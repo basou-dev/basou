@@ -34,6 +34,7 @@
     "clean": "rm -rf dist .tsup *.tsbuildinfo"
   },
   "dependencies": {
-    "ulid": "^3.0.2"
+    "ulid": "^3.0.2",
+    "zod": "^4.4.3"
   }
 }

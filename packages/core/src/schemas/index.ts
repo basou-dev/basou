@@ -1,12 +1,3 @@
-/**
- * Version of the `@basou/core` package, aligned with `manifest.yaml`'s
- * `basou_version` field as defined in the Basou v0.1 specification.
- */
-export const BASOU_CORE_VERSION = "0.1.0";
-
-export { ulid, prefixedUlid, isValidPrefixedId, ID_PREFIXES } from "./ids/ulid.js";
-export type { IdPrefix, PrefixedId } from "./ids/ulid.js";
-
 export {
   WorkspaceIdSchema,
   TaskIdSchema,
@@ -18,17 +9,21 @@ export {
   SchemaVersionSchema,
   RiskLevelSchema,
   EventSourceSchema,
-  ManifestSchema,
+} from "./shared.schema.js";
+export type { RiskLevel } from "./shared.schema.js";
+
+export { ManifestSchema } from "./manifest.schema.js";
+export type { Manifest } from "./manifest.schema.js";
+
+export {
   SessionSchema,
   SessionStatusSchema,
   SessionSourceKindSchema,
-  EventSchema,
-} from "./schemas/index.js";
+} from "./session.schema.js";
+export type { Session, SessionStatus } from "./session.schema.js";
+
+export { EventSchema } from "./event.schema.js";
 export type {
-  RiskLevel,
-  Manifest,
-  Session,
-  SessionStatus,
   Event,
   SessionStartedEvent,
   SessionEndedEvent,
@@ -45,4 +40,4 @@ export type {
   TaskStatusChangedEvent,
   NoteAddedEvent,
   AdapterOutputEvent,
-} from "./schemas/index.js";
+} from "./event.schema.js";
