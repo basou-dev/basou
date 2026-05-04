@@ -1,0 +1,42 @@
+{
+  "name": "@basou/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "basou command-line tool",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basou-dev/basou.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://basou.dev",
+  "publishConfig": { "access": "public" },
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "basou": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist .tsup *.tsbuildinfo"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  }
+}

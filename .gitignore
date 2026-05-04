@@ -1,0 +1,40 @@
+# Node.js
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+
+# Build artifacts
+dist/
+*.tsbuildinfo
+.turbo/
+.tsup/
+
+# Test / coverage
+coverage/
+.vitest-cache/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Basou - default ignore (Y-2 Section 1.3 / Y-1.5 Section 5.1)
+.basou/logs/
+.basou/raw/
+.basou/tmp/
+.basou/status.json
+.basou/sessions/*/events.jsonl
+.basou/sessions/*/artifacts/
+.basou/approvals/pending/
+.basou/approvals/resolved/
