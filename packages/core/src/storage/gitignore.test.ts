@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   if (repoRoot !== undefined) {
+    // rm with `force: true` removes read-only entries set up by T10/T11.
     await rm(repoRoot, { recursive: true, force: true });
     repoRoot = undefined;
   }
@@ -142,11 +143,15 @@ describe("appendBasouGitignore", () => {
   });
 
   it("error message is pathless when write fails", async () => {
-    // Same setup as T7: .gitignore as a directory triggers either read or
-    // write failure depending on platform; the contract is "pathless message
-    // on either path".
+    // Force the write path specifically by making `.gitignore` read-only.
+    // The body has no Basou marker so readFile succeeds and the implementation
+    // proceeds to writeFile, which then fails with EACCES because the file
+    // mode does not permit writing. T7 covers the read-failure path; this
+    // test exclusively guarantees the writeFile pathless contract.
     const root = getRepoRoot();
-    await mkdir(join(root, ".gitignore"));
+    const gitignorePath = join(root, ".gitignore");
+    await writeFile(gitignorePath, "node_modules/\n", "utf8");
+    await chmod(gitignorePath, 0o444);
     let captured: unknown;
     try {
       await appendBasouGitignore(root);
@@ -155,13 +160,15 @@ describe("appendBasouGitignore", () => {
     }
     expect(captured).toBeInstanceOf(Error);
     const err = captured as Error;
-    expect(["Failed to read .gitignore", "Failed to write .gitignore"]).toContain(err.message);
+    expect(err.message).toBe("Failed to write .gitignore");
     expect(err.message).not.toContain(root);
   });
 
   it("error has native cause attached on write failure", async () => {
     const root = getRepoRoot();
-    await mkdir(join(root, ".gitignore"));
+    const gitignorePath = join(root, ".gitignore");
+    await writeFile(gitignorePath, "node_modules/\n", "utf8");
+    await chmod(gitignorePath, 0o444);
     let captured: unknown;
     try {
       await appendBasouGitignore(root);

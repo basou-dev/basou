@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, readManifest } from "@basou/core";
@@ -13,11 +13,12 @@ let tmpRepo: string | undefined;
 
 // Force git invocations to ignore the developer's global/system config so
 // `git config --local --get remote.origin.url` reflects only what the test
-// sets up.
+// sets up. `os.devNull` resolves to `/dev/null` on POSIX and `\\.\\nul` on
+// Windows, keeping this fixture cross-platform without hard-coded paths.
 const ENV = {
   ...process.env,
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_CONFIG_GLOBAL: devNull,
+  GIT_CONFIG_SYSTEM: devNull,
 };
 
 beforeEach(async () => {
