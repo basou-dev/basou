@@ -1,7 +1,12 @@
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import { promisify } from "node:util";
-import { createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
+import {
+  appendBasouGitignore,
+  createManifest,
+  ensureBasouDirectory,
+  writeManifest,
+} from "@basou/core";
 import type { Command } from "commander";
 
 const execFileAsync = promisify(execFile);
@@ -89,7 +94,36 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
   });
 
   await writeManifest(paths, manifest, { force: options.force === true });
+
+  // .gitignore は best-effort: 失敗しても init 全体は成功とみなす（A1）。
+  // Y-2 §16.1「既存 Git repo で安全に実行できる」を担保するため、
+  // permission denied 等で manifest だけ書けて .gitignore が書けない
+  // ケースでも基本機能は使える。
+  try {
+    await appendBasouGitignore(repositoryRoot);
+  } catch (error: unknown) {
+    renderGitignoreWarning(error, options.verbose === true || process.env.BASOU_DEBUG === "1");
+  }
+
   console.log(`Initialized Basou workspace: ${manifest.workspace.id}`);
+}
+
+/**
+ * Render a non-fatal warning when `.gitignore` cannot be updated. Mirrors
+ * `renderCliError`'s pathless contract — never prints `error.cause.message`
+ * because native fs errors embed the absolute path in it.
+ */
+function renderGitignoreWarning(error: unknown, verbose: boolean): void {
+  const baseMessage = error instanceof Error ? error.message : String(error);
+  // The fallback hint is intentionally `dist`-only-portable: it does not
+  // reference the Basou planning repo or any in-repo doc path, since the
+  // CLI is published independently of `docs/`.
+  console.error(
+    `Warning: Could not update .gitignore (${baseMessage}). Add Basou's default .gitignore block manually.`,
+  );
+  if (verbose && error instanceof Error && error.cause instanceof Error) {
+    console.error(`Caused by: ${describeCause(error.cause)}`);
+  }
 }
 
 /**

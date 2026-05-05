@@ -48,6 +48,7 @@ export type {
 } from "./schemas/index.js";
 
 export {
+  appendBasouGitignore,
   basouPaths,
   createManifest,
   ensureBasouDirectory,
@@ -56,4 +57,8 @@ export {
   writeManifest,
   writeYamlFile,
 } from "./storage/index.js";
-export type { BasouPaths, CreateManifestInput } from "./storage/index.js";
+export type {
+  AppendBasouGitignoreResult,
+  BasouPaths,
+  CreateManifestInput,
+} from "./storage/index.js";

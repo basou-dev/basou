@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BASOU_CORE_VERSION,
+  appendBasouGitignore,
   basouPaths,
   createManifest,
   ensureBasouDirectory,
@@ -32,5 +33,9 @@ describe("@basou/core skeleton", () => {
     expect(createManifest).toBeTypeOf("function");
     expect(readManifest).toBeTypeOf("function");
     expect(writeManifest).toBeTypeOf("function");
+  });
+
+  it("re-exports appendBasouGitignore from storage", () => {
+    expect(appendBasouGitignore).toBeTypeOf("function");
   });
 });

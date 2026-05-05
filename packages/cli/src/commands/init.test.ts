@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -161,6 +161,77 @@ describe("doRunInit (pure runner)", () => {
     const paths = basouPaths(repo);
     const info = await stat(paths.root);
     expect(info.isDirectory()).toBe(true);
+  });
+});
+
+describe("doRunInit + .gitignore integration", () => {
+  it("creates .gitignore with Basou block during init in fresh repo", async () => {
+    const repo = getTmpRepo();
+    await doRunInit({}, { cwd: repo });
+    const body = await readFile(join(repo, ".gitignore"), "utf8");
+    expect(body).toContain("# Basou - default ignore");
+    expect(body).toContain(".basou/logs/");
+  });
+
+  it("appends to existing .gitignore preserving prior rules", async () => {
+    const repo = getTmpRepo();
+    await writeFile(join(repo, ".gitignore"), "node_modules/\n", "utf8");
+    await doRunInit({}, { cwd: repo });
+    const body = await readFile(join(repo, ".gitignore"), "utf8");
+    expect(body).toContain("node_modules/");
+    expect(body).toContain("# Basou - default ignore");
+  });
+
+  it("second init with --force does not duplicate Basou block", async () => {
+    const repo = getTmpRepo();
+    await doRunInit({}, { cwd: repo });
+    await doRunInit({ force: true }, { cwd: repo });
+    const body = await readFile(join(repo, ".gitignore"), "utf8");
+    const matches = body.match(/^# Basou - default ignore/gm);
+    expect(matches?.length ?? 0).toBe(1);
+  });
+
+  it("warns and continues with exitCode 0 when .gitignore is unwritable", async () => {
+    const repo = getTmpRepo();
+    // .gitignore as a directory makes both readFile and writeFile fail
+    // (EISDIR). doRunInit's try/catch around appendBasouGitignore must
+    // swallow the error and return success.
+    await mkdir(join(repo, ".gitignore"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runInit({}, { cwd: repo });
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Warning: Could not update .gitignore");
+    expect(process.exitCode).toBe(0);
+    // manifest must still be written
+    const manifest = await readManifest(basouPaths(repo));
+    expect(manifest.workspace.id.startsWith("ws_")).toBe(true);
+  });
+
+  it("warning message is pathless by default", async () => {
+    const repo = getTmpRepo();
+    await mkdir(join(repo, ".gitignore"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runInit({}, { cwd: repo });
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Warning: Could not update .gitignore");
+    expect(stderr).not.toContain(repo);
+    expect(stderr).not.toContain("Caused by:");
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("verbose warning does not leak absolute paths through cause", async () => {
+    const repo = getTmpRepo();
+    await mkdir(join(repo, ".gitignore"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runInit({ verbose: true }, { cwd: repo });
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Warning: Could not update .gitignore");
+    expect(stderr).toContain("Caused by:");
+    expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(0);
   });
 });
 
