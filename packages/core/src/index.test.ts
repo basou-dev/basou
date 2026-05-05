@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { BASOU_CORE_VERSION, basouPaths, ensureBasouDirectory } from "./index.js";
+import {
+  BASOU_CORE_VERSION,
+  basouPaths,
+  createManifest,
+  ensureBasouDirectory,
+  readManifest,
+  readYamlFile,
+  writeManifest,
+  writeYamlFile,
+} from "./index.js";
 
 describe("@basou/core skeleton", () => {
   it("exposes BASOU_CORE_VERSION as 0.1.0", () => {
@@ -12,5 +21,16 @@ describe("@basou/core skeleton", () => {
 
   it("re-exports ensureBasouDirectory from storage", () => {
     expect(ensureBasouDirectory).toBeTypeOf("function");
+  });
+
+  it("re-exports yaml-store APIs from storage", () => {
+    expect(readYamlFile).toBeTypeOf("function");
+    expect(writeYamlFile).toBeTypeOf("function");
+  });
+
+  it("re-exports manifest APIs from storage", () => {
+    expect(createManifest).toBeTypeOf("function");
+    expect(readManifest).toBeTypeOf("function");
+    expect(writeManifest).toBeTypeOf("function");
   });
 });

@@ -6,6 +6,10 @@ import { join } from "node:path";
  * given repository root. The shape mirrors Y-2 Section 1.2's `.basou/` tree.
  * `root` is the `.basou/` directory itself (i.e. `repositoryRoot/.basou`).
  *
+ * `files` exposes the well-known top-level files inside `.basou/`. Each path
+ * is computed but not created — they are written by their respective
+ * subsystems (e.g. `writeManifest` for `manifest.yaml`).
+ *
  * All fields are deeply readonly; consumers must not mutate the returned
  * object.
  */
@@ -20,6 +24,12 @@ export type BasouPaths = {
   readonly logs: string;
   readonly raw: string;
   readonly tmp: string;
+  readonly files: {
+    readonly manifest: string;
+    readonly status: string;
+    readonly handoff: string;
+    readonly decisions: string;
+  };
 };
 
 /**
@@ -47,6 +57,12 @@ export function basouPaths(repositoryRoot: string): BasouPaths {
     logs: join(root, "logs"),
     raw: join(root, "raw"),
     tmp: join(root, "tmp"),
+    files: {
+      manifest: join(root, "manifest.yaml"),
+      status: join(root, "status.json"),
+      handoff: join(root, "handoff.md"),
+      decisions: join(root, "decisions.md"),
+    },
   };
 }
 

@@ -36,6 +36,7 @@
     "clean": "rm -rf dist .tsup *.tsbuildinfo"
   },
   "dependencies": {
+    "@basou/core": "workspace:*",
     "commander": "^12.1.0"
   }
 }

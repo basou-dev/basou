@@ -51,6 +51,15 @@ describe("basouPaths", () => {
     expect(paths.tmp.startsWith(`${paths.root}${sep}`)).toBe(true);
   });
 
+  it("includes manifest/status/handoff/decisions file paths under .basou root", () => {
+    const root = getRepoRoot();
+    const paths = basouPaths(root);
+    expect(paths.files.manifest).toBe(join(root, ".basou", "manifest.yaml"));
+    expect(paths.files.status).toBe(join(root, ".basou", "status.json"));
+    expect(paths.files.handoff).toBe(join(root, ".basou", "handoff.md"));
+    expect(paths.files.decisions).toBe(join(root, ".basou", "decisions.md"));
+  });
+
   it("is pure — calling it does not create any files", async () => {
     const root = getRepoRoot();
     basouPaths(root);

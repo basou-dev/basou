@@ -47,5 +47,13 @@ export type {
   AdapterOutputEvent,
 } from "./schemas/index.js";
 
-export { basouPaths, ensureBasouDirectory } from "./storage/index.js";
-export type { BasouPaths } from "./storage/index.js";
+export {
+  basouPaths,
+  createManifest,
+  ensureBasouDirectory,
+  readManifest,
+  readYamlFile,
+  writeManifest,
+  writeYamlFile,
+} from "./storage/index.js";
+export type { BasouPaths, CreateManifestInput } from "./storage/index.js";

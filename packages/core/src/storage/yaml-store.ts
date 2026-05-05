@@ -1,0 +1,52 @@
+import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { parse, stringify } from "yaml";
+
+/**
+ * Read a YAML file as `unknown`. Caller MUST validate via a zod schema.
+ *
+ * Throws Error with pathless message and the original native error attached
+ * as `cause` for I/O failures and YAML parse errors. All fs and parse exits
+ * go through fixed messages so absolute paths cannot leak via `error.message`.
+ */
+export async function readYamlFile(filePath: string): Promise<unknown> {
+  let body: string;
+  try {
+    body = await readFile(filePath, "utf8");
+  } catch (error: unknown) {
+    if (hasErrorCode(error) && error.code === "ENOENT") {
+      throw new Error("YAML file not found", { cause: error });
+    }
+    throw new Error("Failed to read YAML file", { cause: error });
+  }
+  try {
+    return parse(body);
+  } catch (error: unknown) {
+    throw new Error("Failed to parse YAML content", { cause: error });
+  }
+}
+
+/**
+ * Write a value as YAML using a tmp-file + rename for crash-resistant
+ * atomicity.
+ *
+ * The tmp file path is `${filePath}.tmp.${random}` — placed in the SAME
+ * directory as the target so that `rename` stays within one filesystem and
+ * cannot fail with EXDEV. On any failure the tmp file is unlinked
+ * best-effort and the original error is re-thrown with a pathless message.
+ */
+export async function writeYamlFile(filePath: string, value: unknown): Promise<void> {
+  const body = stringify(value);
+  const tmpPath = `${filePath}.tmp.${Math.random().toString(36).slice(2)}`;
+  try {
+    await writeFile(tmpPath, body, "utf8");
+    await rename(tmpPath, filePath);
+  } catch (error: unknown) {
+    await unlink(tmpPath).catch(() => undefined);
+    throw new Error("Failed to write YAML file", { cause: error });
+  }
+}
+
+function hasErrorCode(error: unknown): error is Error & { code: string } {
+  if (!(error instanceof Error)) return false;
+  return typeof (error as unknown as Record<string, unknown>).code === "string";
+}
