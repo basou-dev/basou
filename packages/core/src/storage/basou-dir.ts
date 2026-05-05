@@ -1,4 +1,4 @@
-import { mkdir, stat } from "node:fs/promises";
+import { lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
@@ -79,9 +79,12 @@ const PATH_LABELS = {
 export async function ensureBasouDirectory(repositoryRoot: string): Promise<BasouPaths> {
   const paths = basouPaths(repositoryRoot);
 
-  let existing: Awaited<ReturnType<typeof stat>> | undefined;
+  // lstat (not stat) so that a symlink at `.basou` is detected as a symlink
+  // and rejected; following the link could place Basou state outside the
+  // git repository root, violating Y-2 Section 1.1.
+  let existing: Awaited<ReturnType<typeof lstat>> | undefined;
   try {
-    existing = await stat(paths.root);
+    existing = await lstat(paths.root);
   } catch (error: unknown) {
     if (!hasErrorCode(error) || error.code !== "ENOENT") {
       throw new Error("Failed to inspect .basou directory", { cause: error });

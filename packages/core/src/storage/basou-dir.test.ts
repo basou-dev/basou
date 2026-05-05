@@ -1,31 +1,47 @@
-import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { basouPaths, ensureBasouDirectory } from "./basou-dir.js";
 
-let repoRoot: string;
+let repoRoot: string | undefined;
 
 beforeEach(async () => {
   repoRoot = await mkdtemp(join(tmpdir(), "basou-test-"));
 });
 
 afterEach(async () => {
-  await rm(repoRoot, { recursive: true, force: true });
+  if (repoRoot !== undefined) {
+    await rm(repoRoot, { recursive: true, force: true });
+    repoRoot = undefined;
+  }
 });
 
+// Detects absolute-style paths: a leading slash followed by two or more
+// path components (e.g. "/var/folders/abc"). Relative labels emitted by
+// the implementation (e.g. ".basou/sessions") deliberately do not match —
+// they are not absolute paths and remain safe to surface in error
+// messages. The contract enforced is "no absolute path leakage", not
+// "no slash anywhere".
 const PATH_LIKE_PATTERN = /\/[\w-]+\/[\w-]+\//;
 
 async function expectPathlessMessage(message: string): Promise<void> {
+  if (repoRoot === undefined) throw new Error("repoRoot not initialized");
   expect(message).not.toContain(repoRoot);
   expect(message).not.toContain(await realpath(repoRoot));
   expect(message).not.toMatch(PATH_LIKE_PATTERN);
 }
 
+function getRepoRoot(): string {
+  if (repoRoot === undefined) throw new Error("repoRoot not initialized");
+  return repoRoot;
+}
+
 describe("basouPaths", () => {
   it("returns a layout rooted at <repo>/.basou", () => {
-    const paths = basouPaths(repoRoot);
-    expect(paths.root).toBe(join(repoRoot, ".basou"));
+    const root = getRepoRoot();
+    const paths = basouPaths(root);
+    expect(paths.root).toBe(join(root, ".basou"));
     expect(paths.sessions.startsWith(`${paths.root}${sep}`)).toBe(true);
     expect(paths.tasks.startsWith(`${paths.root}${sep}`)).toBe(true);
     expect(paths.approvals.pending.startsWith(`${paths.root}${sep}`)).toBe(true);
@@ -36,15 +52,16 @@ describe("basouPaths", () => {
   });
 
   it("is pure — calling it does not create any files", async () => {
-    basouPaths(repoRoot);
-    const entries = await readdir(repoRoot);
+    const root = getRepoRoot();
+    basouPaths(root);
+    const entries = await readdir(root);
     expect(entries).toEqual([]);
   });
 });
 
 describe("ensureBasouDirectory", () => {
   it("creates all six required subdirectories", async () => {
-    const paths = await ensureBasouDirectory(repoRoot);
+    const paths = await ensureBasouDirectory(getRepoRoot());
     for (const target of [
       paths.sessions,
       paths.tasks,
@@ -60,22 +77,25 @@ describe("ensureBasouDirectory", () => {
   });
 
   it("returns paths matching basouPaths(repositoryRoot)", async () => {
-    const created = await ensureBasouDirectory(repoRoot);
-    expect(created).toEqual(basouPaths(repoRoot));
+    const root = getRepoRoot();
+    const created = await ensureBasouDirectory(root);
+    expect(created).toEqual(basouPaths(root));
   });
 
   it("is idempotent on an empty target", async () => {
-    await ensureBasouDirectory(repoRoot);
-    const second = await ensureBasouDirectory(repoRoot);
-    expect(second).toEqual(basouPaths(repoRoot));
+    const root = getRepoRoot();
+    await ensureBasouDirectory(root);
+    const second = await ensureBasouDirectory(root);
+    expect(second).toEqual(basouPaths(root));
     const info = await stat(second.sessions);
     expect(info.isDirectory()).toBe(true);
   });
 
   it("is idempotent when some subdirectories pre-exist", async () => {
-    const paths = basouPaths(repoRoot);
+    const root = getRepoRoot();
+    const paths = basouPaths(root);
     await mkdir(paths.sessions, { recursive: true });
-    await ensureBasouDirectory(repoRoot);
+    await ensureBasouDirectory(root);
     for (const target of [
       paths.tasks,
       paths.approvals.pending,
@@ -90,21 +110,35 @@ describe("ensureBasouDirectory", () => {
   });
 
   it("throws when .basou exists as a file", async () => {
-    await writeFile(join(repoRoot, ".basou"), "");
-    await expect(ensureBasouDirectory(repoRoot)).rejects.toThrow(/exists but is not a directory/);
+    const root = getRepoRoot();
+    await writeFile(join(root, ".basou"), "");
+    await expect(ensureBasouDirectory(root)).rejects.toThrow(/exists but is not a directory/);
   });
 
   it("throws when .basou/approvals exists as a file", async () => {
-    await mkdir(join(repoRoot, ".basou"));
-    await writeFile(join(repoRoot, ".basou", "approvals"), "");
-    await expect(ensureBasouDirectory(repoRoot)).rejects.toThrow(/exists but is not a directory/);
+    const root = getRepoRoot();
+    await mkdir(join(root, ".basou"));
+    await writeFile(join(root, ".basou", "approvals"), "");
+    await expect(ensureBasouDirectory(root)).rejects.toThrow(/exists but is not a directory/);
+  });
+
+  it("rejects when .basou is a symlink (regardless of target)", async () => {
+    const root = getRepoRoot();
+    const linkTarget = await mkdtemp(join(tmpdir(), "basou-symlink-target-"));
+    try {
+      await symlink(linkTarget, join(root, ".basou"));
+      await expect(ensureBasouDirectory(root)).rejects.toThrow(/exists but is not a directory/);
+    } finally {
+      await rm(linkTarget, { recursive: true, force: true });
+    }
   });
 
   it("emits a pathless error message when .basou is a file (root-as-file case)", async () => {
-    await writeFile(join(repoRoot, ".basou"), "");
+    const root = getRepoRoot();
+    await writeFile(join(root, ".basou"), "");
     let captured: unknown;
     try {
-      await ensureBasouDirectory(repoRoot);
+      await ensureBasouDirectory(root);
     } catch (error: unknown) {
       captured = error;
     }
@@ -113,11 +147,12 @@ describe("ensureBasouDirectory", () => {
   });
 
   it("emits a pathless error message when a subdirectory is a file (subdirectory-as-file case)", async () => {
-    await mkdir(join(repoRoot, ".basou"));
-    await writeFile(join(repoRoot, ".basou", "approvals"), "");
+    const root = getRepoRoot();
+    await mkdir(join(root, ".basou"));
+    await writeFile(join(root, ".basou", "approvals"), "");
     let captured: unknown;
     try {
-      await ensureBasouDirectory(repoRoot);
+      await ensureBasouDirectory(root);
     } catch (error: unknown) {
       captured = error;
     }
@@ -126,7 +161,7 @@ describe("ensureBasouDirectory", () => {
   });
 
   it("works when repositoryRoot is itself created via mkdtemp (sanity)", async () => {
-    const paths = await ensureBasouDirectory(repoRoot);
+    const paths = await ensureBasouDirectory(getRepoRoot());
     const info = await stat(paths.root);
     expect(info.isDirectory()).toBe(true);
   });
