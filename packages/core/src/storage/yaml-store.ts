@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
 
@@ -29,16 +30,19 @@ export async function readYamlFile(filePath: string): Promise<unknown> {
  * Write a value as YAML using a tmp-file + rename for crash-resistant
  * atomicity.
  *
- * The tmp file path is `${filePath}.tmp.${random}` — placed in the SAME
- * directory as the target so that `rename` stays within one filesystem and
- * cannot fail with EXDEV. On any failure the tmp file is unlinked
- * best-effort and the original error is re-thrown with a pathless message.
+ * The tmp file path is `${filePath}.tmp.${randomUUID()}` — placed in the
+ * SAME directory as the target so that `rename` stays within one
+ * filesystem and cannot fail with EXDEV. The tmp file is opened with the
+ * `wx` flag, so a hypothetical name collision fails fast rather than
+ * silently overwriting an unrelated file. On any failure the tmp file is
+ * unlinked best-effort and the original error is re-thrown with a pathless
+ * message.
  */
 export async function writeYamlFile(filePath: string, value: unknown): Promise<void> {
   const body = stringify(value);
-  const tmpPath = `${filePath}.tmp.${Math.random().toString(36).slice(2)}`;
+  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
   try {
-    await writeFile(tmpPath, body, "utf8");
+    await writeFile(tmpPath, body, { encoding: "utf8", flag: "wx" });
     await rename(tmpPath, filePath);
   } catch (error: unknown) {
     await unlink(tmpPath).catch(() => undefined);

@@ -97,16 +97,27 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
  * `verbose: true` we never print the Error object directly because Node's
  * `util.inspect` recursively expands `error.cause`, and native fs errors
  * embed absolute paths in their messages.
+ *
+ * In verbose mode we surface only a non-path identifier for the cause —
+ * preferring its errno-style `code` (e.g. "ENOENT", "EACCES") and falling
+ * back to the constructor name. The cause's `message` is intentionally NOT
+ * printed because Node's native fs errors include the failed path in it.
  */
 function renderCliError(error: unknown, verbose: boolean): void {
   if (error instanceof Error) {
     console.error(error.message);
     if (verbose && error.cause instanceof Error) {
-      console.error(`Caused by: ${error.cause.message}`);
+      console.error(`Caused by: ${describeCause(error.cause)}`);
     }
   } else {
     console.error(String(error));
   }
+}
+
+function describeCause(cause: Error): string {
+  const code = (cause as unknown as Record<string, unknown>).code;
+  if (typeof code === "string" && code.length > 0) return code;
+  return cause.constructor.name;
 }
 
 async function resolveGitRepositoryRoot(cwd: string): Promise<string> {
@@ -116,10 +127,20 @@ async function resolveGitRepositoryRoot(cwd: string): Promise<string> {
     if (root.length === 0) throw new Error("git rev-parse returned empty output");
     return root;
   } catch (error: unknown) {
+    // Distinguish a missing `git` binary from "not a git repository" so the
+    // user is not misled into running `git init` when git itself is absent.
+    if (hasErrorCode(error) && error.code === "ENOENT") {
+      throw new Error("Git executable not found in PATH. Install git first.", { cause: error });
+    }
     throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou init'.", {
       cause: error,
     });
   }
+}
+
+function hasErrorCode(error: unknown): error is Error & { code: string } {
+  if (!(error instanceof Error)) return false;
+  return typeof (error as unknown as Record<string, unknown>).code === "string";
 }
 
 async function tryGitRemoteUrl(repositoryRoot: string): Promise<string | undefined> {

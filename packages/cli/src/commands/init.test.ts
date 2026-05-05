@@ -176,4 +176,25 @@ describe("runInit (process-state wrapper)", () => {
     expect(stderr).not.toContain(repo);
     expect(process.exitCode).toBe(1);
   });
+
+  it("verbose mode does not leak absolute paths through cause.message", async () => {
+    // Force a native fs error whose `message` embeds an absolute path:
+    // creating `.basou/sessions` as a regular file makes mkdirLabeled fail
+    // with EEXIST, which gets wrapped by ensureBasouDirectory carrying the
+    // native error as `cause`. Verbose rendering must surface only the
+    // cause's code / constructor name, never its message (which would
+    // include the absolute path).
+    const repo = getTmpRepo();
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(join(repo, ".basou"), { recursive: true });
+    await writeFile(join(repo, ".basou", "sessions"), "");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runInit({ verbose: true }, { cwd: repo });
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain(".basou/sessions exists but is not a directory");
+    expect(stderr).toContain("Caused by:");
+    expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
+  });
 });

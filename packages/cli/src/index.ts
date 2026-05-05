@@ -11,12 +11,17 @@ registerInitCommand(program);
 program.parseAsync(process.argv).catch((err: unknown) => {
   // Mirror runInit's renderCliError: never print the Error object directly
   // because util.inspect recursively expands `error.cause`, which can carry
-  // absolute paths from native fs errors.
+  // absolute paths from native fs errors. In verbose mode we expose only
+  // the cause's errno-style code (or constructor name as a fallback) — the
+  // cause's `message` is suppressed because Node's native fs errors embed
+  // the failed path in it.
   const verbose = process.env.BASOU_DEBUG === "1";
   if (err instanceof Error) {
     console.error(err.message);
     if (verbose && err.cause instanceof Error) {
-      console.error(`Caused by: ${err.cause.message}`);
+      const code = (err.cause as unknown as Record<string, unknown>).code;
+      const label = typeof code === "string" && code.length > 0 ? code : err.cause.constructor.name;
+      console.error(`Caused by: ${label}`);
     }
   } else {
     console.error(String(err));
