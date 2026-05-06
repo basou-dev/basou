@@ -69,3 +69,10 @@ export type {
   BasouPaths,
   CreateManifestInput,
 } from "./storage/index.js";
+
+export { ChildProcessRunner } from "./runtime/child-process-runner.js";
+export type {
+  ProcessRunner,
+  RunOptions,
+  RunResult,
+} from "./runtime/process-runner.js";
