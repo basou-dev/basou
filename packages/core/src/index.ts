@@ -23,6 +23,7 @@ export {
   SessionStatusSchema,
   SessionSourceKindSchema,
   EventSchema,
+  StatusSchema,
 } from "./schemas/index.js";
 export type {
   RiskLevel,
@@ -45,16 +46,22 @@ export type {
   TaskStatusChangedEvent,
   NoteAddedEvent,
   AdapterOutputEvent,
+  StatusSnapshot,
 } from "./schemas/index.js";
 
 export {
   appendBasouGitignore,
+  assertBasouRootSafe,
   basouPaths,
+  buildStatusSnapshot,
   createManifest,
   ensureBasouDirectory,
+  findErrorCode,
   readManifest,
+  readStatus,
   readYamlFile,
   writeManifest,
+  writeStatus,
   writeYamlFile,
 } from "./storage/index.js";
 export type {

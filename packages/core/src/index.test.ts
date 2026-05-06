@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   BASOU_CORE_VERSION,
+  StatusSchema,
   appendBasouGitignore,
+  assertBasouRootSafe,
   basouPaths,
+  buildStatusSnapshot,
   createManifest,
   ensureBasouDirectory,
+  findErrorCode,
   readManifest,
+  readStatus,
   readYamlFile,
   writeManifest,
+  writeStatus,
   writeYamlFile,
 } from "./index.js";
 
@@ -37,5 +43,17 @@ describe("@basou/core skeleton", () => {
 
   it("re-exports appendBasouGitignore from storage", () => {
     expect(appendBasouGitignore).toBeTypeOf("function");
+  });
+
+  it("re-exports StatusSchema from schemas", () => {
+    expect(StatusSchema.parse).toBeTypeOf("function");
+  });
+
+  it("re-exports status storage APIs", () => {
+    expect(assertBasouRootSafe).toBeTypeOf("function");
+    expect(buildStatusSnapshot).toBeTypeOf("function");
+    expect(writeStatus).toBeTypeOf("function");
+    expect(readStatus).toBeTypeOf("function");
+    expect(findErrorCode).toBeTypeOf("function");
   });
 });
