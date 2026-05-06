@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BASOU_CORE_VERSION,
+  ChildProcessRunner,
   StatusSchema,
   appendBasouGitignore,
   assertBasouRootSafe,
@@ -55,5 +56,11 @@ describe("@basou/core skeleton", () => {
     expect(writeStatus).toBeTypeOf("function");
     expect(readStatus).toBeTypeOf("function");
     expect(findErrorCode).toBeTypeOf("function");
+  });
+
+  it("re-exports ChildProcessRunner from runtime", () => {
+    expect(ChildProcessRunner).toBeTypeOf("function");
+    const runner = new ChildProcessRunner();
+    expect(typeof runner.run).toBe("function");
   });
 });

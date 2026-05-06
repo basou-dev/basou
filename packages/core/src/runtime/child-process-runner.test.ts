@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { findErrorCode } from "../storage/status.js";
 import { ChildProcessRunner } from "./child-process-runner.js";
 
 const NODE = process.execPath;
@@ -155,16 +156,31 @@ describe("ChildProcessRunner", () => {
   });
 
   // 14 (POSIX only — chmod 0o000 has no effect under root)
-  it.skipIf(skipPosixOnly)("throws when the binary lacks execute permission", async () => {
-    const scriptPath = path.join(cwd, "noexec.sh");
-    await writeFile(scriptPath, "#!/bin/sh\necho hi\n");
-    await chmod(scriptPath, 0o000);
-    try {
-      await expect(runner.run(scriptPath, [], { cwd })).rejects.toThrow();
-    } finally {
-      await chmod(scriptPath, 0o755);
-    }
-  });
+  it.skipIf(skipPosixOnly)(
+    "rejects with pathless message and EACCES cause when binary lacks execute permission",
+    async () => {
+      const scriptPath = path.join(cwd, "noexec.sh");
+      await writeFile(scriptPath, "#!/bin/sh\necho hi\n");
+      await chmod(scriptPath, 0o000);
+      try {
+        let caught: unknown;
+        await runner.run(scriptPath, [], { cwd }).catch((err: unknown) => {
+          caught = err;
+        });
+        expect(caught).toBeInstanceOf(Error);
+        const err = caught as Error;
+        // Pathless: neither cwd nor the script path leak into the message.
+        expect(err.message).not.toContain(cwd);
+        expect(err.message).not.toContain(scriptPath);
+        // Generic spawn-error message (not the ENOENT-specific one).
+        expect(err.message).toBe("Failed to spawn child process");
+        // The errno is preserved on the cause chain for callers to classify.
+        expect(findErrorCode(err, "EACCES")).toBe(true);
+      } finally {
+        await chmod(scriptPath, 0o755);
+      }
+    },
+  );
 
   // 15
   it("removes the abort listener after run completes", async () => {
@@ -179,9 +195,13 @@ describe("ChildProcessRunner", () => {
     expect(removeSpy).toHaveBeenCalledTimes(1);
   });
 
-  // 16 (POSIX only)
+  // 16 (POSIX only) — Note: this case verifies that aborting immediately
+  // after the run() Promise is created still kills the child. The
+  // narrower spawn-vs-listener-attach window is synchronous in the
+  // implementation and not externally observable, so the actual
+  // post-attach race guard is exercised only indirectly here.
   it.skipIf(skipPosixOnly)(
-    "kills the child even if abort fires immediately after spawn returns",
+    "kills the child when abort fires immediately after promise creation",
     async () => {
       const controller = new AbortController();
       const promise = runner.run(NODE, ["-e", "setInterval(() => {}, 1000)"], {
@@ -221,8 +241,13 @@ describe("ChildProcessRunner", () => {
     expect(result.stdout.length).toBeGreaterThanOrEqual(oneMiB);
   }, 30_000);
 
-  // 19
-  it("is idempotent when child exits naturally before the kill timer fires", async () => {
+  // 19 — Note: this case verifies that the timeout timer is cleared once
+  // the child exits naturally, so no kill is attempted afterward. The
+  // narrower kill-after-natural-exit race (timer fires while close is in
+  // flight) is not deterministically reproducible from the public API and
+  // is left to the in-source race guard `if (killed || child.exitCode
+  // !== null) return;`.
+  it("clears the kill timer once the child exits naturally", async () => {
     const result = await runner.run(NODE, ["-e", "process.exit(0)"], {
       cwd,
       timeout_ms: 50,

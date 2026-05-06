@@ -37,12 +37,19 @@ export class ChildProcessRunner implements ProcessRunner {
       });
     }
 
+    // Freeze the invocation snapshot at spawn time so the eventual RunResult
+    // reflects the call as it was issued, even if the caller mutates `args`
+    // or `options` afterward.
+    const snapshotCommand = command;
+    const snapshotArgs: readonly string[] = [...args];
+    const snapshotCwd = options.cwd;
+
     const started_at = new Date();
 
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawn(command, [...args], {
-        cwd: options.cwd,
+      child = spawn(snapshotCommand, [...snapshotArgs], {
+        cwd: snapshotCwd,
         env: options.env ?? process.env,
         stdio: ["pipe", "pipe", "pipe"],
         shell: false,
@@ -118,9 +125,9 @@ export class ChildProcessRunner implements ProcessRunner {
         cleanup();
         const ended_at = new Date();
         resolve({
-          command,
-          args: [...args],
-          cwd: options.cwd,
+          command: snapshotCommand,
+          args: snapshotArgs,
+          cwd: snapshotCwd,
           exit_code: code,
           signal,
           stdout,
