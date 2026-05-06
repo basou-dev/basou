@@ -29,6 +29,12 @@ Thumbs.db
 .env.*
 !.env.example
 
+# AI / agent local state
+.agents/local/
+.agents/tmp/
+AGENTS.local.md
+.claude/
+
 # Basou - default ignore (Y-2 Section 1.3 / Y-1.5 Section 5.1)
 .basou/logs/
 .basou/raw/
