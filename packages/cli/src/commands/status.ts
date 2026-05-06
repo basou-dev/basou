@@ -85,7 +85,11 @@ export async function doRunStatus(options: StatusOptions, ctx: StatusContext): P
     if (findErrorCode(error, "ENOENT")) {
       throw new Error("Workspace not initialized. Run 'basou init' first.");
     }
-    throw error;
+    // ZodError's `message` echoes invalid input values verbatim, which can
+    // include path-like strings if a user-edited manifest contains them.
+    // Wrap in a fixed pathless message and surface only the cause's
+    // constructor name in verbose mode (via renderCliError + describeCause).
+    throw new Error("Failed to read workspace manifest", { cause: error });
   }
 
   const snapshot = await buildStatusSnapshot({ manifest, paths });

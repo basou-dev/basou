@@ -164,18 +164,19 @@ describe("runStatus (process-state wrapper)", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("corrupt manifest: exit 1, stderr is pathless even in verbose mode", async () => {
+  it("corrupt manifest: exit 1 with pathless wrapper message and code-only Caused by", async () => {
     const { repo, paths } = await setupInitedRepo();
     // Overwrite manifest with content that fails ManifestSchema.parse but is
-    // still valid YAML, so the underlying error is a ZodError thrown by
-    // readManifest. ZodError carries its issues in `message`, not in `cause`,
-    // so `Caused by:` is intentionally not asserted here — the contract that
-    // matters is "exit 1, no absolute path leaks".
+    // still valid YAML. doRunStatus wraps the underlying ZodError in a fixed
+    // "Failed to read workspace manifest" so the raw issue dump (which can
+    // echo invalid input verbatim) never reaches stderr.
     await writeFile(paths.files.manifest, 'schema_version: "0.2.0"\n', "utf8");
     const errSpy = captureStderr();
     captureStdout();
     await runStatus({ verbose: true }, { cwd: repo });
     const stderr = joinCalls(errSpy);
+    expect(stderr).toContain("Failed to read workspace manifest");
+    expect(stderr).toContain("Caused by:");
     expect(stderr).not.toContain(repo);
     expect(process.exitCode).toBe(1);
   });

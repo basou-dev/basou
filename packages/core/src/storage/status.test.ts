@@ -119,6 +119,21 @@ describe("buildStatusSnapshot", () => {
     expect(snapshot.directories_present.sessions).toBe(false);
   });
 
+  it("reports false when an ancestor of the slot is a regular file (ENOTDIR)", async () => {
+    const paths = await ensureBasouDirectory(getRepoRoot());
+    // Replace .basou/approvals (a directory) with a regular file so that
+    // lstat'ing any child path fails with ENOTDIR rather than ENOENT —
+    // exercising the ENOTDIR branch of dirPresent independently of ENOENT.
+    await fsp.rm(paths.approvals.pending, { recursive: true });
+    await fsp.rm(paths.approvals.resolved, { recursive: true });
+    const approvalsBase = join(paths.root, "approvals");
+    await fsp.rm(approvalsBase, { recursive: true });
+    await fsp.writeFile(approvalsBase, "not a directory", "utf8");
+    const snapshot = await buildStatusSnapshot({ manifest: makeManifest(), paths });
+    expect(snapshot.directories_present.approvals_pending).toBe(false);
+    expect(snapshot.directories_present.approvals_resolved).toBe(false);
+  });
+
   // POSIX: lstat(path) requires traversal (x) permission on the parent
   // directory, NOT on `path` itself. Dropping the .basou directory's x bits
   // therefore makes every lstat(.basou/<child>) fail with EACCES, while

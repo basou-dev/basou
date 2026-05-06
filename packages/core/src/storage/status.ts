@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-// Namespace import so tests can use `vi.spyOn(fsp, "lstat")` to inject EACCES
-// without leaning on POSIX `chmod` quirks (target-mode chmod does not affect
-// `lstat(target)`, only the parent's traversal permission does).
+// Namespace import keeps lstat / readFile / writeFile / rename / unlink
+// behind a single binding for symmetry. The EACCES test exercises this
+// module via real fs + chmod on the parent directory rather than vi.spyOn,
+// because vi.spyOn cannot redefine ESM module exports under vitest 2.x.
 import * as fsp from "node:fs/promises";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import { StatusSchema, type StatusSnapshot } from "../schemas/status.schema.js";
@@ -125,6 +126,12 @@ export async function buildStatusSnapshot(input: {
  * `status.json`. The atomic strategy mirrors `writeYamlFile`: write to a
  * uniquely-named tmp file in the same directory with the `wx` flag, then
  * `rename` over the destination so a crash never leaves a partial JSON.
+ *
+ * **Precondition**: callers MUST invoke {@link assertBasouRootSafe} on
+ * `paths.root` first to ensure `.basou` is a real directory and not a
+ * swapped symlink. `writeStatus` does not redo this guard — it trusts the
+ * caller — so a direct invocation without the guard could write
+ * `status.json` outside the repository root.
  */
 export async function writeStatus(paths: BasouPaths, snapshot: StatusSnapshot): Promise<void> {
   const validated = StatusSchema.parse(snapshot);
