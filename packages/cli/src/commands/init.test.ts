@@ -145,10 +145,19 @@ describe("doRunInit (pure runner)", () => {
     expect(second.workspace.id).not.toBe(first.workspace.id);
   });
 
-  it("throws when not in a git repository", async () => {
+  it("throws the exact 'Not a git repository...' wrapper message when cwd is not in a git repo (contract)", async () => {
     const nonGitDir = await mkdtemp(join(tmpdir(), "basou-not-git-"));
     try {
-      await expect(doRunInit({}, { cwd: nonGitDir })).rejects.toThrow(/Not a git repository/);
+      let err: unknown;
+      try {
+        await doRunInit({}, { cwd: nonGitDir });
+      } catch (caught) {
+        err = caught;
+      }
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe(
+        "Not a git repository. Run 'git init' first, then re-run 'basou init'.",
+      );
     } finally {
       await rm(nonGitDir, { recursive: true, force: true });
     }

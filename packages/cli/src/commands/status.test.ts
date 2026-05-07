@@ -150,6 +150,24 @@ describe("doRunStatus (pure runner)", () => {
     expect(entries).toContain("status.json");
     expect(entries.some((name) => name.startsWith("status.json.tmp."))).toBe(false);
   });
+
+  it("throws the exact 'Not a git repository...' wrapper message when cwd is not in a git repo (contract)", async () => {
+    const nonGitDir = await mkdtemp(join(tmpdir(), "basou-not-git-status-"));
+    try {
+      let err: unknown;
+      try {
+        await doRunStatus({}, { cwd: nonGitDir });
+      } catch (caught) {
+        err = caught;
+      }
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe(
+        "Not a git repository. Run 'git init' first, then re-run 'basou status'.",
+      );
+    } finally {
+      await rm(nonGitDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("runStatus (process-state wrapper)", () => {

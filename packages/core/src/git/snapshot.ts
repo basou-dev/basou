@@ -139,18 +139,27 @@ export async function getSnapshot(repositoryRoot: string): Promise<GitSnapshot> 
     throw new Error("Failed to read git state", { cause: error });
   }
 
-  let staged: string[];
-  let unstaged: string[];
-  let untracked: string[];
+  let dirty: boolean;
+  const staged: string[] = [];
+  const unstaged: string[] = [];
+  const untracked: string[] = [];
   try {
     const status = await git.status();
-    staged = [...status.staged];
-    unstaged = [...status.modified];
-    untracked = [...status.not_added];
+    dirty = !status.isClean();
+    // Walk status.files so deleted / renamed / conflicted entries are
+    // classified correctly (StatusResult's top-level `staged` / `modified`
+    // / `not_added` arrays exclude D / R / U entries).
+    for (const f of status.files) {
+      if (f.index === "?" && f.working_dir === "?") {
+        untracked.push(f.path);
+        continue;
+      }
+      if (f.index !== " " && f.index !== "?") staged.push(f.path);
+      if (f.working_dir !== " " && f.working_dir !== "?") unstaged.push(f.path);
+    }
   } catch (error: unknown) {
     throw new Error("Failed to read git state", { cause: error });
   }
-  const dirty = staged.length > 0 || unstaged.length > 0 || untracked.length > 0;
 
   let ahead: number | undefined;
   let behind: number | undefined;

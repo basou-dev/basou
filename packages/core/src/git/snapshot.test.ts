@@ -165,6 +165,56 @@ describe("getSnapshot — basic", () => {
     expect(snap.staged).toEqual([]);
     expect(snap.unstaged).toEqual([]);
   });
+
+  it("reports dirty=true with a working-tree deleted file in unstaged (post-1)", async () => {
+    await initRepoWithCommit(tmpRepo);
+    await rm(join(tmpRepo, "README.md"));
+    const snap = await getSnapshot(tmpRepo);
+    expect(snap.dirty).toBe(true);
+    expect(snap.unstaged).toEqual(["README.md"]);
+    expect(snap.staged).toEqual([]);
+    expect(snap.untracked).toEqual([]);
+  });
+
+  it("reports dirty=true with a staged rename in staged (post-1)", async () => {
+    await initRepoWithCommit(tmpRepo);
+    const git = safeSimpleGit(tmpRepo);
+    await git.mv("README.md", "README2.md");
+    const snap = await getSnapshot(tmpRepo);
+    expect(snap.dirty).toBe(true);
+    // simple-git reports renames either as a single R entry or as
+    // delete+add depending on similarity heuristics; in either case
+    // README2.md must appear in `staged`.
+    expect(snap.staged).toContain("README2.md");
+  });
+
+  it("reports dirty=true with a merge conflict in unstaged (post-1)", async () => {
+    await initRepoWithCommit(tmpRepo);
+    const git = safeSimpleGit(tmpRepo);
+    // Create a divergent branch then merge it back to provoke a conflict
+    // on README.md.
+    await git.checkoutBranch("feature", "main");
+    await writeFile(join(tmpRepo, "README.md"), "# feature side\n");
+    await git.add("README.md");
+    await git.commit("feature change");
+    await git.checkout("main");
+    await writeFile(join(tmpRepo, "README.md"), "# main side\n");
+    await git.add("README.md");
+    await git.commit("main change");
+    let mergeFailed = false;
+    try {
+      await git.merge(["feature"]);
+    } catch {
+      mergeFailed = true;
+    }
+    expect(mergeFailed).toBe(true);
+    const snap = await getSnapshot(tmpRepo);
+    expect(snap.dirty).toBe(true);
+    // Conflicted entries surface with `index === "U"` and/or
+    // `working_dir === "U"`, so they appear in either staged or unstaged.
+    const allChanged = [...snap.staged, ...snap.unstaged];
+    expect(allChanged).toContain("README.md");
+  });
 });
 
 describe("getSnapshot — edge cases", () => {
