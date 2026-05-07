@@ -76,3 +76,6 @@ export type {
   RunOptions,
   RunResult,
 } from "./runtime/process-runner.js";
+
+export { getSnapshot, resolveRepositoryRoot, tryRemoteUrl } from "./git/snapshot.js";
+export type { GitSnapshot } from "./git/snapshot.js";

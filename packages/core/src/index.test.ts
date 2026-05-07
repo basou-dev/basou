@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BASOU_CORE_VERSION,
   ChildProcessRunner,
+  type GitSnapshot,
   StatusSchema,
   appendBasouGitignore,
   assertBasouRootSafe,
@@ -10,9 +11,12 @@ import {
   createManifest,
   ensureBasouDirectory,
   findErrorCode,
+  getSnapshot,
   readManifest,
   readStatus,
   readYamlFile,
+  resolveRepositoryRoot,
+  tryRemoteUrl,
   writeManifest,
   writeStatus,
   writeYamlFile,
@@ -62,5 +66,24 @@ describe("@basou/core skeleton", () => {
     expect(ChildProcessRunner).toBeTypeOf("function");
     const runner = new ChildProcessRunner();
     expect(typeof runner.run).toBe("function");
+  });
+
+  it("re-exports git capability functions from git/snapshot", () => {
+    expect(resolveRepositoryRoot).toBeTypeOf("function");
+    expect(tryRemoteUrl).toBeTypeOf("function");
+    expect(getSnapshot).toBeTypeOf("function");
+  });
+
+  it("re-exports the GitSnapshot type from git/snapshot", () => {
+    // Compile-time only: if the type is missing, this assignment fails to typecheck.
+    const sample: GitSnapshot = {
+      head: "deadbeef",
+      branch: "main",
+      dirty: false,
+      staged: [],
+      unstaged: [],
+      untracked: [],
+    };
+    expect(sample.dirty).toBe(false);
   });
 });

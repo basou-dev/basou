@@ -1,15 +1,13 @@
-import { execFile } from "node:child_process";
 import { basename } from "node:path";
-import { promisify } from "node:util";
 import {
   appendBasouGitignore,
   createManifest,
   ensureBasouDirectory,
+  resolveRepositoryRoot,
+  tryRemoteUrl,
   writeManifest,
 } from "@basou/core";
 import type { Command } from "commander";
-
-const execFileAsync = promisify(execFile);
 
 export type InitOptions = {
   name?: string;
@@ -71,7 +69,7 @@ export async function runInit(options: InitOptions, ctx: InitContext = {}): Prom
  */
 export async function doRunInit(options: InitOptions, ctx: InitContext): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveGitRepositoryRoot(cwd);
+  const repositoryRoot = await resolveRepositoryRootForInit(cwd);
   const workspaceName = options.name ?? basename(repositoryRoot);
 
   // --repo-url > git config --local remote.origin.url > omit
@@ -80,7 +78,7 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
   if (options.repoUrl !== undefined) {
     repositoryUrl = options.repoUrl === "" ? null : options.repoUrl;
   } else {
-    repositoryUrl = await tryGitRemoteUrl(repositoryRoot);
+    repositoryUrl = await tryRemoteUrl(repositoryRoot);
   }
 
   const paths = await ensureBasouDirectory(repositoryRoot);
@@ -154,42 +152,20 @@ function describeCause(cause: Error): string {
   return cause.constructor.name;
 }
 
-async function resolveGitRepositoryRoot(cwd: string): Promise<string> {
+/**
+ * Wrap the core git capability so the CLI surfaces the command-specific
+ * "Run 'git init' first, then re-run 'basou init'." suffix while the
+ * capability layer remains command-agnostic.
+ */
+async function resolveRepositoryRootForInit(cwd: string): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd });
-    const root = stdout.trimEnd();
-    if (root.length === 0) throw new Error("git rev-parse returned empty output");
-    return root;
+    return await resolveRepositoryRoot(cwd);
   } catch (error: unknown) {
-    // Distinguish a missing `git` binary from "not a git repository" so the
-    // user is not misled into running `git init` when git itself is absent.
-    if (hasErrorCode(error) && error.code === "ENOENT") {
-      throw new Error("Git executable not found in PATH. Install git first.", { cause: error });
+    if (error instanceof Error && error.message === "Not a git repository") {
+      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou init'.", {
+        cause: error,
+      });
     }
-    throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou init'.", {
-      cause: error,
-    });
-  }
-}
-
-function hasErrorCode(error: unknown): error is Error & { code: string } {
-  if (!(error instanceof Error)) return false;
-  return typeof (error as unknown as Record<string, unknown>).code === "string";
-}
-
-async function tryGitRemoteUrl(repositoryRoot: string): Promise<string | undefined> {
-  try {
-    // `--local` constrains lookup to the repository config so global/system
-    // remotes do not leak in. The repository_url MUST reflect this repo,
-    // not whatever the developer set globally.
-    const { stdout } = await execFileAsync(
-      "git",
-      ["config", "--local", "--get", "remote.origin.url"],
-      { cwd: repositoryRoot },
-    );
-    const url = stdout.trimEnd();
-    return url.length > 0 ? url : undefined;
-  } catch {
-    return undefined;
+    throw error;
   }
 }

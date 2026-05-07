@@ -10,7 +10,9 @@
     "directory": "packages/core"
   },
   "homepage": "https://basou.dev",
-  "publishConfig": { "access": "public" },
+  "publishConfig": {
+    "access": "public"
+  },
   "sideEffects": false,
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -34,6 +36,7 @@
     "clean": "rm -rf dist .tsup *.tsbuildinfo"
   },
   "dependencies": {
+    "simple-git": "^3.36.0",
     "ulid": "^3.0.2",
     "yaml": "^2.8.4",
     "zod": "^4.4.3"
