@@ -9,9 +9,9 @@ import {
   type RunResult,
   type Session,
   SessionSchema,
-  appendEvent,
   assertBasouRootSafe,
   basouPaths,
+  appendEvent as coreAppendEvent,
   getSnapshot,
   overwriteYamlFile,
   parseDuration,
@@ -22,6 +22,8 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
+
+type AppendEventFn = typeof coreAppendEvent;
 
 /**
  * `basou exec` orchestration: spawn an arbitrary child as a single new
@@ -44,6 +46,14 @@ export type ExecOptions = {
 type ExecContext = {
   runner?: ProcessRunner;
   now?: () => Date;
+  // events.jsonl writer override. Tests use this to verify that appendEvent
+  // failures during git_snapshot propagate as exec failures (see
+  // tryAppendGitSnapshot below) instead of being swallowed into a skip warning.
+  appendEvent?: AppendEventFn;
+  // Last-resort SIGKILL hook installation hook. Tests capture the handler
+  // installed on `process.on("exit", ...)` and trigger it manually to verify
+  // that activeChild is killed when the parent exits abnormally.
+  onExitHookInstalled?: (handler: () => void) => void;
 };
 
 export function registerExecCommand(program: Command): void {
@@ -64,7 +74,7 @@ export function registerExecCommand(program: Command): void {
         const exitCode = await runExec(command, args, options);
         process.exit(exitCode);
       } catch (error: unknown) {
-        renderExecError(error, options.verbose === true);
+        renderExecError(error, options.verbose === true || process.env.BASOU_DEBUG === "1");
         process.exit(1);
       }
     });
@@ -78,6 +88,7 @@ export async function runExec(
 ): Promise<number> {
   const runner = ctx.runner ?? new ChildProcessRunner();
   const now = ctx.now ?? (() => new Date());
+  const appendEvent: AppendEventFn = ctx.appendEvent ?? coreAppendEvent;
   const cwd = options.cwd ?? process.cwd();
 
   // 0. timeout option fail-fast: invalid timeout never creates a session.
@@ -123,7 +134,7 @@ export async function runExec(
 
   // 6. Optional pre-execute git_snapshot.
   if (options.snapshot !== false) {
-    await tryAppendGitSnapshot(sessionDir, sessionId, repoRoot, now);
+    await tryAppendGitSnapshot(sessionDir, sessionId, repoRoot, now, appendEvent);
   }
 
   // 7. status_changed: initialized -> running.
@@ -168,6 +179,9 @@ export async function runExec(
   process.on("SIGINT", onSigInt);
   process.on("SIGTERM", onSigTerm);
   process.on("exit", exitHandler);
+  // Allow tests to capture the exit handler and trigger the activeChild
+  // SIGKILL fallback synchronously without faking `process.emit("exit")`.
+  ctx.onExitHookInstalled?.(exitHandler);
 
   let result: RunResult;
   try {
@@ -185,7 +199,7 @@ export async function runExec(
       // Spawn-time error / pre-aborted / validation error: tear down the
       // session as failed before propagating so events.jsonl and session.yaml
       // are consistent even on error.
-      await finalizeSessionAsFailed(sessionDir, sessionYamlPath, sessionId, {
+      await finalizeSessionAsFailed(sessionDir, sessionYamlPath, sessionId, appendEvent, {
         command,
         args,
         cwd,
@@ -223,7 +237,7 @@ export async function runExec(
   // 10. Optional post-execute git_snapshot (after command_executed so the
   //     event sequence reads chronologically: pre-snapshot, run, post-snapshot).
   if (options.snapshot !== false) {
-    await tryAppendGitSnapshot(sessionDir, sessionId, repoRoot, now);
+    await tryAppendGitSnapshot(sessionDir, sessionId, repoRoot, now, appendEvent);
   }
 
   const finalStatus = decideFinalStatus(result, signalReceived);
@@ -295,22 +309,34 @@ async function tryAppendGitSnapshot(
   sessionId: string,
   repoRoot: string,
   now: () => Date,
+  appendEvent: AppendEventFn,
 ): Promise<void> {
+  // Stage 1: snapshot acquisition. Capability-level failures (no git repo,
+  // git binary missing, no commits) are recoverable and downgrade to a skip
+  // warning. The session continues and events.jsonl simply lacks this
+  // git_snapshot entry.
+  let snapshot: Awaited<ReturnType<typeof getSnapshot>>;
   try {
-    const snapshot = await getSnapshot(repoRoot);
-    await appendEvent(sessionDir, {
-      schema_version: "0.1.0",
-      type: "git_snapshot",
-      id: prefixedUlid("evt"),
-      session_id: sessionId,
-      occurred_at: now().toISOString(),
-      source: "git-capability",
-      ...snapshot,
-    });
+    snapshot = await getSnapshot(repoRoot);
   } catch (error: unknown) {
-    const normalized = normalizeGitSnapshotSkipMessage(error);
-    console.warn(normalized);
+    console.warn(normalizeGitSnapshotSkipMessage(error));
+    return;
   }
+  // Stage 2: events.jsonl append. Schema validation / disk failures here are
+  // NOT a "snapshot capability" miss — they would corrupt the events.jsonl
+  // integrity contract (the fixed 7-event sequence when snapshot is on). We
+  // intentionally do NOT swallow these; let them propagate so the exec call
+  // fails loudly instead of producing a session that looks successful but
+  // has missing or partial events.
+  await appendEvent(sessionDir, {
+    schema_version: "0.1.0",
+    type: "git_snapshot",
+    id: prefixedUlid("evt"),
+    session_id: sessionId,
+    occurred_at: now().toISOString(),
+    source: "git-capability",
+    ...snapshot,
+  });
 }
 
 function normalizeGitSnapshotSkipMessage(error: unknown): string {
@@ -377,6 +403,7 @@ async function finalizeSessionAsFailed(
   sessionDir: string,
   sessionYamlPath: string,
   sessionId: string,
+  appendEvent: AppendEventFn,
   ctx: {
     command: string;
     args: string[];

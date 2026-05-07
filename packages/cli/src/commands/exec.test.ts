@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import {
   type ProcessRunner,
   type RunOptions,
   type RunResult,
+  appendEvent,
   basouPaths,
   createManifest,
   ensureBasouDirectory,
@@ -290,5 +292,119 @@ describe("runExec", () => {
     expect(ce.received_signal).toBe("SIGINT");
     const sc2 = JSON.parse(lines[3] ?? "{}");
     expect(sc2.to).toBe("interrupted");
+  });
+
+  // 9 (Codex review #3 M2): activeChild SIGKILL last-resort cleanup
+  it("kills activeChild via the parent exit hook (last-resort cleanup)", async () => {
+    const repo = await setupInitedRepo();
+    let capturedExitHandler: (() => void) | undefined;
+    const killSpy = vi.fn();
+    const fakeChild = { kill: killSpy } as unknown as ChildProcess;
+    const runner: ProcessRunner = {
+      run: async (cmd, args, options: RunOptions): Promise<RunResult> => {
+        options.onSpawn?.(fakeChild);
+        // Simulate the parent process exiting abnormally while the child
+        // is still alive. The captured handler is what runExec installed on
+        // `process.on("exit", ...)`.
+        capturedExitHandler?.();
+        return {
+          command: cmd,
+          args: [...args],
+          cwd: options.cwd,
+          exit_code: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          started_at: FIXED_DATE.toISOString(),
+          ended_at: FIXED_DATE.toISOString(),
+          duration_ms: 0,
+          pid: 1,
+        };
+      },
+    };
+    await runExec(
+      "node",
+      [],
+      { cwd: repo, snapshot: false },
+      {
+        runner,
+        now: () => FIXED_DATE,
+        onExitHookInstalled: (h) => {
+          capturedExitHandler = h;
+        },
+      },
+    );
+    expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+    expect(killSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // 10 (Codex review #3 H1): appendEvent failure during git_snapshot must
+  // propagate as an exec failure instead of being swallowed into a warning.
+  // This guards the events.jsonl integrity contract — a session that should
+  // produce 7 events must never silently end up with 5/6.
+  it("propagates appendEvent failure during git_snapshot (does not silently skip)", async () => {
+    const repo = await setupInitedRepo();
+    const runner = makeFakeRunner({ exit_code: 0 });
+    const fakeAppend = async (sessionDir: string, event: unknown): Promise<void> => {
+      if ((event as { type?: string })?.type === "git_snapshot") {
+        throw new Error("Failed to append event to events.jsonl", {
+          cause: { code: "ENOSPC" },
+        });
+      }
+      return appendEvent(sessionDir, event);
+    };
+    await expect(
+      runExec(
+        "node",
+        [],
+        { cwd: repo },
+        { runner, now: () => FIXED_DATE, appendEvent: fakeAppend },
+      ),
+    ).rejects.toThrow(/Failed to append event/);
+  });
+
+  // 11 (Codex review #3 M1): getSnapshot capability failure (no commits)
+  // emits the pathless skip warning and the session still completes.
+  it("emits a pathless skip warning when getSnapshot fails (no commits)", async () => {
+    const noCommitRepo = await mkdtemp(join(tmpdir(), "basou-exec-nocommit-"));
+    try {
+      await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+        cwd: noCommitRepo,
+        env: ENV,
+      });
+      // No initial commit -> getSnapshot throws "No commits in repository".
+      const paths = await ensureBasouDirectory(noCommitRepo);
+      const manifest = createManifest({
+        workspaceName: "nocommit-test",
+        now: FIXED_DATE,
+        workspaceId: FIXED_WS_ID,
+      });
+      await writeManifest(paths, manifest);
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const runner = makeFakeRunner({ exit_code: 0 });
+      const exitCode = await runExec(
+        "node",
+        [],
+        { cwd: noCommitRepo },
+        { runner, now: () => FIXED_DATE },
+      );
+      expect(exitCode).toBe(0);
+      expect(warnSpy).toHaveBeenCalledWith("git_snapshot skipped: no commits in repository");
+      // Pre and post snapshots are both skipped, so events.jsonl has 5 events.
+      const sessionId = await findOnlySessionId(noCommitRepo);
+      const lines = await readEventsLines(noCommitRepo, sessionId);
+      expect(lines).toHaveLength(5);
+      const types = lines.map((l) => JSON.parse(l).type);
+      expect(types).toEqual([
+        "session_started",
+        "session_status_changed",
+        "command_executed",
+        "session_status_changed",
+        "session_ended",
+      ]);
+    } finally {
+      await rm(noCommitRepo, { recursive: true, force: true });
+    }
   });
 });
