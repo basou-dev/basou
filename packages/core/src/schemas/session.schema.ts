@@ -37,7 +37,9 @@ const SessionSourceSchema = z.object({
 const InvocationSchema = z.object({
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
-  exit_code: z.number().int(),
+  // Nullable to record signal-terminated runs where the child has no exit
+  // code; the same nullability is mirrored in CommandExecutedEventSchema.
+  exit_code: z.number().int().nullable(),
 });
 
 const SessionInnerSchema = z.object({

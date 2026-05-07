@@ -1,15 +1,30 @@
+import type { ChildProcess } from "node:child_process";
+
 /**
  * Internal abstraction over child-process execution.
  *
  * The v0.1 implementation is intentionally minimal:
- * - No stream callbacks (callers receive stdout/stderr as full strings).
+ * - Optional UTF-8 stdout/stderr capture (`capture: "buffer"`, default) or
+ *   pass-through to the parent's stdio (`capture: "none"`).
+ * - No stream callbacks for partial chunks.
  * - No event emission. Callers wire any event flow separately.
- * - UTF-8 capture only.
  *
  * The boundary is internal: ProcessRunner is not part of the public
  * adapter surface. Adapters do not import or instantiate it directly;
  * CLI / Core orchestration owns construction and invocation.
  */
+
+/**
+ * Output capture mode.
+ *
+ * - `"buffer"` (default): pipe stdout/stderr to the runner and accumulate
+ *   the full UTF-8 string into {@link RunResult}.
+ * - `"none"`: inherit the parent's stdio. The child writes directly to the
+ *   parent terminal in real time and {@link RunResult.stdout} /
+ *   {@link RunResult.stderr} are empty strings. `stdin` cannot be combined
+ *   with `"none"` because the child has no writable stdin pipe.
+ */
+export type CaptureMode = "buffer" | "none";
 
 export type RunOptions = {
   /**
@@ -36,9 +51,21 @@ export type RunOptions = {
   readonly timeout_ms?: number;
   /**
    * Optional input written to the child's stdin. The pipe is closed
-   * after the value is written.
+   * after the value is written. Incompatible with `capture: "none"`.
    */
   readonly stdin?: string | Buffer;
+  /**
+   * Output capture mode. Defaults to `"buffer"`. See {@link CaptureMode}.
+   */
+  readonly capture?: CaptureMode;
+  /**
+   * Invoked synchronously immediately after the child has been spawned,
+   * before the runner waits for completion. Callers use this to retain a
+   * reference for parent-side cleanup (e.g. an `exit` hook that SIGKILLs
+   * the child if the parent is forcibly terminated). The runner takes no
+   * action if the callback throws.
+   */
+  readonly onSpawn?: (child: ChildProcess) => void;
 };
 
 export type RunResult = {

@@ -57,6 +57,7 @@ export {
   createManifest,
   ensureBasouDirectory,
   findErrorCode,
+  overwriteYamlFile,
   readManifest,
   readStatus,
   readYamlFile,
@@ -72,6 +73,7 @@ export type {
 
 export { ChildProcessRunner } from "./runtime/child-process-runner.js";
 export type {
+  CaptureMode,
   ProcessRunner,
   RunOptions,
   RunResult,
@@ -79,3 +81,7 @@ export type {
 
 export { getSnapshot, resolveRepositoryRoot, tryRemoteUrl } from "./git/snapshot.js";
 export type { GitSnapshot } from "./git/snapshot.js";
+
+export { appendEvent } from "./events/event-writer.js";
+
+export { parseDuration } from "./lib/duration.js";

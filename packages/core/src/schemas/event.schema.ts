@@ -76,10 +76,21 @@ const ApprovalExpiredEventSchema = BaseEventSchema.extend({
 
 // --- Command / Git / File events ---
 
+// `command` is the spawned executable name only (e.g. "npm"); arguments are
+// kept in `args` to preserve quoting and avoid shell-injection round-trips.
+// `exit_code` is null when the child terminated by signal. `signal` records
+// the child's terminating signal; `received_signal` records what the parent
+// process received (SIGINT/SIGTERM) and forwarded as cancellation, so a
+// timeout (signal set, received_signal absent) can be distinguished from a
+// user interrupt (both set).
 const CommandExecutedEventSchema = BaseEventSchema.extend({
   type: z.literal("command_executed"),
   command: z.string(),
-  exit_code: z.number().int(),
+  args: z.array(z.string()),
+  cwd: z.string(),
+  exit_code: z.number().int().nullable(),
+  signal: z.string().nullable().optional(),
+  received_signal: z.string().nullable().optional(),
   duration_ms: z.number().int().nonnegative(),
 });
 

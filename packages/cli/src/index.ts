@@ -1,14 +1,22 @@
 import { Command } from "commander";
+import { registerExecCommand } from "./commands/exec.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerStatusCommand } from "./commands/status.js";
 
 const BASOU_CLI_VERSION = "0.1.0";
 
 const program = new Command();
-program.name("basou").description("Provenance layer for AI development").version(BASOU_CLI_VERSION);
+program
+  .name("basou")
+  .description("Provenance layer for AI development")
+  .version(BASOU_CLI_VERSION)
+  // Required so that `basou exec` (and any other passThroughOptions
+  // subcommand) can forward unknown flags to the wrapped child.
+  .enablePositionalOptions();
 
 registerInitCommand(program);
 registerStatusCommand(program);
+registerExecCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   // Mirror runInit's renderCliError: never print the Error object directly

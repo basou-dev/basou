@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 
 import { findErrorCode } from "../storage/status.js";
 
@@ -14,8 +14,14 @@ const DEFAULT_KILL_GRACE_MS = 5_000;
  *   detached, but the OS does not guarantee the child is reaped when
  *   the parent terminates abruptly; callers handle SIGINT/SIGTERM/exit
  *   hooks themselves.
- * - `stdio: ['pipe', 'pipe', 'pipe']`. stdout / stderr are decoded as
- *   UTF-8 and accumulated as full strings (no streaming callbacks).
+ * - `capture: "buffer"` (default): `stdio: ['pipe', 'pipe', 'pipe']`,
+ *   stdout / stderr are decoded as UTF-8 and accumulated as full
+ *   strings (no streaming callbacks).
+ * - `capture: "none"`: `stdio: ['inherit', 'inherit', 'inherit']`, the
+ *   child writes directly to the parent terminal in real time and
+ *   `RunResult.stdout` / `stderr` are empty strings. `stdin` is
+ *   incompatible with this mode (the child has no writable stdin pipe)
+ *   and the combination is rejected before spawn.
  * - `timeout_ms` and `AbortSignal` both trigger a two-stage kill:
  *   `SIGTERM`, then `SIGKILL` after `DEFAULT_KILL_GRACE_MS` (5_000 ms).
  * - A non-zero `exit_code` does not throw; it is returned via
@@ -43,20 +49,34 @@ export class ChildProcessRunner implements ProcessRunner {
     const snapshotCommand = command;
     const snapshotArgs: readonly string[] = [...args];
     const snapshotCwd = options.cwd;
+    const captureMode = options.capture ?? "buffer";
 
     const started_at = new Date();
 
-    let child: ChildProcessWithoutNullStreams;
+    let child: ChildProcess;
     try {
       child = spawn(snapshotCommand, [...snapshotArgs], {
         cwd: snapshotCwd,
         env: options.env ?? process.env,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio:
+          captureMode === "none" ? ["inherit", "inherit", "inherit"] : ["pipe", "pipe", "pipe"],
         shell: false,
         detached: false,
       });
     } catch (error: unknown) {
       throw classifySpawnError(error);
+    }
+
+    // Notify caller that the child exists so they can wire parent-side
+    // cleanup (e.g. an `exit` hook). The runner ignores any throw from
+    // the callback; the caller is responsible for keeping it side-effect
+    // safe.
+    if (options.onSpawn) {
+      try {
+        options.onSpawn(child);
+      } catch {
+        // intentional: do not let onSpawn failures abort the run.
+      }
     }
 
     let timeoutTimer: NodeJS.Timeout | null = null;
@@ -87,20 +107,24 @@ export class ChildProcessRunner implements ProcessRunner {
 
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
+    if (captureMode === "buffer") {
+      // stdio is ['pipe', 'pipe', 'pipe'] so stdout/stderr/stdin are non-null.
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk: string) => {
+        stdout += chunk;
+      });
+      child.stderr?.on("data", (chunk: string) => {
+        stderr += chunk;
+      });
 
-    if (options.stdin !== undefined) {
-      child.stdin.end(options.stdin);
-    } else {
-      child.stdin.end();
+      if (options.stdin !== undefined) {
+        child.stdin?.end(options.stdin);
+      } else {
+        child.stdin?.end();
+      }
     }
+    // capture: "none" leaves stdio inherited; stdout/stderr remain "".
 
     if (options.timeout_ms !== undefined) {
       timeoutTimer = setTimeout(triggerKill, options.timeout_ms);
@@ -148,6 +172,9 @@ function validateOptions(options: RunOptions): void {
     (!Number.isFinite(options.timeout_ms) || options.timeout_ms <= 0)
   ) {
     throw new Error("Invalid timeout_ms");
+  }
+  if (options.capture === "none" && options.stdin !== undefined) {
+    throw new Error('Combination of capture: "none" and stdin is not supported');
   }
 }
 

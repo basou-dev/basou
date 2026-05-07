@@ -258,4 +258,41 @@ describe("ChildProcessRunner", () => {
       setTimeout(resolve, 100);
     });
   });
+
+  // 23: capture: "none" returns empty stdout/stderr but still reports exit code.
+  it('returns empty stdout/stderr in capture: "none" mode while preserving exit_code', async () => {
+    const result = await runner.run(
+      NODE,
+      ["-e", "process.stdout.write('inherited'); process.exit(0)"],
+      { cwd, capture: "none" },
+    );
+    expect(result.exit_code).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
+  // 24: combining capture: "none" with stdin is rejected before spawn.
+  it('rejects capture: "none" combined with stdin', async () => {
+    await expect(
+      runner.run(NODE, ["-e", "process.exit(0)"], {
+        cwd,
+        capture: "none",
+        stdin: "input",
+      }),
+    ).rejects.toThrow('Combination of capture: "none" and stdin is not supported');
+  });
+
+  // 25: onSpawn callback receives the child process and runs synchronously
+  // before the run completes.
+  it("invokes onSpawn with the spawned child and lets the caller observe its pid", async () => {
+    let observedPid: number | null = null;
+    const result = await runner.run(NODE, ["-e", "process.exit(0)"], {
+      cwd,
+      onSpawn: (child) => {
+        observedPid = child.pid ?? null;
+      },
+    });
+    expect(observedPid).toBe(result.pid);
+    expect(observedPid).not.toBeNull();
+  });
 });

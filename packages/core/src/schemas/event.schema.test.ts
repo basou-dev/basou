@@ -44,7 +44,9 @@ const FIXTURES = [
   {
     ...BASE,
     type: "command_executed" as const,
-    command: "ls -la",
+    command: "ls",
+    args: ["-la"],
+    cwd: "/tmp/example",
     exit_code: 0,
     duration_ms: 12,
   },

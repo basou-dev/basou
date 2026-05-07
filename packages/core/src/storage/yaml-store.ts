@@ -50,6 +50,27 @@ export async function writeYamlFile(filePath: string, value: unknown): Promise<v
   }
 }
 
+/**
+ * Overwrite an existing YAML file atomically. Like {@link writeYamlFile}
+ * but without the `wx` collision check on the temp file's target — used
+ * for files that legitimately need in-place mutation (e.g. session.yaml's
+ * status / ended_at lifecycle updates).
+ *
+ * Uses tmp-file + rename within the same directory for crash-resistant
+ * atomicity. Error messages are pathless; the native cause is attached.
+ */
+export async function overwriteYamlFile(filePath: string, value: unknown): Promise<void> {
+  const body = stringify(value);
+  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
+  try {
+    await writeFile(tmpPath, body, { encoding: "utf8" });
+    await rename(tmpPath, filePath);
+  } catch (error: unknown) {
+    await unlink(tmpPath).catch(() => undefined);
+    throw new Error("Failed to overwrite YAML file", { cause: error });
+  }
+}
+
 function hasErrorCode(error: unknown): error is Error & { code: string } {
   if (!(error instanceof Error)) return false;
   return typeof (error as unknown as Record<string, unknown>).code === "string";
