@@ -93,8 +93,8 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
 
   await writeManifest(paths, manifest, { force: options.force === true });
 
-  // .gitignore は best-effort: 失敗しても init 全体は成功とみなす（A1）。
-  // Y-2 §16.1「既存 Git repo で安全に実行できる」を担保するため、
+  // .gitignore は best-effort: 失敗しても init 全体は成功とみなす。
+  // 「既存 Git repo で安全に実行できる」という完了条件を担保するため、
   // permission denied 等で manifest だけ書けて .gitignore が書けない
   // ケースでも基本機能は使える。
   try {
