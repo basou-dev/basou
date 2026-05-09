@@ -1,6 +1,17 @@
-import { simpleGit } from "simple-git";
+import { type SimpleGit, simpleGit } from "simple-git";
 import type { GitSnapshotEvent } from "../schemas/event.schema.js";
 import { findErrorCode } from "../storage/status.js";
+
+/**
+ * Build a {@link SimpleGit} instance bound to `repoRoot`. Production callers
+ * use this single helper so any future tightening (additional safety opts,
+ * environment scrubbing, ...) lands in one place. Test fixtures that need
+ * `unsafe.allowUnsafeConfigPaths` for isolated `GIT_CONFIG_*` paths build
+ * their own SimpleGit locally and intentionally bypass this helper.
+ */
+export function safeSimpleGit(repoRoot: string): SimpleGit {
+  return simpleGit({ baseDir: repoRoot });
+}
 
 /**
  * Detect "git executable not found" across error wrappers used by simple-git.
@@ -9,7 +20,7 @@ import { findErrorCode } from "../storage/status.js";
  * text survives in the message string. We therefore check both the errno
  * `code` (via {@link findErrorCode}) and the message chain.
  */
-function isGitNotFound(error: unknown): boolean {
+export function isGitNotFound(error: unknown): boolean {
   if (findErrorCode(error, "ENOENT")) return true;
   let cur: unknown = error;
   for (let i = 0; i < 4 && cur instanceof Error; i++) {
@@ -48,7 +59,7 @@ export type GitSnapshot = Omit<
  * path; native errors are kept on `error.cause` for verbose surfacing.
  */
 export async function resolveRepositoryRoot(cwd: string): Promise<string> {
-  const git = simpleGit({ baseDir: cwd });
+  const git = safeSimpleGit(cwd);
   try {
     const root = (await git.revparse(["--show-toplevel"])).trimEnd();
     if (root.length === 0) {
@@ -76,7 +87,7 @@ export async function resolveRepositoryRoot(cwd: string): Promise<string> {
  * `manifest.yaml`.
  */
 export async function tryRemoteUrl(repositoryRoot: string): Promise<string | undefined> {
-  const git = simpleGit({ baseDir: repositoryRoot });
+  const git = safeSimpleGit(repositoryRoot);
   try {
     const result = await git.getConfig("remote.origin.url", "local");
     const url = (result.value ?? "").trimEnd();
@@ -103,7 +114,7 @@ export async function tryRemoteUrl(repositoryRoot: string): Promise<string | und
  * Pathless contract preserved on every throw path.
  */
 export async function getSnapshot(repositoryRoot: string): Promise<GitSnapshot> {
-  const git = simpleGit({ baseDir: repositoryRoot });
+  const git = safeSimpleGit(repositoryRoot);
 
   let inside: boolean;
   try {

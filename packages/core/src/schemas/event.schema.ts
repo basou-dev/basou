@@ -110,6 +110,9 @@ const FileChangedEventSchema = BaseEventSchema.extend({
   type: z.literal("file_changed"),
   path: z.string(),
   change_type: z.enum(["added", "modified", "deleted", "renamed"]),
+  // Renamed entries record the previous path here. Optional + nullable to
+  // keep the wire format stable for added / modified / deleted events.
+  old_path: z.string().nullable().optional(),
 });
 
 // --- Decision / Task / Note events ---

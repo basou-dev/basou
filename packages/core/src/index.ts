@@ -82,6 +82,16 @@ export type {
 export { getSnapshot, resolveRepositoryRoot, tryRemoteUrl } from "./git/snapshot.js";
 export type { GitSnapshot } from "./git/snapshot.js";
 
+export { getDiff } from "./git/diff.js";
+export type { DiffResult, FileChange, FileChangeStatus } from "./git/diff.js";
+
+export {
+  claudeCodeAdapterMetadata,
+  resolveClaudeCodeCommand,
+  summarizeAdapterOutput,
+} from "./adapters/claude-code/index.js";
+export type { CommandLookup } from "./adapters/claude-code/index.js";
+
 export { appendEvent } from "./events/event-writer.js";
 
 export { parseDuration } from "./lib/duration.js";
