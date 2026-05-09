@@ -14,8 +14,9 @@ import {
   ensureBasouDirectory,
   writeManifest,
 } from "@basou/core";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runClaudeCode } from "./run.js";
+import { type RunContext, registerRunCommand, runClaudeCode } from "./run.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -457,33 +458,59 @@ describe("runClaudeCode", () => {
     }
   });
 
-  // 13 — getDiff capability skip
-  it("emits a pathless file_changed skip warning when getDiff fails", async () => {
+  // 13 — getDiff capability skip via DI: warning + pre+post snapshot union
+  it("emits a pathless file_changed skip warning and preserves snapshot union when getDiff throws", async () => {
     const repo = await setupInitedRepo();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // Fake runner deletes .git so the post-snapshot still passes (it was
-    // taken before this point) but the diff stage cannot resolve refs.
-    // Simpler approach: no commit happens (HEAD === HEAD), so getDiff
-    // returns []. To force a real skip, we use a runner that touches no
-    // files — this means no file_changed events but no skip warning either.
-    // Instead, we install a fake appendEvent layer that swaps to a state
-    // where the headRef was rewritten away from preSnapshot.head. Here we
-    // simply assert the no-commit case results in zero file_changed events
-    // (the most common quiescent path) and that the warning channel stays
-    // available for actual capability failures.
-    const runner = makeFakeRunner({ exit_code: 0 });
+    // Force a committed change so pre/post HEAD differ; without DI, getDiff
+    // would observe the change and emit a file_changed event. Here the DI
+    // overrides getDiff to throw so we exercise the capability-skip path.
+    const runner: ProcessRunner = {
+      run: async (cmd, args, options) => {
+        await writeFile(join(options.cwd, "added.txt"), "x\n");
+        await execFileAsync("git", ["add", "added.txt"], { cwd: options.cwd, env: ENV });
+        await execFileAsync("git", ["commit", "-m", "add"], { cwd: options.cwd, env: ENV });
+        return {
+          command: cmd,
+          args: [...args],
+          cwd: options.cwd,
+          exit_code: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          started_at: FIXED_DATE.toISOString(),
+          ended_at: FIXED_DATE.toISOString(),
+          duration_ms: 0,
+          pid: 1,
+        };
+      },
+    };
+    const failingGetDiff = async (): Promise<never> => {
+      throw new Error("Failed to compute git diff", { cause: { code: "EIO" } });
+    };
     await runClaudeCode(
       [],
       { cwd: repo },
-      { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+      {
+        runner,
+        now: () => FIXED_DATE,
+        resolveCommand: okResolve,
+        getDiff: failingGetDiff,
+      },
     );
-    // getDiff with baseRef === headRef short-circuits to no file_changed
-    // events — no skip warning is emitted in this happy path.
-    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("file_changed skipped"));
+    expect(warnSpy).toHaveBeenCalledWith("file_changed skipped: failed to compute git diff");
     const sessionId = await findOnlySessionId(repo);
     const lines = await readEventsLines(repo, sessionId);
-    const fileChangedCount = lines.filter((l) => JSON.parse(l).type === "file_changed").length;
-    expect(fileChangedCount).toBe(0);
+    const fileChanged = lines.filter((l) => JSON.parse(l).type === "file_changed");
+    expect(fileChanged).toHaveLength(0);
+    // related_files retains the pre+post snapshot union — the freshly
+    // committed file shows up via the post-snapshot `staged`/`unstaged`
+    // observation rather than the (now-skipped) diff.
+    const yaml = await readFile(join(basouPaths(repo).sessions, sessionId, "session.yaml"), "utf8");
+    // No file_changed event was emitted, so the diff path didn't contribute,
+    // but related_files is non-empty from the snapshot side (untracked
+    // .basou/ paths plus any other observed dirty entries).
+    expect(yaml).not.toMatch(/related_files:\s*\[\s*\]/);
   });
 
   // 14 — appendEvent failure during file_changed propagates
@@ -526,54 +553,103 @@ describe("runClaudeCode", () => {
     ).rejects.toThrow(/Failed to append event/);
   });
 
-  // 15 — `--no-snapshot` consumed by `run` when placed before claude-code
-  it("treats --no-snapshot as a basou option when supplied via parent options", async () => {
+  // 15-17 — argv ordering tests exercise the real commander parse path so
+  //         the contract (--no-snapshot before vs after `claude-code`,
+  //         `--` separator) is pinned end-to-end. The ctx is plumbed through
+  //         registerRunCommand into the action callback, then process.exit
+  //         is replaced by a throw so the test can resume after the action.
+  type ExitSentinel = { code: number };
+  const installExitTrap = (): ExitSentinel => {
+    const sentinel: ExitSentinel = { code: -1 };
+    vi.spyOn(process, "exit").mockImplementation((code?: string | number | null) => {
+      // Lock the first observed exit code: action callbacks may surface a
+      // second `process.exit(1)` from their own catch block when the trap
+      // throws the sentinel error, but the contract is what the action
+      // *intended* to exit with on its happy path.
+      if (sentinel.code === -1) {
+        sentinel.code = typeof code === "number" ? code : 0;
+      }
+      throw new Error(`__exit_${typeof code === "number" ? code : 0}__`);
+    });
+    return sentinel;
+  };
+
+  async function runViaParseAsync(argv: readonly string[], ctx: RunContext): Promise<ExitSentinel> {
+    const program = new Command();
+    program.name("basou").enablePositionalOptions();
+    registerRunCommand(program, ctx);
+    const sentinel = installExitTrap();
+    try {
+      await program.parseAsync(["node", "basou", ...argv]);
+    } catch (error: unknown) {
+      // Swallow only the synthetic exit thrown by the trap. Real failures
+      // surface through expect().rejects.toThrow in dedicated tests above.
+      if (error instanceof Error && error.message.startsWith("__exit_")) {
+        // expected: process.exit was called via the trap
+      } else {
+        throw error;
+      }
+    }
+    return sentinel;
+  }
+
+  // 15 — `basou run --no-snapshot claude-code` parses --no-snapshot as a run
+  //       option and emits 5 events (no git_snapshot pre/post).
+  it("parses --no-snapshot as a basou option when placed before `claude-code`", async () => {
     const repo = await setupInitedRepo();
     const runner = makeFakeRunner({ exit_code: 0 });
-    await runClaudeCode(
-      [],
-      { cwd: repo, snapshot: false },
-      { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+    const sentinel = await runViaParseAsync(
+      ["run", "--no-snapshot", "--cwd", repo, "claude-code"],
+      {
+        runner,
+        now: () => FIXED_DATE,
+        resolveCommand: okResolve,
+      },
     );
+    expect(sentinel.code).toBe(0);
+    expect(runner.lastArgs).toEqual([]);
     const sessionId = await findOnlySessionId(repo);
     const lines = await readEventsLines(repo, sessionId);
-    // Snapshot off ⇒ 5 events (no git_snapshot pre/post).
     expect(lines).toHaveLength(5);
-    expect((runner as ProcessRunner & { lastArgs?: readonly string[] }).lastArgs).toEqual([]);
   });
 
-  // 16 — args after `claude-code` are passthrough; --no-snapshot is left for child
-  it("forwards unknown flags after claude-code to the child via passthrough", async () => {
+  // 16 — `basou run --cwd <repo> claude-code --no-snapshot` consumes
+  //       --no-snapshot on the claude-code subsubcommand (the option is
+  //       redeclared there for symmetry with placement before the
+  //       subsubcommand name). The child receives an empty argv and
+  //       snapshot is off, mirroring case 15. To force passthrough, use
+  //       the `--` separator (case 17).
+  it("consumes --no-snapshot when placed after `claude-code` (no passthrough)", async () => {
     const repo = await setupInitedRepo();
     const runner = makeFakeRunner({ exit_code: 0 });
-    await runClaudeCode(
-      ["--no-snapshot", "--some-flag"],
-      { cwd: repo },
+    const sentinel = await runViaParseAsync(
+      ["run", "--cwd", repo, "claude-code", "--no-snapshot"],
       { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
     );
-    expect((runner as ProcessRunner & { lastArgs?: readonly string[] }).lastArgs).toEqual([
-      "--no-snapshot",
-      "--some-flag",
-    ]);
+    expect(sentinel.code).toBe(0);
+    expect(runner.lastArgs).toEqual([]);
     const sessionId = await findOnlySessionId(repo);
     const lines = await readEventsLines(repo, sessionId);
-    // Snapshot stayed on (default) ⇒ 7 events.
-    expect(lines).toHaveLength(7);
+    expect(lines).toHaveLength(5);
   });
 
-  // 17 — `--` separator passthrough
-  it("forwards args after `--` separator to the child", async () => {
+  // 17 — `basou run --cwd <repo> claude-code -- --some-flag` forwards the
+  //       trailing flag via the `--` separator; snapshot stays on (7
+  //       events).
+  it("forwards args after `--` to the child while leaving snapshot on", async () => {
     const repo = await setupInitedRepo();
     const runner = makeFakeRunner({ exit_code: 0 });
-    await runClaudeCode(
-      ["--some-flag", "value"],
-      { cwd: repo, snapshot: false },
+    const sentinel = await runViaParseAsync(
+      ["run", "--cwd", repo, "claude-code", "--", "--some-flag"],
       { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
     );
-    expect((runner as ProcessRunner & { lastArgs?: readonly string[] }).lastArgs).toEqual([
-      "--some-flag",
-      "value",
-    ]);
+    expect(sentinel.code).toBe(0);
+    // The `--` separator itself is consumed by commander; the remaining
+    // `--some-flag` reaches the child unchanged.
+    expect(runner.lastArgs).toEqual(["--some-flag"]);
+    const sessionId = await findOnlySessionId(repo);
+    const lines = await readEventsLines(repo, sessionId);
+    expect(lines).toHaveLength(7);
   });
 
   // 18 — dirty-no-commit case

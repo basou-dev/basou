@@ -29,6 +29,7 @@ import type { Command } from "commander";
 
 type AppendEventFn = typeof coreAppendEvent;
 type ResolveCommandFn = typeof resolveClaudeCodeCommand;
+type GetDiffFn = typeof getDiff;
 
 /**
  * `basou run claude-code` orchestration: spawn claude-code as a single new
@@ -48,7 +49,7 @@ export type RunOptions = {
   verbose?: boolean;
 };
 
-type RunContext = {
+export type RunContext = {
   runner?: ProcessRunner;
   now?: () => Date;
   appendEvent?: AppendEventFn;
@@ -56,14 +57,33 @@ type RunContext = {
   // Override the claude-code PATH lookup. Tests use this to skip real
   // `which` invocations and force success / failure deterministically.
   resolveCommand?: ResolveCommandFn;
+  // Override the git diff capability. Tests use this to force capability
+  // failure deterministically without rewriting the git fixture state.
+  getDiff?: GetDiffFn;
 };
 
-export function registerRunCommand(program: Command): void {
+/**
+ * Wire the `basou run` command group into `program`. The optional `ctx` is
+ * passed through to `runClaudeCode` so tests can intercept the action callback
+ * (fake runner, fake clock, deterministic resolveCommand / getDiff). Production
+ * callers omit it.
+ *
+ * Basou options (`--no-snapshot`, `--cwd`, `-v`) are defined on both the
+ * `run` group and the inner `claude-code` subcommand. commander's
+ * `passThroughOptions()` only forwards UNKNOWN options to args, so a
+ * group-only definition would make `basou run claude-code --no-snapshot`
+ * crash with "unknown option". Duplicating the definitions lets the option
+ * be recognized regardless of position; only `--`-separated args go to the
+ * child. v0.2+ adapter additions (codex / gemini) should consider
+ * extracting a common-option helper rather than re-duplicating.
+ */
+export function registerRunCommand(program: Command, ctx: RunContext = {}): void {
   const runCommand = program
     .command("run")
     .description("Run an AI coding tool through Basou as a tracked session")
-    // Required so the inner `claude-code` subcommand can passthrough unknown
-    // options to the child without commander interpreting them as run options.
+    // Required so the inner `claude-code` subcommand can pass through
+    // arguments after `--` to the child without commander interpreting them
+    // as run-group options.
     .enablePositionalOptions()
     .option("--no-snapshot", "Skip git_snapshot before/after the session")
     .option("--cwd <path>", "Run from a Basou root other than process.cwd()")
@@ -72,17 +92,29 @@ export function registerRunCommand(program: Command): void {
   runCommand
     .command("claude-code [args...]")
     .description("Run Claude Code CLI as a Basou-tracked session")
-    // Forward unknown flags after `claude-code` to the child. basou's own
-    // options (--no-snapshot, --cwd, -v) must come before the `claude-code`
-    // subcommand name; see basou/AGENTS.md "CLI 設計上の注記".
+    // Same options redeclared on the subsubcommand so they are recognized
+    // when placed AFTER `claude-code` as well; see the function comment.
+    .option("--no-snapshot", "Skip git_snapshot before/after the session")
+    .option("--cwd <path>", "Run from a Basou root other than process.cwd()")
+    .option("-v, --verbose", "Show error causes")
     .passThroughOptions()
-    .action(async (args: string[], _options: object, command: Command) => {
+    .action(async (args: string[], options: RunOptions, command: Command) => {
       const parentOptions = (command.parent?.opts() ?? {}) as RunOptions;
+      // Both layers default `snapshot` to `true` when --no-snapshot is
+      // omitted, so a naive spread would let the subsubcommand's default
+      // overwrite a `--no-snapshot` set on the parent. Take a logical AND
+      // instead: snapshot stays on only when neither layer disables it.
+      const snapshotOn = parentOptions.snapshot !== false && options.snapshot !== false;
+      const merged: RunOptions = {
+        ...parentOptions,
+        ...options,
+        snapshot: snapshotOn,
+      };
       try {
-        const exitCode = await runClaudeCode(args, parentOptions);
+        const exitCode = await runClaudeCode(args, merged, ctx);
         process.exit(exitCode);
       } catch (error: unknown) {
-        renderRunError(error, parentOptions.verbose === true || process.env.BASOU_DEBUG === "1");
+        renderRunError(error, merged.verbose === true || process.env.BASOU_DEBUG === "1");
         process.exit(1);
       }
     });
@@ -97,6 +129,7 @@ export async function runClaudeCode(
   const now = ctx.now ?? (() => new Date());
   const appendEvent: AppendEventFn = ctx.appendEvent ?? coreAppendEvent;
   const resolveCommand: ResolveCommandFn = ctx.resolveCommand ?? resolveClaudeCodeCommand;
+  const getDiffFn: GetDiffFn = ctx.getDiff ?? getDiff;
 
   // 1. Resolve the claude-code executable BEFORE any side-effect: a missing
   //    CLI is a user installation issue, not something worth recording as a
@@ -259,6 +292,7 @@ export async function runClaudeCode(
       postSnapshot.head,
       now().toISOString(),
       appendEvent,
+      getDiffFn,
     );
   }
 
@@ -370,12 +404,13 @@ async function tryAppendFileChangedEvents(
   headRef: string,
   occurredAt: string,
   appendEvent: AppendEventFn,
+  getDiffFn: GetDiffFn,
 ): Promise<DiffResult | null> {
   // Stage 1: capability acquisition (same skip-vs-fail split as
   // tryAppendGitSnapshot).
   let diff: DiffResult;
   try {
-    diff = await getDiff(repoRoot, baseRef, headRef);
+    diff = await getDiffFn(repoRoot, baseRef, headRef);
   } catch (error: unknown) {
     console.warn(normalizeFileChangedSkipMessage(error));
     return null;
