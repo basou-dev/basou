@@ -92,6 +92,7 @@ export {
 } from "./adapters/claude-code/index.js";
 export type { CommandLookup } from "./adapters/claude-code/index.js";
 
-export { appendEvent } from "./events/event-writer.js";
+export { appendEvent, readAllEvents, replayEvents } from "./events/index.js";
+export type { ReplayOptions, ReplayWarning } from "./events/index.js";
 
 export { parseDuration } from "./lib/duration.js";

@@ -171,21 +171,10 @@ export async function readStatus(paths: BasouPaths): Promise<StatusSnapshot> {
   return StatusSchema.parse(parsed);
 }
 
-/**
- * Walk the cause chain (up to `depth` levels) looking for an Error whose
- * errno-style `code` matches `code`. Returns true on the first match.
- * Resilient to wrapper depth changes so that ENOENT detection survives
- * future error-wrapping refactors.
- */
-export function findErrorCode(error: unknown, code: string, depth = 4): boolean {
-  let cur: unknown = error;
-  for (let i = 0; i < depth && cur instanceof Error; i++) {
-    const c = (cur as { code?: unknown }).code;
-    if (typeof c === "string" && c === code) return true;
-    cur = (cur as Error).cause;
-  }
-  return false;
-}
+// Re-exported from lib so existing import paths (`./storage/status.js`,
+// `@basou/core/storage/index.js`, `@basou/core`) continue to resolve while
+// the canonical definition lives in `core/src/lib/error-codes.ts`.
+export { findErrorCode } from "../lib/error-codes.js";
 
 function hasErrorCode(error: unknown): error is Error & { code: string } {
   if (!(error instanceof Error)) return false;

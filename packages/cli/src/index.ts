@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { registerExecCommand } from "./commands/exec.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerRunCommand } from "./commands/run.js";
+import { registerSessionCommand } from "./commands/session.js";
 import { registerStatusCommand } from "./commands/status.js";
 
 const BASOU_CLI_VERSION = "0.1.0";
@@ -19,6 +20,7 @@ registerInitCommand(program);
 registerStatusCommand(program);
 registerExecCommand(program);
 registerRunCommand(program);
+registerSessionCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   // Mirror runInit's renderCliError: never print the Error object directly

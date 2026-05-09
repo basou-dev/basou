@@ -292,18 +292,6 @@ describe("assertBasouRootSafe", () => {
   });
 });
 
-describe("findErrorCode", () => {
-  it("walks the cause chain and detects ENOENT at depth 2", () => {
-    const innermost = Object.assign(new Error("inner"), { code: "ENOENT" });
-    const middle = new Error("middle wrapping inner", { cause: innermost });
-    const outer = new Error("outer", { cause: middle });
-    expect(findErrorCode(outer, "ENOENT")).toBe(true);
-    expect(findErrorCode(outer, "EACCES")).toBe(false);
-    // depth 1 stops at outer (no code), so ENOENT at depth 2 is not reachable.
-    expect(findErrorCode(outer, "ENOENT", 1)).toBe(false);
-  });
-});
-
 describe("DIRECTORY_CHECKS", () => {
   it("has the same key set as StatusSchema.shape.directories_present.shape", () => {
     const checkKeys = Object.keys(DIRECTORY_CHECKS).sort();
