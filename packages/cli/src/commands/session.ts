@@ -278,9 +278,12 @@ async function classifySuspect(
       if (ev.type === "session_ended") endedFound = true;
     }
   } catch (_error: unknown) {
-    // events.jsonl I/O failure is reported via the warning hook for replays
-    // we initiated above; for the suspect check itself we fall through and
-    // leave the session unflagged (callers can still see the status column).
+    // events.jsonl I/O failure (e.g. EACCES) is unrecoverable for the
+    // suspect check. Surface a stderr warning so the operator sees that the
+    // classification was skipped rather than silently treating the session
+    // as healthy. The warning intentionally avoids exposing the cause's
+    // message so absolute paths from native fs errors do not leak.
+    console.error(`Warning: skipped suspect check for ${shortId(sid)}: events.jsonl unreadable`);
     return { suspect: false, suspectReason: null };
   }
   if (endedFound) {
@@ -400,10 +403,11 @@ function formatWorkingDir(
   if (workingDir === repositoryRoot) return "<repository_root>";
   const rel = relative(repositoryRoot, workingDir);
   if (rel.length === 0 || rel === ".") return "<repository_root>";
-  // A relative path that starts with `..` means the working dir is outside
-  // the repo; fall back to the absolute path so the operator can see what
-  // was actually recorded rather than a misleading `../` traversal.
-  if (rel.startsWith("..")) return workingDir;
+  // Outside-repo working directories surface as a `../...` relative path
+  // rather than the absolute path so the default-display contract holds
+  // even for sessions recorded from a sibling checkout. `--full-path` is
+  // the explicit opt-in for the absolute form.
+  if (rel.startsWith("..")) return rel;
   return `./${rel}`;
 }
 
@@ -471,6 +475,11 @@ async function resolveSessionId(paths: BasouPaths, input: string): Promise<strin
     throw new Error("Session id is empty");
   }
   const normalized = trimmed.startsWith(SES_PREFIX) ? trimmed : `${SES_PREFIX}${trimmed}`;
+  // Reject prefix-only input (`ses_` or just spaces after the prefix) so a
+  // bare prefix cannot match an arbitrary single session via `startsWith`.
+  if (normalized.length <= SES_PREFIX.length) {
+    throw new Error(`Session not found: ${input}`);
+  }
 
   let entries: string[];
   try {

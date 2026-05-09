@@ -537,4 +537,80 @@ describe("doRunSessionShow", () => {
     expect(joinCalls(out)).toContain("Events: 2 total");
     expect(joinCalls(err)).toContain("malformed JSON");
   });
+
+  it("case 19: prefix-only `ses_` input is rejected as not found", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: SES("Z01") });
+    let captured: unknown;
+    try {
+      await doRunSessionShow("ses_", {}, { cwd: repo });
+    } catch (error: unknown) {
+      captured = error;
+    }
+    expect((captured as Error).message).toBe("Session not found: ses_");
+  });
+
+  it("case 20: --last value larger than the events count slices gracefully", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("Z02");
+    // Crockford base32 excludes I, L, O, U — keep suffix chars within
+    // the allowed alphabet so EventSchema validates the synthetic IDs.
+    const events = `${SESSION_STARTED_LINE(id, "M01", "2026-05-08T11:00:00+09:00")}${SESSION_ENDED_LINE(id, "M02", "2026-05-08T11:00:30+09:00")}`;
+    await createSession(repo, { id, endedAt: "2026-05-08T11:00:30+09:00", events });
+    const out = captureStdout();
+    await doRunSessionShow(id, { last: 1000 }, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("Last 2 events:");
+    expect(stdout).toContain("session_started");
+    expect(stdout).toContain("session_ended");
+  });
+
+  it("case 21: show with 0 events omits the trailing events section", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("Z03");
+    await createSession(repo, { id });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("Events: 0 total");
+    expect(stdout).not.toContain("Last ");
+    expect(stdout).not.toContain("All events:");
+  });
+
+  it("case 22: --last 0 is rejected by the option converter (commander layer)", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerSessionCommand(program);
+    let captured: unknown;
+    try {
+      await program.parseAsync(["node", "basou", "session", "show", "ses_anyid", "--last", "0"], {
+        from: "node",
+      });
+    } catch (error: unknown) {
+      captured = error;
+    }
+    expect(captured).toBeDefined();
+    const message = (captured as Error).message ?? String(captured ?? "");
+    expect(message).toContain("Invalid number: 0");
+  });
+
+  it("case 23: working_directory outside the repo prints a `../...` relative path in default text", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("Z04");
+    // sibling directory of the temp repo (still within the same /private/var
+    // subtree) so `relative` produces a `..` traversal.
+    const outside = await mkdtemp(join(tmpdir(), "basou-outside-"));
+    try {
+      const outsideReal = await realpath(outside);
+      await createSession(repo, { id, workingDirectory: outsideReal });
+      const out = captureStdout();
+      await doRunSessionShow(id, {}, { cwd: repo });
+      const stdout = joinCalls(out);
+      expect(stdout).toMatch(/Working dir:\s+\.\.\/.+/);
+      // The default-text contract must not leak the absolute path.
+      expect(stdout).not.toContain(outsideReal);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
 });

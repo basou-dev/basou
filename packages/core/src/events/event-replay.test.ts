@@ -225,4 +225,28 @@ describe("replayEvents", () => {
     }
     expect(seen).toEqual(["session_started", "session_ended"]);
   });
+
+  it("handles CRLF line endings without warnings", async () => {
+    // Files written on Windows may use CRLF separators. The line-trim step
+    // strips the trailing CR before JSON parse, so both lines must yield
+    // cleanly without partial_trailing_line or malformed_json warnings.
+    const lf = startedLine("01") + endedLine("02");
+    const crlf = lf.replace(/\n/g, "\r\n");
+    await writeFile(join(sessionDir, "events.jsonl"), crlf);
+    const { warnings, onWarning } = captureWarnings();
+    const events = await readAllEvents(sessionDir, { onWarning });
+    expect(events.map((e) => e.type)).toEqual(["session_started", "session_ended"]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("treats a whitespace-only unterminated tail as a normal end of file", async () => {
+    // A trailing run of spaces/tabs without a final newline is effectively
+    // empty after trim and must not produce partial_trailing_line.
+    const body = `${startedLine("01")}\n   \t  `;
+    await writeFile(join(sessionDir, "events.jsonl"), body);
+    const { warnings, onWarning } = captureWarnings();
+    const events = await readAllEvents(sessionDir, { onWarning });
+    expect(events.map((e) => e.type)).toEqual(["session_started"]);
+    expect(warnings).toEqual([]);
+  });
 });
