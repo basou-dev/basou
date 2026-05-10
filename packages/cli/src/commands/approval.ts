@@ -217,6 +217,12 @@ async function readApprovalListRecord(
     console.error(`Skipped ${shortId(id)}: invalid approval schema`);
     return null;
   }
+  if (parse.data.id !== id) {
+    // Surface a stderr warning rather than dropping silently so an operator
+    // can spot the corrupted entry from `basou approval list`.
+    console.error(`Skipped ${shortId(id)}: filename and YAML body id disagree`);
+    return null;
+  }
   const approval = parse.data;
   return { approval, location, lazyExpired: isLazyExpired(approval, now) };
 }
@@ -350,7 +356,28 @@ async function doRunApprovalResolve(
     }
     throw new Error("Failed to read approval", { cause: error });
   }
-  const approval = ApprovalSchema.parse(pendingRaw);
+  // Wrap zod's parse so a malformed pending YAML surfaces through the
+  // pathless `Failed to read approval` contract instead of leaking a raw
+  // ZodError through the rendered output.
+  const approvalParse = ApprovalSchema.safeParse(pendingRaw);
+  if (!approvalParse.success) {
+    throw new Error("Failed to read approval", { cause: approvalParse.error });
+  }
+  const approval = approvalParse.data;
+  // Defensive id check (matches loadApproval): filename id and body id
+  // must agree, otherwise we'd resolve one approval while emitting events
+  // for another.
+  if (approval.id !== id) {
+    throw new Error("Failed to read approval", {
+      cause: new Error(`Approval id mismatch: filename id ${id} vs YAML body id ${approval.id}`),
+    });
+  }
+  // A pending-side YAML whose status is no longer `pending` means the
+  // file was corrupted (or hand-edited mid-resolution). Refuse to fire a
+  // second resolution event for it.
+  if (approval.status !== "pending") {
+    throw new Error(`Approval status mismatch: pending YAML has status=${approval.status}`);
+  }
 
   // Step D-5: events.jsonl fence — if a resolution event already exists
   // for this approval, refuse to fire a second one. This guards the
@@ -659,9 +686,17 @@ function shortId(id: string): string {
   return sliceShort(id, SHORT_ID_BASE_LEN);
 }
 
+// Known Basou prefixed-id leading tokens. Strip whichever applies so that
+// a session id passed through the warning handler renders as the bare
+// ULID prefix (matching what session.ts already emits) instead of leaving
+// the `ses_` head in the truncated short id.
+const KNOWN_ID_PREFIXES = ["appr_", "ses_", "evt_", "ws_", "task_", "decision_"] as const;
+
 function sliceShort(id: string, len: number): string {
-  if (id.startsWith(APPR_PREFIX)) {
-    return id.slice(APPR_PREFIX.length, APPR_PREFIX.length + len);
+  for (const prefix of KNOWN_ID_PREFIXES) {
+    if (id.startsWith(prefix)) {
+      return id.slice(prefix.length, prefix.length + len);
+    }
   }
   return id.slice(0, len);
 }

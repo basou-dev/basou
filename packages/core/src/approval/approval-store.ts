@@ -41,6 +41,17 @@ export async function loadApproval(
     if (!result.success) {
       throw new Error("Failed to read approval", { cause: result.error });
     }
+    // Defensive id check: a hand-edited YAML whose `id` field disagrees
+    // with the filename-derived id would otherwise let the CLI render or
+    // mutate one approval while citing another. Treat the mismatch as a
+    // read failure rather than silently picking one side.
+    if (result.data.id !== approvalId) {
+      throw new Error("Failed to read approval", {
+        cause: new Error(
+          `Approval id mismatch: filename id ${approvalId} vs YAML body id ${result.data.id}`,
+        ),
+      });
+    }
     return { approval: result.data, location };
   }
   return null;

@@ -134,6 +134,29 @@ describe("approval-store", () => {
     expect(isLazyExpired(approvedPast, baseNow)).toBe(false);
   });
 
+  it("loadApproval throws Failed to read approval when filename id and YAML body id disagree", async () => {
+    const paths = getPaths();
+    const filenameId = "appr_01HXMA01ABCDEFGHJKMNPQRSTV";
+    const bodyId = "appr_01HXMB02ABCDEFGHJKMNPQRSTV";
+    // Save a YAML body whose `id` field deliberately disagrees with the
+    // filename it lives under — exactly the split-brain a hand-edited
+    // dogfood approval can produce.
+    const filePath = join(paths.approvals.pending, `${filenameId}.yaml`);
+    await writeYamlFile(filePath, { ...PENDING_FIXTURE, id: bodyId });
+
+    let captured: unknown;
+    try {
+      await loadApproval(paths, filenameId);
+    } catch (error: unknown) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(Error);
+    const err = captured as Error;
+    expect(err.message).toBe("Failed to read approval");
+    expect(err.cause).toBeInstanceOf(Error);
+    expect((err.cause as Error).message).toContain("Approval id mismatch");
+  });
+
   it("loadApproval throws Failed to read approval when YAML fails schema validation", async () => {
     const paths = getPaths();
     const id = "appr_01HXMA01ABCDEFGHJKMNPQRSTV";

@@ -717,6 +717,93 @@ describe("runApprovalReject", () => {
   });
 });
 
+// === Codex#3 post-impl review fixes ===
+
+describe("post-impl review fixes (Codex#3)", () => {
+  it("case 27 (M1): approve refuses a pending-side YAML whose status is no longer pending", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P01");
+    const sessionId = SES("S01");
+    // Place an `approved` YAML in the pending directory — the kind of
+    // corruption a half-completed manual edit could leave behind.
+    await createApproval(repo, {
+      id: approvalId,
+      sessionId,
+      status: "approved",
+      resolver: "local-cli",
+      resolvedAt: "2026-05-04T10:01:23+09:00",
+      location: "pending",
+    });
+    const stderr = captureStderr();
+    await runApprovalApprove(approvalId, {}, { cwd: repo });
+    expect(process.exitCode).toBe(1);
+    expect(stderr.mock.calls.flat().join("\n")).toContain("Approval status mismatch");
+  });
+
+  it("case 28 (M2): approve wraps zod parse errors of the pending YAML as Failed to read approval", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P01");
+    const paths = basouPaths(repo);
+    // Write a YAML body with an invalid status enum directly so that we
+    // exercise the zod failure path inside doRunApprovalResolve.
+    const pendingPath = join(paths.approvals.pending, `${approvalId}.yaml`);
+    await writeFile(
+      pendingPath,
+      [
+        'schema_version: "0.1.0"',
+        `id: "${approvalId}"`,
+        'session_id: "ses_01HXSE01ABCDEFGHJKMNPQRSTV"',
+        'created_at: "2026-05-04T10:00:00+09:00"',
+        'status: "completely-invalid"',
+        'risk_level: "medium"',
+        "action:",
+        '  kind: "shell_command"',
+        'reason: "test"',
+        "expires_at: null",
+        "resolver: null",
+        "resolved_at: null",
+        "note: null",
+        "rejection_reason: null",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const stderr = captureStderr();
+    await runApprovalApprove(approvalId, {}, { cwd: repo });
+    expect(process.exitCode).toBe(1);
+    expect(stderr.mock.calls.flat().join("\n")).toContain("Failed to read approval");
+  });
+
+  it("case 29 (L1): warning rendering strips the ses_ prefix from session-derived short ids", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P01");
+    const sessionId = SES("S01");
+    await createApproval(repo, { id: approvalId, sessionId });
+    // Drop a partial trailing line so replayEvents emits the
+    // `partial_trailing_line` warning, which is keyed by session id.
+    const sessionDir = await ensureSessionDir(repo, sessionId);
+    const partial = JSON.stringify({
+      schema_version: "0.1.0",
+      type: "session_started",
+      id: EVT("E01"),
+      session_id: sessionId,
+      occurred_at: "2026-05-04T10:00:00+09:00",
+      source: "terminal-recording",
+    });
+    // Note: NO trailing newline, so replayEvents flags the line as partial.
+    await writeFile(join(sessionDir, "events.jsonl"), partial, "utf8");
+
+    const err = captureStderr();
+    await doRunApprovalShow(approvalId, {}, { cwd: repo });
+    const stderrText = err.mock.calls.flat().join("\n");
+    expect(stderrText).toContain("partial trailing line");
+    // The session ULID prefix MUST appear without the `ses_` head; if the
+    // bug regressed we'd see `ses_01/events.jsonl` instead.
+    expect(stderrText).toContain("01HXAB/events.jsonl");
+    expect(stderrText).not.toContain("ses_01HXAB/events.jsonl");
+  });
+});
+
 // === resolveApprovalId regression (Y3p-M1) ===
 
 describe("resolveApprovalId regression", () => {
