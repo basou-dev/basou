@@ -2,7 +2,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readYamlFile, writeYamlFile } from "./yaml-store.js";
+import { linkYamlFile, readYamlFile, writeYamlFile } from "./yaml-store.js";
 
 let workDir: string | undefined;
 
@@ -106,5 +106,52 @@ describe("yaml-store", () => {
     await writeYamlFile(filePath, { v: 2 });
     const read = await readYamlFile(filePath);
     expect(read).toEqual({ v: 2 });
+  });
+
+  it("linkYamlFile creates the target when absent and leaves no tmp file", async () => {
+    const root = getWorkDir();
+    const filePath = join(root, "linked.yaml");
+    await linkYamlFile(filePath, { hello: "world" });
+    const read = await readYamlFile(filePath);
+    expect(read).toEqual({ hello: "world" });
+    const entries = await readdir(root);
+    expect(entries).toContain("linked.yaml");
+    expect(entries.some((name) => name.startsWith("linked.yaml.tmp."))).toBe(false);
+  });
+
+  it("linkYamlFile fails with EEXIST when target already exists", async () => {
+    const root = getWorkDir();
+    const filePath = join(root, "linked.yaml");
+    await writeFile(filePath, "first: value\n", "utf8");
+    let captured: unknown;
+    try {
+      await linkYamlFile(filePath, { hello: "world" });
+    } catch (error: unknown) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(Error);
+    const err = captured as Error;
+    expect(err.message).toBe("Failed to write YAML file");
+    expect(err.message).not.toContain(root);
+    const cause = err.cause as Error & { code?: unknown };
+    expect(cause).toBeInstanceOf(Error);
+    expect(cause.code).toBe("EEXIST");
+  });
+
+  it("linkYamlFile cleans up the tmp file when link fails", async () => {
+    const root = getWorkDir();
+    const filePath = join(root, "linked.yaml");
+    // Pre-create the target so the `link()` call fails. The point of this
+    // case is to confirm that the tmp side is unlinked even when link fails.
+    await writeFile(filePath, "existing: yes\n", "utf8");
+    let threw = false;
+    try {
+      await linkYamlFile(filePath, { hello: "world" });
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    const entries = await readdir(root);
+    expect(entries.some((name) => name.startsWith("linked.yaml.tmp."))).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { link, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
 
 /**
@@ -48,6 +48,33 @@ export async function writeYamlFile(filePath: string, value: unknown): Promise<v
     await unlink(tmpPath).catch(() => undefined);
     throw new Error("Failed to write YAML file", { cause: error });
   }
+}
+
+/**
+ * Atomically create a new YAML file. Like {@link writeYamlFile} but uses
+ * `link()` instead of `rename()` so that if the target already exists, the
+ * call FAILS with EEXIST instead of silently overwriting it.
+ *
+ * Used by `basou approval approve` / `reject` to write the resolved-side
+ * YAML, so a concurrent resolver cannot overwrite an already-resolved
+ * approval. The temp file uses the same `${filePath}.tmp.${randomUUID()}`
+ * naming as {@link writeYamlFile} and is unlinked on every code path.
+ *
+ * Throws `Error("Failed to write YAML file", { cause })` on failure; if
+ * `cause.code === "EEXIST"` the caller can detect a target-exists race.
+ */
+export async function linkYamlFile(filePath: string, value: unknown): Promise<void> {
+  const body = stringify(value);
+  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
+  try {
+    await writeFile(tmpPath, body, { encoding: "utf8", flag: "wx" });
+    await link(tmpPath, filePath);
+  } catch (error: unknown) {
+    await unlink(tmpPath).catch(() => undefined);
+    throw new Error("Failed to write YAML file", { cause: error });
+  }
+  // tmp file is now linked twice (tmp + target); unlink the tmp side.
+  await unlink(tmpPath).catch(() => undefined);
 }
 
 /**

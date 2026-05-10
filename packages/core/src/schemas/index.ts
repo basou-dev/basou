@@ -25,6 +25,12 @@ export {
 } from "./session.schema.js";
 export type { Session, SessionStatus } from "./session.schema.js";
 
+export {
+  ApprovalSchema,
+  ApprovalStatusSchema,
+} from "./approval.schema.js";
+export type { Approval, ApprovalStatus } from "./approval.schema.js";
+
 export { EventSchema } from "./event.schema.js";
 export type {
   Event,

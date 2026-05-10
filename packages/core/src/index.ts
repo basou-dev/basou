@@ -24,6 +24,8 @@ export {
   SessionSourceKindSchema,
   EventSchema,
   StatusSchema,
+  ApprovalSchema,
+  ApprovalStatusSchema,
 } from "./schemas/index.js";
 export type {
   RiskLevel,
@@ -47,7 +49,12 @@ export type {
   NoteAddedEvent,
   AdapterOutputEvent,
   StatusSnapshot,
+  Approval,
+  ApprovalStatus,
 } from "./schemas/index.js";
+
+export { enumerateApprovals, isLazyExpired, loadApproval } from "./approval/index.js";
+export type { ApprovalLocation, LoadedApproval } from "./approval/index.js";
 
 export {
   appendBasouGitignore,
@@ -57,6 +64,7 @@ export {
   createManifest,
   ensureBasouDirectory,
   findErrorCode,
+  linkYamlFile,
   overwriteYamlFile,
   readManifest,
   readStatus,

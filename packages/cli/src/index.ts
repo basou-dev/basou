@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { registerApprovalCommand } from "./commands/approval.js";
 import { registerExecCommand } from "./commands/exec.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerRunCommand } from "./commands/run.js";
@@ -21,6 +22,7 @@ registerStatusCommand(program);
 registerExecCommand(program);
 registerRunCommand(program);
 registerSessionCommand(program);
+registerApprovalCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   // Mirror runInit's renderCliError: never print the Error object directly
