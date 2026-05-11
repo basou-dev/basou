@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { registerApprovalCommand } from "./commands/approval.js";
+import { registerDecisionCommand } from "./commands/decision.js";
 import { registerDecisionsCommand } from "./commands/decisions.js";
 import { registerExecCommand } from "./commands/exec.js";
 import { registerHandoffCommand } from "./commands/handoff.js";
@@ -25,6 +26,7 @@ registerExecCommand(program);
 registerRunCommand(program);
 registerSessionCommand(program);
 registerApprovalCommand(program);
+registerDecisionCommand(program);
 registerHandoffCommand(program);
 registerDecisionsCommand(program);
 

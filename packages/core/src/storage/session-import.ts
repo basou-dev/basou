@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { writeEventsBulk } from "../events/event-writer.js";
 import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import type { Event } from "../schemas/event.schema.js";
@@ -184,22 +184,4 @@ function buildSessionRecord(
     summary: input.summary ?? null,
   };
   return { schema_version: "0.1.0", session: inner };
-}
-
-// Write the entire events.jsonl in one atomic tmp+rename pass. Avoids the
-// open/append/close-per-event overhead of `appendEvent` and gives an
-// all-or-nothing guarantee that matches the rollback story above. Zero
-// events produces a zero-byte file so the session_yaml `events_log` pointer
-// remains valid.
-async function writeEventsBulk(sessionDir: string, events: Event[]): Promise<void> {
-  const filePath = join(sessionDir, "events.jsonl");
-  const body = events.length > 0 ? `${events.map((e) => JSON.stringify(e)).join("\n")}\n` : "";
-  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
-  try {
-    await writeFile(tmpPath, body, { encoding: "utf8", flag: "wx" });
-    await rename(tmpPath, filePath);
-  } catch (error: unknown) {
-    await unlink(tmpPath).catch(() => undefined);
-    throw new Error("Failed to write events.jsonl", { cause: error });
-  }
 }

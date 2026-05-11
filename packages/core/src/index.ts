@@ -63,13 +63,16 @@ export type { ApprovalLocation, LoadedApproval } from "./approval/index.js";
 
 export {
   appendBasouGitignore,
+  appendEventToExistingSession,
   assertBasouRootSafe,
   basouPaths,
   buildStatusSnapshot,
   classifySuspect,
+  createAdHocSessionWithEvent,
   createManifest,
   enumerateSessionDirs,
   ensureBasouDirectory,
+  FailedToFinalizeError,
   findErrorCode,
   GENERATED_END,
   GENERATED_START,
@@ -92,7 +95,12 @@ export {
 } from "./storage/index.js";
 export type {
   AppendBasouGitignoreResult,
+  AppendEventToExistingInput,
+  AppendEventToExistingResult,
+  AttachableStatus,
   BasouPaths,
+  CreateAdHocSessionInput,
+  CreateAdHocSessionResult,
   CreateManifestInput,
   ImportSessionOptions,
   ImportSessionResult,
@@ -130,7 +138,7 @@ export {
 } from "./adapters/claude-code/index.js";
 export type { CommandLookup } from "./adapters/claude-code/index.js";
 
-export { appendEvent, readAllEvents, replayEvents } from "./events/index.js";
+export { appendEvent, readAllEvents, replayEvents, writeEventsBulk } from "./events/index.js";
 export type { ReplayOptions, ReplayWarning } from "./events/index.js";
 
 export { parseDuration } from "./lib/duration.js";

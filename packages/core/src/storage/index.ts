@@ -39,3 +39,15 @@ export type {
   ImportSessionOptions,
   ImportSessionResult,
 } from "./session-import.js";
+export {
+  FailedToFinalizeError,
+  appendEventToExistingSession,
+  createAdHocSessionWithEvent,
+} from "./ad-hoc-session.js";
+export type {
+  AppendEventToExistingInput,
+  AppendEventToExistingResult,
+  AttachableStatus,
+  CreateAdHocSessionInput,
+  CreateAdHocSessionResult,
+} from "./ad-hoc-session.js";

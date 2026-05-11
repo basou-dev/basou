@@ -1,0 +1,314 @@
+import {
+  type Event,
+  FailedToFinalizeError,
+  type PrefixedId,
+  type SessionStatus,
+  appendEventToExistingSession,
+  assertBasouRootSafe,
+  basouPaths,
+  createAdHocSessionWithEvent,
+  findErrorCode,
+  prefixedUlid,
+  readManifest,
+  resolveRepositoryRoot,
+} from "@basou/core";
+import { type Command, InvalidArgumentError } from "commander";
+import { resolveSessionId } from "./session.js";
+
+const SES_PREFIX = "ses_";
+const SHORT_ID_BASE_LEN = 6;
+const LABEL_TITLE_MAX = 40;
+const LABEL_TRUNCATE_HEAD = LABEL_TITLE_MAX - 3;
+const CAUSE_CHAIN_MAX_DEPTH = 4;
+
+export type DecisionRecordOptions = {
+  title: string;
+  rationale?: string;
+  session?: string;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type DecisionContext = {
+  /** Defaults to `process.cwd()`. Injectable for tests. */
+  cwd?: string;
+  /** Defaults to `() => new Date()`. Injectable for tests. */
+  nowProvider?: () => Date;
+};
+
+/**
+ * Wire `basou decision record` onto `program`. The `decision` group only
+ * contains the write-side `record` subcommand in v0.1; list/show inspectors
+ * are deferred (see Y-3s carryover #41).
+ */
+export function registerDecisionCommand(program: Command): void {
+  const decision = program
+    .command("decision")
+    .description("Record human-authored decisions as events");
+
+  decision
+    .command("record")
+    .description("Record a decision_recorded event")
+    .requiredOption("--title <text>", "Decision title", parseTitle)
+    .option(
+      "--rationale <text>",
+      "Optional rationale (echoed to stdout summary only; not stored in v0.1)",
+      parseRationale,
+    )
+    .option(
+      "--session <session_id>",
+      "Attach to an existing session; otherwise an ad-hoc session is created",
+    )
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (options: DecisionRecordOptions) => {
+      await runDecisionRecord(options);
+    });
+}
+
+/**
+ * Programmatic entry for `basou decision record`. Owns process exit state.
+ * Tests targeting the success path or the thrown error should prefer
+ * {@link doRunDecisionRecord}.
+ */
+export async function runDecisionRecord(
+  options: DecisionRecordOptions,
+  ctx: DecisionContext = {},
+): Promise<void> {
+  try {
+    await doRunDecisionRecord(options, ctx);
+  } catch (error: unknown) {
+    renderDecisionError(error, isVerbose(options));
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunDecisionRecord(
+  options: DecisionRecordOptions,
+  ctx: DecisionContext,
+): Promise<void> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForDecision(cwd);
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+
+  const now = ctx.nowProvider !== undefined ? ctx.nowProvider() : new Date();
+  const occurredAt = now.toISOString();
+  const decisionId = prefixedUlid("decision");
+
+  if (options.session !== undefined) {
+    const sessionId = await resolveSessionId(paths, options.session);
+    const sesId = sessionId as PrefixedId<"ses">;
+    const result = await appendEventToExistingSession({
+      paths,
+      sessionId: sesId,
+      eventBuilder: (eventId) =>
+        buildDecisionEvent({
+          eventId,
+          sessionId: sesId,
+          decisionId,
+          title: options.title,
+          occurredAt,
+        }),
+    });
+    printDecisionResult(options, {
+      mode: "attached",
+      sessionId,
+      decisionId,
+      eventId: result.eventId,
+      sessionStatus: result.sessionStatus,
+      title: options.title,
+      ...(options.rationale !== undefined ? { rationale: options.rationale } : {}),
+    });
+    return;
+  }
+
+  const manifest = await readManifest(paths);
+  const adHoc = await createAdHocSessionWithEvent({
+    paths,
+    manifest,
+    label: buildAdHocLabel(options.title),
+    occurredAt,
+    sessionSource: "human",
+    workingDirectory: repositoryRoot,
+    invocation: {
+      command: "basou decision record",
+      args: ["--title", options.title],
+    },
+    targetEventBuilder: (sessionId, eventId) =>
+      buildDecisionEvent({
+        eventId,
+        sessionId,
+        decisionId,
+        title: options.title,
+        occurredAt,
+      }),
+  });
+  printDecisionResult(options, {
+    mode: "ad-hoc",
+    sessionId: adHoc.sessionId,
+    decisionId,
+    eventId: adHoc.targetEventId,
+    sessionStatus: "completed",
+    title: options.title,
+    ...(options.rationale !== undefined ? { rationale: options.rationale } : {}),
+  });
+}
+
+function buildDecisionEvent(input: {
+  eventId: PrefixedId<"evt">;
+  sessionId: PrefixedId<"ses">;
+  decisionId: PrefixedId<"decision">;
+  title: string;
+  occurredAt: string;
+}): Event {
+  return {
+    schema_version: "0.1.0",
+    id: input.eventId,
+    session_id: input.sessionId,
+    occurred_at: input.occurredAt,
+    source: "local-cli",
+    type: "decision_recorded",
+    decision_id: input.decisionId,
+    title: input.title,
+  };
+}
+
+function buildAdHocLabel(title: string): string {
+  const truncated =
+    title.length > LABEL_TITLE_MAX ? `${title.slice(0, LABEL_TRUNCATE_HEAD)}...` : title;
+  return `Ad-hoc decision: ${truncated}`;
+}
+
+function parseTitle(raw: string): string {
+  if (raw.length === 0) {
+    throw new InvalidArgumentError("Title must not be empty");
+  }
+  return raw;
+}
+
+function parseRationale(raw: string): string {
+  if (raw.length === 0) {
+    throw new InvalidArgumentError("Rationale must not be empty");
+  }
+  return raw;
+}
+
+type DecisionPrintInput = {
+  mode: "ad-hoc" | "attached";
+  sessionId: string;
+  decisionId: string;
+  eventId: string;
+  sessionStatus: SessionStatus;
+  title: string;
+  rationale?: string;
+};
+
+function printDecisionResult(options: DecisionRecordOptions, result: DecisionPrintInput): void {
+  const sid = shortSessionId(result.sessionId);
+  if (options.json === true) {
+    // Y3s-M3: when rationale is present, surface `rationale_saved:false` so
+    // the JSON consumer knows the value was echoed but not persisted.
+    const payload: Record<string, unknown> = {
+      decision_id: result.decisionId,
+      event_id: result.eventId,
+      session_id: result.sessionId,
+      session_status: result.sessionStatus,
+      mode: result.mode,
+      title: result.title,
+    };
+    if (result.rationale !== undefined) {
+      payload.rationale = result.rationale;
+      payload.rationale_saved = false;
+    }
+    console.log(JSON.stringify(payload));
+    return;
+  }
+  const rationaleSuffix =
+    result.rationale !== undefined ? ` (rationale: ${result.rationale}, not saved in v0.1)` : "";
+  if (result.mode === "ad-hoc") {
+    console.log(`Recorded ${result.decisionId} in ad-hoc session ${sid}${rationaleSuffix}`);
+  } else {
+    console.log(
+      `Recorded ${result.decisionId} in session ${sid} (${result.sessionStatus})${rationaleSuffix}`,
+    );
+  }
+}
+
+function shortSessionId(id: string): string {
+  if (id.startsWith(SES_PREFIX)) {
+    return id.slice(SES_PREFIX.length, SES_PREFIX.length + SHORT_ID_BASE_LEN);
+  }
+  return id.slice(0, SHORT_ID_BASE_LEN);
+}
+
+async function resolveRepositoryRootForDecision(cwd: string): Promise<string> {
+  try {
+    return await resolveRepositoryRoot(cwd);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "Not a git repository") {
+      throw new Error(
+        "Not a git repository. Run 'git init' first, then re-run 'basou decision record'.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {
+  try {
+    await assertBasouRootSafe(basouRoot);
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) {
+      throw new Error("Workspace not initialized. Run 'basou init' first.");
+    }
+    throw error;
+  }
+}
+
+function isVerbose(options: { verbose?: boolean }): boolean {
+  return options.verbose === true || process.env.BASOU_DEBUG === "1";
+}
+
+function renderDecisionError(error: unknown, verbose: boolean): void {
+  if (!(error instanceof Error)) {
+    console.error(String(error));
+    return;
+  }
+  console.error(error.message);
+
+  // Y3s-H4: FailedToFinalizeError carries enough context to warn the operator
+  // not to retry, since the target event is already in events.jsonl.
+  if (error instanceof FailedToFinalizeError) {
+    const sid = shortSessionId(error.sessionId);
+    console.error(`Recorded ${error.decisionEventId} in session ${sid}; do not rerun`);
+    console.error("Warning: session.yaml status update failed; events.jsonl is consistent");
+  }
+
+  if (verbose) {
+    const label = extractCauseLabel(error);
+    if (label !== undefined) {
+      console.error(`Caused by: ${label}`);
+    }
+  }
+}
+
+/**
+ * Walk the cause chain (up to {@link CAUSE_CHAIN_MAX_DEPTH} hops) and return
+ * the first errno code found, falling back to the deepest constructor name.
+ * Y3s-M1: the value goes into `Caused by: <label>` so verbose output stays
+ * pathless even when capability layers wrap native errors.
+ */
+function extractCauseLabel(error: Error): string | undefined {
+  let current: unknown = error.cause;
+  let constructorName: string | undefined;
+  for (let depth = 0; depth < CAUSE_CHAIN_MAX_DEPTH; depth += 1) {
+    if (!(current instanceof Error)) break;
+    const code = (current as Error & { code?: unknown }).code;
+    if (typeof code === "string") return code;
+    constructorName = current.constructor.name;
+    current = current.cause;
+  }
+  return constructorName;
+}

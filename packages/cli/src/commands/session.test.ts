@@ -16,9 +16,11 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   doRunSessionList,
+  doRunSessionNote,
   doRunSessionShow,
   registerSessionCommand,
   runSessionImport,
+  runSessionNote,
 } from "./session.js";
 
 const FIXTURE_PATH = join(
@@ -910,5 +912,208 @@ describe("runSessionImport", () => {
     ).rejects.toBeDefined();
     const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
     expect(stderr).toContain("--from");
+  });
+});
+
+describe("doRunSessionNote", () => {
+  it("note-1: --body appends a note_added event and prints the human summary", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N01");
+    await createSession(repo, { id: sid, status: "running" });
+    const out = captureStdout();
+    await doRunSessionNote(sid, { body: "hello note" }, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("Added note to session");
+    expect(stdout).toContain("(running)");
+    expect(stdout).toContain("hello note");
+
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "note_added", body: "hello note" });
+  });
+
+  it("note-2: --from-file reads the body from the given path", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N02");
+    await createSession(repo, { id: sid, status: "running" });
+    const notePath = join(repo, "note.txt");
+    await writeFile(notePath, "file body");
+    const out = captureStdout();
+    await doRunSessionNote(sid, { fromFile: notePath }, { cwd: repo });
+    expect(joinCalls(out)).toContain("file body");
+  });
+
+  it("note-3: --json emits the result with event_id / session_id / status / body_length", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N03");
+    await createSession(repo, { id: sid, status: "running" });
+    const out = captureStdout();
+    await doRunSessionNote(sid, { body: "ABCDE", json: true }, { cwd: repo });
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(payload.session_id).toBe(sid);
+    expect(payload.session_status).toBe("running");
+    expect(typeof payload.event_id).toBe("string");
+    expect((payload.event_id as string).startsWith("evt_")).toBe(true);
+    expect(payload.body_length).toBe(5);
+  });
+
+  it("note-4: does not modify session.yaml content", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N04");
+    await createSession(repo, { id: sid, status: "running" });
+    const yamlPath = join(basouPaths(repo).sessions, sid, "session.yaml");
+    const before = await readFile(yamlPath, "utf8");
+    await doRunSessionNote(sid, { body: "x" }, { cwd: repo });
+    const after = await readFile(yamlPath, "utf8");
+    expect(after).toBe(before);
+  });
+
+  it("note-5: truncates note bodies longer than 80 characters in the text preview", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N05");
+    await createSession(repo, { id: sid, status: "running" });
+    const longBody = "a".repeat(100);
+    const out = captureStdout();
+    await doRunSessionNote(sid, { body: longBody }, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("...");
+    expect(stdout).toContain("a".repeat(77));
+    expect(stdout).not.toContain("a".repeat(78));
+  });
+
+  it("note-6: missing --body and --from-file fails with 'Provide --body or --from-file'", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N06");
+    await createSession(repo, { id: sid, status: "running" });
+    const err = captureStderr();
+    await runSessionNote(sid, {}, { cwd: repo });
+    expect(joinCalls(err)).toContain("Provide --body or --from-file");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-7: providing both --body and --from-file fails mutually-exclusive", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N07");
+    await createSession(repo, { id: sid, status: "running" });
+    const notePath = join(repo, "n.txt");
+    await writeFile(notePath, "x");
+    const err = captureStderr();
+    await runSessionNote(sid, { body: "y", fromFile: notePath }, { cwd: repo });
+    expect(joinCalls(err)).toContain("--body and --from-file are mutually exclusive");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-8: empty --body is rejected by the commander converter", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerSessionCommand(program);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await expect(
+      program.parseAsync(["node", "basou", "session", "note", SES("N08"), "--body", ""]),
+    ).rejects.toBeDefined();
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("--body must not be empty");
+  });
+
+  it("note-9: --from-file with ENOENT path emits 'Note source not found'", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N09");
+    await createSession(repo, { id: sid, status: "running" });
+    const err = captureStderr();
+    await runSessionNote(sid, { fromFile: join(repo, "does-not-exist.txt") }, { cwd: repo });
+    expect(joinCalls(err)).toContain("Note source not found");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-10: --from-file pointing at a directory emits 'Note source is not a file'", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N10");
+    await createSession(repo, { id: sid, status: "running" });
+    const err = captureStderr();
+    await runSessionNote(sid, { fromFile: repo }, { cwd: repo });
+    expect(joinCalls(err)).toContain("Note source is not a file");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-11: empty file body produces 'Note body is empty'", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N11");
+    await createSession(repo, { id: sid, status: "running" });
+    const notePath = join(repo, "empty.txt");
+    await writeFile(notePath, "");
+    const err = captureStderr();
+    await runSessionNote(sid, { fromFile: notePath }, { cwd: repo });
+    expect(joinCalls(err)).toContain("Note body is empty");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-12: attaching to a completed session is rejected", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N12");
+    await createSession(repo, { id: sid, status: "completed" });
+    const err = captureStderr();
+    await runSessionNote(sid, { body: "x" }, { cwd: repo });
+    expect(joinCalls(err)).toContain("Session is not active: completed");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-13: attaching to an imported session is rejected with the dedicated message", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N13");
+    await createSession(repo, { id: sid, status: "imported" });
+    const err = captureStderr();
+    await runSessionNote(sid, { body: "x" }, { cwd: repo });
+    expect(joinCalls(err)).toContain("Cannot attach to imported session");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-14: waiting_approval is an attachable status (Y3s-M5 happy path)", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N14");
+    await createSession(repo, { id: sid, status: "waiting_approval" });
+    const out = captureStdout();
+    await doRunSessionNote(sid, { body: "approve later" }, { cwd: repo });
+    expect(joinCalls(out)).toContain("(waiting_approval)");
+  });
+
+  it("note-15: --from-file - (stdin) is rejected before any disk I/O (Y3s-M4)", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N15");
+    await createSession(repo, { id: sid, status: "running" });
+    const err = captureStderr();
+    await runSessionNote(sid, { fromFile: "-" }, { cwd: repo });
+    expect(joinCalls(err)).toContain("--from-file - (stdin) is not supported in v0.1");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-16: pathless contract: non-verbose stderr does not leak absolute paths", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N16");
+    await createSession(repo, { id: sid, status: "running" });
+    const missing = join(repo, "deep", "nested", "secret.txt");
+    const err = captureStderr();
+    await runSessionNote(sid, { fromFile: missing }, { cwd: repo });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("Note source not found");
+    expect(stderr).not.toContain(missing);
+    expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-17: pathless contract: verbose emits 'Caused by: <label>' without leaking cause.message", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N17");
+    await createSession(repo, { id: sid, status: "running" });
+    const missing = join(repo, "deep", "nested", "secret.txt");
+    const err = captureStderr();
+    await runSessionNote(sid, { fromFile: missing, verbose: true }, { cwd: repo });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("Note source not found");
+    expect(stderr).toContain("Caused by: ENOENT");
+    expect(stderr).not.toContain(missing);
+    expect(stderr).not.toContain(repo);
   });
 });

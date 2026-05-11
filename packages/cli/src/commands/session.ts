@@ -13,6 +13,7 @@ import {
   type SessionStatus,
   SessionStatusSchema,
   TaskIdSchema,
+  appendEventToExistingSession,
   assertBasouRootSafe,
   basouPaths,
   enumerateSessionDirs,
@@ -111,6 +112,17 @@ export function registerSessionCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (options: SessionImportOptions) => {
       await runSessionImport(options);
+    });
+
+  session
+    .command("note <session_id>")
+    .description("Append a note_added event to an existing session")
+    .option("--body <text>", "Note body (inline)", parseNoteBodyOption)
+    .option("--from-file <path>", "Read note body from a file")
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (sessionIdInput: string, options: SessionNoteOptions) => {
+      await runSessionNote(sessionIdInput, options);
     });
 }
 
@@ -452,7 +464,7 @@ function eventVariantSummary(ev: Event): string {
   }
 }
 
-async function resolveSessionId(paths: BasouPaths, input: string): Promise<string> {
+export async function resolveSessionId(paths: BasouPaths, input: string): Promise<string> {
   const trimmed = input.trim();
   if (trimmed.length === 0) {
     throw new Error("Session id is empty");
@@ -549,7 +561,7 @@ function maxLen(values: readonly string[], floor: number): number {
 
 async function resolveRepositoryRootForSession(
   cwd: string,
-  subcmd: "list" | "show" | "import",
+  subcmd: "list" | "show" | "import" | "note",
 ): Promise<string> {
   try {
     return await resolveRepositoryRoot(cwd);
@@ -750,4 +762,133 @@ function printSessionImportResult(
   console.log(
     `Imported session ${sid} (${result.eventCount} events) from ${basename(options.from)}`,
   );
+}
+
+// ----------------------------------------------------------------------------
+// session note (Step 16)
+// ----------------------------------------------------------------------------
+
+const NOTE_BODY_PREVIEW_LIMIT = 80;
+const NOTE_BODY_PREVIEW_HEAD = 77;
+
+export type SessionNoteOptions = {
+  body?: string;
+  fromFile?: string;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+/**
+ * Programmatic entry for `basou session note <session_id>`. Appends a single
+ * `note_added` event to an existing attachable session. `session.yaml` is
+ * deliberately NOT modified.
+ */
+export async function runSessionNote(
+  sessionIdInput: string,
+  options: SessionNoteOptions,
+  ctx: SessionContext = {},
+): Promise<void> {
+  try {
+    await doRunSessionNote(sessionIdInput, options, ctx);
+  } catch (error: unknown) {
+    renderSessionError(error, isVerbose(options));
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunSessionNote(
+  sessionIdInput: string,
+  options: SessionNoteOptions,
+  ctx: SessionContext,
+): Promise<void> {
+  const hasBody = options.body !== undefined;
+  const hasFromFile = options.fromFile !== undefined;
+  if (!hasBody && !hasFromFile) {
+    throw new Error("Provide --body or --from-file");
+  }
+  if (hasBody && hasFromFile) {
+    throw new Error("--body and --from-file are mutually exclusive");
+  }
+  // Y3s-M4: stdin pipe path is not supported in v0.1. Surface a dedicated
+  // pathless error before any disk I/O so the failure mode is obvious.
+  if (hasFromFile && options.fromFile === "-") {
+    throw new Error("--from-file - (stdin) is not supported in v0.1");
+  }
+
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForSession(cwd, "note");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+
+  const sessionId = await resolveSessionId(paths, sessionIdInput);
+
+  const body = hasBody ? (options.body as string) : await readNoteFile(options.fromFile as string);
+  if (body.length === 0) {
+    throw new Error("Note body is empty");
+  }
+
+  const occurredAt = new Date().toISOString();
+  const sesId = sessionId as `ses_${string}`;
+
+  const result = await appendEventToExistingSession({
+    paths,
+    sessionId: sesId,
+    eventBuilder: (eventId) =>
+      ({
+        schema_version: "0.1.0",
+        id: eventId,
+        session_id: sesId,
+        occurred_at: occurredAt,
+        source: "local-cli",
+        type: "note_added",
+        body,
+      }) as Event,
+  });
+
+  printSessionNoteResult(options, sessionId, result.eventId, result.sessionStatus, body);
+}
+
+async function readNoteFile(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) {
+      throw new Error("Note source not found", { cause: error });
+    }
+    if (findErrorCode(error, "EISDIR")) {
+      throw new Error("Note source is not a file", { cause: error });
+    }
+    throw new Error("Failed to read note source", { cause: error });
+  }
+}
+
+function parseNoteBodyOption(raw: string): string {
+  if (raw.length === 0) {
+    throw new InvalidArgumentError("--body must not be empty");
+  }
+  return raw;
+}
+
+function printSessionNoteResult(
+  options: SessionNoteOptions,
+  sessionId: string,
+  eventId: string,
+  sessionStatus: SessionStatus,
+  body: string,
+): void {
+  const sid = shortId(sessionId);
+  if (options.json === true) {
+    console.log(
+      JSON.stringify({
+        event_id: eventId,
+        session_id: sessionId,
+        session_status: sessionStatus,
+        body_length: body.length,
+      }),
+    );
+    return;
+  }
+  const preview =
+    body.length > NOTE_BODY_PREVIEW_LIMIT ? `${body.slice(0, NOTE_BODY_PREVIEW_HEAD)}...` : body;
+  console.log(`Added note to session ${sid} (${sessionStatus}): ${preview}`);
 }
