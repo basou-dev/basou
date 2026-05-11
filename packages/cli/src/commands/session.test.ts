@@ -683,6 +683,7 @@ describe("runSessionImport", () => {
 
   it("import-4: --label override appears in session.yaml", async () => {
     const repo = await setupInitedRepo();
+    captureStdout();
     await runSessionImport(
       { format: "json", from: FIXTURE_PATH, label: "custom-label" },
       { cwd: repo },
@@ -698,6 +699,7 @@ describe("runSessionImport", () => {
   it("import-5: --task override appears in session.yaml", async () => {
     const repo = await setupInitedRepo();
     const taskId = "task_01HXABCDEF1234567890ABCTK1";
+    captureStdout();
     await runSessionImport({ format: "json", from: FIXTURE_PATH, task: taskId }, { cwd: repo });
     const paths = basouPaths(repo);
     const [sid = ""] = await readdir(paths.sessions);
@@ -850,6 +852,7 @@ describe("runSessionImport", () => {
 
   it("import-17: round-trip preserves event count, source.kind and rewrites status", async () => {
     const repo = await setupInitedRepo();
+    captureStdout();
     await runSessionImport({ format: "json", from: FIXTURE_PATH }, { cwd: repo });
     const paths = basouPaths(repo);
     const [sid = ""] = await readdir(paths.sessions);

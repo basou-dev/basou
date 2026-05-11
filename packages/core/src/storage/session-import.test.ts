@@ -302,4 +302,87 @@ describe("importSessionFromJson", () => {
     const info = await stat(eventsPath);
     expect(info.size).toBe(0);
   });
+
+  it("preserves variant-specific cross-reference ids across rewrite", async () => {
+    // approval_id chain across two events must remain joinable, and decision_id /
+    // file paths / raw_ref must round-trip unchanged so handoff / decisions
+    // renderers see the same references the exporter emitted.
+    const APPROVAL_ID = "appr_01HXABCDEF1234567890ABCAP1";
+    const DECISION_ID = "decision_01HXABCDEF1234567890ABCDC1";
+    const FILE_PATH = "src/components/ContactForm.tsx";
+    const OLD_PATH = "src/components/Contact.tsx";
+    const RAW_REF = ".basou/raw/ses_xxx/adapter.jsonl";
+    const paths = await setupPaths();
+    const events: SessionImportPayload["events"] = [
+      {
+        schema_version: "0.1.0",
+        type: "approval_requested",
+        id: "evt_01HXABCDEF1234567890ABCEV1",
+        session_id: INPUT_SES_ID,
+        occurred_at: "2026-05-04T09:00:00+09:00",
+        source: "human",
+        approval_id: APPROVAL_ID,
+        expires_at: null,
+        risk_level: "medium",
+        action: { kind: "shell_command" },
+        reason: "needs review",
+        status: "pending",
+      },
+      {
+        schema_version: "0.1.0",
+        type: "approval_approved",
+        id: "evt_01HXABCDEF1234567890ABCEV2",
+        session_id: INPUT_SES_ID,
+        occurred_at: "2026-05-04T09:00:01+09:00",
+        source: "human",
+        approval_id: APPROVAL_ID,
+      },
+      {
+        schema_version: "0.1.0",
+        type: "decision_recorded",
+        id: "evt_01HXABCDEF1234567890ABCEV3",
+        session_id: INPUT_SES_ID,
+        occurred_at: "2026-05-04T09:00:02+09:00",
+        source: "human",
+        decision_id: DECISION_ID,
+        title: "Adopt zod",
+      },
+      {
+        schema_version: "0.1.0",
+        type: "file_changed",
+        id: "evt_01HXABCDEF1234567890ABCEV4",
+        session_id: INPUT_SES_ID,
+        occurred_at: "2026-05-04T09:00:03+09:00",
+        source: "git-capability",
+        path: FILE_PATH,
+        change_type: "renamed",
+        old_path: OLD_PATH,
+      },
+      {
+        schema_version: "0.1.0",
+        type: "adapter_output",
+        id: "evt_01HXABCDEF1234567890ABCEV5",
+        session_id: INPUT_SES_ID,
+        occurred_at: "2026-05-04T09:00:04+09:00",
+        source: "claude-code-adapter",
+        stream: "stdout",
+        summary: "summary",
+        raw_ref: RAW_REF,
+      },
+    ];
+    const result = await importSessionFromJson(paths, makeManifest(), makePayload({ events }), {});
+    const wire = await readEventsJsonl(paths, result.sessionId);
+    expect(wire).toHaveLength(5);
+    // approval chain still joinable on the imported side
+    expect(wire[0]?.approval_id).toBe(APPROVAL_ID);
+    expect(wire[1]?.approval_id).toBe(APPROVAL_ID);
+    expect(wire[0]?.approval_id).toBe(wire[1]?.approval_id);
+    // decision_id preserved
+    expect(wire[2]?.decision_id).toBe(DECISION_ID);
+    // file_changed path / old_path preserved (no path normalization on import)
+    expect(wire[3]?.path).toBe(FILE_PATH);
+    expect(wire[3]?.old_path).toBe(OLD_PATH);
+    // adapter_output raw_ref preserved
+    expect(wire[4]?.raw_ref).toBe(RAW_REF);
+  });
 });

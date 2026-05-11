@@ -10,6 +10,7 @@ import type {
   SessionInnerImportInput,
 } from "../schemas/session-import.schema.js";
 import type { Session, SessionSourceKind, SessionStatus } from "../schemas/session.schema.js";
+import { TaskIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { linkYamlFile } from "./yaml-store.js";
 
@@ -60,6 +61,15 @@ export async function importSessionFromJson(
   payload: SessionImportPayload,
   options: ImportSessionOptions,
 ): Promise<ImportSessionResult> {
+  // Defense in depth: the CLI converter (parseTaskIdOverride) already gates
+  // this, but a direct core API caller could still pass an arbitrary string.
+  if (
+    options.taskIdOverride !== undefined &&
+    !TaskIdSchema.safeParse(options.taskIdOverride).success
+  ) {
+    throw new Error(`Invalid task_id: ${options.taskIdOverride}`);
+  }
+
   const newSessionId = prefixedUlid("ses");
 
   const rewrittenEvents = rewriteEvents(payload.events, newSessionId);
@@ -76,15 +86,15 @@ export async function importSessionFromJson(
     };
   }
 
+  // recursive: true lets a stripped-down workspace (manifest present but
+  // `.basou/sessions` missing) recover instead of failing with ENOENT; ULID
+  // collision on the new session dir itself is statistically impossible, so
+  // the silent EEXIST on an existing directory is acceptable here. Concurrent
+  // attempts to write the same session.yaml are caught by linkYamlFile below.
   const sessionDir = join(paths.sessions, newSessionId);
   try {
-    await mkdir(sessionDir);
+    await mkdir(sessionDir, { recursive: true });
   } catch (error: unknown) {
-    if (findErrorCode(error, "EEXIST")) {
-      throw new Error("Session directory collision (retry the command)", {
-        cause: error,
-      });
-    }
     throw new Error("Failed to create session directory", { cause: error });
   }
 
