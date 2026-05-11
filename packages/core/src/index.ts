@@ -61,15 +61,26 @@ export {
   assertBasouRootSafe,
   basouPaths,
   buildStatusSnapshot,
+  classifySuspect,
   createManifest,
+  enumerateSessionDirs,
   ensureBasouDirectory,
   findErrorCode,
+  GENERATED_END,
+  GENERATED_START,
   linkYamlFile,
+  loadSessionEntries,
   overwriteYamlFile,
+  parseMarkers,
   readManifest,
+  readMarkdownFile,
+  readSessionYaml,
   readStatus,
   readYamlFile,
+  renderWithMarkers,
+  STUCK_THRESHOLD_MS,
   writeManifest,
+  writeMarkdownFile,
   writeStatus,
   writeYamlFile,
 } from "./storage/index.js";
@@ -77,7 +88,18 @@ export type {
   AppendBasouGitignoreResult,
   BasouPaths,
   CreateManifestInput,
+  LoadSessionEntriesOptions,
+  MarkerSection,
+  SessionEntry,
+  SessionSkipReason,
+  SuspectReason,
 } from "./storage/index.js";
+
+export { renderHandoff } from "./handoff/index.js";
+export type { HandoffRendererInput, HandoffRendererResult } from "./handoff/index.js";
+
+export { renderDecisions } from "./decisions/index.js";
+export type { DecisionsRendererInput, DecisionsRendererResult } from "./decisions/index.js";
 
 export { ChildProcessRunner } from "./runtime/child-process-runner.js";
 export type {

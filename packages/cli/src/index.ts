@@ -1,6 +1,8 @@
 import { Command } from "commander";
 import { registerApprovalCommand } from "./commands/approval.js";
+import { registerDecisionsCommand } from "./commands/decisions.js";
 import { registerExecCommand } from "./commands/exec.js";
+import { registerHandoffCommand } from "./commands/handoff.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerSessionCommand } from "./commands/session.js";
@@ -23,6 +25,8 @@ registerExecCommand(program);
 registerRunCommand(program);
 registerSessionCommand(program);
 registerApprovalCommand(program);
+registerHandoffCommand(program);
+registerDecisionsCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   // Mirror runInit's renderCliError: never print the Error object directly

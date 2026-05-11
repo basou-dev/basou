@@ -12,3 +12,25 @@ export {
   readStatus,
   writeStatus,
 } from "./status.js";
+export {
+  classifySuspect,
+  enumerateSessionDirs,
+  loadSessionEntries,
+  readSessionYaml,
+  STUCK_THRESHOLD_MS,
+} from "./sessions.js";
+export type {
+  LoadSessionEntriesOptions,
+  SessionEntry,
+  SessionSkipReason,
+  SuspectReason,
+} from "./sessions.js";
+export {
+  GENERATED_END,
+  GENERATED_START,
+  parseMarkers,
+  readMarkdownFile,
+  renderWithMarkers,
+  writeMarkdownFile,
+} from "./markdown-store.js";
+export type { MarkerSection } from "./markdown-store.js";

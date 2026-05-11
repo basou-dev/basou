@@ -1,4 +1,3 @@
-import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import {
   type BasouPaths,
@@ -6,14 +5,16 @@ import {
   type ReplayWarning,
   type Session,
   SessionSchema,
+  type SessionSkipReason,
   type SessionStatus,
   SessionStatusSchema,
   assertBasouRootSafe,
   basouPaths,
+  enumerateSessionDirs,
   findErrorCode,
+  loadSessionEntries,
   readAllEvents,
   readYamlFile,
-  replayEvents,
   resolveRepositoryRoot,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -21,10 +22,6 @@ import type { Command } from "commander";
 const SES_PREFIX = "ses_";
 const SHORT_ID_BASE_LEN = 6;
 const SHORT_ID_MAX_LEN = 26; // ULID body length
-// 24h: long enough that an active long-running session will not be flagged,
-// short enough that an abandoned process is surfaced within a working day.
-// Tunable via CLI option in a future step (continuation backlog #12).
-const STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 const STATUS_VALUES = SessionStatusSchema.options;
 
@@ -126,16 +123,27 @@ export async function doRunSessionList(
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
-  const entries = await enumerateSessionDirs(paths);
-  if (entries === null) {
+  // Y-3o-X1 消化: orchestration を core の loadSessionEntries に委譲。
+  // 既存 stderr 文言「Skipped <sid>: <reason>」と「Warning: skipped suspect
+  // check for <sid>: events.jsonl unreadable」を保持するため、CLI 側で
+  // onSkip / onWarning を mapping する。
+  const now = new Date();
+  const records: SessionListRecord[] = (
+    await loadSessionEntries(paths, {
+      now,
+      onWarning: (w, sid) => makeWarningHandler(sid)(w),
+      onSkip: (sid, reason) => printSessionListSkip(sid, reason),
+    })
+  ).map((entry) => ({
+    sessionId: entry.sessionId,
+    session: entry.session,
+    suspect: entry.suspect,
+    suspectReason: entry.suspectReason,
+  }));
+
+  if (records.length === 0) {
     printNoSessions(options);
     return;
-  }
-
-  const records: SessionListRecord[] = [];
-  for (const sid of entries) {
-    const rec = await readSessionListRecord(paths, sid);
-    if (rec !== null) records.push(rec);
   }
 
   // started_at desc using Date.parse to normalize across timezone offsets;
@@ -226,76 +234,30 @@ export async function doRunSessionShow(
   printSessionShowText(session, events, options, repositoryRoot);
 }
 
-async function enumerateSessionDirs(paths: BasouPaths): Promise<string[] | null> {
-  try {
-    const dirents = await readdir(paths.sessions, { withFileTypes: true });
-    return dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-  } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) return null; // empty workspace, no sessions yet
-    throw new Error("Failed to enumerate sessions", { cause: error });
+/**
+ * Y-3o-X1 消化: orchestration (enumerate + read + classifySuspect) は
+ * `loadSessionEntries` に集約済。本 CLI は reason ラベルを既存 stderr 文言
+ * (= Step 12 の session list で確立) に map することで test divergence を
+ * 防ぐ。
+ *
+ * - `session_yaml_missing` → "Skipped <sid>: session.yaml not found"
+ * - `session_yaml_invalid` → "Skipped <sid>: invalid session schema"
+ * - `events_jsonl_unreadable` → "Warning: skipped suspect check for <sid>:
+ *   events.jsonl unreadable" (Codex#1 Y3q-M2 で確立)
+ */
+function printSessionListSkip(sid: string, reason: SessionSkipReason): void {
+  const short = shortId(sid);
+  switch (reason) {
+    case "session_yaml_missing":
+      console.error(`Skipped ${short}: session.yaml not found`);
+      break;
+    case "session_yaml_invalid":
+      console.error(`Skipped ${short}: invalid session schema`);
+      break;
+    case "events_jsonl_unreadable":
+      console.error(`Warning: skipped suspect check for ${short}: events.jsonl unreadable`);
+      break;
   }
-}
-
-async function readSessionListRecord(
-  paths: BasouPaths,
-  sid: string,
-): Promise<SessionListRecord | null> {
-  const sessionYamlPath = join(paths.sessions, sid, "session.yaml");
-  let raw: unknown;
-  try {
-    raw = await readYamlFile(sessionYamlPath);
-  } catch (error: unknown) {
-    console.error(`Skipped ${shortId(sid)}: ${describeReadError(error)}`);
-    return null;
-  }
-  const parse = SessionSchema.safeParse(raw);
-  if (!parse.success) {
-    console.error(`Skipped ${shortId(sid)}: invalid session schema`);
-    return null;
-  }
-  const session = parse.data;
-
-  const { suspect, suspectReason } = await classifySuspect(paths, sid, session);
-  return { sessionId: sid, session, suspect, suspectReason };
-}
-
-async function classifySuspect(
-  paths: BasouPaths,
-  sid: string,
-  session: Session,
-): Promise<{ suspect: boolean; suspectReason: string | null }> {
-  if (session.session.status !== "running") {
-    return { suspect: false, suspectReason: null };
-  }
-  const sessionDir = join(paths.sessions, sid);
-  let endedFound = false;
-  let lastEventOccurredAt: string | null = null;
-  try {
-    for await (const ev of replayEvents(sessionDir, {
-      onWarning: makeWarningHandler(sid),
-    })) {
-      lastEventOccurredAt = ev.occurred_at;
-      if (ev.type === "session_ended") endedFound = true;
-    }
-  } catch (_error: unknown) {
-    // events.jsonl I/O failure (e.g. EACCES) is unrecoverable for the
-    // suspect check. Surface a stderr warning so the operator sees that the
-    // classification was skipped rather than silently treating the session
-    // as healthy. The warning intentionally avoids exposing the cause's
-    // message so absolute paths from native fs errors do not leak.
-    console.error(`Warning: skipped suspect check for ${shortId(sid)}: events.jsonl unreadable`);
-    return { suspect: false, suspectReason: null };
-  }
-  if (endedFound) {
-    return { suspect: true, suspectReason: "events_say_ended_but_yaml_running" };
-  }
-  if (lastEventOccurredAt !== null) {
-    const ageMs = Date.now() - Date.parse(lastEventOccurredAt);
-    if (Number.isFinite(ageMs) && ageMs > STUCK_THRESHOLD_MS) {
-      return { suspect: true, suspectReason: "running_no_end_event" };
-    }
-  }
-  return { suspect: false, suspectReason: null };
 }
 
 function suspectLabel(reason: string | null): string {
@@ -481,15 +443,9 @@ async function resolveSessionId(paths: BasouPaths, input: string): Promise<strin
     throw new Error(`Session not found: ${input}`);
   }
 
-  let entries: string[];
-  try {
-    const dirents = await readdir(paths.sessions, { withFileTypes: true });
-    entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-  } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) {
-      throw new Error(`Session not found: ${input}`);
-    }
-    throw new Error("Failed to enumerate sessions", { cause: error });
+  const entries = await enumerateSessionDirs(paths);
+  if (entries.length === 0) {
+    throw new Error(`Session not found: ${input}`);
   }
 
   const matches = entries.filter((e) => e.startsWith(normalized));
@@ -613,15 +569,6 @@ function renderSessionError(error: unknown, verbose: boolean): void {
     const label = typeof code === "string" ? code : error.cause.constructor.name;
     console.error(`Caused by: ${label}`);
   }
-}
-
-function describeReadError(error: unknown): string {
-  if (error instanceof Error) {
-    if (error.message === "YAML file not found") return "session.yaml not found";
-    if (error.message === "Failed to parse YAML content") return "invalid YAML";
-    return error.message;
-  }
-  return String(error);
 }
 
 function parsePositiveInt(raw: string): number {
