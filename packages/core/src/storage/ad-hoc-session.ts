@@ -173,7 +173,11 @@ export async function createAdHocSessionWithEvent(
         from: "initialized",
         to: "running",
       },
-      input.targetEventBuilder(sessionId, targetEventId),
+      assertTargetEventIdentity(
+        input.targetEventBuilder(sessionId, targetEventId),
+        sessionId,
+        targetEventId,
+      ),
       {
         schema_version: "0.1.0",
         id: statusToCompletedEventId,
@@ -317,7 +321,7 @@ export async function appendEventToExistingSession(
 
   // 4. Mint event ID and build payload.
   const eventId = prefixedUlid("evt");
-  const event = input.eventBuilder(eventId);
+  const event = assertTargetEventIdentity(input.eventBuilder(eventId), input.sessionId, eventId);
 
   // 5. Append (appendEvent validates with EventSchema; bad payloads are
   //    rejected with the fixed `"Invalid Basou event payload"` message).
@@ -325,4 +329,25 @@ export async function appendEventToExistingSession(
   await appendEvent(sessionDir, event);
 
   return { eventId, sessionStatus: status };
+}
+
+/**
+ * Defensive check (Y3s-3-M1): a builder closure could in principle hand back
+ * an event whose `id` or `session_id` differs from the orchestrator's
+ * minted values. EventSchema only validates the shape, so this slip would
+ * silently corrupt events.jsonl. Reject with a fixed pathless message so
+ * direct-caller misuse never reaches disk.
+ */
+function assertTargetEventIdentity(
+  event: Event,
+  expectedSessionId: PrefixedId<"ses">,
+  expectedEventId: PrefixedId<"evt">,
+): Event {
+  if (event.session_id !== expectedSessionId) {
+    throw new Error("Target event session_id mismatch");
+  }
+  if (event.id !== expectedEventId) {
+    throw new Error("Target event id mismatch");
+  }
+  return event;
 }

@@ -1103,6 +1103,18 @@ describe("doRunSessionNote", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("note-17b: --from-file - verbose run does not emit 'Caused by:' (hand-crafted error has no cause, Y3s-3-L1)", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N17b");
+    await createSession(repo, { id: sid, status: "running" });
+    const err = captureStderr();
+    await runSessionNote(sid, { fromFile: "-", verbose: true }, { cwd: repo });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("--from-file - (stdin) is not supported in v0.1");
+    expect(stderr).not.toContain("Caused by:");
+    expect(process.exitCode).toBe(1);
+  });
+
   it("note-17: pathless contract: verbose emits 'Caused by: <label>' without leaking cause.message", async () => {
     const repo = await setupInitedRepo();
     const sid = SES("N17");

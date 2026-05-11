@@ -685,4 +685,111 @@ describe("appendEventToExistingSession", () => {
       }),
     ).rejects.toThrow();
   });
+
+  it("rejects a target event whose session_id does not match (Y3s-3-M1)", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, VALID_SES_ID, "running");
+    const FOREIGN_SES_ID = "ses_01HXFOREIGNSESS1234567890";
+    await expect(
+      appendEventToExistingSession({
+        paths,
+        sessionId: VALID_SES_ID,
+        eventBuilder: (eventId) =>
+          ({
+            schema_version: "0.1.0",
+            id: eventId,
+            // Wrong session_id — the builder lied about which session this
+            // event belongs to. The orchestrator must reject before disk.
+            session_id: FOREIGN_SES_ID,
+            occurred_at: "2026-05-11T12:30:00+09:00",
+            source: "local-cli",
+            type: "note_added",
+            body: "x",
+          }) as Event,
+      }),
+    ).rejects.toThrow("Target event session_id mismatch");
+
+    // Ensure the malformed event never landed in events.jsonl.
+    const events = await readEventsJsonl(paths, VALID_SES_ID);
+    expect(events).toHaveLength(0);
+  });
+
+  it("rejects a target event whose id does not match the minted one (Y3s-3-M1)", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, VALID_SES_ID, "running");
+    const STOLEN_EVENT_ID = "evt_01HXSTOLENEVENT1234567890";
+    await expect(
+      appendEventToExistingSession({
+        paths,
+        sessionId: VALID_SES_ID,
+        eventBuilder: () =>
+          ({
+            schema_version: "0.1.0",
+            id: STOLEN_EVENT_ID,
+            session_id: VALID_SES_ID,
+            occurred_at: "2026-05-11T12:30:00+09:00",
+            source: "local-cli",
+            type: "note_added",
+            body: "x",
+          }) as Event,
+      }),
+    ).rejects.toThrow("Target event id mismatch");
+  });
+});
+
+describe("writeEventsBulk error contract (Y3s-3-M2)", () => {
+  it("surfaces 'Failed to write events.jsonl' without leaking absolute paths in cause.message", async () => {
+    const { writeEventsBulk } = await import("../events/event-writer.js");
+    // Point at a directory that doesn't exist so the underlying writeFile
+    // fails with ENOENT (cannot create tmp file in a missing dir).
+    const bogusDir = join(getWorkDir(), "no-such-session-dir");
+    let captured: Error | undefined;
+    try {
+      await writeEventsBulk(bogusDir, [
+        {
+          schema_version: "0.1.0",
+          id: "evt_01HXABCDEF1234567890ABCEV1" as `evt_${string}`,
+          session_id: "ses_01HXABCDEF1234567890ABCSE1" as `ses_${string}`,
+          occurred_at: "2026-05-11T12:00:00+09:00",
+          source: "local-cli",
+          type: "session_started",
+        },
+      ]);
+    } catch (error: unknown) {
+      if (error instanceof Error) captured = error;
+    }
+    expect(captured).toBeDefined();
+    if (captured !== undefined) {
+      expect(captured.message).toBe("Failed to write events.jsonl");
+      expect(captured.message).not.toContain(bogusDir);
+      expect(captured.cause).toBeDefined();
+    }
+  });
+
+  it("surfaces 'Invalid Basou event payload' fixed message on validation failure", async () => {
+    const paths = await setupPaths();
+    const { writeEventsBulk } = await import("../events/event-writer.js");
+    let captured: Error | undefined;
+    try {
+      await writeEventsBulk(paths.sessions, [
+        // type=note_added but body missing — EventSchema rejects.
+        {
+          schema_version: "0.1.0",
+          id: "evt_01HXABCDEF1234567890ABCEV2" as `evt_${string}`,
+          session_id: "ses_01HXABCDEF1234567890ABCSE2" as `ses_${string}`,
+          occurred_at: "2026-05-11T12:00:00+09:00",
+          source: "local-cli",
+          type: "note_added",
+        } as unknown as Event,
+      ]);
+    } catch (error: unknown) {
+      if (error instanceof Error) captured = error;
+    }
+    expect(captured).toBeDefined();
+    if (captured !== undefined) {
+      expect(captured.message).toBe("Invalid Basou event payload");
+      expect(captured.message).not.toContain(paths.sessions);
+      expect(captured.cause).toBeDefined();
+    }
+  });
 });
