@@ -45,9 +45,17 @@ export async function renderDecisions(
   input: DecisionsRendererInput,
 ): Promise<DecisionsRendererResult> {
   const now = new Date(input.nowIso);
-  const loadOpts: Parameters<typeof loadSessionEntries>[1] = { now };
+  // Codex#3 Y3q-M1: same rationale as handoff-renderer. Track which
+  // sessions already had `events_jsonl_unreadable` surfaced so non-running
+  // sessions whose events.jsonl is unreadable still produce a stderr
+  // warning instead of silently dropping their decisions.
+  const unreadableEmitted = new Set<string>();
+  const wrappedSkip: (sid: string, reason: SessionSkipReason) => void = (sid, reason) => {
+    if (reason === "events_jsonl_unreadable") unreadableEmitted.add(sid);
+    input.onSessionSkip?.(sid, reason);
+  };
+  const loadOpts: Parameters<typeof loadSessionEntries>[1] = { now, onSkip: wrappedSkip };
   if (input.onWarning !== undefined) loadOpts.onWarning = input.onWarning;
-  if (input.onSessionSkip !== undefined) loadOpts.onSkip = input.onSessionSkip;
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
   const decisions: DecisionRecord[] = [];
@@ -67,9 +75,9 @@ export async function renderDecisions(
         }
       }
     } catch {
-      // Same rationale as handoff-renderer: loadSessionEntries already
-      // emitted `events_jsonl_unreadable` via onSkip, so the CLI has
-      // surfaced a warning; don't double-report.
+      if (!unreadableEmitted.has(entry.sessionId)) {
+        wrappedSkip(entry.sessionId, "events_jsonl_unreadable");
+      }
     }
   }
   decisions.sort((a, b) => {

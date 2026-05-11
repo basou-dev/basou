@@ -241,6 +241,22 @@ describe("basou handoff generate", () => {
     );
   });
 
+  it("case 4b2 (Codex#3 Y3q-M1): completed session with unreadable events.jsonl still surfaces a warning", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("X14");
+    // Status = completed: classifySuspect short-circuits and never touches
+    // events.jsonl. The unreadable file is therefore only seen on the
+    // decision-aggregation pass; without M1 the catch would swallow it.
+    await placeSession(repo, { id, status: "completed" });
+    await mkdir(join(basouPaths(repo).sessions, id, "events.jsonl"), { recursive: true });
+    captureStdout();
+    const err = captureStderr();
+    await doRunHandoffGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+    expect(joinCalls(err)).toContain(
+      `Warning: skipped suspect check for ${id.slice(4, 10)}: events.jsonl unreadable`,
+    );
+  });
+
   it("case 4c (Codex#2 Y3q-M4): session.yaml missing emits Skipped <sid>: session_yaml_missing", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X06");
@@ -370,6 +386,39 @@ describe("basou handoff generate", () => {
       expect(joinCalls(err)).toContain("Failed to enumerate sessions");
     } finally {
       await chmod(paths.sessions, 0o755);
+    }
+  });
+
+  it("case 14 (Codex#3 Y3q-L1): markdown write failure exits 1 with the fixed message", async () => {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    // Make .basou itself read-only so the tmp file inside cannot be created.
+    // (Pre-creating handoff.md as a directory wouldn't work because
+    // readMarkdownFile reads it first and fails on EISDIR before write runs.)
+    await chmod(paths.root, 0o555);
+    captureStdout();
+    const err = captureStderr();
+    try {
+      await runHandoffGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+      expect(process.exitCode).toBe(1);
+      expect(joinCalls(err)).toContain("Failed to write markdown file");
+    } finally {
+      await chmod(paths.root, 0o755);
+    }
+  });
+
+  it("case 14b (Codex#3 Y3q-L1): verbose mode surfaces 'Caused by: <code>' on a write failure", async () => {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    await chmod(paths.root, 0o555);
+    captureStdout();
+    const err = captureStderr();
+    try {
+      await runHandoffGenerate({ verbose: true }, { cwd: repo, nowProvider: () => FIXED_DATE });
+      expect(process.exitCode).toBe(1);
+      expect(joinCalls(err)).toMatch(/Caused by:/);
+    } finally {
+      await chmod(paths.root, 0o755);
     }
   });
 

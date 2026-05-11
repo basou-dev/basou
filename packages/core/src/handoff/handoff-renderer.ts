@@ -69,11 +69,21 @@ type DecisionRecord = {
 export async function renderHandoff(input: HandoffRendererInput): Promise<HandoffRendererResult> {
   const limit = input.relatedFilesLimit ?? 20;
   const now = new Date(input.nowIso);
+  // Wrap the caller's onSkip so we can detect whether loadSessionEntries'
+  // suspect pass already emitted `events_jsonl_unreadable` for a session
+  // (Codex#3 Y3q-M1). For non-running sessions the suspect pass does not
+  // touch events.jsonl, so the second replay below may be the first to
+  // hit the unreadable file — without this bookkeeping that error would
+  // be silently swallowed.
+  const unreadableEmitted = new Set<string>();
+  const wrappedSkip: (sid: string, reason: SessionSkipReason) => void = (sid, reason) => {
+    if (reason === "events_jsonl_unreadable") unreadableEmitted.add(sid);
+    input.onSessionSkip?.(sid, reason);
+  };
   // `exactOptionalPropertyTypes` forbids passing literal `undefined` for an
   // optional property, so build the options object conditionally.
-  const loadOpts: Parameters<typeof loadSessionEntries>[1] = { now };
+  const loadOpts: Parameters<typeof loadSessionEntries>[1] = { now, onSkip: wrappedSkip };
   if (input.onWarning !== undefined) loadOpts.onWarning = input.onWarning;
-  if (input.onSessionSkip !== undefined) loadOpts.onSkip = input.onSessionSkip;
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
   const decisions: DecisionRecord[] = [];
@@ -93,9 +103,14 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
         }
       }
     } catch {
-      // events.jsonl unreadable: loadSessionEntries' suspect pass has
-      // already invoked onSkip with `events_jsonl_unreadable`, so the
-      // CLI will surface a stderr warning. Don't double-report here.
+      // events.jsonl unreadable on the decision-aggregation pass. If the
+      // suspect pass has not already surfaced a warning for this session
+      // (e.g. completed session, where classifySuspect short-circuits
+      // before reading events.jsonl), emit the skip now so the operator
+      // is not left wondering why a decision is missing (Codex#3 Y3q-M1).
+      if (!unreadableEmitted.has(entry.sessionId)) {
+        wrappedSkip(entry.sessionId, "events_jsonl_unreadable");
+      }
     }
   }
   decisions.sort((a, b) => {

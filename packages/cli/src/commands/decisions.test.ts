@@ -207,6 +207,96 @@ describe("basou decisions generate", () => {
     expect(joinCalls(err)).toContain("Markers mismatched in decisions.md");
   });
 
+  it("case 4b (Codex#2 Y3q-M4): events.jsonl unreadable surfaces the existing suspect-check wording", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("X10");
+    // Place a running session so classifySuspect actually tries to read
+    // events.jsonl. Then replace events.jsonl with a directory so the read
+    // fails with EISDIR (portable across Linux/macOS).
+    const paths = basouPaths(repo);
+    const sessionDir = join(paths.sessions, id);
+    await mkdir(sessionDir, { recursive: true });
+    await writeYamlFile(join(sessionDir, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: {
+        id,
+        label: "fixture running",
+        task_id: null,
+        workspace_id: FIXED_WS_ID,
+        source: { kind: "terminal", version: "0.1.0" },
+        started_at: "2026-05-08T11:00:00+09:00",
+        status: "running",
+        working_directory: "/tmp/fixture",
+        invocation: { command: "echo", args: [], exit_code: 0 },
+        related_files: [],
+        events_log: "events.jsonl",
+      },
+    });
+    await mkdir(join(sessionDir, "events.jsonl"), { recursive: true });
+    captureStdout();
+    const err = captureStderr();
+    await doRunDecisionsGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+    expect(joinCalls(err)).toContain(
+      `Warning: skipped suspect check for ${id.slice(4, 10)}: events.jsonl unreadable`,
+    );
+  });
+
+  it("case 4c (Codex#2 Y3q-M4): session.yaml missing emits Skipped <sid>: session_yaml_missing", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("X11");
+    await mkdir(join(basouPaths(repo).sessions, id), { recursive: true });
+    captureStdout();
+    const err = captureStderr();
+    await doRunDecisionsGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+    expect(joinCalls(err)).toContain(`Skipped ${id.slice(4, 10)}: session_yaml_missing`);
+  });
+
+  it("case 4d (Codex#2 Y3q-M4): session.yaml invalid schema emits Skipped <sid>: session_yaml_invalid", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("X12");
+    const sessionDir = join(basouPaths(repo).sessions, id);
+    await mkdir(sessionDir, { recursive: true });
+    await writeYamlFile(join(sessionDir, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: { id },
+    });
+    captureStdout();
+    const err = captureStderr();
+    await doRunDecisionsGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+    expect(joinCalls(err)).toContain(`Skipped ${id.slice(4, 10)}: session_yaml_invalid`);
+  });
+
+  it("case 15a (Codex#3 Y3q-L1): markdown write failure exits 1 with the fixed message", async () => {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    // Make .basou read-only so the tmp file cannot be created.
+    await chmod(paths.root, 0o555);
+    captureStdout();
+    const err = captureStderr();
+    try {
+      await runDecisionsGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+      expect(process.exitCode).toBe(1);
+      expect(joinCalls(err)).toContain("Failed to write markdown file");
+    } finally {
+      await chmod(paths.root, 0o755);
+    }
+  });
+
+  it("case 15b (Codex#3 Y3q-L1): verbose mode surfaces 'Caused by: <code>' on a write failure", async () => {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    await chmod(paths.root, 0o555);
+    captureStdout();
+    const err = captureStderr();
+    try {
+      await runDecisionsGenerate({ verbose: true }, { cwd: repo, nowProvider: () => FIXED_DATE });
+      expect(process.exitCode).toBe(1);
+      expect(joinCalls(err)).toMatch(/Caused by:/);
+    } finally {
+      await chmod(paths.root, 0o755);
+    }
+  });
+
   it("case 7: partial trailing line in events.jsonl produces a stderr warning", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X01");
