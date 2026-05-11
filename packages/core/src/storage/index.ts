@@ -34,3 +34,8 @@ export {
   writeMarkdownFile,
 } from "./markdown-store.js";
 export type { MarkerSection } from "./markdown-store.js";
+export { importSessionFromJson } from "./session-import.js";
+export type {
+  ImportSessionOptions,
+  ImportSessionResult,
+} from "./session-import.js";

@@ -1,18 +1,42 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   basouPaths,
   createManifest,
   ensureBasouDirectory,
+  readYamlFile,
   writeManifest,
   writeYamlFile,
 } from "@basou/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { doRunSessionList, doRunSessionShow, registerSessionCommand } from "./session.js";
+import {
+  doRunSessionList,
+  doRunSessionShow,
+  registerSessionCommand,
+  runSessionImport,
+} from "./session.js";
+
+const FIXTURE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "__fixtures__",
+  "session-import-roundtrip.json",
+);
+
+async function readFixture(): Promise<Record<string, unknown>> {
+  const body = await readFile(FIXTURE_PATH, "utf8");
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
+async function writeImportPayload(payload: unknown, workDir: string): Promise<string> {
+  const path = join(workDir, `import-${Math.random().toString(36).slice(2)}.json`);
+  await writeFile(path, JSON.stringify(payload));
+  return path;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -612,5 +636,276 @@ describe("doRunSessionShow", () => {
     } finally {
       await rm(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe("runSessionImport", () => {
+  it("import-1: happy path writes Imported session line and creates session dir", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await runSessionImport({ format: "json", from: FIXTURE_PATH }, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toMatch(
+      /^Imported session \w+ \(7 events\) from session-import-roundtrip\.json$/,
+    );
+    const paths = basouPaths(repo);
+    const sessionDirs = await readdir(paths.sessions);
+    expect(sessionDirs).toHaveLength(1);
+  });
+
+  it("import-2: --json emits a single JSON line with the documented shape", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await runSessionImport({ format: "json", from: FIXTURE_PATH, json: true }, { cwd: repo });
+    const parsed = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      event_count: 7,
+      dry_run: false,
+      status: "imported",
+      source: { kind: "claude-code-adapter", version: "0.1.0" },
+    });
+    expect(typeof parsed.session_id).toBe("string");
+    expect((parsed.session_id as string).startsWith("ses_")).toBe(true);
+  });
+
+  it("import-3: --verbose appends Caused by: on schema fail", async () => {
+    const repo = await setupInitedRepo();
+    const fixture = await readFixture();
+    fixture.events = undefined;
+    const from = await writeImportPayload(fixture, repo);
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from, verbose: true }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Invalid import payload");
+    expect(stderr).toContain("Caused by: ZodError");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("import-4: --label override appears in session.yaml", async () => {
+    const repo = await setupInitedRepo();
+    await runSessionImport(
+      { format: "json", from: FIXTURE_PATH, label: "custom-label" },
+      { cwd: repo },
+    );
+    const paths = basouPaths(repo);
+    const [sid = ""] = await readdir(paths.sessions);
+    const yaml = (await readYamlFile(join(paths.sessions, sid, "session.yaml"))) as {
+      session: { label?: string };
+    };
+    expect(yaml.session.label).toBe("custom-label");
+  });
+
+  it("import-5: --task override appears in session.yaml", async () => {
+    const repo = await setupInitedRepo();
+    const taskId = "task_01HXABCDEF1234567890ABCTK1";
+    await runSessionImport({ format: "json", from: FIXTURE_PATH, task: taskId }, { cwd: repo });
+    const paths = basouPaths(repo);
+    const [sid = ""] = await readdir(paths.sessions);
+    const yaml = (await readYamlFile(join(paths.sessions, sid, "session.yaml"))) as {
+      session: { task_id?: string };
+    };
+    expect(yaml.session.task_id).toBe(taskId);
+  });
+
+  it("import-6: invalid --task is rejected via the commander layer", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerSessionCommand(program);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await expect(
+      program.parseAsync([
+        "node",
+        "basou",
+        "session",
+        "import",
+        "--format",
+        "json",
+        "--from",
+        FIXTURE_PATH,
+        "--task",
+        "not-a-task",
+      ]),
+    ).rejects.toBeDefined();
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("Invalid task_id: not-a-task");
+  });
+
+  it("import-7: --dry-run produces an illustrative ID message and writes no files", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await runSessionImport({ format: "json", from: FIXTURE_PATH, dryRun: true }, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("Dry run: would import 7 events into");
+    expect(stdout).toContain("illustrative ID; not reserved, no files written");
+    const paths = basouPaths(repo);
+    const sessionDirs = await readdir(paths.sessions);
+    expect(sessionDirs).toEqual([]);
+  });
+
+  it("import-8: ENOENT input is mapped to 'Import source not found'", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from: join(repo, "missing.json") }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Import source not found");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("import-9: EISDIR input is mapped to 'Import source is not a file'", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from: repo }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Import source is not a file");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("import-10: malformed JSON is mapped to 'Failed to parse import JSON'", async () => {
+    const repo = await setupInitedRepo();
+    const from = join(repo, "broken.json");
+    await writeFile(from, "{this is not json");
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Failed to parse import JSON");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("import-11: schema failure (missing events) emits 'Invalid import payload'", async () => {
+    const repo = await setupInitedRepo();
+    const fixture = await readFixture();
+    fixture.events = undefined;
+    const from = await writeImportPayload(fixture, repo);
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Invalid import payload");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("import-12: schema_version '0.2.0' is rejected with the dedicated message", async () => {
+    const repo = await setupInitedRepo();
+    const fixture = await readFixture();
+    fixture.schema_version = "0.2.0";
+    const from = await writeImportPayload(fixture, repo);
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Unsupported import schema_version: 0.2.0");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("import-13: non-chronological events trigger 'Events are not in chronological order'", async () => {
+    const repo = await setupInitedRepo();
+    const fixture = (await readFixture()) as {
+      events: Array<{ occurred_at: string }>;
+    };
+    const second = fixture.events[1];
+    if (second === undefined) throw new Error("fixture must have >=2 events");
+    second.occurred_at = "2026-04-15T08:00:00+09:00"; // before [0]
+    const from = await writeImportPayload(fixture, repo);
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Events are not in chronological order");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("import-14: uninitialized workspace yields 'Workspace not initialized...'", async () => {
+    const repo = await realpath(getTmpRepo()); // git init only, no basou init
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from: FIXTURE_PATH }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Workspace not initialized. Run 'basou init' first.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("import-15: non-git cwd yields the dedicated 'Not a git repository' message", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "basou-not-git-"));
+    try {
+      const err = captureStderr();
+      await runSessionImport({ format: "json", from: FIXTURE_PATH }, { cwd: outside });
+      const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(stderr).toContain(
+        "Not a git repository. Run 'git init' first, then re-run 'basou session import'.",
+      );
+      expect(process.exitCode).toBe(1);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("import-16: pathless contract — stderr leaks no absolute paths on schema fail", async () => {
+    const repo = await setupInitedRepo();
+    const fixture = await readFixture();
+    fixture.events = undefined;
+    const from = await writeImportPayload(fixture, repo);
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from, verbose: true }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).not.toContain(repo);
+    expect(stderr).not.toContain(from);
+    expect(stderr).not.toContain(tmpdir());
+  });
+
+  it("import-17: round-trip preserves event count, source.kind and rewrites status", async () => {
+    const repo = await setupInitedRepo();
+    await runSessionImport({ format: "json", from: FIXTURE_PATH }, { cwd: repo });
+    const paths = basouPaths(repo);
+    const [sid = ""] = await readdir(paths.sessions);
+    const yaml = (await readYamlFile(join(paths.sessions, sid, "session.yaml"))) as {
+      session: { status: string; source: { kind: string } };
+    };
+    expect(yaml.session.status).toBe("imported");
+    expect(yaml.session.source.kind).toBe("claude-code-adapter");
+    const events = (await readFile(join(paths.sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0);
+    expect(events).toHaveLength(7);
+  });
+
+  it("import-18: missing --format is rejected by commander", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerSessionCommand(program);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await expect(
+      program.parseAsync(["node", "basou", "session", "import", "--from", FIXTURE_PATH]),
+    ).rejects.toBeDefined();
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("--format");
+  });
+
+  it("import-19: --format 'yaml' is rejected with the dedicated message", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerSessionCommand(program);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await expect(
+      program.parseAsync([
+        "node",
+        "basou",
+        "session",
+        "import",
+        "--format",
+        "yaml",
+        "--from",
+        FIXTURE_PATH,
+      ]),
+    ).rejects.toBeDefined();
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("Unsupported format: yaml. Valid values: json");
+  });
+
+  it("import-20: missing --from is rejected by commander", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerSessionCommand(program);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await expect(
+      program.parseAsync(["node", "basou", "session", "import", "--format", "json"]),
+    ).rejects.toBeDefined();
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("--from");
   });
 });

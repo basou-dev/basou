@@ -23,7 +23,7 @@ export {
   SessionStatusSchema,
   SessionSourceKindSchema,
 } from "./session.schema.js";
-export type { Session, SessionStatus } from "./session.schema.js";
+export type { Session, SessionStatus, SessionSourceKind } from "./session.schema.js";
 
 export {
   ApprovalSchema,
@@ -50,3 +50,12 @@ export type {
   NoteAddedEvent,
   AdapterOutputEvent,
 } from "./event.schema.js";
+
+export {
+  SessionImportPayloadSchema,
+  SessionInnerImportSchema,
+} from "./session-import.schema.js";
+export type {
+  SessionImportPayload,
+  SessionInnerImportInput,
+} from "./session-import.schema.js";

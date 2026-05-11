@@ -1,23 +1,30 @@
-import { join, relative } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename, join, relative } from "node:path";
 import {
   type BasouPaths,
   type Event,
+  type ImportSessionOptions,
+  type ImportSessionResult,
   type ReplayWarning,
   type Session,
+  SessionImportPayloadSchema,
   SessionSchema,
   type SessionSkipReason,
   type SessionStatus,
   SessionStatusSchema,
+  TaskIdSchema,
   assertBasouRootSafe,
   basouPaths,
   enumerateSessionDirs,
   findErrorCode,
+  importSessionFromJson,
   loadSessionEntries,
   readAllEvents,
+  readManifest,
   readYamlFile,
   resolveRepositoryRoot,
 } from "@basou/core";
-import type { Command } from "commander";
+import { type Command, InvalidArgumentError } from "commander";
 
 const SES_PREFIX = "ses_";
 const SHORT_ID_BASE_LEN = 6;
@@ -90,6 +97,20 @@ export function registerSessionCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (id: string, options: SessionShowOptions) => {
       await runSessionShow(id, options);
+    });
+
+  session
+    .command("import")
+    .description("Import a session from a JSON file")
+    .requiredOption("--format <format>", "Input format (currently only 'json')", parseImportFormat)
+    .requiredOption("--from <path>", "Path to the input JSON file")
+    .option("--label <text>", "Override the session label", parseLabelOverride)
+    .option("--task <task_id>", "Override the session task_id", parseTaskIdOverride)
+    .option("--dry-run", "Validate input only; do not write to disk")
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (options: SessionImportOptions) => {
+      await runSessionImport(options);
     });
 }
 
@@ -528,7 +549,7 @@ function maxLen(values: readonly string[], floor: number): number {
 
 async function resolveRepositoryRootForSession(
   cwd: string,
-  subcmd: "list" | "show",
+  subcmd: "list" | "show" | "import",
 ): Promise<string> {
   try {
     return await resolveRepositoryRoot(cwd);
@@ -593,4 +614,140 @@ function printNoSessions(options: SessionListOptions): void {
   } else {
     console.log("No sessions found.");
   }
+}
+
+// ----------------------------------------------------------------------------
+// session import (Step 15)
+// ----------------------------------------------------------------------------
+
+export type SessionImportOptions = {
+  format: "json";
+  from: string;
+  label?: string;
+  task?: string;
+  dryRun?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+/**
+ * Programmatic entry for `basou session import`. Mirrors the wrapper /
+ * pure-runner split used by list / show so tests can target either layer.
+ */
+export async function runSessionImport(
+  options: SessionImportOptions,
+  ctx: SessionContext = {},
+): Promise<void> {
+  try {
+    await doRunSessionImport(options, ctx);
+  } catch (error: unknown) {
+    renderSessionError(error, isVerbose(options));
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunSessionImport(
+  options: SessionImportOptions,
+  ctx: SessionContext,
+): Promise<void> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForSession(cwd, "import");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+
+  const manifest = await readManifest(paths);
+
+  const rawBody = await readInputFile(options.from);
+  const json = parseJsonStrict(rawBody);
+
+  const parsed = SessionImportPayloadSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error("Invalid import payload", { cause: parsed.error });
+  }
+
+  if (parsed.data.schema_version !== "0.1.0") {
+    throw new Error(`Unsupported import schema_version: ${parsed.data.schema_version}`);
+  }
+
+  const importOptions: ImportSessionOptions = { dryRun: options.dryRun === true };
+  if (options.label !== undefined) importOptions.labelOverride = options.label;
+  if (options.task !== undefined) importOptions.taskIdOverride = options.task;
+
+  const result = await importSessionFromJson(paths, manifest, parsed.data, importOptions);
+  printSessionImportResult(options, result);
+}
+
+async function readInputFile(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) {
+      throw new Error("Import source not found", { cause: error });
+    }
+    if (findErrorCode(error, "EISDIR")) {
+      throw new Error("Import source is not a file", { cause: error });
+    }
+    throw new Error("Failed to read import source", { cause: error });
+  }
+}
+
+function parseJsonStrict(body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch (error: unknown) {
+    throw new Error("Failed to parse import JSON", { cause: error });
+  }
+}
+
+function parseImportFormat(raw: string): "json" {
+  if (raw !== "json") {
+    throw new InvalidArgumentError(`Unsupported format: ${raw}. Valid values: json`);
+  }
+  return "json";
+}
+
+function parseLabelOverride(raw: string): string {
+  if (raw.length === 0) {
+    throw new InvalidArgumentError("Label must not be empty");
+  }
+  return raw;
+}
+
+function parseTaskIdOverride(raw: string): string {
+  const result = TaskIdSchema.safeParse(raw);
+  if (!result.success) {
+    throw new InvalidArgumentError(`Invalid task_id: ${raw}`);
+  }
+  return raw;
+}
+
+function printSessionImportResult(
+  options: SessionImportOptions,
+  result: ImportSessionResult,
+): void {
+  const isDry = options.dryRun === true;
+  const sid = shortId(result.sessionId);
+  if (options.json === true) {
+    console.log(
+      JSON.stringify({
+        session_id: result.sessionId,
+        event_count: result.eventCount,
+        dry_run: isDry,
+        source: { kind: result.finalSourceKind, version: "0.1.0" },
+        status: result.finalStatus,
+      }),
+    );
+    return;
+  }
+
+  if (isDry) {
+    console.log(
+      `Dry run: would import ${result.eventCount} events into ${sid} (illustrative ID; not reserved, no files written)`,
+    );
+    return;
+  }
+
+  console.log(
+    `Imported session ${sid} (${result.eventCount} events) from ${basename(options.from)}`,
+  );
 }

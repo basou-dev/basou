@@ -28,6 +28,8 @@ export const SessionSourceKindSchema = z.enum([
   "import",
   "terminal",
 ]);
+/** Inferred runtime type for {@link SessionSourceKindSchema}. */
+export type SessionSourceKind = z.infer<typeof SessionSourceKindSchema>;
 
 const SessionSourceSchema = z.object({
   kind: SessionSourceKindSchema,

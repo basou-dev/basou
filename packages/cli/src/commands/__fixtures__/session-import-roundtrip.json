@@ -1,0 +1,101 @@
+{
+  "schema_version": "0.1.0",
+  "session": {
+    "id": "ses_01HXFXTRRNDTRPSESSV0000000",
+    "label": "Round-trip fixture: contact form refactor",
+    "task_id": null,
+    "workspace_id": "ws_01HXFXTRRNDTRPWSV000000000",
+    "source": { "kind": "claude-code-adapter", "version": "0.1.0" },
+    "started_at": "2026-04-15T09:00:00+09:00",
+    "ended_at": "2026-04-15T11:30:00+09:00",
+    "status": "completed",
+    "working_directory": "/Users/example/projects/example-app",
+    "invocation": { "command": "claude-code", "args": [], "exit_code": 0 },
+    "related_files": ["src/components/ContactForm.tsx", "src/styles/contact.css"],
+    "events_log": "events.jsonl",
+    "summary": null
+  },
+  "events": [
+    {
+      "schema_version": "0.1.0",
+      "type": "session_started",
+      "id": "evt_01HXFXTRRNDTRPEVT000000001",
+      "session_id": "ses_01HXFXTRRNDTRPSESSV0000000",
+      "occurred_at": "2026-04-15T09:00:00+09:00",
+      "source": "claude-code-adapter"
+    },
+    {
+      "schema_version": "0.1.0",
+      "type": "git_snapshot",
+      "id": "evt_01HXFXTRRNDTRPEVT000000002",
+      "session_id": "ses_01HXFXTRRNDTRPSESSV0000000",
+      "occurred_at": "2026-04-15T09:00:01+09:00",
+      "source": "git-capability",
+      "head": "abc123def456abc123def456abc123def456abc1",
+      "branch": "feature/contact-form",
+      "dirty": false,
+      "staged": [],
+      "unstaged": [],
+      "untracked": []
+    },
+    {
+      "schema_version": "0.1.0",
+      "type": "command_executed",
+      "id": "evt_01HXFXTRRNDTRPEVT000000003",
+      "session_id": "ses_01HXFXTRRNDTRPSESSV0000000",
+      "occurred_at": "2026-04-15T09:15:23+09:00",
+      "source": "terminal-recording",
+      "command": "npm",
+      "args": ["test"],
+      "cwd": "/Users/example/projects/example-app",
+      "exit_code": 0,
+      "duration_ms": 4321
+    },
+    {
+      "schema_version": "0.1.0",
+      "type": "command_executed",
+      "id": "evt_01HXFXTRRNDTRPEVT000000004",
+      "session_id": "ses_01HXFXTRRNDTRPSESSV0000000",
+      "occurred_at": "2026-04-15T09:30:11+09:00",
+      "source": "terminal-recording",
+      "command": "git",
+      "args": ["diff", "--stat"],
+      "cwd": "/Users/example/projects/example-app",
+      "exit_code": 0,
+      "duration_ms": 123
+    },
+    {
+      "schema_version": "0.1.0",
+      "type": "decision_recorded",
+      "id": "evt_01HXFXTRRNDTRPEVT000000005",
+      "session_id": "ses_01HXFXTRRNDTRPSESSV0000000",
+      "occurred_at": "2026-04-15T10:45:00+09:00",
+      "source": "human",
+      "decision_id": "decision_01HXFXTRRNDTRPDEC000000001",
+      "title": "Adopt zod for ContactForm validation"
+    },
+    {
+      "schema_version": "0.1.0",
+      "type": "git_snapshot",
+      "id": "evt_01HXFXTRRNDTRPEVT000000006",
+      "session_id": "ses_01HXFXTRRNDTRPSESSV0000000",
+      "occurred_at": "2026-04-15T11:29:50+09:00",
+      "source": "git-capability",
+      "head": "def456abc123def456abc123def456abc123def4",
+      "branch": "feature/contact-form",
+      "dirty": true,
+      "staged": ["src/components/ContactForm.tsx"],
+      "unstaged": ["src/styles/contact.css"],
+      "untracked": []
+    },
+    {
+      "schema_version": "0.1.0",
+      "type": "session_ended",
+      "id": "evt_01HXFXTRRNDTRPEVT000000007",
+      "session_id": "ses_01HXFXTRRNDTRPSESSV0000000",
+      "occurred_at": "2026-04-15T11:30:00+09:00",
+      "source": "claude-code-adapter",
+      "exit_code": 0
+    }
+  ]
+}
