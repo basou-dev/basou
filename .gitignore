@@ -35,6 +35,16 @@ Thumbs.db
 AGENTS.local.md
 .claude/
 
+# AI instruction files (kept local-only, never committed)
+# Reason: AI agent instructions contain repository-specific operational rules that
+# should not be exposed publicly. Contributors who modify these files locally must
+# not push changes — the canonical content lives outside this repo. Files are
+# maintained locally and may symlink to a shared source.
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/.github/copilot-instructions.md
+
 # Basou - default ignore (Y-2 Section 1.3 / Y-1.5 Section 5.1)
 .basou/logs/
 .basou/raw/
