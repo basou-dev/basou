@@ -454,4 +454,11 @@ describe("basou handoff generate", () => {
     const generate = handoff?.commands.find((c) => c.name() === "generate");
     expect(generate).toBeDefined();
   });
+
+  it("case 17: stdout summary includes a tasks: count (Step 17)", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await doRunHandoffGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+    expect(joinCalls(out)).toContain("tasks: 0");
+  });
 });

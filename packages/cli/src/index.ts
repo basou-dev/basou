@@ -8,6 +8,7 @@ import { registerInitCommand } from "./commands/init.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerSessionCommand } from "./commands/session.js";
 import { registerStatusCommand } from "./commands/status.js";
+import { registerTaskCommand } from "./commands/task.js";
 
 const BASOU_CLI_VERSION = "0.1.0";
 
@@ -27,6 +28,7 @@ registerRunCommand(program);
 registerSessionCommand(program);
 registerApprovalCommand(program);
 registerDecisionCommand(program);
+registerTaskCommand(program);
 registerHandoffCommand(program);
 registerDecisionsCommand(program);
 

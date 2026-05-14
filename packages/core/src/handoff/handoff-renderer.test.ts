@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
+import type { TaskStatus } from "../schemas/task.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { renderHandoff } from "./handoff-renderer.js";
 
@@ -14,6 +15,8 @@ const SES = (s: string): string => `ses_01HXABCDEF1234567890ABC${s}`;
 const EVT = (s: string): string => `evt_01HXABCDEF1234567890ABC${s}`;
 const DEC = (s: string): string => `decision_01HXABCDEF1234567890ABC${s}`;
 const APPR = (s: string): string => `appr_01HXABCDEF1234567890ABC${s}`;
+const TASK = (s: string): string => `task_01HXABCDEF1234567890ABC${s}`;
+const WS_ID = "ws_01HXABCDEF1234567890ABCDEF";
 
 let workDir: string | undefined;
 
@@ -125,6 +128,51 @@ function decisionRecordedLine(
     decision_id: decisionId,
     title,
   })}\n`;
+}
+
+function taskCreatedLine(
+  sessionId: string,
+  evt: string,
+  taskId: string,
+  title: string,
+  occurredAt: string,
+): string {
+  return `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "task_created",
+    id: EVT(evt),
+    session_id: sessionId,
+    occurred_at: occurredAt,
+    source: "human",
+    task_id: taskId,
+    title,
+  })}\n`;
+}
+
+async function placeTaskFile(
+  paths: BasouPaths,
+  fixture: {
+    id: string;
+    title: string;
+    status: TaskStatus;
+    createdAt: string;
+    sessionId: string;
+  },
+): Promise<void> {
+  const yaml = stringify({
+    schema_version: "0.1.0",
+    task: {
+      id: fixture.id,
+      title: fixture.title,
+      status: fixture.status,
+      created_at: fixture.createdAt,
+      updated_at: fixture.createdAt,
+      workspace_id: WS_ID,
+      created_in_session: fixture.sessionId,
+      linked_sessions: [fixture.sessionId],
+    },
+  });
+  await writeFile(join(paths.tasks, `${fixture.id}.md`), `---\n${yaml}---\n\n`);
 }
 
 async function placePendingApproval(paths: BasouPaths, approvalId: string): Promise<void> {
@@ -298,7 +346,7 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain("- src/x.ts");
     expect(result.body).toContain(`- ${dec}: pick A`);
     expect(result.body).toContain("| short_id | status | started_at | label |");
-    expect(result.body).toContain("Sessions: 1.");
+    expect(result.body).toContain("Sessions: 1. Tasks: 0.");
   });
 
   it("case 12: nowIso is reflected in the generated_at header", async () => {
@@ -306,5 +354,102 @@ describe("handoff-renderer", () => {
     const customNow = "2026-12-31T23:59:59.000Z";
     const result = await renderHandoff({ paths, nowIso: customNow });
     expect(result.body).toContain(`> Generated at ${customNow}`);
+  });
+
+  it("case 13: 最終 task / 次に実行すべき作業 stay placeholder when no tasks exist", async () => {
+    const paths = await setupPaths();
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.taskCount).toBe(0);
+    expect(result.pendingTaskCount).toBe(0);
+    expect(result.body).toContain("- 最終 task: (no tasks recorded yet)");
+    expect(result.body).toContain("(no pending tasks)");
+  });
+
+  it("case 14: a single planned task surfaces as 最終 task and in 次に実行すべき作業", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X0D");
+    const taskId = TASK("T01");
+    const events = taskCreatedLine(sid, "E10", taskId, "form revamp", "2026-05-08T14:00:00+09:00");
+    await placeSession(paths, { id: sid, status: "running" }, events);
+    await placeTaskFile(paths, {
+      id: taskId,
+      title: "form revamp",
+      status: "planned",
+      createdAt: "2026-05-08T14:00:00+09:00",
+      sessionId: sid,
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.taskCount).toBe(1);
+    expect(result.pendingTaskCount).toBe(1);
+    expect(result.body).toContain(`- 最終 task: ${taskId} (planned): form revamp`);
+    expect(result.body).toContain(`- ${taskId} (planned): form revamp`);
+    expect(result.body).toContain("Sessions: 1. Tasks: 1.");
+  });
+
+  it("case 15: multi tasks select the latest task_created event for 最終 task", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X0E");
+    const t1 = TASK("T02");
+    const t2 = TASK("T03");
+    const events =
+      taskCreatedLine(sid, "E11", t1, "first task", "2026-05-08T11:00:00+09:00") +
+      taskCreatedLine(sid, "E12", t2, "second task", "2026-05-08T14:00:00+09:00");
+    await placeSession(paths, { id: sid, status: "running" }, events);
+    await placeTaskFile(paths, {
+      id: t1,
+      title: "first task",
+      status: "in_progress",
+      createdAt: "2026-05-08T11:00:00+09:00",
+      sessionId: sid,
+    });
+    await placeTaskFile(paths, {
+      id: t2,
+      title: "second task",
+      status: "planned",
+      createdAt: "2026-05-08T14:00:00+09:00",
+      sessionId: sid,
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`- 最終 task: ${t2} (planned): second task`);
+  });
+
+  it("case 16: pending list excludes done / cancelled tasks", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X0F");
+    const t1 = TASK("T04");
+    const t2 = TASK("T05");
+    const t3 = TASK("T06");
+    const events =
+      taskCreatedLine(sid, "E13", t1, "ongoing", "2026-05-08T11:00:00+09:00") +
+      taskCreatedLine(sid, "E14", t2, "completed", "2026-05-08T12:00:00+09:00") +
+      taskCreatedLine(sid, "E15", t3, "abandoned", "2026-05-08T13:00:00+09:00");
+    await placeSession(paths, { id: sid, status: "running" }, events);
+    await placeTaskFile(paths, {
+      id: t1,
+      title: "ongoing",
+      status: "in_progress",
+      createdAt: "2026-05-08T11:00:00+09:00",
+      sessionId: sid,
+    });
+    await placeTaskFile(paths, {
+      id: t2,
+      title: "completed",
+      status: "done",
+      createdAt: "2026-05-08T12:00:00+09:00",
+      sessionId: sid,
+    });
+    await placeTaskFile(paths, {
+      id: t3,
+      title: "abandoned",
+      status: "cancelled",
+      createdAt: "2026-05-08T13:00:00+09:00",
+      sessionId: sid,
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.taskCount).toBe(3);
+    expect(result.pendingTaskCount).toBe(1);
+    expect(result.body).toContain(`- ${t1} (in_progress): ongoing`);
+    expect(result.body).not.toMatch(new RegExp(`- ${t2} `));
+    expect(result.body).not.toMatch(new RegExp(`- ${t3} `));
   });
 });

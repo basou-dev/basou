@@ -8,6 +8,7 @@ import {
   type SuspectReason,
   loadSessionEntries,
 } from "../storage/sessions.js";
+import { type TaskDocument, type TaskSkipReason, loadTaskEntries } from "../storage/tasks.js";
 
 /** Input contract for {@link renderHandoff}. */
 export type HandoffRendererInput = {
@@ -23,6 +24,12 @@ export type HandoffRendererInput = {
    * consistent with `basou session list` (Codex#2 Y3q-M4).
    */
   onSessionSkip?: (sessionId: string, reason: SessionSkipReason) => void;
+  /**
+   * Per-task degradation reasons (invalid front matter / unreadable file).
+   * Surfaced so the CLI can warn the operator about a malformed task.md
+   * without aborting the handoff render.
+   */
+  onTaskSkip?: (taskId: string, reason: TaskSkipReason) => void;
   /** Maximum related_files entries to display before `... +N more`. Default 20. */
   relatedFilesLimit?: number;
 };
@@ -34,10 +41,21 @@ export type HandoffRendererResult = {
   decisionCount: number;
   pendingApprovalsCount: number;
   suspectCount: number;
+  /** Total number of task.md files successfully loaded. */
+  taskCount: number;
+  /** Tasks whose status is `planned` or `in_progress` (= shown in 次に実行すべき作業). */
+  pendingTaskCount: number;
 };
 
 type DecisionRecord = {
   decisionId: string;
+  title: string;
+  occurredAt: string;
+  sessionId: string;
+};
+
+type TaskCreatedRecord = {
+  taskId: string;
   title: string;
   occurredAt: string;
   sessionId: string;
@@ -87,6 +105,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
   const decisions: DecisionRecord[] = [];
+  const tasksCreated: TaskCreatedRecord[] = [];
   for (const entry of entries) {
     const sessionDir = join(input.paths.sessions, entry.sessionId);
     try {
@@ -96,6 +115,13 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
         if (ev.type === "decision_recorded") {
           decisions.push({
             decisionId: ev.decision_id,
+            title: ev.title,
+            occurredAt: ev.occurred_at,
+            sessionId: entry.sessionId,
+          });
+        } else if (ev.type === "task_created") {
+          tasksCreated.push({
+            taskId: ev.task_id,
             title: ev.title,
             occurredAt: ev.occurred_at,
             sessionId: entry.sessionId,
@@ -117,6 +143,23 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
     return c !== 0 ? c : a.decisionId.localeCompare(b.decisionId);
   });
+  tasksCreated.sort((a, b) => {
+    const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
+    return c !== 0 ? c : a.taskId.localeCompare(b.taskId);
+  });
+
+  const taskLoadOpts: Parameters<typeof loadTaskEntries>[1] = {};
+  if (input.onTaskSkip !== undefined) taskLoadOpts.onSkip = input.onTaskSkip;
+  const taskEntries = await loadTaskEntries(input.paths, taskLoadOpts);
+  const taskById = new Map<string, TaskDocument>();
+  for (const t of taskEntries) taskById.set(t.task.task.id, t);
+
+  const latestTaskRecord = tasksCreated[tasksCreated.length - 1];
+  const latestTaskDoc =
+    latestTaskRecord !== undefined ? taskById.get(latestTaskRecord.taskId) : undefined;
+  const pendingTasks = taskEntries.filter(
+    (t) => t.task.task.status === "planned" || t.task.task.status === "in_progress",
+  );
 
   const approvals = await enumerateApprovals(input.paths);
   const pendingApprovalsCount = approvals.pending.length;
@@ -156,6 +199,10 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     displayedFiles,
     overflow,
     entries,
+    latestTaskRecord,
+    latestTaskDoc,
+    pendingTasks,
+    totalTaskCount: taskEntries.length,
   });
 
   return {
@@ -164,6 +211,8 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     decisionCount: decisions.length,
     pendingApprovalsCount,
     suspectCount,
+    taskCount: taskEntries.length,
+    pendingTaskCount: pendingTasks.length,
   };
 }
 
@@ -178,6 +227,10 @@ function formatHandoffBody(args: {
   displayedFiles: ReadonlyArray<string>;
   overflow: number;
   entries: ReadonlyArray<SessionEntry>;
+  latestTaskRecord: TaskCreatedRecord | undefined;
+  latestTaskDoc: TaskDocument | undefined;
+  pendingTasks: ReadonlyArray<TaskDocument>;
+  totalTaskCount: number;
 }): string {
   const lines: string[] = [];
   lines.push("# Handoff");
@@ -199,7 +252,17 @@ function formatHandoffBody(args: {
   } else {
     lines.push("- 最終 session: (no live sessions)");
   }
-  lines.push("- 最終 task: (no tasks recorded yet)");
+  if (args.latestTaskRecord !== undefined) {
+    // Status comes from task.md when available; if a task_created event
+    // exists but the task.md was deleted manually, fall back to the event's
+    // implicit "planned" default.
+    const status = args.latestTaskDoc?.task.task.status ?? "planned";
+    lines.push(
+      `- 最終 task: ${args.latestTaskRecord.taskId} (${status}): ${args.latestTaskRecord.title}`,
+    );
+  } else {
+    lines.push("- 最終 task: (no tasks recorded yet)");
+  }
   lines.push("");
 
   // 直近の変更ファイル
@@ -254,7 +317,13 @@ function formatHandoffBody(args: {
   // 次に実行すべき作業
   lines.push("## 次に実行すべき作業");
   lines.push("");
-  lines.push("(no pending tasks)");
+  if (args.pendingTasks.length === 0) {
+    lines.push("(no pending tasks)");
+  } else {
+    for (const t of args.pendingTasks) {
+      lines.push(`- ${t.task.task.id} (${t.task.task.status}): ${t.task.task.title}`);
+    }
+  }
   lines.push("");
 
   // セッション一覧
@@ -274,7 +343,7 @@ function formatHandoffBody(args: {
     }
   }
   lines.push("");
-  lines.push(`Sessions: ${args.sessionCount}.`);
+  lines.push(`Sessions: ${args.sessionCount}. Tasks: ${args.totalTaskCount}.`);
 
   return lines.join("\n");
 }

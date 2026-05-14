@@ -11,9 +11,9 @@ import {
   prefixedUlid,
   readManifest,
   resolveRepositoryRoot,
+  resolveSessionId,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
-import { resolveSessionId } from "./session.js";
 
 const SES_PREFIX = "ses_";
 const SHORT_ID_BASE_LEN = 6;

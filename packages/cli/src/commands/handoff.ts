@@ -1,6 +1,7 @@
 import {
   type ReplayWarning,
   type SessionSkipReason,
+  type TaskSkipReason,
   assertBasouRootSafe,
   basouPaths,
   findErrorCode,
@@ -77,6 +78,7 @@ export async function doRunHandoffGenerate(
     nowIso,
     onWarning: (w, sid) => printReplayWarning(w, sid),
     onSessionSkip: (sid, reason) => printSessionSkip(sid, reason),
+    onTaskSkip: (taskId, reason) => printTaskSkip(taskId, reason),
   });
 
   const existing = await readMarkdownFile(paths.files.handoff);
@@ -84,7 +86,7 @@ export async function doRunHandoffGenerate(
   await writeMarkdownFile(paths.files.handoff, finalBody);
 
   console.log(
-    `Generated .basou/handoff.md (sessions: ${result.sessionCount}, decisions: ${result.decisionCount}, pending approvals: ${result.pendingApprovalsCount})`,
+    `Generated .basou/handoff.md (sessions: ${result.sessionCount}, tasks: ${result.taskCount}, decisions: ${result.decisionCount}, pending approvals: ${result.pendingApprovalsCount})`,
   );
 }
 
@@ -168,4 +170,16 @@ function printSessionSkip(sid: string, reason: SessionSkipReason): void {
   } else {
     console.error(`Skipped ${short}: ${reason}`);
   }
+}
+
+const TASK_PREFIX = "task_";
+
+function shortTaskId(id: string): string {
+  if (id.startsWith(TASK_PREFIX))
+    return id.slice(TASK_PREFIX.length, TASK_PREFIX.length + SHORT_ID_LEN);
+  return id.slice(0, SHORT_ID_LEN);
+}
+
+function printTaskSkip(taskId: string, reason: TaskSkipReason): void {
+  console.error(`Skipped ${shortTaskId(taskId)}: ${reason}`);
 }

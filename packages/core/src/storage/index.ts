@@ -51,3 +51,26 @@ export type {
   CreateAdHocSessionInput,
   CreateAdHocSessionResult,
 } from "./ad-hoc-session.js";
+export {
+  TaskWriteAfterEventError,
+  createTaskWithEvent,
+  enumerateTaskIds,
+  loadTaskEntries,
+  readTaskFile,
+  updateTaskStatusWithEvent,
+  writeTaskFile,
+} from "./tasks.js";
+export type {
+  AttachTaskInput,
+  AttachUpdateTaskStatusInput,
+  CreateAdHocTaskInput,
+  CreateTaskInput,
+  CreateTaskResult,
+  LoadTaskEntriesOptions,
+  TaskDocument,
+  TaskSkipReason,
+  UpdateAdHocTaskStatusInput,
+  UpdateTaskStatusInput,
+  UpdateTaskStatusResult,
+  WriteTaskFileMode,
+} from "./tasks.js";

@@ -25,6 +25,9 @@ export {
 } from "./session.schema.js";
 export type { Session, SessionStatus, SessionSourceKind } from "./session.schema.js";
 
+export { TaskSchema, TaskStatusSchema } from "./task.schema.js";
+export type { Task, TaskStatus } from "./task.schema.js";
+
 export {
   ApprovalSchema,
   ApprovalStatusSchema,

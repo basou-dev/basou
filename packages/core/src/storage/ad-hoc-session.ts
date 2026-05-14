@@ -59,6 +59,14 @@ export type CreateAdHocSessionInput = {
   workingDirectory: string;
   invocation: { command: string; args: string[] };
   /**
+   * Optional task id to link this ad-hoc session to. When provided, both the
+   * initial and the final `session.yaml` writes embed `task_id` so the
+   * single-session-to-single-task invariant (Y-2 §2.1) holds for task-flavoured
+   * ad-hoc paths (`basou task new` / `task status` without `--session`).
+   * Defaults to `null` so existing callers (decision / note) are unchanged.
+   */
+  taskId?: PrefixedId<"task">;
+  /**
    * Builds the variant-specific target event. Receives the freshly minted
    * session/event IDs so the caller can fill in cross-reference fields
    * (`decision_id`, `body`, ...) without owning ID generation.
@@ -123,6 +131,7 @@ export async function createAdHocSessionWithEvent(
       label: input.label,
       workingDirectory: input.workingDirectory,
       invocation: input.invocation,
+      taskId: input.taskId ?? null,
     }),
   );
 
@@ -243,13 +252,14 @@ function buildInitialSession(input: {
   label: string;
   workingDirectory: string;
   invocation: { command: string; args: string[] };
+  taskId: PrefixedId<"task"> | null;
 }): Session {
   return {
     schema_version: "0.1.0",
     session: {
       id: input.sessionId,
       label: input.label,
-      task_id: null,
+      task_id: input.taskId,
       workspace_id: input.workspaceId,
       source: { kind: input.sourceKind, version: "0.1.0" },
       started_at: input.startedAt,

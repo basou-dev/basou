@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 import {
-  type BasouPaths,
   type Event,
   type ImportSessionOptions,
   type ImportSessionResult,
@@ -16,7 +15,6 @@ import {
   appendEventToExistingSession,
   assertBasouRootSafe,
   basouPaths,
-  enumerateSessionDirs,
   findErrorCode,
   importSessionFromJson,
   loadSessionEntries,
@@ -24,6 +22,7 @@ import {
   readManifest,
   readYamlFile,
   resolveRepositoryRoot,
+  resolveSessionId,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 
@@ -462,35 +461,6 @@ function eventVariantSummary(ev: Event): string {
     case "adapter_output":
       return `${ev.stream} "${ev.summary}" raw_ref=${ev.raw_ref}`;
   }
-}
-
-export async function resolveSessionId(paths: BasouPaths, input: string): Promise<string> {
-  const trimmed = input.trim();
-  if (trimmed.length === 0) {
-    throw new Error("Session id is empty");
-  }
-  const normalized = trimmed.startsWith(SES_PREFIX) ? trimmed : `${SES_PREFIX}${trimmed}`;
-  // Reject prefix-only input (`ses_` or just spaces after the prefix) so a
-  // bare prefix cannot match an arbitrary single session via `startsWith`.
-  if (normalized.length <= SES_PREFIX.length) {
-    throw new Error(`Session not found: ${input}`);
-  }
-
-  const entries = await enumerateSessionDirs(paths);
-  if (entries.length === 0) {
-    throw new Error(`Session not found: ${input}`);
-  }
-
-  const matches = entries.filter((e) => e.startsWith(normalized));
-  if (matches.length === 0) {
-    throw new Error(`Session not found: ${input}`);
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      `Ambiguous session id '${input}': matched ${matches.length} sessions. Disambiguate with a longer prefix.`,
-    );
-  }
-  return matches[0] as string;
 }
 
 function makeWarningHandler(sid: string): (warning: ReplayWarning) => void {
