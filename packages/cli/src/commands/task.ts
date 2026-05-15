@@ -4,10 +4,13 @@ import {
   type Event,
   FailedToFinalizeError,
   type PrefixedId,
+  type ReconcileFailure,
+  type ReconcileResult,
   type ReplayWarning,
   type SessionEntry,
   type SessionStatus,
   type TaskDocument,
+  type TaskReconciledEvent,
   type TaskStatus,
   TaskStatusSchema,
   TaskWriteAfterEventError,
@@ -20,6 +23,8 @@ import {
   prefixedUlid,
   readManifest,
   readTaskFile,
+  reconcileAllTasks,
+  reconcileTask,
   replayEvents,
   resolveRepositoryRoot,
   resolveSessionId,
@@ -64,6 +69,13 @@ export type TaskShowOptions = {
 
 export type TaskStatusOptions = {
   session?: string;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type TaskReconcileOptions = {
+  task?: string;
+  write?: boolean;
   json?: boolean;
   verbose?: boolean;
 };
@@ -132,6 +144,19 @@ export function registerTaskCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (taskIdInput: string, newStatusInput: string, options: TaskStatusOptions) => {
       await runTaskStatus(taskIdInput, newStatusInput, options);
+    });
+
+  task
+    .command("reconcile")
+    .description(
+      "Dry-run audit of task session references; use --write to repair broken refs. Forward sync (events -> task.md linked_sessions) is out of scope.",
+    )
+    .option("--task <task_id>", "Limit to a single task (otherwise scan all)")
+    .option("--write", "Apply repairs (default: dry-run)")
+    .option("--json", "Output as JSON")
+    .option("-v, --verbose", "Show error causes and broken session_id values")
+    .action(async (options: TaskReconcileOptions) => {
+      await runTaskReconcile(options);
     });
 }
 
@@ -419,7 +444,9 @@ export async function doRunTaskShow(
         onWarning: (w) => printReplayWarning(w, s.sessionId),
       })) {
         if (
-          (ev.type === "task_created" || ev.type === "task_status_changed") &&
+          (ev.type === "task_created" ||
+            ev.type === "task_status_changed" ||
+            ev.type === "task_reconciled") &&
           ev.task_id === taskId
         ) {
           events.push(ev);
@@ -496,8 +523,14 @@ function printTaskShowText(
   const heading = showAll ? "All events:" : `Last ${slice.length} events:`;
   console.log("");
   console.log(heading);
+  const verbose = isVerbose(options);
   for (const ev of slice) {
     console.log(`  ${formatTaskEvent(ev)}`);
+    if (verbose && ev.type === "task_reconciled") {
+      for (const line of formatTaskReconciledDetails(ev)) {
+        console.log(line);
+      }
+    }
   }
 }
 
@@ -508,7 +541,29 @@ function formatTaskEvent(ev: Event): string {
   if (ev.type === "task_status_changed") {
     return `${ev.occurred_at} [${ev.source}]  task_status_changed  ${ev.from} -> ${ev.to}`;
   }
+  if (ev.type === "task_reconciled") {
+    const removedCount =
+      (ev.removed_created_in_session !== null ? 1 : 0) + ev.removed_linked_sessions.length;
+    return `${ev.occurred_at} [${ev.source}]  task_reconciled      ${removedCount} broken ref${removedCount === 1 ? "" : "s"} (use -v for details)`;
+  }
   return `${ev.occurred_at} [${ev.source}]  ${ev.type}`;
+}
+
+function formatTaskReconciledDetails(ev: TaskReconciledEvent): string[] {
+  const lines: string[] = [];
+  if (ev.removed_created_in_session !== null) {
+    lines.push(`      removed_created_in_session:    ${ev.removed_created_in_session}`);
+  }
+  if (ev.created_in_session_replacement !== null) {
+    lines.push(`      created_in_session_replacement: ${ev.created_in_session_replacement}`);
+  }
+  if (ev.removed_linked_sessions.length > 0) {
+    lines.push("      removed_linked_sessions:");
+    for (const sid of ev.removed_linked_sessions) {
+      lines.push(`        - ${sid}`);
+    }
+  }
+  return lines;
 }
 
 // ============================================================================
@@ -624,6 +679,244 @@ function printTaskStatusResult(options: TaskStatusOptions, result: TaskStatusPri
 }
 
 // ============================================================================
+// task reconcile (Step 19)
+// ============================================================================
+
+export async function runTaskReconcile(
+  options: TaskReconcileOptions,
+  ctx: TaskContext = {},
+): Promise<void> {
+  try {
+    await doRunTaskReconcile(options, ctx);
+  } catch (error: unknown) {
+    renderTaskError(error, isVerbose(options));
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunTaskReconcile(
+  options: TaskReconcileOptions,
+  ctx: TaskContext,
+): Promise<void> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForTask(cwd, "reconcile");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+  const manifest = await readManifest(paths);
+  const nowProvider = ctx.nowProvider ?? ((): Date => new Date());
+  const write = options.write === true;
+  const verbose = isVerbose(options);
+  const json = options.json === true;
+
+  if (options.task !== undefined) {
+    const taskId = (await resolveTaskId(paths, options.task)) as PrefixedId<"task">;
+    const result = await reconcileTask(paths, manifest, {
+      taskId,
+      occurredAt: nowProvider().toISOString(),
+      workingDirectory: repositoryRoot,
+      write,
+    });
+    if (json) {
+      printReconcileJson({ dryRun: !write, scanned: 1, results: [result], failed: [] });
+    } else {
+      printReconcileSingleText(result, paths, { write, verbose });
+    }
+    return;
+  }
+
+  const all = await reconcileAllTasks(paths, manifest, {
+    occurredAt: () => nowProvider().toISOString(),
+    workingDirectory: repositoryRoot,
+    write,
+  });
+  if (json) {
+    printReconcileJson({
+      dryRun: !write,
+      scanned: all.scanned,
+      results: all.results,
+      failed: all.failed,
+    });
+  } else {
+    printReconcileAllText(all.results, all.failed, all.scanned, { write, verbose });
+  }
+  if (all.failed.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+function printReconcileJson(input: {
+  dryRun: boolean;
+  scanned: number;
+  results: ReadonlyArray<ReconcileResult>;
+  failed: ReadonlyArray<ReconcileFailure>;
+}): void {
+  console.log(
+    JSON.stringify(
+      {
+        dry_run: input.dryRun,
+        scanned: input.scanned,
+        reconciled: input.results.map((r) => ({
+          task_id: r.taskId,
+          removed_created_in_session: r.brokenCreatedInSession,
+          created_in_session_replacement:
+            r.brokenCreatedInSession !== null && r.reconcileSession !== null
+              ? r.reconcileSession.sessionId
+              : null,
+          removed_linked_sessions: r.brokenLinkedSessions,
+          reconcile_session_id: r.reconcileSession?.sessionId ?? null,
+          event_id: r.reconcileSession?.eventId ?? null,
+        })),
+        failed: input.failed.map((f) => ({
+          task_id: f.taskId,
+          error_class: f.errorClass,
+          phase: f.phase,
+        })),
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+async function printReconcileSingleText(
+  result: ReconcileResult,
+  paths: ReturnType<typeof basouPaths>,
+  options: { write: boolean; verbose: boolean },
+): Promise<void> {
+  if (result.clean) {
+    // For the --task path with no broken refs we report counts of reachable
+    // references so the operator gets a positive audit confirmation rather
+    // than a bare "ok". Re-read task.md cheaply; the core API already did
+    // the integrity work so this is just for the display string.
+    let createdCount = 0;
+    let linkedCount = 0;
+    try {
+      const doc = await readTaskFile(paths, result.taskId);
+      createdCount = 1;
+      linkedCount = doc.task.task.linked_sessions.length;
+    } catch {
+      // If the file became unreadable between reconcileTask and here just
+      // fall back to a less detailed message rather than crashing the run.
+    }
+    console.log(
+      `${result.taskId}: no broken refs (${createdCount} created_in_session + ${linkedCount} linked_sessions, all reachable).`,
+    );
+    return;
+  }
+  if (options.write) {
+    const sessionPart =
+      result.reconcileSession !== null
+        ? ` (in session ${shortSessionId(result.reconcileSession.sessionId)})`
+        : "";
+    console.log(`Reconciled ${result.taskId}: ${describeReconcileSummary(result)}${sessionPart}.`);
+    return;
+  }
+  const summary = describeBrokenSummary(result, "task", options.verbose);
+  console.log(`(dry-run) Would reconcile ${result.taskId}: ${summary}`);
+  console.log("Note: events -> task.md forward sync is out of scope; see Y-3z / Step 22.");
+  console.log("Re-run with --write to apply.");
+}
+
+function printReconcileAllText(
+  results: ReadonlyArray<ReconcileResult>,
+  failed: ReadonlyArray<ReconcileFailure>,
+  scanned: number,
+  options: { write: boolean; verbose: boolean },
+): void {
+  if (results.length === 0 && failed.length === 0) {
+    console.log(`Scanned ${scanned} tasks, no broken refs detected.`);
+    return;
+  }
+
+  let totalBrokenRefs = 0;
+  for (const r of results) {
+    totalBrokenRefs += r.brokenLinkedSessions.length + (r.brokenCreatedInSession !== null ? 1 : 0);
+  }
+
+  if (options.write) {
+    for (const r of results) {
+      const sessionPart =
+        r.reconcileSession !== null
+          ? ` (in session ${shortSessionId(r.reconcileSession.sessionId)})`
+          : "";
+      console.log(`Reconciled ${r.taskId}: ${describeReconcileSummary(r)}${sessionPart}`);
+    }
+    for (const f of failed) {
+      const phase = f.phase ?? "unknown";
+      console.error(
+        `Failed to reconcile ${f.taskId}: ${f.errorClass} (phase: ${phase}); see Caused by with -v`,
+      );
+    }
+    const reconciledCount = results.length;
+    const reconciledRefs = totalBrokenRefs;
+    const reconciledPart = `reconciled ${reconciledCount} task${reconciledCount === 1 ? "" : "s"} (${reconciledRefs} broken ref${reconciledRefs === 1 ? "" : "s"})`;
+    const failedPart =
+      failed.length === 0 ? "" : `, ${failed.length} task${failed.length === 1 ? "" : "s"} failed`;
+    console.log(`Scanned ${scanned} tasks, ${reconciledPart}${failedPart}.`);
+    if (failed.length > 0) {
+      console.error("(exit code 1)");
+    }
+    return;
+  }
+
+  // dry-run with broken refs
+  for (const r of results) {
+    const summary = describeBrokenSummary(r, "all", options.verbose);
+    console.log(`(dry-run) Would reconcile ${r.taskId}: ${summary}`);
+  }
+  console.log(
+    `Scanned ${scanned} tasks, would reconcile ${results.length} task${results.length === 1 ? "" : "s"} (${totalBrokenRefs} broken ref${totalBrokenRefs === 1 ? "" : "s"}).`,
+  );
+  console.log("Note: events -> task.md forward sync is out of scope; see Y-3z / Step 22.");
+  console.log("Re-run with --write to apply.");
+}
+
+function describeReconcileSummary(r: ReconcileResult): string {
+  const linkedCount = r.brokenLinkedSessions.length;
+  const parts: string[] = [];
+  if (r.brokenCreatedInSession !== null) {
+    parts.push("replaced created_in_session");
+  }
+  if (linkedCount > 0) {
+    parts.push(`removed ${linkedCount} linked_sessions entr${linkedCount === 1 ? "y" : "ies"}`);
+  }
+  return parts.join(" + ");
+}
+
+function describeBrokenSummary(
+  r: ReconcileResult,
+  scope: "all" | "task",
+  verbose: boolean,
+): string {
+  const showIds = scope === "task" || verbose;
+  const parts: string[] = [];
+  if (r.brokenCreatedInSession !== null) {
+    parts.push(
+      showIds
+        ? `broken created_in_session ${formatSessionIdForDisplay(r.brokenCreatedInSession, verbose, scope)}`
+        : "broken created_in_session",
+    );
+  }
+  const linkedCount = r.brokenLinkedSessions.length;
+  if (linkedCount > 0) {
+    if (showIds) {
+      const ids = r.brokenLinkedSessions
+        .map((id) => formatSessionIdForDisplay(id, verbose, scope))
+        .join(", ");
+      parts.push(`${linkedCount} linked_sessions entr${linkedCount === 1 ? "y" : "ies"} [${ids}]`);
+    } else {
+      parts.push(`${linkedCount} linked_sessions entr${linkedCount === 1 ? "y" : "ies"}`);
+    }
+  }
+  return parts.join(" + ");
+}
+
+function formatSessionIdForDisplay(id: string, verbose: boolean, scope: "all" | "task"): string {
+  if (verbose && scope === "task") return id;
+  return `${SES_PREFIX}${shortSessionId(id)}`;
+}
+
+// ============================================================================
 // option converters
 // ============================================================================
 
@@ -701,7 +994,7 @@ async function readDescriptionFile(path: string): Promise<string> {
 
 async function resolveRepositoryRootForTask(
   cwd: string,
-  subcmd: "new" | "list" | "show" | "status",
+  subcmd: "new" | "list" | "show" | "status" | "reconcile",
 ): Promise<string> {
   try {
     return await resolveRepositoryRoot(cwd);
@@ -741,18 +1034,16 @@ function renderTaskError(error: unknown, verbose: boolean): void {
   if (error instanceof TaskWriteAfterEventError) {
     const sid = shortSessionId(error.sessionId);
     const tid = shortTaskId(error.taskId);
-    const unsafeArtefact =
-      error.phase === "link-session" ? "session-task linkage" : `task ${tid} file`;
+    const unsafeArtefact = describeUnsafeArtefact(error.phase, tid, sid);
     console.error(
       `Recorded ${error.eventId} in session ${sid}; ${unsafeArtefact} is in unsafe state; do not rerun`,
     );
-    const warning =
-      error.phase === "link-session"
-        ? "session.yaml task_id update failed"
-        : `task.md ${error.phase === "create" ? "creation" : "update"} failed`;
-    console.error(
-      `Warning: ${warning}; events.jsonl is consistent; reconcile via v0.2 \`basou task reconcile\` (未実装)`,
-    );
+    const warning = describeWriteFailureWarning(error.phase);
+    const hint =
+      error.phase === "reconcile-concurrent"
+        ? "re-run `basou task reconcile`"
+        : "manual repair required; see `basou task show -v` for event payload";
+    console.error(`Warning: ${warning}; events.jsonl is consistent; ${hint}`);
   }
 
   if (error instanceof FailedToFinalizeError) {
@@ -766,6 +1057,44 @@ function renderTaskError(error: unknown, verbose: boolean): void {
     if (label !== undefined) {
       console.error(`Caused by: ${label}`);
     }
+  }
+}
+
+function describeUnsafeArtefact(
+  phase: TaskWriteAfterEventError["phase"],
+  tid: string,
+  sid: string,
+): string {
+  switch (phase) {
+    case "create":
+      return `task ${tid} file`;
+    case "overwrite":
+      return `task ${tid} file`;
+    case "link-session":
+      return "session-task linkage";
+    case "reconcile":
+      return `task ${tid} file (reconcile incomplete)`;
+    case "reconcile-finalize":
+      return `reconcile session ${sid} (finalize incomplete)`;
+    case "reconcile-concurrent":
+      return `task ${tid} file (concurrent modification detected)`;
+  }
+}
+
+function describeWriteFailureWarning(phase: TaskWriteAfterEventError["phase"]): string {
+  switch (phase) {
+    case "create":
+      return "task.md creation failed";
+    case "overwrite":
+      return "task.md update failed";
+    case "link-session":
+      return "session.yaml task_id update failed";
+    case "reconcile":
+      return "task.md reconciliation failed";
+    case "reconcile-finalize":
+      return "reconcile session finalize failed (session.yaml status update)";
+    case "reconcile-concurrent":
+      return "task.md was modified concurrently; re-run reconcile to retry";
   }
 }
 

@@ -136,6 +136,18 @@ const TaskStatusChangedEventSchema = BaseEventSchema.extend({
   to: z.string(),
 });
 
+// Step 19: emitted by `basou task reconcile --write` after broken session
+// references in a task.md are cleaned up. `.strict()` so that any extra field
+// (likely a core-side miscoding of an audit value) is rejected at parse time
+// rather than silently stripped — the event is the audit trail.
+const TaskReconciledEventSchema = BaseEventSchema.extend({
+  type: z.literal("task_reconciled"),
+  task_id: TaskIdSchema,
+  removed_created_in_session: SessionIdSchema.nullable().default(null),
+  created_in_session_replacement: SessionIdSchema.nullable().default(null),
+  removed_linked_sessions: z.array(SessionIdSchema).default([]),
+}).strict();
+
 const NoteAddedEventSchema = BaseEventSchema.extend({
   type: z.literal("note_added"),
   body: z.string(),
@@ -173,6 +185,7 @@ export const EventSchema = z.discriminatedUnion("type", [
   DecisionRecordedEventSchema,
   TaskCreatedEventSchema,
   TaskStatusChangedEventSchema,
+  TaskReconciledEventSchema,
   NoteAddedEventSchema,
   AdapterOutputEventSchema,
 ]);
@@ -206,6 +219,8 @@ export type DecisionRecordedEvent = z.infer<typeof DecisionRecordedEventSchema>;
 export type TaskCreatedEvent = z.infer<typeof TaskCreatedEventSchema>;
 /** Narrowed runtime type for the `task_status_changed` event variant. */
 export type TaskStatusChangedEvent = z.infer<typeof TaskStatusChangedEventSchema>;
+/** Narrowed runtime type for the `task_reconciled` event variant (.strict()). */
+export type TaskReconciledEvent = z.infer<typeof TaskReconciledEventSchema>;
 /** Narrowed runtime type for the `note_added` event variant. */
 export type NoteAddedEvent = z.infer<typeof NoteAddedEventSchema>;
 /** Narrowed runtime type for the `adapter_output` event variant (.strict()). */

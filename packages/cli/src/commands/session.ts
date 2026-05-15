@@ -27,6 +27,7 @@ import {
 import { type Command, InvalidArgumentError } from "commander";
 
 const SES_PREFIX = "ses_";
+const TASK_PREFIX = "task_";
 const SHORT_ID_BASE_LEN = 6;
 const SHORT_ID_MAX_LEN = 26; // ULID body length
 
@@ -456,6 +457,11 @@ function eventVariantSummary(ev: Event): string {
       return ev.title;
     case "task_status_changed":
       return `${ev.from} -> ${ev.to}`;
+    case "task_reconciled": {
+      const createdPart =
+        ev.removed_created_in_session !== null ? "1 created_in_session" : "0 created_in_session";
+      return `task ${shortTaskId(ev.task_id)}: cleared ${ev.removed_linked_sessions.length} linked + ${createdPart}`;
+    }
     case "note_added":
       return ev.body.length > 80 ? `${ev.body.slice(0, 77)}...` : ev.body;
     case "adapter_output":
@@ -486,6 +492,13 @@ function makeWarningHandler(sid: string): (warning: ReplayWarning) => void {
 
 function shortId(id: string): string {
   return sliceShort(id, SHORT_ID_BASE_LEN);
+}
+
+function shortTaskId(id: string): string {
+  if (id.startsWith(TASK_PREFIX)) {
+    return id.slice(TASK_PREFIX.length, TASK_PREFIX.length + SHORT_ID_BASE_LEN);
+  }
+  return id.slice(0, SHORT_ID_BASE_LEN);
 }
 
 function sliceShort(id: string, len: number): string {

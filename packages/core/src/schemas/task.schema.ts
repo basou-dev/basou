@@ -28,9 +28,14 @@ const TaskInnerSchema = z.object({
   updated_at: IsoTimestampSchema,
   workspace_id: WorkspaceIdSchema,
   /**
-   * Session id where the task was created (= the session that wrote the
-   * `task_created` event). For ad-hoc paths this is the freshly minted
-   * ad-hoc session id; for attach paths it is the target session id.
+   * Session id that anchors this task. For freshly created tasks it is the
+   * session that wrote the `task_created` event (= ad-hoc reconcile target
+   * for ad-hoc paths, or the target session id for attach paths). After
+   * `basou task reconcile --write` repairs a broken anchor (Y-3w D1) the
+   * value is replaced with the ad-hoc reconcile session id; the old broken
+   * session_id is preserved on the `task_reconciled` event payload via
+   * `removed_created_in_session` for audit. So this field always names a
+   * reachable session, even after the original anchor is gone.
    */
   created_in_session: SessionIdSchema,
   /**

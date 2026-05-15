@@ -12,6 +12,7 @@ import type {
 import type { Session, SessionSourceKind, SessionStatus } from "../schemas/session.schema.js";
 import { TaskIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
+import { enumerateTaskIds } from "./tasks.js";
 import { linkYamlFile } from "./yaml-store.js";
 
 /**
@@ -70,6 +71,14 @@ export async function importSessionFromJson(
     throw new Error(`Invalid task_id: ${options.taskIdOverride}`);
   }
 
+  // Step 19 guard (Y-3w §H.7): rewriteEvents preserves variant-specific
+  // task_id fields, so importing a session containing a `task_reconciled`
+  // event would silently install a dangling task_id reference if the local
+  // workspace lacks that task. Validate up-front for `task_reconciled` only;
+  // the broader sweep over `task_created` / `task_status_changed` /
+  // session.yaml.task_id is Step 21 (Y-3w-10).
+  await assertImportedTaskReconciledReferencesAreReachable(paths, payload.events);
+
   const newSessionId = prefixedUlid("ses");
 
   const rewrittenEvents = rewriteEvents(payload.events, newSessionId);
@@ -124,6 +133,26 @@ export async function importSessionFromJson(
     finalStatus: "imported",
     finalSourceKind: sessionRecord.session.source.kind,
   };
+}
+
+// Step 19 (Y-3w §H.7): refuse any payload whose `task_reconciled` events
+// point at task ids the local workspace cannot resolve. The fixed message
+// is pathless-contract compliant; broken ids are not echoed back so an
+// adversarial payload cannot probe the local task namespace.
+async function assertImportedTaskReconciledReferencesAreReachable(
+  paths: BasouPaths,
+  events: ReadonlyArray<Event>,
+): Promise<void> {
+  let knownTaskIds: Set<string> | null = null;
+  for (const ev of events) {
+    if (ev.type !== "task_reconciled") continue;
+    if (knownTaskIds === null) {
+      knownTaskIds = new Set(await enumerateTaskIds(paths));
+    }
+    if (!knownTaskIds.has(ev.task_id)) {
+      throw new Error("Imported task_reconciled event references unknown task_id");
+    }
+  }
 }
 
 // Rewrite each event's `id` and `session_id` to brand-new values while

@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { link, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { link, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
@@ -12,11 +12,12 @@ import { SessionIdSchema, TaskIdSchema } from "../schemas/shared.schema.js";
 import { type Task, TaskSchema, type TaskStatus } from "../schemas/task.schema.js";
 import {
   type AttachableStatus,
+  FailedToFinalizeError,
   appendEventToExistingSession,
   createAdHocSessionWithEvent,
 } from "./ad-hoc-session.js";
 import type { BasouPaths } from "./basou-dir.js";
-import { readSessionYaml } from "./sessions.js";
+import { enumerateSessionDirs, readSessionYaml } from "./sessions.js";
 import { overwriteYamlFile } from "./yaml-store.js";
 
 // ============================================================================
@@ -334,8 +335,21 @@ function assertTransitionAllowed(from: TaskStatus, to: TaskStatus): void {
  *   - `link-session`: session.yaml `task_id` update during the attach path
  *     (Codex Y3t-3-H2: split out so CLI warnings describe the actual
  *     unsafe artefact instead of always saying "task.md creation failed")
+ *   - `reconcile`: task.md overwrite during `basou task reconcile --write`
+ *     after the `task_reconciled` event was persisted (Y-3w §F.3 D4-6)
+ *   - `reconcile-finalize`: ad-hoc reconcile session finalize failed (=
+ *     `FailedToFinalizeError` caught and re-classified, Y-3w §F.3 D4-8)
+ *   - `reconcile-concurrent`: task.md was modified between the pre-write
+ *     snapshot and the post-event re-read; the operator is told to re-run
+ *     reconcile rather than overwrite a stale snapshot (Y-3w §D.1 stage 6)
  */
-export type TaskWriteAfterEventPhase = "create" | "overwrite" | "link-session";
+export type TaskWriteAfterEventPhase =
+  | "create"
+  | "overwrite"
+  | "link-session"
+  | "reconcile"
+  | "reconcile-finalize"
+  | "reconcile-concurrent";
 
 export class TaskWriteAfterEventError extends Error {
   readonly taskId: PrefixedId<"task">;
@@ -442,6 +456,38 @@ function buildAdHocTaskLabel(title: string, mode: "new" | "status"): string {
   const truncated =
     title.length > LABEL_TITLE_MAX ? `${title.slice(0, LABEL_TRUNCATE_HEAD)}...` : title;
   return mode === "new" ? `Ad-hoc task: ${truncated}` : `Ad-hoc task status: ${truncated}`;
+}
+
+// Kept distinct from buildAdHocTaskLabel rather than threading a third mode
+// through that helper — `basou task reconcile` is a management operation, not
+// a creation/status flow, and the label prefix should read that way.
+function buildAdHocReconcileLabel(title: string): string {
+  const truncated =
+    title.length > LABEL_TITLE_MAX ? `${title.slice(0, LABEL_TRUNCATE_HEAD)}...` : title;
+  return `Ad-hoc task reconcile: ${truncated}`;
+}
+
+function buildTaskReconciledEvent(input: {
+  eventId: PrefixedId<"evt">;
+  sessionId: PrefixedId<"ses">;
+  taskId: PrefixedId<"task">;
+  removedCreatedInSession: PrefixedId<"ses"> | null;
+  createdInSessionReplacement: PrefixedId<"ses"> | null;
+  removedLinkedSessions: PrefixedId<"ses">[];
+  occurredAt: string;
+}): Event {
+  return {
+    schema_version: "0.1.0",
+    id: input.eventId,
+    session_id: input.sessionId,
+    occurred_at: input.occurredAt,
+    source: "local-cli",
+    type: "task_reconciled",
+    task_id: input.taskId,
+    removed_created_in_session: input.removedCreatedInSession,
+    created_in_session_replacement: input.createdInSessionReplacement,
+    removed_linked_sessions: input.removedLinkedSessions,
+  };
 }
 
 /**
@@ -864,4 +910,358 @@ function buildUpdatedDoc(input: {
     },
   };
   return { task: next, body: input.currentDoc.body };
+}
+
+// ============================================================================
+// Reconcile (Y-3w / Step 19)
+// ============================================================================
+
+/**
+ * Single-task audit result. Always returned by {@link reconcileTask} regardless
+ * of mode: in dry-run the `clean` / `broken*` fields describe what would change
+ * and `reconcileSession` is `null`; in write mode the same fields describe
+ * what did change and `reconcileSession` carries the minted ad-hoc session +
+ * `task_reconciled` event ids.
+ *
+ * Broken `linked_sessions[]` entries are deduplicated against the same session
+ * id appearing more than once in the source task.md (Y-3w §C 注 3 / F-3).
+ */
+export type ReconcileResult = {
+  taskId: PrefixedId<"task">;
+  clean: boolean;
+  brokenCreatedInSession: PrefixedId<"ses"> | null;
+  brokenLinkedSessions: PrefixedId<"ses">[];
+  reconcileSession: {
+    sessionId: PrefixedId<"ses">;
+    eventId: PrefixedId<"evt">;
+  } | null;
+};
+
+/**
+ * Per-task failure record collected by {@link reconcileAllTasks}. The scan
+ * keeps running on isolated failures so one bad task does not freeze the
+ * batch; the CLI layer renders this list and exits 1 if any entry is present.
+ *
+ * `phase` is populated only for {@link TaskWriteAfterEventError}; for any
+ * other error class it is `null` and the operator must use `--verbose` to
+ * surface the cause chain.
+ */
+export type ReconcileFailure = {
+  taskId: PrefixedId<"task">;
+  errorClass: string;
+  phase: TaskWriteAfterEventPhase | null;
+};
+
+/**
+ * Batch audit result. Order follows `enumerateTaskIds(paths)` (ULID-ascending).
+ * `scanned` is the number of readable task.md files processed (= excludes
+ * malformed task.md from the count so an integrity-broken file does not
+ * pad the total; Y-3w §B.2 注 / test #17).
+ */
+export type ReconcileAllResult = {
+  results: ReconcileResult[];
+  failed: ReconcileFailure[];
+  scanned: number;
+};
+
+export type ReconcileTaskInput = {
+  taskId: PrefixedId<"task">;
+  occurredAt: string;
+  workingDirectory: string;
+  write: boolean;
+  /**
+   * Test-only hook (Y-3w §J.4): the test runner uses this to mutate the task
+   * file from outside the reconcile flow between the pre-write snapshot and
+   * the post-event re-read, simulating a concurrent edit so the
+   * `reconcile-concurrent` branch can be exercised deterministically.
+   * Production callers leave it undefined.
+   */
+  _onPhaseCompleted?: (phase: "phase-4-snapshot" | "phase-5-bulk-write") => Promise<void>;
+};
+
+export type ReconcileAllTasksInput = {
+  /**
+   * Per-task timestamp factory. Each reconciled task gets a fresh ISO string
+   * so concurrent ad-hoc sessions do not collide on `occurred_at`. The CLI
+   * layer wires this to `ctx.nowProvider().toISOString()`.
+   */
+  occurredAt: () => string;
+  workingDirectory: string;
+  write: boolean;
+};
+
+export type ReconcileAllTasksOptions = {
+  /**
+   * When true the result includes clean tasks (= no broken refs). The CLI
+   * layer leaves this false so the human output only mentions tasks that
+   * actually changed.
+   */
+  includeClean?: boolean;
+};
+
+type TaskMdSnapshot = {
+  mtimeMs: number;
+  hash: string;
+};
+
+async function computeTaskMdSnapshot(paths: BasouPaths, taskId: string): Promise<TaskMdSnapshot> {
+  const filePath = join(paths.tasks, `${taskId}.md`);
+  const [stats, raw] = await Promise.all([stat(filePath), readFile(filePath)]);
+  const hash = createHash("sha256").update(raw).digest("hex");
+  return { mtimeMs: stats.mtimeMs, hash };
+}
+
+type DetectedBrokenRefs = {
+  brokenCreatedInSession: PrefixedId<"ses"> | null;
+  brokenLinkedSessions: PrefixedId<"ses">[];
+};
+
+async function detectBrokenRefs(
+  paths: BasouPaths,
+  task: Task["task"],
+): Promise<DetectedBrokenRefs> {
+  const sessionDirs = new Set(await enumerateSessionDirs(paths));
+  const brokenCreatedInSession = sessionDirs.has(task.created_in_session)
+    ? null
+    : (task.created_in_session as PrefixedId<"ses">);
+  // Deduplicate broken entries so duplicate broken ids in a hand-edited task.md
+  // surface as a single entry on the event payload (Y-3w F-3 / test #21).
+  const seen = new Set<string>();
+  const brokenLinkedSessions: PrefixedId<"ses">[] = [];
+  for (const sid of task.linked_sessions) {
+    if (sessionDirs.has(sid)) continue;
+    if (seen.has(sid)) continue;
+    seen.add(sid);
+    brokenLinkedSessions.push(sid as PrefixedId<"ses">);
+  }
+  return { brokenCreatedInSession, brokenLinkedSessions };
+}
+
+function buildReconciledDoc(input: {
+  currentDoc: TaskDocument;
+  brokenCreatedInSession: PrefixedId<"ses"> | null;
+  brokenLinkedSessions: ReadonlyArray<PrefixedId<"ses">>;
+  reconcileSessionId: PrefixedId<"ses">;
+  occurredAt: string;
+}): TaskDocument {
+  const brokenSet = new Set<string>(input.brokenLinkedSessions);
+  const filtered = input.currentDoc.task.task.linked_sessions.filter((sid) => !brokenSet.has(sid));
+  const merged: PrefixedId<"ses">[] = [...filtered] as PrefixedId<"ses">[];
+  if (!merged.includes(input.reconcileSessionId)) {
+    merged.push(input.reconcileSessionId);
+  }
+  const nextCreatedInSession =
+    input.brokenCreatedInSession !== null
+      ? input.reconcileSessionId
+      : input.currentDoc.task.task.created_in_session;
+  const next: Task = {
+    ...input.currentDoc.task,
+    task: {
+      ...input.currentDoc.task.task,
+      created_in_session: nextCreatedInSession,
+      updated_at: input.occurredAt,
+      linked_sessions: merged,
+    },
+  };
+  return { task: next, body: input.currentDoc.body };
+}
+
+/**
+ * Audit a single task's session references. In `write: false` mode this is a
+ * pure read-only report (no events, no task.md change). In `write: true` mode,
+ * if any broken reference is found, mint an ad-hoc reconcile session, fire
+ * `task_reconciled`, and overwrite task.md with the repaired refs.
+ *
+ * The broken `created_in_session` field is REPLACED with the new reconcile
+ * session id rather than nulled out — `TaskSchema.created_in_session` is
+ * non-nullable, so dropping it would leave the file schema-invalid (Y-3w D1).
+ * The old broken id is preserved on the event payload via
+ * `removed_created_in_session` for audit.
+ *
+ * Stages (Y-3w §D.1) — failures after stage 5 surface a phase-specific
+ * {@link TaskWriteAfterEventError} so the CLI can render a tailored "do not
+ * rerun" hint:
+ *   1. Boundary parse
+ *   2. Read task.md, detect broken refs
+ *   3. Early return when clean (no event fired, no overwrite)
+ *   4. Snapshot task.md mtime/hash (concurrent-edit guard)
+ *   5. Mint ad-hoc session + `task_reconciled` event (catch
+ *      `FailedToFinalizeError` → `phase: "reconcile-finalize"`)
+ *   6. Re-snapshot task.md; if changed since stage 4 →
+ *      `phase: "reconcile-concurrent"`
+ *   7. Overwrite task.md; failure → `phase: "reconcile"`
+ */
+export async function reconcileTask(
+  paths: BasouPaths,
+  manifest: Manifest,
+  input: ReconcileTaskInput,
+): Promise<ReconcileResult> {
+  TaskIdSchema.parse(input.taskId);
+
+  const currentDoc = await readTaskFile(paths, input.taskId);
+  const { brokenCreatedInSession, brokenLinkedSessions } = await detectBrokenRefs(
+    paths,
+    currentDoc.task.task,
+  );
+
+  if (brokenCreatedInSession === null && brokenLinkedSessions.length === 0) {
+    return {
+      taskId: input.taskId,
+      clean: true,
+      brokenCreatedInSession: null,
+      brokenLinkedSessions: [],
+      reconcileSession: null,
+    };
+  }
+
+  if (!input.write) {
+    return {
+      taskId: input.taskId,
+      clean: false,
+      brokenCreatedInSession,
+      brokenLinkedSessions,
+      reconcileSession: null,
+    };
+  }
+
+  const preSnapshot = await computeTaskMdSnapshot(paths, input.taskId);
+  if (input._onPhaseCompleted !== undefined) {
+    await input._onPhaseCompleted("phase-4-snapshot");
+  }
+
+  let adHoc: Awaited<ReturnType<typeof createAdHocSessionWithEvent>>;
+  try {
+    adHoc = await createAdHocSessionWithEvent({
+      paths,
+      manifest,
+      label: buildAdHocReconcileLabel(currentDoc.task.task.title),
+      occurredAt: input.occurredAt,
+      sessionSource: "human",
+      workingDirectory: input.workingDirectory,
+      invocation: {
+        command: "basou task reconcile",
+        args: ["--task", input.taskId, "--write"],
+      },
+      taskId: input.taskId,
+      targetEventBuilder: (sessionId, eventId) =>
+        buildTaskReconciledEvent({
+          eventId,
+          sessionId,
+          taskId: input.taskId,
+          removedCreatedInSession: brokenCreatedInSession,
+          createdInSessionReplacement: brokenCreatedInSession !== null ? sessionId : null,
+          removedLinkedSessions: brokenLinkedSessions,
+          occurredAt: input.occurredAt,
+        }),
+    });
+  } catch (error: unknown) {
+    if (error instanceof FailedToFinalizeError) {
+      throw new TaskWriteAfterEventError({
+        taskId: input.taskId,
+        eventId: error.decisionEventId,
+        sessionId: error.sessionId,
+        phase: "reconcile-finalize",
+        cause: error,
+      });
+    }
+    throw error;
+  }
+
+  if (input._onPhaseCompleted !== undefined) {
+    await input._onPhaseCompleted("phase-5-bulk-write");
+  }
+
+  const postSnapshot = await computeTaskMdSnapshot(paths, input.taskId);
+  if (postSnapshot.mtimeMs !== preSnapshot.mtimeMs || postSnapshot.hash !== preSnapshot.hash) {
+    throw new TaskWriteAfterEventError({
+      taskId: input.taskId,
+      eventId: adHoc.targetEventId,
+      sessionId: adHoc.sessionId,
+      phase: "reconcile-concurrent",
+      cause: new Error("task.md changed during reconcile"),
+    });
+  }
+
+  const repaired = buildReconciledDoc({
+    currentDoc,
+    brokenCreatedInSession,
+    brokenLinkedSessions,
+    reconcileSessionId: adHoc.sessionId,
+    occurredAt: input.occurredAt,
+  });
+  try {
+    await writeTaskFile(paths, input.taskId, repaired, { mode: "overwrite" });
+  } catch (error: unknown) {
+    throw new TaskWriteAfterEventError({
+      taskId: input.taskId,
+      eventId: adHoc.targetEventId,
+      sessionId: adHoc.sessionId,
+      phase: "reconcile",
+      cause: error,
+    });
+  }
+
+  return {
+    taskId: input.taskId,
+    clean: false,
+    brokenCreatedInSession,
+    brokenLinkedSessions,
+    reconcileSession: {
+      sessionId: adHoc.sessionId,
+      eventId: adHoc.targetEventId,
+    },
+  };
+}
+
+/**
+ * Reconcile every task in `.basou/tasks/`. Continues on per-task failures so
+ * an isolated {@link TaskWriteAfterEventError} does not stop the batch
+ * (Y-3w D4-4). Malformed task.md files are skipped silently and excluded
+ * from `scanned`.
+ */
+export async function reconcileAllTasks(
+  paths: BasouPaths,
+  manifest: Manifest,
+  input: ReconcileAllTasksInput,
+  options: ReconcileAllTasksOptions = {},
+): Promise<ReconcileAllResult> {
+  const taskIds = await enumerateTaskIds(paths);
+  const results: ReconcileResult[] = [];
+  const failed: ReconcileFailure[] = [];
+  let scanned = 0;
+
+  for (const id of taskIds) {
+    // Probe readability first so malformed task.md does NOT inflate `scanned`
+    // and never reaches the reconcile flow (Y-3w §B.2 注 / test #17). The
+    // readTaskFile call is replayed inside reconcileTask itself — re-reading
+    // is cheap and keeps reconcileTask's contract single-purpose.
+    try {
+      await readTaskFile(paths, id);
+    } catch {
+      continue;
+    }
+    scanned += 1;
+
+    try {
+      const r = await reconcileTask(paths, manifest, {
+        taskId: id as PrefixedId<"task">,
+        occurredAt: input.occurredAt(),
+        workingDirectory: input.workingDirectory,
+        write: input.write,
+      });
+      if (options.includeClean === true || !r.clean) {
+        results.push(r);
+      }
+    } catch (error: unknown) {
+      const errorClass = error instanceof Error ? error.constructor.name : "Error";
+      const phase = error instanceof TaskWriteAfterEventError ? error.phase : null;
+      failed.push({
+        taskId: id as PrefixedId<"task">,
+        errorClass,
+        phase,
+      });
+    }
+  }
+
+  return { results, failed, scanned };
 }

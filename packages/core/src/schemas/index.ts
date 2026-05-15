@@ -50,6 +50,7 @@ export type {
   DecisionRecordedEvent,
   TaskCreatedEvent,
   TaskStatusChangedEvent,
+  TaskReconciledEvent,
   NoteAddedEvent,
   AdapterOutputEvent,
 } from "./event.schema.js";
