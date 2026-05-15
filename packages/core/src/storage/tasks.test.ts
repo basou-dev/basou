@@ -12,6 +12,8 @@ import {
   enumerateTaskIds,
   loadTaskEntries,
   readTaskFile,
+  reconcileAllTasks,
+  reconcileTask,
   updateTaskStatusWithEvent,
   writeTaskFile,
 } from "./tasks.js";
@@ -779,6 +781,7 @@ describe("staged-write failure injection (Codex Y3t-3-H2 / Y3t-3-M3)", () => {
   async function chmodTasksWritable(paths: BasouPaths): Promise<void> {
     await chmod(paths.tasks, 0o755);
   }
+  // Type guards so we don't reach into TS-unsafe casts every time.
 
   it("ad-hoc create: events durable when task.md write fails (phase: 'create')", async () => {
     const paths = await setupPaths();
@@ -927,5 +930,594 @@ describe("staged-write failure injection (Codex Y3t-3-H2 / Y3t-3-M3)", () => {
     expect(events.some((e) => e.type === "task_status_changed" && e.to === "in_progress")).toBe(
       true,
     );
+  });
+});
+
+// ============================================================================
+// reconcile (Y-3w / Step 19)
+// ============================================================================
+
+// ULID body: first char 0-7, remaining 25 chars Crockford (excludes I/L/O/U).
+const BROKEN_SES_A = "ses_01HXBRKENABCDEFGH1234567B1" as PrefixedId<"ses">; // 26 body chars
+const BROKEN_SES_B = "ses_01HXBRKENABCDEFGH1234567B2" as PrefixedId<"ses">;
+const REACHABLE_SES_A = "ses_01HXREACHABE12345678REKC11" as PrefixedId<"ses">;
+const REACHABLE_SES_B = "ses_01HXREACHABE12345678REKC22" as PrefixedId<"ses">;
+
+async function placeTaskFile(
+  paths: BasouPaths,
+  taskId: PrefixedId<"task">,
+  fields: {
+    createdInSession: PrefixedId<"ses">;
+    linkedSessions: ReadonlyArray<PrefixedId<"ses">>;
+    title?: string;
+  },
+): Promise<void> {
+  const yaml = stringifyYaml({
+    schema_version: "0.1.0",
+    task: {
+      id: taskId,
+      title: fields.title ?? "fixture task",
+      status: "planned",
+      created_at: OCC_AT,
+      updated_at: OCC_AT,
+      workspace_id: WS_ID,
+      created_in_session: fields.createdInSession,
+      linked_sessions: [...fields.linkedSessions],
+    },
+  });
+  await writeFile(join(paths.tasks, `${taskId}.md`), `---\n${yaml}---\n\nfixture body\n`);
+}
+
+async function placeSessionDir(paths: BasouPaths, sessionId: PrefixedId<"ses">): Promise<void> {
+  await mkdir(join(paths.sessions, sessionId), { recursive: true });
+}
+
+async function readReconciledEvent(
+  paths: BasouPaths,
+  sessionId: string,
+): Promise<Record<string, unknown> | undefined> {
+  const raw = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+  for (const line of raw.split("\n")) {
+    if (line.length === 0) continue;
+    const ev = JSON.parse(line) as Record<string, unknown>;
+    if (ev.type === "task_reconciled") return ev;
+  }
+  return undefined;
+}
+
+describe("reconcileTask (Step 19)", () => {
+  // 1
+  it("write: broken created_in_session only -> replaces + fires single event + updates task.md", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.clean).toBe(false);
+    expect(r.brokenCreatedInSession).toBe(BROKEN_SES_A);
+    expect(r.brokenLinkedSessions).toEqual([]);
+    expect(r.reconcileSession).not.toBeNull();
+    const newSes = r.reconcileSession?.sessionId as string;
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.created_in_session).toBe(newSes);
+    expect(doc.task.task.linked_sessions).toContain(newSes);
+    const ev = await readReconciledEvent(paths, newSes);
+    expect(ev?.removed_created_in_session).toBe(BROKEN_SES_A);
+    expect(ev?.created_in_session_replacement).toBe(newSes);
+    expect(ev?.removed_linked_sessions).toEqual([]);
+  });
+
+  // 2
+  it("write: broken linked_sessions only -> pops broken + appends reconcile session + fires single event", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: REACHABLE_SES_A,
+      linkedSessions: [REACHABLE_SES_A, BROKEN_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.brokenCreatedInSession).toBeNull();
+    expect(r.brokenLinkedSessions).toEqual([BROKEN_SES_A]);
+    const newSes = r.reconcileSession?.sessionId as string;
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.created_in_session).toBe(REACHABLE_SES_A);
+    expect(doc.task.task.linked_sessions).toEqual([REACHABLE_SES_A, newSes]);
+    const ev = await readReconciledEvent(paths, newSes);
+    expect(ev?.removed_created_in_session).toBeNull();
+    expect(ev?.created_in_session_replacement).toBeNull();
+    expect(ev?.removed_linked_sessions).toEqual([BROKEN_SES_A]);
+  });
+
+  // 3
+  it("write: Pattern A+B (Y-3u milestone 20) records both in one event", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [BROKEN_SES_A, REACHABLE_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.brokenCreatedInSession).toBe(BROKEN_SES_A);
+    expect(r.brokenLinkedSessions).toEqual([BROKEN_SES_A]);
+    const newSes = r.reconcileSession?.sessionId as string;
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.created_in_session).toBe(newSes);
+    expect(doc.task.task.linked_sessions).toEqual([REACHABLE_SES_A, newSes]);
+    const ev = await readReconciledEvent(paths, newSes);
+    expect(ev?.removed_created_in_session).toBe(BROKEN_SES_A);
+    expect(ev?.created_in_session_replacement).toBe(newSes);
+    expect(ev?.removed_linked_sessions).toEqual([BROKEN_SES_A]);
+  });
+
+  // 4
+  it("write: clean task returns { clean: true } without firing an event", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: REACHABLE_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.clean).toBe(true);
+    expect(r.reconcileSession).toBeNull();
+    const sessionDirs = (await readdir(paths.sessions)).filter((d) => d !== REACHABLE_SES_A);
+    expect(sessionDirs).toEqual([]);
+  });
+
+  // 5
+  it("dry-run: broken refs reported, no event, task.md unchanged", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A, BROKEN_SES_B],
+    });
+    const before = await readFile(join(paths.tasks, `${TASK_ID_A}.md`), "utf8");
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: false,
+    });
+    expect(r.clean).toBe(false);
+    expect(r.reconcileSession).toBeNull();
+    expect(r.brokenCreatedInSession).toBe(BROKEN_SES_A);
+    expect(r.brokenLinkedSessions).toEqual([BROKEN_SES_B]);
+    const after = await readFile(join(paths.tasks, `${TASK_ID_A}.md`), "utf8");
+    expect(after).toBe(before);
+    const sessionDirs = (await readdir(paths.sessions)).filter((d) => d !== REACHABLE_SES_A);
+    expect(sessionDirs).toEqual([]);
+  });
+
+  // 9
+  it("dedup: broken pop + reconcile append preserves order with no duplicates", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeSessionDir(paths, REACHABLE_SES_B);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: REACHABLE_SES_A,
+      linkedSessions: [REACHABLE_SES_A, BROKEN_SES_A, REACHABLE_SES_B],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    const newSes = r.reconcileSession?.sessionId as string;
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.linked_sessions).toEqual([REACHABLE_SES_A, REACHABLE_SES_B, newSes]);
+  });
+
+  // 10
+  it("targetEventBuilder emits source: local-cli with orchestrator-minted ids", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    const newSes = r.reconcileSession?.sessionId as string;
+    const ev = await readReconciledEvent(paths, newSes);
+    expect(ev?.source).toBe("local-cli");
+    expect(ev?.session_id).toBe(newSes);
+    expect(ev?.id).toBe(r.reconcileSession?.eventId);
+  });
+
+  // 11
+  it("reconcile session.yaml.task_id pins to the reconciled task", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    const newSes = r.reconcileSession?.sessionId as string;
+    const yaml = await readFile(join(paths.sessions, newSes, "session.yaml"), "utf8");
+    expect(yaml).toContain(`task_id: ${TASK_ID_A}`);
+  });
+
+  // 12
+  it("created_in_session_replacement matches the new reconcile session id", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    const newSes = r.reconcileSession?.sessionId as string;
+    const ev = await readReconciledEvent(paths, newSes);
+    expect(ev?.created_in_session_replacement).toBe(newSes);
+  });
+
+  // 14
+  it("Pattern A: removed_created_in_session: null + reconcile session appended (no empty array)", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: REACHABLE_SES_A,
+      linkedSessions: [BROKEN_SES_A], // all linked entries broken
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    const newSes = r.reconcileSession?.sessionId as string;
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.linked_sessions).toEqual([newSes]);
+    expect(doc.task.task.linked_sessions.length).toBeGreaterThan(0);
+    const ev = await readReconciledEvent(paths, newSes);
+    expect(ev?.removed_created_in_session).toBeNull();
+  });
+
+  // 15
+  it("Pattern B: reconcile session id appended to linked_sessions automatically", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    const newSes = r.reconcileSession?.sessionId as string;
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.linked_sessions).toEqual([REACHABLE_SES_A, newSes]);
+  });
+
+  // 16
+  it("idempotent: second reconcileTask is clean and fires no event", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const first = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    const dirsAfterFirst = (await readdir(paths.sessions)).length;
+    const second = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: "2026-05-12T12:00:00+09:00",
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(first.clean).toBe(false);
+    expect(second.clean).toBe(true);
+    expect(second.reconcileSession).toBeNull();
+    expect((await readdir(paths.sessions)).length).toBe(dirsAfterFirst);
+  });
+
+  // 21
+  it("dedups duplicate broken linked_sessions on the event payload", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: REACHABLE_SES_A,
+      linkedSessions: [BROKEN_SES_A, REACHABLE_SES_A, BROKEN_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.brokenLinkedSessions).toEqual([BROKEN_SES_A]);
+    const newSes = r.reconcileSession?.sessionId as string;
+    const ev = await readReconciledEvent(paths, newSes);
+    expect(ev?.removed_linked_sessions).toEqual([BROKEN_SES_A]);
+  });
+
+  // 22
+  it("same broken id in created_in_session and linked_sessions (Y-3u milestone 20)", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [BROKEN_SES_A, REACHABLE_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.brokenCreatedInSession).toBe(BROKEN_SES_A);
+    expect(r.brokenLinkedSessions).toEqual([BROKEN_SES_A]);
+    const newSes = r.reconcileSession?.sessionId as string;
+    const ev = await readReconciledEvent(paths, newSes);
+    expect(ev?.removed_created_in_session).toBe(BROKEN_SES_A);
+    expect(ev?.removed_linked_sessions).toEqual([BROKEN_SES_A]);
+  });
+});
+
+describe("reconcileTask failure phases (Step 19)", () => {
+  // 18
+  it("phase: 'reconcile' when task.md overwrite fails after event commit", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    await chmod(paths.tasks, 0o555);
+    let captured: TaskWriteAfterEventError | undefined;
+    try {
+      await reconcileTask(paths, makeManifest(), {
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+        write: true,
+      });
+    } catch (error: unknown) {
+      if (error instanceof TaskWriteAfterEventError) captured = error;
+      else throw error;
+    } finally {
+      await chmod(paths.tasks, 0o755);
+    }
+    expect(captured?.phase).toBe("reconcile");
+    expect(captured?.taskId).toBe(TASK_ID_A);
+    const ev = await readReconciledEvent(paths, captured?.sessionId as string);
+    expect(ev?.type).toBe("task_reconciled");
+  });
+
+  // 19
+  it("phase: 'reconcile-finalize' when ad-hoc session finalize fails", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    vi.mocked(overwriteYamlFile).mockImplementationOnce(async () => {
+      throw new Error("Failed to overwrite YAML file", {
+        cause: Object.assign(new Error("simulated EACCES"), { code: "EACCES" }),
+      });
+    });
+    let captured: TaskWriteAfterEventError | undefined;
+    try {
+      await reconcileTask(paths, makeManifest(), {
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+        write: true,
+      });
+    } catch (error: unknown) {
+      if (error instanceof TaskWriteAfterEventError) captured = error;
+      else throw error;
+    }
+    expect(captured?.phase).toBe("reconcile-finalize");
+    expect(captured?.taskId).toBe(TASK_ID_A);
+    // task.md must NOT be overwritten when finalize failed before stage 7.
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.created_in_session).toBe(BROKEN_SES_A);
+  });
+
+  // 20
+  it("phase: 'reconcile-concurrent' when task.md mtime/hash changes between stage 4 and stage 6", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    let captured: TaskWriteAfterEventError | undefined;
+    try {
+      await reconcileTask(paths, makeManifest(), {
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+        write: true,
+        _onPhaseCompleted: async (phase) => {
+          if (phase === "phase-5-bulk-write") {
+            // Simulate a concurrent edit by rewriting task.md from the outside
+            // with a different body before reconcile's stage 6 re-snapshot.
+            const taskMdPath = join(paths.tasks, `${TASK_ID_A}.md`);
+            const raw = await readFile(taskMdPath, "utf8");
+            // Pad with an extra newline so both mtime and hash change.
+            await new Promise((res) => setTimeout(res, 10));
+            await writeFile(taskMdPath, `${raw}\nconcurrent edit\n`);
+          }
+        },
+      });
+    } catch (error: unknown) {
+      if (error instanceof TaskWriteAfterEventError) captured = error;
+      else throw error;
+    }
+    expect(captured?.phase).toBe("reconcile-concurrent");
+    // The concurrent edit must NOT be clobbered by reconcile's stage 7.
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.created_in_session).toBe(BROKEN_SES_A);
+  });
+});
+
+describe("reconcileAllTasks (Step 19)", () => {
+  // 7
+  it("empty workspace: { results: [], failed: [], scanned: 0 }", async () => {
+    const paths = await setupPaths();
+    const r = await reconcileAllTasks(paths, makeManifest(), {
+      occurredAt: () => OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.results).toEqual([]);
+    expect(r.failed).toEqual([]);
+    expect(r.scanned).toBe(0);
+  });
+
+  // 13
+  it("write=true on a clean-only workspace mints no ad-hoc session", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: REACHABLE_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const sessionsBefore = (await readdir(paths.sessions)).length;
+    const r = await reconcileAllTasks(paths, makeManifest(), {
+      occurredAt: () => OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.results).toEqual([]);
+    expect(r.failed).toEqual([]);
+    expect(r.scanned).toBe(1);
+    expect((await readdir(paths.sessions)).length).toBe(sessionsBefore);
+  });
+
+  // 17
+  it("malformed task.md is excluded from scanned and not reconciled", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: REACHABLE_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    await writeFile(join(paths.tasks, `${TASK_ID_B}.md`), "no front matter\n");
+    const r = await reconcileAllTasks(paths, makeManifest(), {
+      occurredAt: () => OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.scanned).toBe(1);
+    expect(r.failed).toEqual([]);
+  });
+
+  // 6
+  it("isolated failure continues: one task fails, others succeed", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    await placeTaskFile(paths, TASK_ID_B, {
+      createdInSession: BROKEN_SES_B,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    // Fail the SECOND ad-hoc finalize so TASK_ID_B reconcile blows up while
+    // TASK_ID_A reconcile succeeds (enumerateTaskIds returns ULID-ascending).
+    vi.mocked(overwriteYamlFile)
+      .mockImplementationOnce(async (path, payload) => {
+        const actual = await vi.importActual<typeof import("./yaml-store.js")>("./yaml-store.js");
+        return actual.overwriteYamlFile(path, payload);
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error("Failed to overwrite YAML file", {
+          cause: Object.assign(new Error("simulated EACCES"), { code: "EACCES" }),
+        });
+      });
+    const r = await reconcileAllTasks(paths, makeManifest(), {
+      occurredAt: () => OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.scanned).toBe(2);
+    expect(r.results.map((x) => x.taskId)).toEqual([TASK_ID_A]);
+    expect(r.failed.map((x) => x.taskId)).toEqual([TASK_ID_B]);
+    expect(r.failed[0]?.errorClass).toBe("TaskWriteAfterEventError");
+    expect(r.failed[0]?.phase).toBe("reconcile-finalize");
+  });
+
+  // 8
+  it("isolated failure continues across reconcile-finalize specifically", async () => {
+    // Same path as #6 but spelled out to pin the phase classification.
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    await placeTaskFile(paths, TASK_ID_B, {
+      createdInSession: BROKEN_SES_B,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    let call = 0;
+    vi.mocked(overwriteYamlFile).mockImplementation(async (path, payload) => {
+      call += 1;
+      if (call === 2) {
+        throw new Error("Failed to overwrite YAML file", {
+          cause: Object.assign(new Error("simulated EACCES"), { code: "EACCES" }),
+        });
+      }
+      const actual = await vi.importActual<typeof import("./yaml-store.js")>("./yaml-store.js");
+      return actual.overwriteYamlFile(path, payload);
+    });
+    const r = await reconcileAllTasks(paths, makeManifest(), {
+      occurredAt: () => OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(r.failed[0]?.phase).toBe("reconcile-finalize");
   });
 });

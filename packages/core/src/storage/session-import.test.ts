@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { parse, stringify as stringifyYaml } from "yaml";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { SessionImportPayload } from "../schemas/session-import.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "./basou-dir.js";
@@ -384,5 +384,83 @@ describe("importSessionFromJson", () => {
     expect(wire[3]?.old_path).toBe(OLD_PATH);
     // adapter_output raw_ref preserved
     expect(wire[4]?.raw_ref).toBe(RAW_REF);
+  });
+});
+
+describe("importSessionFromJson task_reconciled guard (Step 19 / Y-3w §H.7)", () => {
+  const EXISTING_TASK_ID = "task_01HXABCDEF1234567890ABCTK1" as const;
+  const UNKNOWN_TASK_ID = "task_01HXABCDEF1234567890ABCTK9" as const;
+  const ANCHOR_SES_ID = "ses_01HXABCDEF1234567890ABCNCH" as const;
+
+  async function placeExistingTask(paths: BasouPaths): Promise<void> {
+    const yaml = stringifyYaml({
+      schema_version: "0.1.0",
+      task: {
+        id: EXISTING_TASK_ID,
+        title: "existing fixture task",
+        status: "planned",
+        created_at: "2026-05-04T09:00:00+09:00",
+        updated_at: "2026-05-04T09:00:00+09:00",
+        workspace_id: LOCAL_WS_ID,
+        created_in_session: ANCHOR_SES_ID,
+        linked_sessions: [ANCHOR_SES_ID],
+      },
+    });
+    await writeFile(join(paths.tasks, `${EXISTING_TASK_ID}.md`), `---\n${yaml}---\nbody\n`);
+  }
+
+  // 47
+  it("rejects an import whose task_reconciled references an unknown task_id", async () => {
+    const paths = await setupPaths();
+    const sessionsBefore = await readdir(paths.sessions);
+    const payload = makePayload({
+      events: [
+        {
+          schema_version: "0.1.0",
+          type: "task_reconciled",
+          id: INPUT_EVT_ID,
+          session_id: INPUT_SES_ID,
+          occurred_at: "2026-05-04T09:00:00+09:00",
+          source: "claude-code-adapter",
+          task_id: UNKNOWN_TASK_ID,
+          removed_created_in_session: null,
+          created_in_session_replacement: null,
+          removed_linked_sessions: [],
+        },
+      ],
+    });
+    await expect(importSessionFromJson(paths, makeManifest(), payload, {})).rejects.toThrow(
+      "Imported task_reconciled event references unknown task_id",
+    );
+    // No session dir written when the guard fires before mkdir.
+    const sessionsAfter = await readdir(paths.sessions);
+    expect(sessionsAfter).toEqual(sessionsBefore);
+  });
+
+  // 48
+  it("accepts an import whose task_reconciled references an existing task_id", async () => {
+    const paths = await setupPaths();
+    await placeExistingTask(paths);
+    const payload = makePayload({
+      events: [
+        {
+          schema_version: "0.1.0",
+          type: "task_reconciled",
+          id: INPUT_EVT_ID,
+          session_id: INPUT_SES_ID,
+          occurred_at: "2026-05-04T09:00:00+09:00",
+          source: "claude-code-adapter",
+          task_id: EXISTING_TASK_ID,
+          removed_created_in_session: null,
+          created_in_session_replacement: null,
+          removed_linked_sessions: [],
+        },
+      ],
+    });
+    const result = await importSessionFromJson(paths, makeManifest(), payload, {});
+    expect(result.eventCount).toBe(1);
+    const wire = await readEventsJsonl(paths, result.sessionId);
+    expect(wire[0]?.type).toBe("task_reconciled");
+    expect(wire[0]?.task_id).toBe(EXISTING_TASK_ID);
   });
 });

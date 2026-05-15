@@ -719,7 +719,7 @@ export async function doRunTaskReconcile(
     if (json) {
       printReconcileJson({ dryRun: !write, scanned: 1, results: [result], failed: [] });
     } else {
-      printReconcileSingleText(result, paths, { write, verbose });
+      await printReconcileSingleText(result, paths, { write, verbose });
     }
     return;
   }

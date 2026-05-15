@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EventSchema } from "./event.schema.js";
+import { EventSchema, type TaskReconciledEvent } from "./event.schema.js";
 
 const BASE = {
   schema_version: "0.1.0",
@@ -242,5 +242,83 @@ describe("EventSchema (discriminator narrowing)", () => {
     } else {
       throw new Error("expected adapter_output narrowing");
     }
+  });
+});
+
+describe("TaskReconciledEventSchema (Step 19)", () => {
+  const BASE_RECONCILED = {
+    ...BASE,
+    type: "task_reconciled" as const,
+    task_id: "task_01HXABCDEF1234567890ABCDEF",
+  };
+
+  // 23
+  it("parses a minimum payload with all three optional fields defaulted", () => {
+    const result = EventSchema.safeParse(BASE_RECONCILED);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "task_reconciled") {
+      throw new Error("expected task_reconciled narrowing");
+    }
+    expect(result.data.removed_created_in_session).toBeNull();
+    expect(result.data.created_in_session_replacement).toBeNull();
+    expect(result.data.removed_linked_sessions).toEqual([]);
+  });
+
+  // 24
+  it("parses a full payload with all three optional fields specified", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_RECONCILED,
+      removed_created_in_session: "ses_01HXABCDEF1234567890ABCBR1",
+      created_in_session_replacement: "ses_01HXABCDEF1234567890ABCRC1",
+      removed_linked_sessions: ["ses_01HXABCDEF1234567890ABCBR1"],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "task_reconciled") {
+      throw new Error("expected task_reconciled narrowing");
+    }
+    expect(result.data.removed_created_in_session).toBe("ses_01HXABCDEF1234567890ABCBR1");
+    expect(result.data.created_in_session_replacement).toBe("ses_01HXABCDEF1234567890ABCRC1");
+    expect(result.data.removed_linked_sessions).toEqual(["ses_01HXABCDEF1234567890ABCBR1"]);
+  });
+
+  // 25
+  it("rejects an extra field (`.strict()` contract — Codex review #1 B-2)", () => {
+    // Probe via safeParse with an unknown property — `.strict()` should reject
+    // it so a buggy core can't quietly drop audit data on the floor.
+    const result = EventSchema.safeParse({
+      ...BASE_RECONCILED,
+      rationale: "operator note",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  // 26
+  it("parses a partial payload (only removed_linked_sessions specified)", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_RECONCILED,
+      removed_linked_sessions: ["ses_01HXABCDEF1234567890ABCBR1"],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "task_reconciled") {
+      throw new Error("expected task_reconciled narrowing");
+    }
+    expect(result.data.removed_created_in_session).toBeNull();
+    expect(result.data.created_in_session_replacement).toBeNull();
+    expect(result.data.removed_linked_sessions).toEqual(["ses_01HXABCDEF1234567890ABCBR1"]);
+  });
+
+  // 27
+  it("narrows the EventSchema union to TaskReconciledEvent via the type literal", () => {
+    const parsed = EventSchema.parse(BASE_RECONCILED);
+    if (parsed.type !== "task_reconciled") {
+      throw new Error("expected task_reconciled narrowing");
+    }
+    // TypeScript-level check: this assignment compiles only if the discriminated
+    // narrowing also exports a usable TaskReconciledEvent type.
+    const narrowed: TaskReconciledEvent = parsed;
+    expect(narrowed.task_id).toBe("task_01HXABCDEF1234567890ABCDEF");
   });
 });

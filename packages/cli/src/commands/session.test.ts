@@ -187,6 +187,26 @@ const SESSION_ENDED_LINE = (sessionId: string, suffix: string, occurredAt: strin
     exit_code: 0,
   })}\n`;
 
+const TASK_RECONCILED_LINE = (
+  sessionId: string,
+  suffix: string,
+  occurredAt: string,
+  taskId: string,
+  brokenSesId: string,
+) =>
+  `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "task_reconciled",
+    id: EVT(suffix),
+    session_id: sessionId,
+    occurred_at: occurredAt,
+    source: "local-cli",
+    task_id: taskId,
+    removed_created_in_session: brokenSesId,
+    created_in_session_replacement: sessionId,
+    removed_linked_sessions: [brokenSesId],
+  })}\n`;
+
 describe("doRunSessionList", () => {
   it("case 1: empty workspace (sessions dir absent) prints No sessions found.", async () => {
     const repo = await setupInitedRepo();
@@ -1127,5 +1147,27 @@ describe("doRunSessionNote", () => {
     expect(stderr).toContain("Caused by: ENOENT");
     expect(stderr).not.toContain(missing);
     expect(stderr).not.toContain(repo);
+  });
+});
+
+describe("doRunSessionShow task_reconciled summary (Step 19)", () => {
+  it("case 46: eventVariantSummary surfaces task_reconciled with cleared/created counts", async () => {
+    const repo = await setupInitedRepo();
+    // SES helper appends a 3-char suffix; "RCK" stays inside Crockford alphabet
+    // (excludes I/L/O/U), so the resulting ULID-body validates.
+    const id = SES("RCK");
+    const taskId = "task_01HXABCDEF1234567890ABCTAK";
+    const brokenSes = "ses_01HXABCDEF1234567890ABCBR1";
+    const events =
+      SESSION_STARTED_LINE(id, "K01", "2026-05-08T11:00:00+09:00") +
+      TASK_RECONCILED_LINE(id, "K02", "2026-05-08T11:00:10+09:00", taskId, brokenSes) +
+      SESSION_ENDED_LINE(id, "K03", "2026-05-08T11:00:30+09:00");
+    await createSession(repo, { id, endedAt: "2026-05-08T11:00:30+09:00", events });
+    const out = captureStdout();
+    await doRunSessionShow(id, { events: true }, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("task_reconciled");
+    expect(stdout).toContain("cleared 1 linked");
+    expect(stdout).toContain("1 created_in_session");
   });
 });

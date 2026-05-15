@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +17,7 @@ import {
   createManifest,
   ensureBasouDirectory,
   writeManifest,
+  writeTaskFile,
   writeYamlFile,
 } from "@basou/core";
 import { Command } from "commander";
@@ -15,11 +25,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   doRunTaskList,
   doRunTaskNew,
+  doRunTaskReconcile,
   doRunTaskShow,
   doRunTaskStatus,
   registerTaskCommand,
   runTaskList,
   runTaskNew,
+  runTaskReconcile,
   runTaskShow,
   runTaskStatus,
 } from "./task.js";
@@ -683,5 +695,450 @@ describe("task list happy stderr stays empty", () => {
     const err = captureStderr();
     await doRunTaskList({}, { cwd: repo });
     expect(joinCalls(err)).toBe("");
+  });
+});
+
+// ============================================================================
+// task reconcile (Step 19)
+// ============================================================================
+
+// ULID body excludes I, L, O, U — use Crockford-valid suffixes only.
+const BROKEN_SES_TR = "ses_01HXBRKENABCDEFGH1234567B1";
+const REACHABLE_SES_TR = "ses_01HXREACHABE12345678REKC11";
+const TASK_ID_TR_A = "task_01HXABCDEF1234567890ABCTAK";
+const TASK_ID_TR_B = "task_01HXABCDEF1234567890ABCTAN"; // K and N — both Crockford-valid
+
+async function placeBrokenTask(
+  repo: string,
+  taskId: string,
+  fields: { createdInSession: string; linkedSessions: string[]; title?: string },
+): Promise<void> {
+  await writeTaskFile(
+    basouPaths(repo),
+    taskId,
+    {
+      task: {
+        schema_version: "0.1.0",
+        task: {
+          id: taskId as `task_${string}`,
+          title: fields.title ?? "broken fixture",
+          status: "planned",
+          created_at: "2026-05-04T09:00:00+09:00",
+          updated_at: "2026-05-04T09:00:00+09:00",
+          workspace_id: FIXED_WS_ID,
+          created_in_session: fields.createdInSession as `ses_${string}`,
+          linked_sessions: fields.linkedSessions as `ses_${string}`[],
+        },
+      },
+      body: "fixture body",
+    },
+    { mode: "create" },
+  );
+}
+
+describe("doRunTaskReconcile (all-scan)", () => {
+  // 28
+  it("t-rec-1: clean workspace prints sentinel and exits 0", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: REACHABLE_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const out = captureStdout();
+    await runTaskReconcile({}, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(out)).toContain("Scanned 1 tasks, no broken refs detected.");
+    expect(process.exitCode).toBe(0);
+  });
+
+  // 29
+  it("t-rec-2: dry-run with broken refs lists tasks + forward-sync note + exits 0", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const out = captureStdout();
+    await runTaskReconcile({}, { cwd: repo, ...FIXED_CTX });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("(dry-run) Would reconcile");
+    expect(stdout).toContain("forward sync is out of scope");
+    expect(stdout).toContain("Re-run with --write to apply.");
+    // no ad-hoc reconcile session was minted in dry-run mode
+    const sessions = await readdir(basouPaths(repo).sessions);
+    expect(sessions).toEqual([REACHABLE_SES_TR]);
+    expect(process.exitCode).toBe(0);
+  });
+
+  // 30
+  it("t-rec-3: --write repairs broken refs, fires event, exits 0", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const out = captureStdout();
+    await runTaskReconcile({ write: true }, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(out)).toContain(`Reconciled ${TASK_ID_TR_A}`);
+    expect(process.exitCode).toBe(0);
+    const sessions = await readdir(basouPaths(repo).sessions);
+    const reconcileSes = sessions.find((s) => s !== REACHABLE_SES_TR);
+    expect(reconcileSes).toBeDefined();
+    const events = (
+      await readFile(
+        join(basouPaths(repo).sessions, reconcileSes as string, "events.jsonl"),
+        "utf8",
+      )
+    )
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.some((e) => e.type === "task_reconciled")).toBe(true);
+  });
+
+  // 31
+  it("t-rec-4: --write partial failure surfaces failed list to stderr + exits 1", async () => {
+    const repo = await setupInitedRepo();
+    const core = await import("@basou/core");
+    // Replace the orchestrator wholesale — vi.spyOn cannot intercept the
+    // module-internal reconcileTask call inside reconcileAllTasks (ES module
+    // local binding, Y-3w §J.4 / Codex review #2 A-10).
+    vi.spyOn(core, "reconcileAllTasks").mockImplementationOnce(async () => ({
+      results: [
+        {
+          taskId: TASK_ID_TR_A as `task_${string}`,
+          clean: false,
+          brokenCreatedInSession: BROKEN_SES_TR as `ses_${string}`,
+          brokenLinkedSessions: [],
+          reconcileSession: {
+            sessionId: "ses_01HXABCDEF1234567890ABCREC" as `ses_${string}`,
+            eventId: "evt_01HXABCDEF1234567890ABCREE" as `evt_${string}`,
+          },
+        },
+      ],
+      failed: [
+        {
+          taskId: TASK_ID_TR_B as `task_${string}`,
+          errorClass: "TaskWriteAfterEventError",
+          phase: "reconcile",
+        },
+      ],
+      scanned: 2,
+    }));
+    const out = captureStdout();
+    const err = captureStderr();
+    await runTaskReconcile({ write: true }, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(out)).toContain(`Reconciled ${TASK_ID_TR_A}`);
+    expect(joinCalls(err)).toContain(`Failed to reconcile ${TASK_ID_TR_B}`);
+    expect(joinCalls(err)).toContain("phase: reconcile");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("doRunTaskReconcile (single task --task)", () => {
+  // 32
+  it("t-rec-5: --task on clean task reports reachable counts and exits 0", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: REACHABLE_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const out = captureStdout();
+    await runTaskReconcile({ task: TASK_ID_TR_A }, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(out)).toContain("no broken refs");
+    expect(process.exitCode).toBe(0);
+  });
+
+  // 33
+  it("t-rec-6: --task dry-run with broken inlines short session ids + exits 0", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const out = captureStdout();
+    await runTaskReconcile({ task: TASK_ID_TR_A }, { cwd: repo, ...FIXED_CTX });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("(dry-run) Would reconcile");
+    expect(stdout).toContain("ses_01HXBR"); // short broken id (default for --task)
+    expect(stdout).toContain("forward sync is out of scope");
+    expect(process.exitCode).toBe(0);
+  });
+
+  // 34
+  it("t-rec-7: --task --write reports Reconciled <id> + exits 0", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const out = captureStdout();
+    await runTaskReconcile({ task: TASK_ID_TR_A, write: true }, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(out)).toContain(`Reconciled ${TASK_ID_TR_A}`);
+    expect(process.exitCode).toBe(0);
+  });
+
+  // 35
+  it("t-rec-8: --task <invalid_format> exits 1 with a fixed message", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runTaskReconcile({ task: "definitely-not-a-task-id" }, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(err)).toContain("Task not found");
+    expect(joinCalls(err)).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
+  });
+
+  // 36
+  it("t-rec-9: --task <ambiguous_prefix> exits 1 with ambiguity message", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: REACHABLE_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    await placeBrokenTask(repo, TASK_ID_TR_B, {
+      createdInSession: REACHABLE_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const err = captureStderr();
+    // Both TASK_ID_TR_A and TASK_ID_TR_B start with "task_01H" — this prefix matches both
+    await runTaskReconcile({ task: "task_01H" }, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(err)).toContain("Ambiguous task id");
+    expect(process.exitCode).toBe(1);
+  });
+
+  // 37
+  it("t-rec-10: --task <unknown_id> exits 1 with 'Task not found'", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runTaskReconcile(
+      { task: "task_01HUNKNOWNABCDEFGH1234567A" },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    expect(joinCalls(err)).toContain("Task not found");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("doRunTaskReconcile (--json)", () => {
+  // 38
+  it("t-rec-11: --json dry-run emits dry_run:true + reconciled list + failed:[]", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const out = captureStdout();
+    await runTaskReconcile({ json: true }, { cwd: repo, ...FIXED_CTX });
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(payload.dry_run).toBe(true);
+    expect(payload.scanned).toBe(1);
+    expect(Array.isArray(payload.reconciled)).toBe(true);
+    expect((payload.reconciled as unknown[]).length).toBe(1);
+    expect(payload.failed).toEqual([]);
+  });
+
+  // 39
+  it("t-rec-12: --json --write emits event_id + reconcile_session_id on success", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const out = captureStdout();
+    await runTaskReconcile({ json: true, write: true }, { cwd: repo, ...FIXED_CTX });
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(payload.dry_run).toBe(false);
+    const reconciled = (payload.reconciled as Array<Record<string, unknown>>)[0];
+    expect(reconciled?.reconcile_session_id).toMatch(/^ses_/);
+    expect(reconciled?.event_id).toMatch(/^evt_/);
+  });
+
+  // 40
+  it("t-rec-13: --json --write partial failure populates failed[] and sets exit 1", async () => {
+    const repo = await setupInitedRepo();
+    const core = await import("@basou/core");
+    // Same ES-module-binding rationale as t-rec-4: replace reconcileAllTasks
+    // wholesale (Y-3w §J.4).
+    vi.spyOn(core, "reconcileAllTasks").mockImplementationOnce(async () => ({
+      results: [
+        {
+          taskId: TASK_ID_TR_A as `task_${string}`,
+          clean: false,
+          brokenCreatedInSession: BROKEN_SES_TR as `ses_${string}`,
+          brokenLinkedSessions: [],
+          reconcileSession: {
+            sessionId: "ses_01HXABCDEF1234567890ABCREC" as `ses_${string}`,
+            eventId: "evt_01HXABCDEF1234567890ABCREE" as `evt_${string}`,
+          },
+        },
+      ],
+      failed: [
+        {
+          taskId: TASK_ID_TR_B as `task_${string}`,
+          errorClass: "TaskWriteAfterEventError",
+          phase: "reconcile",
+        },
+      ],
+      scanned: 2,
+    }));
+    const out = captureStdout();
+    await runTaskReconcile({ json: true, write: true }, { cwd: repo, ...FIXED_CTX });
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect((payload.failed as Array<Record<string, unknown>>).length).toBe(1);
+    expect((payload.failed as Array<Record<string, unknown>>)[0]?.phase).toBe("reconcile");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("renderTaskError extended phases (Step 19)", () => {
+  // 41a: reconcile
+  it("t-rec-14: phase 'reconcile' warning calls out task.md reconciliation failed", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const core = await import("@basou/core");
+    vi.spyOn(core, "reconcileTask").mockImplementationOnce(async () => {
+      throw new core.TaskWriteAfterEventError({
+        taskId: TASK_ID_TR_A as `task_${string}`,
+        eventId: "evt_01HXABCDEF1234567890ABCFA1" as `evt_${string}`,
+        sessionId: "ses_01HXABCDEF1234567890ABCFA1" as `ses_${string}`,
+        phase: "reconcile",
+        cause: Object.assign(new Error("simulated EACCES"), { code: "EACCES" }),
+      });
+    });
+    const err = captureStderr();
+    await runTaskReconcile({ task: TASK_ID_TR_A, write: true }, { cwd: repo, ...FIXED_CTX });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("Warning: task.md reconciliation failed");
+    expect(stderr).toContain("manual repair required");
+    expect(stderr).not.toContain("(未実装)");
+    expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
+  });
+
+  // 41b: reconcile-finalize
+  it("t-rec-15: phase 'reconcile-finalize' warning calls out session.yaml status update", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const core = await import("@basou/core");
+    vi.spyOn(core, "reconcileTask").mockImplementationOnce(async () => {
+      throw new core.TaskWriteAfterEventError({
+        taskId: TASK_ID_TR_A as `task_${string}`,
+        eventId: "evt_01HXABCDEF1234567890ABCFA1" as `evt_${string}`,
+        sessionId: "ses_01HXABCDEF1234567890ABCFA1" as `ses_${string}`,
+        phase: "reconcile-finalize",
+        cause: Object.assign(new Error("simulated EACCES"), { code: "EACCES" }),
+      });
+    });
+    const err = captureStderr();
+    await runTaskReconcile({ task: TASK_ID_TR_A, write: true }, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(err)).toContain("reconcile session finalize failed");
+  });
+
+  // 41c: reconcile-concurrent
+  it("t-rec-16: phase 'reconcile-concurrent' suggests re-running reconcile rather than manual repair", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const core = await import("@basou/core");
+    vi.spyOn(core, "reconcileTask").mockImplementationOnce(async () => {
+      throw new core.TaskWriteAfterEventError({
+        taskId: TASK_ID_TR_A as `task_${string}`,
+        eventId: "evt_01HXABCDEF1234567890ABCFA1" as `evt_${string}`,
+        sessionId: "ses_01HXABCDEF1234567890ABCFA1" as `ses_${string}`,
+        phase: "reconcile-concurrent",
+        cause: Object.assign(new Error("simulated mtime drift"), { code: "EAGAIN" }),
+      });
+    });
+    const err = captureStderr();
+    await runTaskReconcile({ task: TASK_ID_TR_A, write: true }, { cwd: repo, ...FIXED_CTX });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("task.md was modified concurrently");
+    expect(stderr).toContain("re-run `basou task reconcile`");
+  });
+});
+
+describe("doRunTaskReconcile (verbose)", () => {
+  // 42
+  it("t-rec-17: -v in all-scan dry-run inlines short broken session ids in stdout", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    const out = captureStdout();
+    await runTaskReconcile({ verbose: true }, { cwd: repo, ...FIXED_CTX });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("ses_01HXBR");
+  });
+});
+
+// ============================================================================
+// task show extensions (Step 19)
+// ============================================================================
+
+describe("doRunTaskShow with task_reconciled events (Step 19)", () => {
+  async function setupReconciledFixture(): Promise<{ repo: string; taskId: string }> {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: BROKEN_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    captureStdout(); // mute reconcile output
+    await runTaskReconcile({ task: TASK_ID_TR_A, write: true }, { cwd: repo, ...FIXED_CTX });
+    vi.restoreAllMocks();
+    return { repo, taskId: TASK_ID_TR_A };
+  }
+
+  // 43
+  it("t-rec-show-1: task show collects task_reconciled events", async () => {
+    const { repo, taskId } = await setupReconciledFixture();
+    const out = captureStdout();
+    await doRunTaskShow(taskId, { events: true }, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("task_reconciled");
+    expect(stdout).toContain("broken ref");
+  });
+
+  // 44
+  it("t-rec-show-2: task show -v expands the task_reconciled payload", async () => {
+    const { repo, taskId } = await setupReconciledFixture();
+    const out = captureStdout();
+    await doRunTaskShow(taskId, { events: true, verbose: true }, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("removed_created_in_session:");
+    expect(stdout).toContain("created_in_session_replacement:");
+  });
+
+  // 45
+  it("t-rec-show-3: task show --json embeds task_reconciled payload in events[]", async () => {
+    const { repo, taskId } = await setupReconciledFixture();
+    const out = captureStdout();
+    await doRunTaskShow(taskId, { json: true, events: true }, { cwd: repo });
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    const events = payload.events as Array<Record<string, unknown>>;
+    const reconciled = events.find((e) => e.type === "task_reconciled");
+    expect(reconciled).toBeDefined();
+    expect(reconciled?.removed_created_in_session).toBe(BROKEN_SES_TR);
   });
 });
