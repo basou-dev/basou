@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { link, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { z } from "zod";
 import type { PrefixedId } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import type { Event } from "../schemas/event.schema.js";
@@ -31,6 +32,14 @@ const DEFAULT_ATTACHABLE_STATUSES: ReadonlySet<AttachableStatus> = new Set<Attac
   "running",
   "waiting_approval",
 ]);
+
+// Codex Y3t-3-H1: enforce §C.3 initial-status restriction and TaskSchema
+// title/label minimums at the core API boundary so direct callers (tests,
+// future programmatic uses) cannot smuggle past the CLI-side parsers and
+// commit a `task_created` event for a malformed task.
+const InitialTaskStatusSchema = z.enum(["planned", "in_progress"]);
+const TaskTitleSchema = z.string().min(1);
+const TaskLabelSchema = z.string().min(1);
 
 // ============================================================================
 // File read / parse
@@ -318,17 +327,27 @@ function assertTransitionAllowed(from: TaskStatus, to: TaskStatus): void {
  * Reconciliation (= regenerating the missing task.md from events) is a
  * v0.2 feature; see Step 17 申し送り #52.
  */
+/**
+ * `phase` identifies which staged write failed after the event commit:
+ *   - `create`: task.md create write (ad-hoc or attach path)
+ *   - `overwrite`: task.md overwrite during a status change
+ *   - `link-session`: session.yaml `task_id` update during the attach path
+ *     (Codex Y3t-3-H2: split out so CLI warnings describe the actual
+ *     unsafe artefact instead of always saying "task.md creation failed")
+ */
+export type TaskWriteAfterEventPhase = "create" | "overwrite" | "link-session";
+
 export class TaskWriteAfterEventError extends Error {
   readonly taskId: PrefixedId<"task">;
   readonly eventId: PrefixedId<"evt">;
   readonly sessionId: PrefixedId<"ses">;
-  readonly phase: "create" | "overwrite";
+  readonly phase: TaskWriteAfterEventPhase;
 
   constructor(args: {
     taskId: PrefixedId<"task">;
     eventId: PrefixedId<"evt">;
     sessionId: PrefixedId<"ses">;
-    phase: "create" | "overwrite";
+    phase: TaskWriteAfterEventPhase;
     cause: unknown;
   }) {
     super("Failed to write task file after event was persisted", { cause: args.cause });
@@ -445,8 +464,16 @@ function buildAdHocTaskLabel(title: string, mode: "new" | "status"): string {
  * arrives (Step 17 申し送り #52).
  */
 export async function createTaskWithEvent(input: CreateTaskInput): Promise<CreateTaskResult> {
-  // Boundary parses so direct (non-CLI) callers can't smuggle in malformed ids.
+  // Boundary parses so direct (non-CLI) callers can't smuggle in malformed
+  // ids / statuses / titles past the CLI-side guards. All checks here run
+  // BEFORE any persistent write, so a rejection leaves events.jsonl and
+  // task.md untouched.
   TaskIdSchema.parse(input.taskId);
+  InitialTaskStatusSchema.parse(input.initialStatus);
+  TaskTitleSchema.parse(input.title);
+  if (input.label !== undefined) {
+    TaskLabelSchema.parse(input.label);
+  }
 
   if (input.mode === "ad-hoc") {
     return createTaskAdHoc(input);
@@ -550,9 +577,9 @@ async function createTaskAttach(input: AttachTaskInput): Promise<CreateTaskResul
   });
 
   // 3. Update session.yaml task_id (null → new) so the §2.1 invariant holds.
-  //    Failure here puts us into the same "event persisted, side-effect missing"
-  //    band as task.md — surface via TaskWriteAfterEventError so the operator
-  //    sees the same warning shape.
+  //    Failure here puts us into the same "event persisted, side-effect
+  //    missing" band as task.md. Use phase: "link-session" so the operator
+  //    warning identifies the failed artefact correctly (Codex Y3t-3-H2).
   try {
     const updated = {
       ...sessionDoc,
@@ -564,7 +591,7 @@ async function createTaskAttach(input: AttachTaskInput): Promise<CreateTaskResul
       taskId: input.taskId,
       eventId: appendResult.eventId,
       sessionId: input.sessionId,
-      phase: "create",
+      phase: "link-session",
       cause: error,
     });
   }

@@ -253,12 +253,17 @@ function formatHandoffBody(args: {
     lines.push("- 最終 session: (no live sessions)");
   }
   if (args.latestTaskRecord !== undefined) {
-    // Status comes from task.md when available; if a task_created event
-    // exists but the task.md was deleted manually, fall back to the event's
-    // implicit "planned" default.
-    const status = args.latestTaskDoc?.task.task.status ?? "planned";
+    // Status comes from task.md when available. If the task_created event
+    // exists but task.md is missing / invalid we MUST NOT fabricate
+    // "planned" — events alone cannot restore the initial status (申し送り
+    // #52) and operators would miss an unsafe-state reconcile (Codex
+    // Y3t-3-M1).
+    const statusLabel =
+      args.latestTaskDoc !== undefined
+        ? args.latestTaskDoc.task.task.status
+        : "status unknown — task.md missing or invalid";
     lines.push(
-      `- 最終 task: ${args.latestTaskRecord.taskId} (${status}): ${args.latestTaskRecord.title}`,
+      `- 最終 task: ${args.latestTaskRecord.taskId} (${statusLabel}): ${args.latestTaskRecord.title}`,
     );
   } else {
     lines.push("- 最終 task: (no tasks recorded yet)");

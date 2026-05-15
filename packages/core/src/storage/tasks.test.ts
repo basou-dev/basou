@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import type { PrefixedId } from "../ids/ulid.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
@@ -15,7 +15,15 @@ import {
   updateTaskStatusWithEvent,
   writeTaskFile,
 } from "./tasks.js";
-import { writeYamlFile } from "./yaml-store.js";
+import { overwriteYamlFile, writeYamlFile } from "./yaml-store.js";
+
+vi.mock("./yaml-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./yaml-store.js")>("./yaml-store.js");
+  return {
+    ...actual,
+    overwriteYamlFile: vi.fn(actual.overwriteYamlFile),
+  };
+});
 
 const WS_ID = "ws_01HXABCDEF1234567890ABCWS1" as const;
 const TASK_ID_A = "task_01HXABCDEF1234567890ABCTAK" as PrefixedId<"task">;
@@ -690,5 +698,234 @@ describe("TaskWriteAfterEventError", () => {
     expect(err.taskId).toBe(TASK_ID_A);
     expect(err.phase).toBe("create");
     expect(err.message).toBe("Failed to write task file after event was persisted");
+  });
+});
+
+// ============================================================================
+// Codex Y3t-3-H1: boundary validation
+// ============================================================================
+
+describe("createTaskWithEvent boundary validation (Codex Y3t-3-H1)", () => {
+  it("rejects an invalid initialStatus before any event is written (ad-hoc)", async () => {
+    const paths = await setupPaths();
+    await expect(
+      createTaskWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: OCC_AT,
+        taskId: TASK_ID_A,
+        title: "smuggled-done",
+        // biome-ignore lint/suspicious/noExplicitAny: simulating a direct caller bypassing the CLI parser to verify the runtime boundary (Codex Y3t-3-H1).
+        initialStatus: "done" as any,
+        description: "",
+        workingDirectory: getWorkDir(),
+      }),
+    ).rejects.toThrow();
+    const sessionDirs = await readdir(paths.sessions);
+    expect(sessionDirs.filter((d) => d.startsWith("ses_"))).toHaveLength(0);
+    const taskFiles = await readdir(paths.tasks);
+    expect(taskFiles).toHaveLength(0);
+  });
+
+  it("rejects an empty title before any event is written (ad-hoc)", async () => {
+    const paths = await setupPaths();
+    await expect(
+      createTaskWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: OCC_AT,
+        taskId: TASK_ID_A,
+        title: "",
+        initialStatus: "planned",
+        description: "",
+        workingDirectory: getWorkDir(),
+      }),
+    ).rejects.toThrow();
+    const sessionDirs = await readdir(paths.sessions);
+    expect(sessionDirs.filter((d) => d.startsWith("ses_"))).toHaveLength(0);
+  });
+
+  it("rejects an empty label before any event is written (attach)", async () => {
+    const paths = await setupPaths();
+    await placeRunningSession(paths, SES_ID_RUNNING);
+    await expect(
+      createTaskWithEvent({
+        mode: "attach",
+        paths,
+        occurredAt: OCC_AT,
+        sessionId: SES_ID_RUNNING,
+        taskId: TASK_ID_A,
+        title: "ok-title",
+        label: "",
+        initialStatus: "planned",
+        description: "",
+      }),
+    ).rejects.toThrow();
+    const events = await readFile(join(paths.sessions, SES_ID_RUNNING, "events.jsonl"), "utf8");
+    expect(events).toBe("");
+  });
+});
+
+// ============================================================================
+// Codex Y3t-3-H2 + Y3t-3-M3: staged-write failure injection
+// ============================================================================
+
+describe("staged-write failure injection (Codex Y3t-3-H2 / Y3t-3-M3)", () => {
+  async function chmodTasksReadonly(paths: BasouPaths): Promise<void> {
+    await chmod(paths.tasks, 0o555);
+  }
+  async function chmodTasksWritable(paths: BasouPaths): Promise<void> {
+    await chmod(paths.tasks, 0o755);
+  }
+
+  it("ad-hoc create: events durable when task.md write fails (phase: 'create')", async () => {
+    const paths = await setupPaths();
+    await chmodTasksReadonly(paths);
+    let captured: TaskWriteAfterEventError | undefined;
+    try {
+      await createTaskWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: OCC_AT,
+        taskId: TASK_ID_A,
+        title: "fail-task-md",
+        initialStatus: "planned",
+        description: "",
+        workingDirectory: getWorkDir(),
+      });
+    } catch (error: unknown) {
+      if (error instanceof TaskWriteAfterEventError) captured = error;
+      else throw error;
+    } finally {
+      await chmodTasksWritable(paths);
+    }
+    expect(captured).toBeInstanceOf(TaskWriteAfterEventError);
+    expect(captured?.phase).toBe("create");
+    expect(captured?.taskId).toBe(TASK_ID_A);
+    const events = (
+      await readFile(join(paths.sessions, captured?.sessionId as string, "events.jsonl"), "utf8")
+    )
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.some((e) => e.type === "task_created" && e.task_id === TASK_ID_A)).toBe(true);
+  });
+
+  it("attach create: events durable when task.md write fails (phase: 'create')", async () => {
+    const paths = await setupPaths();
+    await placeRunningSession(paths, SES_ID_RUNNING);
+    await chmodTasksReadonly(paths);
+    let captured: TaskWriteAfterEventError | undefined;
+    try {
+      await createTaskWithEvent({
+        mode: "attach",
+        paths,
+        occurredAt: OCC_AT,
+        sessionId: SES_ID_RUNNING,
+        taskId: TASK_ID_A,
+        title: "attach-fail",
+        initialStatus: "planned",
+        description: "",
+      });
+    } catch (error: unknown) {
+      if (error instanceof TaskWriteAfterEventError) captured = error;
+      else throw error;
+    } finally {
+      await chmodTasksWritable(paths);
+    }
+    expect(captured?.phase).toBe("create");
+    expect(captured?.sessionId).toBe(SES_ID_RUNNING);
+    const events = (await readFile(join(paths.sessions, SES_ID_RUNNING, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe("task_created");
+  });
+
+  it("attach create: events durable when session.yaml link fails (phase: 'link-session')", async () => {
+    const paths = await setupPaths();
+    await placeRunningSession(paths, SES_ID_RUNNING);
+    vi.mocked(overwriteYamlFile).mockImplementationOnce(async () => {
+      throw new Error("Failed to overwrite YAML file", {
+        cause: Object.assign(new Error("simulated EACCES"), { code: "EACCES" }),
+      });
+    });
+    let captured: TaskWriteAfterEventError | undefined;
+    try {
+      await createTaskWithEvent({
+        mode: "attach",
+        paths,
+        occurredAt: OCC_AT,
+        sessionId: SES_ID_RUNNING,
+        taskId: TASK_ID_A,
+        title: "link-fail",
+        initialStatus: "planned",
+        description: "",
+      });
+    } catch (error: unknown) {
+      if (error instanceof TaskWriteAfterEventError) captured = error;
+      else throw error;
+    }
+    expect(captured?.phase).toBe("link-session");
+    expect(captured?.taskId).toBe(TASK_ID_A);
+    expect(captured?.sessionId).toBe(SES_ID_RUNNING);
+    const events = (await readFile(join(paths.sessions, SES_ID_RUNNING, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe("task_created");
+    // task.md must NOT exist when link-session failed before task.md write.
+    const taskFiles = await readdir(paths.tasks);
+    expect(taskFiles).toHaveLength(0);
+  });
+
+  it("ad-hoc status overwrite: events durable when task.md overwrite fails (phase: 'overwrite')", async () => {
+    const paths = await setupPaths();
+    // First create the task successfully so a subsequent status change has a
+    // task.md to overwrite.
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "to-progress",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await chmodTasksReadonly(paths);
+    let captured: TaskWriteAfterEventError | undefined;
+    try {
+      await updateTaskStatusWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: "2026-05-11T13:00:00+09:00",
+        taskId: TASK_ID_A,
+        newStatus: "in_progress",
+        workingDirectory: getWorkDir(),
+      });
+    } catch (error: unknown) {
+      if (error instanceof TaskWriteAfterEventError) captured = error;
+      else throw error;
+    } finally {
+      await chmodTasksWritable(paths);
+    }
+    expect(captured?.phase).toBe("overwrite");
+    const events = (
+      await readFile(join(paths.sessions, captured?.sessionId as string, "events.jsonl"), "utf8")
+    )
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.some((e) => e.type === "task_status_changed" && e.to === "in_progress")).toBe(
+      true,
+    );
   });
 });

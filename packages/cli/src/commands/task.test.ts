@@ -421,6 +421,27 @@ describe("doRunTaskShow", () => {
     expect(joinCalls(err)).toContain("Task not found"); // bare prefix path
     expect(process.exitCode).toBe(1);
   });
+
+  it("t-show-4: malformed events.jsonl emits a replay warning to stderr (Codex Y3t-3-M2)", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "show-4" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const paths = basouPaths(repo);
+    const sessions = (await readdir(paths.sessions)).filter((d) => d.startsWith("ses_"));
+    expect(sessions).toHaveLength(1);
+    const sid = sessions[0] as string;
+    const jsonlPath = join(paths.sessions, sid, "events.jsonl");
+    const original = await readFile(jsonlPath, "utf8");
+    await writeFile(jsonlPath, `${original}{not valid json\n`);
+
+    const err = captureStderr();
+    captureStdout();
+    await runTaskShow(taskId, { json: true }, { cwd: repo });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("skipped malformed JSON");
+    expect(stderr).not.toContain(repo);
+  });
 });
 
 // ============================================================================
@@ -606,6 +627,34 @@ describe("renderTaskError (pathless contract)", () => {
     const stderr = joinCalls(err);
     expect(stderr).toContain("Caused by: EACCES");
     expect(stderr).not.toContain("/Users/secret");
+  });
+
+  it("t-pathless-3b: TaskWriteAfterEventError link-session phase wording calls out session.yaml (Codex Y3t-3-H2)", async () => {
+    const repo = await setupInitedRepo();
+    const core = await import("@basou/core");
+    const spy = vi.spyOn(core, "createTaskWithEvent");
+    spy.mockImplementationOnce(async () => {
+      throw new core.TaskWriteAfterEventError({
+        taskId: "task_01HXABCDEF1234567890ABCFAI" as `task_${string}`,
+        eventId: "evt_01HXABCDEF1234567890ABCFAI" as `evt_${string}`,
+        sessionId: "ses_01HXABCDEF1234567890ABCFAI" as `ses_${string}`,
+        phase: "link-session",
+        cause: Object.assign(new Error("Failed to overwrite YAML file"), {
+          cause: Object.assign(new Error(`absolute path ${repo}/.basou/sessions/x/session.yaml`), {
+            code: "EACCES",
+          }),
+        }),
+      });
+    });
+    const sid = await createSession(repo, { id: SES("LNK"), status: "running", taskId: null });
+    const err = captureStderr();
+    await runTaskNew({ title: "x", session: sid }, { cwd: repo, ...FIXED_CTX });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("session-task linkage is in unsafe state");
+    expect(stderr).toContain("Warning: session.yaml task_id update failed");
+    expect(stderr).not.toContain("task.md creation failed");
+    expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
   });
 
   it("t-pathless-4: 'Task not found' non-verbose stderr is empty of absolute paths", async () => {

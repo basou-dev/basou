@@ -413,6 +413,21 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain(`- 最終 task: ${t2} (planned): second task`);
   });
 
+  it("case 16b: latestTask without task.md surfaces 'status unknown' (Codex Y3t-3-M1)", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X0G");
+    const taskId = TASK("T07");
+    // task_created event exists but the corresponding task.md is intentionally
+    // NOT placed — the renderer must not fabricate a "planned" status.
+    const events = taskCreatedLine(sid, "E16", taskId, "orphaned", "2026-05-08T15:00:00+09:00");
+    await placeSession(paths, { id: sid, status: "running" }, events);
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(
+      `- 最終 task: ${taskId} (status unknown — task.md missing or invalid): orphaned`,
+    );
+    expect(result.body).not.toContain(`- 最終 task: ${taskId} (planned):`);
+  });
+
   it("case 16: pending list excludes done / cancelled tasks", async () => {
     const paths = await setupPaths();
     const sid = SES("X0F");

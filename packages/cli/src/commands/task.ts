@@ -4,6 +4,7 @@ import {
   type Event,
   FailedToFinalizeError,
   type PrefixedId,
+  type ReplayWarning,
   type SessionEntry,
   type SessionStatus,
   type TaskDocument,
@@ -408,10 +409,15 @@ export async function doRunTaskShow(
   const sessions = await loadSessionEntries(paths, { now: new Date() });
   const events: Event[] = [];
   const linkedSessionIds = new Set<string>(doc.task.task.linked_sessions);
+  // Codex Y3t-3-M2: replay warnings (malformed JSON / schema violations /
+  // partial trailing lines) and unreadable events.jsonl files must reach
+  // the operator so silent gaps in the events history don't go unnoticed.
   for (const s of sessions) {
     const sessionDir = join(paths.sessions, s.sessionId);
     try {
-      for await (const ev of replayEvents(sessionDir)) {
+      for await (const ev of replayEvents(sessionDir, {
+        onWarning: (w) => printReplayWarning(w, s.sessionId),
+      })) {
         if (
           (ev.type === "task_created" || ev.type === "task_status_changed") &&
           ev.task_id === taskId
@@ -420,10 +426,13 @@ export async function doRunTaskShow(
           linkedSessionIds.add(s.sessionId);
         }
       }
-    } catch {
-      // Surface as a list skip on the session_yaml_unreadable channel later
-      // if needed; for `task show` we silently drop unreadable events.jsonl
-      // and continue so the task metadata still renders.
+    } catch (error: unknown) {
+      // I/O failure (events.jsonl unreadable). The renderer still works on
+      // task.md metadata alone, but the operator must know events from this
+      // session are missing from the aggregate.
+      const short = shortSessionId(s.sessionId);
+      const suffix = error instanceof Error ? `: ${error.message}` : "";
+      console.error(`Warning: events unavailable for session ${short}${suffix}`);
     }
   }
   events.sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at));
@@ -732,12 +741,17 @@ function renderTaskError(error: unknown, verbose: boolean): void {
   if (error instanceof TaskWriteAfterEventError) {
     const sid = shortSessionId(error.sessionId);
     const tid = shortTaskId(error.taskId);
+    const unsafeArtefact =
+      error.phase === "link-session" ? "session-task linkage" : `task ${tid} file`;
     console.error(
-      `Recorded ${error.eventId} in session ${sid}; task ${tid} file is in unsafe state; do not rerun`,
+      `Recorded ${error.eventId} in session ${sid}; ${unsafeArtefact} is in unsafe state; do not rerun`,
     );
-    const phaseLabel = error.phase === "create" ? "creation" : "update";
+    const warning =
+      error.phase === "link-session"
+        ? "session.yaml task_id update failed"
+        : `task.md ${error.phase === "create" ? "creation" : "update"} failed`;
     console.error(
-      `Warning: task.md ${phaseLabel} failed; events.jsonl is consistent; reconcile via v0.2 \`basou task reconcile\` (未実装)`,
+      `Warning: ${warning}; events.jsonl is consistent; reconcile via v0.2 \`basou task reconcile\` (未実装)`,
     );
   }
 
@@ -766,6 +780,25 @@ function extractCauseLabel(error: Error): string | undefined {
     current = current.cause;
   }
   return constructorName;
+}
+
+function printReplayWarning(warning: ReplayWarning, sessionId: string): void {
+  const short = shortSessionId(sessionId);
+  switch (warning.kind) {
+    case "partial_trailing_line":
+      console.error(`Warning: ignored partial trailing line in ${short}/events.jsonl`);
+      break;
+    case "malformed_json":
+      console.error(
+        `Warning: skipped malformed JSON at line ${warning.line} in ${short}/events.jsonl`,
+      );
+      break;
+    case "schema_violation":
+      console.error(
+        `Warning: skipped invalid event at line ${warning.line} in ${short}/events.jsonl`,
+      );
+      break;
+  }
 }
 
 function shortSessionId(id: string): string {
