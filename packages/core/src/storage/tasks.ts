@@ -290,8 +290,13 @@ export async function loadTaskEntries(
 // Status transition rules (Step 17 §C.2)
 // ============================================================================
 
+// Y-3z #59 / B-B3: `planned -> done` and `planned -> cancelled` are direct
+// shortcuts so a task that was queued but completed (or abandoned) outside
+// of an explicit `in_progress` phase can be closed with a single CLI call.
+// The 1 transition = 1 event invariant is preserved: each shortcut emits
+// exactly one `task_status_changed` event capturing the new from / to pair.
 const ALLOWED_TRANSITIONS: Readonly<Record<TaskStatus, ReadonlySet<TaskStatus>>> = {
-  planned: new Set<TaskStatus>(["in_progress"]),
+  planned: new Set<TaskStatus>(["in_progress", "done", "cancelled"]),
   in_progress: new Set<TaskStatus>(["done", "cancelled"]),
   done: new Set<TaskStatus>(),
   cancelled: new Set<TaskStatus>(),

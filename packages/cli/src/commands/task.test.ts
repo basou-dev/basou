@@ -473,15 +473,29 @@ describe("doRunTaskStatus", () => {
     expect(md).toContain("status: in_progress");
   });
 
-  it("t-status-2: planned -> done is rejected as an invalid transition", async () => {
+  it("t-status-2: planned -> done is now a direct shortcut (Y-3z #59 / B-B3)", async () => {
+    // Y-3z #59 lifts the prior two-step requirement so `basou task status
+    // <id> done` succeeds straight from planned. The audit trail still
+    // captures exactly one task_status_changed event for the jump.
     const repo = await setupInitedRepo();
-    captureStdout();
+    const out = captureStdout();
     await doRunTaskNew({ title: "ts" }, { cwd: repo, ...FIXED_CTX });
     const taskId = await findCreatedTaskId(repo);
-    const err = captureStderr();
-    await runTaskStatus(taskId, "done", {}, { cwd: repo, ...FIXED_CTX_2 });
-    expect(joinCalls(err)).toContain("Invalid task status transition: planned -> done");
-    expect(process.exitCode).toBe(1);
+    await doRunTaskStatus(taskId, "done", {}, { cwd: repo, ...FIXED_CTX_2 });
+    expect(joinCalls(out)).toContain("Updated");
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("status: done");
+  });
+
+  it("t-status-2b: planned -> cancelled is also a direct shortcut (Y-3z #59 / B-B3)", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await doRunTaskNew({ title: "ts" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    await doRunTaskStatus(taskId, "cancelled", {}, { cwd: repo, ...FIXED_CTX_2 });
+    expect(joinCalls(out)).toContain("Updated");
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("status: cancelled");
   });
 
   it("t-status-3: done -> done is rejected as an invalid (idempotent) transition", async () => {

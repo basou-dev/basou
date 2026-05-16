@@ -542,7 +542,71 @@ describe("updateTaskStatusWithEvent (transition rules)", () => {
     expect(doc.task.task.linked_sessions).toHaveLength(2);
   });
 
-  it("rejects planned -> done (Codex Y3t-H5)", async () => {
+  it("allows planned -> done directly (Y-3z #59 / B-B3 shortcut)", async () => {
+    // Y-3z #59 lifts the prior `planned -> in_progress -> done` two-step
+    // requirement so a task that finished without an explicit in-progress
+    // phase can close in a single CLI call. The 1 transition = 1 event
+    // invariant is preserved — the resulting task.md records a single
+    // `task_status_changed` event with from=planned / to=done.
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "transitions",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const result = await updateTaskStatusWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: "2026-05-17T12:00:00+09:00",
+      taskId: TASK_ID_A,
+      newStatus: "done",
+      workingDirectory: getWorkDir(),
+    });
+    expect(result.previousStatus).toBe("planned");
+    expect(result.newStatus).toBe("done");
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.status).toBe("done");
+  });
+
+  it("allows planned -> cancelled directly (Y-3z #59 / B-B3 shortcut)", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "transitions",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const result = await updateTaskStatusWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: "2026-05-17T12:00:00+09:00",
+      taskId: TASK_ID_A,
+      newStatus: "cancelled",
+      workingDirectory: getWorkDir(),
+    });
+    expect(result.previousStatus).toBe("planned");
+    expect(result.newStatus).toBe("cancelled");
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.status).toBe("cancelled");
+  });
+
+  it("still rejects planned -> planned (no-op self-transition)", async () => {
+    // Y-3z #59 only adds the two terminal shortcuts; the self-edge from
+    // planned to planned is still disallowed so the audit trail stays
+    // strictly monotonic in the status field.
     const paths = await setupPaths();
     await createTaskWithEvent({
       mode: "ad-hoc",
@@ -562,10 +626,10 @@ describe("updateTaskStatusWithEvent (transition rules)", () => {
         manifest: makeManifest(),
         occurredAt: OCC_AT,
         taskId: TASK_ID_A,
-        newStatus: "done",
+        newStatus: "planned",
         workingDirectory: getWorkDir(),
       }),
-    ).rejects.toThrow("Invalid task status transition: planned -> done");
+    ).rejects.toThrow("Invalid task status transition: planned -> planned");
   });
 
   it("rejects done -> done (no-op idempotent)", async () => {
