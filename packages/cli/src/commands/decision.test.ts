@@ -568,7 +568,7 @@ describe("doRunDecisionRecord (pathless contract)", () => {
   });
 });
 
-describe("doRunDecisionRecord (label cap, Y-3z #63 / B-G1)", () => {
+describe("doRunDecisionRecord (label cap)", () => {
   // The session.yaml `label` field is built by `buildAdHocLabel(title)` =
   // `Ad-hoc decision: ${truncated}` where `truncated` keeps the first 80
   // chars of the title and appends `...` for anything longer. The 3 cases
