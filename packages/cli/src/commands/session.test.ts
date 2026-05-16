@@ -967,7 +967,7 @@ describe("runSessionImport", () => {
     expect(stderr).toContain(`Task not found: ${unknownTaskId}`);
     expect(stderr).not.toContain(repo);
     expect(process.exitCode).toBe(1);
-    // No session was imported because the guard fired before mkdir.
+    // resolveTaskId threw before importSessionFromJson was called; no session dir is created.
     const paths = basouPaths(repo);
     const sessionDirs = await readdir(paths.sessions);
     expect(sessionDirs).toHaveLength(0);
