@@ -151,6 +151,26 @@ async function createSession(repo: string, fixture: SessionFixture): Promise<str
   return fixture.id;
 }
 
+async function placeFixtureTask(repo: string, taskId: string): Promise<void> {
+  const paths = basouPaths(repo);
+  const body = `---
+schema_version: "0.1.0"
+task:
+  id: ${taskId}
+  title: fixture task
+  status: planned
+  created_at: "2026-05-04T09:00:00+09:00"
+  updated_at: "2026-05-04T09:00:00+09:00"
+  workspace_id: ${FIXED_WS_ID}
+  created_in_session: ses_01HXABCDEF1234567890ABCDE1
+  linked_sessions:
+    - ses_01HXABCDEF1234567890ABCDE1
+---
+body
+`;
+  await writeFile(join(paths.tasks, `${taskId}.md`), body);
+}
+
 function captureStdout() {
   return vi.spyOn(console, "log").mockImplementation(() => undefined);
 }
@@ -721,6 +741,7 @@ describe("runSessionImport", () => {
   it("import-5: --task override appears in session.yaml", async () => {
     const repo = await setupInitedRepo();
     const taskId = "task_01HXABCDEF1234567890ABCTK1";
+    await placeFixtureTask(repo, taskId);
     captureStdout();
     await runSessionImport({ format: "json", from: FIXTURE_PATH, task: taskId }, { cwd: repo });
     const paths = basouPaths(repo);
@@ -731,7 +752,7 @@ describe("runSessionImport", () => {
     expect(yaml.session.task_id).toBe(taskId);
   });
 
-  it("import-6: invalid --task is rejected via the commander layer", async () => {
+  it("import-6: empty --task is rejected via the commander layer", async () => {
     const program = new Command();
     program.exitOverride();
     registerSessionCommand(program);
@@ -747,11 +768,11 @@ describe("runSessionImport", () => {
         "--from",
         FIXTURE_PATH,
         "--task",
-        "not-a-task",
+        "",
       ]),
     ).rejects.toBeDefined();
     const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(stderr).toContain("Invalid task_id: not-a-task");
+    expect(stderr).toContain("Task id is empty");
   });
 
   it("import-7: --dry-run produces an illustrative ID message and writes no files", async () => {
@@ -932,6 +953,56 @@ describe("runSessionImport", () => {
     ).rejects.toBeDefined();
     const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
     expect(stderr).toContain("--from");
+  });
+
+  it("import-21: --task pointing at an unknown task_id is rejected with Task not found", async () => {
+    const repo = await setupInitedRepo();
+    const unknownTaskId = "task_01HXABCDEF1234567890ABCTK9";
+    const err = captureStderr();
+    await runSessionImport(
+      { format: "json", from: FIXTURE_PATH, task: unknownTaskId },
+      { cwd: repo },
+    );
+    const stderr = joinCalls(err);
+    expect(stderr).toContain(`Task not found: ${unknownTaskId}`);
+    expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
+    // No session was imported because the guard fired before mkdir.
+    const paths = basouPaths(repo);
+    const sessionDirs = await readdir(paths.sessions);
+    expect(sessionDirs).toHaveLength(0);
+  });
+
+  it("import-22: --task accepts a unique prefix and resolves to the full task_id", async () => {
+    const repo = await setupInitedRepo();
+    const fullTaskId = "task_01HXABCDEF1234567890ABCTK1";
+    await placeFixtureTask(repo, fullTaskId);
+    captureStdout();
+    await runSessionImport(
+      { format: "json", from: FIXTURE_PATH, task: "task_01HXABCDEF" },
+      { cwd: repo },
+    );
+    const paths = basouPaths(repo);
+    const [sid = ""] = await readdir(paths.sessions);
+    const yaml = (await readYamlFile(join(paths.sessions, sid, "session.yaml"))) as {
+      session: { task_id?: string };
+    };
+    expect(yaml.session.task_id).toBe(fullTaskId);
+  });
+
+  it("import-23: --task with an ambiguous prefix is rejected with Ambiguous task id", async () => {
+    const repo = await setupInitedRepo();
+    await placeFixtureTask(repo, "task_01HXABCDEF1234567890ABCTK1");
+    await placeFixtureTask(repo, "task_01HXABCDEF1234567890ABCTK2");
+    const err = captureStderr();
+    await runSessionImport(
+      { format: "json", from: FIXTURE_PATH, task: "task_01HXABCDEF" },
+      { cwd: repo },
+    );
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("Ambiguous task id 'task_01HXABCDEF'");
+    expect(stderr).toContain("matched 2 tasks");
+    expect(process.exitCode).toBe(1);
   });
 });
 

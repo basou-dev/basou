@@ -71,13 +71,15 @@ export async function importSessionFromJson(
     throw new Error(`Invalid task_id: ${options.taskIdOverride}`);
   }
 
-  // Step 19 guard (Y-3w §H.7): rewriteEvents preserves variant-specific
-  // task_id fields, so importing a session containing a `task_reconciled`
-  // event would silently install a dangling task_id reference if the local
-  // workspace lacks that task. Validate up-front for `task_reconciled` only;
-  // the broader sweep over `task_created` / `task_status_changed` /
-  // session.yaml.task_id is Step 21 (Y-3w-10).
-  await assertImportedTaskReconciledReferencesAreReachable(paths, payload.events);
+  // Step 21 guard (Y-3y, expanded from Step 19 Y-3w §H.7): rewriteEvents
+  // preserves variant-specific task_id fields, so importing a session that
+  // references a task absent from the local workspace would silently
+  // install a dangling reference. Validate every task_id carrier:
+  // task_created / task_status_changed / task_reconciled events plus the
+  // effective session task_id (override-wins, matches buildSessionRecord
+  // below).
+  const effectiveSessionTaskId = options.taskIdOverride ?? payload.session.task_id ?? null;
+  await assertImportedTaskReferencesAreReachable(paths, payload.events, effectiveSessionTaskId);
 
   const newSessionId = prefixedUlid("ses");
 
@@ -135,22 +137,41 @@ export async function importSessionFromJson(
   };
 }
 
-// Step 19 (Y-3w §H.7): refuse any payload whose `task_reconciled` events
-// point at task ids the local workspace cannot resolve. The fixed message
-// is pathless-contract compliant; broken ids are not echoed back so an
-// adversarial payload cannot probe the local task namespace.
-async function assertImportedTaskReconciledReferencesAreReachable(
+// Step 21 (Y-3y, expanded from Step 19 Y-3w §H.7): refuse any payload that
+// references task ids absent from the local workspace, across every carrier:
+// task_created / task_status_changed / task_reconciled events plus the
+// effective session task_id (= the override if supplied, otherwise the
+// imported session.yaml.task_id; matches buildSessionRecord's override-wins
+// semantics so we never reject on an id the final record will discard). The
+// fixed message is pathless-contract compliant; broken ids are not echoed
+// back so an adversarial payload cannot probe the local task namespace.
+async function assertImportedTaskReferencesAreReachable(
   paths: BasouPaths,
   events: ReadonlyArray<Event>,
+  effectiveSessionTaskId: string | null,
 ): Promise<void> {
-  let knownTaskIds: Set<string> | null = null;
+  const taskIdsToCheck = new Set<string>();
   for (const ev of events) {
-    if (ev.type !== "task_reconciled") continue;
-    if (knownTaskIds === null) {
-      knownTaskIds = new Set(await enumerateTaskIds(paths));
+    if (
+      ev.type === "task_created" ||
+      ev.type === "task_status_changed" ||
+      ev.type === "task_reconciled"
+    ) {
+      taskIdsToCheck.add(ev.task_id);
     }
-    if (!knownTaskIds.has(ev.task_id)) {
-      throw new Error("Imported task_reconciled event references unknown task_id");
+  }
+  if (effectiveSessionTaskId !== null) {
+    taskIdsToCheck.add(effectiveSessionTaskId);
+  }
+  if (taskIdsToCheck.size === 0) {
+    // Step 21 L-2: skip the tasks-dir scan when nothing references a task,
+    // so imports that carry no task_id at all keep the pre-Step-19 perf.
+    return;
+  }
+  const knownTaskIds = new Set(await enumerateTaskIds(paths));
+  for (const id of taskIdsToCheck) {
+    if (!knownTaskIds.has(id)) {
+      throw new Error("Imported session references unknown task_id");
     }
   }
 }

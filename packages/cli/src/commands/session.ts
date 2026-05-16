@@ -11,7 +11,6 @@ import {
   type SessionSkipReason,
   type SessionStatus,
   SessionStatusSchema,
-  TaskIdSchema,
   appendEventToExistingSession,
   assertBasouRootSafe,
   basouPaths,
@@ -23,6 +22,7 @@ import {
   readYamlFile,
   resolveRepositoryRoot,
   resolveSessionId,
+  resolveTaskId,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 
@@ -666,7 +666,9 @@ export async function doRunSessionImport(
 
   const importOptions: ImportSessionOptions = { dryRun: options.dryRun === true };
   if (options.label !== undefined) importOptions.labelOverride = options.label;
-  if (options.task !== undefined) importOptions.taskIdOverride = options.task;
+  if (options.task !== undefined) {
+    importOptions.taskIdOverride = await resolveTaskId(paths, options.task);
+  }
 
   const result = await importSessionFromJson(paths, manifest, parsed.data, importOptions);
   printSessionImportResult(options, result);
@@ -709,9 +711,8 @@ function parseLabelOverride(raw: string): string {
 }
 
 function parseTaskIdOverride(raw: string): string {
-  const result = TaskIdSchema.safeParse(raw);
-  if (!result.success) {
-    throw new InvalidArgumentError(`Invalid task_id: ${raw}`);
+  if (raw.length === 0) {
+    throw new InvalidArgumentError("Task id is empty");
   }
   return raw;
 }
