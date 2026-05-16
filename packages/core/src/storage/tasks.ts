@@ -970,6 +970,18 @@ export type ReconcileTaskInput = {
   workingDirectory: string;
   write: boolean;
   /**
+   * Whether the caller invoked reconcile against a single task (`--task <id>`)
+   * or as part of a full scan. The ad-hoc reconcile session records the form
+   * on its `invocation.args` so audit trails distinguish targeted repairs
+   * from sweeps (Y-3w §B.1):
+   *   - `"single"` -> `["--task", <taskId>, "--write"]`
+   *   - `"all"`    -> `["--write"]` (= the operator typed no task id, so the
+   *     scan-wide intent is preserved instead of synthesising one per task)
+   * Defaults to `"single"` so direct callers (tests, programmatic uses) keep
+   * the targeted form without an explicit argument.
+   */
+  scope?: "single" | "all";
+  /**
    * Test-only hook (Y-3w §J.4): the test runner uses this to mutate the task
    * file from outside the reconcile flow between the pre-write snapshot and
    * the post-event re-read, simulating a concurrent edit so the
@@ -1011,11 +1023,73 @@ async function computeTaskMdSnapshot(paths: BasouPaths, taskId: string): Promise
   return { mtimeMs: stats.mtimeMs, hash };
 }
 
+// Read task.md and derive its mtime/sha256 snapshot from the SAME raw bytes
+// the TaskDocument was parsed from. Codex review #3 M-3 flagged that the
+// previous "readTaskFile, then computeTaskMdSnapshot" sequence left a window
+// where a concurrent edit between those two reads could leave the caller
+// acting on stale content while the snapshot already reflected the new
+// content — and stage 7 would then clobber the new bytes with the stale
+// TaskDocument. Sharing the raw bytes here means stage 6's re-read is
+// compared against the EXACT bytes that produced this document, so any
+// drift since this read is caught.
+async function readTaskFileWithSnapshot(
+  paths: BasouPaths,
+  taskId: string,
+): Promise<{ doc: TaskDocument; snapshot: TaskMdSnapshot }> {
+  const filePath = join(paths.tasks, `${taskId}.md`);
+  let rawBuffer: Buffer;
+  let stats: Awaited<ReturnType<typeof stat>>;
+  try {
+    [rawBuffer, stats] = await Promise.all([readFile(filePath), stat(filePath)]);
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) {
+      throw new Error("Task file not found", { cause: error });
+    }
+    throw new Error("Failed to read task file", { cause: error });
+  }
+  const raw = rawBuffer.toString("utf8");
+  const hash = createHash("sha256").update(rawBuffer).digest("hex");
+  // Parse logic mirrors readTaskFile so the error contract stays identical
+  // (Invalid task file format / Failed to read task file). Duplicated here to
+  // avoid a second readFile from the public helper.
+  let split: { yamlText: string; body: string };
+  try {
+    split = splitFrontMatter(raw);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "Invalid task file format") {
+      throw error;
+    }
+    throw new Error("Failed to read task file", { cause: error });
+  }
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(split.yamlText);
+  } catch (error: unknown) {
+    throw new Error("Failed to read task file", { cause: error });
+  }
+  const result = TaskSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("Failed to read task file", { cause: result.error });
+  }
+  return {
+    doc: { task: result.data, body: split.body },
+    snapshot: { mtimeMs: stats.mtimeMs, hash },
+  };
+}
+
 type DetectedBrokenRefs = {
   brokenCreatedInSession: PrefixedId<"ses"> | null;
   brokenLinkedSessions: PrefixedId<"ses">[];
 };
 
+// `enumerateSessionDirs` returns directory names only — it does NOT validate
+// the contents of each `session.yaml`. By treating directory existence alone
+// as "reachable", reconcile targets the Y-3u §6.9 milestone-20 failure mode
+// (= session directory removed entirely, dangling id remains in task.md) and
+// keeps the "broken" predicate cheap. A directory that exists but whose
+// session.yaml is missing or schema-invalid is intentionally classified as
+// reachable here; that flavour of corruption is the responsibility of session
+// integrity tools (Step 21 / Y-3y) and is out of scope for v0.2 reconcile.
 async function detectBrokenRefs(
   paths: BasouPaths,
   task: Task["task"],
@@ -1082,12 +1156,14 @@ function buildReconciledDoc(input: {
  * {@link TaskWriteAfterEventError} so the CLI can render a tailored "do not
  * rerun" hint:
  *   1. Boundary parse
- *   2. Read task.md, detect broken refs
+ *   2. Read task.md AND snapshot its mtime/hash from the same raw bytes,
+ *      then detect broken refs (Codex review #3 M-3: sharing the raw bytes
+ *      closes the readTaskFile-then-snapshot race window).
  *   3. Early return when clean (no event fired, no overwrite)
- *   4. Snapshot task.md mtime/hash (concurrent-edit guard)
+ *   4. (no separate stage anymore — snapshot is taken at stage 2)
  *   5. Mint ad-hoc session + `task_reconciled` event (catch
  *      `FailedToFinalizeError` → `phase: "reconcile-finalize"`)
- *   6. Re-snapshot task.md; if changed since stage 4 →
+ *   6. Re-snapshot task.md; if changed since stage 2 →
  *      `phase: "reconcile-concurrent"`
  *   7. Overwrite task.md; failure → `phase: "reconcile"`
  */
@@ -1098,7 +1174,10 @@ export async function reconcileTask(
 ): Promise<ReconcileResult> {
   TaskIdSchema.parse(input.taskId);
 
-  const currentDoc = await readTaskFile(paths, input.taskId);
+  const { doc: currentDoc, snapshot: preSnapshot } = await readTaskFileWithSnapshot(
+    paths,
+    input.taskId,
+  );
   const { brokenCreatedInSession, brokenLinkedSessions } = await detectBrokenRefs(
     paths,
     currentDoc.task.task,
@@ -1124,7 +1203,6 @@ export async function reconcileTask(
     };
   }
 
-  const preSnapshot = await computeTaskMdSnapshot(paths, input.taskId);
   if (input._onPhaseCompleted !== undefined) {
     await input._onPhaseCompleted("phase-4-snapshot");
   }
@@ -1140,7 +1218,10 @@ export async function reconcileTask(
       workingDirectory: input.workingDirectory,
       invocation: {
         command: "basou task reconcile",
-        args: ["--task", input.taskId, "--write"],
+        args:
+          (input.scope ?? "single") === "single"
+            ? ["--task", input.taskId, "--write"]
+            : ["--write"],
       },
       taskId: input.taskId,
       targetEventBuilder: (sessionId, eventId) =>
@@ -1248,6 +1329,7 @@ export async function reconcileAllTasks(
         occurredAt: input.occurredAt(),
         workingDirectory: input.workingDirectory,
         write: input.write,
+        scope: "all",
       });
       if (options.includeClean === true || !r.clean) {
         results.push(r);

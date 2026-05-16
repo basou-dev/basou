@@ -715,6 +715,7 @@ export async function doRunTaskReconcile(
       occurredAt: nowProvider().toISOString(),
       workingDirectory: repositoryRoot,
       write,
+      scope: "single",
     });
     if (json) {
       printReconcileJson({ dryRun: !write, scanned: 1, results: [result], failed: [] });

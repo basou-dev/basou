@@ -1152,6 +1152,46 @@ describe("reconcileTask (Step 19)", () => {
     expect(ev?.id).toBe(r.reconcileSession?.eventId);
   });
 
+  // 11b (Codex review #3 M-1): invocation.args distinguishes single-task from scan
+  it("scope: 'single' records [--task, id, --write] on the ad-hoc invocation", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const r = await reconcileTask(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+      scope: "single",
+    });
+    const newSes = r.reconcileSession?.sessionId as string;
+    const yaml = await readFile(join(paths.sessions, newSes, "session.yaml"), "utf8");
+    expect(yaml).toContain("- --task");
+    expect(yaml).toContain(`- ${TASK_ID_A}`);
+    expect(yaml).toContain("- --write");
+  });
+
+  it("scope: 'all' records [--write] on the ad-hoc invocation (no per-task id)", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, REACHABLE_SES_A);
+    await placeTaskFile(paths, TASK_ID_A, {
+      createdInSession: BROKEN_SES_A,
+      linkedSessions: [REACHABLE_SES_A],
+    });
+    const r = await reconcileAllTasks(paths, makeManifest(), {
+      occurredAt: () => OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    const newSes = r.results[0]?.reconcileSession?.sessionId as string;
+    const yaml = await readFile(join(paths.sessions, newSes, "session.yaml"), "utf8");
+    expect(yaml).toContain("- --write");
+    expect(yaml).not.toContain("--task");
+  });
+
   // 11
   it("reconcile session.yaml.task_id pins to the reconciled task", async () => {
     const paths = await setupPaths();
