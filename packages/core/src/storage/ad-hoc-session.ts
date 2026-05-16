@@ -97,7 +97,7 @@ export type CreateAdHocSessionResult = {
  * carries the full lifecycle trail, so callers can reconcile manually. The
  * thrown {@link FailedToFinalizeError} carries the `sessionId` and
  * `targetEventId` so the CLI layer can warn the user not to re-run the
- * command and duplicate the decision.
+ * command and duplicate the target event.
  *
  * Direct (non-CLI) callers are self-defended by zod boundary parses on
  * `sessionSource` and the initial session record.
