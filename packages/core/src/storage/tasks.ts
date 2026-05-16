@@ -1239,7 +1239,7 @@ export async function reconcileTask(
     if (error instanceof FailedToFinalizeError) {
       throw new TaskWriteAfterEventError({
         taskId: input.taskId,
-        eventId: error.decisionEventId,
+        eventId: error.targetEventId,
         sessionId: error.sessionId,
         phase: "reconcile-finalize",
         cause: error,

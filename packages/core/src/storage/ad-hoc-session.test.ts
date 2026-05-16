@@ -385,7 +385,7 @@ describe("createAdHocSessionWithEvent", () => {
     ).rejects.toThrow(FailedToFinalizeError);
   });
 
-  it("preserves events.jsonl when finalize fails and surfaces sessionId + decisionEventId", async () => {
+  it("preserves events.jsonl when finalize fails and surfaces sessionId + targetEventId", async () => {
     const paths = await setupPaths();
     const occurredAt = "2026-05-11T12:00:00+09:00";
 
@@ -419,7 +419,7 @@ describe("createAdHocSessionWithEvent", () => {
     if (captured !== undefined) {
       expect(captured.message).toBe("Failed to finalize ad-hoc session");
       expect(captured.sessionId.startsWith("ses_")).toBe(true);
-      expect(captured.decisionEventId.startsWith("evt_")).toBe(true);
+      expect(captured.targetEventId.startsWith("evt_")).toBe(true);
 
       const events = await readEventsJsonl(paths, captured.sessionId);
       expect(events).toHaveLength(5);

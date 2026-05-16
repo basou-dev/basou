@@ -24,23 +24,19 @@ import { linkYamlFile, overwriteYamlFile } from "./yaml-store.js";
 /**
  * Thrown when the ad-hoc session was fully written to disk (5 events plus the
  * initial `session.yaml`) but the final `session.yaml` update to status
- * `completed` failed. The caller can read `sessionId` / `decisionEventId` to
+ * `completed` failed. The caller can read `sessionId` / `targetEventId` to
  * emit a retry-duplicate-prevention warning, since the target event itself is
  * already persisted in `events.jsonl`.
- *
- * The class name is `decisionEventId` rather than `targetEventId` because
- * only the `basou decision record` ad-hoc path throws this — `basou session
- * note` uses the attach path which never finalizes a session.
  */
 export class FailedToFinalizeError extends Error {
   readonly sessionId: PrefixedId<"ses">;
-  readonly decisionEventId: PrefixedId<"evt">;
+  readonly targetEventId: PrefixedId<"evt">;
 
-  constructor(sessionId: PrefixedId<"ses">, decisionEventId: PrefixedId<"evt">, cause: unknown) {
+  constructor(sessionId: PrefixedId<"ses">, targetEventId: PrefixedId<"evt">, cause: unknown) {
     super("Failed to finalize ad-hoc session", { cause });
     this.name = "FailedToFinalizeError";
     this.sessionId = sessionId;
-    this.decisionEventId = decisionEventId;
+    this.targetEventId = targetEventId;
   }
 }
 
@@ -99,8 +95,8 @@ export type CreateAdHocSessionResult = {
  * A failure on the final `session.yaml` status update is fatal but the
  * session directory is NOT cleaned up — `events.jsonl` is consistent and
  * carries the full lifecycle trail, so callers can reconcile manually. The
- * thrown {@link FailedToFinalizeError} carries the `sessionId` and target
- * `decisionEventId` so the CLI layer can warn the user not to re-run the
+ * thrown {@link FailedToFinalizeError} carries the `sessionId` and
+ * `targetEventId` so the CLI layer can warn the user not to re-run the
  * command and duplicate the decision.
  *
  * Direct (non-CLI) callers are self-defended by zod boundary parses on

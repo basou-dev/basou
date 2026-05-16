@@ -282,7 +282,7 @@ function renderDecisionError(error: unknown, verbose: boolean): void {
   // not to retry, since the target event is already in events.jsonl.
   if (error instanceof FailedToFinalizeError) {
     const sid = shortSessionId(error.sessionId);
-    console.error(`Recorded ${error.decisionEventId} in session ${sid}; do not rerun`);
+    console.error(`Recorded ${error.targetEventId} in session ${sid}; do not rerun`);
     console.error("Warning: session.yaml status update failed; events.jsonl is consistent");
   }
 
