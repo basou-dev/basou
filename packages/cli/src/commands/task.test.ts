@@ -1212,6 +1212,7 @@ describe("Ambiguous task id surface coverage (Y-3z #60 / B-B4)", () => {
     // The user-supplied prefix is echoed verbatim in the message, but the
     // workspace absolute path must never leak through stderr.
     expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
   });
 
   it("t-amb-3: task show <ambiguous-prefix> renders the same way in text mode (no --json)", async () => {
@@ -1247,6 +1248,7 @@ describe("Ambiguous task id surface coverage (Y-3z #60 / B-B4)", () => {
     expect(stderr).toContain("Ambiguous task id");
     expect(stderr).not.toContain("Caused by:");
     expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
   });
 
   it("t-amb-6: a longer prefix that uniquely matches one task disambiguates successfully (regression)", async () => {
