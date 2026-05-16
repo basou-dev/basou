@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { lstat } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { type SessionSkipReason, loadSessionEntries } from "../storage/sessions.js";
@@ -21,6 +22,13 @@ type DecisionRecord = {
   title: string;
   occurredAt: string;
   sessionId: string;
+  // Y-2 §10.4 / Y-3z #40 rich fields. All optional; populated only when the
+  // decision_recorded event carried the field.
+  rationale: string | null | undefined;
+  alternatives: readonly string[] | undefined;
+  rejectedReason: string | null | undefined;
+  linkedEvents: readonly string[] | undefined;
+  linkedFiles: readonly string[] | undefined;
 };
 
 /**
@@ -36,10 +44,12 @@ type DecisionRecord = {
  * Both fields are monotonic, so the result is a stable cross-session
  * timeline.
  *
- * Y-2 §10.4 lists rationale / alternatives / rejected_reason / linked_events
- * / linked_files in addition to the 4 core fields below; those will be added
- * together with the `basou decision record` CLI (継続宿題 #24) when the
- * schema is extended (Codex#1 Y3q-L1).
+ * Y-2 §10.4 rich fields (rationale / alternatives / rejected_reason /
+ * linked_events / linked_files) are rendered when the event carries them.
+ * `linked_events` and `linked_files` are OPAQUE references: the schema only
+ * validates the SHAPE, not existence — references that cannot be resolved
+ * to a known event id or an existing file on disk are surfaced inline as
+ * `(missing)` so cross-workspace round-trips never reject parse-time.
  */
 export async function renderDecisions(
   input: DecisionsRendererInput,
@@ -59,18 +69,28 @@ export async function renderDecisions(
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
   const decisions: DecisionRecord[] = [];
+  // Workspace-wide event id index, populated during the same scan that
+  // collects decisions, so `linked_events` membership can be resolved
+  // without a second pass over events.jsonl.
+  const knownEventIds = new Set<string>();
   for (const entry of entries) {
     const sessionDir = join(input.paths.sessions, entry.sessionId);
     try {
       for await (const ev of replayEvents(sessionDir, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
+        knownEventIds.add(ev.id);
         if (ev.type === "decision_recorded") {
           decisions.push({
             decisionId: ev.decision_id,
             title: ev.title,
             occurredAt: ev.occurred_at,
             sessionId: entry.sessionId,
+            rationale: ev.rationale,
+            alternatives: ev.alternatives,
+            rejectedReason: ev.rejected_reason,
+            linkedEvents: ev.linked_events,
+            linkedFiles: ev.linked_files,
           });
         }
       }
@@ -85,14 +105,42 @@ export async function renderDecisions(
     return c !== 0 ? c : a.decisionId.localeCompare(b.decisionId);
   });
 
-  const body = formatDecisionsBody({ nowIso: input.nowIso, decisions });
+  // Resolve linked_files relative to the repository root (= parent of
+  // `.basou/`). Existence is checked with `lstat` so symlinks are treated
+  // honestly — a dangling symlink is reported as `(missing)`. The check
+  // runs once per unique path so repeated references share their lookup.
+  const repoRoot = dirname(input.paths.root);
+  const fileExistenceCache = new Map<string, boolean>();
+  async function fileExists(relPath: string): Promise<boolean> {
+    const cached = fileExistenceCache.get(relPath);
+    if (cached !== undefined) return cached;
+    const abs = resolve(repoRoot, relPath);
+    let exists: boolean;
+    try {
+      await lstat(abs);
+      exists = true;
+    } catch {
+      exists = false;
+    }
+    fileExistenceCache.set(relPath, exists);
+    return exists;
+  }
+
+  const body = await formatDecisionsBody({
+    nowIso: input.nowIso,
+    decisions,
+    knownEventIds,
+    fileExists,
+  });
   return { body, decisionCount: decisions.length };
 }
 
-function formatDecisionsBody(args: {
+async function formatDecisionsBody(args: {
   nowIso: string;
   decisions: ReadonlyArray<DecisionRecord>;
-}): string {
+  knownEventIds: ReadonlySet<string>;
+  fileExists: (relPath: string) => Promise<boolean>;
+}): Promise<string> {
   const lines: string[] = [];
   lines.push("# Decisions");
   lines.push("");
@@ -109,6 +157,29 @@ function formatDecisionsBody(args: {
     lines.push(`- 決定日: ${occurredDate}`);
     lines.push(`- session: ${shortDecisionSessionId(d.sessionId)}`);
     lines.push(`- 判断: ${d.title}`);
+    if (typeof d.rationale === "string" && d.rationale.length > 0) {
+      lines.push(`- rationale: ${d.rationale}`);
+    }
+    if (d.alternatives !== undefined && d.alternatives.length > 0) {
+      lines.push(`- alternatives: ${d.alternatives.join(", ")}`);
+    }
+    if (typeof d.rejectedReason === "string" && d.rejectedReason.length > 0) {
+      lines.push(`- rejected_reason: ${d.rejectedReason}`);
+    }
+    if (d.linkedEvents !== undefined && d.linkedEvents.length > 0) {
+      const parts = d.linkedEvents.map((eid) =>
+        args.knownEventIds.has(eid) ? eid : `${eid} (missing)`,
+      );
+      lines.push(`- linked_events: ${parts.join(", ")}`);
+    }
+    if (d.linkedFiles !== undefined && d.linkedFiles.length > 0) {
+      const parts = await Promise.all(
+        d.linkedFiles.map(async (path) =>
+          (await args.fileExists(path)) ? path : `${path} (missing)`,
+        ),
+      );
+      lines.push(`- linked_files: ${parts.join(", ")}`);
+    }
     lines.push("");
   }
   return lines.join("\n");

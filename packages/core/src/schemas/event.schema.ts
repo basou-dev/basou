@@ -117,10 +117,21 @@ const FileChangedEventSchema = BaseEventSchema.extend({
 
 // --- Decision / Task / Note events ---
 
+// Y-2 §10.4 / Y-3z #40 (= B-F1): rich fields are all optional so v0.1 payloads
+// (= core 4 fields only) round-trip unchanged. References are opaque — the
+// schema only validates the SHAPE (EventId format, non-empty / length-capped
+// strings); existence of the referenced event or file is the renderer's
+// concern and surfaces as `(missing)` rather than a parse failure, so
+// import/export round-trips across workspaces never reject on a stale id.
 const DecisionRecordedEventSchema = BaseEventSchema.extend({
   type: z.literal("decision_recorded"),
   decision_id: DecisionIdSchema,
   title: z.string(),
+  rationale: z.string().nullable().optional(),
+  alternatives: z.array(z.string().min(1)).optional(),
+  rejected_reason: z.string().nullable().optional(),
+  linked_events: z.array(EventIdSchema).optional(),
+  linked_files: z.array(z.string().min(1).max(4096)).optional(),
 });
 
 const TaskCreatedEventSchema = BaseEventSchema.extend({

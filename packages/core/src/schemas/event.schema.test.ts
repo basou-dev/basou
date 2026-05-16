@@ -322,3 +322,117 @@ describe("TaskReconciledEventSchema (Step 19)", () => {
     expect(narrowed.task_id).toBe("task_01HXABCDEF1234567890ABCDEF");
   });
 });
+
+// ============================================================================
+// Decision rich fields (Y-3z #40 / B-F1)
+// ============================================================================
+
+describe("DecisionRecordedEventSchema (rich fields)", () => {
+  const BASE_DECISION = {
+    ...BASE,
+    type: "decision_recorded" as const,
+    decision_id: "decision_01HXABCDEF1234567890ABCDEF",
+    title: "Use zod v4",
+  };
+
+  it("accepts a v0.1-shape payload with only the 4 core fields", () => {
+    const result = EventSchema.safeParse(BASE_DECISION);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "decision_recorded") throw new Error("narrowing failed");
+    expect(result.data.rationale).toBeUndefined();
+    expect(result.data.alternatives).toBeUndefined();
+    expect(result.data.rejected_reason).toBeUndefined();
+    expect(result.data.linked_events).toBeUndefined();
+    expect(result.data.linked_files).toBeUndefined();
+  });
+
+  it("accepts every rich field populated", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_DECISION,
+      rationale: "TypeScript と統合できる",
+      alternatives: ["yup", "joi", "手書きバリデーション"],
+      rejected_reason: "yup は TypeScript 統合がやや弱い",
+      linked_events: ["evt_01HXABCDEF1234567890ABCDR1", "evt_01HXABCDEF1234567890ABCDR2"],
+      linked_files: ["src/components/ContactForm.tsx"],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "decision_recorded") throw new Error("narrowing failed");
+    expect(result.data.rationale).toBe("TypeScript と統合できる");
+    expect(result.data.alternatives).toEqual(["yup", "joi", "手書きバリデーション"]);
+    expect(result.data.rejected_reason).toBe("yup は TypeScript 統合がやや弱い");
+    expect(result.data.linked_events).toHaveLength(2);
+    expect(result.data.linked_files).toEqual(["src/components/ContactForm.tsx"]);
+  });
+
+  it("accepts rationale=null explicitly (= operator cleared the field)", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_DECISION,
+      rationale: null,
+      rejected_reason: null,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an alternatives entry that is an empty string", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_DECISION,
+      alternatives: ["yup", ""],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a linked_event with the wrong prefix", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_DECISION,
+      linked_events: ["ses_01HXABCDEF1234567890ABCDR1"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a linked_event id that does not exist in the workspace (opaque reference)", () => {
+    // The schema only validates the SHAPE; the renderer marks unresolvable
+    // ids as `(missing)` at render time. This keeps round-trips across
+    // workspaces safe.
+    const result = EventSchema.safeParse({
+      ...BASE_DECISION,
+      linked_events: ["evt_01HXABCDEF0000000000NEVER1"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a linked_file that is the empty string", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_DECISION,
+      linked_files: ["src/x.ts", ""],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a linked_file path that exceeds the 4096-char cap", () => {
+    const long = `${"a/".repeat(2049)}b.ts`;
+    const result = EventSchema.safeParse({
+      ...BASE_DECISION,
+      linked_files: [long],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("round-trips a JSON serialization with rich fields intact", () => {
+    const original = {
+      ...BASE_DECISION,
+      rationale: "x",
+      alternatives: ["a", "b"],
+      rejected_reason: "y",
+      linked_events: ["evt_01HXABCDEF1234567890ABCDR1"],
+      linked_files: ["src/x.ts", "src/y.ts"],
+    };
+    const json = JSON.stringify(original);
+    const parsed = EventSchema.parse(JSON.parse(json));
+    if (parsed.type !== "decision_recorded") throw new Error("narrowing failed");
+    expect(parsed.rationale).toBe("x");
+    expect(parsed.alternatives).toEqual(["a", "b"]);
+    expect(parsed.linked_events).toEqual(["evt_01HXABCDEF1234567890ABCDR1"]);
+  });
+});

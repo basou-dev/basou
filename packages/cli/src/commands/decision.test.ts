@@ -164,14 +164,16 @@ describe("doRunDecisionRecord (ad-hoc path)", () => {
     expect("rationale_saved" in payload).toBe(false);
   });
 
-  it("dec-3: --rationale echoes 'not saved in v0.1' in the text output", async () => {
+  it("dec-3: --rationale echoes the value in the text output and is persisted (B-F1 #40)", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
     await doRunDecisionRecord({ title: "T", rationale: "R" }, { cwd: repo, ...FIXED_CTX });
     const stdout = joinCalls(out);
-    expect(stdout).toContain("(rationale: R, not saved in v0.1)");
+    expect(stdout).toContain("(rationale: R)");
+    // Legacy "not saved in v0.1" wording is gone now that the schema stores it.
+    expect(stdout).not.toContain("not saved in v0.1");
 
-    // Ensure the rationale never lands in events.jsonl.
+    // The rationale MUST now land in the decision_recorded event payload.
     const sid = await findAdHocSessionId(repo);
     const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
       .split("\n")
@@ -179,10 +181,10 @@ describe("doRunDecisionRecord (ad-hoc path)", () => {
       .map((l) => JSON.parse(l) as Record<string, unknown>);
     const decision = events.find((e) => e.type === "decision_recorded");
     expect(decision).toBeDefined();
-    expect("rationale" in (decision as object)).toBe(false);
+    expect((decision as { rationale?: unknown }).rationale).toBe("R");
   });
 
-  it("dec-4: --rationale --json adds rationale_saved=false to the payload", async () => {
+  it("dec-4: --rationale --json persists the rationale field on the JSON payload (B-F1 #40)", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
     await doRunDecisionRecord(
@@ -191,7 +193,9 @@ describe("doRunDecisionRecord (ad-hoc path)", () => {
     );
     const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
     expect(payload.rationale).toBe("R");
-    expect(payload.rationale_saved).toBe(false);
+    // The legacy `rationale_saved: false` indicator is removed now that the
+    // value is persisted into events.jsonl.
+    expect("rationale_saved" in payload).toBe(false);
   });
 
   it("dec-5: writes session.yaml status=completed with completed_at and exit_code 0", async () => {
@@ -408,6 +412,125 @@ describe("registerDecisionCommand (CLI option converters)", () => {
     ).rejects.toBeDefined();
     const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
     expect(stderr).toContain("Rationale must not be empty");
+  });
+});
+
+describe("doRunDecisionRecord (rich fields, Y-3z #40 / B-F1)", () => {
+  it("dec-rich-1: --alternative twice produces a 2-entry alternatives array on the event payload", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunDecisionRecord(
+      { title: "T", alternative: ["yup", "joi"] },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const sid = await findAdHocSessionId(repo);
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const decision = events.find((e) => e.type === "decision_recorded");
+    expect((decision as { alternatives?: unknown }).alternatives).toEqual(["yup", "joi"]);
+  });
+
+  it("dec-rich-2: --rejected-reason and --linked-event populate the schema fields", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunDecisionRecord(
+      {
+        title: "T",
+        rejectedReason: "yup overkill",
+        linkedEvent: ["evt_01HXABCDEF1234567890ABCDR1", "evt_01HXABCDEF1234567890ABCDR2"],
+      },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const sid = await findAdHocSessionId(repo);
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const decision = events.find((e) => e.type === "decision_recorded") as Record<string, unknown>;
+    expect(decision.rejected_reason).toBe("yup overkill");
+    expect(decision.linked_events).toEqual([
+      "evt_01HXABCDEF1234567890ABCDR1",
+      "evt_01HXABCDEF1234567890ABCDR2",
+    ]);
+  });
+
+  it("dec-rich-3: --linked-file twice persists both paths", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunDecisionRecord(
+      { title: "T", linkedFile: ["src/a.ts", "src/b.ts"] },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const sid = await findAdHocSessionId(repo);
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const decision = events.find((e) => e.type === "decision_recorded") as Record<string, unknown>;
+    expect(decision.linked_files).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  it("dec-rich-4: --linked-event with the wrong prefix is rejected by the converter", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerDecisionCommand(program);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await expect(
+      program.parseAsync([
+        "node",
+        "basou",
+        "decision",
+        "record",
+        "--title",
+        "x",
+        "--linked-event",
+        "ses_01HXABCDEF1234567890ABCDEF",
+      ]),
+    ).rejects.toBeDefined();
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("Linked event id must match evt_<ULID>");
+  });
+
+  it("dec-rich-5: --linked-file '' is rejected by the converter", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerDecisionCommand(program);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await expect(
+      program.parseAsync([
+        "node",
+        "basou",
+        "decision",
+        "record",
+        "--title",
+        "x",
+        "--linked-file",
+        "",
+      ]),
+    ).rejects.toBeDefined();
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("Linked file path must not be empty");
+  });
+
+  it("dec-rich-6: --json --rationale --alternative --rejected-reason exposes all rich fields", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await doRunDecisionRecord(
+      {
+        title: "T",
+        rationale: "fast",
+        alternative: ["yup"],
+        rejectedReason: "overkill",
+        json: true,
+      },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(payload.rationale).toBe("fast");
+    expect(payload.alternatives).toEqual(["yup"]);
+    expect(payload.rejected_reason).toBe("overkill");
   });
 });
 

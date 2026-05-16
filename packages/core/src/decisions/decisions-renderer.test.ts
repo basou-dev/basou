@@ -69,6 +69,13 @@ function decisionLine(
   decisionId: string,
   title: string,
   occurredAt: string,
+  rich?: {
+    rationale?: string | null;
+    alternatives?: string[];
+    rejected_reason?: string | null;
+    linked_events?: string[];
+    linked_files?: string[];
+  },
 ): string {
   return `${JSON.stringify({
     schema_version: "0.1.0",
@@ -79,6 +86,7 @@ function decisionLine(
     source: "human",
     decision_id: decisionId,
     title,
+    ...rich,
   })}\n`;
 }
 
@@ -197,5 +205,130 @@ describe("decisions-renderer", () => {
     const customNow = "2026-12-31T23:59:59.000Z";
     const result = await renderDecisions({ paths, nowIso: customNow });
     expect(result.body).toContain(`> Generated at ${customNow}`);
+  });
+
+  // ------------------------------------------------------------------
+  // Y-3z #40 / B-F1: rich field rendering (rationale / alternatives /
+  // rejected_reason / linked_events / linked_files) plus opaque-reference
+  // (missing) marker handling.
+  // ------------------------------------------------------------------
+
+  it("case rich-1: rationale / alternatives / rejected_reason render on dedicated lines when present", async () => {
+    const paths = await setupPaths();
+    const sid = SES("R01");
+    const did = DEC("R01");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "ER1", did, "zod", "2026-05-08T11:30:00+09:00", {
+        rationale: "TS integration",
+        alternatives: ["yup", "joi"],
+        rejected_reason: "overkill",
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("- rationale: TS integration");
+    expect(result.body).toContain("- alternatives: yup, joi");
+    expect(result.body).toContain("- rejected_reason: overkill");
+  });
+
+  it("case rich-2: an absent / null rationale produces no rationale line", async () => {
+    const paths = await setupPaths();
+    const sid = SES("R02");
+    const did = DEC("R02");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "ER2", did, "zod", "2026-05-08T11:30:00+09:00", {
+        rationale: null,
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).not.toContain("rationale:");
+  });
+
+  it("case rich-3: linked_events that resolve in-workspace render as-is", async () => {
+    const paths = await setupPaths();
+    const sid = SES("R03");
+    const did = DEC("R03");
+    const targetEvt = EVT("ER3");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "ER3", did, "zod", "2026-05-08T11:30:00+09:00", {
+        linked_events: [targetEvt],
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`- linked_events: ${targetEvt}`);
+    expect(result.body).not.toContain("(missing)");
+  });
+
+  it("case rich-4: a linked_event that does NOT exist in the workspace is marked (missing)", async () => {
+    const paths = await setupPaths();
+    const sid = SES("R04");
+    const did = DEC("R04");
+    // ULID body is 26 chars (the EVT helper appends 3 chars to a 23-char
+    // prefix). "STR" never appears as any other event's tail in this test,
+    // so the renderer cannot resolve it.
+    const stranger = EVT("STR");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "ER4", did, "zod", "2026-05-08T11:30:00+09:00", {
+        linked_events: [stranger],
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`- linked_events: ${stranger} (missing)`);
+  });
+
+  it("case rich-5: linked_files mixed present/missing — each path gets its own marker", async () => {
+    const paths = await setupPaths();
+    // Place a real file inside the workspace so `lstat` finds it. The
+    // missing entry never gets created; the renderer flags it inline.
+    const repoRoot = paths.root.slice(0, paths.root.length - "/.basou".length);
+    const realRelPath = "src/present.ts";
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    await writeFile(join(repoRoot, realRelPath), "// present", "utf8");
+
+    const sid = SES("R05");
+    const did = DEC("R05");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "ER5", did, "zod", "2026-05-08T11:30:00+09:00", {
+        linked_files: [realRelPath, "src/missing.ts"],
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`- linked_files: ${realRelPath}, src/missing.ts (missing)`);
+  });
+
+  it("case rich-6: a v0.1-shape payload (no rich fields) renders the legacy 4-line section unchanged", async () => {
+    // Backward-compat check: events without any of the new fields produce
+    // exactly the same lines as before B-F1.
+    const paths = await setupPaths();
+    const sid = SES("R06");
+    const did = DEC("R06");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "ER6", did, "legacy", "2026-05-08T11:30:00+09:00"),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`## ${did}: legacy`);
+    expect(result.body).toContain("- 決定日: 2026-05-08");
+    expect(result.body).toContain("- 判断: legacy");
+    expect(result.body).not.toContain("rationale:");
+    expect(result.body).not.toContain("alternatives:");
+    expect(result.body).not.toContain("linked_events:");
+    expect(result.body).not.toContain("linked_files:");
   });
 });

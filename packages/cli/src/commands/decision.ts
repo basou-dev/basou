@@ -26,6 +26,10 @@ const LABEL_TRUNCATE_HEAD = LABEL_TITLE_MAX - 3;
 export type DecisionRecordOptions = {
   title: string;
   rationale?: string;
+  rejectedReason?: string;
+  alternative?: string[];
+  linkedEvent?: string[];
+  linkedFile?: string[];
   session?: string;
   json?: boolean;
   verbose?: boolean;
@@ -52,10 +56,29 @@ export function registerDecisionCommand(program: Command): void {
     .command("record")
     .description("Record a decision_recorded event")
     .requiredOption("--title <text>", "Decision title", parseTitle)
+    .option("--rationale <text>", "Rationale for the decision", parseRationale)
     .option(
-      "--rationale <text>",
-      "Optional rationale (echoed to stdout summary only; not stored in v0.1)",
-      parseRationale,
+      "--rejected-reason <text>",
+      "Reason rejected alternatives were not chosen",
+      parseRejectedReason,
+    )
+    .option(
+      "--alternative <text>",
+      "Alternative considered (repeatable: --alternative yup --alternative joi)",
+      collectAlternative,
+      [] as string[],
+    )
+    .option(
+      "--linked-event <event_id>",
+      "Related event id (repeatable). Schema only checks the prefix; existence is verified at render time.",
+      collectLinkedEvent,
+      [] as string[],
+    )
+    .option(
+      "--linked-file <path>",
+      "Related file path (repeatable). Path is opaque; existence is verified at render time.",
+      collectLinkedFile,
+      [] as string[],
     )
     .option(
       "--session <session_id>",
@@ -101,6 +124,8 @@ export async function doRunDecisionRecord(
   const occurredAt = now.toISOString();
   const decisionId = prefixedUlid("decision");
 
+  const rich = pickRichFields(options);
+
   if (options.session !== undefined) {
     const sessionId = await resolveSessionId(paths, options.session);
     const sesId = sessionId as PrefixedId<"ses">;
@@ -114,6 +139,7 @@ export async function doRunDecisionRecord(
           decisionId,
           title: options.title,
           occurredAt,
+          rich,
         }),
     });
     printDecisionResult(options, {
@@ -123,7 +149,7 @@ export async function doRunDecisionRecord(
       eventId: result.eventId,
       sessionStatus: result.sessionStatus,
       title: options.title,
-      ...(options.rationale !== undefined ? { rationale: options.rationale } : {}),
+      rich,
     });
     return;
   }
@@ -147,6 +173,7 @@ export async function doRunDecisionRecord(
         decisionId,
         title: options.title,
         occurredAt,
+        rich,
       }),
   });
   printDecisionResult(options, {
@@ -156,8 +183,32 @@ export async function doRunDecisionRecord(
     eventId: adHoc.targetEventId,
     sessionStatus: "completed",
     title: options.title,
-    ...(options.rationale !== undefined ? { rationale: options.rationale } : {}),
+    rich,
   });
+}
+
+type RichDecisionFields = {
+  rationale?: string;
+  rejected_reason?: string;
+  alternatives?: string[];
+  linked_events?: string[];
+  linked_files?: string[];
+};
+
+function pickRichFields(options: DecisionRecordOptions): RichDecisionFields {
+  const out: RichDecisionFields = {};
+  if (options.rationale !== undefined) out.rationale = options.rationale;
+  if (options.rejectedReason !== undefined) out.rejected_reason = options.rejectedReason;
+  if (options.alternative !== undefined && options.alternative.length > 0) {
+    out.alternatives = [...options.alternative];
+  }
+  if (options.linkedEvent !== undefined && options.linkedEvent.length > 0) {
+    out.linked_events = [...options.linkedEvent];
+  }
+  if (options.linkedFile !== undefined && options.linkedFile.length > 0) {
+    out.linked_files = [...options.linkedFile];
+  }
+  return out;
 }
 
 function buildDecisionEvent(input: {
@@ -166,6 +217,7 @@ function buildDecisionEvent(input: {
   decisionId: PrefixedId<"decision">;
   title: string;
   occurredAt: string;
+  rich: RichDecisionFields;
 }): Event {
   return {
     schema_version: "0.1.0",
@@ -176,6 +228,15 @@ function buildDecisionEvent(input: {
     type: "decision_recorded",
     decision_id: input.decisionId,
     title: input.title,
+    ...(input.rich.rationale !== undefined ? { rationale: input.rich.rationale } : {}),
+    ...(input.rich.alternatives !== undefined ? { alternatives: input.rich.alternatives } : {}),
+    ...(input.rich.rejected_reason !== undefined
+      ? { rejected_reason: input.rich.rejected_reason }
+      : {}),
+    ...(input.rich.linked_events !== undefined
+      ? { linked_events: input.rich.linked_events as Array<`evt_${string}`> }
+      : {}),
+    ...(input.rich.linked_files !== undefined ? { linked_files: input.rich.linked_files } : {}),
   };
 }
 
@@ -199,6 +260,39 @@ function parseRationale(raw: string): string {
   return raw;
 }
 
+function parseRejectedReason(raw: string): string {
+  if (raw.length === 0) {
+    throw new InvalidArgumentError("Rejected reason must not be empty");
+  }
+  return raw;
+}
+
+function collectAlternative(value: string, prev: string[]): string[] {
+  if (value.length === 0) {
+    throw new InvalidArgumentError("Alternative must not be empty");
+  }
+  return prev.concat(value);
+}
+
+const EVENT_ID_RE = /^evt_[A-Z0-9]+$/;
+
+function collectLinkedEvent(value: string, prev: string[]): string[] {
+  if (!EVENT_ID_RE.test(value)) {
+    throw new InvalidArgumentError(`Linked event id must match evt_<ULID>, got '${value}'`);
+  }
+  return prev.concat(value);
+}
+
+function collectLinkedFile(value: string, prev: string[]): string[] {
+  if (value.length === 0) {
+    throw new InvalidArgumentError("Linked file path must not be empty");
+  }
+  if (value.length > 4096) {
+    throw new InvalidArgumentError("Linked file path exceeds 4096 chars");
+  }
+  return prev.concat(value);
+}
+
 type DecisionPrintInput = {
   mode: "ad-hoc" | "attached";
   sessionId: string;
@@ -206,14 +300,12 @@ type DecisionPrintInput = {
   eventId: string;
   sessionStatus: SessionStatus;
   title: string;
-  rationale?: string;
+  rich: RichDecisionFields;
 };
 
 function printDecisionResult(options: DecisionRecordOptions, result: DecisionPrintInput): void {
   const sid = shortSessionId(result.sessionId);
   if (options.json === true) {
-    // Y3s-M3: when rationale is present, surface `rationale_saved:false` so
-    // the JSON consumer knows the value was echoed but not persisted.
     const payload: Record<string, unknown> = {
       decision_id: result.decisionId,
       event_id: result.eventId,
@@ -222,15 +314,21 @@ function printDecisionResult(options: DecisionRecordOptions, result: DecisionPri
       mode: result.mode,
       title: result.title,
     };
-    if (result.rationale !== undefined) {
-      payload.rationale = result.rationale;
-      payload.rationale_saved = false;
+    // Y-3z #40 / B-F1: rich fields are now persisted into the
+    // decision_recorded event, so they appear in the JSON summary as-is
+    // (the old `rationale_saved: false` indicator is gone).
+    if (result.rich.rationale !== undefined) payload.rationale = result.rich.rationale;
+    if (result.rich.alternatives !== undefined) payload.alternatives = result.rich.alternatives;
+    if (result.rich.rejected_reason !== undefined) {
+      payload.rejected_reason = result.rich.rejected_reason;
     }
+    if (result.rich.linked_events !== undefined) payload.linked_events = result.rich.linked_events;
+    if (result.rich.linked_files !== undefined) payload.linked_files = result.rich.linked_files;
     console.log(JSON.stringify(payload));
     return;
   }
   const rationaleSuffix =
-    result.rationale !== undefined ? ` (rationale: ${result.rationale}, not saved in v0.1)` : "";
+    result.rich.rationale !== undefined ? ` (rationale: ${result.rich.rationale})` : "";
   if (result.mode === "ad-hoc") {
     console.log(`Recorded ${result.decisionId} in ad-hoc session ${sid}${rationaleSuffix}`);
   } else {
