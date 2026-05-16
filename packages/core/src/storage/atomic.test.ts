@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -135,5 +135,32 @@ describe("atomicReplace", () => {
     expect((captured as { code?: unknown }).code).toBe("ENOENT");
     const entries = await readdir(root);
     expect(entries.length).toBe(0);
+  });
+
+  it("cleans up the tmp file when rename fails (target is a non-empty directory)", async () => {
+    // Pre-create the target as a non-empty directory so `rename(tmp, target)`
+    // fails after the tmp write has already succeeded. This exercises the
+    // post-write / rename-failure cleanup path explicitly, complementing the
+    // missing-dir case above (which fails inside the tmp write itself).
+    const root = getWorkDir();
+    const filePath = join(root, "target");
+    await mkdir(filePath);
+    await writeFile(join(filePath, "child"), "x", "utf8");
+    let captured: unknown;
+    try {
+      await atomicReplace(filePath, "content");
+    } catch (error: unknown) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(Error);
+    // Native rename error: code is platform-dependent (EISDIR / ENOTDIR /
+    // EEXIST) so we only assert that *some* errno code surfaced.
+    expect((captured as { code?: unknown }).code).toBeDefined();
+    // Target untouched — still the original directory.
+    const stat = await lstat(filePath);
+    expect(stat.isDirectory()).toBe(true);
+    // No tmp pollution alongside the target.
+    const entries = await readdir(root);
+    expect(entries.some((name) => name.startsWith("target.tmp."))).toBe(false);
   });
 });
