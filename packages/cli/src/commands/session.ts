@@ -4,7 +4,6 @@ import {
   type Event,
   type ImportSessionOptions,
   type ImportSessionResult,
-  type ReplayWarning,
   type Session,
   SessionImportPayloadSchema,
   SessionSchema,
@@ -24,7 +23,12 @@ import {
   resolveTaskId,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
-import { isVerbose, printSessionListSkip, renderCliError } from "../lib/error-render.js";
+import {
+  isVerbose,
+  printReplayWarning,
+  printSessionListSkip,
+  renderCliError,
+} from "../lib/error-render.js";
 
 const SES_PREFIX = "ses_";
 const TASK_PREFIX = "task_";
@@ -164,7 +168,7 @@ export async function doRunSessionList(
   const records: SessionListRecord[] = (
     await loadSessionEntries(paths, {
       now,
-      onWarning: (w, sid) => makeWarningHandler(sid)(w),
+      onWarning: (w, sid) => printReplayWarning(w, sid),
       onSkip: (sid, reason) => printSessionListSkip(sid, reason),
     })
   ).map((entry) => ({
@@ -256,7 +260,7 @@ export async function doRunSessionShow(
   }
 
   const events = await readAllEvents(sessionDir, {
-    onWarning: makeWarningHandler(sessionId),
+    onWarning: (w) => printReplayWarning(w, sessionId),
   });
 
   if (options.json === true) {
@@ -441,27 +445,6 @@ function eventVariantSummary(ev: Event): string {
     case "adapter_output":
       return `${ev.stream} "${ev.summary}" raw_ref=${ev.raw_ref}`;
   }
-}
-
-function makeWarningHandler(sid: string): (warning: ReplayWarning) => void {
-  const short = shortId(sid);
-  return (warning) => {
-    switch (warning.kind) {
-      case "partial_trailing_line":
-        console.error(`Warning: ignored partial trailing line in ${short}/events.jsonl`);
-        break;
-      case "malformed_json":
-        console.error(
-          `Warning: skipped malformed JSON at line ${warning.line} in ${short}/events.jsonl`,
-        );
-        break;
-      case "schema_violation":
-        console.error(
-          `Warning: skipped invalid event at line ${warning.line} in ${short}/events.jsonl`,
-        );
-        break;
-    }
-  };
 }
 
 function shortId(id: string): string {

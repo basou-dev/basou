@@ -8,7 +8,6 @@ import {
   ApprovalStatusSchema,
   type BasouPaths,
   type Event,
-  type ReplayWarning,
   appendEvent,
   assertBasouRootSafe,
   basouPaths,
@@ -23,7 +22,7 @@ import {
   resolveRepositoryRoot,
 } from "@basou/core";
 import type { Command } from "commander";
-import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { isVerbose, printReplayWarning, renderCliError } from "../lib/error-render.js";
 
 const APPR_PREFIX = "appr_";
 const SHORT_ID_BASE_LEN = 6;
@@ -265,7 +264,7 @@ export async function doRunApprovalShow(
   const sessionDir = join(paths.sessions, loaded.approval.session_id);
   const relatedEvents: Event[] = [];
   for await (const ev of replayEvents(sessionDir, {
-    onWarning: makeWarningHandler(loaded.approval.session_id),
+    onWarning: (w) => printReplayWarning(w, loaded.approval.session_id),
   })) {
     if (isApprovalEvent(ev) && ev.approval_id === id) {
       relatedEvents.push(ev);
@@ -386,7 +385,7 @@ async function doRunApprovalResolve(
   // failed (events.jsonl is the source-of-truth, not the YAML mirror).
   const sessionDir = join(paths.sessions, approval.session_id);
   for await (const ev of replayEvents(sessionDir, {
-    onWarning: makeWarningHandler(approval.session_id),
+    onWarning: (w) => printReplayWarning(w, approval.session_id),
   })) {
     if (
       isApprovalEvent(ev) &&
@@ -660,27 +659,6 @@ function approvalEventSummary(ev: Event): string {
       // Other event types are filtered out before reaching this helper.
       return "";
   }
-}
-
-function makeWarningHandler(sid: string): (warning: ReplayWarning) => void {
-  const short = shortId(sid);
-  return (warning) => {
-    switch (warning.kind) {
-      case "partial_trailing_line":
-        console.error(`Warning: ignored partial trailing line in ${short}/events.jsonl`);
-        break;
-      case "malformed_json":
-        console.error(
-          `Warning: skipped malformed JSON at line ${warning.line} in ${short}/events.jsonl`,
-        );
-        break;
-      case "schema_violation":
-        console.error(
-          `Warning: skipped invalid event at line ${warning.line} in ${short}/events.jsonl`,
-        );
-        break;
-    }
-  };
 }
 
 function shortId(id: string): string {
