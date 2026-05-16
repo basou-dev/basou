@@ -667,6 +667,73 @@ describe("updateTaskStatusWithEvent (transition rules)", () => {
     ).rejects.toThrow("Invalid task status transition: done -> done");
   });
 
+  it("rejects in_progress -> in_progress (self-edge regression)", async () => {
+    // Self-edges in every status row are disallowed so a no-op CLI call
+    // still surfaces an error rather than appending a duplicate event.
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "x",
+      initialStatus: "in_progress",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await expect(
+      updateTaskStatusWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: OCC_AT,
+        taskId: TASK_ID_A,
+        newStatus: "in_progress",
+        workingDirectory: getWorkDir(),
+      }),
+    ).rejects.toThrow("Invalid task status transition: in_progress -> in_progress");
+  });
+
+  it("rejects cancelled -> cancelled (terminal self-edge regression)", async () => {
+    // cancelled is terminal — re-cancelling must reject so the audit
+    // trail does not gain a no-op event.
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "x",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    // planned -> cancelled is now a direct shortcut (B-B3), used here only
+    // to land the task in `cancelled` before we probe the self-edge.
+    await updateTaskStatusWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      newStatus: "cancelled",
+      workingDirectory: getWorkDir(),
+    });
+    await expect(
+      updateTaskStatusWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: OCC_AT,
+        taskId: TASK_ID_A,
+        newStatus: "cancelled",
+        workingDirectory: getWorkDir(),
+      }),
+    ).rejects.toThrow("Invalid task status transition: cancelled -> cancelled");
+  });
+
   it("dedups linked_sessions when the same session changes status twice", async () => {
     const paths = await setupPaths();
     await placeRunningSession(paths, SES_ID_RUNNING);

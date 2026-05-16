@@ -10,10 +10,17 @@ import {
 /**
  * Y-2 task lifecycle states (Step 17 確定事項 4).
  *
- * Allowed transitions enforced by the storage layer:
- *   planned → in_progress → {done | cancelled}
- *   in_progress → cancelled
- * `done` and `cancelled` are terminal.
+ * The storage layer's `ALLOWED_TRANSITIONS` map (= source of truth in
+ * `tasks.ts`) is the authoritative graph; the comment below is a snapshot.
+ * As of Y-3z #59 (B-B3) `planned` now reaches `done` / `cancelled`
+ * directly so tasks completed (or abandoned) outside an explicit
+ * in-progress phase can close in a single CLI call:
+ *
+ *   planned → {in_progress | done | cancelled}
+ *   in_progress → {done | cancelled}
+ *   done / cancelled = terminal
+ *
+ * Self-edges are rejected so the audit trail stays monotonic.
  */
 export const TaskStatusSchema = z.enum(["planned", "in_progress", "done", "cancelled"]);
 /** Inferred runtime type for {@link TaskStatusSchema}. */

@@ -736,9 +736,10 @@ export type UpdateTaskStatusResult = {
  * Fire a `task_status_changed` event and overwrite the task.md front matter
  * with the new status / `updated_at` / appended-but-deduped `linked_sessions`.
  *
- * Validates the transition (§C.2) BEFORE any event write so a rejected
- * transition leaves events.jsonl untouched. The transition table:
- *   planned → in_progress
+ * Validates the transition BEFORE any event write so a rejected transition
+ * leaves events.jsonl untouched. The canonical edge set lives in
+ * {@link ALLOWED_TRANSITIONS}; the current shape (Y-3z #59) is:
+ *   planned → {in_progress, done, cancelled}
  *   in_progress → {done, cancelled}
  *   done / cancelled are terminal (= idempotent same-state is rejected too).
  */
