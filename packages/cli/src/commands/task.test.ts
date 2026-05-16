@@ -1156,3 +1156,111 @@ describe("doRunTaskShow with task_reconciled events (Step 19)", () => {
     expect(reconciled?.removed_created_in_session).toBe(BROKEN_SES_TR);
   });
 });
+
+// ============================================================================
+// Y-3z #60 / B-B4: Ambiguous task id surface coverage
+//
+// Step 21 (Y-3y / import-23) covered `session import --task <prefix>` and
+// Step 22 / B-B3 era left `task reconcile --task <prefix>` covered by
+// `t-rec-9`. The remaining surfaces that funnel user-supplied prefixes
+// through `resolveTaskId` — `task show <prefix>` and
+// `task status <prefix> <new_status>` — only have happy-path / not-found
+// coverage. The cases below lock in the Ambiguous branch (= matched > 1)
+// for both surfaces, plus the pathless contract and the absence of
+// `Caused by:` in verbose mode (Ambiguous errors carry no cause chain).
+// ============================================================================
+
+describe("Ambiguous task id surface coverage (Y-3z #60 / B-B4)", () => {
+  // The two fixture ids share `task_01HXABCDEF1234567890ABCTA`, so any
+  // prefix at or shorter than that length matches both — and any prefix
+  // longer than that disambiguates to one specific task.
+  const AMBIG_PREFIX = "task_01HXABCDEF1234567890ABCTA";
+
+  async function setupTwoAmbiguousTasks(): Promise<string> {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
+    await placeBrokenTask(repo, TASK_ID_TR_A, {
+      createdInSession: REACHABLE_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    await placeBrokenTask(repo, TASK_ID_TR_B, {
+      createdInSession: REACHABLE_SES_TR,
+      linkedSessions: [REACHABLE_SES_TR],
+    });
+    return repo;
+  }
+
+  it("t-amb-1: task show <ambiguous-prefix> exits 1 with the canonical Ambiguous wording", async () => {
+    const repo = await setupTwoAmbiguousTasks();
+    const err = captureStderr();
+    await runTaskShow(AMBIG_PREFIX, { json: true }, { cwd: repo });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain(`Ambiguous task id '${AMBIG_PREFIX}': matched 2 tasks`);
+    expect(stderr).toContain("Disambiguate with a longer prefix.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("t-amb-2: task show <ambiguous-prefix> stays pathless and emits no Caused by even with --verbose", async () => {
+    const repo = await setupTwoAmbiguousTasks();
+    const err = captureStderr();
+    await runTaskShow(AMBIG_PREFIX, { json: true, verbose: true }, { cwd: repo });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("Ambiguous task id");
+    // Ambiguous errors are surfaced with a fixed pathless message and
+    // carry no `cause`, so verbose mode must not append a `Caused by` line.
+    expect(stderr).not.toContain("Caused by:");
+    // The user-supplied prefix is echoed verbatim in the message, but the
+    // workspace absolute path must never leak through stderr.
+    expect(stderr).not.toContain(repo);
+  });
+
+  it("t-amb-3: task show <ambiguous-prefix> renders the same way in text mode (no --json)", async () => {
+    const repo = await setupTwoAmbiguousTasks();
+    const err = captureStderr();
+    await runTaskShow(AMBIG_PREFIX, {}, { cwd: repo });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain(`Ambiguous task id '${AMBIG_PREFIX}'`);
+    expect(stderr).toContain("matched 2 tasks");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("t-amb-4: task status <ambiguous-prefix> <new_status> exits 1 with the canonical Ambiguous wording", async () => {
+    const repo = await setupTwoAmbiguousTasks();
+    const err = captureStderr();
+    await runTaskStatus(AMBIG_PREFIX, "in_progress", {}, { cwd: repo, ...FIXED_CTX });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain(`Ambiguous task id '${AMBIG_PREFIX}': matched 2 tasks`);
+    expect(stderr).toContain("Disambiguate with a longer prefix.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("t-amb-5: task status <ambiguous-prefix> with --verbose stays pathless and emits no Caused by", async () => {
+    const repo = await setupTwoAmbiguousTasks();
+    const err = captureStderr();
+    await runTaskStatus(
+      AMBIG_PREFIX,
+      "in_progress",
+      { verbose: true },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("Ambiguous task id");
+    expect(stderr).not.toContain("Caused by:");
+    expect(stderr).not.toContain(repo);
+  });
+
+  it("t-amb-6: a longer prefix that uniquely matches one task disambiguates successfully (regression)", async () => {
+    // Negative-space probe: extending the prefix past the shared tail
+    // resolves to a single task, so task show succeeds and emits no
+    // Ambiguous diagnostic.
+    const repo = await setupTwoAmbiguousTasks();
+    const out = captureStdout();
+    const err = captureStderr();
+    await runTaskShow(TASK_ID_TR_A, { json: true }, { cwd: repo });
+    const stdout = joinCalls(out);
+    const stderr = joinCalls(err);
+    expect(stderr).not.toContain("Ambiguous task id");
+    const payload = JSON.parse(stdout) as Record<string, unknown>;
+    expect((payload.task as Record<string, unknown>).id).toBe(TASK_ID_TR_A);
+  });
+});
