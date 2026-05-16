@@ -7,6 +7,7 @@ import {
   basouPaths,
   createManifest,
   ensureBasouDirectory,
+  readYamlFile,
   writeManifest,
   writeYamlFile,
 } from "@basou/core";
@@ -564,5 +565,48 @@ describe("doRunDecisionRecord (pathless contract)", () => {
     const err = captureStderr();
     await doRunDecisionRecord({ title: "ok" }, { cwd: repo, ...FIXED_CTX });
     expect(joinCalls(err)).toBe("");
+  });
+});
+
+describe("doRunDecisionRecord (label cap, Y-3z #63 / B-G1)", () => {
+  // The session.yaml `label` field is built by `buildAdHocLabel(title)` =
+  // `Ad-hoc decision: ${truncated}` where `truncated` keeps the first 80
+  // chars of the title and appends `...` for anything longer. The 3 cases
+  // below pin the 80-char cap, the off-by-one boundary at exactly 80 chars,
+  // and the truncation marker for 81+ char titles.
+
+  async function readAdHocSessionLabel(repo: string): Promise<string> {
+    const sid = await findAdHocSessionId(repo);
+    const parsed = (await readYamlFile(join(basouPaths(repo).sessions, sid, "session.yaml"))) as {
+      session: { label: string };
+    };
+    return parsed.session.label;
+  }
+
+  it("dec-cap-1: titles up to 80 chars are recorded verbatim (no truncation marker)", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const eighty = "a".repeat(80);
+    await doRunDecisionRecord({ title: eighty }, { cwd: repo, ...FIXED_CTX });
+    const label = await readAdHocSessionLabel(repo);
+    expect(label).toBe(`Ad-hoc decision: ${eighty}`);
+    expect(label.includes("...")).toBe(false);
+  });
+
+  it("dec-cap-2: titles of 81+ chars are truncated at 77 chars and gain a `...` marker", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const tooLong = "a".repeat(100);
+    await doRunDecisionRecord({ title: tooLong }, { cwd: repo, ...FIXED_CTX });
+    const label = await readAdHocSessionLabel(repo);
+    expect(label).toBe(`Ad-hoc decision: ${"a".repeat(77)}...`);
+  });
+
+  it("dec-cap-3: short titles (< 80 chars) are unaffected by the cap change", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunDecisionRecord({ title: "short title" }, { cwd: repo, ...FIXED_CTX });
+    const label = await readAdHocSessionLabel(repo);
+    expect(label).toBe("Ad-hoc decision: short title");
   });
 });

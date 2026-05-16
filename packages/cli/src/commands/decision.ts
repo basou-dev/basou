@@ -20,7 +20,12 @@ import {
   shortSessionId,
 } from "../lib/error-render.js";
 
-const LABEL_TITLE_MAX = 40;
+// Y-3z #63 / B-G1: raised from the original 40-char cap to 80 chars so a
+// long decision title (= the most common ad-hoc trigger) retains its core
+// information without being truncated. 80 chars still fits comfortably in
+// single-column session list / handoff renderings. fb-driven re-tuning
+// may revisit this value (see Y-3v §4.3).
+const LABEL_TITLE_MAX = 80;
 const LABEL_TRUNCATE_HEAD = LABEL_TITLE_MAX - 3;
 
 export type DecisionRecordOptions = {

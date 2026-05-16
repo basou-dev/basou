@@ -26,7 +26,12 @@ import { overwriteYamlFile } from "./yaml-store.js";
 // ============================================================================
 
 const FRONT_MATTER_DELIM = "---";
-const LABEL_TITLE_MAX = 40;
+// Y-3z #63 / B-G1: raised from the original 40-char cap to 80 chars so
+// long task / reconcile titles retain their core information. The same
+// cap applies to `Ad-hoc task:`, `Ad-hoc task status:`, and
+// `Ad-hoc task reconcile:` labels so the three ad-hoc label generators
+// stay consistent with the decision-side cap (cli/src/commands/decision.ts).
+const LABEL_TITLE_MAX = 80;
 const LABEL_TRUNCATE_HEAD = LABEL_TITLE_MAX - 3;
 
 const DEFAULT_ATTACHABLE_STATUSES: ReadonlySet<AttachableStatus> = new Set<AttachableStatus>([
