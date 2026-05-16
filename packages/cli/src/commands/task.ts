@@ -2,11 +2,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type Event,
-  FailedToFinalizeError,
   type PrefixedId,
   type ReconcileFailure,
   type ReconcileResult,
-  type ReplayWarning,
   type SessionEntry,
   type SessionStatus,
   type TaskDocument,
@@ -32,11 +30,17 @@ import {
   updateTaskStatusWithEvent,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
+import {
+  type ErrorClassifier,
+  failedToFinalizeClassifier,
+  isVerbose,
+  printReplayWarning,
+  printTaskSkip,
+  renderCliError,
+  shortSessionId,
+  shortTaskId,
+} from "../lib/error-render.js";
 
-const SES_PREFIX = "ses_";
-const TASK_PREFIX = "task_";
-const SHORT_ID_LEN = 6;
-const CAUSE_CHAIN_MAX_DEPTH = 4;
 const STATUS_VALUES = TaskStatusSchema.options;
 
 // ============================================================================
@@ -168,7 +172,7 @@ export async function runTaskNew(options: TaskNewOptions, ctx: TaskContext = {})
   try {
     await doRunTaskNew(options, ctx);
   } catch (error: unknown) {
-    renderTaskError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options), classifiers: TASK_CLASSIFIERS });
     process.exitCode = 1;
   }
 }
@@ -299,7 +303,7 @@ export async function runTaskList(options: TaskListOptions, ctx: TaskContext = {
   try {
     await doRunTaskList(options, ctx);
   } catch (error: unknown) {
-    renderTaskError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options), classifiers: TASK_CLASSIFIERS });
     process.exitCode = 1;
   }
 }
@@ -311,7 +315,7 @@ export async function doRunTaskList(options: TaskListOptions, ctx: TaskContext):
   await assertWorkspaceInitialized(paths.root);
 
   const entries = await loadTaskEntries(paths, {
-    onSkip: (id, reason) => printTaskListSkip(id, reason),
+    onSkip: (id, reason) => printTaskSkip(id, reason),
   });
   // loadTaskEntries returns asc by created_at; reverse for newest-first display.
   const ordered = [...entries].sort(
@@ -393,11 +397,6 @@ function printTaskListText(entries: ReadonlyArray<TaskDocument>): void {
   }
 }
 
-function printTaskListSkip(taskId: string, reason: string): void {
-  const sid = shortTaskId(taskId);
-  console.error(`Skipped ${sid}: ${reason}`);
-}
-
 // ============================================================================
 // task show
 // ============================================================================
@@ -410,7 +409,7 @@ export async function runTaskShow(
   try {
     await doRunTaskShow(idInput, options, ctx);
   } catch (error: unknown) {
-    renderTaskError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options), classifiers: TASK_CLASSIFIERS });
     process.exitCode = 1;
   }
 }
@@ -579,7 +578,7 @@ export async function runTaskStatus(
   try {
     await doRunTaskStatus(taskIdInput, newStatusInput, options, ctx);
   } catch (error: unknown) {
-    renderTaskError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options), classifiers: TASK_CLASSIFIERS });
     process.exitCode = 1;
   }
 }
@@ -689,7 +688,7 @@ export async function runTaskReconcile(
   try {
     await doRunTaskReconcile(options, ctx);
   } catch (error: unknown) {
-    renderTaskError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options), classifiers: TASK_CLASSIFIERS });
     process.exitCode = 1;
   }
 }
@@ -914,7 +913,7 @@ function describeBrokenSummary(
 
 function formatSessionIdForDisplay(id: string, verbose: boolean, scope: "all" | "task"): string {
   if (verbose && scope === "task") return id;
-  return `${SES_PREFIX}${shortSessionId(id)}`;
+  return `ses_${shortSessionId(id)}`;
 }
 
 // ============================================================================
@@ -1021,45 +1020,38 @@ async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {
   }
 }
 
-function isVerbose(options: { verbose?: boolean }): boolean {
-  return options.verbose === true || process.env.BASOU_DEBUG === "1";
-}
-
-function renderTaskError(error: unknown, verbose: boolean): void {
-  if (!(error instanceof Error)) {
-    console.error(String(error));
-    return;
-  }
-  console.error(error.message);
-
-  if (error instanceof TaskWriteAfterEventError) {
-    const sid = shortSessionId(error.sessionId);
-    const tid = shortTaskId(error.taskId);
-    const unsafeArtefact = describeUnsafeArtefact(error.phase, tid, sid);
-    console.error(
-      `Recorded ${error.eventId} in session ${sid}; ${unsafeArtefact} is in unsafe state; do not rerun`,
-    );
-    const warning = describeWriteFailureWarning(error.phase);
+/**
+ * Task-specific classifier for {@link TaskWriteAfterEventError}. The
+ * generic renderer ({@link renderCliError}) already prints the underlying
+ * `error.message`; this classifier appends the two task-specific lines
+ * that explain WHICH artefact is in unsafe state and the manual-repair
+ * hint. Combined with {@link failedToFinalizeClassifier} from the shared
+ * lib so both error classes are surfaced consistently across `task new`,
+ * `task status`, `task reconcile`, etc.
+ */
+const taskWriteAfterEventClassifier: ErrorClassifier = {
+  match: (error) => error instanceof TaskWriteAfterEventError,
+  additionalLines: (error) => {
+    const e = error as TaskWriteAfterEventError;
+    const sid = shortSessionId(e.sessionId);
+    const tid = shortTaskId(e.taskId);
+    const unsafeArtefact = describeUnsafeArtefact(e.phase, tid, sid);
+    const warning = describeWriteFailureWarning(e.phase);
     const hint =
-      error.phase === "reconcile-concurrent"
+      e.phase === "reconcile-concurrent"
         ? "re-run `basou task reconcile`"
         : "manual repair required; see `basou task show -v` for event payload";
-    console.error(`Warning: ${warning}; events.jsonl is consistent; ${hint}`);
-  }
+    return [
+      `Recorded ${e.eventId} in session ${sid}; ${unsafeArtefact} is in unsafe state; do not rerun`,
+      `Warning: ${warning}; events.jsonl is consistent; ${hint}`,
+    ];
+  },
+};
 
-  if (error instanceof FailedToFinalizeError) {
-    const sid = shortSessionId(error.sessionId);
-    console.error(`Recorded ${error.targetEventId} in session ${sid}; do not rerun`);
-    console.error("Warning: session.yaml status update failed; events.jsonl is consistent");
-  }
-
-  if (verbose) {
-    const label = extractCauseLabel(error);
-    if (label !== undefined) {
-      console.error(`Caused by: ${label}`);
-    }
-  }
-}
+const TASK_CLASSIFIERS: readonly ErrorClassifier[] = [
+  taskWriteAfterEventClassifier,
+  failedToFinalizeClassifier,
+];
 
 function describeUnsafeArtefact(
   phase: TaskWriteAfterEventError["phase"],
@@ -1097,50 +1089,6 @@ function describeWriteFailureWarning(phase: TaskWriteAfterEventError["phase"]): 
     case "reconcile-concurrent":
       return "task.md was modified concurrently; re-run reconcile to retry";
   }
-}
-
-function extractCauseLabel(error: Error): string | undefined {
-  let current: unknown = error.cause;
-  let constructorName: string | undefined;
-  for (let depth = 0; depth < CAUSE_CHAIN_MAX_DEPTH; depth += 1) {
-    if (!(current instanceof Error)) break;
-    const code = (current as Error & { code?: unknown }).code;
-    if (typeof code === "string") return code;
-    constructorName = current.constructor.name;
-    current = current.cause;
-  }
-  return constructorName;
-}
-
-function printReplayWarning(warning: ReplayWarning, sessionId: string): void {
-  const short = shortSessionId(sessionId);
-  switch (warning.kind) {
-    case "partial_trailing_line":
-      console.error(`Warning: ignored partial trailing line in ${short}/events.jsonl`);
-      break;
-    case "malformed_json":
-      console.error(
-        `Warning: skipped malformed JSON at line ${warning.line} in ${short}/events.jsonl`,
-      );
-      break;
-    case "schema_violation":
-      console.error(
-        `Warning: skipped invalid event at line ${warning.line} in ${short}/events.jsonl`,
-      );
-      break;
-  }
-}
-
-function shortSessionId(id: string): string {
-  if (id.startsWith(SES_PREFIX))
-    return id.slice(SES_PREFIX.length, SES_PREFIX.length + SHORT_ID_LEN);
-  return id.slice(0, SHORT_ID_LEN);
-}
-
-function shortTaskId(id: string): string {
-  if (id.startsWith(TASK_PREFIX))
-    return id.slice(TASK_PREFIX.length, TASK_PREFIX.length + SHORT_ID_LEN);
-  return id.slice(0, SHORT_ID_LEN);
 }
 
 function pad(value: string, width: number): string {

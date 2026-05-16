@@ -22,6 +22,7 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
+import { isVerbose, renderCliError } from "../lib/error-render.js";
 
 type AppendEventFn = typeof coreAppendEvent;
 
@@ -74,7 +75,7 @@ export function registerExecCommand(program: Command): void {
         const exitCode = await runExec(command, args, options);
         process.exit(exitCode);
       } catch (error: unknown) {
-        renderExecError(error, options.verbose === true || process.env.BASOU_DEBUG === "1");
+        renderCliError(error, { verbose: isVerbose(options) });
         process.exit(1);
       }
     });
@@ -462,18 +463,5 @@ async function resolveRepositoryRootForExec(cwd: string): Promise<string> {
       });
     }
     throw error;
-  }
-}
-
-function renderExecError(error: unknown, verbose: boolean): void {
-  if (!(error instanceof Error)) {
-    console.error(String(error));
-    return;
-  }
-  console.error(error.message);
-  if (verbose && error.cause instanceof Error) {
-    const code = (error.cause as Error & { code?: unknown }).code;
-    const label = typeof code === "string" ? code : error.cause.constructor.name;
-    console.error(`Caused by: ${label}`);
   }
 }

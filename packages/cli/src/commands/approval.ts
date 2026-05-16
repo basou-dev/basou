@@ -23,6 +23,7 @@ import {
   resolveRepositoryRoot,
 } from "@basou/core";
 import type { Command } from "commander";
+import { isVerbose, renderCliError } from "../lib/error-render.js";
 
 const APPR_PREFIX = "appr_";
 const SHORT_ID_BASE_LEN = 6;
@@ -132,7 +133,7 @@ export async function runApprovalList(
   try {
     await doRunApprovalList(options, ctx);
   } catch (error: unknown) {
-    renderApprovalError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -237,7 +238,7 @@ export async function runApprovalShow(
   try {
     await doRunApprovalShow(idInput, options, ctx);
   } catch (error: unknown) {
-    renderApprovalError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -301,7 +302,7 @@ export async function runApprovalApprove(
   try {
     await doRunApprovalResolve(idInput, options, ctx, "approve");
   } catch (error: unknown) {
-    renderApprovalError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -314,7 +315,7 @@ export async function runApprovalReject(
   try {
     await doRunApprovalResolve(idInput, options, ctx, "reject");
   } catch (error: unknown) {
-    renderApprovalError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -759,23 +760,6 @@ async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {
       throw new Error("Workspace not initialized. Run 'basou init' first.");
     }
     throw error;
-  }
-}
-
-function isVerbose(options: { verbose?: boolean }): boolean {
-  return options.verbose === true || process.env.BASOU_DEBUG === "1";
-}
-
-function renderApprovalError(error: unknown, verbose: boolean): void {
-  if (!(error instanceof Error)) {
-    console.error(String(error));
-    return;
-  }
-  console.error(error.message);
-  if (verbose && error.cause instanceof Error) {
-    const code = (error.cause as Error & { code?: unknown }).code;
-    const label = typeof code === "string" ? code : error.cause.constructor.name;
-    console.error(`Caused by: ${label}`);
   }
 }
 

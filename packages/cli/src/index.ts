@@ -9,6 +9,7 @@ import { registerRunCommand } from "./commands/run.js";
 import { registerSessionCommand } from "./commands/session.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerTaskCommand } from "./commands/task.js";
+import { isVerbose, renderCliError } from "./lib/error-render.js";
 
 const BASOU_CLI_VERSION = "0.1.0";
 
@@ -33,22 +34,11 @@ registerHandoffCommand(program);
 registerDecisionsCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
-  // Mirror runInit's renderCliError: never print the Error object directly
-  // because util.inspect recursively expands `error.cause`, which can carry
-  // absolute paths from native fs errors. In verbose mode we expose only
-  // the cause's errno-style code (or constructor name as a fallback) — the
-  // cause's `message` is suppressed because Node's native fs errors embed
-  // the failed path in it.
-  const verbose = process.env.BASOU_DEBUG === "1";
-  if (err instanceof Error) {
-    console.error(err.message);
-    if (verbose && err.cause instanceof Error) {
-      const code = (err.cause as unknown as Record<string, unknown>).code;
-      const label = typeof code === "string" && code.length > 0 ? code : err.cause.constructor.name;
-      console.error(`Caused by: ${label}`);
-    }
-  } else {
-    console.error(String(err));
-  }
+  // Top-level safety net: never print the Error object directly because
+  // Node's util.inspect recursively expands `error.cause`, which can carry
+  // absolute paths from native fs errors. Delegates to the shared pathless
+  // renderer; verbose mode is gated on BASOU_DEBUG only since the failure
+  // bypassed the subcommand handler that owns the `-v` flag.
+  renderCliError(err, { verbose: isVerbose(undefined) });
   process.exit(1);
 });

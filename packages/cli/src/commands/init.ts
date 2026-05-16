@@ -8,6 +8,7 @@ import {
   writeManifest,
 } from "@basou/core";
 import type { Command } from "commander";
+import { extractCauseLabel, isVerbose, renderCliError } from "../lib/error-render.js";
 
 export type InitOptions = {
   name?: string;
@@ -56,7 +57,7 @@ export async function runInit(options: InitOptions, ctx: InitContext = {}): Prom
   try {
     await doRunInit(options, ctx);
   } catch (error: unknown) {
-    renderCliError(error, options.verbose === true || process.env.BASOU_DEBUG === "1");
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -100,7 +101,7 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
   try {
     await appendBasouGitignore(repositoryRoot);
   } catch (error: unknown) {
-    renderGitignoreWarning(error, options.verbose === true || process.env.BASOU_DEBUG === "1");
+    renderGitignoreWarning(error, isVerbose(options));
   }
 
   console.log(`Initialized Basou workspace: ${manifest.workspace.id}`);
@@ -108,8 +109,9 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
 
 /**
  * Render a non-fatal warning when `.gitignore` cannot be updated. Mirrors
- * `renderCliError`'s pathless contract — never prints `error.cause.message`
- * because native fs errors embed the absolute path in it.
+ * the pathless contract enforced by {@link renderCliError} — never prints
+ * `error.cause.message` because native fs errors embed the absolute path
+ * in it.
  */
 function renderGitignoreWarning(error: unknown, verbose: boolean): void {
   const baseMessage = error instanceof Error ? error.message : String(error);
@@ -119,37 +121,10 @@ function renderGitignoreWarning(error: unknown, verbose: boolean): void {
   console.error(
     `Warning: Could not update .gitignore (${baseMessage}). Add Basou's default .gitignore block manually.`,
   );
-  if (verbose && error instanceof Error && error.cause instanceof Error) {
-    console.error(`Caused by: ${describeCause(error.cause)}`);
+  if (verbose && error instanceof Error) {
+    const label = extractCauseLabel(error);
+    if (label !== undefined) console.error(`Caused by: ${label}`);
   }
-}
-
-/**
- * Render a CLI error to stderr without leaking absolute paths. Even with
- * `verbose: true` we never print the Error object directly because Node's
- * `util.inspect` recursively expands `error.cause`, and native fs errors
- * embed absolute paths in their messages.
- *
- * In verbose mode we surface only a non-path identifier for the cause —
- * preferring its errno-style `code` (e.g. "ENOENT", "EACCES") and falling
- * back to the constructor name. The cause's `message` is intentionally NOT
- * printed because Node's native fs errors include the failed path in it.
- */
-function renderCliError(error: unknown, verbose: boolean): void {
-  if (error instanceof Error) {
-    console.error(error.message);
-    if (verbose && error.cause instanceof Error) {
-      console.error(`Caused by: ${describeCause(error.cause)}`);
-    }
-  } else {
-    console.error(String(error));
-  }
-}
-
-function describeCause(cause: Error): string {
-  const code = (cause as unknown as Record<string, unknown>).code;
-  if (typeof code === "string" && code.length > 0) return code;
-  return cause.constructor.name;
 }
 
 /**

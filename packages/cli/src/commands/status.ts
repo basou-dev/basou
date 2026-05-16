@@ -10,6 +10,7 @@ import {
   writeStatus,
 } from "@basou/core";
 import type { Command } from "commander";
+import { isVerbose, renderCliError } from "../lib/error-render.js";
 
 export type StatusOptions = {
   json?: boolean;
@@ -46,7 +47,7 @@ export async function runStatus(options: StatusOptions, ctx: StatusContext = {})
   try {
     await doRunStatus(options, ctx);
   } catch (error: unknown) {
-    renderCliError(error, options.verbose === true || process.env.BASOU_DEBUG === "1");
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -85,7 +86,7 @@ export async function doRunStatus(options: StatusOptions, ctx: StatusContext): P
     // ZodError's `message` echoes invalid input values verbatim, which can
     // include path-like strings if a user-edited manifest contains them.
     // Wrap in a fixed pathless message and surface only the cause's
-    // constructor name in verbose mode (via renderCliError + describeCause).
+    // constructor name in verbose mode via the shared renderCliError helper.
     throw new Error("Failed to read workspace manifest", { cause: error });
   }
 
@@ -107,29 +108,6 @@ function renderTextStatus(s: StatusSnapshot): void {
   const total = Object.keys(dp).length;
   const present = Object.values(dp).filter((v) => v === true).length;
   console.log(`Subdirectories present: ${present}/${total}`);
-}
-
-/**
- * Render a CLI error to stderr without leaking absolute paths. Even with
- * `verbose: true` we never print the Error object directly because Node's
- * `util.inspect` recursively expands `error.cause`, and native fs errors
- * embed absolute paths in their messages.
- */
-function renderCliError(error: unknown, verbose: boolean): void {
-  if (error instanceof Error) {
-    console.error(error.message);
-    if (verbose && error.cause instanceof Error) {
-      console.error(`Caused by: ${describeCause(error.cause)}`);
-    }
-  } else {
-    console.error(String(error));
-  }
-}
-
-function describeCause(cause: Error): string {
-  const code = (cause as unknown as Record<string, unknown>).code;
-  if (typeof code === "string" && code.length > 0) return code;
-  return cause.constructor.name;
 }
 
 /**

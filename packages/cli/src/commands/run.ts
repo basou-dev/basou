@@ -26,6 +26,7 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
+import { isVerbose, renderCliError } from "../lib/error-render.js";
 
 type AppendEventFn = typeof coreAppendEvent;
 type ResolveCommandFn = typeof resolveClaudeCodeCommand;
@@ -114,7 +115,7 @@ export function registerRunCommand(program: Command, ctx: RunContext = {}): void
         const exitCode = await runClaudeCode(args, merged, ctx);
         process.exit(exitCode);
       } catch (error: unknown) {
-        renderRunError(error, merged.verbose === true || process.env.BASOU_DEBUG === "1");
+        renderCliError(error, { verbose: isVerbose(merged) });
         process.exit(1);
       }
     });
@@ -584,18 +585,5 @@ async function resolveRepositoryRootForRun(cwd: string): Promise<string> {
       });
     }
     throw error;
-  }
-}
-
-function renderRunError(error: unknown, verbose: boolean): void {
-  if (!(error instanceof Error)) {
-    console.error(String(error));
-    return;
-  }
-  console.error(error.message);
-  if (verbose && error.cause instanceof Error) {
-    const code = (error.cause as Error & { code?: unknown }).code;
-    const label = typeof code === "string" ? code : error.cause.constructor.name;
-    console.error(`Caused by: ${label}`);
   }
 }

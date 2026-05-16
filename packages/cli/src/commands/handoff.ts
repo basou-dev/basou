@@ -1,7 +1,4 @@
 import {
-  type ReplayWarning,
-  type SessionSkipReason,
-  type TaskSkipReason,
   assertBasouRootSafe,
   basouPaths,
   findErrorCode,
@@ -12,9 +9,13 @@ import {
   writeMarkdownFile,
 } from "@basou/core";
 import type { Command } from "commander";
-
-const SES_PREFIX = "ses_";
-const SHORT_ID_LEN = 6;
+import {
+  isVerbose,
+  printReplayWarning,
+  printSessionSkip,
+  printTaskSkip,
+  renderCliError,
+} from "../lib/error-render.js";
 
 export type HandoffGenerateOptions = { verbose?: boolean };
 
@@ -53,7 +54,7 @@ export async function runHandoffGenerate(
   try {
     await doRunHandoffGenerate(options, ctx);
   } catch (error: unknown) {
-    renderHandoffError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -113,73 +114,4 @@ async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {
     }
     throw error;
   }
-}
-
-function isVerbose(options: HandoffGenerateOptions): boolean {
-  return options.verbose === true || process.env.BASOU_DEBUG === "1";
-}
-
-function renderHandoffError(error: unknown, verbose: boolean): void {
-  if (!(error instanceof Error)) {
-    console.error(String(error));
-    return;
-  }
-  console.error(error.message);
-  if (verbose && error.cause instanceof Error) {
-    const code = (error.cause as Error & { code?: unknown }).code;
-    const label = typeof code === "string" ? code : error.cause.constructor.name;
-    console.error(`Caused by: ${label}`);
-  }
-}
-
-function shortId(id: string): string {
-  if (id.startsWith(SES_PREFIX))
-    return id.slice(SES_PREFIX.length, SES_PREFIX.length + SHORT_ID_LEN);
-  return id.slice(0, SHORT_ID_LEN);
-}
-
-function printReplayWarning(warning: ReplayWarning, sid: string): void {
-  const short = shortId(sid);
-  switch (warning.kind) {
-    case "partial_trailing_line":
-      console.error(`Warning: ignored partial trailing line in ${short}/events.jsonl`);
-      break;
-    case "malformed_json":
-      console.error(
-        `Warning: skipped malformed JSON at line ${warning.line} in ${short}/events.jsonl`,
-      );
-      break;
-    case "schema_violation":
-      console.error(
-        `Warning: skipped invalid event at line ${warning.line} in ${short}/events.jsonl`,
-      );
-      break;
-  }
-}
-
-/**
- * Codex#2 Y3q-M4: `events_jsonl_unreadable` is mapped to the same stderr
- * wording that `basou session list` already uses so the user-facing surface
- * stays consistent (= existing session.ts:286 文言). The other reasons fall
- * through to a generic `Skipped <sid>: <reason>` form.
- */
-function printSessionSkip(sid: string, reason: SessionSkipReason): void {
-  const short = shortId(sid);
-  if (reason === "events_jsonl_unreadable") {
-    console.error(`Warning: skipped suspect check for ${short}: events.jsonl unreadable`);
-  } else {
-    console.error(`Skipped ${short}: ${reason}`);
-  }
-}
-
-const TASK_PREFIX = "task_";
-
-function shortTaskId(id: string): string {
-  if (id.startsWith(TASK_PREFIX))
-    return id.slice(TASK_PREFIX.length, TASK_PREFIX.length + SHORT_ID_LEN);
-  return id.slice(0, SHORT_ID_LEN);
-}
-
-function printTaskSkip(taskId: string, reason: TaskSkipReason): void {
-  console.error(`Skipped ${shortTaskId(taskId)}: ${reason}`);
 }

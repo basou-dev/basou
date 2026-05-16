@@ -1,6 +1,5 @@
 import {
   type Event,
-  FailedToFinalizeError,
   type PrefixedId,
   type SessionStatus,
   appendEventToExistingSession,
@@ -14,12 +13,15 @@ import {
   resolveSessionId,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
+import {
+  failedToFinalizeClassifier,
+  isVerbose,
+  renderCliError,
+  shortSessionId,
+} from "../lib/error-render.js";
 
-const SES_PREFIX = "ses_";
-const SHORT_ID_BASE_LEN = 6;
 const LABEL_TITLE_MAX = 40;
 const LABEL_TRUNCATE_HEAD = LABEL_TITLE_MAX - 3;
-const CAUSE_CHAIN_MAX_DEPTH = 4;
 
 export type DecisionRecordOptions = {
   title: string;
@@ -78,7 +80,10 @@ export async function runDecisionRecord(
   try {
     await doRunDecisionRecord(options, ctx);
   } catch (error: unknown) {
-    renderDecisionError(error, isVerbose(options));
+    renderCliError(error, {
+      verbose: isVerbose(options),
+      classifiers: [failedToFinalizeClassifier],
+    });
     process.exitCode = 1;
   }
 }
@@ -235,13 +240,6 @@ function printDecisionResult(options: DecisionRecordOptions, result: DecisionPri
   }
 }
 
-function shortSessionId(id: string): string {
-  if (id.startsWith(SES_PREFIX)) {
-    return id.slice(SES_PREFIX.length, SES_PREFIX.length + SHORT_ID_BASE_LEN);
-  }
-  return id.slice(0, SHORT_ID_BASE_LEN);
-}
-
 async function resolveRepositoryRootForDecision(cwd: string): Promise<string> {
   try {
     return await resolveRepositoryRoot(cwd);
@@ -265,50 +263,4 @@ async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {
     }
     throw error;
   }
-}
-
-function isVerbose(options: { verbose?: boolean }): boolean {
-  return options.verbose === true || process.env.BASOU_DEBUG === "1";
-}
-
-function renderDecisionError(error: unknown, verbose: boolean): void {
-  if (!(error instanceof Error)) {
-    console.error(String(error));
-    return;
-  }
-  console.error(error.message);
-
-  // Y3s-H4: FailedToFinalizeError carries enough context to warn the operator
-  // not to retry, since the target event is already in events.jsonl.
-  if (error instanceof FailedToFinalizeError) {
-    const sid = shortSessionId(error.sessionId);
-    console.error(`Recorded ${error.targetEventId} in session ${sid}; do not rerun`);
-    console.error("Warning: session.yaml status update failed; events.jsonl is consistent");
-  }
-
-  if (verbose) {
-    const label = extractCauseLabel(error);
-    if (label !== undefined) {
-      console.error(`Caused by: ${label}`);
-    }
-  }
-}
-
-/**
- * Walk the cause chain (up to {@link CAUSE_CHAIN_MAX_DEPTH} hops) and return
- * the first errno code found, falling back to the deepest constructor name.
- * Y3s-M1: the value goes into `Caused by: <label>` so verbose output stays
- * pathless even when capability layers wrap native errors.
- */
-function extractCauseLabel(error: Error): string | undefined {
-  let current: unknown = error.cause;
-  let constructorName: string | undefined;
-  for (let depth = 0; depth < CAUSE_CHAIN_MAX_DEPTH; depth += 1) {
-    if (!(current instanceof Error)) break;
-    const code = (current as Error & { code?: unknown }).code;
-    if (typeof code === "string") return code;
-    constructorName = current.constructor.name;
-    current = current.cause;
-  }
-  return constructorName;
 }

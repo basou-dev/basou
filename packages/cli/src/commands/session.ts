@@ -8,7 +8,6 @@ import {
   type Session,
   SessionImportPayloadSchema,
   SessionSchema,
-  type SessionSkipReason,
   type SessionStatus,
   SessionStatusSchema,
   appendEventToExistingSession,
@@ -25,6 +24,7 @@ import {
   resolveTaskId,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
+import { isVerbose, printSessionListSkip, renderCliError } from "../lib/error-render.js";
 
 const SES_PREFIX = "ses_";
 const TASK_PREFIX = "task_";
@@ -138,7 +138,7 @@ export async function runSessionList(
   try {
     await doRunSessionList(options, ctx);
   } catch (error: unknown) {
-    renderSessionError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -225,7 +225,7 @@ export async function runSessionShow(
   try {
     await doRunSessionShow(idInput, options, ctx);
   } catch (error: unknown) {
-    renderSessionError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -265,32 +265,6 @@ export async function doRunSessionShow(
   }
 
   printSessionShowText(session, events, options, repositoryRoot);
-}
-
-/**
- * Y-3o-X1 消化: orchestration (enumerate + read + classifySuspect) は
- * `loadSessionEntries` に集約済。本 CLI は reason ラベルを既存 stderr 文言
- * (= Step 12 の session list で確立) に map することで test divergence を
- * 防ぐ。
- *
- * - `session_yaml_missing` → "Skipped <sid>: session.yaml not found"
- * - `session_yaml_invalid` → "Skipped <sid>: invalid session schema"
- * - `events_jsonl_unreadable` → "Warning: skipped suspect check for <sid>:
- *   events.jsonl unreadable" (Codex#1 Y3q-M2 で確立)
- */
-function printSessionListSkip(sid: string, reason: SessionSkipReason): void {
-  const short = shortId(sid);
-  switch (reason) {
-    case "session_yaml_missing":
-      console.error(`Skipped ${short}: session.yaml not found`);
-      break;
-    case "session_yaml_invalid":
-      console.error(`Skipped ${short}: invalid session schema`);
-      break;
-    case "events_jsonl_unreadable":
-      console.error(`Warning: skipped suspect check for ${short}: events.jsonl unreadable`);
-      break;
-  }
 }
 
 function suspectLabel(reason: string | null): string {
@@ -570,23 +544,6 @@ async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {
   }
 }
 
-function isVerbose(options: { verbose?: boolean }): boolean {
-  return options.verbose === true || process.env.BASOU_DEBUG === "1";
-}
-
-function renderSessionError(error: unknown, verbose: boolean): void {
-  if (!(error instanceof Error)) {
-    console.error(String(error));
-    return;
-  }
-  console.error(error.message);
-  if (verbose && error.cause instanceof Error) {
-    const code = (error.cause as Error & { code?: unknown }).code;
-    const label = typeof code === "string" ? code : error.cause.constructor.name;
-    console.error(`Caused by: ${label}`);
-  }
-}
-
 function parsePositiveInt(raw: string): number {
   const n = Number.parseInt(raw, 10);
   if (!Number.isInteger(n) || n < 1 || raw.trim() !== String(n)) {
@@ -636,7 +593,7 @@ export async function runSessionImport(
   try {
     await doRunSessionImport(options, ctx);
   } catch (error: unknown) {
-    renderSessionError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
@@ -775,7 +732,7 @@ export async function runSessionNote(
   try {
     await doRunSessionNote(sessionIdInput, options, ctx);
   } catch (error: unknown) {
-    renderSessionError(error, isVerbose(options));
+    renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
 }
