@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
-import { link, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
@@ -16,6 +16,7 @@ import {
   appendEventToExistingSession,
   createAdHocSessionWithEvent,
 } from "./ad-hoc-session.js";
+import { atomicCreate, atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { enumerateSessionDirs, readSessionYaml } from "./sessions.js";
 import { overwriteYamlFile } from "./yaml-store.js";
@@ -152,13 +153,10 @@ export type WriteTaskFileMode = "create" | "overwrite";
 /**
  * Atomically write `<paths.tasks>/<taskId>.md`.
  *
- * `mode: "create"` uses `link()` against the target so a pre-existing file
+ * `mode: "create"` delegates to {@link atomicCreate} so a pre-existing file
  * fails fast with EEXIST → `"Task file already exists"`.
- * `mode: "overwrite"` uses `rename()` and silently replaces any prior file.
- *
- * The tmp file lives in the SAME directory as the target so the link/rename
- * cannot fail with EXDEV. On every failure path the tmp file is best-effort
- * unlinked so disk never carries a half-written rename source.
+ * `mode: "overwrite"` delegates to {@link atomicReplace} and silently
+ * replaces any prior file.
  *
  * The serialised body is structured as:
  *
@@ -179,7 +177,6 @@ export async function writeTaskFile(
   const validated = TaskSchema.parse(doc.task);
 
   const filePath = join(paths.tasks, `${taskId}.md`);
-  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
   const yamlText = stringifyYaml(validated);
   const trimmedBody =
     doc.body.length === 0 ? "" : `\n${doc.body.endsWith("\n") ? doc.body : `${doc.body}\n`}`;
@@ -187,27 +184,20 @@ export async function writeTaskFile(
 
   if (options.mode === "create") {
     try {
-      // wx flag on tmp + link to target — both fail with EEXIST on collision,
-      // which the caller surfaces as `"Task file already exists"`.
-      await writeFile(tmpPath, fileBody, { encoding: "utf8", flag: "wx" });
-      await link(tmpPath, filePath);
+      await atomicCreate(filePath, fileBody);
     } catch (error: unknown) {
-      await unlink(tmpPath).catch(() => undefined);
       if (findErrorCode(error, "EEXIST")) {
         throw new Error("Task file already exists", { cause: error });
       }
       throw new Error("Failed to write task file", { cause: error });
     }
-    await unlink(tmpPath).catch(() => undefined);
     return;
   }
 
   // overwrite mode
   try {
-    await writeFile(tmpPath, fileBody, { encoding: "utf8" });
-    await rename(tmpPath, filePath);
+    await atomicReplace(filePath, fileBody);
   } catch (error: unknown) {
-    await unlink(tmpPath).catch(() => undefined);
     throw new Error("Failed to write task file", { cause: error });
   }
 }

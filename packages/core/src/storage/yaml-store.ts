@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { link, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
+import { atomicCreate, atomicReplace } from "./atomic.js";
 
 /**
  * Read a YAML file as `unknown`. Caller MUST validate via a zod schema.
@@ -27,73 +27,52 @@ export async function readYamlFile(filePath: string): Promise<unknown> {
 }
 
 /**
- * Write a value as YAML using a tmp-file + rename for crash-resistant
- * atomicity.
- *
- * The tmp file path is `${filePath}.tmp.${randomUUID()}` — placed in the
- * SAME directory as the target so that `rename` stays within one
- * filesystem and cannot fail with EXDEV. The tmp file is opened with the
- * `wx` flag, so a hypothetical name collision fails fast rather than
- * silently overwriting an unrelated file. On any failure the tmp file is
- * unlinked best-effort and the original error is re-thrown with a pathless
- * message.
+ * Write a value as YAML using {@link atomicReplace} for crash-resistant
+ * atomicity. The shared helper handles the tmp-file + rename sequence,
+ * `wx` collision guard, and best-effort tmp cleanup on failure. This
+ * wrapper adds the YAML serialisation and the pathless error vocabulary.
  */
 export async function writeYamlFile(filePath: string, value: unknown): Promise<void> {
   const body = stringify(value);
-  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
   try {
-    await writeFile(tmpPath, body, { encoding: "utf8", flag: "wx" });
-    await rename(tmpPath, filePath);
+    await atomicReplace(filePath, body);
   } catch (error: unknown) {
-    await unlink(tmpPath).catch(() => undefined);
     throw new Error("Failed to write YAML file", { cause: error });
   }
 }
 
 /**
- * Atomically create a new YAML file. Like {@link writeYamlFile} but uses
- * `link()` instead of `rename()` so that if the target already exists, the
- * call FAILS with EEXIST instead of silently overwriting it.
+ * Atomically create a new YAML file. Like {@link writeYamlFile} but
+ * delegates to {@link atomicCreate} so a pre-existing target fails with
+ * EEXIST instead of being silently overwritten.
  *
  * Used by `basou approval approve` / `reject` to write the resolved-side
  * YAML, so a concurrent resolver cannot overwrite an already-resolved
- * approval. The temp file uses the same `${filePath}.tmp.${randomUUID()}`
- * naming as {@link writeYamlFile} and is unlinked on every code path.
+ * approval.
  *
  * Throws `Error("Failed to write YAML file", { cause })` on failure; if
  * `cause.code === "EEXIST"` the caller can detect a target-exists race.
  */
 export async function linkYamlFile(filePath: string, value: unknown): Promise<void> {
   const body = stringify(value);
-  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
   try {
-    await writeFile(tmpPath, body, { encoding: "utf8", flag: "wx" });
-    await link(tmpPath, filePath);
+    await atomicCreate(filePath, body);
   } catch (error: unknown) {
-    await unlink(tmpPath).catch(() => undefined);
     throw new Error("Failed to write YAML file", { cause: error });
   }
-  // tmp file is now linked twice (tmp + target); unlink the tmp side.
-  await unlink(tmpPath).catch(() => undefined);
 }
 
 /**
  * Overwrite an existing YAML file atomically. Like {@link writeYamlFile}
- * but without the `wx` collision check on the temp file's target — used
- * for files that legitimately need in-place mutation (e.g. session.yaml's
- * status / ended_at lifecycle updates).
- *
- * Uses tmp-file + rename within the same directory for crash-resistant
- * atomicity. Error messages are pathless; the native cause is attached.
+ * but with a distinct pathless message label, used for files that
+ * legitimately need in-place mutation (e.g. session.yaml's status /
+ * ended_at lifecycle updates).
  */
 export async function overwriteYamlFile(filePath: string, value: unknown): Promise<void> {
   const body = stringify(value);
-  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
   try {
-    await writeFile(tmpPath, body, { encoding: "utf8" });
-    await rename(tmpPath, filePath);
+    await atomicReplace(filePath, body);
   } catch (error: unknown) {
-    await unlink(tmpPath).catch(() => undefined);
     throw new Error("Failed to overwrite YAML file", { cause: error });
   }
 }

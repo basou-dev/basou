@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
-import { appendFile, rename, unlink, writeFile } from "node:fs/promises";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
+import { atomicReplace } from "../storage/atomic.js";
 
 /**
  * Append a single Basou event to `<sessionDir>/events.jsonl`.
@@ -39,9 +39,9 @@ export async function appendEvent(sessionDir: string, event: unknown): Promise<v
 }
 
 /**
- * Write `events.jsonl` in one atomic tmp+rename pass, validating every event
- * against {@link EventSchema} before any disk I/O so a payload that fails
- * validation never leaves a partial file behind.
+ * Write `events.jsonl` in one atomic tmp+rename pass via {@link atomicReplace},
+ * validating every event against {@link EventSchema} before any disk I/O so
+ * a payload that fails validation never leaves a partial file behind.
  *
  * The helper is used by the round-trip importer (`session-import.ts`) and the
  * ad-hoc session orchestrator (`ad-hoc-session.ts`) where a small, fixed batch
@@ -51,8 +51,7 @@ export async function appendEvent(sessionDir: string, event: unknown): Promise<v
  * Throws `"Invalid Basou event payload"` (same fixed message as
  * {@link appendEvent}) on validation failure, or `"Failed to write
  * events.jsonl"` on a disk I/O failure. The original native error is attached
- * as `cause`. The tmp file is best-effort unlinked on any failure so disk
- * never carries a half-written rename source.
+ * as `cause`.
  */
 export async function writeEventsBulk(sessionDir: string, events: Event[]): Promise<void> {
   const validated: Event[] = [];
@@ -66,12 +65,9 @@ export async function writeEventsBulk(sessionDir: string, events: Event[]): Prom
   const filePath = join(sessionDir, "events.jsonl");
   const body =
     validated.length > 0 ? `${validated.map((e) => JSON.stringify(e)).join("\n")}\n` : "";
-  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
   try {
-    await writeFile(tmpPath, body, { encoding: "utf8", flag: "wx" });
-    await rename(tmpPath, filePath);
+    await atomicReplace(filePath, body);
   } catch (error: unknown) {
-    await unlink(tmpPath).catch(() => undefined);
     throw new Error("Failed to write events.jsonl", { cause: error });
   }
 }

@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { atomicReplace } from "./atomic.js";
 
 /** Marker line that begins the auto-generated region. */
 export const GENERATED_START = "<!-- BASOU:GENERATED:START -->";
@@ -39,21 +39,17 @@ export async function readMarkdownFile(filePath: string): Promise<string | null>
 }
 
 /**
- * Atomically write a markdown body using the same tmp-file + rename pattern
- * as {@link writeYamlFile}. The tmp path stays in the SAME directory as the
- * target so `rename` cannot fail with EXDEV. The tmp file is opened with
- * `wx` to make a hypothetical name collision fail fast.
+ * Atomically write a markdown body via {@link atomicReplace}. The shared
+ * helper handles the tmp-file + rename sequence, `wx` collision guard, and
+ * best-effort tmp cleanup on failure.
  *
- * On any failure the tmp file is unlinked best-effort and the original
- * error is re-thrown as `Error("Failed to write markdown file", { cause })`.
+ * On any failure the original error is re-thrown as
+ * `Error("Failed to write markdown file", { cause })` (pathless contract).
  */
 export async function writeMarkdownFile(filePath: string, body: string): Promise<void> {
-  const tmpPath = `${filePath}.tmp.${randomUUID()}`;
   try {
-    await writeFile(tmpPath, body, { encoding: "utf8", flag: "wx" });
-    await rename(tmpPath, filePath);
+    await atomicReplace(filePath, body);
   } catch (error: unknown) {
-    await unlink(tmpPath).catch(() => undefined);
     throw new Error("Failed to write markdown file", { cause: error });
   }
 }

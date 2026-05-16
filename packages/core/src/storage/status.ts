@@ -1,11 +1,11 @@
-import { randomUUID } from "node:crypto";
-// Namespace import keeps lstat / readFile / writeFile / rename / unlink
-// behind a single binding for symmetry. The EACCES test exercises this
-// module via real fs + chmod on the parent directory rather than vi.spyOn,
-// because vi.spyOn cannot redefine ESM module exports under vitest 2.x.
+// Namespace import keeps lstat / readFile behind a single binding for the
+// read-side guards. The EACCES test exercises this module via real fs +
+// chmod on the parent directory rather than vi.spyOn, because vi.spyOn
+// cannot redefine ESM module exports under vitest 2.x.
 import * as fsp from "node:fs/promises";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import { StatusSchema, type StatusSnapshot } from "../schemas/status.schema.js";
+import { atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 
 /**
@@ -123,9 +123,7 @@ export async function buildStatusSnapshot(input: {
  *
  * Re-validates via `StatusSchema.parse` before any file I/O, so an invalid
  * snapshot throws synchronously and never overwrites the existing
- * `status.json`. The atomic strategy mirrors `writeYamlFile`: write to a
- * uniquely-named tmp file in the same directory with the `wx` flag, then
- * `rename` over the destination so a crash never leaves a partial JSON.
+ * `status.json`. Delegates the tmp-file + rename pass to {@link atomicReplace}.
  *
  * **Precondition**: callers MUST invoke {@link assertBasouRootSafe} on
  * `paths.root` first to ensure `.basou` is a real directory and not a
@@ -136,12 +134,9 @@ export async function buildStatusSnapshot(input: {
 export async function writeStatus(paths: BasouPaths, snapshot: StatusSnapshot): Promise<void> {
   const validated = StatusSchema.parse(snapshot);
   const body = `${JSON.stringify(validated, null, 2)}\n`;
-  const tmpPath = `${paths.files.status}.tmp.${randomUUID()}`;
   try {
-    await fsp.writeFile(tmpPath, body, { encoding: "utf8", flag: "wx" });
-    await fsp.rename(tmpPath, paths.files.status);
+    await atomicReplace(paths.files.status, body);
   } catch (error: unknown) {
-    await fsp.unlink(tmpPath).catch(() => undefined);
     throw new Error("Failed to write status file", { cause: error });
   }
 }
