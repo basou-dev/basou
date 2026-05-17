@@ -159,6 +159,23 @@ const TaskReconciledEventSchema = BaseEventSchema.extend({
   removed_linked_sessions: z.array(SessionIdSchema).default([]),
 }).strict();
 
+// v0.2: emitted by `basou task refresh-linkage` after the task.md
+// `linked_sessions[]` snapshot is re-derived from `session.yaml.task_id`
+// matches across the workspace. Distinct from `task_reconciled` (= broken
+// ref cleanup) so each event carries a single, focused audit story.
+// `.strict()` for the same reason as TaskReconciledEvent — the event is the
+// authoritative record. The three count/array fields are all optional with
+// sensible defaults so the schema is backward-compatible (= a future caller
+// that omits them parses to an empty refresh, which is also the no-op
+// dry-run record shape).
+const TaskLinkageRefreshedEventSchema = BaseEventSchema.extend({
+  type: z.literal("task_linkage_refreshed"),
+  task_id: TaskIdSchema,
+  added_linked_sessions: z.array(SessionIdSchema).default([]),
+  removed_linked_sessions: z.array(SessionIdSchema).default([]),
+  final_count: z.number().int().nonnegative().optional(),
+}).strict();
+
 const NoteAddedEventSchema = BaseEventSchema.extend({
   type: z.literal("note_added"),
   body: z.string(),
@@ -197,6 +214,7 @@ export const EventSchema = z.discriminatedUnion("type", [
   TaskCreatedEventSchema,
   TaskStatusChangedEventSchema,
   TaskReconciledEventSchema,
+  TaskLinkageRefreshedEventSchema,
   NoteAddedEventSchema,
   AdapterOutputEventSchema,
 ]);
@@ -232,6 +250,8 @@ export type TaskCreatedEvent = z.infer<typeof TaskCreatedEventSchema>;
 export type TaskStatusChangedEvent = z.infer<typeof TaskStatusChangedEventSchema>;
 /** Narrowed runtime type for the `task_reconciled` event variant (.strict()). */
 export type TaskReconciledEvent = z.infer<typeof TaskReconciledEventSchema>;
+/** Narrowed runtime type for the `task_linkage_refreshed` event variant (.strict()). */
+export type TaskLinkageRefreshedEvent = z.infer<typeof TaskLinkageRefreshedEventSchema>;
 /** Narrowed runtime type for the `note_added` event variant. */
 export type NoteAddedEvent = z.infer<typeof NoteAddedEventSchema>;
 /** Narrowed runtime type for the `adapter_output` event variant (.strict()). */

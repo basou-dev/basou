@@ -59,6 +59,7 @@ export {
   readTaskFile,
   reconcileAllTasks,
   reconcileTask,
+  refreshTaskLinkedSessions,
   updateTaskStatusWithEvent,
   writeTaskFile,
 } from "./tasks.js";
@@ -75,6 +76,8 @@ export type {
   ReconcileFailure,
   ReconcileResult,
   ReconcileTaskInput,
+  RefreshLinkageInput,
+  RefreshLinkageResult,
   TaskDocument,
   TaskSkipReason,
   TaskWriteAfterEventPhase,

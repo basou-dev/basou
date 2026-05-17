@@ -5,6 +5,7 @@ import {
   type PrefixedId,
   type ReconcileFailure,
   type ReconcileResult,
+  type RefreshLinkageResult,
   type SessionEntry,
   type SessionStatus,
   type TaskDocument,
@@ -23,6 +24,7 @@ import {
   readTaskFile,
   reconcileAllTasks,
   reconcileTask,
+  refreshTaskLinkedSessions,
   replayEvents,
   resolveRepositoryRoot,
   resolveSessionId,
@@ -87,6 +89,12 @@ export type TaskStatusOptions = {
 
 export type TaskReconcileOptions = {
   task?: string;
+  write?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type TaskRefreshLinkageOptions = {
   write?: boolean;
   json?: boolean;
   verbose?: boolean;
@@ -174,6 +182,18 @@ export function registerTaskCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes and broken session_id values")
     .action(async (options: TaskReconcileOptions) => {
       await runTaskReconcile(options);
+    });
+
+  task
+    .command("refresh-linkage <task_id>")
+    .description(
+      "Re-derive task.md linked_sessions[] from session.yaml.task_id matches across the workspace (forward sync events -> task.md). Dry-run default; use --write to apply.",
+    )
+    .option("--write", "Apply the refresh (default: dry-run)")
+    .option("--json", "Output as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (taskIdInput: string, options: TaskRefreshLinkageOptions) => {
+      await runTaskRefreshLinkage(taskIdInput, options);
     });
 }
 
@@ -489,7 +509,8 @@ export async function doRunTaskShow(
         if (
           (ev.type === "task_created" ||
             ev.type === "task_status_changed" ||
-            ev.type === "task_reconciled") &&
+            ev.type === "task_reconciled" ||
+            ev.type === "task_linkage_refreshed") &&
           ev.task_id === taskId
         ) {
           events.push(ev);
@@ -579,15 +600,21 @@ function printTaskShowText(
 
 function formatTaskEvent(ev: Event): string {
   if (ev.type === "task_created") {
-    return `${ev.occurred_at} [${ev.source}]  task_created         ${ev.title}`;
+    return `${ev.occurred_at} [${ev.source}]  task_created             ${ev.title}`;
   }
   if (ev.type === "task_status_changed") {
-    return `${ev.occurred_at} [${ev.source}]  task_status_changed  ${ev.from} -> ${ev.to}`;
+    return `${ev.occurred_at} [${ev.source}]  task_status_changed      ${ev.from} -> ${ev.to}`;
   }
   if (ev.type === "task_reconciled") {
     const removedCount =
       (ev.removed_created_in_session !== null ? 1 : 0) + ev.removed_linked_sessions.length;
-    return `${ev.occurred_at} [${ev.source}]  task_reconciled      ${removedCount} broken ref${removedCount === 1 ? "" : "s"} (use -v for details)`;
+    return `${ev.occurred_at} [${ev.source}]  task_reconciled          ${removedCount} broken ref${removedCount === 1 ? "" : "s"} (use -v for details)`;
+  }
+  if (ev.type === "task_linkage_refreshed") {
+    const added = ev.added_linked_sessions.length;
+    const removed = ev.removed_linked_sessions.length;
+    const finalPart = ev.final_count !== undefined ? `, final=${ev.final_count}` : "";
+    return `${ev.occurred_at} [${ev.source}]  task_linkage_refreshed   +${added} / -${removed}${finalPart}`;
   }
   return `${ev.occurred_at} [${ev.source}]  ${ev.type}`;
 }
@@ -961,6 +988,104 @@ function formatSessionIdForDisplay(id: string, verbose: boolean, scope: "all" | 
 }
 
 // ============================================================================
+// task refresh-linkage
+// ============================================================================
+
+export async function runTaskRefreshLinkage(
+  taskIdInput: string,
+  options: TaskRefreshLinkageOptions,
+  ctx: TaskContext = {},
+): Promise<void> {
+  try {
+    await doRunTaskRefreshLinkage(taskIdInput, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options), classifiers: TASK_CLASSIFIERS });
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunTaskRefreshLinkage(
+  taskIdInput: string,
+  options: TaskRefreshLinkageOptions,
+  ctx: TaskContext,
+): Promise<void> {
+  if (taskIdInput.trim().length === 0) {
+    throw new Error("Task id is empty");
+  }
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForTask(cwd, "refresh-linkage");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+  const manifest = await readManifest(paths);
+  const taskId = (await resolveTaskId(paths, taskIdInput)) as PrefixedId<"task">;
+  const nowProvider = ctx.nowProvider ?? ((): Date => new Date());
+  const write = options.write === true;
+
+  const result = await refreshTaskLinkedSessions(paths, manifest, {
+    taskId,
+    occurredAt: nowProvider().toISOString(),
+    workingDirectory: repositoryRoot,
+    write,
+  });
+
+  if (options.json === true) {
+    printRefreshLinkageJson(result, { dryRun: !write });
+    return;
+  }
+  printRefreshLinkageText(result, { dryRun: !write });
+}
+
+function printRefreshLinkageJson(result: RefreshLinkageResult, input: { dryRun: boolean }): void {
+  console.log(
+    JSON.stringify(
+      {
+        task_id: result.taskId,
+        clean: result.clean,
+        dry_run: input.dryRun,
+        added_linked_sessions: result.addedLinkedSessions,
+        removed_linked_sessions: result.removedLinkedSessions,
+        final_count: result.finalCount,
+        refresh_session_id: result.refreshSession?.sessionId ?? null,
+        event_id: result.refreshSession?.eventId ?? null,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+function printRefreshLinkageText(result: RefreshLinkageResult, input: { dryRun: boolean }): void {
+  if (result.clean) {
+    console.log(
+      `${result.taskId}: linked_sessions already fresh (${result.finalCount} entr${result.finalCount === 1 ? "y" : "ies"}).`,
+    );
+    return;
+  }
+  const addedCount = result.addedLinkedSessions.length;
+  const removedCount = result.removedLinkedSessions.length;
+  const summaryParts: string[] = [];
+  if (addedCount > 0) {
+    summaryParts.push(`+${addedCount} added`);
+  }
+  if (removedCount > 0) {
+    summaryParts.push(`-${removedCount} removed`);
+  }
+  const summary = summaryParts.join(", ");
+  if (input.dryRun) {
+    console.log(`(dry-run) Would refresh ${result.taskId} linked_sessions: ${summary}.`);
+    console.log("Re-run with --write to apply.");
+    return;
+  }
+  const sid =
+    result.refreshSession !== null
+      ? ` (in session ${shortSessionId(result.refreshSession.sessionId)})`
+      : "";
+  console.log(
+    `Refreshed ${result.taskId} linked_sessions: ${summary}${sid}; final count ${result.finalCount}.`,
+  );
+}
+
+// ============================================================================
 // option converters
 // ============================================================================
 
@@ -1056,7 +1181,7 @@ async function readDescriptionFile(path: string): Promise<string> {
 
 async function resolveRepositoryRootForTask(
   cwd: string,
-  subcmd: "new" | "list" | "show" | "status" | "reconcile",
+  subcmd: "new" | "list" | "show" | "status" | "reconcile" | "refresh-linkage",
 ): Promise<string> {
   try {
     return await resolveRepositoryRoot(cwd);
@@ -1102,7 +1227,9 @@ const taskWriteAfterEventClassifier: ErrorClassifier = {
     const hint =
       e.phase === "reconcile-concurrent"
         ? "re-run `basou task reconcile`"
-        : "manual repair required; see `basou task show -v` for event payload";
+        : e.phase === "linkage-refresh-concurrent"
+          ? "re-run `basou task refresh-linkage`"
+          : "manual repair required; see `basou task show -v` for event payload";
     return [
       `Recorded ${e.eventId} in session ${sid}; ${unsafeArtefact} is in unsafe state; do not rerun`,
       `Warning: ${warning}; events.jsonl is consistent; ${hint}`,
@@ -1133,6 +1260,12 @@ function describeUnsafeArtefact(
       return `reconcile session ${sid} (finalize incomplete)`;
     case "reconcile-concurrent":
       return `task ${tid} file (concurrent modification detected)`;
+    case "linkage-refresh":
+      return `task ${tid} file (linkage refresh incomplete)`;
+    case "linkage-refresh-finalize":
+      return `linkage refresh session ${sid} (finalize incomplete)`;
+    case "linkage-refresh-concurrent":
+      return `task ${tid} file (concurrent modification detected)`;
   }
 }
 
@@ -1150,6 +1283,12 @@ function describeWriteFailureWarning(phase: TaskWriteAfterEventError["phase"]): 
       return "reconcile session finalize failed (session.yaml status update)";
     case "reconcile-concurrent":
       return "task.md was modified concurrently; re-run reconcile to retry";
+    case "linkage-refresh":
+      return "task.md linkage refresh write failed";
+    case "linkage-refresh-finalize":
+      return "linkage refresh session finalize failed (session.yaml status update)";
+    case "linkage-refresh-concurrent":
+      return "task.md was modified concurrently; re-run refresh-linkage to retry";
   }
 }
 

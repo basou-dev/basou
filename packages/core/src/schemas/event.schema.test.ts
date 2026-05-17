@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { EventSchema, type TaskReconciledEvent } from "./event.schema.js";
+import {
+  EventSchema,
+  type TaskLinkageRefreshedEvent,
+  type TaskReconciledEvent,
+} from "./event.schema.js";
 
 const BASE = {
   schema_version: "0.1.0",
@@ -319,6 +323,68 @@ describe("TaskReconciledEventSchema (Step 19)", () => {
     // TypeScript-level check: this assignment compiles only if the discriminated
     // narrowing also exports a usable TaskReconciledEvent type.
     const narrowed: TaskReconciledEvent = parsed;
+    expect(narrowed.task_id).toBe("task_01HXABCDEF1234567890ABCDEF");
+  });
+});
+
+describe("TaskLinkageRefreshedEventSchema", () => {
+  const BASE_REFRESHED = {
+    ...BASE,
+    type: "task_linkage_refreshed" as const,
+    task_id: "task_01HXABCDEF1234567890ABCDEF",
+  };
+
+  it("parses a minimum payload with array defaults applied", () => {
+    const result = EventSchema.safeParse(BASE_REFRESHED);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "task_linkage_refreshed") {
+      throw new Error("expected task_linkage_refreshed narrowing");
+    }
+    expect(result.data.added_linked_sessions).toEqual([]);
+    expect(result.data.removed_linked_sessions).toEqual([]);
+    expect(result.data.final_count).toBeUndefined();
+  });
+
+  it("parses a full payload with added / removed / final_count", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_REFRESHED,
+      added_linked_sessions: ["ses_01HXABCDEF1234567890ABCAD1"],
+      removed_linked_sessions: ["ses_01HXABCDEF1234567890ABCRM1"],
+      final_count: 3,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "task_linkage_refreshed") {
+      throw new Error("expected task_linkage_refreshed narrowing");
+    }
+    expect(result.data.added_linked_sessions).toEqual(["ses_01HXABCDEF1234567890ABCAD1"]);
+    expect(result.data.removed_linked_sessions).toEqual(["ses_01HXABCDEF1234567890ABCRM1"]);
+    expect(result.data.final_count).toBe(3);
+  });
+
+  it("rejects an extra field (`.strict()` contract)", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_REFRESHED,
+      rationale: "operator note",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a negative final_count", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_REFRESHED,
+      final_count: -1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("narrows the EventSchema union to TaskLinkageRefreshedEvent", () => {
+    const parsed = EventSchema.parse(BASE_REFRESHED);
+    if (parsed.type !== "task_linkage_refreshed") {
+      throw new Error("expected task_linkage_refreshed narrowing");
+    }
+    const narrowed: TaskLinkageRefreshedEvent = parsed;
     expect(narrowed.task_id).toBe("task_01HXABCDEF1234567890ABCDEF");
   });
 });

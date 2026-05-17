@@ -440,6 +440,12 @@ function eventVariantSummary(ev: Event): string {
         ev.removed_created_in_session !== null ? "1 created_in_session" : "0 created_in_session";
       return `task ${shortTaskId(ev.task_id)}: cleared ${ev.removed_linked_sessions.length} linked + ${createdPart}`;
     }
+    case "task_linkage_refreshed": {
+      const added = ev.added_linked_sessions.length;
+      const removed = ev.removed_linked_sessions.length;
+      const final = ev.final_count !== undefined ? ` final=${ev.final_count}` : "";
+      return `task ${shortTaskId(ev.task_id)}: +${added} / -${removed} linked${final}`;
+    }
     case "note_added":
       return ev.body.length > 80 ? `${ev.body.slice(0, 77)}...` : ev.body;
     case "adapter_output":

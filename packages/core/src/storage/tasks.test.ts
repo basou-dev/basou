@@ -1845,3 +1845,163 @@ describe("reconcileAllTasks (Step 19)", () => {
     expect(r.failed[0]?.phase).toBe("reconcile-finalize");
   });
 });
+
+// ============================================================================
+// refreshTaskLinkedSessions — forward sync events -> task.md.linked_sessions[]
+// ============================================================================
+
+describe("refreshTaskLinkedSessions", () => {
+  async function placeSessionWithTaskId(
+    paths: BasouPaths,
+    sessionId: PrefixedId<"ses">,
+    taskId: PrefixedId<"task"> | null,
+    status = "running",
+  ): Promise<void> {
+    await placeRunningSession(paths, sessionId, { taskId, status });
+  }
+
+  async function placeTaskWithLinkedSessions(
+    paths: BasouPaths,
+    linked: PrefixedId<"ses">[],
+  ): Promise<void> {
+    const yaml = stringifyYaml({
+      schema_version: "0.1.0",
+      task: {
+        id: TASK_ID_A,
+        title: "linkage fixture",
+        status: "in_progress",
+        created_at: OCC_AT,
+        updated_at: OCC_AT,
+        workspace_id: WS_ID,
+        created_in_session: SES_ID_RUNNING,
+        linked_sessions: linked,
+      },
+    });
+    await writeFile(join(paths.tasks, `${TASK_ID_A}.md`), `---\n${yaml}---\n\nbody\n`);
+  }
+
+  it("reports clean when current snapshot already matches workspace truth", async () => {
+    const { refreshTaskLinkedSessions } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await placeSessionWithTaskId(paths, SES_ID_RUNNING, TASK_ID_A);
+    await placeTaskWithLinkedSessions(paths, [SES_ID_RUNNING]);
+    const result = await refreshTaskLinkedSessions(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: false,
+    });
+    expect(result.clean).toBe(true);
+    expect(result.addedLinkedSessions).toEqual([]);
+    expect(result.removedLinkedSessions).toEqual([]);
+    expect(result.refreshSession).toBeNull();
+    expect(result.finalCount).toBe(1);
+  });
+
+  it("detects an added session in dry-run without firing an event", async () => {
+    const { refreshTaskLinkedSessions } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await placeSessionWithTaskId(paths, SES_ID_RUNNING, TASK_ID_A);
+    // SES_ID_OTHER also links to the task via session.yaml.task_id but is
+    // not yet in task.md's linked_sessions snapshot.
+    await placeSessionWithTaskId(paths, SES_ID_OTHER, TASK_ID_A);
+    await placeTaskWithLinkedSessions(paths, [SES_ID_RUNNING]);
+    const result = await refreshTaskLinkedSessions(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: false,
+    });
+    expect(result.clean).toBe(false);
+    expect(result.addedLinkedSessions).toEqual([SES_ID_OTHER]);
+    expect(result.removedLinkedSessions).toEqual([]);
+    expect(result.refreshSession).toBeNull();
+    // No ad-hoc session minted on dry-run.
+    const sessions = await readdir(paths.sessions);
+    expect(sessions.filter((s) => s.startsWith("ses_"))).toHaveLength(2);
+  });
+
+  it("write mode mints an ad-hoc session, fires task_linkage_refreshed, and updates task.md", async () => {
+    const { refreshTaskLinkedSessions } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await placeSessionWithTaskId(paths, SES_ID_RUNNING, TASK_ID_A);
+    await placeSessionWithTaskId(paths, SES_ID_OTHER, TASK_ID_A);
+    await placeTaskWithLinkedSessions(paths, [SES_ID_RUNNING]);
+    const result = await refreshTaskLinkedSessions(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(result.clean).toBe(false);
+    expect(result.refreshSession).not.toBeNull();
+    const refreshSessionId = result.refreshSession?.sessionId as PrefixedId<"ses">;
+    // task.md now contains both pre-existing linked sessions plus the new
+    // refresh session that wrote the event.
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    const linked = new Set(doc.task.task.linked_sessions);
+    expect(linked.has(SES_ID_RUNNING)).toBe(true);
+    expect(linked.has(SES_ID_OTHER)).toBe(true);
+    expect(linked.has(refreshSessionId)).toBe(true);
+    expect(doc.task.task.updated_at).toBe(OCC_AT);
+    // events.jsonl on the ad-hoc session has the new event in the middle of
+    // the 5-event lifecycle.
+    const events = (await readFile(join(paths.sessions, refreshSessionId, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.map((e) => e.type)).toEqual([
+      "session_started",
+      "session_status_changed",
+      "task_linkage_refreshed",
+      "session_status_changed",
+      "session_ended",
+    ]);
+    expect(events[2]).toMatchObject({
+      type: "task_linkage_refreshed",
+      task_id: TASK_ID_A,
+      added_linked_sessions: [SES_ID_OTHER],
+      removed_linked_sessions: [],
+    });
+  });
+
+  it("removes a snapshot entry whose session.yaml no longer links to the task", async () => {
+    const { refreshTaskLinkedSessions } = await import("./tasks.js");
+    const paths = await setupPaths();
+    // SES_ID_RUNNING is the anchor (always preserved), SES_ID_OTHER is in the
+    // snapshot but its session.yaml does NOT link to TASK_ID_A.
+    await placeSessionWithTaskId(paths, SES_ID_RUNNING, TASK_ID_A);
+    await placeSessionWithTaskId(paths, SES_ID_OTHER, TASK_ID_B);
+    await placeTaskWithLinkedSessions(paths, [SES_ID_RUNNING, SES_ID_OTHER]);
+    const result = await refreshTaskLinkedSessions(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: true,
+    });
+    expect(result.clean).toBe(false);
+    expect(result.removedLinkedSessions).toEqual([SES_ID_OTHER]);
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.linked_sessions).not.toContain(SES_ID_OTHER);
+    // Anchor is always preserved.
+    expect(doc.task.task.linked_sessions).toContain(SES_ID_RUNNING);
+  });
+
+  it("preserves the anchor (created_in_session) even when its session.yaml no longer links to the task", async () => {
+    const { refreshTaskLinkedSessions } = await import("./tasks.js");
+    const paths = await setupPaths();
+    // The anchor session has task_id cleared — that drift is reconcile's
+    // concern, not refresh-linkage's. refresh-linkage must still preserve the
+    // anchor in linked_sessions to honor the Y-2 §2.1 invariant.
+    await placeSessionWithTaskId(paths, SES_ID_RUNNING, null);
+    await placeTaskWithLinkedSessions(paths, [SES_ID_RUNNING]);
+    const result = await refreshTaskLinkedSessions(paths, makeManifest(), {
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+      write: false,
+    });
+    expect(result.clean).toBe(true);
+    expect(result.finalCount).toBe(1);
+  });
+});

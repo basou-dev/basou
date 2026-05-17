@@ -367,7 +367,14 @@ export type TaskWriteAfterEventPhase =
   | "link-session"
   | "reconcile"
   | "reconcile-finalize"
-  | "reconcile-concurrent";
+  | "reconcile-concurrent"
+  // Mirror the reconcile-failure phases for the `refreshTaskLinkedSessions`
+  // path. Failure semantics are identical (= ad-hoc session committed, then
+  // task.md write / concurrency check failed), but the operator-facing
+  // recovery hint must point at `basou task refresh-linkage`, not reconcile.
+  | "linkage-refresh"
+  | "linkage-refresh-finalize"
+  | "linkage-refresh-concurrent";
 
 export class TaskWriteAfterEventError extends Error {
   readonly taskId: PrefixedId<"task">;
@@ -495,6 +502,16 @@ function buildAdHocReconcileLabel(title: string): string {
   return `Ad-hoc task reconcile: ${truncated}`;
 }
 
+// Separate label generator for `basou task refresh-linkage` so the operator
+// can distinguish refresh runs from reconcile runs at a glance in session
+// listings — both flow through `createAdHocSessionWithEvent` but answer
+// different questions (broken-ref repair vs. snapshot-vs-events sync).
+function buildAdHocRefreshLinkageLabel(title: string): string {
+  const truncated =
+    title.length > LABEL_TITLE_MAX ? `${title.slice(0, LABEL_TRUNCATE_HEAD)}...` : title;
+  return `Ad-hoc task refresh-linkage: ${truncated}`;
+}
+
 function buildTaskReconciledEvent(input: {
   eventId: PrefixedId<"evt">;
   sessionId: PrefixedId<"ses">;
@@ -515,6 +532,29 @@ function buildTaskReconciledEvent(input: {
     removed_created_in_session: input.removedCreatedInSession,
     created_in_session_replacement: input.createdInSessionReplacement,
     removed_linked_sessions: input.removedLinkedSessions,
+  };
+}
+
+function buildTaskLinkageRefreshedEvent(input: {
+  eventId: PrefixedId<"evt">;
+  sessionId: PrefixedId<"ses">;
+  taskId: PrefixedId<"task">;
+  addedLinkedSessions: PrefixedId<"ses">[];
+  removedLinkedSessions: PrefixedId<"ses">[];
+  finalCount: number;
+  occurredAt: string;
+}): Event {
+  return {
+    schema_version: "0.1.0",
+    id: input.eventId,
+    session_id: input.sessionId,
+    occurred_at: input.occurredAt,
+    source: "local-cli",
+    type: "task_linkage_refreshed",
+    task_id: input.taskId,
+    added_linked_sessions: input.addedLinkedSessions,
+    removed_linked_sessions: input.removedLinkedSessions,
+    final_count: input.finalCount,
   };
 }
 
@@ -1479,4 +1519,270 @@ export async function reconcileAllTasks(
   }
 
   return { results, failed, scanned };
+}
+
+// ============================================================================
+// Linkage refresh: events.jsonl → task.md `linked_sessions[]` forward sync
+// ============================================================================
+
+/**
+ * Single-task linkage refresh result. In `write: false` mode this is a pure
+ * dry-run report (no event, no task.md change); `addedLinkedSessions` and
+ * `removedLinkedSessions` describe what would change. In `write: true` mode
+ * the same fields describe what did change and `refreshSession` carries the
+ * ad-hoc session + `task_linkage_refreshed` event ids that were minted.
+ *
+ * `clean === true` means the existing `task.md.linked_sessions[]` already
+ * matches the union of `session.yaml.task_id` matches plus the anchor
+ * (`created_in_session`) — no event fired, no overwrite.
+ */
+export type RefreshLinkageResult = {
+  taskId: PrefixedId<"task">;
+  clean: boolean;
+  addedLinkedSessions: PrefixedId<"ses">[];
+  removedLinkedSessions: PrefixedId<"ses">[];
+  /** Number of entries in `linked_sessions[]` after the refresh would run. */
+  finalCount: number;
+  refreshSession: {
+    sessionId: PrefixedId<"ses">;
+    eventId: PrefixedId<"evt">;
+  } | null;
+};
+
+export type RefreshLinkageInput = {
+  taskId: PrefixedId<"task">;
+  occurredAt: string;
+  workingDirectory: string;
+  write: boolean;
+};
+
+type DetectedLinkageDelta = {
+  addedLinkedSessions: PrefixedId<"ses">[];
+  removedLinkedSessions: PrefixedId<"ses">[];
+  finalLinkedSessions: PrefixedId<"ses">[];
+};
+
+// Re-derive `linked_sessions[]` from the source of truth: every
+// `session.yaml` whose `task_id` points at this task, plus the
+// `created_in_session` anchor (which is preserved even if its session.yaml
+// no longer carries the task_id — that flavour of drift is the
+// `task reconcile` path's concern, not this one).
+//
+// `enumerateSessionDirs` already filters to dir-named-`ses_<ulid>` entries.
+// Sessions whose `session.yaml` is missing or schema-invalid are silently
+// skipped so a single broken session does not abort the workspace-wide
+// refresh; surfacing those is the responsibility of the session-integrity
+// tooling.
+async function detectLinkageDelta(
+  paths: BasouPaths,
+  task: Task["task"],
+): Promise<DetectedLinkageDelta> {
+  const sessionIds = await enumerateSessionDirs(paths);
+  const reachable = new Set<string>();
+  for (const sid of sessionIds) {
+    try {
+      const doc = await readSessionYaml(paths, sid);
+      if (doc.session.task_id === task.id) {
+        reachable.add(sid);
+      }
+    } catch {
+      // Missing / malformed session.yaml — skip; session integrity is out of
+      // scope here (Step 21 / Y-3y owns that surface).
+    }
+  }
+  // The anchor invariant (Y-2 §2.1) requires `linked_sessions[]` to always
+  // contain `created_in_session`. Preserve it here even if the session.yaml
+  // was hand-edited to clear task_id (rare; handled by reconcile).
+  const finalSet = new Set<string>(reachable);
+  finalSet.add(task.created_in_session);
+
+  const currentSet = new Set<string>(task.linked_sessions);
+  const addedLinkedSessions: PrefixedId<"ses">[] = [];
+  const removedLinkedSessions: PrefixedId<"ses">[] = [];
+  for (const sid of finalSet) {
+    if (!currentSet.has(sid)) addedLinkedSessions.push(sid as PrefixedId<"ses">);
+  }
+  for (const sid of currentSet) {
+    if (!finalSet.has(sid)) removedLinkedSessions.push(sid as PrefixedId<"ses">);
+  }
+  // Stable ordering: ULID-ascending so two runs against the same workspace
+  // produce identical event payloads (matters for replay determinism).
+  addedLinkedSessions.sort();
+  removedLinkedSessions.sort();
+  const finalLinkedSessions = [...finalSet].sort() as PrefixedId<"ses">[];
+  return { addedLinkedSessions, removedLinkedSessions, finalLinkedSessions };
+}
+
+function buildRefreshedDoc(input: {
+  currentDoc: TaskDocument;
+  finalLinkedSessions: ReadonlyArray<PrefixedId<"ses">>;
+  refreshSessionId: PrefixedId<"ses">;
+  occurredAt: string;
+}): TaskDocument {
+  // Include the refresh session itself in `linked_sessions` (it is the
+  // session that wrote the `task_linkage_refreshed` event, so it is by
+  // definition linked). Deduplicate via a Set in case the ad-hoc session id
+  // somehow already shows up in finalLinkedSessions (defensive).
+  const merged = new Set<string>(input.finalLinkedSessions);
+  merged.add(input.refreshSessionId);
+  const linked = [...merged].sort() as PrefixedId<"ses">[];
+  const next: Task = {
+    ...input.currentDoc.task,
+    task: {
+      ...input.currentDoc.task.task,
+      updated_at: input.occurredAt,
+      linked_sessions: linked,
+    },
+  };
+  return { task: next, body: input.currentDoc.body };
+}
+
+/**
+ * Refresh `task.md.linked_sessions[]` so it matches the union of
+ * `session.yaml.task_id` references in the workspace plus the
+ * `created_in_session` anchor. In `write: false` this is a pure read-only
+ * report; in `write: true` the diff is recorded as a
+ * `task_linkage_refreshed` event inside a fresh ad-hoc session and the
+ * task.md is overwritten with the new snapshot.
+ *
+ * Stages mirror `reconcileTask` so the operator gets the same
+ * "do-not-rerun" hint shape on partial failure:
+ *   1. Boundary parse
+ *   2. Read task.md AND snapshot its mtime/hash from the same raw bytes
+ *   3. Detect linkage delta (= scan workspace session.yaml)
+ *   4. Early return when clean
+ *   5. Mint ad-hoc session + `task_linkage_refreshed` event (catch
+ *      `FailedToFinalizeError` → `phase: "linkage-refresh-finalize"`)
+ *   6. Re-snapshot task.md; if changed since stage 2 →
+ *      `phase: "linkage-refresh-concurrent"`
+ *   7. Overwrite task.md; failure → `phase: "linkage-refresh"`
+ *
+ * The refresh event is distinct from `task_reconciled` (= broken-ref
+ * cleanup, `.strict()` with broken-ref-specific fields) so each event
+ * carries a single, focused audit story (Y-3z H-2: don't reuse
+ * `task_reconciled` for snapshot sync).
+ */
+export async function refreshTaskLinkedSessions(
+  paths: BasouPaths,
+  manifest: Manifest,
+  input: RefreshLinkageInput,
+): Promise<RefreshLinkageResult> {
+  TaskIdSchema.parse(input.taskId);
+
+  const { doc: currentDoc, snapshot: preSnapshot } = await readTaskFileWithSnapshot(
+    paths,
+    input.taskId,
+  );
+  const { addedLinkedSessions, removedLinkedSessions, finalLinkedSessions } =
+    await detectLinkageDelta(paths, currentDoc.task.task);
+
+  if (addedLinkedSessions.length === 0 && removedLinkedSessions.length === 0) {
+    return {
+      taskId: input.taskId,
+      clean: true,
+      addedLinkedSessions: [],
+      removedLinkedSessions: [],
+      finalCount: finalLinkedSessions.length,
+      refreshSession: null,
+    };
+  }
+
+  if (!input.write) {
+    return {
+      taskId: input.taskId,
+      clean: false,
+      addedLinkedSessions,
+      removedLinkedSessions,
+      finalCount: finalLinkedSessions.length,
+      refreshSession: null,
+    };
+  }
+
+  // The refresh session is itself a new linked entry; account for it on
+  // the event payload's `final_count` so the audit number matches the
+  // post-write task.md. This is a +1 over the workspace-scan count.
+  const finalCountWithRefreshSession = finalLinkedSessions.length + 1;
+
+  let adHoc: Awaited<ReturnType<typeof createAdHocSessionWithEvent>>;
+  try {
+    adHoc = await createAdHocSessionWithEvent({
+      paths,
+      manifest,
+      label: buildAdHocRefreshLinkageLabel(currentDoc.task.task.title),
+      occurredAt: input.occurredAt,
+      sessionSource: "human",
+      workingDirectory: input.workingDirectory,
+      invocation: {
+        command: "basou task refresh-linkage",
+        args: [input.taskId, "--write"],
+      },
+      taskId: input.taskId,
+      targetEventBuilders: [
+        (sessionId, eventId) =>
+          buildTaskLinkageRefreshedEvent({
+            eventId,
+            sessionId,
+            taskId: input.taskId,
+            addedLinkedSessions,
+            removedLinkedSessions,
+            finalCount: finalCountWithRefreshSession,
+            occurredAt: input.occurredAt,
+          }),
+      ],
+    });
+  } catch (error: unknown) {
+    if (error instanceof FailedToFinalizeError) {
+      throw new TaskWriteAfterEventError({
+        taskId: input.taskId,
+        eventId: error.targetEventIds[0] as PrefixedId<"evt">,
+        sessionId: error.sessionId,
+        phase: "linkage-refresh-finalize",
+        cause: error,
+      });
+    }
+    throw error;
+  }
+
+  const anchorEventId = adHoc.targetEventIds[0] as PrefixedId<"evt">;
+
+  const postSnapshot = await computeTaskMdSnapshot(paths, input.taskId);
+  if (postSnapshot.mtimeMs !== preSnapshot.mtimeMs || postSnapshot.hash !== preSnapshot.hash) {
+    throw new TaskWriteAfterEventError({
+      taskId: input.taskId,
+      eventId: anchorEventId,
+      sessionId: adHoc.sessionId,
+      phase: "linkage-refresh-concurrent",
+      cause: new Error("task.md changed during linkage refresh"),
+    });
+  }
+
+  const refreshed = buildRefreshedDoc({
+    currentDoc,
+    finalLinkedSessions,
+    refreshSessionId: adHoc.sessionId,
+    occurredAt: input.occurredAt,
+  });
+  try {
+    await writeTaskFile(paths, input.taskId, refreshed, { mode: "overwrite" });
+  } catch (error: unknown) {
+    throw new TaskWriteAfterEventError({
+      taskId: input.taskId,
+      eventId: anchorEventId,
+      sessionId: adHoc.sessionId,
+      phase: "linkage-refresh",
+      cause: error,
+    });
+  }
+
+  return {
+    taskId: input.taskId,
+    clean: false,
+    addedLinkedSessions,
+    removedLinkedSessions,
+    finalCount: finalCountWithRefreshSession,
+    refreshSession: {
+      sessionId: adHoc.sessionId,
+      eventId: anchorEventId,
+    },
+  };
 }

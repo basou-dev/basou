@@ -155,7 +155,8 @@ async function assertImportedTaskReferencesAreReachable(
     if (
       ev.type === "task_created" ||
       ev.type === "task_status_changed" ||
-      ev.type === "task_reconciled"
+      ev.type === "task_reconciled" ||
+      ev.type === "task_linkage_refreshed"
     ) {
       taskIdsToCheck.add(ev.task_id);
     }

@@ -26,12 +26,14 @@ import {
   doRunTaskList,
   doRunTaskNew,
   doRunTaskReconcile,
+  doRunTaskRefreshLinkage,
   doRunTaskShow,
   doRunTaskStatus,
   registerTaskCommand,
   runTaskList,
   runTaskNew,
   runTaskReconcile,
+  runTaskRefreshLinkage,
   runTaskShow,
   runTaskStatus,
 } from "./task.js";
@@ -1428,5 +1430,120 @@ describe("Ambiguous task id surface coverage (Y-3z #60 / B-B4)", () => {
     expect(stderr).not.toContain("Ambiguous task id");
     const payload = JSON.parse(stdout) as Record<string, unknown>;
     expect((payload.task as Record<string, unknown>).id).toBe(TASK_ID_TR_A);
+  });
+});
+
+// ============================================================================
+// task refresh-linkage
+// ============================================================================
+
+describe("doRunTaskRefreshLinkage", () => {
+  // The fixtures here mirror the reconcile-side helpers but place
+  // session.yaml with explicit task_id pointers so the refresh path has
+  // something to scan.
+  const REFRESH_TASK_ID = "task_01HXABCDEF1234567890ABCTAK";
+  const REFRESH_SES_A = "ses_01HXREACHABE12345678REKC11";
+  const REFRESH_SES_B = "ses_01HXREACHABE12345678REKC22";
+
+  async function placeTaskMd(
+    repo: string,
+    taskId: string,
+    linkedSessions: string[],
+  ): Promise<void> {
+    await writeTaskFile(
+      basouPaths(repo),
+      taskId,
+      {
+        task: {
+          schema_version: "0.1.0",
+          task: {
+            id: taskId as `task_${string}`,
+            title: "linkage fixture",
+            status: "in_progress",
+            created_at: "2026-05-04T09:00:00+09:00",
+            updated_at: "2026-05-04T09:00:00+09:00",
+            workspace_id: FIXED_WS_ID,
+            created_in_session: linkedSessions[0] as `ses_${string}`,
+            linked_sessions: linkedSessions as `ses_${string}`[],
+          },
+        },
+        body: "fixture",
+      },
+      { mode: "create" },
+    );
+  }
+
+  it("t-refresh-1: clean snapshot prints a sentinel and exits 0", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REFRESH_SES_A, status: "running", taskId: REFRESH_TASK_ID });
+    await placeTaskMd(repo, REFRESH_TASK_ID, [REFRESH_SES_A]);
+    const out = captureStdout();
+    await runTaskRefreshLinkage(REFRESH_TASK_ID, {}, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(out)).toContain("linked_sessions already fresh");
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("t-refresh-2: dry-run with an added session lists +1 and exits 0 without minting an ad-hoc session", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REFRESH_SES_A, status: "running", taskId: REFRESH_TASK_ID });
+    await createSession(repo, { id: REFRESH_SES_B, status: "running", taskId: REFRESH_TASK_ID });
+    await placeTaskMd(repo, REFRESH_TASK_ID, [REFRESH_SES_A]);
+    const out = captureStdout();
+    await runTaskRefreshLinkage(REFRESH_TASK_ID, {}, { cwd: repo, ...FIXED_CTX });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("(dry-run) Would refresh");
+    expect(stdout).toContain("+1 added");
+    expect(stdout).toContain("Re-run with --write to apply.");
+    // Only the two pre-existing sessions; no ad-hoc refresh session minted.
+    const sessions = await readdir(basouPaths(repo).sessions);
+    expect(sessions.sort()).toEqual([REFRESH_SES_A, REFRESH_SES_B].sort());
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("t-refresh-3: --write applies the refresh and fires task_linkage_refreshed", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REFRESH_SES_A, status: "running", taskId: REFRESH_TASK_ID });
+    await createSession(repo, { id: REFRESH_SES_B, status: "running", taskId: REFRESH_TASK_ID });
+    await placeTaskMd(repo, REFRESH_TASK_ID, [REFRESH_SES_A]);
+    const out = captureStdout();
+    await runTaskRefreshLinkage(REFRESH_TASK_ID, { write: true }, { cwd: repo, ...FIXED_CTX });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain(`Refreshed ${REFRESH_TASK_ID} linked_sessions`);
+    expect(stdout).toContain("+1 added");
+    // Three sessions on disk now: two pre-existing + one ad-hoc refresh.
+    const sessions = await readdir(basouPaths(repo).sessions);
+    expect(sessions.length).toBe(3);
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("t-refresh-4: --json emits the diff payload with refresh_session_id when write succeeds", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: REFRESH_SES_A, status: "running", taskId: REFRESH_TASK_ID });
+    await createSession(repo, { id: REFRESH_SES_B, status: "running", taskId: REFRESH_TASK_ID });
+    await placeTaskMd(repo, REFRESH_TASK_ID, [REFRESH_SES_A]);
+    const out = captureStdout();
+    await doRunTaskRefreshLinkage(
+      REFRESH_TASK_ID,
+      { write: true, json: true },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(payload.task_id).toBe(REFRESH_TASK_ID);
+    expect(payload.clean).toBe(false);
+    expect(payload.dry_run).toBe(false);
+    expect(payload.added_linked_sessions).toEqual([REFRESH_SES_B]);
+    expect(payload.removed_linked_sessions).toEqual([]);
+    expect(typeof payload.refresh_session_id).toBe("string");
+    expect(typeof payload.event_id).toBe("string");
+  });
+
+  it("t-refresh-5: unknown task id surfaces 'Task not found' without leaking absolute paths", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runTaskRefreshLinkage("task_01HXABCDEF1234567890ABCTAK", {}, { cwd: repo, ...FIXED_CTX });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("Task not found");
+    expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
   });
 });
