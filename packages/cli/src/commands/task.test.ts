@@ -1590,6 +1590,33 @@ describe("doRunTaskEdit", () => {
     expect(md).toContain("status: in_progress");
   });
 
+  it("t-edit-4: combined --title and --status applies both (status first via event, then title overwrite)", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "combined-pre" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const out = captureStdout();
+    await doRunTaskEdit(
+      taskId,
+      { title: "combined-post", status: "in_progress" },
+      { cwd: repo, ...FIXED_CTX_2 },
+    );
+    const stdout = joinCalls(out);
+    // Both update lines are surfaced so the operator can verify both stages
+    // landed.
+    expect(stdout).toContain(`Updated ${taskId} status: planned -> in_progress`);
+    expect(stdout).toContain(`Updated ${taskId} title`);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("title: combined-post");
+    expect(md).toContain("status: in_progress");
+    // The status change fires a fresh ad-hoc session; the title overwrite
+    // alone should NOT mint another. So sessions count goes up by exactly 1
+    // versus the pre-edit snapshot.
+    const sessions = (await readdir(basouPaths(repo).sessions)).filter((s) => s.startsWith("ses_"));
+    // 1 from `task new`, 1 from the status portion of `task edit` = 2.
+    expect(sessions.length).toBe(2);
+  });
+
   it("t-edit-3: neither --title nor --status is rejected before any disk write", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
