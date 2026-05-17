@@ -1586,8 +1586,10 @@ async function detectLinkageDelta(
         reachable.add(sid);
       }
     } catch {
-      // Missing / malformed session.yaml — skip; session integrity is out of
-      // scope here (Step 21 / Y-3y owns that surface).
+      // Missing / malformed session.yaml — skip. Surfacing those is the
+      // responsibility of session-integrity tooling, not the linkage-refresh
+      // path; a single corrupt session.yaml must not abort the workspace
+      // scan.
     }
   }
   // The anchor invariant (Y-2 §2.1) requires `linked_sessions[]` to always
@@ -1659,8 +1661,9 @@ function buildRefreshedDoc(input: {
  *
  * The refresh event is distinct from `task_reconciled` (= broken-ref
  * cleanup, `.strict()` with broken-ref-specific fields) so each event
- * carries a single, focused audit story (Y-3z H-2: don't reuse
- * `task_reconciled` for snapshot sync).
+ * carries a single, focused audit story. Reusing `task_reconciled` here
+ * would either redefine its semantics or require widening its strict
+ * schema, both of which break replay determinism for older events.
  */
 export async function refreshTaskLinkedSessions(
   paths: BasouPaths,
