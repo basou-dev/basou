@@ -131,20 +131,19 @@ describe("createAdHocSessionWithEvent", () => {
       sessionSource: "human",
       workingDirectory: "/srv/example-project",
       invocation: { command: "basou decision record", args: ["--title", "choose pnpm"] },
-      targetEventBuilder: buildDecisionTargetEvent(
-        "decision_01HXABCDEF1234567890ABCDE1",
-        "choose pnpm",
-        occurredAt,
-      ),
+      targetEventBuilders: [
+        buildDecisionTargetEvent("decision_01HXABCDEF1234567890ABCDE1", "choose pnpm", occurredAt),
+      ],
     });
 
     expect(result.sessionId.startsWith("ses_")).toBe(true);
-    expect(result.targetEventId.startsWith("evt_")).toBe(true);
+    expect(result.targetEventIds).toHaveLength(1);
+    expect(result.targetEventIds[0]?.startsWith("evt_")).toBe(true);
     expect(result.lifecycleEventIds).toHaveLength(4);
     for (const id of result.lifecycleEventIds) {
       expect(id.startsWith("evt_")).toBe(true);
     }
-    expect(result.lifecycleEventIds).not.toContain(result.targetEventId);
+    expect(result.lifecycleEventIds).not.toContain(result.targetEventIds[0]);
   });
 
   it("writes session.yaml with status completed, ended_at, and invocation.exit_code 0", async () => {
@@ -158,11 +157,9 @@ describe("createAdHocSessionWithEvent", () => {
       sessionSource: "human",
       workingDirectory: "/srv/example-project",
       invocation: { command: "basou decision record", args: ["--title", "x"] },
-      targetEventBuilder: buildDecisionTargetEvent(
-        "decision_01HXABCDEF1234567890ABCDE2",
-        "x",
-        occurredAt,
-      ),
+      targetEventBuilders: [
+        buildDecisionTargetEvent("decision_01HXABCDEF1234567890ABCDE2", "x", occurredAt),
+      ],
     });
 
     const yaml = await readSessionYaml(paths, result.sessionId);
@@ -190,11 +187,9 @@ describe("createAdHocSessionWithEvent", () => {
       sessionSource: "human",
       workingDirectory: "/srv/example-project",
       invocation: { command: "basou decision record", args: [] },
-      targetEventBuilder: buildDecisionTargetEvent(
-        "decision_01HXABCDEF1234567890ABCDE3",
-        "lifecycle",
-        occurredAt,
-      ),
+      targetEventBuilders: [
+        buildDecisionTargetEvent("decision_01HXABCDEF1234567890ABCDE3", "lifecycle", occurredAt),
+      ],
     });
 
     const events = await readEventsJsonl(paths, result.sessionId);
@@ -221,7 +216,7 @@ describe("createAdHocSessionWithEvent", () => {
       sessionSource: "human",
       workingDirectory: "/srv/example-project",
       invocation: { command: "basou decision record", args: ["--title", "keep"] },
-      targetEventBuilder: buildDecisionTargetEvent(decisionId, "keep", occurredAt),
+      targetEventBuilders: [buildDecisionTargetEvent(decisionId, "keep", occurredAt)],
     });
 
     const events = await readEventsJsonl(paths, result.sessionId);
@@ -230,7 +225,7 @@ describe("createAdHocSessionWithEvent", () => {
       type: "decision_recorded",
       decision_id: decisionId,
       title: "keep",
-      id: result.targetEventId,
+      id: result.targetEventIds[0],
     });
   });
 
@@ -245,7 +240,7 @@ describe("createAdHocSessionWithEvent", () => {
       sessionSource: "human",
       workingDirectory: "/srv/example-project",
       invocation: { command: "basou session note", args: [] },
-      targetEventBuilder: buildNoteTargetEvent("hello note", occurredAt),
+      targetEventBuilders: [buildNoteTargetEvent("hello note", occurredAt)],
     });
 
     const events = await readEventsJsonl(paths, result.sessionId);
@@ -263,11 +258,9 @@ describe("createAdHocSessionWithEvent", () => {
       sessionSource: "human",
       workingDirectory: "/srv/example-project",
       invocation: { command: "basou decision record", args: [] },
-      targetEventBuilder: buildDecisionTargetEvent(
-        "decision_01HXABCDEF1234567890ABCDE5",
-        "source",
-        occurredAt,
-      ),
+      targetEventBuilders: [
+        buildDecisionTargetEvent("decision_01HXABCDEF1234567890ABCDE5", "source", occurredAt),
+      ],
     });
 
     const yaml = await readSessionYaml(paths, result.sessionId);
@@ -292,11 +285,9 @@ describe("createAdHocSessionWithEvent", () => {
       sessionSource: "human",
       workingDirectory: "/srv/example-project",
       invocation: { command: "basou decision record", args: [] },
-      targetEventBuilder: buildDecisionTargetEvent(
-        "decision_01HXABCDEF1234567890ABCDE6",
-        "ts",
-        occurredAt,
-      ),
+      targetEventBuilders: [
+        buildDecisionTargetEvent("decision_01HXABCDEF1234567890ABCDE6", "ts", occurredAt),
+      ],
     });
     const events = await readEventsJsonl(paths, result.sessionId);
     for (const event of events) {
@@ -316,11 +307,13 @@ describe("createAdHocSessionWithEvent", () => {
         sessionSource: "not-a-real-kind" as any,
         workingDirectory: "/srv/example-project",
         invocation: { command: "basou decision record", args: [] },
-        targetEventBuilder: buildDecisionTargetEvent(
-          "decision_01HXABCDEF1234567890ABCDE7",
-          "x",
-          "2026-05-11T12:00:00+09:00",
-        ),
+        targetEventBuilders: [
+          buildDecisionTargetEvent(
+            "decision_01HXABCDEF1234567890ABCDE7",
+            "x",
+            "2026-05-11T12:00:00+09:00",
+          ),
+        ],
       }),
     ).rejects.toThrow();
   });
@@ -337,17 +330,19 @@ describe("createAdHocSessionWithEvent", () => {
         sessionSource: "human",
         workingDirectory: "/srv/example-project",
         invocation: { command: "basou decision record", args: [] },
-        targetEventBuilder: (sessionId, eventId) =>
-          ({
-            schema_version: "0.1.0",
-            id: eventId,
-            session_id: sessionId,
-            occurred_at: occurredAt,
-            source: "local-cli",
-            type: "decision_recorded",
-            // decision_id missing — fails EventSchema.parse.
-            title: "broken",
-          }) as unknown as Event,
+        targetEventBuilders: [
+          (sessionId, eventId) =>
+            ({
+              schema_version: "0.1.0",
+              id: eventId,
+              session_id: sessionId,
+              occurred_at: occurredAt,
+              source: "local-cli",
+              type: "decision_recorded",
+              // decision_id missing — fails EventSchema.parse.
+              title: "broken",
+            }) as unknown as Event,
+        ],
       }),
     ).rejects.toThrow("Invalid Basou event payload");
 
@@ -376,11 +371,13 @@ describe("createAdHocSessionWithEvent", () => {
         sessionSource: "human",
         workingDirectory: "/srv/example-project",
         invocation: { command: "basou decision record", args: [] },
-        targetEventBuilder: buildDecisionTargetEvent(
-          "decision_01HXABCDEF1234567890ABCDE8",
-          "finalize-fail",
-          occurredAt,
-        ),
+        targetEventBuilders: [
+          buildDecisionTargetEvent(
+            "decision_01HXABCDEF1234567890ABCDE8",
+            "finalize-fail",
+            occurredAt,
+          ),
+        ],
       }),
     ).rejects.toThrow(FailedToFinalizeError);
   });
@@ -405,11 +402,13 @@ describe("createAdHocSessionWithEvent", () => {
         sessionSource: "human",
         workingDirectory: "/srv/example-project",
         invocation: { command: "basou decision record", args: [] },
-        targetEventBuilder: buildDecisionTargetEvent(
-          "decision_01HXABCDEF1234567890ABCDE9",
-          "finalize-fail2",
-          occurredAt,
-        ),
+        targetEventBuilders: [
+          buildDecisionTargetEvent(
+            "decision_01HXABCDEF1234567890ABCDE9",
+            "finalize-fail2",
+            occurredAt,
+          ),
+        ],
       });
     } catch (error: unknown) {
       if (error instanceof FailedToFinalizeError) captured = error;
@@ -419,7 +418,8 @@ describe("createAdHocSessionWithEvent", () => {
     if (captured !== undefined) {
       expect(captured.message).toBe("Failed to finalize ad-hoc session");
       expect(captured.sessionId.startsWith("ses_")).toBe(true);
-      expect(captured.targetEventId.startsWith("evt_")).toBe(true);
+      expect(captured.targetEventIds).toHaveLength(1);
+      expect(captured.targetEventIds[0]?.startsWith("evt_")).toBe(true);
 
       const events = await readEventsJsonl(paths, captured.sessionId);
       expect(events).toHaveLength(5);
@@ -447,11 +447,9 @@ describe("createAdHocSessionWithEvent", () => {
         sessionSource: "human",
         workingDirectory: "/srv/example-project",
         invocation: { command: "basou decision record", args: [] },
-        targetEventBuilder: buildDecisionTargetEvent(
-          "decision_01HXABCDEF1234567890ABCDF1",
-          "x",
-          occurredAt,
-        ),
+        targetEventBuilders: [
+          buildDecisionTargetEvent("decision_01HXABCDEF1234567890ABCDF1", "x", occurredAt),
+        ],
       }),
     ).rejects.toThrow("Session directory collision (retry the command)");
   });
@@ -470,16 +468,18 @@ describe("createAdHocSessionWithEvent", () => {
         sessionSource: "human",
         workingDirectory: "/srv/example-project",
         invocation: { command: "basou decision record", args: [] },
-        targetEventBuilder: (sessionId, eventId) =>
-          ({
-            schema_version: "0.1.0",
-            id: eventId,
-            session_id: sessionId,
-            occurred_at: occurredAt,
-            source: "local-cli",
-            type: "decision_recorded",
-            title: "no decision_id",
-          }) as unknown as Event,
+        targetEventBuilders: [
+          (sessionId, eventId) =>
+            ({
+              schema_version: "0.1.0",
+              id: eventId,
+              session_id: sessionId,
+              occurred_at: occurredAt,
+              source: "local-cli",
+              type: "decision_recorded",
+              title: "no decision_id",
+            }) as unknown as Event,
+        ],
       });
     } catch (error: unknown) {
       if (error instanceof Error) captured = error;
@@ -492,6 +492,182 @@ describe("createAdHocSessionWithEvent", () => {
       expect(captured.cause).toBeDefined();
       expect(captured.message).not.toContain(paths.root);
     }
+  });
+});
+
+// Multi-target event support: `task new --status done|cancelled` mints two
+// target events (`task_created` + `task_status_changed`) in the same ad-hoc
+// session. The orchestrator must order them between the two lifecycle
+// status-change pairs and mint a separate event id per builder.
+describe("createAdHocSessionWithEvent (multi-target events)", () => {
+  function buildTaskCreatedTargetEvent(
+    taskId: string,
+    title: string,
+    occurredAt: string,
+  ): (sessionId: string, eventId: string) => Event {
+    return (sessionId, eventId) =>
+      ({
+        schema_version: "0.1.0",
+        id: eventId,
+        session_id: sessionId,
+        occurred_at: occurredAt,
+        source: "local-cli",
+        type: "task_created",
+        task_id: taskId,
+        title,
+      }) as Event;
+  }
+  function buildTaskStatusChangedTargetEvent(
+    taskId: string,
+    from: string,
+    to: string,
+    occurredAt: string,
+  ): (sessionId: string, eventId: string) => Event {
+    return (sessionId, eventId) =>
+      ({
+        schema_version: "0.1.0",
+        id: eventId,
+        session_id: sessionId,
+        occurred_at: occurredAt,
+        source: "local-cli",
+        type: "task_status_changed",
+        task_id: taskId,
+        from,
+        to,
+      }) as Event;
+  }
+
+  it("writes 4 lifecycle + N target events with stable ordering for N=2", async () => {
+    const paths = await setupPaths();
+    const occurredAt = "2026-05-11T12:00:00+09:00";
+    const taskId = "task_01HXABCDEF1234567890ABCDT1";
+    const result = await createAdHocSessionWithEvent({
+      paths,
+      manifest: makeManifest(),
+      label: "Ad-hoc task: retro done",
+      occurredAt,
+      sessionSource: "human",
+      workingDirectory: "/srv/example-project",
+      invocation: {
+        command: "basou task new",
+        args: ["--title", "retro done", "--status", "done"],
+      },
+      taskId: taskId as `task_${string}`,
+      targetEventBuilders: [
+        buildTaskCreatedTargetEvent(taskId, "retro done", occurredAt),
+        buildTaskStatusChangedTargetEvent(taskId, "planned", "done", occurredAt),
+      ],
+    });
+
+    expect(result.targetEventIds).toHaveLength(2);
+    // The two target event ids must be distinct ULIDs.
+    expect(result.targetEventIds[0]).not.toBe(result.targetEventIds[1]);
+
+    const events = await readEventsJsonl(paths, result.sessionId);
+    expect(events).toHaveLength(6);
+    expect(events[0]?.type).toBe("session_started");
+    expect(events[1]).toMatchObject({
+      type: "session_status_changed",
+      from: "initialized",
+      to: "running",
+    });
+    expect(events[2]).toMatchObject({
+      type: "task_created",
+      task_id: taskId,
+      id: result.targetEventIds[0],
+    });
+    expect(events[3]).toMatchObject({
+      type: "task_status_changed",
+      task_id: taskId,
+      from: "planned",
+      to: "done",
+      id: result.targetEventIds[1],
+    });
+    expect(events[4]).toMatchObject({
+      type: "session_status_changed",
+      from: "running",
+      to: "completed",
+    });
+    expect(events[5]?.type).toBe("session_ended");
+  });
+
+  it("rejects an empty targetEventBuilders array (boundary parse)", async () => {
+    const paths = await setupPaths();
+    await expect(
+      createAdHocSessionWithEvent({
+        paths,
+        manifest: makeManifest(),
+        label: "Ad-hoc empty",
+        occurredAt: "2026-05-11T12:00:00+09:00",
+        sessionSource: "human",
+        workingDirectory: "/srv/example-project",
+        invocation: { command: "basou decision record", args: [] },
+        targetEventBuilders: [],
+      }),
+    ).rejects.toThrow("Ad-hoc session requires at least one target event builder");
+  });
+
+  it("rejects when a target event builder returns an id mismatch (assertTargetEventIdentity)", async () => {
+    const paths = await setupPaths();
+    const occurredAt = "2026-05-11T12:00:00+09:00";
+    await expect(
+      createAdHocSessionWithEvent({
+        paths,
+        manifest: makeManifest(),
+        label: "Ad-hoc mismatch",
+        occurredAt,
+        sessionSource: "human",
+        workingDirectory: "/srv/example-project",
+        invocation: { command: "basou task new", args: [] },
+        targetEventBuilders: [
+          buildTaskCreatedTargetEvent("task_01HXABCDEF1234567890ABCDT2", "ok", occurredAt),
+          // The second builder lies about the eventId: it ignores the
+          // orchestrator-minted one and substitutes a different ULID. The
+          // assertion in `assertTargetEventIdentity` must trip on this.
+          (sessionId) =>
+            ({
+              schema_version: "0.1.0",
+              id: "evt_01HXABCDEF1234567890ABCDXX",
+              session_id: sessionId,
+              occurred_at: occurredAt,
+              source: "local-cli",
+              type: "task_status_changed",
+              task_id: "task_01HXABCDEF1234567890ABCDT2",
+              from: "planned",
+              to: "done",
+            }) as unknown as Event,
+        ],
+      }),
+    ).rejects.toThrow("Target event id mismatch");
+  });
+
+  it("rejects when a target event builder returns a session_id mismatch", async () => {
+    const paths = await setupPaths();
+    const occurredAt = "2026-05-11T12:00:00+09:00";
+    await expect(
+      createAdHocSessionWithEvent({
+        paths,
+        manifest: makeManifest(),
+        label: "Ad-hoc mismatch2",
+        occurredAt,
+        sessionSource: "human",
+        workingDirectory: "/srv/example-project",
+        invocation: { command: "basou task new", args: [] },
+        targetEventBuilders: [
+          (_sessionId, eventId) =>
+            ({
+              schema_version: "0.1.0",
+              id: eventId,
+              session_id: "ses_01HXABCDEF1234567890ABCDXX",
+              occurred_at: occurredAt,
+              source: "local-cli",
+              type: "task_created",
+              task_id: "task_01HXABCDEF1234567890ABCDT3",
+              title: "wrong-session",
+            }) as unknown as Event,
+        ],
+      }),
+    ).rejects.toThrow("Target event session_id mismatch");
   });
 });
 

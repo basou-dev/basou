@@ -171,21 +171,23 @@ export async function doRunDecisionRecord(
       command: "basou decision record",
       args: ["--title", options.title],
     },
-    targetEventBuilder: (sessionId, eventId) =>
-      buildDecisionEvent({
-        eventId,
-        sessionId,
-        decisionId,
-        title: options.title,
-        occurredAt,
-        rich,
-      }),
+    targetEventBuilders: [
+      (sessionId, eventId) =>
+        buildDecisionEvent({
+          eventId,
+          sessionId,
+          decisionId,
+          title: options.title,
+          occurredAt,
+          rich,
+        }),
+    ],
   });
   printDecisionResult(options, {
     mode: "ad-hoc",
     sessionId: adHoc.sessionId,
     decisionId,
-    eventId: adHoc.targetEventId,
+    eventId: adHoc.targetEventIds[0] as string,
     sessionStatus: "completed",
     title: options.title,
     rich,

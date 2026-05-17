@@ -22,21 +22,32 @@ import { linkYamlFile, overwriteYamlFile } from "./yaml-store.js";
 // ============================================================================
 
 /**
- * Thrown when the ad-hoc session was fully written to disk (5 events plus the
- * initial `session.yaml`) but the final `session.yaml` update to status
- * `completed` failed. The caller can read `sessionId` / `targetEventId` to
- * emit a retry-duplicate-prevention warning, since the target event itself is
- * already persisted in `events.jsonl`.
+ * Thrown when the ad-hoc session was fully written to disk (4 lifecycle
+ * events + N target events plus the initial `session.yaml`) but the final
+ * `session.yaml` update to status `completed` failed. The caller can read
+ * `sessionId` / `targetEventIds` to emit a retry-duplicate-prevention
+ * warning, since the target events themselves are already persisted in
+ * `events.jsonl`.
+ *
+ * `targetEventIds` is an array because a single ad-hoc session may carry
+ * multiple target events (e.g. `task new --status done` fires both
+ * `task_created` and `task_status_changed`). Callers that need a single
+ * anchor id should use `targetEventIds[0]`, which by convention is the
+ * primary event for the operation.
  */
 export class FailedToFinalizeError extends Error {
   readonly sessionId: PrefixedId<"ses">;
-  readonly targetEventId: PrefixedId<"evt">;
+  readonly targetEventIds: ReadonlyArray<PrefixedId<"evt">>;
 
-  constructor(sessionId: PrefixedId<"ses">, targetEventId: PrefixedId<"evt">, cause: unknown) {
+  constructor(
+    sessionId: PrefixedId<"ses">,
+    targetEventIds: ReadonlyArray<PrefixedId<"evt">>,
+    cause: unknown,
+  ) {
     super("Failed to finalize ad-hoc session", { cause });
     this.name = "FailedToFinalizeError";
     this.sessionId = sessionId;
-    this.targetEventId = targetEventId;
+    this.targetEventIds = targetEventIds;
   }
 }
 
@@ -63,30 +74,55 @@ export type CreateAdHocSessionInput = {
    */
   taskId?: PrefixedId<"task">;
   /**
-   * Builds the variant-specific target event. Receives the freshly minted
-   * session/event IDs so the caller can fill in cross-reference fields
-   * (`decision_id`, `body`, ...) without owning ID generation.
+   * Builds the variant-specific target events. Each builder receives the
+   * freshly minted session id and a freshly minted event id (one per
+   * builder) so callers can fill in cross-reference fields (`decision_id`,
+   * `body`, ...) without owning ID generation.
+   *
+   * The most common case is a single-element array (`[builder]`) for the
+   * one-target-event flows (`basou decision record`, `basou session note`,
+   * `basou task new --status planned`, `basou task status`,
+   * `basou task reconcile`). Two-element arrays are used by
+   * `basou task new --status done|cancelled` to emit `task_created` plus
+   * an immediate `task_status_changed` in the same atomic bulk write.
+   *
+   * Must be non-empty; an empty array is rejected at the start of
+   * {@link createAdHocSessionWithEvent}.
    */
-  targetEventBuilder: (sessionId: PrefixedId<"ses">, eventId: PrefixedId<"evt">) => Event;
+  targetEventBuilders: ReadonlyArray<
+    (sessionId: PrefixedId<"ses">, eventId: PrefixedId<"evt">) => Event
+  >;
 };
 
 export type CreateAdHocSessionResult = {
   sessionId: PrefixedId<"ses">;
-  targetEventId: PrefixedId<"evt">;
+  /**
+   * Target event IDs in the order their builders were supplied. Length
+   * equals `input.targetEventBuilders.length`. Callers that conceptually
+   * have a single anchor event should use `targetEventIds[0]`.
+   */
+  targetEventIds: PrefixedId<"evt">[];
   /**
    * Lifecycle event IDs in chronological order:
    * `[started, status→running, status→completed, ended]`.
-   * The target event ID is reported separately in {@link targetEventId}.
+   * Target event IDs are reported separately in {@link targetEventIds}.
    */
   lifecycleEventIds: PrefixedId<"evt">[];
 };
 
 /**
- * Atomically create a fresh ad-hoc session that produces a single target
- * event then immediately closes itself. Y-2 §6.2 lifecycle
- * (`initialized → running → completed`) is honored: five events are written
- * in one bulk atomic pass and `session.yaml` is written twice
- * (`initialized` → `completed`).
+ * Atomically create a fresh ad-hoc session that produces one or more target
+ * events then immediately closes itself. Y-2 §6.2 lifecycle
+ * (`initialized → running → completed`) is honored: `4 + N` events are
+ * written in one bulk atomic pass (where N = number of target builders) and
+ * `session.yaml` is written twice (`initialized` → `completed`).
+ *
+ * The single-target case (N = 1) covers `basou decision record`,
+ * `basou session note`, `basou task new --status planned|in_progress`,
+ * `basou task status`, and `basou task reconcile`. The two-target case
+ * (N = 2) covers `basou task new --status done|cancelled` which fires
+ * `task_created` followed immediately by `task_status_changed (planned → terminal)`
+ * so the audit trail captures the implicit transition.
  *
  * Failures during `mkdir`, the initial `session.yaml` write, or the bulk
  * `events.jsonl` write trigger a best-effort `rm -rf` of the session
@@ -96,8 +132,8 @@ export type CreateAdHocSessionResult = {
  * session directory is NOT cleaned up — `events.jsonl` is consistent and
  * carries the full lifecycle trail, so callers can reconcile manually. The
  * thrown {@link FailedToFinalizeError} carries the `sessionId` and
- * `targetEventId` so the CLI layer can warn the user not to re-run the
- * command and duplicate the target event.
+ * `targetEventIds` so the CLI layer can warn the user not to re-run the
+ * command and duplicate the target events.
  *
  * Direct (non-CLI) callers are self-defended by zod boundary parses on
  * `sessionSource` and the initial session record.
@@ -107,12 +143,15 @@ export async function createAdHocSessionWithEvent(
 ): Promise<CreateAdHocSessionResult> {
   // 1. core boundary parse — direct callers may pass arbitrary strings.
   SessionSourceKindSchema.parse(input.sessionSource);
+  if (input.targetEventBuilders.length === 0) {
+    throw new Error("Ad-hoc session requires at least one target event builder");
+  }
 
-  // 2. ID minting
+  // 2. ID minting. One target event id per builder; lifecycle ids are fixed.
   const sessionId = prefixedUlid("ses");
   const startedEventId = prefixedUlid("evt");
   const statusToRunningEventId = prefixedUlid("evt");
-  const targetEventId = prefixedUlid("evt");
+  const targetEventIds = input.targetEventBuilders.map(() => prefixedUlid("evt"));
   const statusToCompletedEventId = prefixedUlid("evt");
   const endedEventId = prefixedUlid("evt");
 
@@ -159,6 +198,10 @@ export async function createAdHocSessionWithEvent(
   //    partial state survives (status=initialized + no events is not visible
   //    in `basou session list`).
   try {
+    const targetEvents: Event[] = input.targetEventBuilders.map((build, index) => {
+      const targetEventId = targetEventIds[index] as PrefixedId<"evt">;
+      return assertTargetEventIdentity(build(sessionId, targetEventId), sessionId, targetEventId);
+    });
     const events: Event[] = [
       {
         schema_version: "0.1.0",
@@ -178,11 +221,7 @@ export async function createAdHocSessionWithEvent(
         from: "initialized",
         to: "running",
       },
-      assertTargetEventIdentity(
-        input.targetEventBuilder(sessionId, targetEventId),
-        sessionId,
-        targetEventId,
-      ),
+      ...targetEvents,
       {
         schema_version: "0.1.0",
         id: statusToCompletedEventId,
@@ -225,12 +264,12 @@ export async function createAdHocSessionWithEvent(
     });
     await overwriteYamlFile(sessionYamlPath, finalSession);
   } catch (error: unknown) {
-    throw new FailedToFinalizeError(sessionId, targetEventId, error);
+    throw new FailedToFinalizeError(sessionId, targetEventIds, error);
   }
 
   return {
     sessionId,
-    targetEventId,
+    targetEventIds,
     lifecycleEventIds: [
       startedEventId,
       statusToRunningEventId,

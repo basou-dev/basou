@@ -50,7 +50,15 @@ const STATUS_VALUES = TaskStatusSchema.options;
 export type TaskNewOptions = {
   title: string;
   label?: string;
-  status?: "planned" | "in_progress";
+  status?: TaskStatus;
+  /**
+   * ISO-8601 timestamp written into `task.md.updated_at` when status is a
+   * terminal value (done / cancelled). Lets the operator backdate a
+   * retroactively-recorded completed task so `task.md` reflects the
+   * actual completion moment while `events.jsonl` keeps recording time.
+   * Rejected (exit 1) when supplied with a non-terminal status.
+   */
+  completedAt?: string;
   session?: string;
   description?: string;
   fromFile?: string;
@@ -103,8 +111,13 @@ export function registerTaskCommand(program: Command): void {
     .option("--label <text>", "Optional label for the task", parseLabel)
     .option(
       "--status <status>",
-      "Initial status (planned | in_progress, default planned)",
+      `Initial status (one of: ${STATUS_VALUES.join(", ")}; default planned). For done/cancelled the orchestrator also emits a task_status_changed event so the audit trail records the implicit transition.`,
       parseInitialTaskStatus,
+    )
+    .option(
+      "--completed-at <iso>",
+      "ISO-8601 timestamp to record as the task's updated_at when --status is done or cancelled (rejected otherwise)",
+      parseIsoTimestampOption,
     )
     .option("--session <session_id>", "Attach to existing session; otherwise ad-hoc")
     .option("--description <text>", "Task description body (inline)", parseDescriptionOption)
@@ -185,6 +198,14 @@ export async function doRunTaskNew(options: TaskNewOptions, ctx: TaskContext): P
     throw new Error("--from-file - (stdin) is not supported in v0.1");
   }
 
+  const initialStatus = options.status ?? "planned";
+  // `--completed-at` only makes sense paired with a terminal status. Catching
+  // the mismatch up front avoids ambiguity about whether the override would
+  // still be honored on a planned/in_progress task (= it wouldn't).
+  if (options.completedAt !== undefined && !isTerminalStatusForCli(initialStatus)) {
+    throw new Error("--completed-at requires --status done or cancelled");
+  }
+
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveRepositoryRootForTask(cwd, "new");
   const paths = basouPaths(repositoryRoot);
@@ -200,7 +221,6 @@ export async function doRunTaskNew(options: TaskNewOptions, ctx: TaskContext): P
   const now = ctx.nowProvider !== undefined ? ctx.nowProvider() : new Date();
   const occurredAt = now.toISOString();
   const taskId = prefixedUlid("task");
-  const initialStatus = options.status ?? "planned";
 
   if (options.session !== undefined) {
     const sessionId = (await resolveSessionId(paths, options.session)) as PrefixedId<"ses">;
@@ -214,6 +234,7 @@ export async function doRunTaskNew(options: TaskNewOptions, ctx: TaskContext): P
       ...(options.label !== undefined ? { label: options.label } : {}),
       initialStatus,
       description,
+      ...(options.completedAt !== undefined ? { completedAt: options.completedAt } : {}),
     });
     printTaskNewResult(options, {
       mode: "attached",
@@ -224,6 +245,8 @@ export async function doRunTaskNew(options: TaskNewOptions, ctx: TaskContext): P
       title: options.title,
       ...(options.label !== undefined ? { label: options.label } : {}),
       status: initialStatus,
+      occurredAt,
+      ...(options.completedAt !== undefined ? { completedAt: options.completedAt } : {}),
       descriptionLength: description.length,
     });
     return;
@@ -241,6 +264,7 @@ export async function doRunTaskNew(options: TaskNewOptions, ctx: TaskContext): P
     initialStatus,
     description,
     workingDirectory: repositoryRoot,
+    ...(options.completedAt !== undefined ? { completedAt: options.completedAt } : {}),
   });
   printTaskNewResult(options, {
     mode: "ad-hoc",
@@ -251,8 +275,14 @@ export async function doRunTaskNew(options: TaskNewOptions, ctx: TaskContext): P
     title: options.title,
     ...(options.label !== undefined ? { label: options.label } : {}),
     status: initialStatus,
+    occurredAt,
+    ...(options.completedAt !== undefined ? { completedAt: options.completedAt } : {}),
     descriptionLength: description.length,
   });
+}
+
+function isTerminalStatusForCli(status: TaskStatus): boolean {
+  return status === "done" || status === "cancelled";
 }
 
 type TaskNewPrint = {
@@ -264,6 +294,8 @@ type TaskNewPrint = {
   title: string;
   label?: string;
   status: TaskStatus;
+  occurredAt: string;
+  completedAt?: string;
   descriptionLength: number;
 };
 
@@ -279,6 +311,8 @@ function printTaskNewResult(options: TaskNewOptions, result: TaskNewPrint): void
         title: result.title,
         label: result.label ?? null,
         status: result.status,
+        recorded_at: result.occurredAt,
+        completed_at: result.completedAt ?? null,
         description_length: result.descriptionLength,
       }),
     );
@@ -291,7 +325,17 @@ function printTaskNewResult(options: TaskNewOptions, result: TaskNewPrint): void
       : `Created ${result.taskId} in session ${shortSes} (${result.sessionStatus})`;
   console.log(created);
   console.log(`  Title:  ${result.title}`);
-  console.log(`  Status: ${result.status}`);
+  // For terminal initial statuses surface both the recording time (= the
+  // ad-hoc session timestamp = now) and the supplied completion time so the
+  // operator can tell at a glance that the audit trail (events.jsonl)
+  // reflects the former while task.md.updated_at reflects the latter.
+  if (result.completedAt !== undefined) {
+    console.log(
+      `  Status: ${result.status} (recorded at ${result.occurredAt}, completed at ${result.completedAt})`,
+    );
+  } else {
+    console.log(`  Status: ${result.status}`);
+  }
   console.log(`  Label:  ${result.label ?? "(none)"}`);
 }
 
@@ -934,9 +978,27 @@ function parseLabel(raw: string): string {
   return raw;
 }
 
-function parseInitialTaskStatus(raw: string): "planned" | "in_progress" {
-  if (raw !== "planned" && raw !== "in_progress") {
-    throw new InvalidArgumentError("Initial task status must be 'planned' or 'in_progress'");
+function parseInitialTaskStatus(raw: string): TaskStatus {
+  const result = TaskStatusSchema.safeParse(raw);
+  if (!result.success) {
+    throw new InvalidArgumentError(
+      `Initial task status must be one of: ${STATUS_VALUES.join(", ")}`,
+    );
+  }
+  return result.data;
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function parseIsoTimestampOption(raw: string): string {
+  // Mirror the IsoTimestampSchema accepted form (Y-2 §3.2): date + time +
+  // explicit zone designator. We rely on Date.parse for content validation
+  // and the regex above for shape so misformed inputs are rejected before
+  // we hand the string to the orchestrator's downstream parsers.
+  if (!ISO_DATE_RE.test(raw) || Number.isNaN(Date.parse(raw))) {
+    throw new InvalidArgumentError(
+      "Invalid --completed-at value; expected ISO-8601 timestamp like 2026-05-10T12:34:56+09:00",
+    );
   }
   return raw;
 }

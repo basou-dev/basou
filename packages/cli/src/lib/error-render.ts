@@ -101,8 +101,15 @@ export const failedToFinalizeClassifier: ErrorClassifier = {
   additionalLines: (error) => {
     const e = error as FailedToFinalizeError;
     const sid = shortSessionId(e.sessionId);
+    // `targetEventIds[0]` is the operator-facing anchor event (= the
+    // `decision_recorded` / `task_created` / `task_reconciled` event the
+    // command was meant to produce). Multi-target ad-hoc sessions (e.g.
+    // `task new --status done` which adds `task_status_changed`) carry the
+    // additional ids in `targetEventIds[1..]`; one anchor is enough for the
+    // do-not-rerun warning.
+    const anchor = e.targetEventIds[0];
     return [
-      `Recorded ${e.targetEventId} in session ${sid}; do not rerun`,
+      `Recorded ${anchor} in session ${sid}; do not rerun`,
       "Warning: session.yaml status update failed; events.jsonl is consistent",
     ];
   },

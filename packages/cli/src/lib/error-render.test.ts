@@ -247,7 +247,7 @@ describe("failedToFinalizeClassifier", () => {
   it("matches a FailedToFinalizeError and emits the two warning lines", () => {
     const ftf = new FailedToFinalizeError(
       "ses_01HXABCDEFG1234567890ABCDE" as `ses_${string}`,
-      "evt_01HXABCDEFG1234567890ABCDE" as `evt_${string}`,
+      ["evt_01HXABCDEFG1234567890ABCDE" as `evt_${string}`],
       new Error("inner failure"),
     );
     expect(failedToFinalizeClassifier.match(ftf)).toBe(true);

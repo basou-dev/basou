@@ -325,30 +325,194 @@ describe("registerTaskCommand (option converters)", () => {
     );
   });
 
-  it("t-new-16: --status done is rejected by the converter (initial-status guard)", async () => {
+  it("t-new-16: --status garbage is rejected by the converter (only TaskStatus values accepted)", async () => {
     const program = new Command();
     program.exitOverride();
     registerTaskCommand(program);
     const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     await expect(
-      program.parseAsync(["node", "basou", "task", "new", "--title", "x", "--status", "done"]),
+      program.parseAsync(["node", "basou", "task", "new", "--title", "x", "--status", "garbage"]),
     ).rejects.toBeDefined();
     expect(errSpy.mock.calls.map((c) => String(c[0])).join("")).toContain(
-      "Initial task status must be 'planned' or 'in_progress'",
+      "Initial task status must be one of: planned, in_progress, done, cancelled",
     );
   });
 
-  it("t-new-17: --status cancelled is rejected by the converter", async () => {
+  it("t-new-17: --completed-at with an invalid ISO string is rejected by the converter", async () => {
     const program = new Command();
     program.exitOverride();
     registerTaskCommand(program);
     const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     await expect(
-      program.parseAsync(["node", "basou", "task", "new", "--title", "x", "--status", "cancelled"]),
+      program.parseAsync([
+        "node",
+        "basou",
+        "task",
+        "new",
+        "--title",
+        "x",
+        "--status",
+        "done",
+        "--completed-at",
+        "yesterday",
+      ]),
     ).rejects.toBeDefined();
     expect(errSpy.mock.calls.map((c) => String(c[0])).join("")).toContain(
-      "Initial task status must be 'planned' or 'in_progress'",
+      "Invalid --completed-at value",
     );
+  });
+});
+
+describe("doRunTaskNew (terminal initial status, ad-hoc path)", () => {
+  it("t-new-18: --status done creates task.md as done with a 2-event audit trail", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await doRunTaskNew(
+      {
+        title: "retrospective done",
+        status: "done",
+        completedAt: "2026-05-10T12:34:56+09:00",
+      },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    expect(joinCalls(out)).toContain("Created task_");
+    expect(joinCalls(out)).toContain("Status: done (recorded at");
+    expect(joinCalls(out)).toContain("completed at 2026-05-10T12:34:56+09:00");
+
+    const taskId = await findCreatedTaskId(repo);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("status: done");
+    expect(md).toContain("updated_at: 2026-05-10T12:34:56+09:00");
+    // created_at stays at the recording time, not the completion time.
+    expect(md).toContain(`created_at: ${FIXED_NOW.toISOString()}`);
+
+    const sessions = await readdir(basouPaths(repo).sessions);
+    const sid = sessions.find((s) => s.startsWith("ses_")) as string;
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events).toHaveLength(6);
+    expect(events[0]?.type).toBe("session_started");
+    expect(events[1]).toMatchObject({
+      type: "session_status_changed",
+      from: "initialized",
+      to: "running",
+    });
+    expect(events[2]).toMatchObject({ type: "task_created", task_id: taskId });
+    expect(events[3]).toMatchObject({
+      type: "task_status_changed",
+      task_id: taskId,
+      from: "planned",
+      to: "done",
+    });
+    expect(events[4]).toMatchObject({
+      type: "session_status_changed",
+      from: "running",
+      to: "completed",
+    });
+    expect(events[5]?.type).toBe("session_ended");
+  });
+
+  it("t-new-19: --status cancelled with --completed-at writes a cancellation audit trail", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew(
+      {
+        title: "retro cancelled",
+        status: "cancelled",
+        completedAt: "2026-05-09T11:22:33+09:00",
+      },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const taskId = await findCreatedTaskId(repo);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("status: cancelled");
+    expect(md).toContain("updated_at: 2026-05-09T11:22:33+09:00");
+
+    const sessions = await readdir(basouPaths(repo).sessions);
+    const sid = sessions.find((s) => s.startsWith("ses_")) as string;
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const statusChange = events.find((e) => e.type === "task_status_changed");
+    expect(statusChange).toMatchObject({ from: "planned", to: "cancelled" });
+  });
+
+  it("t-new-20: --status done without --completed-at uses occurredAt for updated_at", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "no completedAt", status: "done" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    const expected = FIXED_NOW.toISOString();
+    expect(md).toContain(`created_at: ${expected}`);
+    expect(md).toContain(`updated_at: ${expected}`);
+  });
+
+  it("t-new-21: --completed-at without --status done|cancelled is rejected", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runTaskNew(
+      { title: "x", completedAt: "2026-05-10T12:34:56+09:00" },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    expect(joinCalls(err)).toContain("--completed-at requires --status done or cancelled");
+    expect(process.exitCode).toBe(1);
+    // No partial state should have leaked to disk.
+    const sessions = await readdir(basouPaths(repo).sessions).catch(() => []);
+    expect(sessions.filter((s) => s.startsWith("ses_"))).toHaveLength(0);
+    const tasks = await readdir(basouPaths(repo).tasks).catch(() => []);
+    expect(tasks).toHaveLength(0);
+  });
+
+  it("t-new-22: --status done --json includes recorded_at and completed_at", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await doRunTaskNew(
+      {
+        title: "json done",
+        status: "done",
+        completedAt: "2026-05-08T08:00:00+09:00",
+        json: true,
+      },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(payload.status).toBe("done");
+    expect(payload.recorded_at).toBe(FIXED_NOW.toISOString());
+    expect(payload.completed_at).toBe("2026-05-08T08:00:00+09:00");
+  });
+
+  it("t-new-23: --status done --session <running> attaches both events to the existing session", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N23");
+    await createSession(repo, { id: sid, status: "running" });
+    captureStdout();
+    await doRunTaskNew(
+      {
+        title: "attach done",
+        status: "done",
+        completedAt: "2026-05-09T10:00:00+09:00",
+        session: sid,
+      },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    // The attached session is not closed by `task new`, so we expect exactly
+    // the two task events appended (no session_started / ended pair).
+    expect(events.map((e) => e.type)).toEqual(["task_created", "task_status_changed"]);
+    expect(events[1]).toMatchObject({ from: "planned", to: "done" });
+    const taskId = await findCreatedTaskId(repo);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("status: done");
+    expect(md).toContain("updated_at: 2026-05-09T10:00:00+09:00");
+    const yaml = await readFile(join(basouPaths(repo).sessions, sid, "session.yaml"), "utf8");
+    expect(yaml).toContain(`task_id: ${taskId}`);
   });
 });
 

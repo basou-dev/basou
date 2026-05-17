@@ -9,7 +9,12 @@ import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { SessionStatus } from "../schemas/session.schema.js";
 import { SessionIdSchema, TaskIdSchema } from "../schemas/shared.schema.js";
-import { type Task, TaskSchema, type TaskStatus } from "../schemas/task.schema.js";
+import {
+  type Task,
+  TaskSchema,
+  type TaskStatus,
+  TaskStatusSchema,
+} from "../schemas/task.schema.js";
 import {
   type AttachableStatus,
   FailedToFinalizeError,
@@ -40,13 +45,22 @@ const DEFAULT_ATTACHABLE_STATUSES: ReadonlySet<AttachableStatus> = new Set<Attac
   "waiting_approval",
 ]);
 
-// Codex Y3t-3-H1: enforce §C.3 initial-status restriction and TaskSchema
-// title/label minimums at the core API boundary so direct callers (tests,
-// future programmatic uses) cannot smuggle past the CLI-side parsers and
-// commit a `task_created` event for a malformed task.
-const InitialTaskStatusSchema = z.enum(["planned", "in_progress"]);
+// Boundary parses for direct callers so a malformed task cannot smuggle
+// past the CLI-side parsers and commit a `task_created` event.
+// `initialStatus` was originally restricted to `planned | in_progress`
+// (Codex Y3t-3-H1) but now accepts any TaskStatus so retroactively-recorded
+// terminal tasks can be entered in one CLI call; the orchestrator emits a
+// follow-up `task_status_changed` event so the audit trail still records
+// the implicit transition from `planned`.
+const InitialTaskStatusSchema = TaskStatusSchema;
 const TaskTitleSchema = z.string().min(1);
 const TaskLabelSchema = z.string().min(1);
+
+const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>(["done", "cancelled"]);
+
+function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return TERMINAL_TASK_STATUSES.has(status);
+}
 
 // ============================================================================
 // File read / parse
@@ -385,9 +399,17 @@ export type CreateAdHocTaskInput = {
   taskId: PrefixedId<"task">;
   title: string;
   label?: string;
-  initialStatus: "planned" | "in_progress";
+  initialStatus: TaskStatus;
   description: string;
   workingDirectory: string;
+  /**
+   * Optional override for `task.md.updated_at` when `initialStatus` is a
+   * terminal value (done / cancelled). Lets the operator backdate a
+   * retroactively-recorded completed task so `task.md` reflects the actual
+   * completion moment while `events.jsonl` keeps recording time. Ignored
+   * for non-terminal statuses.
+   */
+  completedAt?: string;
 };
 
 export type AttachTaskInput = {
@@ -398,9 +420,11 @@ export type AttachTaskInput = {
   taskId: PrefixedId<"task">;
   title: string;
   label?: string;
-  initialStatus: "planned" | "in_progress";
+  initialStatus: TaskStatus;
   description: string;
   attachableStatuses?: ReadonlySet<AttachableStatus>;
+  /** See {@link CreateAdHocTaskInput.completedAt}. */
+  completedAt?: string;
 };
 
 export type CreateTaskInput = CreateAdHocTaskInput | AttachTaskInput;
@@ -535,16 +559,17 @@ async function createTaskAdHoc(input: CreateAdHocTaskInput): Promise<CreateTaskR
     occurredAt: input.occurredAt,
     sessionSource: "human",
     workingDirectory: input.workingDirectory,
-    invocation: { command: "basou task new", args: ["--title", input.title] },
+    invocation: {
+      command: "basou task new",
+      args: buildTaskNewInvocationArgs(input.title, input.initialStatus, input.completedAt),
+    },
     taskId: input.taskId,
-    targetEventBuilder: (sessionId, eventId) =>
-      buildTaskCreatedEvent({
-        eventId,
-        sessionId,
-        taskId: input.taskId,
-        title: input.title,
-        occurredAt: input.occurredAt,
-      }),
+    targetEventBuilders: buildTaskNewTargetEventBuilders({
+      taskId: input.taskId,
+      title: input.title,
+      initialStatus: input.initialStatus,
+      occurredAt: input.occurredAt,
+    }),
   });
 
   const task: Task = buildInitialTask({
@@ -553,9 +578,15 @@ async function createTaskAdHoc(input: CreateAdHocTaskInput): Promise<CreateTaskR
     ...(input.label !== undefined ? { label: input.label } : {}),
     status: input.initialStatus,
     occurredAt: input.occurredAt,
+    ...(input.completedAt !== undefined ? { completedAt: input.completedAt } : {}),
     workspaceId: input.manifest.workspace.id,
     createdInSession: adHoc.sessionId,
   });
+  // `targetEventIds[0]` is the `task_created` anchor (= what the caller cares
+  // about); a second `task_status_changed` event may also live in this
+  // ad-hoc session when initialStatus is terminal, but it is not the
+  // primary task-lifecycle anchor.
+  const anchorEventId = adHoc.targetEventIds[0] as PrefixedId<"evt">;
   try {
     await writeTaskFile(
       input.paths,
@@ -566,7 +597,7 @@ async function createTaskAdHoc(input: CreateAdHocTaskInput): Promise<CreateTaskR
   } catch (error: unknown) {
     throw new TaskWriteAfterEventError({
       taskId: input.taskId,
-      eventId: adHoc.targetEventId,
+      eventId: anchorEventId,
       sessionId: adHoc.sessionId,
       phase: "create",
       cause: error,
@@ -574,7 +605,7 @@ async function createTaskAdHoc(input: CreateAdHocTaskInput): Promise<CreateTaskR
   }
   return {
     taskId: input.taskId,
-    eventId: adHoc.targetEventId,
+    eventId: anchorEventId,
     sessionId: adHoc.sessionId,
     sessionStatus: "completed",
   };
@@ -642,13 +673,39 @@ async function createTaskAttach(input: AttachTaskInput): Promise<CreateTaskResul
     });
   }
 
-  // 4. Write task.md (create mode, collision = rerun guard).
+  // 4. For terminal initialStatus (done / cancelled) append a second target
+  //    event `task_status_changed (planned → terminal)` so the events.jsonl
+  //    audit trail records the implicit transition. The ALLOWED_TRANSITIONS
+  //    shortcut from `planned` to `done|cancelled` makes this a single
+  //    permitted edge. The session.yaml `task_id` link from step 3 covers
+  //    both events; no further session.yaml write is needed.
+  if (isTerminalTaskStatus(input.initialStatus)) {
+    await appendEventToExistingSession({
+      paths: input.paths,
+      sessionId: input.sessionId,
+      ...(input.attachableStatuses !== undefined
+        ? { attachableStatuses: input.attachableStatuses }
+        : {}),
+      eventBuilder: (eventId) =>
+        buildTaskStatusChangedEvent({
+          eventId,
+          sessionId: input.sessionId,
+          taskId: input.taskId,
+          from: "planned",
+          to: input.initialStatus,
+          occurredAt: input.occurredAt,
+        }),
+    });
+  }
+
+  // 5. Write task.md (create mode, collision = rerun guard).
   const task: Task = buildInitialTask({
     taskId: input.taskId,
     title: input.title,
     ...(input.label !== undefined ? { label: input.label } : {}),
     status: input.initialStatus,
     occurredAt: input.occurredAt,
+    ...(input.completedAt !== undefined ? { completedAt: input.completedAt } : {}),
     workspaceId: sessionDoc.session.workspace_id,
     createdInSession: input.sessionId,
   });
@@ -683,9 +740,19 @@ function buildInitialTask(input: {
   label?: string;
   status: TaskStatus;
   occurredAt: string;
+  /**
+   * Override for `updated_at` when `status` is terminal. Ignored for
+   * non-terminal statuses so backdating a non-completed task is not
+   * possible by accident.
+   */
+  completedAt?: string;
   workspaceId: PrefixedId<"ws">;
   createdInSession: PrefixedId<"ses">;
 }): Task {
+  const updatedAt =
+    input.completedAt !== undefined && isTerminalTaskStatus(input.status)
+      ? input.completedAt
+      : input.occurredAt;
   return {
     schema_version: "0.1.0",
     task: {
@@ -694,12 +761,63 @@ function buildInitialTask(input: {
       ...(input.label !== undefined ? { label: input.label } : {}),
       status: input.status,
       created_at: input.occurredAt,
-      updated_at: input.occurredAt,
+      updated_at: updatedAt,
       workspace_id: input.workspaceId,
       created_in_session: input.createdInSession,
       linked_sessions: [input.createdInSession],
     },
   };
+}
+
+// Helpers for the ad-hoc `task new` path. The invocation args list mirrors
+// the operator's CLI input so the recorded `session.yaml.invocation.args`
+// stays accurate even when `--status` / `--completed-at` were supplied.
+function buildTaskNewInvocationArgs(
+  title: string,
+  initialStatus: TaskStatus,
+  completedAt: string | undefined,
+): string[] {
+  const args = ["--title", title];
+  if (initialStatus !== "planned") {
+    args.push("--status", initialStatus);
+  }
+  if (completedAt !== undefined && isTerminalTaskStatus(initialStatus)) {
+    args.push("--completed-at", completedAt);
+  }
+  return args;
+}
+
+function buildTaskNewTargetEventBuilders(input: {
+  taskId: PrefixedId<"task">;
+  title: string;
+  initialStatus: TaskStatus;
+  occurredAt: string;
+}): Array<(sessionId: PrefixedId<"ses">, eventId: PrefixedId<"evt">) => Event> {
+  const createdBuilder = (sessionId: PrefixedId<"ses">, eventId: PrefixedId<"evt">): Event =>
+    buildTaskCreatedEvent({
+      eventId,
+      sessionId,
+      taskId: input.taskId,
+      title: input.title,
+      occurredAt: input.occurredAt,
+    });
+  if (!isTerminalTaskStatus(input.initialStatus)) {
+    return [createdBuilder];
+  }
+  // For terminal initialStatus, emit `task_status_changed (planned → terminal)`
+  // right after `task_created` so replay reconstructs the implicit
+  // transition. The shortcut edges `planned → done|cancelled` are already
+  // allowed by ALLOWED_TRANSITIONS.
+  const statusChangedBuilder = (sessionId: PrefixedId<"ses">, eventId: PrefixedId<"evt">): Event =>
+    buildTaskStatusChangedEvent({
+      eventId,
+      sessionId,
+      taskId: input.taskId,
+      from: "planned",
+      to: input.initialStatus,
+      occurredAt: input.occurredAt,
+    });
+  return [createdBuilder, statusChangedBuilder];
 }
 
 // ============================================================================
@@ -781,17 +899,20 @@ async function updateTaskStatusAdHoc(
     workingDirectory: input.workingDirectory,
     invocation: { command: "basou task status", args: [input.taskId, input.newStatus] },
     taskId: input.taskId,
-    targetEventBuilder: (sessionId, eventId) =>
-      buildTaskStatusChangedEvent({
-        eventId,
-        sessionId,
-        taskId: input.taskId,
-        from: previousStatus,
-        to: input.newStatus,
-        occurredAt: input.occurredAt,
-      }),
+    targetEventBuilders: [
+      (sessionId, eventId) =>
+        buildTaskStatusChangedEvent({
+          eventId,
+          sessionId,
+          taskId: input.taskId,
+          from: previousStatus,
+          to: input.newStatus,
+          occurredAt: input.occurredAt,
+        }),
+    ],
   });
 
+  const anchorEventId = adHoc.targetEventIds[0] as PrefixedId<"evt">;
   // 3. Overwrite task.md (status + updated_at + linked_sessions append-dedup).
   const updatedDoc = buildUpdatedDoc({
     currentDoc,
@@ -804,7 +925,7 @@ async function updateTaskStatusAdHoc(
   } catch (error: unknown) {
     throw new TaskWriteAfterEventError({
       taskId: input.taskId,
-      eventId: adHoc.targetEventId,
+      eventId: anchorEventId,
       sessionId: adHoc.sessionId,
       phase: "overwrite",
       cause: error,
@@ -812,7 +933,7 @@ async function updateTaskStatusAdHoc(
   }
   return {
     taskId: input.taskId,
-    eventId: adHoc.targetEventId,
+    eventId: anchorEventId,
     sessionId: adHoc.sessionId,
     sessionStatus: "completed",
     previousStatus,
@@ -1225,22 +1346,24 @@ export async function reconcileTask(
             : ["--write"],
       },
       taskId: input.taskId,
-      targetEventBuilder: (sessionId, eventId) =>
-        buildTaskReconciledEvent({
-          eventId,
-          sessionId,
-          taskId: input.taskId,
-          removedCreatedInSession: brokenCreatedInSession,
-          createdInSessionReplacement: brokenCreatedInSession !== null ? sessionId : null,
-          removedLinkedSessions: brokenLinkedSessions,
-          occurredAt: input.occurredAt,
-        }),
+      targetEventBuilders: [
+        (sessionId, eventId) =>
+          buildTaskReconciledEvent({
+            eventId,
+            sessionId,
+            taskId: input.taskId,
+            removedCreatedInSession: brokenCreatedInSession,
+            createdInSessionReplacement: brokenCreatedInSession !== null ? sessionId : null,
+            removedLinkedSessions: brokenLinkedSessions,
+            occurredAt: input.occurredAt,
+          }),
+      ],
     });
   } catch (error: unknown) {
     if (error instanceof FailedToFinalizeError) {
       throw new TaskWriteAfterEventError({
         taskId: input.taskId,
-        eventId: error.targetEventId,
+        eventId: error.targetEventIds[0] as PrefixedId<"evt">,
         sessionId: error.sessionId,
         phase: "reconcile-finalize",
         cause: error,
@@ -1253,11 +1376,13 @@ export async function reconcileTask(
     await input._onPhaseCompleted("phase-5-bulk-write");
   }
 
+  const anchorEventId = adHoc.targetEventIds[0] as PrefixedId<"evt">;
+
   const postSnapshot = await computeTaskMdSnapshot(paths, input.taskId);
   if (postSnapshot.mtimeMs !== preSnapshot.mtimeMs || postSnapshot.hash !== preSnapshot.hash) {
     throw new TaskWriteAfterEventError({
       taskId: input.taskId,
-      eventId: adHoc.targetEventId,
+      eventId: anchorEventId,
       sessionId: adHoc.sessionId,
       phase: "reconcile-concurrent",
       cause: new Error("task.md changed during reconcile"),
@@ -1276,7 +1401,7 @@ export async function reconcileTask(
   } catch (error: unknown) {
     throw new TaskWriteAfterEventError({
       taskId: input.taskId,
-      eventId: adHoc.targetEventId,
+      eventId: anchorEventId,
       sessionId: adHoc.sessionId,
       phase: "reconcile",
       cause: error,
@@ -1290,7 +1415,7 @@ export async function reconcileTask(
     brokenLinkedSessions,
     reconcileSession: {
       sessionId: adHoc.sessionId,
-      eventId: adHoc.targetEventId,
+      eventId: anchorEventId,
     },
   };
 }

@@ -428,6 +428,97 @@ describe("createTaskWithEvent (ad-hoc)", () => {
       .map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(events.filter((e) => e.type === "task_status_changed")).toHaveLength(0);
   });
+
+  it("starts the task done by emitting task_created + task_status_changed in the same ad-hoc session", async () => {
+    const paths = await setupPaths();
+    const completedAt = "2026-05-10T12:34:56+09:00";
+    const result = await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "retro done",
+      initialStatus: "done",
+      description: "",
+      workingDirectory: getWorkDir(),
+      completedAt,
+    });
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.status).toBe("done");
+    // task.md.updated_at reflects the backdated completion time while
+    // created_at stays at the ad-hoc session timestamp.
+    expect(doc.task.task.updated_at).toBe(completedAt);
+    expect(doc.task.task.created_at).toBe(OCC_AT);
+    const events = (await readFile(join(paths.sessions, result.sessionId, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.map((e) => e.type)).toEqual([
+      "session_started",
+      "session_status_changed",
+      "task_created",
+      "task_status_changed",
+      "session_status_changed",
+      "session_ended",
+    ]);
+    // All events share the recording time (occurred_at = OCC_AT); the
+    // backdated completion time is only reflected in task.md.updated_at.
+    for (const e of events) {
+      expect(e.occurred_at).toBe(OCC_AT);
+    }
+    expect(events[3]).toMatchObject({ from: "planned", to: "done", task_id: TASK_ID_A });
+  });
+
+  it("starts the task cancelled with a 2-event audit trail", async () => {
+    const paths = await setupPaths();
+    const result = await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "abandoned",
+      initialStatus: "cancelled",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.status).toBe("cancelled");
+    // No completedAt supplied -> updated_at falls back to occurredAt.
+    expect(doc.task.task.updated_at).toBe(OCC_AT);
+    const events = (await readFile(join(paths.sessions, result.sessionId, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.filter((e) => e.type === "task_status_changed")).toHaveLength(1);
+    expect(events.find((e) => e.type === "task_status_changed")).toMatchObject({
+      from: "planned",
+      to: "cancelled",
+    });
+  });
+
+  it("ignores completedAt for non-terminal initialStatus (planned)", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "still planned",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+      // A direct caller might supply a stray completedAt; the orchestrator
+      // must NOT honor it for a non-terminal status — task.md.updated_at
+      // stays pinned to occurredAt so a non-completed task cannot be
+      // backdated by accident.
+      completedAt: "2026-05-10T12:34:56+09:00",
+    });
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.updated_at).toBe(OCC_AT);
+  });
 });
 
 describe("createTaskWithEvent (attach)", () => {
@@ -504,6 +595,37 @@ describe("createTaskWithEvent (attach)", () => {
         description: "",
       }),
     ).rejects.toThrow(`Task already exists: ${TASK_ID_A}`);
+  });
+
+  it("attach with terminal initialStatus appends both task_created and task_status_changed", async () => {
+    const paths = await setupPaths();
+    await placeRunningSession(paths, SES_ID_RUNNING);
+    const completedAt = "2026-05-09T10:00:00+09:00";
+    await createTaskWithEvent({
+      mode: "attach",
+      paths,
+      occurredAt: OCC_AT,
+      sessionId: SES_ID_RUNNING,
+      taskId: TASK_ID_A,
+      title: "attached done",
+      initialStatus: "done",
+      description: "",
+      completedAt,
+    });
+    const events = (await readFile(join(paths.sessions, SES_ID_RUNNING, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    // Two events in order: task_created followed by task_status_changed
+    // (planned → done). The lifecycle events live on the parent session and
+    // are NOT minted here because attach paths reuse an existing session.
+    expect(events.map((e) => e.type)).toEqual(["task_created", "task_status_changed"]);
+    expect(events[1]).toMatchObject({ from: "planned", to: "done", task_id: TASK_ID_A });
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.status).toBe("done");
+    expect(doc.task.task.updated_at).toBe(completedAt);
+    const yaml = await readFile(join(paths.sessions, SES_ID_RUNNING, "session.yaml"), "utf8");
+    expect(yaml).toContain(`task_id: ${TASK_ID_A}`);
   });
 });
 
@@ -839,7 +961,12 @@ describe("TaskWriteAfterEventError", () => {
 // ============================================================================
 
 describe("createTaskWithEvent boundary validation (Codex Y3t-3-H1)", () => {
-  it("rejects an invalid initialStatus before any event is written (ad-hoc)", async () => {
+  it("rejects an unknown initialStatus before any event is written (ad-hoc)", async () => {
+    // `done` and `cancelled` are now accepted (the orchestrator emits a
+    // follow-up `task_status_changed` for terminal initial statuses); the
+    // boundary parser still rejects truly invalid values like the string
+    // below so a direct caller bypassing the CLI parser cannot smuggle a
+    // garbage status past the runtime guard.
     const paths = await setupPaths();
     await expect(
       createTaskWithEvent({
@@ -848,9 +975,9 @@ describe("createTaskWithEvent boundary validation (Codex Y3t-3-H1)", () => {
         manifest: makeManifest(),
         occurredAt: OCC_AT,
         taskId: TASK_ID_A,
-        title: "smuggled-done",
-        // biome-ignore lint/suspicious/noExplicitAny: simulating a direct caller bypassing the CLI parser to verify the runtime boundary (Codex Y3t-3-H1).
-        initialStatus: "done" as any,
+        title: "smuggled-garbage",
+        // biome-ignore lint/suspicious/noExplicitAny: simulating a direct caller bypassing the CLI parser to verify the runtime boundary.
+        initialStatus: "totally-not-a-status" as any,
         description: "",
         workingDirectory: getWorkDir(),
       }),

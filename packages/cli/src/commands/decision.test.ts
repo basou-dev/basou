@@ -251,7 +251,7 @@ describe("doRunDecisionRecord (ad-hoc path)", () => {
     spy.mockImplementationOnce(async () => {
       throw new core.FailedToFinalizeError(
         "ses_01HXABCDEF1234567890ABCDE1" as `ses_${string}`,
-        "evt_01HXABCDEF1234567890ABCDE1" as `evt_${string}`,
+        ["evt_01HXABCDEF1234567890ABCDE1" as `evt_${string}`],
         Object.assign(new Error("Failed to overwrite YAML file"), {
           cause: Object.assign(new Error("simulated"), { code: "EACCES" }),
         }),
@@ -274,7 +274,7 @@ describe("doRunDecisionRecord (ad-hoc path)", () => {
     spy.mockImplementationOnce(async () => {
       throw new core.FailedToFinalizeError(
         "ses_01HXABCDEF1234567890ABCDE2" as `ses_${string}`,
-        "evt_01HXABCDEF1234567890ABCDE2" as `evt_${string}`,
+        ["evt_01HXABCDEF1234567890ABCDE2" as `evt_${string}`],
         Object.assign(new Error("Failed to overwrite YAML file"), {
           cause: Object.assign(new Error("absolute path /Users/secret/.basou/sessions/x"), {
             code: "EACCES",
