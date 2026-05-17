@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
@@ -264,6 +264,94 @@ export async function enumerateTaskIds(paths: BasouPaths): Promise<string[]> {
   return taskIds;
 }
 
+const ARCHIVE_DIR_NAME = "archive";
+
+function archiveTasksDir(paths: BasouPaths): string {
+  return join(paths.tasks, ARCHIVE_DIR_NAME);
+}
+
+/**
+ * Enumerate task ids inside `<paths.tasks>/archive/`. Returns `[]` when the
+ * archive directory does not exist (= no task has ever been archived).
+ * Filtering / ordering rules mirror {@link enumerateTaskIds}.
+ */
+export async function enumerateArchivedTaskIds(paths: BasouPaths): Promise<string[]> {
+  let entries: string[];
+  try {
+    entries = (await readdir(archiveTasksDir(paths), { withFileTypes: true }))
+      .filter((d) => d.isFile())
+      .map((d) => d.name);
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) return [];
+    throw new Error("Failed to enumerate archived tasks", { cause: error });
+  }
+  const taskIds: string[] = [];
+  for (const name of entries) {
+    const match = TASK_FILENAME_RE.exec(name);
+    if (match === null) continue;
+    const candidate = match[1] as string;
+    if (!TaskIdSchema.safeParse(candidate).success) continue;
+    taskIds.push(candidate);
+  }
+  taskIds.sort();
+  return taskIds;
+}
+
+/**
+ * Read a task.md file looking in the main tasks directory first and falling
+ * back to `<paths.tasks>/archive/` if the file is missing there. Returns the
+ * parsed document plus a flag indicating whether the hit came from the
+ * archive dir. Useful for `basou task show` which surfaces archived tasks
+ * read-only without requiring the operator to opt in.
+ *
+ * Error contract matches {@link readTaskFile} — only the lookup location
+ * differs.
+ */
+export async function readTaskFileWithArchiveFallback(
+  paths: BasouPaths,
+  taskId: string,
+): Promise<{ doc: TaskDocument; archived: boolean }> {
+  try {
+    const doc = await readTaskFile(paths, taskId);
+    return { doc, archived: false };
+  } catch (error: unknown) {
+    if (!(error instanceof Error && error.message === "Task file not found")) {
+      throw error;
+    }
+  }
+  const archiveFilePath = join(archiveTasksDir(paths), `${taskId}.md`);
+  let raw: string;
+  try {
+    raw = await readFile(archiveFilePath, "utf8");
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) {
+      throw new Error("Task file not found", { cause: error });
+    }
+    throw new Error("Failed to read task file", { cause: error });
+  }
+  // Parsing mirrors readTaskFile; archived files share the schema.
+  let split: { yamlText: string; body: string };
+  try {
+    split = splitFrontMatter(raw);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "Invalid task file format") {
+      throw error;
+    }
+    throw new Error("Failed to read task file", { cause: error });
+  }
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(split.yamlText);
+  } catch (error: unknown) {
+    throw new Error("Failed to read task file", { cause: error });
+  }
+  const result = TaskSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("Failed to read task file", { cause: result.error });
+  }
+  return { doc: { task: result.data, body: split.body }, archived: true };
+}
+
 export type TaskSkipReason = "task_file_invalid" | "task_file_unreadable";
 
 export type LoadTaskEntriesOptions = {
@@ -374,7 +462,13 @@ export type TaskWriteAfterEventPhase =
   // recovery hint must point at `basou task refresh-linkage`, not reconcile.
   | "linkage-refresh"
   | "linkage-refresh-finalize"
-  | "linkage-refresh-concurrent";
+  | "linkage-refresh-concurrent"
+  // `task_deleted` / `task_archived` event was persisted in events.jsonl but
+  // the subsequent file mutation (unlink / move to archive) failed. The
+  // event remains the authoritative audit record; the operator must reconcile
+  // the residual file state by hand.
+  | "delete"
+  | "archive";
 
 export class TaskWriteAfterEventError extends Error {
   readonly taskId: PrefixedId<"task">;
@@ -512,6 +606,18 @@ function buildAdHocRefreshLinkageLabel(title: string): string {
   return `Ad-hoc task refresh-linkage: ${truncated}`;
 }
 
+function buildAdHocDeleteLabel(title: string): string {
+  const truncated =
+    title.length > LABEL_TITLE_MAX ? `${title.slice(0, LABEL_TRUNCATE_HEAD)}...` : title;
+  return `Ad-hoc task delete: ${truncated}`;
+}
+
+function buildAdHocArchiveLabel(title: string): string {
+  const truncated =
+    title.length > LABEL_TITLE_MAX ? `${title.slice(0, LABEL_TRUNCATE_HEAD)}...` : title;
+  return `Ad-hoc task archive: ${truncated}`;
+}
+
 function buildTaskReconciledEvent(input: {
   eventId: PrefixedId<"evt">;
   sessionId: PrefixedId<"ses">;
@@ -532,6 +638,44 @@ function buildTaskReconciledEvent(input: {
     removed_created_in_session: input.removedCreatedInSession,
     created_in_session_replacement: input.createdInSessionReplacement,
     removed_linked_sessions: input.removedLinkedSessions,
+  };
+}
+
+function buildTaskDeletedEvent(input: {
+  eventId: PrefixedId<"evt">;
+  sessionId: PrefixedId<"ses">;
+  taskId: PrefixedId<"task">;
+  title: string;
+  occurredAt: string;
+}): Event {
+  return {
+    schema_version: "0.1.0",
+    id: input.eventId,
+    session_id: input.sessionId,
+    occurred_at: input.occurredAt,
+    source: "local-cli",
+    type: "task_deleted",
+    task_id: input.taskId,
+    title: input.title,
+  };
+}
+
+function buildTaskArchivedEvent(input: {
+  eventId: PrefixedId<"evt">;
+  sessionId: PrefixedId<"ses">;
+  taskId: PrefixedId<"task">;
+  title: string;
+  occurredAt: string;
+}): Event {
+  return {
+    schema_version: "0.1.0",
+    id: input.eventId,
+    session_id: input.sessionId,
+    occurred_at: input.occurredAt,
+    source: "local-cli",
+    type: "task_archived",
+    task_id: input.taskId,
+    title: input.title,
   };
 }
 
@@ -1787,5 +1931,348 @@ export async function refreshTaskLinkedSessions(
       sessionId: adHoc.sessionId,
       eventId: anchorEventId,
     },
+  };
+}
+
+// ============================================================================
+// editTask — field-level update (no event for pure title edits)
+// ============================================================================
+
+export type EditTaskInput = {
+  paths: BasouPaths;
+  taskId: PrefixedId<"task">;
+  /** New title; rejected when empty. Undefined leaves the field unchanged. */
+  title?: string;
+  /**
+   * New status; routed through transition rules so the call rejects
+   * invalid edges (e.g. `done -> planned`). Undefined leaves the field
+   * unchanged.
+   */
+  newStatus?: TaskStatus;
+  occurredAt: string;
+  /**
+   * Required when {@link newStatus} is provided — the status change fires
+   * a `task_status_changed` event in a fresh ad-hoc session, which needs
+   * a Manifest to seed the new session record. Title-only edits ignore
+   * this field.
+   */
+  manifest?: Manifest;
+  /** Working directory for the ad-hoc status-change session. */
+  workingDirectory?: string;
+};
+
+export type EditTaskResult = {
+  taskId: PrefixedId<"task">;
+  titleUpdated: boolean;
+  statusUpdated: boolean;
+  /** When {@link statusUpdated} is true, the previous status before the edit. */
+  previousStatus: TaskStatus | null;
+  /** When {@link statusUpdated} is true, the new status. */
+  newStatus: TaskStatus | null;
+  /** ad-hoc session minted when status was changed; null for title-only edits. */
+  statusChangeSession: {
+    sessionId: PrefixedId<"ses">;
+    eventId: PrefixedId<"evt">;
+  } | null;
+};
+
+/**
+ * Update one or both of the user-editable fields on a task.md.
+ *
+ * - `title`: in-place overwrite of `task.md` only. v0.1 does not emit a
+ *   `task_title_changed` event — title changes are storage-level metadata
+ *   maintenance, not part of the audit trail.
+ * - `newStatus`: routed through {@link updateTaskStatusWithEvent} so the
+ *   ALLOWED_TRANSITIONS gate is honored and a `task_status_changed` event is
+ *   appended to the audit trail.
+ *
+ * When both are supplied the status change runs first (= event committed)
+ * and then the title overwrite runs against the freshly updated task.md
+ * (= same `updated_at` from the status change). A failure of the
+ * subsequent title overwrite leaves the status change committed; the
+ * status-change side of an edit is the only side with an event, so the
+ * audit trail is consistent regardless.
+ */
+export async function editTask(input: EditTaskInput): Promise<EditTaskResult> {
+  TaskIdSchema.parse(input.taskId);
+  if (input.title === undefined && input.newStatus === undefined) {
+    throw new Error("Nothing to edit: provide --title or --status");
+  }
+  if (input.title !== undefined) {
+    TaskTitleSchema.parse(input.title);
+  }
+
+  let statusUpdated = false;
+  let previousStatus: TaskStatus | null = null;
+  let newStatus: TaskStatus | null = null;
+  let statusChangeSession: EditTaskResult["statusChangeSession"] = null;
+
+  // Stage 1: status change (if any). Failure here exits with the existing
+  // transition / not-found errors and leaves task.md untouched.
+  if (input.newStatus !== undefined) {
+    if (input.manifest === undefined || input.workingDirectory === undefined) {
+      throw new Error("editTask requires manifest + workingDirectory when newStatus is supplied");
+    }
+    const result = await updateTaskStatusWithEvent({
+      mode: "ad-hoc",
+      paths: input.paths,
+      manifest: input.manifest,
+      occurredAt: input.occurredAt,
+      taskId: input.taskId,
+      newStatus: input.newStatus,
+      workingDirectory: input.workingDirectory,
+    });
+    statusUpdated = true;
+    previousStatus = result.previousStatus;
+    newStatus = result.newStatus;
+    statusChangeSession = { sessionId: result.sessionId, eventId: result.eventId };
+  }
+
+  // Stage 2: title overwrite (if any). Re-read so the status change above
+  // (which updated linked_sessions / updated_at) is preserved.
+  let titleUpdated = false;
+  if (input.title !== undefined) {
+    const doc = await readTaskFile(input.paths, input.taskId);
+    if (doc.task.task.title !== input.title) {
+      const next: Task = {
+        ...doc.task,
+        task: {
+          ...doc.task.task,
+          title: input.title,
+          updated_at: input.occurredAt,
+        },
+      };
+      await writeTaskFile(
+        input.paths,
+        input.taskId,
+        { task: next, body: doc.body },
+        { mode: "overwrite" },
+      );
+      titleUpdated = true;
+    }
+  }
+
+  return {
+    taskId: input.taskId,
+    titleUpdated,
+    statusUpdated,
+    previousStatus,
+    newStatus,
+    statusChangeSession,
+  };
+}
+
+// ============================================================================
+// deleteTask — destructive removal with audit event
+// ============================================================================
+
+export type DeleteTaskInput = {
+  paths: BasouPaths;
+  manifest: Manifest;
+  taskId: PrefixedId<"task">;
+  occurredAt: string;
+  workingDirectory: string;
+};
+
+export type DeleteTaskResult = {
+  taskId: PrefixedId<"task">;
+  title: string;
+  sessionId: PrefixedId<"ses">;
+  eventId: PrefixedId<"evt">;
+};
+
+/**
+ * Hard-delete a task.md file with a `task_deleted` audit event.
+ *
+ * Sequence:
+ *   1. Read task.md to capture the current title (which goes onto the
+ *      event payload so the audit record is self-describing even after
+ *      the file is gone).
+ *   2. Mint an ad-hoc session, fire `task_deleted` as the target event.
+ *      The session's `task_id` is intentionally NOT pinned to the
+ *      to-be-deleted task — otherwise the audit session would carry a
+ *      broken reference the moment we unlink the file.
+ *   3. Unlink `<paths.tasks>/<task_id>.md`.
+ *
+ * Failure of step 3 after the event is committed surfaces as a
+ * {@link TaskWriteAfterEventError} with `phase: "delete"`; the operator
+ * is told the event is durable but task.md still exists, and that a
+ * manual `rm` (or a rerun) is required.
+ *
+ * v0.1 contract: no tombstone, no recovery. Restoring a deleted task is
+ * not supported; the event payload (`task_id` + `title`) is the only
+ * persistent record after the unlink succeeds.
+ */
+export async function deleteTask(input: DeleteTaskInput): Promise<DeleteTaskResult> {
+  TaskIdSchema.parse(input.taskId);
+
+  // Stage 1: capture the current title before mint.
+  const doc = await readTaskFile(input.paths, input.taskId);
+  const title = doc.task.task.title;
+
+  // Stage 2: fire the audit event. NOTE we do NOT pass `taskId` to the
+  // ad-hoc session — pinning the session to a task that is about to vanish
+  // would create a guaranteed broken reference on session.yaml.task_id.
+  const adHoc = await createAdHocSessionWithEvent({
+    paths: input.paths,
+    manifest: input.manifest,
+    label: buildAdHocDeleteLabel(title),
+    occurredAt: input.occurredAt,
+    sessionSource: "human",
+    workingDirectory: input.workingDirectory,
+    invocation: {
+      command: "basou task delete",
+      args: [input.taskId, "--yes"],
+    },
+    targetEventBuilders: [
+      (sessionId, eventId) =>
+        buildTaskDeletedEvent({
+          eventId,
+          sessionId,
+          taskId: input.taskId,
+          title,
+          occurredAt: input.occurredAt,
+        }),
+    ],
+  });
+  const eventId = adHoc.targetEventIds[0] as PrefixedId<"evt">;
+
+  // Stage 3: unlink the file.
+  try {
+    await unlink(join(input.paths.tasks, `${input.taskId}.md`));
+  } catch (error: unknown) {
+    throw new TaskWriteAfterEventError({
+      taskId: input.taskId,
+      eventId,
+      sessionId: adHoc.sessionId,
+      phase: "delete",
+      cause: error,
+    });
+  }
+
+  return {
+    taskId: input.taskId,
+    title,
+    sessionId: adHoc.sessionId,
+    eventId,
+  };
+}
+
+// ============================================================================
+// archiveTask — move main/<id>.md to archive/<id>.md with audit event
+// ============================================================================
+
+export type ArchiveTaskInput = {
+  paths: BasouPaths;
+  manifest: Manifest;
+  taskId: PrefixedId<"task">;
+  occurredAt: string;
+  workingDirectory: string;
+};
+
+export type ArchiveTaskResult = {
+  taskId: PrefixedId<"task">;
+  title: string;
+  sessionId: PrefixedId<"ses">;
+  eventId: PrefixedId<"evt">;
+};
+
+/**
+ * Move a task.md file from `<paths.tasks>/<id>.md` to
+ * `<paths.tasks>/archive/<id>.md` with a `task_archived` audit event.
+ *
+ * Sequence:
+ *   1. Read task.md to capture the current title and existing content.
+ *   2. Mint an ad-hoc session, fire `task_archived` as the target event.
+ *      The session's `task_id` IS pinned to the archived task — unlike
+ *      `task_deleted`, the task continues to exist (just at a new path),
+ *      so the session-task linkage stays a valid forward reference.
+ *   3. Append the audit session to the task's `linked_sessions[]` and
+ *      overwrite the source task.md so the snapshot reflects the archive
+ *      session before the move.
+ *   4. Ensure the archive directory exists.
+ *   5. Rename main/<id>.md to archive/<id>.md (= atomic on the same fs).
+ *
+ * Failure modes after step 2 surface as
+ * {@link TaskWriteAfterEventError} with `phase: "archive"`; the operator
+ * is told the event is durable but the on-disk move is incomplete and
+ * must be resolved manually (typically by rerunning `task archive`).
+ */
+export async function archiveTask(input: ArchiveTaskInput): Promise<ArchiveTaskResult> {
+  TaskIdSchema.parse(input.taskId);
+
+  const doc = await readTaskFile(input.paths, input.taskId);
+  const title = doc.task.task.title;
+
+  const adHoc = await createAdHocSessionWithEvent({
+    paths: input.paths,
+    manifest: input.manifest,
+    label: buildAdHocArchiveLabel(title),
+    occurredAt: input.occurredAt,
+    sessionSource: "human",
+    workingDirectory: input.workingDirectory,
+    invocation: {
+      command: "basou task archive",
+      args: [input.taskId, "--yes"],
+    },
+    taskId: input.taskId,
+    targetEventBuilders: [
+      (sessionId, eventId) =>
+        buildTaskArchivedEvent({
+          eventId,
+          sessionId,
+          taskId: input.taskId,
+          title,
+          occurredAt: input.occurredAt,
+        }),
+    ],
+  });
+  const eventId = adHoc.targetEventIds[0] as PrefixedId<"evt">;
+
+  // Stage 3-5 share the same recovery contract: any failure surfaces as
+  // phase "archive" so the operator gets a uniform "rerun task archive"
+  // hint. Specific failure cases:
+  //   - 3: writeTaskFile (overwrite) — fs/yaml-serialize error
+  //   - 4: mkdir of archive dir — usually EACCES
+  //   - 5: rename across the same fs — EEXIST when archive/<id>.md is
+  //        already there, EACCES, or rare ENOSPC
+  try {
+    const linked = doc.task.task.linked_sessions;
+    const merged = linked.includes(adHoc.sessionId) ? linked : [...linked, adHoc.sessionId];
+    const next: Task = {
+      ...doc.task,
+      task: {
+        ...doc.task.task,
+        updated_at: input.occurredAt,
+        linked_sessions: merged,
+      },
+    };
+    await writeTaskFile(
+      input.paths,
+      input.taskId,
+      { task: next, body: doc.body },
+      { mode: "overwrite" },
+    );
+
+    await mkdir(archiveTasksDir(input.paths), { recursive: true });
+    await rename(
+      join(input.paths.tasks, `${input.taskId}.md`),
+      join(archiveTasksDir(input.paths), `${input.taskId}.md`),
+    );
+  } catch (error: unknown) {
+    throw new TaskWriteAfterEventError({
+      taskId: input.taskId,
+      eventId,
+      sessionId: adHoc.sessionId,
+      phase: "archive",
+      cause: error,
+    });
+  }
+
+  return {
+    taskId: input.taskId,
+    title,
+    sessionId: adHoc.sessionId,
+    eventId,
   };
 }

@@ -53,10 +53,15 @@ export type {
 } from "./ad-hoc-session.js";
 export {
   TaskWriteAfterEventError,
+  archiveTask,
   createTaskWithEvent,
+  deleteTask,
+  editTask,
+  enumerateArchivedTaskIds,
   enumerateTaskIds,
   loadTaskEntries,
   readTaskFile,
+  readTaskFileWithArchiveFallback,
   reconcileAllTasks,
   reconcileTask,
   refreshTaskLinkedSessions,
@@ -64,11 +69,17 @@ export {
   writeTaskFile,
 } from "./tasks.js";
 export type {
+  ArchiveTaskInput,
+  ArchiveTaskResult,
   AttachTaskInput,
   AttachUpdateTaskStatusInput,
   CreateAdHocTaskInput,
   CreateTaskInput,
   CreateTaskResult,
+  DeleteTaskInput,
+  DeleteTaskResult,
+  EditTaskInput,
+  EditTaskResult,
   LoadTaskEntriesOptions,
   ReconcileAllResult,
   ReconcileAllTasksInput,

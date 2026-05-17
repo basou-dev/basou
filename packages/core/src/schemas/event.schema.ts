@@ -176,6 +176,23 @@ const TaskLinkageRefreshedEventSchema = BaseEventSchema.extend({
   final_count: z.number().int().nonnegative().optional(),
 }).strict();
 
+// v0.2 lifecycle events for `basou task delete` / `basou task archive`.
+// Both are `.strict()` so the audit record is exactly what the orchestrator
+// emits, and both carry the task's last-known title so events.jsonl can
+// describe what was deleted / archived without requiring the (now gone or
+// relocated) task.md.
+const TaskDeletedEventSchema = BaseEventSchema.extend({
+  type: z.literal("task_deleted"),
+  task_id: TaskIdSchema,
+  title: z.string().min(1),
+}).strict();
+
+const TaskArchivedEventSchema = BaseEventSchema.extend({
+  type: z.literal("task_archived"),
+  task_id: TaskIdSchema,
+  title: z.string().min(1),
+}).strict();
+
 const NoteAddedEventSchema = BaseEventSchema.extend({
   type: z.literal("note_added"),
   body: z.string(),
@@ -215,6 +232,8 @@ export const EventSchema = z.discriminatedUnion("type", [
   TaskStatusChangedEventSchema,
   TaskReconciledEventSchema,
   TaskLinkageRefreshedEventSchema,
+  TaskDeletedEventSchema,
+  TaskArchivedEventSchema,
   NoteAddedEventSchema,
   AdapterOutputEventSchema,
 ]);
@@ -252,6 +271,10 @@ export type TaskStatusChangedEvent = z.infer<typeof TaskStatusChangedEventSchema
 export type TaskReconciledEvent = z.infer<typeof TaskReconciledEventSchema>;
 /** Narrowed runtime type for the `task_linkage_refreshed` event variant (.strict()). */
 export type TaskLinkageRefreshedEvent = z.infer<typeof TaskLinkageRefreshedEventSchema>;
+/** Narrowed runtime type for the `task_deleted` event variant (.strict()). */
+export type TaskDeletedEvent = z.infer<typeof TaskDeletedEventSchema>;
+/** Narrowed runtime type for the `task_archived` event variant (.strict()). */
+export type TaskArchivedEvent = z.infer<typeof TaskArchivedEventSchema>;
 /** Narrowed runtime type for the `note_added` event variant. */
 export type NoteAddedEvent = z.infer<typeof NoteAddedEventSchema>;
 /** Narrowed runtime type for the `adapter_output` event variant (.strict()). */

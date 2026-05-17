@@ -52,6 +52,8 @@ export type {
   TaskStatusChangedEvent,
   TaskReconciledEvent,
   TaskLinkageRefreshedEvent,
+  TaskDeletedEvent,
+  TaskArchivedEvent,
   NoteAddedEvent,
   AdapterOutputEvent,
 } from "./event.schema.js";

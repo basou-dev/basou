@@ -446,6 +446,10 @@ function eventVariantSummary(ev: Event): string {
       const final = ev.final_count !== undefined ? ` final=${ev.final_count}` : "";
       return `task ${shortTaskId(ev.task_id)}: +${added} / -${removed} linked${final}`;
     }
+    case "task_deleted":
+      return `task ${shortTaskId(ev.task_id)}: ${ev.title} (deleted)`;
+    case "task_archived":
+      return `task ${shortTaskId(ev.task_id)}: ${ev.title} (archived)`;
     case "note_added":
       return ev.body.length > 80 ? `${ev.body.slice(0, 77)}...` : ev.body;
     case "adapter_output":

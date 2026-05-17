@@ -13,15 +13,20 @@ import {
   type TaskStatus,
   TaskStatusSchema,
   TaskWriteAfterEventError,
+  archiveTask,
   assertBasouRootSafe,
   basouPaths,
   createTaskWithEvent,
+  deleteTask,
+  editTask,
+  enumerateArchivedTaskIds,
   findErrorCode,
   loadSessionEntries,
   loadTaskEntries,
   prefixedUlid,
   readManifest,
   readTaskFile,
+  readTaskFileWithArchiveFallback,
   reconcileAllTasks,
   reconcileTask,
   refreshTaskLinkedSessions,
@@ -70,6 +75,7 @@ export type TaskNewOptions = {
 
 export type TaskListOptions = {
   status?: TaskStatus;
+  includeArchived?: boolean;
   json?: boolean;
   verbose?: boolean;
 };
@@ -96,6 +102,25 @@ export type TaskReconcileOptions = {
 
 export type TaskRefreshLinkageOptions = {
   write?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type TaskEditOptions = {
+  title?: string;
+  status?: TaskStatus;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type TaskDeleteOptions = {
+  yes?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type TaskArchiveOptions = {
+  yes?: boolean;
   json?: boolean;
   verbose?: boolean;
 };
@@ -144,6 +169,7 @@ export function registerTaskCommand(program: Command): void {
       `Filter by task status (one of: ${STATUS_VALUES.join(", ")})`,
       parseTaskStatusFilter,
     )
+    .option("--include-archived", "Also list tasks under .basou/tasks/archive/ (hidden by default)")
     .option("--json", "Output the list as a JSON array")
     .option("-v, --verbose", "Show error causes")
     .action(async (options: TaskListOptions) => {
@@ -194,6 +220,47 @@ export function registerTaskCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (taskIdInput: string, options: TaskRefreshLinkageOptions) => {
       await runTaskRefreshLinkage(taskIdInput, options);
+    });
+
+  task
+    .command("edit <task_id>")
+    .description(
+      "Update --title and/or --status on an existing task. Status changes fire a task_status_changed event; title changes update task.md only (no event).",
+    )
+    .option("--title <text>", "New title (must be non-empty)", parseTitle)
+    .option(
+      "--status <status>",
+      `New status (one of: ${STATUS_VALUES.join(", ")}); routed through STATUS_TRANSITIONS so only valid edges are accepted`,
+      parseInitialTaskStatus,
+    )
+    .option("--json", "Output as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (taskIdInput: string, options: TaskEditOptions) => {
+      await runTaskEdit(taskIdInput, options);
+    });
+
+  task
+    .command("delete <task_id>")
+    .description(
+      "Hard-delete a task.md file and fire a task_deleted event. Requires confirmation by default; use --yes to skip the prompt.",
+    )
+    .option("--yes", "Skip the confirmation prompt (required when stdin is not a TTY)")
+    .option("--json", "Output as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (taskIdInput: string, options: TaskDeleteOptions) => {
+      await runTaskDelete(taskIdInput, options);
+    });
+
+  task
+    .command("archive <task_id>")
+    .description(
+      "Move task.md into .basou/tasks/archive/ and fire a task_archived event. Requires confirmation by default; use --yes to skip the prompt.",
+    )
+    .option("--yes", "Skip the confirmation prompt (required when stdin is not a TTY)")
+    .option("--json", "Output as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (taskIdInput: string, options: TaskArchiveOptions) => {
+      await runTaskArchive(taskIdInput, options);
     });
 }
 
@@ -381,8 +448,27 @@ export async function doRunTaskList(options: TaskListOptions, ctx: TaskContext):
   const entries = await loadTaskEntries(paths, {
     onSkip: (id, reason) => printTaskSkip(id, reason),
   });
+  // Archive entries are read from `<paths.tasks>/archive/` directly (no
+  // dedicated loader yet — call sites are rare). Marshalling them through a
+  // separate scan keeps the default `task list` path fast (no extra readdir
+  // when the operator does not opt in).
+  const archivedEntries: { doc: TaskDocument; archived: true }[] = [];
+  if (options.includeArchived === true) {
+    const archivedIds = await enumerateArchivedTaskIds(paths);
+    for (const id of archivedIds) {
+      try {
+        const { doc } = await readTaskFileWithArchiveFallback(paths, id);
+        archivedEntries.push({ doc, archived: true });
+      } catch {
+        // Skip unreadable archive entries — keep the list output usable
+        // when one file is corrupt rather than aborting the run.
+      }
+    }
+  }
+  const combined = [...entries, ...archivedEntries.map((a) => a.doc)];
+  const archivedIdSet = new Set(archivedEntries.map((a) => a.doc.task.task.id));
   // loadTaskEntries returns asc by created_at; reverse for newest-first display.
-  const ordered = [...entries].sort(
+  const ordered = [...combined].sort(
     (a, b) => Date.parse(b.task.task.created_at) - Date.parse(a.task.task.created_at),
   );
   const filtered =
@@ -410,6 +496,7 @@ export async function doRunTaskList(options: TaskListOptions, ctx: TaskContext):
           created_at: t.task.task.created_at,
           updated_at: t.task.task.updated_at,
           linked_session_count: t.task.task.linked_sessions.length,
+          archived: archivedIdSet.has(t.task.task.id),
         })),
         null,
         2,
@@ -417,16 +504,21 @@ export async function doRunTaskList(options: TaskListOptions, ctx: TaskContext):
     );
     return;
   }
-  printTaskListText(filtered);
+  printTaskListText(filtered, archivedIdSet);
 }
 
-function printTaskListText(entries: ReadonlyArray<TaskDocument>): void {
+function printTaskListText(
+  entries: ReadonlyArray<TaskDocument>,
+  archivedIds: ReadonlySet<string>,
+): void {
   const rows = entries.map((t) => ({
     sid: shortTaskId(t.task.task.id),
     status: t.task.task.status,
     createdAt: t.task.task.created_at,
     label: t.task.task.label ?? "(none)",
-    title: t.task.task.title,
+    // Mark archived entries with a leading [archived] tag so the operator
+    // can distinguish them from live tasks when --include-archived is on.
+    title: archivedIds.has(t.task.task.id) ? `[archived] ${t.task.task.title}` : t.task.task.title,
     linkedCount: String(t.task.task.linked_sessions.length),
   }));
   const widths = {
@@ -488,8 +580,8 @@ export async function doRunTaskShow(
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
-  const taskId = await resolveTaskId(paths, idInput);
-  const doc = await readTaskFile(paths, taskId);
+  const taskId = await resolveTaskId(paths, idInput, { includeArchived: true });
+  const { doc, archived } = await readTaskFileWithArchiveFallback(paths, taskId);
 
   // Collect events related to this task by replaying every session's
   // events.jsonl and filtering by task_id. Could be optimised via index.json
@@ -510,7 +602,9 @@ export async function doRunTaskShow(
           (ev.type === "task_created" ||
             ev.type === "task_status_changed" ||
             ev.type === "task_reconciled" ||
-            ev.type === "task_linkage_refreshed") &&
+            ev.type === "task_linkage_refreshed" ||
+            ev.type === "task_deleted" ||
+            ev.type === "task_archived") &&
           ev.task_id === taskId
         ) {
           events.push(ev);
@@ -535,6 +629,7 @@ export async function doRunTaskShow(
           task: doc.task.task,
           body: doc.body,
           linked_sessions: [...linkedSessionIds],
+          archived,
           events,
         },
         null,
@@ -544,7 +639,7 @@ export async function doRunTaskShow(
     return;
   }
 
-  printTaskShowText(doc, [...linkedSessionIds], events, sessions, options);
+  printTaskShowText(doc, [...linkedSessionIds], events, sessions, options, archived);
 }
 
 function printTaskShowText(
@@ -553,9 +648,11 @@ function printTaskShowText(
   events: ReadonlyArray<Event>,
   sessionEntries: ReadonlyArray<SessionEntry>,
   options: TaskShowOptions,
+  archived: boolean,
 ): void {
   const t = doc.task.task;
-  console.log(`Task: ${t.id}`);
+  const archivedTag = archived ? " [archived]" : "";
+  console.log(`Task: ${t.id}${archivedTag}`);
   console.log(`  Title:       ${t.title}`);
   console.log(`  Status:      ${t.status}`);
   console.log(`  Label:       ${t.label ?? "(none)"}`);
@@ -615,6 +712,12 @@ function formatTaskEvent(ev: Event): string {
     const removed = ev.removed_linked_sessions.length;
     const finalPart = ev.final_count !== undefined ? `, final=${ev.final_count}` : "";
     return `${ev.occurred_at} [${ev.source}]  task_linkage_refreshed   +${added} / -${removed}${finalPart}`;
+  }
+  if (ev.type === "task_deleted") {
+    return `${ev.occurred_at} [${ev.source}]  task_deleted             ${ev.title}`;
+  }
+  if (ev.type === "task_archived") {
+    return `${ev.occurred_at} [${ev.source}]  task_archived            ${ev.title}`;
   }
   return `${ev.occurred_at} [${ev.source}]  ${ev.type}`;
 }
@@ -1086,6 +1189,235 @@ function printRefreshLinkageText(result: RefreshLinkageResult, input: { dryRun: 
 }
 
 // ============================================================================
+// task edit / delete / archive
+// ============================================================================
+
+export async function runTaskEdit(
+  taskIdInput: string,
+  options: TaskEditOptions,
+  ctx: TaskContext = {},
+): Promise<void> {
+  try {
+    await doRunTaskEdit(taskIdInput, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options), classifiers: TASK_CLASSIFIERS });
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunTaskEdit(
+  taskIdInput: string,
+  options: TaskEditOptions,
+  ctx: TaskContext,
+): Promise<void> {
+  if (taskIdInput.trim().length === 0) {
+    throw new Error("Task id is empty");
+  }
+  if (options.title === undefined && options.status === undefined) {
+    throw new Error("Nothing to edit: provide --title or --status");
+  }
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForTask(cwd, "edit");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+  const manifest = await readManifest(paths);
+  const taskId = (await resolveTaskId(paths, taskIdInput)) as PrefixedId<"task">;
+  const now = ctx.nowProvider !== undefined ? ctx.nowProvider() : new Date();
+  const occurredAt = now.toISOString();
+
+  const result = await editTask({
+    paths,
+    taskId,
+    occurredAt,
+    manifest,
+    workingDirectory: repositoryRoot,
+    ...(options.title !== undefined ? { title: options.title } : {}),
+    ...(options.status !== undefined ? { newStatus: options.status } : {}),
+  });
+
+  if (options.json === true) {
+    console.log(
+      JSON.stringify({
+        task_id: result.taskId,
+        title_updated: result.titleUpdated,
+        status_updated: result.statusUpdated,
+        previous_status: result.previousStatus,
+        new_status: result.newStatus,
+        status_change_session_id: result.statusChangeSession?.sessionId ?? null,
+        status_change_event_id: result.statusChangeSession?.eventId ?? null,
+      }),
+    );
+    return;
+  }
+  if (result.statusUpdated) {
+    const sid =
+      result.statusChangeSession !== null
+        ? ` (in session ${shortSessionId(result.statusChangeSession.sessionId)})`
+        : "";
+    console.log(
+      `Updated ${result.taskId} status: ${result.previousStatus} -> ${result.newStatus}${sid}`,
+    );
+  }
+  if (result.titleUpdated) {
+    console.log(`Updated ${result.taskId} title.`);
+  }
+  if (!result.statusUpdated && !result.titleUpdated) {
+    // Both fields were supplied but matched the current values exactly —
+    // tell the operator the task was already in the requested state.
+    console.log(`No changes for ${result.taskId}.`);
+  }
+}
+
+export async function runTaskDelete(
+  taskIdInput: string,
+  options: TaskDeleteOptions,
+  ctx: TaskContext = {},
+): Promise<void> {
+  try {
+    await doRunTaskDelete(taskIdInput, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options), classifiers: TASK_CLASSIFIERS });
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunTaskDelete(
+  taskIdInput: string,
+  options: TaskDeleteOptions,
+  ctx: TaskContext,
+): Promise<void> {
+  if (taskIdInput.trim().length === 0) {
+    throw new Error("Task id is empty");
+  }
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForTask(cwd, "delete");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+  const manifest = await readManifest(paths);
+  const taskId = (await resolveTaskId(paths, taskIdInput)) as PrefixedId<"task">;
+
+  if (options.yes !== true) {
+    await confirmDestructiveAction("delete", taskId);
+  }
+
+  const now = ctx.nowProvider !== undefined ? ctx.nowProvider() : new Date();
+  const occurredAt = now.toISOString();
+  const result = await deleteTask({
+    paths,
+    manifest,
+    taskId,
+    occurredAt,
+    workingDirectory: repositoryRoot,
+  });
+
+  if (options.json === true) {
+    console.log(
+      JSON.stringify({
+        task_id: result.taskId,
+        title: result.title,
+        session_id: result.sessionId,
+        event_id: result.eventId,
+      }),
+    );
+    return;
+  }
+  console.log(
+    `Deleted ${result.taskId} ("${result.title}") in ad-hoc session ${shortSessionId(result.sessionId)}.`,
+  );
+}
+
+export async function runTaskArchive(
+  taskIdInput: string,
+  options: TaskArchiveOptions,
+  ctx: TaskContext = {},
+): Promise<void> {
+  try {
+    await doRunTaskArchive(taskIdInput, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options), classifiers: TASK_CLASSIFIERS });
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunTaskArchive(
+  taskIdInput: string,
+  options: TaskArchiveOptions,
+  ctx: TaskContext,
+): Promise<void> {
+  if (taskIdInput.trim().length === 0) {
+    throw new Error("Task id is empty");
+  }
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForTask(cwd, "archive");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+  const manifest = await readManifest(paths);
+  const taskId = (await resolveTaskId(paths, taskIdInput)) as PrefixedId<"task">;
+
+  if (options.yes !== true) {
+    await confirmDestructiveAction("archive", taskId);
+  }
+
+  const now = ctx.nowProvider !== undefined ? ctx.nowProvider() : new Date();
+  const occurredAt = now.toISOString();
+  const result = await archiveTask({
+    paths,
+    manifest,
+    taskId,
+    occurredAt,
+    workingDirectory: repositoryRoot,
+  });
+
+  if (options.json === true) {
+    console.log(
+      JSON.stringify({
+        task_id: result.taskId,
+        title: result.title,
+        session_id: result.sessionId,
+        event_id: result.eventId,
+      }),
+    );
+    return;
+  }
+  console.log(
+    `Archived ${result.taskId} ("${result.title}") in ad-hoc session ${shortSessionId(result.sessionId)}.`,
+  );
+}
+
+/**
+ * Read a single y/N answer from stdin when stdin is a TTY. Refuses to wait
+ * for input when stdin is not a TTY (operator must pass --yes explicitly),
+ * so piping `echo y | basou task delete` cannot accidentally trigger a
+ * destructive action.
+ */
+async function confirmDestructiveAction(
+  action: "delete" | "archive",
+  taskId: string,
+): Promise<void> {
+  if (process.stdin.isTTY !== true) {
+    throw new Error(`Refusing to ${action} without TTY; rerun with --yes to skip confirmation.`);
+  }
+  const verb = action === "delete" ? "Delete" : "Archive";
+  process.stdout.write(`${verb} task \`${taskId}\`? [y/N] `);
+  const answer = await readSingleLineFromStdin();
+  const normalized = answer.trim().toLowerCase();
+  if (normalized !== "y" && normalized !== "yes") {
+    throw new Error(`${verb} aborted by user.`);
+  }
+}
+
+async function readSingleLineFromStdin(): Promise<string> {
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const line = await rl.question("");
+    return line;
+  } finally {
+    rl.close();
+  }
+}
+
+// ============================================================================
 // option converters
 // ============================================================================
 
@@ -1181,7 +1513,16 @@ async function readDescriptionFile(path: string): Promise<string> {
 
 async function resolveRepositoryRootForTask(
   cwd: string,
-  subcmd: "new" | "list" | "show" | "status" | "reconcile" | "refresh-linkage",
+  subcmd:
+    | "new"
+    | "list"
+    | "show"
+    | "status"
+    | "reconcile"
+    | "refresh-linkage"
+    | "edit"
+    | "delete"
+    | "archive",
 ): Promise<string> {
   try {
     return await resolveRepositoryRoot(cwd);
@@ -1266,6 +1607,10 @@ function describeUnsafeArtefact(
       return `linkage refresh session ${sid} (finalize incomplete)`;
     case "linkage-refresh-concurrent":
       return `task ${tid} file (concurrent modification detected)`;
+    case "delete":
+      return `task ${tid} file (delete incomplete; file still on disk)`;
+    case "archive":
+      return `task ${tid} file (archive incomplete; check tasks/ and tasks/archive/)`;
   }
 }
 
@@ -1289,6 +1634,10 @@ function describeWriteFailureWarning(phase: TaskWriteAfterEventError["phase"]): 
       return "linkage refresh session finalize failed (session.yaml status update)";
     case "linkage-refresh-concurrent":
       return "task.md was modified concurrently; re-run refresh-linkage to retry";
+    case "delete":
+      return "task.md unlink failed after task_deleted event committed";
+    case "archive":
+      return "task.md move to archive/ failed after task_archived event committed";
   }
 }
 

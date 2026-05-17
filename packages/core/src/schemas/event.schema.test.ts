@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   EventSchema,
+  type TaskArchivedEvent,
+  type TaskDeletedEvent,
   type TaskLinkageRefreshedEvent,
   type TaskReconciledEvent,
 } from "./event.schema.js";
@@ -385,6 +387,83 @@ describe("TaskLinkageRefreshedEventSchema", () => {
       throw new Error("expected task_linkage_refreshed narrowing");
     }
     const narrowed: TaskLinkageRefreshedEvent = parsed;
+    expect(narrowed.task_id).toBe("task_01HXABCDEF1234567890ABCDEF");
+  });
+});
+
+describe("TaskDeletedEventSchema", () => {
+  const BASE_DELETED = {
+    ...BASE,
+    type: "task_deleted" as const,
+    task_id: "task_01HXABCDEF1234567890ABCDEF",
+    title: "the deleted task",
+  };
+
+  it("parses a valid task_deleted payload", () => {
+    const result = EventSchema.safeParse(BASE_DELETED);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "task_deleted") {
+      throw new Error("expected task_deleted narrowing");
+    }
+    expect(result.data.task_id).toBe("task_01HXABCDEF1234567890ABCDEF");
+    expect(result.data.title).toBe("the deleted task");
+  });
+
+  it("rejects an empty title (non-empty string contract)", () => {
+    const result = EventSchema.safeParse({ ...BASE_DELETED, title: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an extra field (`.strict()` contract)", () => {
+    const result = EventSchema.safeParse({ ...BASE_DELETED, reason: "operator note" });
+    expect(result.success).toBe(false);
+  });
+
+  it("narrows the EventSchema union to TaskDeletedEvent", () => {
+    const parsed = EventSchema.parse(BASE_DELETED);
+    if (parsed.type !== "task_deleted") {
+      throw new Error("expected task_deleted narrowing");
+    }
+    const narrowed: TaskDeletedEvent = parsed;
+    expect(narrowed.title).toBe("the deleted task");
+  });
+});
+
+describe("TaskArchivedEventSchema", () => {
+  const BASE_ARCHIVED = {
+    ...BASE,
+    type: "task_archived" as const,
+    task_id: "task_01HXABCDEF1234567890ABCDEF",
+    title: "the archived task",
+  };
+
+  it("parses a valid task_archived payload", () => {
+    const result = EventSchema.safeParse(BASE_ARCHIVED);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "task_archived") {
+      throw new Error("expected task_archived narrowing");
+    }
+    expect(result.data.title).toBe("the archived task");
+  });
+
+  it("rejects an empty title (non-empty string contract)", () => {
+    const result = EventSchema.safeParse({ ...BASE_ARCHIVED, title: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an extra field (`.strict()` contract)", () => {
+    const result = EventSchema.safeParse({ ...BASE_ARCHIVED, reason: "operator note" });
+    expect(result.success).toBe(false);
+  });
+
+  it("narrows the EventSchema union to TaskArchivedEvent", () => {
+    const parsed = EventSchema.parse(BASE_ARCHIVED);
+    if (parsed.type !== "task_archived") {
+      throw new Error("expected task_archived narrowing");
+    }
+    const narrowed: TaskArchivedEvent = parsed;
     expect(narrowed.task_id).toBe("task_01HXABCDEF1234567890ABCDEF");
   });
 });

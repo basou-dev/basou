@@ -2005,3 +2005,249 @@ describe("refreshTaskLinkedSessions", () => {
     expect(result.finalCount).toBe(1);
   });
 });
+
+// ============================================================================
+// editTask
+// ============================================================================
+
+describe("editTask", () => {
+  it("updates title only without firing any event", async () => {
+    const { editTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "old title",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const sessionsBefore = (await readdir(paths.sessions)).filter((s) => s.startsWith("ses_"));
+
+    const result = await editTask({
+      paths,
+      taskId: TASK_ID_A,
+      title: "new title",
+      occurredAt: "2026-05-12T12:00:00+09:00",
+    });
+    expect(result.titleUpdated).toBe(true);
+    expect(result.statusUpdated).toBe(false);
+    expect(result.statusChangeSession).toBeNull();
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.title).toBe("new title");
+    expect(doc.task.task.updated_at).toBe("2026-05-12T12:00:00+09:00");
+    // No new ad-hoc session was minted for a title-only edit.
+    const sessionsAfter = (await readdir(paths.sessions)).filter((s) => s.startsWith("ses_"));
+    expect(sessionsAfter.length).toBe(sessionsBefore.length);
+  });
+
+  it("updates status through updateTaskStatusWithEvent (event fired)", async () => {
+    const { editTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "the task",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const result = await editTask({
+      paths,
+      taskId: TASK_ID_A,
+      newStatus: "in_progress",
+      occurredAt: "2026-05-12T12:00:00+09:00",
+      manifest: makeManifest(),
+      workingDirectory: getWorkDir(),
+    });
+    expect(result.statusUpdated).toBe(true);
+    expect(result.previousStatus).toBe("planned");
+    expect(result.newStatus).toBe("in_progress");
+    expect(result.statusChangeSession).not.toBeNull();
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.status).toBe("in_progress");
+  });
+
+  it("rejects when neither --title nor --status is given", async () => {
+    const { editTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await expect(
+      editTask({
+        paths,
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+      }),
+    ).rejects.toThrow("Nothing to edit");
+  });
+});
+
+// ============================================================================
+// deleteTask
+// ============================================================================
+
+describe("deleteTask", () => {
+  it("fires task_deleted event and unlinks task.md", async () => {
+    const { deleteTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "doomed task",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const result = await deleteTask({
+      paths,
+      manifest: makeManifest(),
+      taskId: TASK_ID_A,
+      occurredAt: "2026-05-12T12:00:00+09:00",
+      workingDirectory: getWorkDir(),
+    });
+    expect(result.title).toBe("doomed task");
+    // task.md no longer in the main dir.
+    const mainTasks = (await readdir(paths.tasks, { withFileTypes: true })).filter((d) =>
+      d.isFile(),
+    );
+    expect(mainTasks.find((d) => d.name === `${TASK_ID_A}.md`)).toBeUndefined();
+    // Event lives on the ad-hoc session that fired it.
+    const events = (await readFile(join(paths.sessions, result.sessionId, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const deletedEvent = events.find((e) => e.type === "task_deleted");
+    expect(deletedEvent).toMatchObject({
+      task_id: TASK_ID_A,
+      title: "doomed task",
+    });
+    // The ad-hoc session.yaml.task_id is NOT pinned to the deleted task —
+    // pinning would create a guaranteed broken reference once the file is
+    // gone.
+    const yaml = await readFile(join(paths.sessions, result.sessionId, "session.yaml"), "utf8");
+    expect(yaml).toContain("task_id: null");
+  });
+
+  it("rejects when the task does not exist", async () => {
+    const { deleteTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await expect(
+      deleteTask({
+        paths,
+        manifest: makeManifest(),
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+      }),
+    ).rejects.toThrow("Task file not found");
+  });
+});
+
+// ============================================================================
+// archiveTask
+// ============================================================================
+
+describe("archiveTask", () => {
+  it("moves task.md to archive/ and fires task_archived event", async () => {
+    const { archiveTask, enumerateArchivedTaskIds } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "to archive",
+      initialStatus: "done",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const result = await archiveTask({
+      paths,
+      manifest: makeManifest(),
+      taskId: TASK_ID_A,
+      occurredAt: "2026-05-12T12:00:00+09:00",
+      workingDirectory: getWorkDir(),
+    });
+    expect(result.title).toBe("to archive");
+    // Original task.md is gone from the main dir.
+    const mainTasks = (await readdir(paths.tasks, { withFileTypes: true })).filter(
+      (d) => d.isFile() && d.name.endsWith(".md"),
+    );
+    expect(mainTasks.find((d) => d.name === `${TASK_ID_A}.md`)).toBeUndefined();
+    // archive dir contains the file now.
+    const archivedIds = await enumerateArchivedTaskIds(paths);
+    expect(archivedIds).toContain(TASK_ID_A);
+    // Event session.yaml.task_id IS pinned (unlike delete) because the
+    // task continues to exist at the new path.
+    const yaml = await readFile(join(paths.sessions, result.sessionId, "session.yaml"), "utf8");
+    expect(yaml).toContain(`task_id: ${TASK_ID_A}`);
+  });
+
+  it("includes the archive session in linked_sessions[] of the archived task.md", async () => {
+    const { archiveTask, readTaskFileWithArchiveFallback } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "linked archive",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const result = await archiveTask({
+      paths,
+      manifest: makeManifest(),
+      taskId: TASK_ID_A,
+      occurredAt: "2026-05-12T12:00:00+09:00",
+      workingDirectory: getWorkDir(),
+    });
+    const { doc, archived } = await readTaskFileWithArchiveFallback(paths, TASK_ID_A);
+    expect(archived).toBe(true);
+    expect(doc.task.task.linked_sessions).toContain(result.sessionId);
+  });
+});
+
+// ============================================================================
+// readTaskFileWithArchiveFallback
+// ============================================================================
+
+describe("readTaskFileWithArchiveFallback", () => {
+  it("returns archived=false for a main-dir task", async () => {
+    const { readTaskFileWithArchiveFallback } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await writeFile(join(paths.tasks, `${TASK_ID_A}.md`), makeRawTaskMd());
+    const { doc, archived } = await readTaskFileWithArchiveFallback(paths, TASK_ID_A);
+    expect(archived).toBe(false);
+    expect(doc.task.task.id).toBe(TASK_ID_A);
+  });
+
+  it("returns archived=true when the file only exists in archive/", async () => {
+    const { readTaskFileWithArchiveFallback } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await mkdir(join(paths.tasks, "archive"), { recursive: true });
+    await writeFile(join(paths.tasks, "archive", `${TASK_ID_A}.md`), makeRawTaskMd());
+    const { doc, archived } = await readTaskFileWithArchiveFallback(paths, TASK_ID_A);
+    expect(archived).toBe(true);
+    expect(doc.task.task.id).toBe(TASK_ID_A);
+  });
+
+  it("throws Task file not found when neither dir has the file", async () => {
+    const { readTaskFileWithArchiveFallback } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await expect(readTaskFileWithArchiveFallback(paths, TASK_ID_A)).rejects.toThrow(
+      "Task file not found",
+    );
+  });
+});

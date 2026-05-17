@@ -23,6 +23,9 @@ import {
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  doRunTaskArchive,
+  doRunTaskDelete,
+  doRunTaskEdit,
   doRunTaskList,
   doRunTaskNew,
   doRunTaskReconcile,
@@ -30,6 +33,9 @@ import {
   doRunTaskShow,
   doRunTaskStatus,
   registerTaskCommand,
+  runTaskArchive,
+  runTaskDelete,
+  runTaskEdit,
   runTaskList,
   runTaskNew,
   runTaskReconcile,
@@ -1545,5 +1551,167 @@ describe("doRunTaskRefreshLinkage", () => {
     expect(stderr).toContain("Task not found");
     expect(stderr).not.toContain(repo);
     expect(process.exitCode).toBe(1);
+  });
+});
+
+// ============================================================================
+// task edit / delete / archive
+// ============================================================================
+
+describe("doRunTaskEdit", () => {
+  it("t-edit-1: --title updates task.md without firing an event", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "edit-target" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const sessionsBefore = (await readdir(basouPaths(repo).sessions)).filter((s) =>
+      s.startsWith("ses_"),
+    );
+    captureStdout();
+    await doRunTaskEdit(taskId, { title: "renamed" }, { cwd: repo, ...FIXED_CTX_2 });
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("title: renamed");
+    // No new ad-hoc session was minted by the title-only edit.
+    const sessionsAfter = (await readdir(basouPaths(repo).sessions)).filter((s) =>
+      s.startsWith("ses_"),
+    );
+    expect(sessionsAfter.length).toBe(sessionsBefore.length);
+  });
+
+  it("t-edit-2: --status routes through STATUS_TRANSITIONS and fires task_status_changed", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "status-edit" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const out = captureStdout();
+    await doRunTaskEdit(taskId, { status: "in_progress" }, { cwd: repo, ...FIXED_CTX_2 });
+    expect(joinCalls(out)).toContain(`Updated ${taskId} status: planned -> in_progress`);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("status: in_progress");
+  });
+
+  it("t-edit-3: neither --title nor --status is rejected before any disk write", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "x" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const err = captureStderr();
+    await runTaskEdit(taskId, {}, { cwd: repo, ...FIXED_CTX_2 });
+    expect(joinCalls(err)).toContain("Nothing to edit");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("doRunTaskDelete", () => {
+  it("t-del-1: --yes hard-deletes task.md and fires task_deleted event", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "doomed task" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const out = captureStdout();
+    await doRunTaskDelete(taskId, { yes: true }, { cwd: repo, ...FIXED_CTX_2 });
+    expect(joinCalls(out)).toContain(`Deleted ${taskId}`);
+    // task.md gone from main dir.
+    const mainTasks = (await readdir(basouPaths(repo).tasks, { withFileTypes: true })).filter((d) =>
+      d.isFile(),
+    );
+    expect(mainTasks.find((d) => d.name === `${taskId}.md`)).toBeUndefined();
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("t-del-2: without --yes and no TTY, exits 1 with a pathless message", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "doomed-no-tty" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const err = captureStderr();
+    // In a non-TTY test environment process.stdin.isTTY is undefined; the
+    // implementation refuses to prompt without --yes.
+    await runTaskDelete(taskId, {}, { cwd: repo, ...FIXED_CTX_2 });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("Refusing to delete without TTY");
+    expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
+    // task.md remains.
+    const mainTasks = (await readdir(basouPaths(repo).tasks)).filter((f) => f.endsWith(".md"));
+    expect(mainTasks).toContain(`${taskId}.md`);
+  });
+
+  it("t-del-3: --json on success emits the audit payload", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "json-doomed" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const out = captureStdout();
+    await doRunTaskDelete(taskId, { yes: true, json: true }, { cwd: repo, ...FIXED_CTX_2 });
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(payload.task_id).toBe(taskId);
+    expect(payload.title).toBe("json-doomed");
+    expect(typeof payload.session_id).toBe("string");
+    expect(typeof payload.event_id).toBe("string");
+  });
+});
+
+describe("doRunTaskArchive", () => {
+  it("t-arch-1: --yes moves task.md to archive/ and fires task_archived event", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "to-archive" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const out = captureStdout();
+    await doRunTaskArchive(taskId, { yes: true }, { cwd: repo, ...FIXED_CTX_2 });
+    expect(joinCalls(out)).toContain(`Archived ${taskId}`);
+    const mainTasks = (await readdir(basouPaths(repo).tasks, { withFileTypes: true })).filter(
+      (d) => d.isFile() && d.name.endsWith(".md"),
+    );
+    expect(mainTasks.find((d) => d.name === `${taskId}.md`)).toBeUndefined();
+    const archiveTasks = await readdir(join(basouPaths(repo).tasks, "archive"));
+    expect(archiveTasks).toContain(`${taskId}.md`);
+  });
+
+  it("t-arch-2: without --yes and no TTY, exits 1 with a pathless message", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "archive-no-tty" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const err = captureStderr();
+    await runTaskArchive(taskId, {}, { cwd: repo, ...FIXED_CTX_2 });
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("Refusing to archive without TTY");
+    expect(stderr).not.toContain(repo);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("t-arch-3: task list default hides archived; --include-archived shows them with [archived] tag", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "live-task" }, { cwd: repo, ...FIXED_CTX });
+    await doRunTaskNew({ title: "to-archive-list" }, { cwd: repo, ...FIXED_CTX_2 });
+    const taskIds = await readdir(basouPaths(repo).tasks);
+    const filenameToArchive = taskIds.find((f) => f.endsWith(".md") && f.startsWith("task_"));
+    const taskIdToArchive = (filenameToArchive as string).replace(/\.md$/, "");
+    captureStdout();
+    await doRunTaskArchive(taskIdToArchive, { yes: true }, { cwd: repo, ...FIXED_CTX_2 });
+
+    const defaultOut = captureStdout();
+    await doRunTaskList({}, { cwd: repo, ...FIXED_CTX });
+    const defaultText = joinCalls(defaultOut);
+    expect(defaultText).not.toContain("[archived]");
+
+    const allOut = captureStdout();
+    await doRunTaskList({ includeArchived: true }, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(allOut)).toContain("[archived]");
+  });
+
+  it("t-arch-4: task show falls back to archive and tags the header", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "to-show-archived" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    captureStdout();
+    await doRunTaskArchive(taskId, { yes: true }, { cwd: repo, ...FIXED_CTX_2 });
+    const out = captureStdout();
+    await doRunTaskShow(taskId, {}, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(out)).toContain("[archived]");
   });
 });
