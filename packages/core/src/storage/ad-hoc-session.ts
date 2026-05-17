@@ -46,6 +46,15 @@ export class FailedToFinalizeError extends Error {
   ) {
     super("Failed to finalize ad-hoc session", { cause });
     this.name = "FailedToFinalizeError";
+    if (targetEventIds.length === 0) {
+      // Defensive guard for direct (non-orchestrator) constructors. The
+      // orchestrator already rejects an empty `targetEventBuilders` array
+      // before any ID minting, but `FailedToFinalizeError` is a public
+      // exported class and `error-render.ts` reads `targetEventIds[0]` as
+      // the operator-facing anchor — an empty array there would surface as
+      // `"Recorded undefined ..."`.
+      throw new Error("FailedToFinalizeError requires at least one target event id");
+    }
     this.sessionId = sessionId;
     this.targetEventIds = targetEventIds;
   }

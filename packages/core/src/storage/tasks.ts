@@ -8,7 +8,7 @@ import { findErrorCode } from "../lib/error-codes.js";
 import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { SessionStatus } from "../schemas/session.schema.js";
-import { SessionIdSchema, TaskIdSchema } from "../schemas/shared.schema.js";
+import { IsoTimestampSchema, SessionIdSchema, TaskIdSchema } from "../schemas/shared.schema.js";
 import {
   type Task,
   TaskSchema,
@@ -46,15 +46,19 @@ const DEFAULT_ATTACHABLE_STATUSES: ReadonlySet<AttachableStatus> = new Set<Attac
 ]);
 
 // Boundary parses for direct callers so a malformed task cannot smuggle
-// past the CLI-side parsers and commit a `task_created` event.
-// `initialStatus` was originally restricted to `planned | in_progress`
-// (Codex Y3t-3-H1) but now accepts any TaskStatus so retroactively-recorded
-// terminal tasks can be entered in one CLI call; the orchestrator emits a
-// follow-up `task_status_changed` event so the audit trail still records
-// the implicit transition from `planned`.
+// past the CLI-side parsers and commit a `task_created` event. The set
+// originally rejected `done` / `cancelled` as initial values, but the
+// orchestrator now emits a follow-up `task_status_changed` for terminal
+// initial statuses so retroactively-recorded completed tasks can be
+// entered in one CLI call; widening the schema lets that path through.
 const InitialTaskStatusSchema = TaskStatusSchema;
 const TaskTitleSchema = z.string().min(1);
 const TaskLabelSchema = z.string().min(1);
+// `completedAt` is an optional ISO-8601 string. Validate it at the boundary
+// so a direct (non-CLI) caller cannot smuggle a garbage timestamp past the
+// orchestrator and leave durable `task_created` / `task_status_changed`
+// events with no valid task.md to back them up.
+const CompletedAtSchema = IsoTimestampSchema;
 
 const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>(["done", "cancelled"]);
 
@@ -543,6 +547,9 @@ export async function createTaskWithEvent(input: CreateTaskInput): Promise<Creat
   TaskTitleSchema.parse(input.title);
   if (input.label !== undefined) {
     TaskLabelSchema.parse(input.label);
+  }
+  if (input.completedAt !== undefined) {
+    CompletedAtSchema.parse(input.completedAt);
   }
 
   if (input.mode === "ad-hoc") {

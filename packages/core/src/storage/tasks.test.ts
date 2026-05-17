@@ -1007,6 +1007,32 @@ describe("createTaskWithEvent boundary validation (Codex Y3t-3-H1)", () => {
     expect(sessionDirs.filter((d) => d.startsWith("ses_"))).toHaveLength(0);
   });
 
+  it("rejects an invalid completedAt before any event is written (ad-hoc)", async () => {
+    // A direct (non-CLI) caller could supply a garbage timestamp; the
+    // boundary parse must reject it before events.jsonl is written so the
+    // orchestrator never leaves durable `task_created` events with no
+    // schema-valid task.md to back them up.
+    const paths = await setupPaths();
+    await expect(
+      createTaskWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: OCC_AT,
+        taskId: TASK_ID_A,
+        title: "smuggled-completedAt",
+        initialStatus: "done",
+        description: "",
+        workingDirectory: getWorkDir(),
+        completedAt: "yesterday",
+      }),
+    ).rejects.toThrow();
+    const sessionDirs = await readdir(paths.sessions);
+    expect(sessionDirs.filter((d) => d.startsWith("ses_"))).toHaveLength(0);
+    const taskFiles = await readdir(paths.tasks);
+    expect(taskFiles).toHaveLength(0);
+  });
+
   it("rejects an empty label before any event is written (attach)", async () => {
     const paths = await setupPaths();
     await placeRunningSession(paths, SES_ID_RUNNING);

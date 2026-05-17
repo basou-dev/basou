@@ -591,6 +591,20 @@ describe("createAdHocSessionWithEvent (multi-target events)", () => {
     expect(events[5]?.type).toBe("session_ended");
   });
 
+  it("FailedToFinalizeError rejects empty targetEventIds at the constructor", () => {
+    // A direct caller of the exported class could pass an empty array. The
+    // CLI render layer uses `targetEventIds[0]` as the operator-facing
+    // anchor, so an empty array would surface as `"Recorded undefined ..."`.
+    expect(
+      () =>
+        new FailedToFinalizeError(
+          "ses_01HXABCDEF1234567890ABCDFR" as `ses_${string}`,
+          [],
+          new Error("inner"),
+        ),
+    ).toThrow("FailedToFinalizeError requires at least one target event id");
+  });
+
   it("rejects an empty targetEventBuilders array (boundary parse)", async () => {
     const paths = await setupPaths();
     await expect(
