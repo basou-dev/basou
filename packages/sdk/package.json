@@ -1,6 +1,6 @@
 {
   "name": "@basou/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Type-only SDK for Basou adapter authors. v0.1: types only, no runtime.",
