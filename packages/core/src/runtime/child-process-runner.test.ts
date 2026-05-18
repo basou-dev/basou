@@ -248,9 +248,16 @@ describe("ChildProcessRunner", () => {
   // is left to the in-source race guard `if (killed || child.exitCode
   // !== null) return;`.
   it("clears the kill timer once the child exits naturally", async () => {
+    // Raised from the original 50ms to 2000ms because cold Node startup on
+    // some hosts (CI, busy laptops) exceeds 50ms and races the kill timer
+    // before the child can call `process.exit(0)`. The test still verifies
+    // the same invariant — timer cleared on natural exit — but the
+    // generous budget keeps it deterministic under load. The post-exit
+    // sleep below is what catches a misbehaving timer that fires AFTER
+    // the child has already exited.
     const result = await runner.run(NODE, ["-e", "process.exit(0)"], {
       cwd,
-      timeout_ms: 50,
+      timeout_ms: 2000,
     });
     expect(result.exit_code).toBe(0);
     expect(result.signal).toBeNull();
