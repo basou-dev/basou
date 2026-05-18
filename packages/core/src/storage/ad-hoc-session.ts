@@ -18,7 +18,7 @@ import { readSessionYaml } from "./sessions.js";
 import { linkYamlFile, overwriteYamlFile } from "./yaml-store.js";
 
 // ============================================================================
-// Finalization-failure error (Y-3s H4)
+// Finalization-failure error
 // ============================================================================
 
 /**
@@ -61,7 +61,7 @@ export class FailedToFinalizeError extends Error {
 }
 
 // ============================================================================
-// Ad-hoc session path (Y-3s D / F)
+// Ad-hoc session path
 // ============================================================================
 
 export type CreateAdHocSessionInput = {
@@ -317,7 +317,7 @@ function buildInitialSession(input: {
 }
 
 // ============================================================================
-// Attach path (Y-3s E / F)
+// Attach path
 // ============================================================================
 
 export type AttachableStatus = "initialized" | "running" | "waiting_approval";
@@ -347,12 +347,12 @@ export type AppendEventToExistingResult = {
  * so the caller can safely append `decision_recorded` / `note_added` without
  * mutating `related_files`, `summary`, or the session status.
  *
- * Race note (Y-3s H3): the status check and the event append are not atomic.
+ * Race note: the status check and the event append are not atomic.
  * Between them another writer (e.g. `basou run claude-code` ending its
  * session) can flip the YAML to `completed` and append `session_ended`.
  * v0.1 accepts this race; the `events_say_ended_but_yaml_running`-style
- * suspect rule (Y-3o-X1) surfaces the inconsistency. Per-session locking is
- * deferred to release prep (Step 17+ carryover #46).
+ * suspect rule surfaces the inconsistency. Per-session locking is
+ * deferred to a v0.3+ follow-up.
  */
 export async function appendEventToExistingSession(
   input: AppendEventToExistingInput,
@@ -386,7 +386,7 @@ export async function appendEventToExistingSession(
 }
 
 /**
- * Defensive check (Y3s-3-M1): a builder closure could in principle hand back
+ * Defensive check: a builder closure could in principle hand back
  * an event whose `id` or `session_id` differs from the orchestrator's
  * minted values. EventSchema only validates the shape, so this slip would
  * silently corrupt events.jsonl. Reject with a fixed pathless message so

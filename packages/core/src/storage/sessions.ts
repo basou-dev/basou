@@ -8,7 +8,7 @@ import { readYamlFile } from "./yaml-store.js";
 
 /**
  * Threshold above which a still-`running` session with no `session_ended`
- * event is flagged suspect (Y-3o §G Rule B).
+ * event is flagged suspect.
  *
  * 24h: long enough that an active long-running session will not be flagged,
  * short enough that an abandoned process is surfaced within a working day.
@@ -102,7 +102,7 @@ export async function readSessionYaml(paths: BasouPaths, sessionId: string): Pro
 }
 
 /**
- * Classify a `running` session as suspect using Y-3o §G:
+ * Classify a `running` session as suspect using one of two rules:
  *
  * - Rule A (`events_say_ended_but_yaml_running`): events.jsonl contains a
  *   `session_ended` event but the session.yaml is still `running`. The

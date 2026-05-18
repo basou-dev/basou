@@ -132,7 +132,7 @@ describe("readTaskFile", () => {
     expect(doc.body).toBe("fixture body\n");
   });
 
-  it("rejects a BOM-prefixed task.md (Codex Y3t-M3)", async () => {
+  it("rejects a BOM-prefixed task.md", async () => {
     const paths = await setupPaths();
     await writeFile(join(paths.tasks, `${TASK_ID_A}.md`), `﻿${makeRawTaskMd()}`);
     await expect(readTaskFile(paths, TASK_ID_A)).rejects.toThrow("Invalid task file format");
@@ -318,7 +318,7 @@ describe("enumerateTaskIds", () => {
     expect(await enumerateTaskIds(paths)).toEqual([]);
   });
 
-  it("skips files whose names are not valid task ids (Codex Y3t-M5)", async () => {
+  it("skips files whose names are not valid task ids", async () => {
     const paths = await setupPaths();
     await writeFile(join(paths.tasks, "task_bad.md"), "junk");
     await writeFile(join(paths.tasks, "README.md"), "junk");
@@ -664,12 +664,13 @@ describe("updateTaskStatusWithEvent (transition rules)", () => {
     expect(doc.task.task.linked_sessions).toHaveLength(2);
   });
 
-  it("allows planned -> done directly (Y-3z #59 / B-B3 shortcut)", async () => {
-    // Y-3z #59 lifts the prior `planned -> in_progress -> done` two-step
-    // requirement so a task that finished without an explicit in-progress
-    // phase can close in a single CLI call. The 1 transition = 1 event
-    // invariant is preserved — the resulting task.md records a single
-    // `task_status_changed` event with from=planned / to=done.
+  it("allows planned -> done directly (terminal-status shortcut)", async () => {
+    // The terminal-status shortcut lifts the prior `planned -> in_progress
+    // -> done` two-step requirement so a task that finished without an
+    // explicit in-progress phase can close in a single CLI call. The
+    // 1 transition = 1 event invariant is preserved — the resulting
+    // task.md records a single `task_status_changed` event with
+    // from=planned / to=done.
     const paths = await setupPaths();
     await createTaskWithEvent({
       mode: "ad-hoc",
@@ -697,7 +698,7 @@ describe("updateTaskStatusWithEvent (transition rules)", () => {
     expect(doc.task.task.status).toBe("done");
   });
 
-  it("allows planned -> cancelled directly (Y-3z #59 / B-B3 shortcut)", async () => {
+  it("allows planned -> cancelled directly (terminal-status shortcut)", async () => {
     const paths = await setupPaths();
     await createTaskWithEvent({
       mode: "ad-hoc",
@@ -726,7 +727,7 @@ describe("updateTaskStatusWithEvent (transition rules)", () => {
   });
 
   it("still rejects planned -> planned (no-op self-transition)", async () => {
-    // Y-3z #59 only adds the two terminal shortcuts; the self-edge from
+    // The terminal-status shortcut only adds two edges; the self-edge from
     // planned to planned is still disallowed so the audit trail stays
     // strictly monotonic in the status field.
     const paths = await setupPaths();
@@ -832,7 +833,7 @@ describe("updateTaskStatusWithEvent (transition rules)", () => {
       description: "",
       workingDirectory: getWorkDir(),
     });
-    // planned -> cancelled is now a direct shortcut (B-B3), used here only
+    // planned -> cancelled is now a direct shortcut, used here only
     // to land the task in `cancelled` before we probe the self-edge.
     await updateTaskStatusWithEvent({
       mode: "ad-hoc",
@@ -957,10 +958,10 @@ describe("TaskWriteAfterEventError", () => {
 });
 
 // ============================================================================
-// Codex Y3t-3-H1: boundary validation
+// Boundary validation for direct (non-CLI) callers
 // ============================================================================
 
-describe("createTaskWithEvent boundary validation (Codex Y3t-3-H1)", () => {
+describe("createTaskWithEvent boundary validation", () => {
   it("rejects an unknown initialStatus before any event is written (ad-hoc)", async () => {
     // `done` and `cancelled` are now accepted (the orchestrator emits a
     // follow-up `task_status_changed` for terminal initial statuses); the
@@ -1055,10 +1056,10 @@ describe("createTaskWithEvent boundary validation (Codex Y3t-3-H1)", () => {
 });
 
 // ============================================================================
-// Codex Y3t-3-H2 + Y3t-3-M3: staged-write failure injection
+// Staged-write failure injection (TaskWriteAfterEventError phase coverage)
 // ============================================================================
 
-describe("staged-write failure injection (Codex Y3t-3-H2 / Y3t-3-M3)", () => {
+describe("staged-write failure injection", () => {
   async function chmodTasksReadonly(paths: BasouPaths): Promise<void> {
     await chmod(paths.tasks, 0o555);
   }
@@ -1218,7 +1219,7 @@ describe("staged-write failure injection (Codex Y3t-3-H2 / Y3t-3-M3)", () => {
 });
 
 // ============================================================================
-// reconcile (Y-3w / Step 19)
+// reconcile (basou task reconcile)
 // ============================================================================
 
 // ULID body: first char 0-7, remaining 25 chars Crockford (excludes I/L/O/U).
@@ -1325,7 +1326,7 @@ describe("reconcileTask (Step 19)", () => {
   });
 
   // 3
-  it("write: Pattern A+B (Y-3u milestone 20) records both in one event", async () => {
+  it("write: Pattern A+B (both broken_created_in_session and broken_linked) records both in one event", async () => {
     const paths = await setupPaths();
     await placeSessionDir(paths, REACHABLE_SES_A);
     await placeTaskFile(paths, TASK_ID_A, {
@@ -1603,7 +1604,7 @@ describe("reconcileTask (Step 19)", () => {
   });
 
   // 22
-  it("same broken id in created_in_session and linked_sessions (Y-3u milestone 20)", async () => {
+  it("same broken id in created_in_session and linked_sessions (cross-field dedup)", async () => {
     const paths = await setupPaths();
     await placeSessionDir(paths, REACHABLE_SES_A);
     await placeTaskFile(paths, TASK_ID_A, {

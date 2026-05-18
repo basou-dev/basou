@@ -160,10 +160,10 @@ export async function doRunSessionList(
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
-  // Y-3o-X1 消化: orchestration を core の loadSessionEntries に委譲。
-  // 既存 stderr 文言「Skipped <sid>: <reason>」と「Warning: skipped suspect
-  // check for <sid>: events.jsonl unreadable」を保持するため、CLI 側で
-  // onSkip / onWarning を mapping する。
+  // Orchestration is delegated to core's `loadSessionEntries`. To preserve
+  // the existing stderr surface ("Skipped <sid>: <reason>" and
+  // "Warning: skipped suspect check for <sid>: events.jsonl unreadable"),
+  // map onSkip / onWarning on the CLI side.
   const now = new Date();
   const records: SessionListRecord[] = (
     await loadSessionEntries(paths, {
@@ -743,7 +743,7 @@ export async function doRunSessionNote(
   if (hasBody && hasFromFile) {
     throw new Error("--body and --from-file are mutually exclusive");
   }
-  // Y3s-M4: stdin pipe path is not supported in v0.1. Surface a dedicated
+  // The stdin pipe path is not supported in v0.1. Surface a dedicated
   // pathless error before any disk I/O so the failure mode is obvious.
   if (hasFromFile && options.fromFile === "-") {
     throw new Error("--from-file - (stdin) is not supported in v0.1");

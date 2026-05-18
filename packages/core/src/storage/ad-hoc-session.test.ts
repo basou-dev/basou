@@ -295,7 +295,7 @@ describe("createAdHocSessionWithEvent", () => {
     }
   });
 
-  it("rejects invalid sessionSource at the core boundary (Y-3s H2)", async () => {
+  it("rejects invalid sessionSource at the core boundary", async () => {
     const paths = await setupPaths();
     await expect(
       createAdHocSessionWithEvent({
@@ -855,7 +855,7 @@ describe("appendEventToExistingSession", () => {
     ).rejects.toThrow("Invalid Basou event payload");
   });
 
-  it("rejects an invalid sessionId at the core boundary (Y-3s H2)", async () => {
+  it("rejects an invalid sessionId at the core boundary", async () => {
     const paths = await setupPaths();
     await expect(
       appendEventToExistingSession({
@@ -876,7 +876,7 @@ describe("appendEventToExistingSession", () => {
     ).rejects.toThrow();
   });
 
-  it("rejects a target event whose session_id does not match (Y3s-3-M1)", async () => {
+  it("rejects a target event whose session_id does not match", async () => {
     const paths = await setupPaths();
     await placeSession(paths, VALID_SES_ID, "running");
     const FOREIGN_SES_ID = "ses_01HXFOREIGNSESS1234567890";
@@ -904,7 +904,7 @@ describe("appendEventToExistingSession", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("rejects a target event whose id does not match the minted one (Y3s-3-M1)", async () => {
+  it("rejects a target event whose id does not match the minted one", async () => {
     const paths = await setupPaths();
     await placeSession(paths, VALID_SES_ID, "running");
     const STOLEN_EVENT_ID = "evt_01HXSTOLENEVENT1234567890";
@@ -927,7 +927,7 @@ describe("appendEventToExistingSession", () => {
   });
 });
 
-describe("writeEventsBulk error contract (Y3s-3-M2)", () => {
+describe("writeEventsBulk error contract", () => {
   it("surfaces 'Failed to write events.jsonl' without leaking absolute paths in cause.message", async () => {
     const { writeEventsBulk } = await import("../events/event-writer.js");
     // Point at a directory that doesn't exist so the underlying writeFile

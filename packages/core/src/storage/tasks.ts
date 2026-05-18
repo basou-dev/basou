@@ -86,7 +86,7 @@ export type TaskDocument = {
  *   ---\n
  *   <body>
  *
- * Strict rules (Codex Y3t-M3):
+ * Strict rules:
  *   - A UTF-8 BOM at the head is rejected.
  *   - CRLF inside the file is normalised to LF before delimiter scanning so
  *     editors that auto-convert line endings stay compatible.
@@ -362,8 +362,8 @@ export type LoadTaskEntriesOptions = {
  * Read every task.md under `<paths.tasks>/` and return the valid documents,
  * skipping malformed / unreadable files with an `onSkip` callback for each.
  *
- * Returned entries are sorted ascending by `task.created_at` (Codex Y3t-L1:
- * internal asc; the CLI layer reverses for newest-first display).
+ * Returned entries are sorted ascending by `task.created_at` (internal asc;
+ * the CLI layer reverses for newest-first display).
  */
 export async function loadTaskEntries(
   paths: BasouPaths,
@@ -398,14 +398,14 @@ export async function loadTaskEntries(
 }
 
 // ============================================================================
-// Status transition rules (Step 17 §C.2)
+// Status transition rules
 // ============================================================================
 
-// Y-3z #59 / B-B3: `planned -> done` and `planned -> cancelled` are direct
-// shortcuts so a task that was queued but completed (or abandoned) outside
-// of an explicit `in_progress` phase can be closed with a single CLI call.
-// The 1 transition = 1 event invariant is preserved: each shortcut emits
-// exactly one `task_status_changed` event capturing the new from / to pair.
+// `planned -> done` and `planned -> cancelled` are direct shortcuts so a
+// task that was queued but completed (or abandoned) outside of an explicit
+// `in_progress` phase can be closed with a single CLI call. The 1
+// transition = 1 event invariant is preserved: each shortcut emits exactly
+// one `task_status_changed` event capturing the new from / to pair.
 const ALLOWED_TRANSITIONS: Readonly<Record<TaskStatus, ReadonlySet<TaskStatus>>> = {
   planned: new Set<TaskStatus>(["in_progress", "done", "cancelled"]),
   in_progress: new Set<TaskStatus>(["done", "cancelled"]),
@@ -432,22 +432,22 @@ function assertTransitionAllowed(from: TaskStatus, to: TaskStatus): void {
  * in events.jsonl.
  *
  * Reconciliation (= regenerating the missing task.md from events) is a
- * v0.2 feature; see Step 17 申し送り #52.
+ * v0.2 follow-up (= `task reconcile` family).
  */
 /**
  * `phase` identifies which staged write failed after the event commit:
  *   - `create`: task.md create write (ad-hoc or attach path)
  *   - `overwrite`: task.md overwrite during a status change
  *   - `link-session`: session.yaml `task_id` update during the attach path
- *     (Codex Y3t-3-H2: split out so CLI warnings describe the actual
- *     unsafe artefact instead of always saying "task.md creation failed")
+ *     (split out so CLI warnings describe the actual unsafe artefact
+ *     instead of always saying "task.md creation failed")
  *   - `reconcile`: task.md overwrite during `basou task reconcile --write`
- *     after the `task_reconciled` event was persisted (Y-3w §F.3 D4-6)
+ *     after the `task_reconciled` event was persisted
  *   - `reconcile-finalize`: ad-hoc reconcile session finalize failed (=
- *     `FailedToFinalizeError` caught and re-classified, Y-3w §F.3 D4-8)
+ *     `FailedToFinalizeError` caught and re-classified)
  *   - `reconcile-concurrent`: task.md was modified between the pre-write
  *     snapshot and the post-event re-read; the operator is told to re-run
- *     reconcile rather than overwrite a stale snapshot (Y-3w §D.1 stage 6)
+ *     reconcile rather than overwrite a stale snapshot
  */
 export type TaskWriteAfterEventPhase =
   | "create"
@@ -718,8 +718,8 @@ function buildTaskLinkageRefreshedEvent(input: {
  * Race window (v0.1 accepts): stage 2 writes the event, stage 3 writes
  * task.md. A failure on stage 3 leaves events.jsonl ahead of task.md;
  * {@link TaskWriteAfterEventError} surfaces this with a "do not rerun"
- * warning so the operator can reconcile manually until v0.2 reconcile
- * arrives (Step 17 申し送り #52).
+ * warning so the operator can reconcile manually until the v0.2 reconcile
+ * flow arrives.
  */
 export async function createTaskWithEvent(input: CreateTaskInput): Promise<CreateTaskResult> {
   // Boundary parses so direct (non-CLI) callers can't smuggle in malformed
@@ -844,10 +844,11 @@ async function createTaskAttach(input: AttachTaskInput): Promise<CreateTaskResul
       }),
   });
 
-  // 3. Update session.yaml task_id (null → new) so the §2.1 invariant holds.
-  //    Failure here puts us into the same "event persisted, side-effect
-  //    missing" band as task.md. Use phase: "link-session" so the operator
-  //    warning identifies the failed artefact correctly (Codex Y3t-3-H2).
+  // 3. Update session.yaml task_id (null → new) so the single-session ↔
+  //    single-task invariant holds. Failure here puts us into the same
+  //    "event persisted, side-effect missing" band as task.md. Use
+  //    phase: "link-session" so the operator warning identifies the failed
+  //    artefact correctly.
   try {
     const updated = {
       ...sessionDoc,
@@ -1052,7 +1053,7 @@ export type UpdateTaskStatusResult = {
  *
  * Validates the transition BEFORE any event write so a rejected transition
  * leaves events.jsonl untouched. The canonical edge set lives in
- * {@link ALLOWED_TRANSITIONS}; the current shape (Y-3z #59) is:
+ * {@link ALLOWED_TRANSITIONS}; the current shape is:
  *   planned → {in_progress, done, cancelled}
  *   in_progress → {done, cancelled}
  *   done / cancelled are terminal (= idempotent same-state is rejected too).
@@ -1226,7 +1227,7 @@ function buildUpdatedDoc(input: {
 }
 
 // ============================================================================
-// Reconcile (Y-3w / Step 19)
+// Reconcile (basou task reconcile)
 // ============================================================================
 
 /**
@@ -1237,7 +1238,7 @@ function buildUpdatedDoc(input: {
  * `task_reconciled` event ids.
  *
  * Broken `linked_sessions[]` entries are deduplicated against the same session
- * id appearing more than once in the source task.md (Y-3w §C 注 3 / F-3).
+ * id appearing more than once in the source task.md (hand-edit defence).
  */
 export type ReconcileResult = {
   taskId: PrefixedId<"task">;
@@ -1269,7 +1270,7 @@ export type ReconcileFailure = {
  * Batch audit result. Order follows `enumerateTaskIds(paths)` (ULID-ascending).
  * `scanned` is the number of readable task.md files processed (= excludes
  * malformed task.md from the count so an integrity-broken file does not
- * pad the total; Y-3w §B.2 注 / test #17).
+ * pad the total).
  */
 export type ReconcileAllResult = {
   results: ReconcileResult[];
@@ -1286,7 +1287,7 @@ export type ReconcileTaskInput = {
    * Whether the caller invoked reconcile against a single task (`--task <id>`)
    * or as part of a full scan. The ad-hoc reconcile session records the form
    * on its `invocation.args` so audit trails distinguish targeted repairs
-   * from sweeps (Y-3w §B.1):
+   * from sweeps:
    *   - `"single"` -> `["--task", <taskId>, "--write"]`
    *   - `"all"`    -> `["--write"]` (= the operator typed no task id, so the
    *     scan-wide intent is preserved instead of synthesising one per task)
@@ -1295,8 +1296,8 @@ export type ReconcileTaskInput = {
    */
   scope?: "single" | "all";
   /**
-   * Test-only hook (Y-3w §J.4): the test runner uses this to mutate the task
-   * file from outside the reconcile flow between the pre-write snapshot and
+   * Test-only hook: the test runner uses this to mutate the task file
+   * from outside the reconcile flow between the pre-write snapshot and
    * the post-event re-read, simulating a concurrent edit so the
    * `reconcile-concurrent` branch can be exercised deterministically.
    * Production callers leave it undefined.
@@ -1397,12 +1398,12 @@ type DetectedBrokenRefs = {
 
 // `enumerateSessionDirs` returns directory names only — it does NOT validate
 // the contents of each `session.yaml`. By treating directory existence alone
-// as "reachable", reconcile targets the Y-3u §6.9 milestone-20 failure mode
-// (= session directory removed entirely, dangling id remains in task.md) and
-// keeps the "broken" predicate cheap. A directory that exists but whose
+// as "reachable", reconcile targets the dogfood failure mode where a session
+// directory is removed entirely and a dangling id remains in task.md, while
+// keeping the "broken" predicate cheap. A directory that exists but whose
 // session.yaml is missing or schema-invalid is intentionally classified as
 // reachable here; that flavour of corruption is the responsibility of session
-// integrity tools (Step 21 / Y-3y) and is out of scope for v0.2 reconcile.
+// integrity tooling and is out of scope for v0.2 reconcile.
 async function detectBrokenRefs(
   paths: BasouPaths,
   task: Task["task"],
@@ -1412,7 +1413,7 @@ async function detectBrokenRefs(
     ? null
     : (task.created_in_session as PrefixedId<"ses">);
   // Deduplicate broken entries so duplicate broken ids in a hand-edited task.md
-  // surface as a single entry on the event payload (Y-3w F-3 / test #21).
+  // surface as a single entry on the event payload.
   const seen = new Set<string>();
   const brokenLinkedSessions: PrefixedId<"ses">[] = [];
   for (const sid of task.linked_sessions) {
@@ -1461,17 +1462,17 @@ function buildReconciledDoc(input: {
  *
  * The broken `created_in_session` field is REPLACED with the new reconcile
  * session id rather than nulled out — `TaskSchema.created_in_session` is
- * non-nullable, so dropping it would leave the file schema-invalid (Y-3w D1).
+ * non-nullable, so dropping it would leave the file schema-invalid.
  * The old broken id is preserved on the event payload via
  * `removed_created_in_session` for audit.
  *
- * Stages (Y-3w §D.1) — failures after stage 5 surface a phase-specific
+ * Stages — failures after stage 5 surface a phase-specific
  * {@link TaskWriteAfterEventError} so the CLI can render a tailored "do not
  * rerun" hint:
  *   1. Boundary parse
  *   2. Read task.md AND snapshot its mtime/hash from the same raw bytes,
- *      then detect broken refs (Codex review #3 M-3: sharing the raw bytes
- *      closes the readTaskFile-then-snapshot race window).
+ *      then detect broken refs (sharing the raw bytes here closes the
+ *      readTaskFile-then-snapshot race window).
  *   3. Early return when clean (no event fired, no overwrite)
  *   4. (no separate stage anymore — snapshot is taken at stage 2)
  *   5. Mint ad-hoc session + `task_reconciled` event (catch
@@ -1613,9 +1614,8 @@ export async function reconcileTask(
 
 /**
  * Reconcile every task in `.basou/tasks/`. Continues on per-task failures so
- * an isolated {@link TaskWriteAfterEventError} does not stop the batch
- * (Y-3w D4-4). Malformed task.md files are skipped silently and excluded
- * from `scanned`.
+ * an isolated {@link TaskWriteAfterEventError} does not stop the batch.
+ * Malformed task.md files are skipped silently and excluded from `scanned`.
  */
 export async function reconcileAllTasks(
   paths: BasouPaths,
@@ -1630,9 +1630,9 @@ export async function reconcileAllTasks(
 
   for (const id of taskIds) {
     // Probe readability first so malformed task.md does NOT inflate `scanned`
-    // and never reaches the reconcile flow (Y-3w §B.2 注 / test #17). The
-    // readTaskFile call is replayed inside reconcileTask itself — re-reading
-    // is cheap and keeps reconcileTask's contract single-purpose.
+    // and never reaches the reconcile flow. The readTaskFile call is replayed
+    // inside reconcileTask itself — re-reading is cheap and keeps reconcileTask's
+    // contract single-purpose.
     try {
       await readTaskFile(paths, id);
     } catch {

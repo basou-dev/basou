@@ -227,8 +227,8 @@ describe("handoff-renderer", () => {
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.sessionCount).toBe(2);
     // dedup + sort asc, scoped to the 直近の変更ファイル section. The next-to-
-    // read section deliberately reuses `displayedFiles.slice(0, 3)` (Codex#2
-    // Y3q-X2), so a global count would over-report by design.
+    // read section deliberately reuses `displayedFiles.slice(0, 3)`, so a
+    // global count would over-report by design.
     const recentSection = sliceSection(result.body, "## 直近の変更ファイル", "##");
     const idxA = recentSection.indexOf("- src/a.ts");
     const idxB = recentSection.indexOf("- src/b.ts");
@@ -413,7 +413,7 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain(`- 最終 task: ${t2} (planned): second task`);
   });
 
-  it("case 16b: latestTask without task.md surfaces 'status unknown' (Codex Y3t-3-M1)", async () => {
+  it("case 16b: latestTask without task.md surfaces 'status unknown'", async () => {
     const paths = await setupPaths();
     const sid = SES("X0G");
     const taskId = TASK("T07");

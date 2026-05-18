@@ -458,7 +458,7 @@ describe("doRunApprovalShow", () => {
     expect(parsed.events[0]?.type).toBe("approval_requested");
   });
 
-  it("case 13: events.jsonl I/O failure (Y3p-M2) surfaces Failed to read events.jsonl", async () => {
+  it("case 13: events.jsonl I/O failure surfaces Failed to read events.jsonl", async () => {
     const repo = await setupInitedRepo();
     const approvalId = APPR("P01");
     const sessionId = SES("S01");
@@ -575,7 +575,7 @@ describe("runApprovalApprove", () => {
     expect(pendingFiles).toContain(`${approvalId}.yaml`);
   });
 
-  it("case 19: events.jsonl fence (Y3p-H2) prevents a second approval_approved write", async () => {
+  it("case 19: events.jsonl fence prevents a second approval_approved write", async () => {
     const repo = await setupInitedRepo();
     const approvalId = APPR("P01");
     const sessionId = SES("S01");
@@ -692,7 +692,7 @@ describe("runApprovalReject", () => {
     expect(pendingFiles).toContain(`${approvalId}.yaml`);
   });
 
-  it("case 25: events.jsonl fence (Y3p-H2) prevents a second approval_rejected", async () => {
+  it("case 25: events.jsonl fence prevents a second approval_rejected", async () => {
     const repo = await setupInitedRepo();
     const approvalId = APPR("P01");
     const sessionId = SES("S01");
@@ -804,7 +804,7 @@ describe("post-impl review fixes (Codex#3)", () => {
   });
 });
 
-// === resolveApprovalId regression (Y3p-M1) ===
+// === resolveApprovalId regression ===
 
 describe("resolveApprovalId regression", () => {
   it("case 26: same full id in pending + resolved → resolved wins with a warning", async () => {

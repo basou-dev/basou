@@ -1161,7 +1161,7 @@ describe("doRunSessionNote", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("note-14: waiting_approval is an attachable status (Y3s-M5 happy path)", async () => {
+  it("note-14: waiting_approval is an attachable status (happy path)", async () => {
     const repo = await setupInitedRepo();
     const sid = SES("N14");
     await createSession(repo, { id: sid, status: "waiting_approval" });
@@ -1170,7 +1170,7 @@ describe("doRunSessionNote", () => {
     expect(joinCalls(out)).toContain("(waiting_approval)");
   });
 
-  it("note-15: --from-file - (stdin) is rejected before any disk I/O (Y3s-M4)", async () => {
+  it("note-15: --from-file - (stdin) is rejected before any disk I/O", async () => {
     const repo = await setupInitedRepo();
     const sid = SES("N15");
     await createSession(repo, { id: sid, status: "running" });
@@ -1194,7 +1194,7 @@ describe("doRunSessionNote", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("note-17b: --from-file - verbose run does not emit 'Caused by:' (hand-crafted error has no cause, Y3s-3-L1)", async () => {
+  it("note-17b: --from-file - verbose run does not emit 'Caused by:' (hand-crafted error has no cause)", async () => {
     const repo = await setupInitedRepo();
     const sid = SES("N17b");
     await createSession(repo, { id: sid, status: "running" });

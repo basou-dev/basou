@@ -584,14 +584,14 @@ export async function doRunTaskShow(
   const { doc, archived } = await readTaskFileWithArchiveFallback(paths, taskId);
 
   // Collect events related to this task by replaying every session's
-  // events.jsonl and filtering by task_id. Could be optimised via index.json
-  // in v0.2 (Step 17 申し送り #54), v0.1 accepts the linear scan.
+  // events.jsonl and filtering by task_id. Could be optimised via an
+  // index.json cache later; v0.1 accepts the linear scan.
   const sessions = await loadSessionEntries(paths, { now: new Date() });
   const events: Event[] = [];
   const linkedSessionIds = new Set<string>(doc.task.task.linked_sessions);
-  // Codex Y3t-3-M2: replay warnings (malformed JSON / schema violations /
-  // partial trailing lines) and unreadable events.jsonl files must reach
-  // the operator so silent gaps in the events history don't go unnoticed.
+  // Replay warnings (malformed JSON / schema violations / partial trailing
+  // lines) and unreadable events.jsonl files must reach the operator so
+  // silent gaps in the events history don't go unnoticed.
   for (const s of sessions) {
     const sessionDir = join(paths.sessions, s.sessionId);
     try {
@@ -987,7 +987,7 @@ async function printReconcileSingleText(
   }
   const summary = describeBrokenSummary(result, "task", options.verbose);
   console.log(`(dry-run) Would reconcile ${result.taskId}: ${summary}`);
-  console.log("Note: events -> task.md forward sync is out of scope; see Y-3z / Step 22.");
+  console.log("Note: events -> task.md forward sync is handled by `basou task refresh-linkage`.");
   console.log("Re-run with --write to apply.");
 }
 
@@ -1041,7 +1041,7 @@ function printReconcileAllText(
   console.log(
     `Scanned ${scanned} tasks, would reconcile ${results.length} task${results.length === 1 ? "" : "s"} (${totalBrokenRefs} broken ref${totalBrokenRefs === 1 ? "" : "s"}).`,
   );
-  console.log("Note: events -> task.md forward sync is out of scope; see Y-3z / Step 22.");
+  console.log("Note: events -> task.md forward sync is handled by `basou task refresh-linkage`.");
   console.log("Re-run with --write to apply.");
 }
 

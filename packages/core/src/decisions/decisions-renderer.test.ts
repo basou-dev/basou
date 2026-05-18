@@ -208,9 +208,9 @@ describe("decisions-renderer", () => {
   });
 
   // ------------------------------------------------------------------
-  // Y-3z #40 / B-F1: rich field rendering (rationale / alternatives /
-  // rejected_reason / linked_events / linked_files) plus opaque-reference
-  // (missing) marker handling.
+  // Rich field rendering (rationale / alternatives / rejected_reason /
+  // linked_events / linked_files) plus opaque-reference (missing) marker
+  // handling.
   // ------------------------------------------------------------------
 
   it("case rich-1: rationale / alternatives / rejected_reason render on dedicated lines when present", async () => {
@@ -312,7 +312,7 @@ describe("decisions-renderer", () => {
 
   it("case rich-6: a v0.1-shape payload (no rich fields) renders the legacy 4-line section unchanged", async () => {
     // Backward-compat check: events without any of the new fields produce
-    // exactly the same lines as before B-F1.
+    // exactly the same lines as the original 4-line section.
     const paths = await setupPaths();
     const sid = SES("R06");
     const did = DEC("R06");

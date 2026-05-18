@@ -165,7 +165,7 @@ describe("doRunDecisionRecord (ad-hoc path)", () => {
     expect("rationale_saved" in payload).toBe(false);
   });
 
-  it("dec-3: --rationale echoes the value in the text output and is persisted (B-F1 #40)", async () => {
+  it("dec-3: --rationale echoes the value in the text output and is persisted", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
     await doRunDecisionRecord({ title: "T", rationale: "R" }, { cwd: repo, ...FIXED_CTX });
@@ -185,7 +185,7 @@ describe("doRunDecisionRecord (ad-hoc path)", () => {
     expect((decision as { rationale?: unknown }).rationale).toBe("R");
   });
 
-  it("dec-4: --rationale --json persists the rationale field on the JSON payload (B-F1 #40)", async () => {
+  it("dec-4: --rationale --json persists the rationale field on the JSON payload", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
     await doRunDecisionRecord(
@@ -306,7 +306,7 @@ describe("doRunDecisionRecord (attach path)", () => {
     expect(events).toHaveLength(1);
   });
 
-  it("dec-11: waiting_approval is an attachable status (Y3s-M5 happy path)", async () => {
+  it("dec-11: waiting_approval is an attachable status (happy path)", async () => {
     const repo = await setupInitedRepo();
     const sid = SES("D11");
     await createSession(repo, { id: sid, status: "waiting_approval" });
@@ -416,7 +416,7 @@ describe("registerDecisionCommand (CLI option converters)", () => {
   });
 });
 
-describe("doRunDecisionRecord (rich fields, Y-3z #40 / B-F1)", () => {
+describe("doRunDecisionRecord (rich fields)", () => {
   it("dec-rich-1: --alternative twice produces a 2-entry alternatives array on the event payload", async () => {
     const repo = await setupInitedRepo();
     captureStdout();

@@ -207,7 +207,7 @@ describe("basou decisions generate", () => {
     expect(joinCalls(err)).toContain("Markers mismatched in decisions.md");
   });
 
-  it("case 4b (Codex#2 Y3q-M4): events.jsonl unreadable surfaces the existing suspect-check wording", async () => {
+  it("case 4b: events.jsonl unreadable surfaces the existing suspect-check wording", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X10");
     // Place a running session so classifySuspect actually tries to read
@@ -241,7 +241,7 @@ describe("basou decisions generate", () => {
     );
   });
 
-  it("case 4c (Codex#2 Y3q-M4): session.yaml missing emits Skipped <sid>: session_yaml_missing", async () => {
+  it("case 4c: session.yaml missing emits Skipped <sid>: session_yaml_missing", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X11");
     await mkdir(join(basouPaths(repo).sessions, id), { recursive: true });
@@ -251,7 +251,7 @@ describe("basou decisions generate", () => {
     expect(joinCalls(err)).toContain(`Skipped ${id.slice(4, 10)}: session_yaml_missing`);
   });
 
-  it("case 4d (Codex#2 Y3q-M4): session.yaml invalid schema emits Skipped <sid>: session_yaml_invalid", async () => {
+  it("case 4d: session.yaml invalid schema emits Skipped <sid>: session_yaml_invalid", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X12");
     const sessionDir = join(basouPaths(repo).sessions, id);
@@ -266,7 +266,7 @@ describe("basou decisions generate", () => {
     expect(joinCalls(err)).toContain(`Skipped ${id.slice(4, 10)}: session_yaml_invalid`);
   });
 
-  it("case 15a (Codex#3 Y3q-L1): markdown write failure exits 1 with the fixed message", async () => {
+  it("case 15a: markdown write failure exits 1 with the fixed message", async () => {
     const repo = await setupInitedRepo();
     const paths = basouPaths(repo);
     // Make .basou read-only so the tmp file cannot be created.
@@ -282,7 +282,7 @@ describe("basou decisions generate", () => {
     }
   });
 
-  it("case 15b (Codex#3 Y3q-L1): verbose mode surfaces 'Caused by: <code>' on a write failure", async () => {
+  it("case 15b: verbose mode surfaces 'Caused by: <code>' on a write failure", async () => {
     const repo = await setupInitedRepo();
     const paths = basouPaths(repo);
     await chmod(paths.root, 0o555);

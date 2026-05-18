@@ -117,7 +117,7 @@ const FileChangedEventSchema = BaseEventSchema.extend({
 
 // --- Decision / Task / Note events ---
 
-// Y-2 §10.4 / Y-3z #40 (= B-F1): rich fields are all optional so v0.1 payloads
+// Decision rich fields are all optional so v0.1 payloads
 // (= core 4 fields only) round-trip unchanged. References are opaque — the
 // schema only validates the SHAPE (EventId format, non-empty / length-capped
 // strings); existence of the referenced event or file is the renderer's

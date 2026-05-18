@@ -158,7 +158,7 @@ describe("runExec", () => {
     expect(sc2.to).toBe("failed");
   });
 
-  // 3 (Y3m-H2)
+  // 3
   it("finalizes session as failed when runner.run throws (spawn-time error)", async () => {
     const repo = await setupInitedRepo();
     const runner: ProcessRunner = {
@@ -189,7 +189,7 @@ describe("runExec", () => {
     expect(ce.exit_code).toBeNull();
   });
 
-  // 4 (Y3m-H4)
+  // 4
   it("rejects invalid timeout fail-fast without creating a session", async () => {
     const repo = await setupInitedRepo();
     const runner = makeFakeRunner({ exit_code: 0 });
@@ -207,7 +207,7 @@ describe("runExec", () => {
     expect(entries).toHaveLength(0);
   });
 
-  // 5 (Y3m-H3)
+  // 5
   it("fails before creating a session when run from a non-git directory", async () => {
     const nonGit = await mkdtemp(join(tmpdir(), "basou-exec-nongit-"));
     try {
@@ -251,7 +251,7 @@ describe("runExec", () => {
     ]);
   });
 
-  // 8 (Y3m-H5)
+  // 8
   it("records signal and exit code 130 on parent SIGINT (POSIX 128+2)", async () => {
     const repo = await setupInitedRepo();
     // Emulate parent SIGINT: the runner sees the controller already aborted

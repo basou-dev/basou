@@ -50,7 +50,7 @@ export type DecisionContext = {
 /**
  * Wire `basou decision record` onto `program`. The `decision` group only
  * contains the write-side `record` subcommand in v0.1; list/show inspectors
- * are deferred (see Y-3s carryover #41).
+ * are deferred to a v0.3+ follow-up.
  */
 export function registerDecisionCommand(program: Command): void {
   const decision = program
@@ -321,9 +321,9 @@ function printDecisionResult(options: DecisionRecordOptions, result: DecisionPri
       mode: result.mode,
       title: result.title,
     };
-    // Y-3z #40 / B-F1: rich fields are now persisted into the
-    // decision_recorded event, so they appear in the JSON summary as-is
-    // (the old `rationale_saved: false` indicator is gone).
+    // Rich fields are now persisted into the decision_recorded event, so
+    // they appear in the JSON summary as-is (the old `rationale_saved:
+    // false` indicator is gone).
     if (result.rich.rationale !== undefined) payload.rationale = result.rich.rationale;
     if (result.rich.alternatives !== undefined) payload.alternatives = result.rich.alternatives;
     if (result.rich.rejected_reason !== undefined) {

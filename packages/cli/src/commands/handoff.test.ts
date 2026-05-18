@@ -227,7 +227,7 @@ describe("basou handoff generate", () => {
     );
   });
 
-  it("case 4b (Codex#2 Y3q-M4): events.jsonl unreadable surfaces the existing suspect-check wording", async () => {
+  it("case 4b: events.jsonl unreadable surfaces the existing suspect-check wording", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X05");
     await placeSession(repo, { id, status: "running" });
@@ -241,12 +241,13 @@ describe("basou handoff generate", () => {
     );
   });
 
-  it("case 4b2 (Codex#3 Y3q-M1): completed session with unreadable events.jsonl still surfaces a warning", async () => {
+  it("case 4b2: completed session with unreadable events.jsonl still surfaces a warning", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X14");
     // Status = completed: classifySuspect short-circuits and never touches
     // events.jsonl. The unreadable file is therefore only seen on the
-    // decision-aggregation pass; without M1 the catch would swallow it.
+    // decision-aggregation pass; without the explicit warning emit the catch
+    // would swallow it.
     await placeSession(repo, { id, status: "completed" });
     await mkdir(join(basouPaths(repo).sessions, id, "events.jsonl"), { recursive: true });
     captureStdout();
@@ -257,7 +258,7 @@ describe("basou handoff generate", () => {
     );
   });
 
-  it("case 4c (Codex#2 Y3q-M4): session.yaml missing emits Skipped <sid>: session_yaml_missing", async () => {
+  it("case 4c: session.yaml missing emits Skipped <sid>: session_yaml_missing", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X06");
     await mkdir(join(basouPaths(repo).sessions, id), { recursive: true });
@@ -267,7 +268,7 @@ describe("basou handoff generate", () => {
     expect(joinCalls(err)).toContain(`Skipped ${id.slice(4, 10)}: session_yaml_missing`);
   });
 
-  it("case 4d (Codex#2 Y3q-M4): session.yaml invalid schema emits Skipped <sid>: session_yaml_invalid", async () => {
+  it("case 4d: session.yaml invalid schema emits Skipped <sid>: session_yaml_invalid", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X07");
     const sessionDir = join(basouPaths(repo).sessions, id);
@@ -389,7 +390,7 @@ describe("basou handoff generate", () => {
     }
   });
 
-  it("case 14 (Codex#3 Y3q-L1): markdown write failure exits 1 with the fixed message", async () => {
+  it("case 14: markdown write failure exits 1 with the fixed message", async () => {
     const repo = await setupInitedRepo();
     const paths = basouPaths(repo);
     // Make .basou itself read-only so the tmp file inside cannot be created.
@@ -407,7 +408,7 @@ describe("basou handoff generate", () => {
     }
   });
 
-  it("case 14b (Codex#3 Y3q-L1): verbose mode surfaces 'Caused by: <code>' on a write failure", async () => {
+  it("case 14b: verbose mode surfaces 'Caused by: <code>' on a write failure", async () => {
     const repo = await setupInitedRepo();
     const paths = basouPaths(repo);
     await chmod(paths.root, 0o555);

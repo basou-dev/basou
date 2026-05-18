@@ -606,7 +606,7 @@ describe("doRunTaskShow", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("t-show-4: malformed events.jsonl emits a replay warning to stderr (Codex Y3t-3-M2)", async () => {
+  it("t-show-4: malformed events.jsonl emits a replay warning to stderr", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
     await doRunTaskNew({ title: "show-4" }, { cwd: repo, ...FIXED_CTX });
@@ -645,10 +645,11 @@ describe("doRunTaskStatus", () => {
     expect(md).toContain("status: in_progress");
   });
 
-  it("t-status-2: planned -> done is now a direct shortcut (Y-3z #59 / B-B3)", async () => {
-    // Y-3z #59 lifts the prior two-step requirement so `basou task status
-    // <id> done` succeeds straight from planned. The audit trail still
-    // captures exactly one task_status_changed event for the jump.
+  it("t-status-2: planned -> done is now a direct shortcut", async () => {
+    // The terminal-status shortcut lifts the prior two-step requirement so
+    // `basou task status <id> done` succeeds straight from planned. The
+    // audit trail still captures exactly one task_status_changed event for
+    // the jump.
     const repo = await setupInitedRepo();
     const out = captureStdout();
     await doRunTaskNew({ title: "ts" }, { cwd: repo, ...FIXED_CTX });
@@ -659,7 +660,7 @@ describe("doRunTaskStatus", () => {
     expect(md).toContain("status: done");
   });
 
-  it("t-status-2b: planned -> cancelled is also a direct shortcut (Y-3z #59 / B-B3)", async () => {
+  it("t-status-2b: planned -> cancelled is also a direct shortcut", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
     await doRunTaskNew({ title: "ts" }, { cwd: repo, ...FIXED_CTX });
@@ -827,7 +828,7 @@ describe("renderTaskError (pathless contract)", () => {
     expect(stderr).not.toContain("/Users/secret");
   });
 
-  it("t-pathless-3b: TaskWriteAfterEventError link-session phase wording calls out session.yaml (Codex Y3t-3-H2)", async () => {
+  it("t-pathless-3b: TaskWriteAfterEventError link-session phase wording calls out session.yaml", async () => {
     const repo = await setupInitedRepo();
     const core = await import("@basou/core");
     const spy = vi.spyOn(core, "createTaskWithEvent");
@@ -949,7 +950,7 @@ describe("doRunTaskReconcile (all-scan)", () => {
     await runTaskReconcile({}, { cwd: repo, ...FIXED_CTX });
     const stdout = joinCalls(out);
     expect(stdout).toContain("(dry-run) Would reconcile");
-    expect(stdout).toContain("forward sync is out of scope");
+    expect(stdout).toContain("forward sync is handled by `basou task refresh-linkage`");
     expect(stdout).toContain("Re-run with --write to apply.");
     // no ad-hoc reconcile session was minted in dry-run mode
     const sessions = await readdir(basouPaths(repo).sessions);
@@ -990,7 +991,7 @@ describe("doRunTaskReconcile (all-scan)", () => {
     const core = await import("@basou/core");
     // Replace the orchestrator wholesale — vi.spyOn cannot intercept the
     // module-internal reconcileTask call inside reconcileAllTasks (ES module
-    // local binding, Y-3w §J.4 / Codex review #2 A-10).
+    // local binding constraint).
     vi.spyOn(core, "reconcileAllTasks").mockImplementationOnce(async () => ({
       results: [
         {
@@ -1051,7 +1052,7 @@ describe("doRunTaskReconcile (single task --task)", () => {
     const stdout = joinCalls(out);
     expect(stdout).toContain("(dry-run) Would reconcile");
     expect(stdout).toContain("ses_01HXBR"); // short broken id (default for --task)
-    expect(stdout).toContain("forward sync is out of scope");
+    expect(stdout).toContain("forward sync is handled by `basou task refresh-linkage`");
     expect(process.exitCode).toBe(0);
   });
 
@@ -1152,7 +1153,7 @@ describe("doRunTaskReconcile (--json)", () => {
     const repo = await setupInitedRepo();
     const core = await import("@basou/core");
     // Same ES-module-binding rationale as t-rec-4: replace reconcileAllTasks
-    // wholesale (Y-3w §J.4).
+    // wholesale.
     vi.spyOn(core, "reconcileAllTasks").mockImplementationOnce(async () => ({
       results: [
         {
@@ -1330,19 +1331,19 @@ describe("doRunTaskShow with task_reconciled events (Step 19)", () => {
 });
 
 // ============================================================================
-// Y-3z #60 / B-B4: Ambiguous task id surface coverage
+// Ambiguous task id surface coverage
 //
-// Step 21 (Y-3y / import-23) covered `session import --task <prefix>` and
-// Step 22 / B-B3 era left `task reconcile --task <prefix>` covered by
-// `t-rec-9`. The remaining surfaces that funnel user-supplied prefixes
-// through `resolveTaskId` — `task show <prefix>` and
-// `task status <prefix> <new_status>` — only have happy-path / not-found
-// coverage. The cases below lock in the Ambiguous branch (= matched > 1)
-// for both surfaces, plus the pathless contract and the absence of
-// `Caused by:` in verbose mode (Ambiguous errors carry no cause chain).
+// Earlier work covered `session import --task <prefix>` and
+// `task reconcile --task <prefix>` for the Ambiguous branch. The remaining
+// surfaces that funnel user-supplied prefixes through `resolveTaskId` —
+// `task show <prefix>` and `task status <prefix> <new_status>` — only had
+// happy-path / not-found coverage. The cases below lock in the Ambiguous
+// branch (= matched > 1) for both surfaces, plus the pathless contract
+// and the absence of `Caused by:` in verbose mode (Ambiguous errors carry
+// no cause chain).
 // ============================================================================
 
-describe("Ambiguous task id surface coverage (Y-3z #60 / B-B4)", () => {
+describe("Ambiguous task id surface coverage", () => {
   // The two fixture ids share `task_01HXABCDEF1234567890ABCTA`, so any
   // prefix at or shorter than that length matches both — and any prefix
   // longer than that disambiguates to one specific task.

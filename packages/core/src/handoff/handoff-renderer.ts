@@ -21,7 +21,7 @@ export type HandoffRendererInput = {
    * Per-session degradation reasons (missing/invalid session.yaml or
    * unreadable events.jsonl). The CLI maps `events_jsonl_unreadable` to the
    * existing suspect-check stderr wording to keep the user-facing surface
-   * consistent with `basou session list` (Codex#2 Y3q-M4).
+   * consistent with `basou session list`.
    */
   onSessionSkip?: (sessionId: string, reason: SessionSkipReason) => void;
   /**
@@ -74,22 +74,21 @@ type TaskCreatedRecord = {
  * 3. `直近の判断`: latest `decision_recorded` event (chronological).
  * 4. `未決事項`: pending-approval count + suspect-session count.
  * 5. `次に読むべきファイル`: `.basou/decisions.md` + top-3 related files
- *    (Codex#1 Y3q-H1; the same `displayedFiles` source is intentionally
- *    reused in two sections — overview vs. resume context, see Codex#2
- *    Y3q-X2).
- * 6. `次に実行すべき作業`: placeholder until task events land (申し送り #24).
+ *    (the same `displayedFiles` source is intentionally reused in two
+ *    sections — overview vs. resume context).
+ * 6. `次に実行すべき作業`: placeholder until task events land.
  * 7. `セッション一覧`: all sessions newest first with inline suspect labels.
  *
  * Session enumeration goes through {@link loadSessionEntries} so the set of
  * sessions whose `decision_recorded` events we replay matches the
- * decisions renderer (Codex#1 Y3q-M3).
+ * decisions renderer.
  */
 export async function renderHandoff(input: HandoffRendererInput): Promise<HandoffRendererResult> {
   const limit = input.relatedFilesLimit ?? 20;
   const now = new Date(input.nowIso);
   // Wrap the caller's onSkip so we can detect whether loadSessionEntries'
   // suspect pass already emitted `events_jsonl_unreadable` for a session
-  // (Codex#3 Y3q-M1). For non-running sessions the suspect pass does not
+  // For non-running sessions the suspect pass does not
   // touch events.jsonl, so the second replay below may be the first to
   // hit the unreadable file — without this bookkeeping that error would
   // be silently swallowed.
@@ -133,7 +132,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
       // suspect pass has not already surfaced a warning for this session
       // (e.g. completed session, where classifySuspect short-circuits
       // before reading events.jsonl), emit the skip now so the operator
-      // is not left wondering why a decision is missing (Codex#3 Y3q-M1).
+      // is not left wondering why a decision is missing.
       if (!unreadableEmitted.has(entry.sessionId)) {
         wrappedSkip(entry.sessionId, "events_jsonl_unreadable");
       }
@@ -255,9 +254,8 @@ function formatHandoffBody(args: {
   if (args.latestTaskRecord !== undefined) {
     // Status comes from task.md when available. If the task_created event
     // exists but task.md is missing / invalid we MUST NOT fabricate
-    // "planned" — events alone cannot restore the initial status (申し送り
-    // #52) and operators would miss an unsafe-state reconcile (Codex
-    // Y3t-3-M1).
+    // "planned" — events alone cannot restore the initial status and
+    // operators would miss an unsafe-state reconcile.
     const statusLabel =
       args.latestTaskDoc !== undefined
         ? args.latestTaskDoc.task.task.status
@@ -309,10 +307,10 @@ function formatHandoffBody(args: {
   lines.push("");
 
   // 次に読むべきファイル
-  // Codex#1 Y3q-H1: drop self-reference to handoff.md, include
-  // `.basou/decisions.md` + the top-3 of `displayedFiles` so the section
-  // points to concrete files. Codex#2 Y3q-X2: the same `displayedFiles`
-  // source is reused intentionally (overview vs. resume context).
+  // Drop self-reference to handoff.md, include `.basou/decisions.md` + the
+  // top-3 of `displayedFiles` so the section points to concrete files. The
+  // same `displayedFiles` source is reused intentionally (overview vs.
+  // resume context).
   lines.push("## 次に読むべきファイル");
   lines.push("");
   lines.push("- .basou/decisions.md");

@@ -52,7 +52,7 @@ export type ImportSessionResult = {
  * mkdir failure the session directory is removed best-effort so partial
  * imports do not leave `session_yaml_missing` half-states behind.
  *
- * Throws `Error` with one of the fixed messages enumerated in the Y-3r plan
+ * Throws `Error` with one of the fixed messages enumerated by the import contract
  * §"Error messages" table; the original native error is attached as `cause`
  * for `--verbose` rendering.
  */
@@ -71,7 +71,7 @@ export async function importSessionFromJson(
     throw new Error(`Invalid task_id: ${options.taskIdOverride}`);
   }
 
-  // Step 21 guard (Y-3y, expanded from Step 19 Y-3w §H.7): rewriteEvents
+  // Reachability guard: rewriteEvents
   // preserves variant-specific task_id fields, so importing a session that
   // references a task absent from the local workspace would silently
   // install a dangling reference. Validate every task_id carrier:
@@ -137,7 +137,7 @@ export async function importSessionFromJson(
   };
 }
 
-// Step 21 (Y-3y, expanded from Step 19 Y-3w §H.7): refuse any payload that
+// Reachability guard: refuse any payload that
 // references task ids absent from the local workspace, across every carrier:
 // task_created / task_status_changed / task_reconciled events plus the
 // effective session task_id (= the override if supplied, otherwise the
@@ -195,7 +195,7 @@ function rewriteEvents(events: Event[], newSessionId: PrefixedId<"ses">): Event[
 }
 
 // Enforce strict chronological order with same-ms duplicates allowed (`>=`).
-// Y-3r K2: events arriving out of order indicate an exporter bug or
+// Out-of-order events indicate an exporter bug or
 // hand-edited payload — refuse to silently sort.
 function assertChronologicalOrder(events: Event[]): void {
   for (let i = 1; i < events.length; i++) {

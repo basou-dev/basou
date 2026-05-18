@@ -225,7 +225,7 @@ describe("storage/sessions", () => {
       expect(skips).toEqual([{ sid: broken, reason: "session_yaml_missing" }]);
     });
 
-    it("case 9 (Codex#1 Y3q-M2): pushes an entry but flags events_jsonl_unreadable when events.jsonl is unreadable", async () => {
+    it("case 9: pushes an entry but flags events_jsonl_unreadable when events.jsonl is unreadable", async () => {
       const paths = await setupPaths();
       const id = SES("XAC");
       await placeSession(paths, { id, status: "running" });
@@ -246,7 +246,7 @@ describe("storage/sessions", () => {
       expect(skips).toEqual([{ sid: id, reason: "events_jsonl_unreadable" }]);
     });
 
-    it("case 10 (Codex#1 Y3q-M2): skips a session with invalid session.yaml schema and reports session_yaml_invalid", async () => {
+    it("case 10: skips a session with invalid session.yaml schema and reports session_yaml_invalid", async () => {
       const paths = await setupPaths();
       const id = SES("XAD");
       const sessionDir = join(paths.sessions, id);

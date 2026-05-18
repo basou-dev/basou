@@ -408,11 +408,11 @@ describe("importSessionFromJson", () => {
   });
 });
 
-describe("importSessionFromJson task_id reachability guard (Step 21 / Y-3y)", () => {
-  // Step 19 (Y-3w §H.7) introduced the guard for task_reconciled only.
-  // Step 21 (Y-3y) expanded it to every task_id carrier: task_created /
+describe("importSessionFromJson task_id reachability guard", () => {
+  // The guard rejects any import whose task_id reference (task_created /
   // task_status_changed / task_reconciled events plus the effective session
-  // task_id (override-wins, matches buildSessionRecord).
+  // task_id, override-wins matching buildSessionRecord) cannot be resolved
+  // against an existing task in the workspace.
 
   it("rejects an import whose task_reconciled references an unknown task_id", async () => {
     const paths = await setupPaths();

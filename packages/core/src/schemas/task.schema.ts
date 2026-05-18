@@ -8,13 +8,13 @@ import {
 } from "./shared.schema.js";
 
 /**
- * Y-2 task lifecycle states (Step 17 確定事項 4).
+ * Task lifecycle states.
  *
  * The storage layer's `ALLOWED_TRANSITIONS` map (= source of truth in
  * `tasks.ts`) is the authoritative graph; the comment below is a snapshot.
- * As of Y-3z #59 (B-B3) `planned` now reaches `done` / `cancelled`
- * directly so tasks completed (or abandoned) outside an explicit
- * in-progress phase can close in a single CLI call:
+ * `planned` reaches `done` / `cancelled` directly so tasks completed (or
+ * abandoned) outside an explicit in-progress phase can close in a single
+ * CLI call:
  *
  *   planned → {in_progress | done | cancelled}
  *   in_progress → {done | cancelled}
@@ -38,7 +38,7 @@ const TaskInnerSchema = z.object({
    * Session id that anchors this task. For freshly created tasks it is the
    * session that wrote the `task_created` event (= ad-hoc reconcile target
    * for ad-hoc paths, or the target session id for attach paths). After
-   * `basou task reconcile --write` repairs a broken anchor (Y-3w D1) the
+   * `basou task reconcile --write` repairs a broken anchor the
    * value is replaced with the ad-hoc reconcile session id; the old broken
    * session_id is preserved on the `task_reconciled` event payload via
    * `removed_created_in_session` for audit. So this field always names a

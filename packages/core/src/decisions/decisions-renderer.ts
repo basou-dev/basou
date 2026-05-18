@@ -22,8 +22,8 @@ type DecisionRecord = {
   title: string;
   occurredAt: string;
   sessionId: string;
-  // Y-2 §10.4 / Y-3z #40 rich fields. All optional; populated only when the
-  // decision_recorded event carried the field.
+  // Rich fields. All optional; populated only when the decision_recorded
+  // event carried the field.
   rationale: string | null | undefined;
   alternatives: readonly string[] | undefined;
   rejectedReason: string | null | undefined;
@@ -38,7 +38,7 @@ type DecisionRecord = {
  * Session enumeration goes through {@link loadSessionEntries} (the same path
  * the handoff renderer uses) so that `session.yaml`-broken sessions are
  * skipped in BOTH outputs and the handoff's `decisionCount` summary stays
- * consistent with the number of sections rendered here (Codex#1 Y3q-M3).
+ * consistent with the number of sections rendered here.
  *
  * Order: `occurred_at` ascending with `decisionId` (= ULID) as tie-breaker.
  * Both fields are monotonic, so the result is a stable cross-session
@@ -55,7 +55,7 @@ export async function renderDecisions(
   input: DecisionsRendererInput,
 ): Promise<DecisionsRendererResult> {
   const now = new Date(input.nowIso);
-  // Codex#3 Y3q-M1: same rationale as handoff-renderer. Track which
+  // Same rationale as handoff-renderer. Track which
   // sessions already had `events_jsonl_unreadable` surfaced so non-running
   // sessions whose events.jsonl is unreadable still produce a stderr
   // warning instead of silently dropping their decisions.

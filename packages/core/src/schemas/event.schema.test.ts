@@ -469,7 +469,7 @@ describe("TaskArchivedEventSchema", () => {
 });
 
 // ============================================================================
-// Decision rich fields (Y-3z #40 / B-F1)
+// Decision rich fields
 // ============================================================================
 
 describe("DecisionRecordedEventSchema (rich fields)", () => {
