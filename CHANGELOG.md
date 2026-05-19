@@ -3,6 +3,20 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Documentation
+
+- Add `docs/spec/` excerpt of the basou v0.1 / v0.2 specification
+  (`overview`, `workspace`, `schemas`, `approval`, `generated-markdown`,
+  `terminal-and-import`, `cli-commands`).
+
+### Internal
+
+- Sanitize planning-doc references in source comments and test descriptions
+  (no functional change). Invariant-anchored comments now link to the
+  corresponding section in `docs/spec/`.
+
 ## 0.2.0 — 2026-05-18
 
 This release strengthens the v0.1 task-lifecycle foundation with broken-ref
