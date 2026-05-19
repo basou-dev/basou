@@ -92,7 +92,7 @@ async function enumerateIds(dir: string): Promise<string[]> {
 /**
  * Return true when an approval is in `pending` state and its `expires_at`
  * timestamp has elapsed. Used by `basou approval list` / `show` to surface
- * a `(expired)` label without mutating the YAML file. Y-2 Section 9.5
+ * a `(expired)` label without mutating the YAML file. Approval expiry uses
  * lazy-evaluation semantics; actual `approval_expired` event firing is
  * deferred to a later step.
  *

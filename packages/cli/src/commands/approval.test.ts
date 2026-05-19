@@ -717,9 +717,9 @@ describe("runApprovalReject", () => {
   });
 });
 
-// === Codex#3 post-impl review fixes ===
+// === post-impl review fixes ===
 
-describe("post-impl review fixes (Codex#3)", () => {
+describe("post-impl review fixes", () => {
   it("case 27 (M1): approve refuses a pending-side YAML whose status is no longer pending", async () => {
     const repo = await setupInitedRepo();
     const approvalId = APPR("P01");

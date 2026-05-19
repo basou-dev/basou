@@ -41,7 +41,7 @@ const SessionStatusChangedEventSchema = BaseEventSchema.extend({
   to: z.string(),
 });
 
-// --- Approval events (Y-2 Section 9) ---
+// --- Approval events ---
 
 const ApprovalRequestedEventSchema = BaseEventSchema.extend({
   type: z.literal("approval_requested"),

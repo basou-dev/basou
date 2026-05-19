@@ -21,8 +21,8 @@ export type CreateManifestInput = {
 };
 
 /**
- * Build a fresh Manifest object that satisfies Y-2 Section 4.1's minimum
- * schema. Performs no I/O. Returned object is parse-validated by
+ * Build a fresh Manifest object that satisfies the manifest schema's
+ * minimum shape. Performs no I/O. Returned object is parse-validated by
  * `ManifestSchema`.
  */
 export function createManifest(input: CreateManifestInput): Manifest {

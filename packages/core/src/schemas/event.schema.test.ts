@@ -290,7 +290,7 @@ describe("TaskReconciledEventSchema (Step 19)", () => {
   });
 
   // 25
-  it("rejects an extra field (`.strict()` contract — Codex review #1 B-2)", () => {
+  it("rejects an extra field (`.strict()` contract)", () => {
     // Probe via safeParse with an unknown property — `.strict()` should reject
     // it so a buggy core can't quietly drop audit data on the floor.
     const result = EventSchema.safeParse({

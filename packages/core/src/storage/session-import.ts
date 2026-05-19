@@ -30,7 +30,7 @@ export type ImportSessionOptions = {
 
 /**
  * Result of a successful import. `finalStatus` is always the literal
- * `"imported"` (per Y-2 Section 6.2 / spec K-decisions); `finalSourceKind`
+ * `"imported"` (per the import-session lifecycle policy); `finalSourceKind`
  * mirrors the input's `session.source.kind` so round-trip imports preserve
  * provenance.
  */

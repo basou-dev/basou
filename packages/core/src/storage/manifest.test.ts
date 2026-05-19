@@ -28,7 +28,7 @@ const FIXED_DATE = new Date("2026-05-04T09:00:00.000Z");
 const FIXED_WS_ID = "ws_01HXABCDEF1234567890ABCDEF" as const;
 
 describe("createManifest", () => {
-  it("produces a Y-2 Section 4.1 minimal manifest", () => {
+  it("produces a minimal manifest", () => {
     const manifest = createManifest({
       workspaceName: "client-foo-lp",
       now: FIXED_DATE,

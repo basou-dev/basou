@@ -14,17 +14,16 @@ import {
 //     but the orchestrator discards it and assigns a fresh ULID.
 //   - `status` / `source.kind` are validated against the canonical enums but
 //     overwritten by the orchestrator (status -> "imported", source.kind
-//     retained from input per K1).
+//     retained from input).
 //   - `events_log` is plain `z.string().optional()`; the orchestrator forces
 //     "events.jsonl" to block path traversal.
 //   - `.strict()` rejects unknown session-level keys at parse time.
 //
 // Events strictness follows EventSchema as authored: `adapter_output` is
 // `.strict()`, the other 14 variants are permissive, and
-// `approval_requested.action` is `.passthrough()`. This keeps Y-2 Section 7.3
-// (additive event fields are allowed) and round-trip imports of post-v0.1
-// events compatible. A blanket strict wrap for every variant is deferred to
-// v0.2 (carry-over #35).
+// `approval_requested.action` is `.passthrough()`. This keeps the spec's
+// additive-event-fields rule and round-trip imports of post-v0.1 events
+// compatible. A blanket strict wrap for every variant is deferred.
 //
 // `schema_version` at the top level is `z.string()` rather than the
 // `SchemaVersionSchema = z.literal("0.1.0")` literal. The strict reject for

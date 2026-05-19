@@ -1448,10 +1448,10 @@ function parseInitialTaskStatus(raw: string): TaskStatus {
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function parseIsoTimestampOption(raw: string): string {
-  // Mirror the IsoTimestampSchema accepted form (Y-2 §3.2): date + time +
-  // explicit zone designator. We rely on Date.parse for content validation
-  // and the regex above for shape so misformed inputs are rejected before
-  // we hand the string to the orchestrator's downstream parsers.
+  // Mirror the IsoTimestampSchema accepted form: date + time + explicit
+  // zone designator. We rely on Date.parse for content validation and the
+  // regex above for shape so misformed inputs are rejected before we hand
+  // the string to the orchestrator's downstream parsers.
   if (!ISO_DATE_RE.test(raw) || Number.isNaN(Date.parse(raw))) {
     throw new InvalidArgumentError(
       "Invalid --completed-at value; expected ISO-8601 timestamp like 2026-05-10T12:34:56+09:00",

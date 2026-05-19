@@ -1151,7 +1151,7 @@ async function updateTaskStatusAttach(
   }
   // task_id collision: the session MUST already be linked to the same task,
   // otherwise a status change on a task that the session does not own would
-  // violate Y-2 §2.1.
+  // violate the session ⇆ task anchor invariant.
   const existingTaskId = sessionDoc.session.task_id ?? null;
   if (existingTaskId === null) {
     throw new Error(`Session is not linked to task: ${input.taskId}`);
@@ -1338,8 +1338,8 @@ async function computeTaskMdSnapshot(paths: BasouPaths, taskId: string): Promise
 }
 
 // Read task.md and derive its mtime/sha256 snapshot from the SAME raw bytes
-// the TaskDocument was parsed from. Codex review #3 M-3 flagged that the
-// previous "readTaskFile, then computeTaskMdSnapshot" sequence left a window
+// the TaskDocument was parsed from. An earlier internal review flagged that
+// the previous "readTaskFile, then computeTaskMdSnapshot" sequence left a window
 // where a concurrent edit between those two reads could leave the caller
 // acting on stale content while the snapshot already reflected the new
 // content — and stage 7 would then clobber the new bytes with the stale

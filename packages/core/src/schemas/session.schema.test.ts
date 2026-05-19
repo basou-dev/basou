@@ -28,7 +28,7 @@ const VALID_SESSION = {
 };
 
 describe("SessionSchema", () => {
-  it("accepts the Y-2 Section 5.1 minimal session example", () => {
+  it("accepts the minimal session example", () => {
     expect(SessionSchema.safeParse(VALID_SESSION).success).toBe(true);
   });
 

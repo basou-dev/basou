@@ -3,8 +3,9 @@ import { join } from "node:path";
 
 /**
  * Absolute paths to the standard `.basou/` directory layout, derived from a
- * given repository root. The shape mirrors Y-2 Section 1.2's `.basou/` tree.
- * `root` is the `.basou/` directory itself (i.e. `repositoryRoot/.basou`).
+ * given repository root. The shape mirrors the canonical `.basou/` tree
+ * (see `docs/spec/workspace.md`). `root` is the `.basou/` directory itself
+ * (i.e. `repositoryRoot/.basou`).
  *
  * `files` exposes the well-known top-level files inside `.basou/`. Each path
  * is computed but not created — they are written by their respective
@@ -97,7 +98,7 @@ export async function ensureBasouDirectory(repositoryRoot: string): Promise<Baso
 
   // lstat (not stat) so that a symlink at `.basou` is detected as a symlink
   // and rejected; following the link could place Basou state outside the
-  // git repository root, violating Y-2 Section 1.1.
+  // git repository root, violating the workspace-root invariant.
   let existing: Awaited<ReturnType<typeof lstat>> | undefined;
   try {
     existing = await lstat(paths.root);

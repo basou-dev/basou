@@ -33,7 +33,7 @@ const VALID_MANIFEST = {
 };
 
 describe("ManifestSchema", () => {
-  it("accepts the Y-2 Section 4.1 minimal manifest example", () => {
+  it("accepts the minimal manifest example", () => {
     expect(ManifestSchema.safeParse(VALID_MANIFEST).success).toBe(true);
   });
 

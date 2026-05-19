@@ -7,7 +7,7 @@ import {
   WorkspaceIdSchema,
 } from "./shared.schema.js";
 
-/** Y-2 Section 6.1 session lifecycle states. */
+/** Session lifecycle states. */
 export const SessionStatusSchema = z.enum([
   "initialized",
   "running",
@@ -21,7 +21,7 @@ export const SessionStatusSchema = z.enum([
 /** Inferred runtime type for {@link SessionStatusSchema}. */
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 
-/** Y-2 Section 5.1 source kind that produced the session. */
+/** Source kind that produced the session. */
 export const SessionSourceKindSchema = z.enum([
   "claude-code-adapter",
   "human",
@@ -62,9 +62,9 @@ const SessionInnerSchema = z.object({
 });
 
 /**
- * Schema for `.basou/sessions/<session_id>/session.yaml`. Y-2 Section 5.1
- * defines the minimal session document with the actual fields nested under
- * the outer `session:` key.
+ * Schema for `.basou/sessions/<session_id>/session.yaml`. The minimal
+ * session document carries the actual fields nested under the outer
+ * `session:` key.
  */
 export const SessionSchema = z.object({
   schema_version: SchemaVersionSchema,

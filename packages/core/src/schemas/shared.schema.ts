@@ -10,8 +10,8 @@ export const SchemaVersionSchema = z.literal("0.1.0");
 /**
  * ISO 8601 timestamp with explicit timezone offset (e.g. `+09:00`).
  *
- * Y-2 specification samples include offsets, so the default zod `.datetime()`
- * (which rejects offsets) is insufficient; `{ offset: true }` is required.
+ * The spec samples include offsets, so the default zod `.datetime()` (which
+ * rejects offsets) is insufficient; `{ offset: true }` is required.
  */
 export const IsoTimestampSchema = z.string().datetime({ offset: true });
 
@@ -37,8 +37,8 @@ export const ApprovalIdSchema = createPrefixedIdSchema("appr");
 export const DecisionIdSchema = createPrefixedIdSchema("decision");
 
 /**
- * Risk level vocabulary fixed by Y-2 Section 9.4. Adapters MUST emit one of
- * these four values; arbitrary strings are rejected at schema parse time.
+ * Risk level vocabulary fixed by the spec. Adapters MUST emit one of these
+ * four values; arbitrary strings are rejected at schema parse time.
  */
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 /** Inferred runtime type for {@link RiskLevelSchema}. */

@@ -44,7 +44,7 @@ type DecisionRecord = {
  * Both fields are monotonic, so the result is a stable cross-session
  * timeline.
  *
- * Y-2 §10.4 rich fields (rationale / alternatives / rejected_reason /
+ * The decision rich fields (rationale / alternatives / rejected_reason /
  * linked_events / linked_files) are rendered when the event carries them.
  * `linked_events` and `linked_files` are OPAQUE references: the schema only
  * validates the SHAPE, not existence — references that cannot be resolved

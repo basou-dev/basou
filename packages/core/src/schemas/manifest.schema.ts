@@ -37,11 +37,11 @@ const WorkspaceMetaSchema = z.object({
 });
 
 /**
- * Schema for `.basou/manifest.yaml`. Y-2 Section 4.1 defines the minimal
- * manifest with schema_version, basou_version, workspace metadata, project
- * info, enabled capabilities, approval policy, adapter config, and git
- * policy. The `adapters."claude-code"` key uses a hyphen; downstream code
- * accesses it via bracket notation.
+ * Schema for `.basou/manifest.yaml`. The minimal manifest carries
+ * schema_version, basou_version, workspace metadata, project info, enabled
+ * capabilities, approval policy, adapter config, and git policy. The
+ * `adapters."claude-code"` key uses a hyphen; downstream code accesses it
+ * via bracket notation.
  */
 export const ManifestSchema = z.object({
   schema_version: SchemaVersionSchema,

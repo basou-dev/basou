@@ -1437,7 +1437,7 @@ describe("reconcileTask (Step 19)", () => {
     expect(ev?.id).toBe(r.reconcileSession?.eventId);
   });
 
-  // 11b (Codex review #3 M-1): invocation.args distinguishes single-task from scan
+  // 11b: invocation.args distinguishes single-task from scan
   it("scope: 'single' records [--task, id, --write] on the ad-hoc invocation", async () => {
     const paths = await setupPaths();
     await placeSessionDir(paths, REACHABLE_SES_A);
@@ -1993,7 +1993,7 @@ describe("refreshTaskLinkedSessions", () => {
     const paths = await setupPaths();
     // The anchor session has task_id cleared — that drift is reconcile's
     // concern, not refresh-linkage's. refresh-linkage must still preserve the
-    // anchor in linked_sessions to honor the Y-2 §2.1 invariant.
+    // anchor in linked_sessions to honor the session ⇆ task anchor invariant.
     await placeSessionWithTaskId(paths, SES_ID_RUNNING, null);
     await placeTaskWithLinkedSessions(paths, [SES_ID_RUNNING]);
     const result = await refreshTaskLinkedSessions(paths, makeManifest(), {

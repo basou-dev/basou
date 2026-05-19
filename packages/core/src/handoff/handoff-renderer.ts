@@ -66,7 +66,7 @@ type TaskCreatedRecord = {
  *
  * The renderer is a pure function (no I/O beyond {@link replayEvents} /
  * {@link loadSessionEntries} / {@link enumerateApprovals}). It assembles the
- * Y-2 §10.3 sections in order:
+ * the spec's `handoff.md` sections in order:
  *
  * 1. `現在の状態`: latest live session (status not archived, source not import).
  * 2. `直近の変更ファイル`: union of `related_files` across sessions, dedup +

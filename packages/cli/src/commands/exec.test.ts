@@ -294,7 +294,7 @@ describe("runExec", () => {
     expect(sc2.to).toBe("interrupted");
   });
 
-  // 9 (Codex review #3 M2): activeChild SIGKILL last-resort cleanup
+  // 9: activeChild SIGKILL last-resort cleanup
   it("kills activeChild via the parent exit hook (last-resort cleanup)", async () => {
     const repo = await setupInitedRepo();
     let capturedExitHandler: (() => void) | undefined;
@@ -338,8 +338,8 @@ describe("runExec", () => {
     expect(killSpy).toHaveBeenCalledTimes(1);
   });
 
-  // 10 (Codex review #3 H1): appendEvent failure during git_snapshot must
-  // propagate as an exec failure instead of being swallowed into a warning.
+  // 10: appendEvent failure during git_snapshot must propagate as an exec
+  // failure instead of being swallowed into a warning.
   // This guards the events.jsonl integrity contract — a session that should
   // produce 7 events must never silently end up with 5/6.
   it("propagates appendEvent failure during git_snapshot (does not silently skip)", async () => {
@@ -363,8 +363,8 @@ describe("runExec", () => {
     ).rejects.toThrow(/Failed to append event/);
   });
 
-  // 11 (Codex review #3 M1): getSnapshot capability failure (no commits)
-  // emits the pathless skip warning and the session still completes.
+  // 11: getSnapshot capability failure (no commits) emits the pathless
+  // skip warning and the session still completes.
   it("emits a pathless skip warning when getSnapshot fails (no commits)", async () => {
     const noCommitRepo = await mkdtemp(join(tmpdir(), "basou-exec-nocommit-"));
     try {
