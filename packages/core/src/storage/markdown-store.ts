@@ -9,11 +9,12 @@ export const GENERATED_END = "<!-- BASOU:GENERATED:END -->";
 /**
  * Result of parsing a markdown body for the BASOU:GENERATED marker region.
  *
- * Y-2 §10.2 mandates strict line-level matching: a marker is only recognized
- * when an entire line is exactly the marker string. Leading/trailing
- * whitespace, comment compression, and BOM are treated as legacy formats
- * (`no_markers`) so that re-generation refuses to silently overwrite a
- * mismatched manual edit.
+ * The spec mandates strict line-level matching (see
+ * `docs/spec/generated-markdown.md#102-marker-convention`): a marker is
+ * only recognized when an entire line is exactly the marker string.
+ * Leading/trailing whitespace, comment compression, and BOM are treated as
+ * legacy formats (`no_markers`) so that re-generation refuses to silently
+ * overwrite a mismatched manual edit.
  */
 export type MarkerSection =
   | { kind: "ok"; before: string; generated: string; after: string }

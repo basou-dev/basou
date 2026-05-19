@@ -711,9 +711,11 @@ function buildTaskLinkageRefreshedEvent(input: {
  * new task).
  *
  * Attach path: the target session's `task_id` is validated against the
- * Y-2 §2.1 invariant (null → updated to the new task; existing X → rejected
- * since X is already owned). If validation passes, the event is appended
- * to events.jsonl and session.yaml's `task_id` is updated to the new task.
+ * session ⇆ task anchor invariant (see
+ * `docs/spec/workspace.md#21-confirmed-invariants`; null → updated to the
+ * new task; existing X → rejected since X is already owned). If validation
+ * passes, the event is appended to events.jsonl and session.yaml's
+ * `task_id` is updated to the new task.
  *
  * Race window (v0.1 accepts): stage 2 writes the event, stage 3 writes
  * task.md. A failure on stage 3 leaves events.jsonl ahead of task.md;
@@ -1736,9 +1738,11 @@ async function detectLinkageDelta(
       // scan.
     }
   }
-  // The anchor invariant (Y-2 §2.1) requires `linked_sessions[]` to always
-  // contain `created_in_session`. Preserve it here even if the session.yaml
-  // was hand-edited to clear task_id (rare; handled by reconcile).
+  // The session ⇆ task anchor invariant
+  // (`docs/spec/workspace.md#21-confirmed-invariants`) requires
+  // `linked_sessions[]` to always contain `created_in_session`. Preserve it
+  // here even if the session.yaml was hand-edited to clear task_id
+  // (rare; handled by reconcile).
   const finalSet = new Set<string>(reachable);
   finalSet.add(task.created_in_session);
 

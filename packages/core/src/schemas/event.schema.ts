@@ -200,9 +200,11 @@ const NoteAddedEventSchema = BaseEventSchema.extend({
 
 // --- Adapter output (`.strict()` rejects raw bodies) ---
 //
-// Y-2 Section 7 forbids embedding raw adapter output (`content`, `body`,
-// `raw`, ...) directly in events.jsonl. The strict variant rejects any
-// schema-unknown key so that contract is enforced at parse time.
+// The spec forbids embedding raw adapter output (`content`, `body`, `raw`,
+// ...) directly in events.jsonl (see
+// `docs/spec/schemas.md#74-adapter_output-constraint-important`). The
+// strict variant rejects any schema-unknown key so that contract is
+// enforced at parse time.
 const AdapterOutputEventSchema = BaseEventSchema.extend({
   type: z.literal("adapter_output"),
   stream: z.enum(["stdout", "stderr"]),

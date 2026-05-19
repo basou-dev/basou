@@ -47,9 +47,11 @@ const TaskInnerSchema = z.object({
   created_in_session: SessionIdSchema,
   /**
    * Snapshot of sessions linked to this task. The events.jsonl history is
-   * the source of truth (Y-2 §10.5); this field is maintained as a UX-only
-   * cache so editors can read the task.md and immediately see related
-   * sessions. Defaults to `[]` for backward compatibility.
+   * the source of truth (see
+   * `docs/spec/generated-markdown.md#105-decisionsmd-generation-principle`);
+   * this field is maintained as a UX-only cache so editors can read the
+   * task.md and immediately see related sessions. Defaults to `[]` for
+   * backward compatibility.
    */
   linked_sessions: z.array(SessionIdSchema).default([]),
 });

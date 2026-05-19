@@ -77,7 +77,8 @@ export type CreateAdHocSessionInput = {
   /**
    * Optional task id to link this ad-hoc session to. When provided, both the
    * initial and the final `session.yaml` writes embed `task_id` so the
-   * single-session-to-single-task invariant (Y-2 §2.1) holds for task-flavoured
+   * single-session-to-single-task invariant (see
+   * `docs/spec/workspace.md#21-confirmed-invariants`) holds for task-flavoured
    * ad-hoc paths (`basou task new` / `task status` without `--session`).
    * Defaults to `null` so existing callers (decision / note) are unchanged.
    */
@@ -121,8 +122,10 @@ export type CreateAdHocSessionResult = {
 
 /**
  * Atomically create a fresh ad-hoc session that produces one or more target
- * events then immediately closes itself. Y-2 §6.2 lifecycle
- * (`initialized → running → completed`) is honored: `4 + N` events are
+ * events then immediately closes itself. The session lifecycle
+ * (`initialized → running → completed`, see
+ * `docs/spec/terminal-and-import.md#62-transition-diagram`) is honored:
+ * `4 + N` events are
  * written in one bulk atomic pass (where N = number of target builders) and
  * `session.yaml` is written twice (`initialized` → `completed`).
  *
