@@ -171,5 +171,3 @@ content (`content`, `body`, `raw`, etc.) belongs in
 - events.jsonl carries only the `summary` and `raw_ref`.
 - This keeps the raw output out of the repository even when events.jsonl is
   opted in for commit.
-
-This separation is a core trust-building principle of basou.

@@ -15,8 +15,8 @@ and how the artefacts are organized.
 
 The v0.1 release intentionally narrows the surface area:
 
-- The primary subject is **basou core**.
-- The only built-in integration is **claude-code-adapter**.
+- The primary product is **basou core**, the workspace tool itself.
+- The only adapter shipped with v0.1 is the **claude-code-adapter**.
 - **git** and **terminal recording** are core capabilities, not separate
   layers.
 - A dedicated provider layer is not implemented in v0.1.
