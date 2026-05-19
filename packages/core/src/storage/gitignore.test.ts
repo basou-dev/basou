@@ -85,8 +85,7 @@ describe("appendBasouGitignore", () => {
 
   it("detects marker with trailing annotation", async () => {
     const root = getRepoRoot();
-    const existing =
-      "# Basou - default ignore (annotated)\n.basou/logs/\n";
+    const existing = "# Basou - default ignore (annotated)\n.basou/logs/\n";
     await writeFile(join(root, ".gitignore"), existing, "utf8");
     const result = await appendBasouGitignore(root);
     expect(result.appended).toBe(false);
