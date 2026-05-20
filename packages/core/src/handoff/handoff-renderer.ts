@@ -61,6 +61,12 @@ type TaskCreatedRecord = {
   sessionId: string;
 };
 
+type TaskStatusChangedRecord = {
+  taskId: string;
+  occurredAt: string;
+  sessionId: string;
+};
+
 /**
  * Render the body of `handoff.md` from the current workspace state.
  *
@@ -105,6 +111,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
 
   const decisions: DecisionRecord[] = [];
   const tasksCreated: TaskCreatedRecord[] = [];
+  const tasksStatusChanged: TaskStatusChangedRecord[] = [];
   for (const entry of entries) {
     const sessionDir = join(input.paths.sessions, entry.sessionId);
     try {
@@ -122,6 +129,12 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
           tasksCreated.push({
             taskId: ev.task_id,
             title: ev.title,
+            occurredAt: ev.occurred_at,
+            sessionId: entry.sessionId,
+          });
+        } else if (ev.type === "task_status_changed") {
+          tasksStatusChanged.push({
+            taskId: ev.task_id,
             occurredAt: ev.occurred_at,
             sessionId: entry.sessionId,
           });
@@ -146,6 +159,10 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
     return c !== 0 ? c : a.taskId.localeCompare(b.taskId);
   });
+  tasksStatusChanged.sort((a, b) => {
+    const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
+    return c !== 0 ? c : a.taskId.localeCompare(b.taskId);
+  });
 
   const taskLoadOpts: Parameters<typeof loadTaskEntries>[1] = {};
   if (input.onTaskSkip !== undefined) taskLoadOpts.onSkip = input.onTaskSkip;
@@ -153,9 +170,24 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   const taskById = new Map<string, TaskDocument>();
   for (const t of taskEntries) taskById.set(t.task.task.id, t);
 
-  const latestTaskRecord = tasksCreated[tasksCreated.length - 1];
+  // Latest activity = most recent task_status_changed, falling back to the
+  // most recent task_created when no status change has been recorded yet.
+  // This surfaces "the task whose status most recently changed (including
+  // done)" instead of "the most recently created task", so a task that just
+  // transitioned to done is no longer hidden from the handoff.
+  const latestStatusChange = tasksStatusChanged[tasksStatusChanged.length - 1];
+  const latestCreatedRecord = tasksCreated[tasksCreated.length - 1];
+  const latestActivityTaskId = latestStatusChange?.taskId ?? latestCreatedRecord?.taskId;
+  const latestActivityTitle =
+    latestActivityTaskId !== undefined
+      ? (tasksCreated.find((t) => t.taskId === latestActivityTaskId)?.title ?? "(title unknown)")
+      : undefined;
+  const latestActivityRecord =
+    latestActivityTaskId !== undefined && latestActivityTitle !== undefined
+      ? { taskId: latestActivityTaskId, title: latestActivityTitle }
+      : undefined;
   const latestTaskDoc =
-    latestTaskRecord !== undefined ? taskById.get(latestTaskRecord.taskId) : undefined;
+    latestActivityRecord !== undefined ? taskById.get(latestActivityRecord.taskId) : undefined;
   const pendingTasks = taskEntries.filter(
     (t) => t.task.task.status === "planned" || t.task.task.status === "in_progress",
   );
@@ -198,7 +230,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     displayedFiles,
     overflow,
     entries,
-    latestTaskRecord,
+    latestActivityRecord,
     latestTaskDoc,
     pendingTasks,
     totalTaskCount: taskEntries.length,
@@ -226,7 +258,7 @@ function formatHandoffBody(args: {
   displayedFiles: ReadonlyArray<string>;
   overflow: number;
   entries: ReadonlyArray<SessionEntry>;
-  latestTaskRecord: TaskCreatedRecord | undefined;
+  latestActivityRecord: { taskId: string; title: string } | undefined;
   latestTaskDoc: TaskDocument | undefined;
   pendingTasks: ReadonlyArray<TaskDocument>;
   totalTaskCount: number;
@@ -251,7 +283,7 @@ function formatHandoffBody(args: {
   } else {
     lines.push("- 最終 session: (no live sessions)");
   }
-  if (args.latestTaskRecord !== undefined) {
+  if (args.latestActivityRecord !== undefined) {
     // Status comes from task.md when available. If the task_created event
     // exists but task.md is missing / invalid we MUST NOT fabricate
     // "planned" — events alone cannot restore the initial status and
@@ -261,7 +293,7 @@ function formatHandoffBody(args: {
         ? args.latestTaskDoc.task.task.status
         : "status unknown — task.md missing or invalid";
     lines.push(
-      `- 最終 task: ${args.latestTaskRecord.taskId} (${statusLabel}): ${args.latestTaskRecord.title}`,
+      `- 最終 task: ${args.latestActivityRecord.taskId} (${statusLabel}): ${args.latestActivityRecord.title}`,
     );
   } else {
     lines.push("- 最終 task: (no tasks recorded yet)");

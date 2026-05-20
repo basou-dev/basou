@@ -149,6 +149,27 @@ function taskCreatedLine(
   })}\n`;
 }
 
+function taskStatusChangedLine(
+  sessionId: string,
+  evt: string,
+  taskId: string,
+  fromStatus: string,
+  toStatus: string,
+  occurredAt: string,
+): string {
+  return `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "task_status_changed",
+    id: EVT(evt),
+    session_id: sessionId,
+    occurred_at: occurredAt,
+    source: "human",
+    task_id: taskId,
+    from: fromStatus,
+    to: toStatus,
+  })}\n`;
+}
+
 async function placeTaskFile(
   paths: BasouPaths,
   fixture: {
@@ -411,6 +432,36 @@ describe("handoff-renderer", () => {
     });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain(`- 最終 task: ${t2} (planned): second task`);
+  });
+
+  it("case 15b: latest task_status_changed wins over task_created when both exist", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X0H");
+    const t1 = TASK("T08"); // older task that later gets status-changed to done
+    const t2 = TASK("T09"); // newer task_created (would have won under the old logic)
+    const events =
+      taskCreatedLine(sid, "E17", t1, "older task", "2026-05-08T10:00:00+09:00") +
+      taskCreatedLine(sid, "E18", t2, "newer task", "2026-05-08T11:00:00+09:00") +
+      taskStatusChangedLine(sid, "E19", t1, "planned", "done", "2026-05-08T12:00:00+09:00");
+    await placeSession(paths, { id: sid, status: "running" }, events);
+    await placeTaskFile(paths, {
+      id: t1,
+      title: "older task",
+      status: "done",
+      createdAt: "2026-05-08T10:00:00+09:00",
+      sessionId: sid,
+    });
+    await placeTaskFile(paths, {
+      id: t2,
+      title: "newer task",
+      status: "planned",
+      createdAt: "2026-05-08T11:00:00+09:00",
+      sessionId: sid,
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    // The status-change wins: t1 (now done) surfaces in 最終 task, NOT t2.
+    expect(result.body).toContain(`- 最終 task: ${t1} (done): older task`);
+    expect(result.body).not.toContain(`- 最終 task: ${t2}`);
   });
 
   it("case 16b: latestTask without task.md surfaces 'status unknown'", async () => {
