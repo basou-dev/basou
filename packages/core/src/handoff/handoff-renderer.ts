@@ -202,8 +202,13 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     (a, b) => Date.parse(b.session.session.started_at) - Date.parse(a.session.session.started_at),
   )[0];
 
+  // 「直近の変更ファイル」 collects related_files from live sessions only.
+  // Imported sessions are historical / cross-workspace and would otherwise
+  // pollute the "what changed recently" view with paths that don't belong
+  // to the current workspace's live work.
   const allFiles = new Set<string>();
   for (const e of entries) {
+    if (e.session.session.source.kind === "import") continue;
     for (const f of e.session.session.related_files) allFiles.add(f);
   }
   const sortedFiles = [...allFiles].sort();
@@ -368,15 +373,39 @@ function formatHandoffBody(args: {
   }
   lines.push("");
 
-  // セッション一覧
+  // セッション一覧 — live sessions first, then a separate
+  // 「Imported sessions」 sub-section so the operator can tell at a glance
+  // which sessions belong to the current workspace's live work vs. which
+  // were brought in via `basou session import`. The "(no sessions yet)"
+  // placeholder fires only when the workspace is completely empty.
+  const liveTableEntries = args.entries.filter((e) => e.session.session.source.kind !== "import");
+  const importedTableEntries = args.entries.filter(
+    (e) => e.session.session.source.kind === "import",
+  );
   lines.push("## セッション一覧");
   lines.push("");
   if (args.entries.length === 0) {
     lines.push("(no sessions yet)");
+  } else if (liveTableEntries.length === 0) {
+    lines.push("(no live sessions; see Imported sessions below)");
   } else {
     lines.push("| short_id | status | started_at | label |");
     lines.push("|---|---|---|---|");
-    for (const e of [...args.entries].reverse()) {
+    for (const e of [...liveTableEntries].reverse()) {
+      const sid = shortHandoffId(e.sessionId);
+      const status = e.session.session.status + suspectLabel(e.suspectReason);
+      const startedAt = e.session.session.started_at;
+      const label = e.session.session.label ?? "";
+      lines.push(`| ${sid} | ${status} | ${startedAt} | ${label} |`);
+    }
+  }
+  if (importedTableEntries.length > 0) {
+    lines.push("");
+    lines.push("### Imported sessions");
+    lines.push("");
+    lines.push("| short_id | status | started_at | label |");
+    lines.push("|---|---|---|---|");
+    for (const e of [...importedTableEntries].reverse()) {
       const sid = shortHandoffId(e.sessionId);
       const status = e.session.session.status + suspectLabel(e.suspectReason);
       const startedAt = e.session.session.started_at;

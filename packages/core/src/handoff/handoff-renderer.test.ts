@@ -472,7 +472,13 @@ describe("handoff-renderer", () => {
     const s2 = SES("X0N");
     const s3 = SES("X0P");
     const taskId = TASK("T0A");
-    const events = taskCreatedLine(s1, "E1A", taskId, "spans 3 sessions", "2026-05-08T09:00:00+09:00");
+    const events = taskCreatedLine(
+      s1,
+      "E1A",
+      taskId,
+      "spans 3 sessions",
+      "2026-05-08T09:00:00+09:00",
+    );
     await placeSession(paths, { id: s1, status: "completed" }, events);
     await placeSession(paths, { id: s2, status: "completed" }, "");
     await placeSession(paths, { id: s3, status: "running" }, "");
@@ -599,5 +605,53 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain("Sessions: 3 (completed 3). Tasks: 0.");
     expect(result.body).not.toContain("failed 0");
     expect(result.body).not.toContain("running 0");
+  });
+
+  it("case 18a: imported session related_files stay out of 直近の変更ファイル", async () => {
+    const paths = await setupPaths();
+    const liveSid = SES("X2A");
+    const importedSid = SES("X2B");
+    await placeSession(paths, {
+      id: liveSid,
+      status: "completed",
+      relatedFiles: ["src/live-only.ts"],
+    });
+    await placeSession(paths, {
+      id: importedSid,
+      status: "imported",
+      source: "import",
+      relatedFiles: ["src/imported-from-elsewhere.ts"],
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    const filesSection = sliceSection(result.body, "## 直近の変更ファイル", "## ");
+    expect(filesSection).toContain("- src/live-only.ts");
+    expect(filesSection).not.toContain("src/imported-from-elsewhere.ts");
+  });
+
+  it("case 18b: imported sessions surface in a separate Imported sessions subsection", async () => {
+    const paths = await setupPaths();
+    const liveSid = SES("X2C");
+    const importedSid = SES("X2D");
+    await placeSession(paths, {
+      id: liveSid,
+      status: "completed",
+      label: "live work",
+    });
+    await placeSession(paths, {
+      id: importedSid,
+      status: "imported",
+      source: "import",
+      label: "from-external",
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    // Live session row sits under the main table, imported session under the
+    // separated subsection.
+    expect(result.body).toContain("## セッション一覧");
+    expect(result.body).toContain("### Imported sessions");
+    const importedSection = sliceSection(result.body, "### Imported sessions", "Sessions:");
+    expect(importedSection).toContain("from-external");
+    const liveSection = sliceSection(result.body, "## セッション一覧", "### Imported sessions");
+    expect(liveSection).toContain("live work");
+    expect(liveSection).not.toContain("from-external");
   });
 });
