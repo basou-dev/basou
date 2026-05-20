@@ -178,6 +178,7 @@ async function placeTaskFile(
     status: TaskStatus;
     createdAt: string;
     sessionId: string;
+    linkedSessions?: ReadonlyArray<string>;
   },
 ): Promise<void> {
   const yaml = stringify({
@@ -190,7 +191,7 @@ async function placeTaskFile(
       updated_at: fixture.createdAt,
       workspace_id: WS_ID,
       created_in_session: fixture.sessionId,
-      linked_sessions: [fixture.sessionId],
+      linked_sessions: fixture.linkedSessions ?? [fixture.sessionId],
     },
   });
   await writeFile(join(paths.tasks, `${fixture.id}.md`), `---\n${yaml}---\n\n`);
@@ -462,6 +463,50 @@ describe("handoff-renderer", () => {
     // The status-change wins: t1 (now done) surfaces in 最終 task, NOT t2.
     expect(result.body).toContain(`- 最終 task: ${t1} (done): older task`);
     expect(result.body).not.toContain(`- 最終 task: ${t2}`);
+  });
+
+  it("case 15c: multi-session task surfaces a (linked_sessions: N) suffix", async () => {
+    const paths = await setupPaths();
+    // SES suffix avoids the ULID-forbidden letters I / L / O / U.
+    const s1 = SES("X0M");
+    const s2 = SES("X0N");
+    const s3 = SES("X0P");
+    const taskId = TASK("T0A");
+    const events = taskCreatedLine(s1, "E1A", taskId, "spans 3 sessions", "2026-05-08T09:00:00+09:00");
+    await placeSession(paths, { id: s1, status: "completed" }, events);
+    await placeSession(paths, { id: s2, status: "completed" }, "");
+    await placeSession(paths, { id: s3, status: "running" }, "");
+    await placeTaskFile(paths, {
+      id: taskId,
+      title: "spans 3 sessions",
+      status: "in_progress",
+      createdAt: "2026-05-08T09:00:00+09:00",
+      sessionId: s1,
+      linkedSessions: [s1, s2, s3],
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(
+      `- 最終 task: ${taskId} (in_progress): spans 3 sessions (linked_sessions: 3)`,
+    );
+  });
+
+  it("case 15d: single-session task omits the linked_sessions suffix", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X0Q");
+    const taskId = TASK("T0B");
+    const events = taskCreatedLine(sid, "E1B", taskId, "lone task", "2026-05-08T09:00:00+09:00");
+    await placeSession(paths, { id: sid, status: "running" }, events);
+    await placeTaskFile(paths, {
+      id: taskId,
+      title: "lone task",
+      status: "planned",
+      createdAt: "2026-05-08T09:00:00+09:00",
+      sessionId: sid,
+      // linkedSessions defaults to [sid] = single-session — suffix MUST NOT appear.
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`- 最終 task: ${taskId} (planned): lone task`);
+    expect(result.body).not.toContain("linked_sessions:");
   });
 
   it("case 16b: latestTask without task.md surfaces 'status unknown'", async () => {

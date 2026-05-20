@@ -292,8 +292,15 @@ function formatHandoffBody(args: {
       args.latestTaskDoc !== undefined
         ? args.latestTaskDoc.task.task.status
         : "status unknown — task.md missing or invalid";
+    // Surface linked_sessions cardinality as a trailing parenthetical when
+    // the latest task spans more than one session. Suppressed when the
+    // task is single-session (the common case) or when task.md is
+    // unavailable, keeping single-session output visually quiet.
+    const linkedCount = args.latestTaskDoc?.task.task.linked_sessions?.length;
+    const linkedSuffix =
+      linkedCount !== undefined && linkedCount > 1 ? ` (linked_sessions: ${linkedCount})` : "";
     lines.push(
-      `- 最終 task: ${args.latestActivityRecord.taskId} (${statusLabel}): ${args.latestActivityRecord.title}`,
+      `- 最終 task: ${args.latestActivityRecord.taskId} (${statusLabel}): ${args.latestActivityRecord.title}${linkedSuffix}`,
     );
   } else {
     lines.push("- 最終 task: (no tasks recorded yet)");
