@@ -385,7 +385,35 @@ function formatHandoffBody(args: {
     }
   }
   lines.push("");
-  lines.push(`Sessions: ${args.sessionCount}. Tasks: ${args.totalTaskCount}.`);
+  // Session-status breakdown: surface completed / failed / running counts
+  // alongside the total so an at-a-glance read distinguishes "ten sessions,
+  // all done" from "ten sessions, three still failing". Order is fixed
+  // (completed first since handoff is read after the work) and zero-count
+  // statuses are omitted. When the workspace is empty the breakdown
+  // parenthetical is suppressed entirely so the existing terse line stays.
+  const statusCounts = new Map<string, number>();
+  for (const e of args.entries) {
+    const s = e.session.session.status;
+    statusCounts.set(s, (statusCounts.get(s) ?? 0) + 1);
+  }
+  const orderedStatuses = [
+    "completed",
+    "failed",
+    "running",
+    "interrupted",
+    "waiting_approval",
+    "initialized",
+    "imported",
+  ] as const;
+  const breakdown = orderedStatuses
+    .filter((s) => (statusCounts.get(s) ?? 0) > 0)
+    .map((s) => `${s} ${statusCounts.get(s)}`)
+    .join(", ");
+  const sessionsLine =
+    breakdown !== ""
+      ? `Sessions: ${args.sessionCount} (${breakdown}). Tasks: ${args.totalTaskCount}.`
+      : `Sessions: ${args.sessionCount}. Tasks: ${args.totalTaskCount}.`;
+  lines.push(sessionsLine);
 
   return lines.join("\n");
 }

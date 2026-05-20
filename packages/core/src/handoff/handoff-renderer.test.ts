@@ -368,7 +368,7 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain("- src/x.ts");
     expect(result.body).toContain(`- ${dec}: pick A`);
     expect(result.body).toContain("| short_id | status | started_at | label |");
-    expect(result.body).toContain("Sessions: 1. Tasks: 0.");
+    expect(result.body).toContain("Sessions: 1 (completed 1). Tasks: 0.");
   });
 
   it("case 12: nowIso is reflected in the generated_at header", async () => {
@@ -405,7 +405,7 @@ describe("handoff-renderer", () => {
     expect(result.pendingTaskCount).toBe(1);
     expect(result.body).toContain(`- 最終 task: ${taskId} (planned): form revamp`);
     expect(result.body).toContain(`- ${taskId} (planned): form revamp`);
-    expect(result.body).toContain("Sessions: 1. Tasks: 1.");
+    expect(result.body).toContain("Sessions: 1 (running 1). Tasks: 1.");
   });
 
   it("case 15: multi tasks select the latest task_created event for 最終 task", async () => {
@@ -562,5 +562,42 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain(`- ${t1} (in_progress): ongoing`);
     expect(result.body).not.toMatch(new RegExp(`- ${t2} `));
     expect(result.body).not.toMatch(new RegExp(`- ${t3} `));
+  });
+
+  it("case 17a: Sessions line splits mixed completed / failed sessions", async () => {
+    const paths = await setupPaths();
+    const s1 = SES("X1A");
+    const s2 = SES("X1B");
+    const s3 = SES("X1C");
+    const s4 = SES("X1D");
+    await placeSession(paths, { id: s1, status: "completed" });
+    await placeSession(paths, { id: s2, status: "completed" });
+    await placeSession(paths, { id: s3, status: "failed" });
+    await placeSession(paths, { id: s4, status: "running" });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("Sessions: 4 (completed 2, failed 1, running 1). Tasks: 0.");
+  });
+
+  it("case 17b: Sessions line omits the breakdown when no sessions exist", async () => {
+    const paths = await setupPaths();
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    // Empty workspace → breakdown suppressed, terse line preserved.
+    expect(result.body).toContain("Sessions: 0. Tasks: 0.");
+    expect(result.body).not.toContain("Sessions: 0 (");
+  });
+
+  it("case 17c: Sessions line lists only non-zero statuses", async () => {
+    const paths = await setupPaths();
+    const s1 = SES("X1E");
+    const s2 = SES("X1F");
+    const s3 = SES("X1G");
+    await placeSession(paths, { id: s1, status: "completed" });
+    await placeSession(paths, { id: s2, status: "completed" });
+    await placeSession(paths, { id: s3, status: "completed" });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    // Only "completed" shows, other statuses suppressed.
+    expect(result.body).toContain("Sessions: 3 (completed 3). Tasks: 0.");
+    expect(result.body).not.toContain("failed 0");
+    expect(result.body).not.toContain("running 0");
   });
 });
