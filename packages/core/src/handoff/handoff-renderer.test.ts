@@ -465,6 +465,34 @@ describe("handoff-renderer", () => {
     expect(result.body).not.toContain(`- 最終 task: ${t2}`);
   });
 
+  it("case 15e: task_status_changed without matching task_created falls back to (title unknown)", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X3A");
+    const taskId = TASK("T0C");
+    // Only a status_changed event — no task_created in the events stream.
+    // This is a legitimate degraded state (e.g. an old events.jsonl trimmed
+    // by external tooling, or a status-only import); the renderer must
+    // surface a sentinel rather than crash or hide the latest activity.
+    const events = taskStatusChangedLine(
+      sid,
+      "E1C",
+      taskId,
+      "planned",
+      "in_progress",
+      "2026-05-08T12:00:00+09:00",
+    );
+    await placeSession(paths, { id: sid, status: "running" }, events);
+    await placeTaskFile(paths, {
+      id: taskId,
+      title: "task without created event",
+      status: "in_progress",
+      createdAt: "2026-05-08T10:00:00+09:00",
+      sessionId: sid,
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`- 最終 task: ${taskId} (in_progress): (title unknown)`);
+  });
+
   it("case 15c: multi-session task surfaces a (linked_sessions: N) suffix", async () => {
     const paths = await setupPaths();
     // SES suffix avoids the ULID-forbidden letters I / L / O / U.
