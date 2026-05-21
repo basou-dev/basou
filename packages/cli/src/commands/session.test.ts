@@ -660,6 +660,38 @@ describe("doRunSessionShow", () => {
     expect(message).toContain("Invalid number: 0");
   });
 
+  it("case 24a: sanitized '~/...' working_directory is displayed verbatim (= no path.relative mangling)", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("ZSA");
+    await createSession(repo, { id, workingDirectory: "~/projects/example" });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("Working dir:   ~/projects/example");
+    // The display must not concatenate ~/projects/example onto cwd or
+    // surface it as a `../`-prefixed traversal — both are signs the old
+    // path.relative path crept in.
+    expect(stdout).not.toMatch(/Working dir:.*\.\.\/.*~\/projects/);
+  });
+
+  it("case 24b: sanitized '.' working_directory collapses to <repository_root>", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("ZSB");
+    await createSession(repo, { id, workingDirectory: "." });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    expect(joinCalls(out)).toContain("Working dir:   <repository_root>");
+  });
+
+  it("case 24c: sanitized 'src/sub' relative working_directory is displayed verbatim", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("ZSC");
+    await createSession(repo, { id, workingDirectory: "src/sub" });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    expect(joinCalls(out)).toContain("Working dir:   src/sub");
+  });
+
   it("case 23: working_directory outside the repo prints a `../...` relative path in default text", async () => {
     const repo = await setupInitedRepo();
     const id = SES("Z04");

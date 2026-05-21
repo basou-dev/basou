@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { basename, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import {
   type Event,
   type ImportSessionOptions,
@@ -374,6 +374,20 @@ function formatWorkingDir(
   options: SessionShowOptions,
 ): string {
   if (options.fullPath === true) return workingDir;
+
+  // v0.3 sanitized sessions write `working_directory` as a relative form
+  // (`~/projects/foo`, `src/sub`, `.`, etc.) rather than the absolute
+  // path the older write paths used. path.relative against a relative
+  // input would silently resolve it against process.cwd and produce
+  // nonsense like `<cwd>/~/projects/foo`, so the relative form must be
+  // surfaced verbatim. The one literal we collapse is `.`, which means
+  // "the session ran at the repo root" — same semantic as an absolute
+  // workingDir equal to repositoryRoot.
+  if (!isAbsolute(workingDir)) {
+    if (workingDir === ".") return "<repository_root>";
+    return workingDir;
+  }
+
   if (workingDir === repositoryRoot) return "<repository_root>";
   const rel = relative(repositoryRoot, workingDir);
   if (rel.length === 0 || rel === ".") return "<repository_root>";
