@@ -9,6 +9,7 @@ import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { SessionStatus } from "../schemas/session.schema.js";
 import { IsoTimestampSchema, SessionIdSchema, TaskIdSchema } from "../schemas/shared.schema.js";
+import type { TaskIndexEntry } from "../schemas/task-index.schema.js";
 import {
   type Task,
   TaskSchema,
@@ -25,6 +26,7 @@ import { atomicCreate, atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
 import { enumerateSessionDirs, readSessionYaml } from "./sessions.js";
+import { readTaskIndex, rebuildTaskIndex, updateTaskIndex } from "./task-index.js";
 import { overwriteYamlFile } from "./yaml-store.js";
 
 // ============================================================================
@@ -244,6 +246,51 @@ const TASK_FILENAME_RE = /^(.+)\.md$/;
  * `"Failed to enumerate tasks"`.
  */
 export async function enumerateTaskIds(paths: BasouPaths): Promise<string[]> {
+  // Fast path: read `tasks/index.json` if it exists and is valid. The index
+  // is maintained write-through by every task mutation API so the cache
+  // matches disk except across crashes / hand-edits / version bumps.
+  try {
+    const index = await readTaskIndex(paths);
+    return index.tasks.map((t) => t.id);
+  } catch {
+    // Index missing / parse fail / schema mismatch — fall through to the
+    // disk-scan rebuild path below. The discrete error classes from
+    // readTaskIndex (Task index not found / Invalid task index / Failed
+    // to read task index) are all equivalent here.
+  }
+
+  const ids = await enumerateTaskIdsFromDisk(paths);
+
+  // Skip the lazy rebuild entirely when there is nothing to record: a
+  // pre-init / empty workspace has no tasks/ dir, so a rebuild attempt
+  // would fail with ENOENT and emit a misleading warning. The next write
+  // will recreate the index from scratch via updateTaskIndex anyway.
+  if (ids.length === 0) {
+    return ids;
+  }
+
+  // Lazy rebuild: scan each task.md and write the resulting index. Best-
+  // effort — a per-task read failure (= a malformed file we'd surface as
+  // a skip elsewhere) is excluded from the rebuilt index but still
+  // returned to the caller in `ids` so loadTaskEntries can surface its
+  // own skip reason. Rebuild write failure (disk full, EACCES) is logged
+  // and swallowed; the next enumerateTaskIds call will retry the rebuild.
+  const entries: TaskIndexEntry[] = [];
+  for (const id of ids) {
+    try {
+      const doc = await readTaskFile(paths, id);
+      entries.push(buildTaskIndexEntry(doc.task.task));
+    } catch {
+      // Skip unreadable entry from the rebuild.
+    }
+  }
+  await rebuildTaskIndex(paths, entries).catch(() => {
+    console.warn("Failed to rebuild tasks/index.json; subsequent reads will retry");
+  });
+  return ids;
+}
+
+async function enumerateTaskIdsFromDisk(paths: BasouPaths): Promise<string[]> {
   let entries: string[];
   try {
     entries = (await readdir(paths.tasks, { withFileTypes: true }))
@@ -263,6 +310,37 @@ export async function enumerateTaskIds(paths: BasouPaths): Promise<string[]> {
   }
   taskIds.sort();
   return taskIds;
+}
+
+/**
+ * Convert the inner `task` portion of a task.md document into the
+ * compact entry shape stored inside `tasks/index.json`. Omits `label`
+ * when the task has no label set so the JSON does not store an
+ * `undefined` literal.
+ */
+function buildTaskIndexEntry(task: Task["task"]): TaskIndexEntry {
+  return {
+    id: task.id,
+    status: task.status,
+    ...(task.label !== undefined ? { label: task.label } : {}),
+    updated_at: task.updated_at,
+  };
+}
+
+/**
+ * Apply a single write-through update to `tasks/index.json` and swallow
+ * any failure with a console.warn so the calling task-write API stays
+ * successful (= task.md is the source of truth, index is a soft cache).
+ */
+async function safeUpdateTaskIndex(
+  paths: BasouPaths,
+  op: Parameters<typeof updateTaskIndex>[1],
+): Promise<void> {
+  try {
+    await updateTaskIndex(paths, op);
+  } catch {
+    console.warn("Index update failed; rebuild on next read");
+  }
 }
 
 const ARCHIVE_DIR_NAME = "archive";
@@ -797,6 +875,7 @@ async function createTaskAdHoc(input: CreateAdHocTaskInput): Promise<CreateTaskR
       cause: error,
     });
   }
+  await safeUpdateTaskIndex(input.paths, { kind: "add", entry: buildTaskIndexEntry(task.task) });
   return {
     taskId: input.taskId,
     eventId: anchorEventId,
@@ -935,6 +1014,8 @@ async function createTaskAttachLocked(input: AttachTaskInput): Promise<CreateTas
       cause: error,
     });
   }
+
+  await safeUpdateTaskIndex(input.paths, { kind: "add", entry: buildTaskIndexEntry(task.task) });
 
   return {
     taskId: input.taskId,
@@ -1150,6 +1231,10 @@ async function updateTaskStatusAdHoc(
       cause: error,
     });
   }
+  await safeUpdateTaskIndex(input.paths, {
+    kind: "update",
+    entry: buildTaskIndexEntry(updatedDoc.task.task),
+  });
   return {
     taskId: input.taskId,
     eventId: anchorEventId,
@@ -1241,6 +1326,10 @@ async function updateTaskStatusAttachLocked(
       cause: error,
     });
   }
+  await safeUpdateTaskIndex(input.paths, {
+    kind: "update",
+    entry: buildTaskIndexEntry(updatedDoc.task.task),
+  });
   return {
     taskId: input.taskId,
     eventId: appendResult.eventId,
@@ -1664,6 +1753,11 @@ async function reconcileTaskLocked(
     });
   }
 
+  await safeUpdateTaskIndex(paths, {
+    kind: "update",
+    entry: buildTaskIndexEntry(repaired.task.task),
+  });
+
   return {
     taskId: input.taskId,
     clean: false,
@@ -2004,6 +2098,11 @@ async function refreshTaskLinkedSessionsLocked(
     });
   }
 
+  await safeUpdateTaskIndex(paths, {
+    kind: "update",
+    entry: buildTaskIndexEntry(refreshed.task.task),
+  });
+
   return {
     taskId: input.taskId,
     clean: false,
@@ -2138,6 +2237,10 @@ export async function editTask(input: EditTaskInput): Promise<EditTaskResult> {
           { task: next, body: doc.body },
           { mode: "overwrite" },
         );
+        await safeUpdateTaskIndex(input.paths, {
+          kind: "update",
+          entry: buildTaskIndexEntry(next.task),
+        });
         titleUpdated = true;
       }
     } finally {
@@ -2254,6 +2357,8 @@ async function deleteTaskLocked(input: DeleteTaskInput): Promise<DeleteTaskResul
       cause: error,
     });
   }
+
+  await safeUpdateTaskIndex(input.paths, { kind: "remove", id: input.taskId });
 
   return {
     taskId: input.taskId,
@@ -2385,6 +2490,11 @@ async function archiveTaskLocked(input: ArchiveTaskInput): Promise<ArchiveTaskRe
       cause: error,
     });
   }
+
+  // Archived tasks live under tasks/archive/<id>.md, which enumerateTaskIds
+  // ignores. Remove the entry from the active index so `task list` matches
+  // disk reality.
+  await safeUpdateTaskIndex(input.paths, { kind: "remove", id: input.taskId });
 
   return {
     taskId: input.taskId,

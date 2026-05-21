@@ -2225,6 +2225,177 @@ describe("archiveTask", () => {
 // ============================================================================
 
 // ============================================================================
+// tasks/index.json write-through + lazy rebuild (B-D2)
+// ============================================================================
+
+describe("tasks/index.json write-through (B-D2)", () => {
+  async function readIndex(
+    paths: BasouPaths,
+  ): Promise<{ tasks: { id: string; status: string }[] }> {
+    const raw = await readFile(join(paths.tasks, "index.json"), "utf8");
+    return JSON.parse(raw) as { tasks: { id: string; status: string }[] };
+  }
+
+  it("createTaskWithEvent adds an entry to tasks/index.json", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "indexed",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const index = await readIndex(paths);
+    expect(index.tasks.map((t) => t.id)).toContain(TASK_ID_A);
+    expect(index.tasks.find((t) => t.id === TASK_ID_A)?.status).toBe("planned");
+  });
+
+  it("updateTaskStatusWithEvent updates the status in tasks/index.json", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "indexed status",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await updateTaskStatusWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: "2026-05-12T12:00:00+09:00",
+      taskId: TASK_ID_A,
+      newStatus: "in_progress",
+      workingDirectory: getWorkDir(),
+    });
+    const index = await readIndex(paths);
+    expect(index.tasks.find((t) => t.id === TASK_ID_A)?.status).toBe("in_progress");
+  });
+
+  it("deleteTask removes the entry from tasks/index.json", async () => {
+    const { deleteTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "to delete",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await deleteTask({
+      paths,
+      manifest: makeManifest(),
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+    });
+    const index = await readIndex(paths);
+    expect(index.tasks.map((t) => t.id)).not.toContain(TASK_ID_A);
+  });
+
+  it("archiveTask removes the entry from the active tasks/index.json", async () => {
+    const { archiveTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "to archive",
+      initialStatus: "done",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await archiveTask({
+      paths,
+      manifest: makeManifest(),
+      taskId: TASK_ID_A,
+      occurredAt: OCC_AT,
+      workingDirectory: getWorkDir(),
+    });
+    const index = await readIndex(paths);
+    expect(index.tasks.map((t) => t.id)).not.toContain(TASK_ID_A);
+  });
+
+  it("enumerateTaskIds uses the index fast path when the index is present", async () => {
+    const paths = await setupPaths();
+    // Place a synthetic index with an entry that does NOT correspond to a
+    // task.md on disk. If enumerateTaskIds is reading from the index it
+    // should surface this ghost id; if it falls back to readdir it would
+    // skip it. ULID uses Crockford Base32 (I / L / O / U excluded).
+    // 26-char Crockford Base32 ULID (no I/L/O/U).
+    const ghostId = "task_01HXGHSTGHSTGHST0000000000";
+    await writeFile(
+      join(paths.tasks, "index.json"),
+      JSON.stringify({
+        schema_version: "0.1.0",
+        tasks: [{ id: ghostId, status: "planned", updated_at: OCC_AT }],
+        last_rebuilt_at: OCC_AT,
+      }),
+      "utf8",
+    );
+    const ids = await enumerateTaskIds(paths);
+    expect(ids).toEqual([ghostId]);
+  });
+
+  it("enumerateTaskIds rebuilds index from disk when index is missing", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "rebuild source",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    // Remove the index entirely.
+    await rm(join(paths.tasks, "index.json"), { force: true });
+    const ids = await enumerateTaskIds(paths);
+    expect(ids).toEqual([TASK_ID_A]);
+    // Rebuilt index should match disk.
+    const index = await readIndex(paths);
+    expect(index.tasks.map((t) => t.id)).toEqual([TASK_ID_A]);
+  });
+
+  it("enumerateTaskIds rebuilds index when the file is corrupt JSON", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "corrupt recovery",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await writeFile(join(paths.tasks, "index.json"), "{ broken", "utf8");
+    const ids = await enumerateTaskIds(paths);
+    expect(ids).toEqual([TASK_ID_A]);
+    // Rebuilt to valid index.
+    const index = await readIndex(paths);
+    expect(index.tasks.map((t) => t.id)).toEqual([TASK_ID_A]);
+  });
+});
+
+// ============================================================================
 // Per-task lock (B-D1)
 // ============================================================================
 
