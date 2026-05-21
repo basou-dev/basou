@@ -92,7 +92,11 @@ describe("doRunStatus (pure runner)", () => {
     await doRunStatus({}, { cwd: repo });
     const stdout = joinCalls(out);
     expect(stdout).toContain(`Workspace: client-foo-lp (${FIXED_WS_ID})`);
-    expect(stdout).toContain("Basou version: 0.1.0");
+    // v0.3.1 label rename: "Basou version" → "Spec version" so the field
+    // is no longer mistaken for the CLI release version (= `basou
+    // --version`). The underlying basou_version literal stays "0.1.0".
+    expect(stdout).toContain("Spec version:  0.1.0");
+    expect(stdout).not.toContain("Basou version:");
     expect(stdout).toContain("Generated at: ");
     expect(stdout).toContain("Subdirectories present: 7/7");
     // pure runner must not flip exitCode to 1 on success (Node leaves it

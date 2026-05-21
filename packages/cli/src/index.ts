@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import { registerApprovalCommand } from "./commands/approval.js";
 import { registerDecisionCommand } from "./commands/decision.js";
@@ -11,11 +12,15 @@ import { registerStatusCommand } from "./commands/status.js";
 import { registerTaskCommand } from "./commands/task.js";
 import { isVerbose, renderCliError } from "./lib/error-render.js";
 
-// Kept in sync with packages/cli/package.json `version` by hand on every
-// release. Dynamic read via import.meta + createRequire is a v0.3.x
-// candidate so a future release bump cannot drift past `basou --version`
-// silently.
-const BASOU_CLI_VERSION = "0.3.0";
+// Read the CLI release version directly from the sibling package.json so
+// `basou --version` cannot drift past a future package-bump (the v0.2/v0.3
+// releases both shipped with a stale "0.1.0" constant before the dynamic
+// read landed). The relative path is stable across the dev (src/index.ts
+// → src/../package.json) and built (dist/index.js → dist/../package.json)
+// layouts, since both files sit one directory below the package root.
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json") as { version: string };
+const BASOU_CLI_VERSION = pkg.version;
 
 const program = new Command();
 program

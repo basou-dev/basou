@@ -5,6 +5,35 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+## 0.3.1 — 2026-05-21
+
+A small follow-up that picks two paper-cut issues out of the v0.3.0
+post-release observation lane. No CLI surface or data-format changes;
+upgrading from v0.3.0 is a `pnpm install && pnpm -r build` away.
+
+### Fixed
+
+- `basou --version` now reads from `packages/cli/package.json` at
+  runtime instead of a hardcoded constant. The v0.2.0 and v0.3.0
+  releases both shipped with `basou --version` still printing `0.1.0`
+  because the constant was never bumped alongside the package version;
+  the dynamic read closes that drift class permanently, and a new
+  `src/index.test.ts` integration test now exec's the built CLI and
+  asserts the printed version matches `package.json`.
+
+### Changed
+
+- `basou status` renames the human-readable label `Basou version:` to
+  `Spec version:` so it no longer collides with the release-version
+  semantics of `basou --version`. The underlying JSON field
+  (`workspace.basou_version`) is unchanged, so JSON consumers are
+  unaffected; only the text-mode label moves.
+
+### Tests
+
+Baseline grew from 1014 (v0.3.0 close) → 1015 (v0.3.1 close), +1 for
+the version-drift guard test.
+
 ## 0.3.0 — 2026-05-21
 
 This release focuses on the three workflow gaps surfaced during v0.2

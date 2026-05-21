@@ -102,8 +102,15 @@ export async function doRunStatus(options: StatusOptions, ctx: StatusContext): P
 
 function renderTextStatus(s: StatusSnapshot): void {
   console.log(`Workspace: ${s.workspace.name} (${s.workspace.id})`);
-  console.log(`Basou version: ${s.workspace.basou_version}`);
-  console.log(`Generated at: ${s.generated_at}`);
+  // The label changed from "Basou version" to "Spec version" in v0.3.1
+  // because the field tracks the workspace data-format spec
+  // (`basou_version` literal-locked to "0.1.0") and was repeatedly
+  // mistaken for the release version returned by `basou --version`. The
+  // wire payload field name (= `workspace.basou_version`) stays the same
+  // so JSON consumers are unaffected; only the human-readable label
+  // moves.
+  console.log(`Spec version:  ${s.workspace.basou_version}`);
+  console.log(`Generated at:  ${s.generated_at}`);
   const dp = s.directories_present;
   const total = Object.keys(dp).length;
   const present = Object.values(dp).filter((v) => v === true).length;
