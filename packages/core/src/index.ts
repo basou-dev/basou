@@ -166,6 +166,13 @@ export type {
 
 export { resolveSessionId, resolveTaskId } from "./lib/id-resolver.js";
 
+export {
+  sanitizePath,
+  sanitizeRelatedFiles,
+  sanitizeWorkingDirectory,
+} from "./lib/path-sanitizer.js";
+export type { SanitizePathOptions, SanitizeRelatedFilesResult } from "./lib/path-sanitizer.js";
+
 export { renderHandoff } from "./handoff/index.js";
 export type { HandoffRendererInput, HandoffRendererResult } from "./handoff/index.js";
 
