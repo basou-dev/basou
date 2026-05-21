@@ -23,6 +23,7 @@ import {
 } from "./ad-hoc-session.js";
 import { atomicCreate, atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
+import { acquireLock } from "./lockfile.js";
 import { enumerateSessionDirs, readSessionYaml } from "./sessions.js";
 import { overwriteYamlFile } from "./yaml-store.js";
 
@@ -1065,17 +1066,26 @@ export async function updateTaskStatusWithEvent(
 ): Promise<UpdateTaskStatusResult> {
   TaskIdSchema.parse(input.taskId);
 
-  // 1. Load current task.md (= source of truth for current status).
-  const currentDoc = await readTaskFile(input.paths, input.taskId);
-  const previousStatus = currentDoc.task.task.status;
+  // Per-task lock guards the read-modify-write of task.md against concurrent
+  // writers on the same task id (= another `task status` / `task edit` /
+  // `task reconcile` on the same task). Released in a finally block so the
+  // lock never lingers on either the success or the failure path.
+  const handle = await acquireLock(input.paths, "task", input.taskId);
+  try {
+    // 1. Load current task.md (= source of truth for current status).
+    const currentDoc = await readTaskFile(input.paths, input.taskId);
+    const previousStatus = currentDoc.task.task.status;
 
-  // 2. Validate transition before touching any persistent state.
-  assertTransitionAllowed(previousStatus, input.newStatus);
+    // 2. Validate transition before touching any persistent state.
+    assertTransitionAllowed(previousStatus, input.newStatus);
 
-  if (input.mode === "ad-hoc") {
-    return updateTaskStatusAdHoc(input, currentDoc, previousStatus);
+    if (input.mode === "ad-hoc") {
+      return await updateTaskStatusAdHoc(input, currentDoc, previousStatus);
+    }
+    return await updateTaskStatusAttach(input, currentDoc, previousStatus);
+  } finally {
+    await handle.release();
   }
-  return updateTaskStatusAttach(input, currentDoc, previousStatus);
 }
 
 async function updateTaskStatusAdHoc(
@@ -1490,6 +1500,23 @@ export async function reconcileTask(
 ): Promise<ReconcileResult> {
   TaskIdSchema.parse(input.taskId);
 
+  // Per-task lock spans the entire reconcile window (= snapshot read,
+  // ad-hoc session + event write, post-write snapshot probe, task.md
+  // overwrite) so the mtime/hash invariant cannot be defeated by a
+  // concurrent writer the helper would otherwise not notice.
+  const handle = await acquireLock(paths, "task", input.taskId);
+  try {
+    return await reconcileTaskLocked(paths, manifest, input);
+  } finally {
+    await handle.release();
+  }
+}
+
+async function reconcileTaskLocked(
+  paths: BasouPaths,
+  manifest: Manifest,
+  input: ReconcileTaskInput,
+): Promise<ReconcileResult> {
   const { doc: currentDoc, snapshot: preSnapshot } = await readTaskFileWithSnapshot(
     paths,
     input.taskId,
@@ -1820,6 +1847,23 @@ export async function refreshTaskLinkedSessions(
 ): Promise<RefreshLinkageResult> {
   TaskIdSchema.parse(input.taskId);
 
+  // Per-task lock spans the entire refresh window so the snapshot taken in
+  // stage 2 cannot be invalidated by another writer the helper does not see;
+  // the stage 6 mtime/hash probe still acts as a belt-and-braces guard
+  // against drift from non-locked code paths (e.g. an external `vi` edit).
+  const handle = await acquireLock(paths, "task", input.taskId);
+  try {
+    return await refreshTaskLinkedSessionsLocked(paths, manifest, input);
+  } finally {
+    await handle.release();
+  }
+}
+
+async function refreshTaskLinkedSessionsLocked(
+  paths: BasouPaths,
+  manifest: Manifest,
+  input: RefreshLinkageInput,
+): Promise<RefreshLinkageResult> {
   const { doc: currentDoc, snapshot: preSnapshot } = await readTaskFileWithSnapshot(
     paths,
     input.taskId,
@@ -2033,26 +2077,36 @@ export async function editTask(input: EditTaskInput): Promise<EditTaskResult> {
   }
 
   // Stage 2: title overwrite (if any). Re-read so the status change above
-  // (which updated linked_sessions / updated_at) is preserved.
+  // (which updated linked_sessions / updated_at) is preserved. The lock is
+  // taken HERE (not around the whole function) because stage 1 calls
+  // `updateTaskStatusWithEvent` which acquires the same per-task lock
+  // internally — wrapping both stages in one outer lock would deadlock on
+  // its own helper. Each stage being independently atomic is the operator-
+  // visible invariant we care about, not stage-1-and-2 atomicity.
   let titleUpdated = false;
   if (input.title !== undefined) {
-    const doc = await readTaskFile(input.paths, input.taskId);
-    if (doc.task.task.title !== input.title) {
-      const next: Task = {
-        ...doc.task,
-        task: {
-          ...doc.task.task,
-          title: input.title,
-          updated_at: input.occurredAt,
-        },
-      };
-      await writeTaskFile(
-        input.paths,
-        input.taskId,
-        { task: next, body: doc.body },
-        { mode: "overwrite" },
-      );
-      titleUpdated = true;
+    const handle = await acquireLock(input.paths, "task", input.taskId);
+    try {
+      const doc = await readTaskFile(input.paths, input.taskId);
+      if (doc.task.task.title !== input.title) {
+        const next: Task = {
+          ...doc.task,
+          task: {
+            ...doc.task.task,
+            title: input.title,
+            updated_at: input.occurredAt,
+          },
+        };
+        await writeTaskFile(
+          input.paths,
+          input.taskId,
+          { task: next, body: doc.body },
+          { mode: "overwrite" },
+        );
+        titleUpdated = true;
+      }
+    } finally {
+      await handle.release();
     }
   }
 
@@ -2110,6 +2164,18 @@ export type DeleteTaskResult = {
 export async function deleteTask(input: DeleteTaskInput): Promise<DeleteTaskResult> {
   TaskIdSchema.parse(input.taskId);
 
+  // Per-task lock keeps the read → audit event → unlink chain free of a
+  // concurrent writer that could otherwise observe task.md after we read it
+  // and before we delete it (e.g. another CLI running `task status`).
+  const handle = await acquireLock(input.paths, "task", input.taskId);
+  try {
+    return await deleteTaskLocked(input);
+  } finally {
+    await handle.release();
+  }
+}
+
+async function deleteTaskLocked(input: DeleteTaskInput): Promise<DeleteTaskResult> {
   // Stage 1: capture the current title before mint.
   const doc = await readTaskFile(input.paths, input.taskId);
   const title = doc.task.task.title;
@@ -2205,6 +2271,18 @@ export type ArchiveTaskResult = {
 export async function archiveTask(input: ArchiveTaskInput): Promise<ArchiveTaskResult> {
   TaskIdSchema.parse(input.taskId);
 
+  // Per-task lock spans read → audit event → task.md overwrite → rename so
+  // a concurrent writer cannot interleave between the linked_sessions
+  // append and the move into archive/.
+  const handle = await acquireLock(input.paths, "task", input.taskId);
+  try {
+    return await archiveTaskLocked(input);
+  } finally {
+    await handle.release();
+  }
+}
+
+async function archiveTaskLocked(input: ArchiveTaskInput): Promise<ArchiveTaskResult> {
   const doc = await readTaskFile(input.paths, input.taskId);
   const title = doc.task.task.title;
 

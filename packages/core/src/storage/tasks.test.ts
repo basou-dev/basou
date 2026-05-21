@@ -2224,6 +2224,280 @@ describe("archiveTask", () => {
 // readTaskFileWithArchiveFallback
 // ============================================================================
 
+// ============================================================================
+// Per-task lock (B-D1)
+// ============================================================================
+
+describe("per-task lock", () => {
+  // The lock's filename strips the type prefix and prepends the scope literal:
+  // `task_<ulid>` → `task_<ulid>.lock` under `.basou/locks/`.
+  function lockFilename(taskId: string): string {
+    const sep = taskId.indexOf("_");
+    const ulid = sep >= 0 ? taskId.slice(sep + 1) : taskId;
+    return `task_${ulid}.lock`;
+  }
+
+  async function placePresetLock(
+    paths: BasouPaths,
+    taskId: string,
+    body: { pid: number; acquired_at: string },
+  ): Promise<string> {
+    const lockPath = join(paths.locks, lockFilename(taskId));
+    await writeFile(lockPath, JSON.stringify(body), "utf8");
+    return lockPath;
+  }
+
+  it("updateTaskStatusWithEvent rejects with 'Lock is held' when a live-pid lockfile pre-exists", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "lock fixture",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    // Pre-place a lockfile claiming the current process pid — isStaleLock
+    // will see `process.kill(pid, 0)` succeed → alive → not stale → throw.
+    await placePresetLock(paths, TASK_ID_A, {
+      pid: process.pid,
+      acquired_at: new Date().toISOString(),
+    });
+    await expect(
+      updateTaskStatusWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: "2026-05-12T12:00:00+09:00",
+        taskId: TASK_ID_A,
+        newStatus: "in_progress",
+        workingDirectory: getWorkDir(),
+      }),
+    ).rejects.toThrow("Lock is held by another process");
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.status).toBe("planned");
+  });
+
+  it("releases the lock after a successful updateTaskStatusWithEvent (lockfile is gone)", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "lock release",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await updateTaskStatusWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: "2026-05-12T12:00:00+09:00",
+      taskId: TASK_ID_A,
+      newStatus: "in_progress",
+      workingDirectory: getWorkDir(),
+    });
+    const entries = await readdir(paths.locks);
+    expect(entries).not.toContain(lockFilename(TASK_ID_A));
+  });
+
+  it("releases the lock after updateTaskStatusWithEvent throws on a rejected transition", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "lock release on error",
+      initialStatus: "done",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await expect(
+      updateTaskStatusWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: "2026-05-12T12:00:00+09:00",
+        taskId: TASK_ID_A,
+        newStatus: "in_progress",
+        workingDirectory: getWorkDir(),
+      }),
+    ).rejects.toThrow(/Invalid task status transition/);
+    const entries = await readdir(paths.locks);
+    expect(entries).not.toContain(lockFilename(TASK_ID_A));
+  });
+
+  it("deleteTask refuses while a live-pid lockfile pre-exists and leaves task.md intact", async () => {
+    const { deleteTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "no delete under lock",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await placePresetLock(paths, TASK_ID_A, {
+      pid: process.pid,
+      acquired_at: new Date().toISOString(),
+    });
+    await expect(
+      deleteTask({
+        paths,
+        manifest: makeManifest(),
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+      }),
+    ).rejects.toThrow("Lock is held by another process");
+    // task.md untouched
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.id).toBe(TASK_ID_A);
+  });
+
+  it("archiveTask refuses while a live-pid lockfile pre-exists and leaves task.md in the main dir", async () => {
+    const { archiveTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "no archive under lock",
+      initialStatus: "done",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await placePresetLock(paths, TASK_ID_A, {
+      pid: process.pid,
+      acquired_at: new Date().toISOString(),
+    });
+    await expect(
+      archiveTask({
+        paths,
+        manifest: makeManifest(),
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+      }),
+    ).rejects.toThrow("Lock is held by another process");
+    const entries = await readdir(paths.tasks, { withFileTypes: true });
+    expect(entries.filter((e) => e.isFile()).map((e) => e.name)).toContain(`${TASK_ID_A}.md`);
+  });
+
+  it("reconcileTask refuses while a live-pid lockfile pre-exists (no audit event minted)", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "no reconcile under lock",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    const sessionDirsBefore = await readdir(paths.sessions);
+    await placePresetLock(paths, TASK_ID_A, {
+      pid: process.pid,
+      acquired_at: new Date().toISOString(),
+    });
+    await expect(
+      reconcileTask(paths, makeManifest(), {
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+        write: true,
+      }),
+    ).rejects.toThrow("Lock is held by another process");
+    // No new ad-hoc reconcile session was minted.
+    const sessionDirsAfter = await readdir(paths.sessions);
+    expect(sessionDirsAfter.length).toBe(sessionDirsBefore.length);
+  });
+
+  it("editTask title-stage refuses while a live-pid lockfile pre-exists (no title-only change)", async () => {
+    const { editTask } = await import("./tasks.js");
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "before edit",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await placePresetLock(paths, TASK_ID_A, {
+      pid: process.pid,
+      acquired_at: new Date().toISOString(),
+    });
+    await expect(
+      editTask({
+        paths,
+        manifest: makeManifest(),
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+        title: "after edit",
+      }),
+    ).rejects.toThrow("Lock is held by another process");
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.title).toBe("before edit");
+  });
+
+  it("dead-pid stale lockfile is reclaimed and the operation proceeds", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "stale recovery",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await placePresetLock(paths, TASK_ID_A, {
+      pid: 99999999,
+      acquired_at: new Date().toISOString(),
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      const err = new Error("kill: no such process") as Error & { code: string };
+      err.code = "ESRCH";
+      throw err;
+    });
+    const result = await updateTaskStatusWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: "2026-05-12T12:00:00+09:00",
+      taskId: TASK_ID_A,
+      newStatus: "in_progress",
+      workingDirectory: getWorkDir(),
+    });
+    expect(killSpy).toHaveBeenCalled();
+    expect(result.newStatus).toBe("in_progress");
+    killSpy.mockRestore();
+  });
+});
+
 describe("readTaskFileWithArchiveFallback", () => {
   it("returns archived=false for a main-dir task", async () => {
     const { readTaskFileWithArchiveFallback } = await import("./tasks.js");
