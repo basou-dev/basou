@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -19,6 +20,7 @@ import {
   readManifest,
   readYamlFile,
   resolveRepositoryRoot,
+  sanitizeWorkingDirectory,
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -376,7 +378,7 @@ function buildInitialSession(input: {
       source: { kind: "terminal", version: "0.1.0" },
       started_at: input.startedAt,
       status: "initialized",
-      working_directory: input.cwd,
+      working_directory: sanitizeWorkingDirectory(input.cwd, { homedir: homedir() }),
       invocation: {
         command: input.command,
         args: [...input.args],

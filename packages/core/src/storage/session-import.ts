@@ -1,8 +1,10 @@
 import { mkdir, rm } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeEventsBulk } from "../events/event-writer.js";
 import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
+import { sanitizeRelatedFiles, sanitizeWorkingDirectory } from "../lib/path-sanitizer.js";
 import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type {
@@ -33,12 +35,22 @@ export type ImportSessionOptions = {
  * `"imported"` (per the import-session lifecycle policy); `finalSourceKind`
  * mirrors the input's `session.source.kind` so round-trip imports preserve
  * provenance.
+ *
+ * `pathSanitizeReport` summarises how many path-shaped fields the importer
+ * rewrote on the way in: `related_files[]` entries plus a single boolean
+ * for `working_directory`. The CLI wrapper surfaces this as a one-line
+ * stderr warning when the total is non-zero so the operator sees that
+ * machine-private prefixes were stripped.
  */
 export type ImportSessionResult = {
   sessionId: PrefixedId<"ses">;
   eventCount: number;
   finalStatus: SessionStatus;
   finalSourceKind: SessionSourceKind;
+  pathSanitizeReport: {
+    relatedFiles: number;
+    workingDirectoryRewritten: boolean;
+  };
 };
 
 /**
@@ -86,7 +98,12 @@ export async function importSessionFromJson(
   const rewrittenEvents = rewriteEvents(payload.events, newSessionId);
   assertChronologicalOrder(rewrittenEvents);
 
-  const sessionRecord = buildSessionRecord(payload.session, manifest, newSessionId, options);
+  const { record: sessionRecord, pathSanitizeReport } = buildSessionRecord(
+    payload.session,
+    manifest,
+    newSessionId,
+    options,
+  );
 
   if (options.dryRun === true) {
     return {
@@ -94,6 +111,7 @@ export async function importSessionFromJson(
       eventCount: rewrittenEvents.length,
       finalStatus: "imported",
       finalSourceKind: sessionRecord.session.source.kind,
+      pathSanitizeReport,
     };
   }
 
@@ -134,6 +152,7 @@ export async function importSessionFromJson(
     eventCount: rewrittenEvents.length,
     finalStatus: "imported",
     finalSourceKind: sessionRecord.session.source.kind,
+    pathSanitizeReport,
   };
 }
 
@@ -215,7 +234,28 @@ function buildSessionRecord(
   manifest: Manifest,
   newSessionId: PrefixedId<"ses">,
   options: ImportSessionOptions,
-): Session {
+): {
+  record: Session;
+  pathSanitizeReport: ImportSessionResult["pathSanitizeReport"];
+} {
+  // Sanitize before constructing the record so the operator-private
+  // absolute prefix never reaches disk (= same write-time policy as
+  // run.ts / exec.ts / ad-hoc-session.ts). We use the imported
+  // working_directory itself as the base for related_files so paths
+  // recorded relative to the original repo continue to read as
+  // repo-internal; the working_directory field itself is sanitized via
+  // the sentinel-based helper so the same value yields "~/projects/foo"
+  // instead of collapsing to ".".
+  const home = homedir();
+  const workingDirectoryRaw = input.working_directory;
+  const workingDirectorySanitized = sanitizeWorkingDirectory(workingDirectoryRaw, {
+    homedir: home,
+  });
+  const relatedSanitized = sanitizeRelatedFiles(input.related_files, {
+    workingDirectory: workingDirectoryRaw,
+    homedir: home,
+  });
+
   const inner: Session["session"] = {
     id: newSessionId,
     ...(options.labelOverride !== undefined || input.label !== undefined
@@ -230,11 +270,17 @@ function buildSessionRecord(
     started_at: input.started_at,
     ...(input.ended_at !== undefined ? { ended_at: input.ended_at } : {}),
     status: "imported",
-    working_directory: input.working_directory,
+    working_directory: workingDirectorySanitized,
     invocation: input.invocation,
-    related_files: input.related_files,
+    related_files: relatedSanitized.sanitized,
     events_log: "events.jsonl",
     summary: input.summary ?? null,
   };
-  return { schema_version: "0.1.0", session: inner };
+  return {
+    record: { schema_version: "0.1.0", session: inner },
+    pathSanitizeReport: {
+      relatedFiles: relatedSanitized.mutationCount,
+      workingDirectoryRewritten: workingDirectorySanitized !== workingDirectoryRaw,
+    },
+  };
 }

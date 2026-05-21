@@ -695,6 +695,58 @@ describe("runSessionImport", () => {
     expect(sessionDirs).toHaveLength(1);
   });
 
+  it("import-sanitize-1: homedir-internal paths in the payload trigger the 'N path(s) sanitized' stderr warning", async () => {
+    const repo = await setupInitedRepo();
+    const fixture = (await readFixture()) as {
+      session: { working_directory: string; related_files: string[] };
+    };
+    // Construct a payload whose paths land under the actual current homedir
+    // so the sanitizer rewrites them (the upstream fixture uses
+    // /Users/example which is off-homedir for any real user).
+    const home = (await import("node:os")).homedir();
+    fixture.session.working_directory = join(home, "projects/example-app");
+    fixture.session.related_files = [
+      join(home, "projects/example-app/src/x.ts"),
+      join(home, "notes/private.md"),
+    ];
+    const from = await writeImportPayload(fixture, repo);
+    const err = captureStderr();
+    const out = captureStdout();
+    await runSessionImport({ format: "json", from }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("Imported session: 3 path(s) sanitized");
+    expect(stderr).toContain("related_files: 2");
+    expect(stderr).toContain("working_directory: 1");
+    expect(joinCalls(out)).toContain("Imported session");
+  });
+
+  it("import-sanitize-2: a payload with already-clean paths produces no sanitize warning", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runSessionImport({ format: "json", from: FIXTURE_PATH }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).not.toContain("path(s) sanitized");
+  });
+
+  it("import-sanitize-3: dry-run still emits the sanitize warning so the operator previews the rewrite", async () => {
+    const repo = await setupInitedRepo();
+    const fixture = (await readFixture()) as {
+      session: { working_directory: string; related_files: string[] };
+    };
+    const home = (await import("node:os")).homedir();
+    fixture.session.working_directory = join(home, "projects/example-app");
+    fixture.session.related_files = [join(home, "projects/example-app/src/x.ts")];
+    const from = await writeImportPayload(fixture, repo);
+    const err = captureStderr();
+    captureStdout();
+    await runSessionImport({ format: "json", from, dryRun: true }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("Imported session: 2 path(s) sanitized");
+    // No session directory should have been created.
+    const sessionDirs = await readdir(basouPaths(repo).sessions);
+    expect(sessionDirs).toHaveLength(0);
+  });
+
   it("import-2: --json emits a single JSON line with the documented shape", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();

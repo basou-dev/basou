@@ -622,6 +622,21 @@ export async function doRunSessionImport(
   }
 
   const result = await importSessionFromJson(paths, manifest, parsed.data, importOptions);
+
+  // Path sanitize visibility: the importer rewrites absolute / homedir
+  // prefixes inside related_files[] and working_directory so the operator-
+  // private layout does not leak into local state. Surface a single-line
+  // warning when anything was actually rewritten — silence on zero so the
+  // happy path stays quiet. The warning fires for dry-run too so the
+  // operator can preview the rewrite before committing.
+  const sanitizeReport = result.pathSanitizeReport;
+  if (sanitizeReport.relatedFiles > 0 || sanitizeReport.workingDirectoryRewritten) {
+    const wdCount = sanitizeReport.workingDirectoryRewritten ? 1 : 0;
+    console.error(
+      `Imported session: ${sanitizeReport.relatedFiles + wdCount} path(s) sanitized (related_files: ${sanitizeReport.relatedFiles}, working_directory: ${wdCount})`,
+    );
+  }
+
   printSessionImportResult(options, result);
 }
 

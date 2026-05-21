@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -23,6 +24,8 @@ import {
   readYamlFile,
   resolveClaudeCodeCommand,
   resolveRepositoryRoot,
+  sanitizeRelatedFiles,
+  sanitizeWorkingDirectory,
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -298,7 +301,16 @@ export async function runClaudeCode(
   }
 
   // 16. Compute related_files = pre+post snapshot ∪ diff (sorted, deduped).
-  const relatedFiles = computeRelatedFiles(preSnapshot, postSnapshot, diff);
+  //     Then sanitize so /Users/<u>/projects/foo/... is stored relative to
+  //     the session's working_directory; system paths outside both bases
+  //     stay verbatim. Git output is usually repo-relative already, but the
+  //     sanitizer is idempotent and cheap so we run it unconditionally
+  //     against the very subset of paths that ever reach session.yaml.
+  const rawRelated = computeRelatedFiles(preSnapshot, postSnapshot, diff);
+  const relatedFiles = sanitizeRelatedFiles(rawRelated, {
+    workingDirectory: repoRoot,
+    homedir: homedir(),
+  }).sanitized;
 
   const finalStatus = decideFinalStatus(result, signalReceived);
 
@@ -499,7 +511,7 @@ function buildInitialSession(input: {
       source: { ...claudeCodeAdapterMetadata },
       started_at: input.startedAt,
       status: "initialized",
-      working_directory: input.cwd,
+      working_directory: sanitizeWorkingDirectory(input.cwd, { homedir: homedir() }),
       invocation: {
         command: input.command,
         args: [...input.args],

@@ -1,8 +1,10 @@
 import { mkdir, rm } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { appendEvent, writeEventsBulk } from "../events/event-writer.js";
 import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
+import { sanitizeWorkingDirectory } from "../lib/path-sanitizer.js";
 import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import {
@@ -311,7 +313,7 @@ function buildInitialSession(input: {
       source: { kind: input.sourceKind, version: "0.1.0" },
       started_at: input.startedAt,
       status: "initialized",
-      working_directory: input.workingDirectory,
+      working_directory: sanitizeWorkingDirectory(input.workingDirectory, { homedir: homedir() }),
       invocation: { ...input.invocation, exit_code: null },
       related_files: [],
       events_log: "events.jsonl",

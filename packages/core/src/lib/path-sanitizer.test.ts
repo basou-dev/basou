@@ -98,10 +98,25 @@ describe("sanitizePath", () => {
 });
 
 describe("sanitizeWorkingDirectory", () => {
-  it("delegates to sanitizePath (= identical behaviour)", () => {
-    expect(sanitizeWorkingDirectory(WD, { workingDirectory: WD, homedir: HOME })).toBe(".");
-    expect(sanitizeWorkingDirectory(HOME, { workingDirectory: WD, homedir: HOME })).toBe("~");
-    expect(sanitizeWorkingDirectory("/etc", { workingDirectory: WD, homedir: HOME })).toBe("/etc");
+  it("rewrites a homedir-internal path with ~/ even when the path equals its own working directory", () => {
+    // This is the key semantic difference from sanitizePath: feeding the
+    // session's working_directory to sanitizePath with itself as opts.workingDirectory
+    // would produce ".", which loses information. sanitizeWorkingDirectory
+    // must yield "~/projects/foo" so the persisted field carries homedir
+    // context.
+    expect(sanitizeWorkingDirectory(WD, { homedir: HOME })).toBe("~/projects/foo");
+  });
+
+  it("rewrites the homedir itself as '~'", () => {
+    expect(sanitizeWorkingDirectory(HOME, { homedir: HOME })).toBe("~");
+  });
+
+  it("preserves a system path that escapes homedir", () => {
+    expect(sanitizeWorkingDirectory("/srv/work", { homedir: HOME })).toBe("/srv/work");
+  });
+
+  it("preserves an already-relative working_directory (e.g. a test fixture passing '.')", () => {
+    expect(sanitizeWorkingDirectory(".", { homedir: HOME })).toBe(".");
   });
 });
 

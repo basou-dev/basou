@@ -83,15 +83,35 @@ export function sanitizePath(rawPath: string, opts: SanitizePathOptions): string
 }
 
 /**
- * Convenience wrapper around {@link sanitizePath} for the
- * `working_directory` field. Functionally identical: the same sanitization
- * rules apply whether the path is being stored as a directory itself or
- * referenced from an array. Exists so call-sites read clearly and a
- * future divergence (e.g. a stricter rule on working directories) can be
- * applied in one place.
+ * Sanitize the `working_directory` field itself. This is a distinct entry
+ * point because the field's own value is the workingDirectory of every
+ * `related_files[]` entry written alongside it — running it through
+ * {@link sanitizePath} with `opts.workingDirectory = rawPath` would
+ * collapse the result to `"."` and lose the homedir-relative form the
+ * spec requires.
+ *
+ * Strategy: bypass the workingDirectory rule entirely by passing a
+ * sentinel that no real path can match. The homedir rule (rule 2) and
+ * the preserve-as-is rule (rule 3) still apply, so:
+ *   - `/Users/u/projects/foo` → `~/projects/foo`
+ *   - `/Users/u` → `~`
+ *   - `/srv/work` → `/srv/work` (preserved, off-tree)
+ *
+ * Callers should still pass the live `homedir` so the rewrite uses the
+ * real operator-private prefix.
  */
-export function sanitizeWorkingDirectory(rawPath: string, opts: SanitizePathOptions): string {
-  return sanitizePath(rawPath, opts);
+export function sanitizeWorkingDirectory(
+  rawPath: string,
+  opts: Pick<SanitizePathOptions, "homedir">,
+): string {
+  // A sentinel that no real absolute path on disk can equal or be under.
+  // `path.posix.normalize` collapses leading `/` so any sentinel must
+  // remain non-prefixing post-normalisation; the sentinel below survives
+  // normalisation as itself and never matches a real path.
+  return sanitizePath(rawPath, {
+    workingDirectory: "/__basou_sentinel_never_match__",
+    homedir: opts.homedir,
+  });
 }
 
 /** Result of {@link sanitizeRelatedFiles}. */
