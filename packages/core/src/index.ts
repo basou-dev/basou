@@ -70,6 +70,7 @@ export { enumerateApprovals, isLazyExpired, loadApproval } from "./approval/inde
 export type { ApprovalLocation, LoadedApproval } from "./approval/index.js";
 
 export {
+  acquireLock,
   appendBasouGitignore,
   appendEventToExistingSession,
   archiveTask,
@@ -140,6 +141,8 @@ export type {
   ImportSessionResult,
   LoadSessionEntriesOptions,
   LoadTaskEntriesOptions,
+  LockHandle,
+  LockScope,
   MarkerSection,
   ReconcileAllResult,
   ReconcileAllTasksInput,

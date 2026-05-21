@@ -808,6 +808,21 @@ async function createTaskAdHoc(input: CreateAdHocTaskInput): Promise<CreateTaskR
 async function createTaskAttach(input: AttachTaskInput): Promise<CreateTaskResult> {
   SessionIdSchema.parse(input.sessionId);
 
+  // Per-session lock spans the entire attach window (session.yaml read →
+  // collision-matrix check → task_created append → session.yaml task_id
+  // update → optional task_status_changed append). Without it, two
+  // concurrent attaches on the same session.yaml could both observe a
+  // null task_id, both append their own `task_created`, and race on the
+  // final task_id overwrite.
+  const sessionLock = await acquireLock(input.paths, "session", input.sessionId);
+  try {
+    return await createTaskAttachLocked(input);
+  } finally {
+    await sessionLock.release();
+  }
+}
+
+async function createTaskAttachLocked(input: AttachTaskInput): Promise<CreateTaskResult> {
   // 1. Read session.yaml + validate the §F.7.2 collision matrix BEFORE writing
   //    anything. status / task_id checks share the same read.
   const sessionDoc = await readSessionYaml(input.paths, input.sessionId);
@@ -1152,6 +1167,26 @@ async function updateTaskStatusAttach(
 ): Promise<UpdateTaskStatusResult> {
   SessionIdSchema.parse(input.sessionId);
 
+  // Per-session lock guards the session.yaml read → events.jsonl append
+  // window so a concurrent writer on the same session cannot append a
+  // conflicting `task_status_changed` or flip session.yaml to a state
+  // that invalidates the status check below. We are already inside the
+  // per-task lock (updateTaskStatusWithEvent acquires it); the per-task
+  // → per-session order is fixed across the codebase to keep cross-API
+  // deadlocks impossible.
+  const sessionLock = await acquireLock(input.paths, "session", input.sessionId);
+  try {
+    return await updateTaskStatusAttachLocked(input, currentDoc, previousStatus);
+  } finally {
+    await sessionLock.release();
+  }
+}
+
+async function updateTaskStatusAttachLocked(
+  input: AttachUpdateTaskStatusInput,
+  currentDoc: TaskDocument,
+  previousStatus: TaskStatus,
+): Promise<UpdateTaskStatusResult> {
   const sessionDoc = await readSessionYaml(input.paths, input.sessionId);
   const status = sessionDoc.session.status;
   if (status === "imported") {

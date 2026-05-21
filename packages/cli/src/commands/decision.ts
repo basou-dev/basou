@@ -2,6 +2,7 @@ import {
   type Event,
   type PrefixedId,
   type SessionStatus,
+  acquireLock,
   appendEventToExistingSession,
   assertBasouRootSafe,
   basouPaths,
@@ -134,19 +135,30 @@ export async function doRunDecisionRecord(
   if (options.session !== undefined) {
     const sessionId = await resolveSessionId(paths, options.session);
     const sesId = sessionId as PrefixedId<"ses">;
-    const result = await appendEventToExistingSession({
-      paths,
-      sessionId: sesId,
-      eventBuilder: (eventId) =>
-        buildDecisionEvent({
-          eventId,
-          sessionId: sesId,
-          decisionId,
-          title: options.title,
-          occurredAt,
-          rich,
-        }),
-    });
+    // Per-session lock guards the session.yaml status read + events.jsonl
+    // append window against a concurrent writer (`basou session note`,
+    // another `decision record --session`, or an attach-flavoured task
+    // command). `appendEventToExistingSession` itself holds no lock; the
+    // caller owns the critical section.
+    const sessionLock = await acquireLock(paths, "session", sesId);
+    let result: Awaited<ReturnType<typeof appendEventToExistingSession>>;
+    try {
+      result = await appendEventToExistingSession({
+        paths,
+        sessionId: sesId,
+        eventBuilder: (eventId) =>
+          buildDecisionEvent({
+            eventId,
+            sessionId: sesId,
+            decisionId,
+            title: options.title,
+            occurredAt,
+            rich,
+          }),
+      });
+    } finally {
+      await sessionLock.release();
+    }
     printDecisionResult(options, {
       mode: "attached",
       sessionId,

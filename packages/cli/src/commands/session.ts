@@ -9,6 +9,7 @@ import {
   SessionSchema,
   type SessionStatus,
   SessionStatusSchema,
+  acquireLock,
   appendEventToExistingSession,
   assertBasouRootSafe,
   basouPaths,
@@ -764,20 +765,32 @@ export async function doRunSessionNote(
   const occurredAt = new Date().toISOString();
   const sesId = sessionId as `ses_${string}`;
 
-  const result = await appendEventToExistingSession({
-    paths,
-    sessionId: sesId,
-    eventBuilder: (eventId) =>
-      ({
-        schema_version: "0.1.0",
-        id: eventId,
-        session_id: sesId,
-        occurred_at: occurredAt,
-        source: "local-cli",
-        type: "note_added",
-        body,
-      }) as Event,
-  });
+  // Per-session lock guards the events.jsonl append + status read window
+  // against a concurrent writer (decision record / task attach / another
+  // session note on the same id). The lock is the caller's responsibility:
+  // appendEventToExistingSession holds no lock so we can compose larger
+  // critical sections (e.g. attach-flavoured task commands) under the same
+  // lock without re-entrant deadlock.
+  const sessionLock = await acquireLock(paths, "session", sesId);
+  let result: Awaited<ReturnType<typeof appendEventToExistingSession>>;
+  try {
+    result = await appendEventToExistingSession({
+      paths,
+      sessionId: sesId,
+      eventBuilder: (eventId) =>
+        ({
+          schema_version: "0.1.0",
+          id: eventId,
+          session_id: sesId,
+          occurred_at: occurredAt,
+          source: "local-cli",
+          type: "note_added",
+          body,
+        }) as Event,
+    });
+  } finally {
+    await sessionLock.release();
+  }
 
   printSessionNoteResult(options, sessionId, result.eventId, result.sessionStatus, body);
 }

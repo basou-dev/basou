@@ -2461,6 +2461,66 @@ describe("per-task lock", () => {
     expect(doc.task.task.title).toBe("before edit");
   });
 
+  it("createTaskWithEvent (attach) refuses when the session lockfile is held alive (no event appended)", async () => {
+    const paths = await setupPaths();
+    await placeRunningSession(paths, SES_ID_RUNNING, { taskId: null });
+    // Place a session lockfile claiming the current pid.
+    const sessionUlid = SES_ID_RUNNING.slice(SES_ID_RUNNING.indexOf("_") + 1);
+    await writeFile(
+      join(paths.locks, `session_${sessionUlid}.lock`),
+      JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }),
+      "utf8",
+    );
+    await expect(
+      createTaskWithEvent({
+        mode: "attach",
+        paths,
+        occurredAt: OCC_AT,
+        sessionId: SES_ID_RUNNING,
+        taskId: TASK_ID_A,
+        title: "attach blocked",
+        initialStatus: "planned",
+        description: "",
+      }),
+    ).rejects.toThrow("Lock is held by another process");
+    // events.jsonl untouched (still empty, see placeRunningSession).
+    const events = await readFile(join(paths.sessions, SES_ID_RUNNING, "events.jsonl"), "utf8");
+    expect(events).toBe("");
+  });
+
+  it("updateTaskStatusWithEvent (attach) refuses when the session lockfile is held alive", async () => {
+    const paths = await setupPaths();
+    await placeRunningSession(paths, SES_ID_RUNNING, { taskId: null });
+    await createTaskWithEvent({
+      mode: "attach",
+      paths,
+      occurredAt: OCC_AT,
+      sessionId: SES_ID_RUNNING,
+      taskId: TASK_ID_A,
+      title: "attach lock for status",
+      initialStatus: "planned",
+      description: "",
+    });
+    const sessionUlid = SES_ID_RUNNING.slice(SES_ID_RUNNING.indexOf("_") + 1);
+    await writeFile(
+      join(paths.locks, `session_${sessionUlid}.lock`),
+      JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }),
+      "utf8",
+    );
+    await expect(
+      updateTaskStatusWithEvent({
+        mode: "attach",
+        paths,
+        occurredAt: "2026-05-12T12:00:00+09:00",
+        sessionId: SES_ID_RUNNING,
+        taskId: TASK_ID_A,
+        newStatus: "in_progress",
+      }),
+    ).rejects.toThrow("Lock is held by another process");
+    const doc = await readTaskFile(paths, TASK_ID_A);
+    expect(doc.task.task.status).toBe("planned");
+  });
+
   it("dead-pid stale lockfile is reclaimed and the operation proceeds", async () => {
     const paths = await setupPaths();
     await createTaskWithEvent({

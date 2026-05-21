@@ -1007,6 +1007,32 @@ describe("runSessionImport", () => {
 });
 
 describe("doRunSessionNote", () => {
+  it("note-lock: refuses with 'Lock is held' when the per-session lockfile is held alive", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("NLK");
+    await createSession(repo, { id: sid, status: "running" });
+    const paths = basouPaths(repo);
+    // Lockfile naming mirrors acquireLock: scope + ULID-after-prefix.
+    const ulid = sid.slice(sid.indexOf("_") + 1);
+    await writeFile(
+      join(paths.locks, `session_${ulid}.lock`),
+      JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }),
+    );
+    await expect(doRunSessionNote(sid, { body: "blocked" }, { cwd: repo })).rejects.toThrow(
+      "Lock is held by another process",
+    );
+    // No note_added appended — events.jsonl is either absent (createSession
+    // does not pre-create it) or empty. Either signals no append happened.
+    let events = "";
+    try {
+      events = await readFile(join(paths.sessions, sid, "events.jsonl"), "utf8");
+    } catch (error: unknown) {
+      const code = (error as { code?: unknown }).code;
+      if (code !== "ENOENT") throw error;
+    }
+    expect(events).toBe("");
+  });
+
   it("note-1: --body appends a note_added event and prints the human summary", async () => {
     const repo = await setupInitedRepo();
     const sid = SES("N01");
