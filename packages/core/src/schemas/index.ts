@@ -29,6 +29,13 @@ export { TaskSchema, TaskStatusSchema } from "./task.schema.js";
 export type { Task, TaskStatus } from "./task.schema.js";
 
 export {
+  TASK_INDEX_SCHEMA_VERSION,
+  TaskIndexEntrySchema,
+  TaskIndexSchema,
+} from "./task-index.schema.js";
+export type { TaskIndex, TaskIndexEntry } from "./task-index.schema.js";
+
+export {
   ApprovalSchema,
   ApprovalStatusSchema,
 } from "./approval.schema.js";

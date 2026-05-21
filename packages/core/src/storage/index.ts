@@ -8,6 +8,13 @@ export type { AppendBasouGitignoreResult } from "./gitignore.js";
 export { acquireLock } from "./lockfile.js";
 export type { LockHandle, LockScope } from "./lockfile.js";
 export {
+  rebuildTaskIndex,
+  readTaskIndex,
+  taskIndexPath,
+  updateTaskIndex,
+} from "./task-index.js";
+export type { TaskIndexOp } from "./task-index.js";
+export {
   assertBasouRootSafe,
   buildStatusSnapshot,
   findErrorCode,
