@@ -5,17 +5,156 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
-### Documentation
+## 0.3.0 — 2026-05-21
 
-- Add `docs/spec/` excerpt of the basou v0.1 / v0.2 specification
-  (`overview`, `workspace`, `schemas`, `approval`, `generated-markdown`,
-  `terminal-and-import`, `cli-commands`).
+This release focuses on the three workflow gaps surfaced during v0.2
+dogfooding: handoff rendering rough edges, the lack of strict isolation
+between concurrent writers, and the absolute paths v0.2 was happy to write
+into `.basou/`. UX, concurrency, and security each ship as a self-contained
+cluster so a downstream consumer can opt out of any one without breaking
+the rest.
 
-### Internal
+### Improved handoff rendering (UX)
 
-- Sanitize planning-doc references in source comments and test descriptions
-  (no functional change). Invariant-anchored comments now link to the
-  corresponding section in `docs/spec/`.
+- `handoff.md` "latest task" line is now driven by the most recent
+  `task_status_changed` event rather than the most recent
+  `task_created`. A `done` task that finished after a long-running
+  `planned` task no longer disappears from the latest-activity slot;
+  the fallback to `task_created` still applies when no status-change
+  event exists yet.
+- The latest task line gains a `(linked_sessions: N)` suffix when more
+  than one session has touched the task, so the operator sees breadth
+  at a glance.
+- The footer's `Sessions: N` is split by status: `Sessions: N
+  (completed K, failed M, running L, ...)` for any status with a
+  non-zero count.
+- Import sessions (`session.source.kind === "import"`) are now broken
+  out into their own `### Imported sessions` table and excluded from
+  the `## 直近の変更ファイル` union so live work is not buried under
+  a back-fill.
+
+### Concurrency
+
+- Added an advisory lockfile helper at `packages/core/src/storage/
+  lockfile.ts` (POSIX `link(2)` atomic create, PID-based stale
+  detection with a 1h age fallback). Lockfiles live at
+  `.basou/locks/<scope>_<ulid>.lock` and are gitignored.
+- Per-task lock now guards the read-modify-write window of
+  `updateTaskStatusWithEvent`, `reconcileTask`,
+  `refreshTaskLinkedSessions`, `editTask`, `deleteTask`, and
+  `archiveTask`. `createTaskWithEvent` is intentionally not locked
+  (= a fresh task id is a fresh ULID; no two creates can race for the
+  same id).
+- Per-session lock now guards the events.jsonl append + surrounding
+  session.yaml mutation at every caller of
+  `appendEventToExistingSession` (= attach-flavoured task commands,
+  `basou decision record --session`, `basou session note`). The lock
+  is caller-owned to avoid re-entrant deadlock against
+  `appendEventToExistingSession` itself.
+- `task → session` is the fixed acquisition order whenever both locks
+  are held (= attach-flavoured task paths). Cross-API deadlocks are
+  thereby impossible by construction.
+- Added a workspace-scoped task index at `.basou/tasks/index.json`
+  (small JSON cache of id / status / label / updated_at). Maintained
+  write-through on every task mutation; rebuilt from disk on missing,
+  parse-broken, or version-mismatched index. `enumerateTaskIds` now
+  reads the index on the hot path so `basou task list` no longer
+  re-parses every front matter for the id list alone.
+- Index updates are best-effort: a write failure (disk full, EACCES)
+  surfaces as a single `Index update failed; rebuild on next read`
+  warning and the task mutation still returns success. The next
+  enumerate rebuilds from disk. Concurrent `createTask` calls can
+  produce a stale-but-valid index (= the lazy-rebuild trigger does
+  not fire on a structurally valid cache); `rm
+  .basou/tasks/index.json && basou task list` force-rebuilds. See
+  `docs/spec/workspace.md` §1.2 for the recovery procedure.
+
+### Security
+
+- Added a path sanitizer at `packages/core/src/lib/path-sanitizer.ts`
+  with three exports: `sanitizePath`,
+  `sanitizeWorkingDirectory` (sentinel-based variant for the field
+  itself), and `sanitizeRelatedFiles`.
+- The two-rule rewrite is: workingDirectory-internal paths become
+  repo-relative; homedir-internal paths become tilde-prefixed
+  (`/Users/<u>/projects/foo/x.ts` → `~/projects/foo/x.ts`). System
+  paths outside both bases (e.g. `/etc/...`) are preserved verbatim
+  so an operator that deliberately recorded a system file is not
+  redacted by surprise.
+- Hardening: null-byte input is rejected with `Invalid path:
+  contains null byte`; backslashes are folded to forward slashes
+  (v0.3 targets macOS / Linux; full Windows support is a v0.4+
+  task). `..`-escapes are normalised purely before prefix matching
+  so an input like `<wd>/../escape/x.ts` cannot masquerade as
+  workspace-internal.
+- Sanitization is applied on the write side at every caller —
+  `basou run claude-code`, `basou exec`, every ad-hoc session path
+  (task new / status / reconcile / refresh-linkage / delete /
+  archive / decision / note), and `basou session import`.
+- `basou session import` emits a single `Imported session: N
+  path(s) sanitized (related_files: K, working_directory: 0|1)`
+  warning to stderr when at least one field was rewritten. The
+  import itself still succeeds; the warning fires for `--dry-run`
+  too so the operator can preview the rewrite before committing.
+- `basou session show` displays sanitized relative
+  `working_directory` values verbatim instead of trying to make
+  them relative against the repo root a second time, with the one
+  literal `.` collapsing to `<repository_root>`.
+- Backward compatibility: existing `session.yaml` files written
+  before v0.3 are NOT retroactively rewritten. A future v0.4+
+  release may introduce `basou session migrate` for that.
+
+### New CLI surface
+
+- (No new top-level commands; v0.3 is an internal hardening pass.
+  The new behaviour is reachable through the existing CLI surface.)
+
+### Spec updates
+
+- `docs/spec/workspace.md` §1.2 — documents `tasks/index.json`
+  semantics (write-through, lazy rebuild, source-of-truth invariant,
+  concurrent-create caveat with the force-rebuild recovery procedure).
+- `docs/spec/workspace.md` §1.3 — `.basou/locks/` added to the
+  default ignore block.
+- `docs/spec/workspace.md` §1.5 (new) — per-task and per-session
+  lock scopes, PID-based stale detection with the 1h age fallback,
+  the fixed task → session acquisition order, and the
+  `createTask` exemption.
+- `docs/spec/schemas.md` §5.1 / §5.2 — the `working_directory`
+  example flips to a sanitized form; §5.2 documents the two-rule
+  sanitizer, the working-directory-specific sentinel skip, the
+  null-byte / backslash hardening, the session-import warning
+  format, and the backward-compat invariant.
+
+### Tests
+
+Baseline grew from 923 (v0.2.0 close) → 1014 (v0.3.0 close), a
+`+91` spread across the three clusters:
+
+- UX (Step 23): `+9` covering the four handoff renderer changes
+  plus a `task_status_changed`-without-`task_created` fallback case.
+- Concurrency (Step 24): `+53` covering the lockfile helper
+  (PID / age / EPERM / null / null-bytes), per-task and per-session
+  lock contention, the task-index schema and helper, and the
+  write-through integration with the existing task APIs.
+- Security (Step 25): `+29` covering each rewrite rule (with
+  `..`-escape and prefix-preference cases), the sanitize-then-
+  warn flow on import, `--dry-run` warning visibility, and the
+  display-side `~/...` / `.` / repo-relative formatting.
+
+`pnpm typecheck` / `pnpm -r build` / `pnpm -r test` / `pnpm lint`
+are green at the tip of `main`.
+
+### Notes
+
+- v0.3.0 is OSS-publish ready as a standalone release. NDA case
+  introduction is independently gated on out-of-tree feedback from
+  external dogfood (5 sessions); release notes for downstream users
+  should wait on that lane.
+- Step 26 (adapter UX — claude-code wrap, terminal-recording precmd
+  hook, session pause/resume) was sized for this release but
+  deferred pending further dogfood signal. It is a v0.3.x candidate
+  rather than a v0.4 prerequisite.
 
 ## 0.2.0 — 2026-05-18
 
