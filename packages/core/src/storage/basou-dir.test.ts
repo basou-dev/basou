@@ -46,6 +46,7 @@ describe("basouPaths", () => {
     expect(paths.tasks.startsWith(`${paths.root}${sep}`)).toBe(true);
     expect(paths.approvals.pending.startsWith(`${paths.root}${sep}`)).toBe(true);
     expect(paths.approvals.resolved.startsWith(`${paths.root}${sep}`)).toBe(true);
+    expect(paths.locks.startsWith(`${paths.root}${sep}`)).toBe(true);
     expect(paths.logs.startsWith(`${paths.root}${sep}`)).toBe(true);
     expect(paths.raw.startsWith(`${paths.root}${sep}`)).toBe(true);
     expect(paths.tmp.startsWith(`${paths.root}${sep}`)).toBe(true);
@@ -69,13 +70,14 @@ describe("basouPaths", () => {
 });
 
 describe("ensureBasouDirectory", () => {
-  it("creates all six required subdirectories", async () => {
+  it("creates all required subdirectories", async () => {
     const paths = await ensureBasouDirectory(getRepoRoot());
     for (const target of [
       paths.sessions,
       paths.tasks,
       paths.approvals.pending,
       paths.approvals.resolved,
+      paths.locks,
       paths.logs,
       paths.raw,
       paths.tmp,
@@ -109,6 +111,7 @@ describe("ensureBasouDirectory", () => {
       paths.tasks,
       paths.approvals.pending,
       paths.approvals.resolved,
+      paths.locks,
       paths.logs,
       paths.raw,
       paths.tmp,

@@ -10,6 +10,7 @@ const BASOU_GITIGNORE_BLOCK =
   ".basou/logs/\n" +
   ".basou/raw/\n" +
   ".basou/tmp/\n" +
+  ".basou/locks/\n" +
   ".basou/status.json\n" +
   ".basou/sessions/*/events.jsonl\n" +
   ".basou/sessions/*/artifacts/\n" +

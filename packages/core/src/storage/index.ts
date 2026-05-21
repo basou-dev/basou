@@ -5,6 +5,8 @@ export { createManifest, readManifest, writeManifest } from "./manifest.js";
 export type { CreateManifestInput } from "./manifest.js";
 export { appendBasouGitignore } from "./gitignore.js";
 export type { AppendBasouGitignoreResult } from "./gitignore.js";
+export { acquireLock } from "./lockfile.js";
+export type { LockHandle, LockScope } from "./lockfile.js";
 export {
   assertBasouRootSafe,
   buildStatusSnapshot,

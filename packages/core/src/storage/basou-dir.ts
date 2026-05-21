@@ -22,6 +22,7 @@ export type BasouPaths = {
     readonly pending: string;
     readonly resolved: string;
   };
+  readonly locks: string;
   readonly logs: string;
   readonly raw: string;
   readonly tmp: string;
@@ -55,6 +56,7 @@ export function basouPaths(repositoryRoot: string): BasouPaths {
       pending: join(approvalsBase, "pending"),
       resolved: join(approvalsBase, "resolved"),
     },
+    locks: join(root, "locks"),
     logs: join(root, "logs"),
     raw: join(root, "raw"),
     tmp: join(root, "tmp"),
@@ -74,6 +76,7 @@ const PATH_LABELS = {
   tasks: ".basou/tasks",
   approvalsPending: ".basou/approvals/pending",
   approvalsResolved: ".basou/approvals/resolved",
+  locks: ".basou/locks",
   logs: ".basou/logs",
   raw: ".basou/raw",
   tmp: ".basou/tmp",
@@ -116,6 +119,7 @@ export async function ensureBasouDirectory(repositoryRoot: string): Promise<Baso
     mkdirLabeled(paths.tasks, PATH_LABELS.tasks),
     mkdirLabeled(paths.approvals.pending, PATH_LABELS.approvalsPending),
     mkdirLabeled(paths.approvals.resolved, PATH_LABELS.approvalsResolved),
+    mkdirLabeled(paths.locks, PATH_LABELS.locks),
     mkdirLabeled(paths.logs, PATH_LABELS.logs),
     mkdirLabeled(paths.raw, PATH_LABELS.raw),
     mkdirLabeled(paths.tmp, PATH_LABELS.tmp),
