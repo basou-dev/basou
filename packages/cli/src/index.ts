@@ -11,7 +11,11 @@ import { registerStatusCommand } from "./commands/status.js";
 import { registerTaskCommand } from "./commands/task.js";
 import { isVerbose, renderCliError } from "./lib/error-render.js";
 
-const BASOU_CLI_VERSION = "0.1.0";
+// Kept in sync with packages/cli/package.json `version` by hand on every
+// release. Dynamic read via import.meta + createRequire is a v0.3.x
+// candidate so a future release bump cannot drift past `basou --version`
+// silently.
+const BASOU_CLI_VERSION = "0.3.0";
 
 const program = new Command();
 program
