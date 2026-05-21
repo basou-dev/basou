@@ -85,9 +85,14 @@ Take a look at what was created:
 
 ```bash
 ls .basou/
-# approvals  decisions.md  handoff.md  locks  logs  manifest.yaml
-# raw  sessions  status.json  tasks  tmp
+# approvals  locks  logs  manifest.yaml  raw  sessions  tasks  tmp
 ```
+
+Only the directory skeleton plus `manifest.yaml` exist right after
+`basou init`. The commit-friendly Markdown files (`handoff.md`,
+`decisions.md`) and the local-only state file (`status.json`) appear
+once you run their generators (`basou handoff generate`,
+`basou decisions generate`, `basou status`), which you'll do in §6.
 
 The default `.gitignore` block was appended to your repo's
 `.gitignore` so logs / raw output / locks stay local; `manifest.yaml`,
@@ -119,7 +124,27 @@ basou task list
 # 01HXC...                    planned  2026-05-21T12:34:56+09:00  1      (none)  Refactor login form
 
 basou task show task_01HXC...
-# (full task.md front matter + body + recent events)
+```
+
+```text
+Task: task_01HXC...
+  Title:       Refactor login form
+  Status:      planned
+  Label:       (none)
+  Created at:  2026-05-21T...
+  Updated at:  2026-05-21T...
+  Workspace:   ws_01HXB...
+
+Linked sessions (1):
+  ses_01HXC...  (completed)
+
+Description:
+(no description)
+
+Events: 1 total
+
+Last 1 events:
+  2026-05-21T... [local-cli]  task_created             Refactor login form
 ```
 
 ## 4. Record a decision
@@ -188,30 +213,82 @@ Generated .basou/handoff.md (sessions: 4, tasks: 1, decisions: 1, pending approv
 
 The exact counts depend on what you did above; the line above
 matches the §3-§5 walkthrough (= one ad-hoc session per `task new`
-+ two more per `task status` + one per `decision record`).
++ one per `decision record` + two per `task status` = 4).
 
 `.basou/handoff.md` is generated Markdown wrapped in
 `<!-- BASOU:GENERATED:START -->` / `<!-- BASOU:GENERATED:END -->`
 markers. Anything you write **outside** the markers is preserved
 across regenerations, so you can hand-edit narrative context above
-or below the generated block and it survives. The generated block
-contains:
+or below the generated block and it survives. Inside the markers
+you'll find roughly this layout:
 
-- **最終 task** (= latest activity): the task whose latest
-  `task_status_changed` event is the most recent, with a
-  `(linked_sessions: N)` suffix when more than one session is
-  linked.
-- **次に実行すべき作業**: the list of `planned` / `in_progress`
-  tasks (= terminal-status tasks are excluded).
-- **セッション一覧**: every non-`imported` session, ordered newest
-  first. `imported` sessions live in a separate
-  `### Imported sessions` subsection.
-- **Sessions footer**: `Sessions: N (completed K, failed M, ...)`.
-- **直近の変更ファイル**: the union of `related_files[]` across
-  live sessions (= `imported` sessions are excluded so a backfill
-  cannot bury today's work).
+```markdown
+<!-- BASOU:GENERATED:START -->
+# Handoff
 
-Have a look:
+> Generated at 2026-05-21T... from ses_01HXC...01HXC...
+
+## 現在の状態
+
+- 最終 session: ses_01HXC... (completed)
+- 最終 task: task_01HXC... (done): Refactor login form (linked_sessions: 3)
+
+## 直近の変更ファイル
+
+(no related files recorded)
+
+## 直近の判断
+
+- decision_01HXD...: Refactor handleLogin into a hook
+
+(1 decisions total — see decisions.md)
+
+## 未決事項
+
+(none)
+
+## 次に読むべきファイル
+
+- .basou/decisions.md
+
+## 次に実行すべき作業
+
+(no pending tasks)
+
+## セッション一覧
+
+| short_id | status | started_at | label |
+|---|---|---|---|
+| 01HXEJ4F | completed | 2026-05-21T... | Ad-hoc task status: Refactor ... |
+| 01HXEJ2P | completed | 2026-05-21T... | Ad-hoc task status: Refactor ... |
+| 01HXEHHS | completed | 2026-05-21T... | Ad-hoc decision: Refactor ...    |
+| 01HXDZGT | completed | 2026-05-21T... | Ad-hoc task: Refactor login form |
+
+Sessions: 4 (completed 4). Tasks: 1.
+<!-- BASOU:GENERATED:END -->
+```
+
+What the generated block tells you:
+
+- **`## 現在の状態`** — the latest task line is driven by the most
+  recent `task_status_changed` event (with a `(linked_sessions: N)`
+  suffix when more than one session has touched the task).
+- **`## 直近の変更ファイル`** — union of `related_files[]` across
+  live sessions, sanitized (= `imported` sessions are excluded so a
+  backfill cannot bury today's work). Empty here because the
+  quickstart did not run any `basou run` / `basou exec` commands.
+- **`## 直近の判断`** — recent decisions; full list lives in
+  `.basou/decisions.md` after `basou decisions generate`.
+- **`## 次に実行すべき作業`** — `planned` / `in_progress` tasks
+  only. Terminal-status tasks (`done` / `cancelled`) are excluded,
+  so this section is `(no pending tasks)` once you've marked the
+  one task `done`.
+- **`## セッション一覧`** — every non-`imported` session, newest
+  first. Imported sessions live in a separate
+  `### Imported sessions` subsection (= empty in the quickstart).
+- **Sessions footer** — `Sessions: N (completed K, failed M, ...)`.
+
+Have a look at the actual file:
 
 ```bash
 cat .basou/handoff.md
@@ -269,17 +346,27 @@ For the underlying data model, start with
 your `$PATH`. Check `pnpm config get global-bin-dir` and add the
 printed path to your shell rc file.
 
-### `Not a git repository`
+### `Not a git repository. Run 'git init' first, then re-run 'basou init'.`
 
 `basou init` and most subsequent commands require a Git repository
 root. Run `git init` first if your project is not yet under version
 control.
 
-### `Workspace already initialized`
+### `Already initialized. Use --force to overwrite.`
 
-Re-running `basou init` against an existing `.basou/` is intentional;
-pass `--force` only if you want to mint a fresh `manifest.yaml`
-(=`workspace_id` regenerated, losing the previous identity).
+Re-running `basou init` against an existing `.basou/` exits with
+this message rather than silently overwriting. Pass `--force` only
+if you want to mint a fresh `manifest.yaml` (= `workspace_id`
+regenerated, losing the previous identity).
+
+### `basou status` shows "Basou version: 0.1.0" but `basou --version` shows 0.3.0
+
+These are two different versions: `basou --version` is the **release
+version** of `@basou/cli` (`0.3.0`), while the line in `basou status`
+output is the **spec version** (`basou_version` in
+`.basou/manifest.yaml`), which is locked to `0.1.0` because the v0.3
+release ships no data-format breaking changes. The label is
+genuinely confusing — slated for re-wording in a future release.
 
 ### `Lock is held by another process`
 
