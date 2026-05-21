@@ -74,7 +74,7 @@ session:
 
   status: "completed"  # see terminal-and-import.md for the lifecycle
 
-  working_directory: "/path/to/client-foo"
+  working_directory: "~/projects/client-foo"  # sanitized — see §5.2
 
   invocation:
     command: "claude-code"  # the executable name that was actually spawned
@@ -95,6 +95,35 @@ session:
   environment, so the resolved command name is stored.
 - `related_files` is populated from the git capability at session end. The
   initial value is an empty array.
+- `working_directory` and `related_files[]` are path-sanitized on write so
+  no operator-private absolute prefix leaks into the workspace's persistent
+  state. The sanitizer applies two rules in order:
+    1. paths under the session's working_directory are rewritten relative
+       to it (e.g. `<wd>/src/x.ts` → `src/x.ts`)
+    2. paths under the operator's homedir are rewritten with a `~/` prefix
+       (e.g. `/Users/<user>/projects/foo/x.ts` → `~/projects/foo/x.ts`)
+  System paths outside both (e.g. `/etc/...`) are preserved as-is so an
+  operator that deliberately recorded a system file path is not redacted
+  by surprise. A null byte in the input is rejected with `Invalid path:
+  contains null byte`; Windows-style backslashes are folded to forward
+  slashes (v0.3 targets macOS / Linux; full Windows support is a v0.4+
+  task).
+- `working_directory` is sanitized via a sentinel-based variant that skips
+  rule (1) when applied to the field's own value — feeding the live cwd
+  through the general sanitizer with itself as the workingDirectory
+  argument would collapse the result to `"."` and lose homedir context.
+  In practice this means a session whose cwd is `/Users/<user>/projects/foo`
+  writes `working_directory: "~/projects/foo"` rather than `"."`.
+- `basou session import` applies the same sanitizer to the incoming JSON
+  and emits a single-line `Imported session: N path(s) sanitized
+  (related_files: K, working_directory: 0|1)` warning to stderr (via
+  `console.error`) when at least one mutation occurred. The import itself
+  succeeds; the warning is informational and fires for `--dry-run` too
+  so the operator can preview a rewrite before committing.
+- Backward compatibility: existing session.yaml files written before the
+  v0.3 sanitizer are NOT retroactively rewritten. A future v0.4+ release
+  may introduce `basou session migrate` to sanitize existing data on
+  request.
 
 ---
 
