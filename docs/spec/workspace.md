@@ -27,7 +27,8 @@ out on disk.
 │       ├── changed-files.json
 │       └── artifacts/
 ├── tasks/
-│   └── <task_id>.md         # source of truth (YAML front matter + body)
+│   ├── <task_id>.md         # source of truth (YAML front matter + body)
+│   └── index.json           # derived cache (id / status / label / updated_at)
 ├── approvals/
 │   ├── pending/
 │   │   └── <approval_id>.yaml
@@ -35,6 +36,7 @@ out on disk.
 │       └── <approval_id>.yaml
 ├── decisions.md             # generated + manually appendable
 ├── handoff.md               # generated + manually appendable
+├── locks/                   # gitignored (advisory lockfiles, see §1.5)
 ├── logs/                    # gitignored
 ├── raw/                     # gitignored (adapter raw output, etc.)
 └── tmp/                     # gitignored
@@ -42,9 +44,34 @@ out on disk.
 
 ### tasks/ details
 
-- v0.1 does not implement `tasks/index.json`. Listing tasks scans `tasks/`
-  and parses each front matter; index.json is reconsidered in a future
-  release as a performance optimization.
+- Listing tasks reads `.basou/tasks/index.json` (a small JSON cache of
+  id / status / optional label / updated_at). The index is updated
+  write-through on every task mutation (`createTask`,
+  `updateTaskStatus`, `editTask`, `deleteTask`, `archiveTask`,
+  `reconcileTask`, `refreshTaskLinkedSessions`); a missing or
+  unparsable index is rebuilt on the next `enumerateTaskIds` call by
+  scanning `tasks/` and re-parsing each front matter.
+  `tasks/<task_id>.md` remains the sole source of truth — the index is
+  a derived cache and never participates in `task reconcile` /
+  `task refresh-linkage` invariants.
+- Write-through failures (disk full, permission etc.) emit a single
+  `Index update failed; rebuild on next read` warning and the task
+  mutation still returns success. The next read repopulates the index
+  from disk.
+- The index has its own `schema_version`; a version mismatch falls
+  through to the rebuild path, so a future bump triggers a forced
+  rebuild rather than a silent migration.
+- **Concurrent-create caveat**: `createTask` does not hold a per-task
+  lock (a new task id is a fresh ULID, so no two creates can race for
+  the same id). Two concurrent `createTask` calls can therefore both
+  observe the same starting index and overwrite each other's
+  write-through update, leaving a structurally valid but
+  partially-stale index. The lazy-rebuild path is gated on missing /
+  parse / version-mismatch failures, so a stale-but-valid index is not
+  auto-recovered. To force a clean rebuild, remove the index
+  (`rm .basou/tasks/index.json`) and run any command that calls
+  `enumerateTaskIds` (e.g. `basou task list`); a workspace-wide index
+  lock is a v0.3.x candidate if dogfood surfaces this drift.
 - In v0.2, `basou task reconcile` detects and repairs broken references in
   `created_in_session` and `linked_sessions[]`. The default is dry-run;
   `--write` actually mutates state, and only the write path emits a
@@ -64,6 +91,7 @@ out on disk.
 .basou/logs/
 .basou/raw/
 .basou/tmp/
+.basou/locks/
 .basou/status.json
 .basou/sessions/*/events.jsonl
 .basou/sessions/*/artifacts/
@@ -91,6 +119,41 @@ approval originals, and adapter raw output are ignored.
 - Separating concept from file name leaves room for a future
   workspace-aggregated log (`.basou/events/task-events.log`).
 - v0.1 does not produce an aggregated log.
+
+## §1.5 Concurrency control
+
+basou holds advisory locks at `.basou/locks/<scope>_<ulid>.lock` while
+mutating per-task or per-session state. Two scopes exist:
+
+- **per-task lock** (`<locks>/task_<ulid>.lock`): held during the
+  read-modify-write window of every task.md mutation
+  (`updateTaskStatus`, `editTask`, `deleteTask`, `archiveTask`,
+  `reconcileTask`, `refreshTaskLinkedSessions`). This prevents two
+  concurrent writers from clobbering each other's `task.md` snapshot
+  and serialises the write-through update of `tasks/index.json` for
+  the same task. `createTask` is intentionally NOT locked: a fresh
+  task id is minted via a new ULID, so no two processes can construct
+  the same id and race over it.
+- **per-session lock** (`<locks>/session_<ulid>.lock`): held during a
+  session.yaml read → events.jsonl append → optional session.yaml
+  update window so two writers on the same session cannot duplicate
+  events or race on the `task_id` field. The lock is the caller's
+  responsibility (`createTask` attach mode, `updateTaskStatus` attach
+  mode, `basou decision record --session`, `basou session note`);
+  `appendEventToExistingSession` itself holds no lock so callers can
+  compose larger critical sections without re-entrant deadlock.
+
+When both locks are held the order is fixed `task → session`, which
+keeps cross-API deadlocks impossible.
+
+Locks are file-based (POSIX `link(2)` atomic create). The lockfile
+body records the holder's pid and `acquired_at` timestamp so a
+competitor can recover from a SIGINT'd CLI run that left the file
+behind: if the holder pid is dead (`process.kill(pid, 0)` returns
+ESRCH) or the lock is older than one hour, the competitor unlinks
+the stale lockfile and retries once.
+
+`.basou/locks/` is gitignored by default.
 
 ---
 
