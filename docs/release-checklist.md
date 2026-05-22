@@ -28,11 +28,11 @@ pnpm --filter @basou/sdk  publish --dry-run --access public --no-git-checks
 
 | Package        | Tarball size | Unpacked size | Files | Notes                                  |
 |----------------|--------------|---------------|-------|----------------------------------------|
-| `@basou/core`  | 153.8 kB     | 659.4 kB      | 5     | dist/index.d.ts is 141 kB              |
-| `@basou/cli`   |  87.2 kB     | 422.6 kB      | 5     | dist/index.d.ts is 13 B (re-export)    |
-| `@basou/sdk`   |   4.7 kB     |  12.6 kB      | 5     | placeholder package, types-only        |
+| `@basou/core`  | 153.8 kB     | 659.5 kB      | 5     | dist/index.d.ts is 141 kB              |
+| `@basou/cli`   |  87.3 kB     | 422.7 kB      | 5     | dist/index.d.ts is 13 B (re-export)    |
+| `@basou/sdk`   |   4.8 kB     |  12.7 kB      | 5     | placeholder package, types-only        |
 
-Verbatim per-file sizes (`npm notice` lines):
+Per-file sizes (`npm notice` lines):
 
 ```
 @basou/core@0.3.1
@@ -40,21 +40,21 @@ Verbatim per-file sizes (`npm notice` lines):
   dist/index.d.ts  141.1 kB
   dist/index.js    126.8 kB
   dist/index.js.map 379.1 kB
-  package.json       1.0 kB
+  package.json       1.1 kB
 
 @basou/cli@0.3.1
   LICENSE           11.4 kB
   dist/index.d.ts    13 B
   dist/index.js    129.6 kB
   dist/index.js.map 280.7 kB
-  package.json     955 B
+  package.json       1.1 kB
 
 @basou/sdk@0.3.1
   LICENSE           11.4 kB
   dist/index.d.ts    74 B
   dist/index.js     114 B
   dist/index.js.map 153 B
-  package.json     899 B
+  package.json     979 B
 ```
 
 If any number diverges by more than ~10% on a future release without
