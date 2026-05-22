@@ -1,8 +1,7 @@
 # basou docs
 
-This directory contains the public specification for **basou v0.1 / v0.2**,
-extracted from the internal planning materials and sanitized for OSS
-distribution.
+This directory contains the public specification for **basou**,
+prepared for OSS distribution.
 
 ## Layout
 

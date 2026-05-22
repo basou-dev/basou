@@ -51,9 +51,9 @@ describe("resolveClaudeCodeCommand", () => {
 });
 
 describe("summarizeAdapterOutput (stub)", () => {
-  it("throws to signal the v0.1 Step 11 deferred state", () => {
+  it("throws to signal the deferred state", () => {
     expect(() => summarizeAdapterOutput("stdout", "anything")).toThrow(
-      "adapter_output summary is not implemented in v0.1 Step 11",
+      "adapter_output summary is not implemented in this release",
     );
   });
 });

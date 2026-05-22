@@ -116,8 +116,8 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
 function renderGitignoreWarning(error: unknown, verbose: boolean): void {
   const baseMessage = error instanceof Error ? error.message : String(error);
   // The fallback hint is intentionally `dist`-only-portable: it does not
-  // reference the Basou planning repo or any in-repo doc path, since the
-  // CLI is published independently of `docs/`.
+  // reference any in-repo doc path, since the CLI is published
+  // independently of `docs/`.
   console.error(
     `Warning: Could not update .gitignore (${baseMessage}). Add Basou's default .gitignore block manually.`,
   );

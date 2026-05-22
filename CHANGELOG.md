@@ -160,13 +160,13 @@ the rest.
 Baseline grew from 923 (v0.2.0 close) → 1014 (v0.3.0 close), a
 `+91` spread across the three clusters:
 
-- UX (Step 23): `+9` covering the four handoff renderer changes
+- UX: `+9` covering the four handoff renderer changes
   plus a `task_status_changed`-without-`task_created` fallback case.
-- Concurrency (Step 24): `+53` covering the lockfile helper
+- Concurrency: `+53` covering the lockfile helper
   (PID / age / EPERM / null / null-bytes), per-task and per-session
   lock contention, the task-index schema and helper, and the
   write-through integration with the existing task APIs.
-- Security (Step 25): `+29` covering each rewrite rule (with
+- Security: `+29` covering each rewrite rule (with
   `..`-escape and prefix-preference cases), the sanitize-then-
   warn flow on import, `--dry-run` warning visibility, and the
   display-side `~/...` / `.` / repo-relative formatting.
@@ -180,10 +180,10 @@ are green at the tip of `main`.
   introduction is independently gated on out-of-tree feedback from
   external dogfood (5 sessions); release notes for downstream users
   should wait on that lane.
-- Step 26 (adapter UX — claude-code wrap, terminal-recording precmd
-  hook, session pause/resume) was sized for this release but
-  deferred pending further dogfood signal. It is a v0.3.x candidate
-  rather than a v0.4 prerequisite.
+- Adapter UX (claude-code wrap, terminal-recording precmd hook,
+  session pause/resume) was sized for this release but deferred
+  pending further dogfood signal. It is a v0.3.x candidate rather
+  than a v0.4 prerequisite.
 
 ## 0.2.0 — 2026-05-18
 
@@ -302,12 +302,12 @@ Both renames are observable only on direct programmatic users of
   one-pass atomic write now accepts N target events between the lifecycle
   status-change pair).
 - Planning-document identifiers removed from public source / tests /
-  comments per the repo's AGENTS.md rule that the public repository stay
-  independent of basou-planning.
+  comments so the public repository stays independent of the private
+  planning repository.
 
 ### Tests
 
-Baseline grew from 720 (Y-3t close) → 923 (v0.2.0 close), a `+203`
+Baseline grew from 720 → 923 (v0.2.0 close), a `+203`
 spread across the new events, the new CLI subcommands, the validation
 strengthening, and the refactors above. `pnpm typecheck` / `pnpm -r
 build` / `pnpm -r test` / `pnpm lint` are green at the tip of `main`.
@@ -333,5 +333,4 @@ Initial release covering the v0.1 MVP scope:
 - Session import (`basou session import --format json`).
 - Status snapshot (`basou status`).
 
-Specification source of truth lives in the planning repository; the public
-repo stays standalone per the AGENTS.md regulations.
+This repository is intended to operate as a standalone codebase.

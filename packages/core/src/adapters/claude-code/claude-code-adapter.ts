@@ -55,13 +55,14 @@ async function isOnPath(command: string): Promise<boolean> {
 /**
  * Stub for the future `adapter_output` summary generator.
  *
- * v0.1 Step 11 keeps `capture: "none"` and intentionally does not emit
- * `adapter_output` events, so this hook has no production callers yet.
- * The signature is committed so that Step 12+ can implement raw_ref
- * generation without retrofitting the adapter scaffold.
+ * The current release keeps `capture: "none"` and intentionally does
+ * not emit `adapter_output` events, so this hook has no production
+ * callers yet. The signature is committed so a later release can
+ * implement raw_ref generation without retrofitting the adapter
+ * scaffold.
  *
- * @throws Error - always; not implemented in v0.1 Step 11.
+ * @throws Error - always; not implemented in this release.
  */
 export function summarizeAdapterOutput(_stream: "stdout" | "stderr", _raw: string): string {
-  throw new Error("adapter_output summary is not implemented in v0.1 Step 11");
+  throw new Error("adapter_output summary is not implemented in this release");
 }

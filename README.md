@@ -103,9 +103,7 @@ basou --version    # → 0.3.0
 ### From npm (future)
 
 `@basou/cli` is not yet published to npm. v0.3.x or v0.4 will publish
-after external feedback consolidates. Tracking issue: see the
-post-release observation lane in the planning notes (not part of this
-public repo).
+after external feedback consolidates.
 
 ```bash
 # Once published:

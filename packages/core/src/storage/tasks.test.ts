@@ -2225,10 +2225,10 @@ describe("archiveTask", () => {
 // ============================================================================
 
 // ============================================================================
-// tasks/index.json write-through + lazy rebuild (B-D2)
+// tasks/index.json write-through + lazy rebuild
 // ============================================================================
 
-describe("tasks/index.json write-through (B-D2)", () => {
+describe("tasks/index.json write-through", () => {
   async function readIndex(
     paths: BasouPaths,
   ): Promise<{ tasks: { id: string; status: string }[] }> {
@@ -2396,7 +2396,7 @@ describe("tasks/index.json write-through (B-D2)", () => {
 });
 
 // ============================================================================
-// Per-task lock (B-D1)
+// Per-task lock
 // ============================================================================
 
 describe("per-task lock", () => {
