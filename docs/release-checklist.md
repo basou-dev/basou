@@ -10,6 +10,12 @@ current `0.3.1` line is safe to push to the public registry.
 Read this before running `pnpm -r publish --access public` on a new
 release.
 
+## Published releases
+
+| Date       | Version | Packages                                  | Notes                                                                                                                            |
+|------------|---------|-------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
+| 2026-05-22 | 0.3.1   | `@basou/core`, `@basou/cli`, `@basou/sdk` | First public scoped release. Published in dependency order (core → cli → sdk); each `pnpm publish` re-authed via the npm web 2FA flow. Registry confirmed all three via `npm view @basou/<pkg> versions`. |
+
 ## Pre-publish dry-run (verified 2026-05-22)
 
 Run from `~/projects/basou` after a clean `pnpm -r build`. Each
