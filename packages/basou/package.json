@@ -1,0 +1,35 @@
+{
+  "name": "basou",
+  "version": "0.3.1",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Convenience installer for the @basou/cli command. `npm install -g basou` exposes the same `basou` binary as `npm install -g @basou/cli`.",
+  "author": "Takashi Matsuyama",
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "session",
+    "audit",
+    "provenance",
+    "git",
+    "claude-code",
+    "basou"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basou-dev/basou.git",
+    "directory": "packages/basou"
+  },
+  "publishConfig": { "access": "public" },
+  "bin": {
+    "basou": "./bin.mjs"
+  },
+  "files": ["bin.mjs"],
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "dependencies": {
+    "@basou/cli": "workspace:*"
+  }
+}
