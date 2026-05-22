@@ -118,6 +118,8 @@ discuss the test plan than have you guess.
 6. `git tag -a vX.Y.Z -m "..."` with a short summary.
 7. Push the branch and the tag.
 8. (Once npm publish is enabled:) `pnpm -r publish --access public`.
+   See [docs/release-checklist.md](docs/release-checklist.md) for the
+   dry-run + tarball verification step that should run before this.
 
 ## Security policy
 
