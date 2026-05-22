@@ -47,7 +47,10 @@ jobs:
           #   B-XN (B-D1, B-D2)
           #   "Codex YN" review references
           #   The literal private-repo name
-          MATCHES=$(git ls-files | xargs grep -nE \
+          # The workflow file itself is excluded from the scan because
+          # the documented examples and regex literal above would
+          # otherwise self-match.
+          MATCHES=$(git ls-files | grep -v '^\.github/workflows/' | xargs grep -nE \
             "Y-[0-9]+[a-z]?|Y-[0-9]+\.[0-9]+|B-[A-Z][0-9]+|Codex Y[0-9]+|basou-planning" \
             2>/dev/null || true)
           if [ -n "$MATCHES" ]; then
@@ -105,8 +108,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # pnpm version is read from the `packageManager` field of the
+        # workspace root package.json; the action errors out if both
+        # are specified.
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
