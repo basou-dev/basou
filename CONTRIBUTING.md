@@ -126,9 +126,11 @@ discuss the test plan than have you guess.
 If you find an issue that allows leaking machine-private paths,
 secrets, or local-file contents into `.basou/` — or any other
 class of issue that has security implications — please *do not*
-open a public issue. Instead, contact the maintainer via the email
-listed on [basou.dev](https://basou.dev). Acknowledgement within
-3 business days is the goal.
+open a public issue. Instead, report it privately via GitHub
+Security Advisories
+(<https://github.com/basou-dev/basou/security/advisories/new>) or
+by mailing hello@basou.dev. Acknowledgement within 3 business
+days is the goal.
 
 ## Code of Conduct
 
