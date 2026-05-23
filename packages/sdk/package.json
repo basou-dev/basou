@@ -5,13 +5,7 @@
   "license": "Apache-2.0",
   "description": "Type-only SDK for Basou adapter authors. v0.1: types only, no runtime.",
   "author": "Takashi Matsuyama",
-  "keywords": [
-    "ai",
-    "agent",
-    "sdk",
-    "adapter",
-    "basou"
-  ],
+  "keywords": ["ai", "agent", "sdk", "adapter", "basou"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/basou-dev/basou.git",

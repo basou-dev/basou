@@ -5,16 +5,7 @@
   "license": "Apache-2.0",
   "description": "basou command-line tool",
   "author": "Takashi Matsuyama",
-  "keywords": [
-    "ai",
-    "agent",
-    "cli",
-    "session",
-    "audit",
-    "provenance",
-    "git",
-    "claude-code"
-  ],
+  "keywords": ["ai", "agent", "cli", "session", "audit", "provenance", "git", "claude-code"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/basou-dev/basou.git",
