@@ -251,7 +251,7 @@ describe("EventSchema (discriminator narrowing)", () => {
   });
 });
 
-describe("TaskReconciledEventSchema (Step 19)", () => {
+describe("TaskReconciledEventSchema", () => {
   const BASE_RECONCILED = {
     ...BASE,
     type: "task_reconciled" as const,

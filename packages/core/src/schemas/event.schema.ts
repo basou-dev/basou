@@ -147,7 +147,7 @@ const TaskStatusChangedEventSchema = BaseEventSchema.extend({
   to: z.string(),
 });
 
-// Step 19: emitted by `basou task reconcile --write` after broken session
+// emitted by `basou task reconcile --write` after broken session
 // references in a task.md are cleaned up. `.strict()` so that any extra field
 // (likely a core-side miscoding of an audit value) is rejected at parse time
 // rather than silently stripped — the event is the audit trail.

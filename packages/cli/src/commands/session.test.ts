@@ -1331,7 +1331,7 @@ describe("doRunSessionNote", () => {
   });
 });
 
-describe("doRunSessionShow task_reconciled summary (Step 19)", () => {
+describe("doRunSessionShow task_reconciled summary", () => {
   it("case 46: eventVariantSummary surfaces task_reconciled with cleared/created counts", async () => {
     const repo = await setupInitedRepo();
     // SES helper appends a 3-char suffix; "RCK" stays inside Crockford alphabet

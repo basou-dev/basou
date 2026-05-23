@@ -852,7 +852,7 @@ function printTaskStatusResult(options: TaskStatusOptions, result: TaskStatusPri
 }
 
 // ============================================================================
-// task reconcile (Step 19)
+// task reconcile
 // ============================================================================
 
 export async function runTaskReconcile(

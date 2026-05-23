@@ -1270,7 +1270,7 @@ async function readReconciledEvent(
   return undefined;
 }
 
-describe("reconcileTask (Step 19)", () => {
+describe("reconcileTask", () => {
   // 1
   it("write: broken created_in_session only -> replaces + fires single event + updates task.md", async () => {
     const paths = await setupPaths();
@@ -1626,7 +1626,7 @@ describe("reconcileTask (Step 19)", () => {
   });
 });
 
-describe("reconcileTask failure phases (Step 19)", () => {
+describe("reconcileTask failure phases", () => {
   // 18
   it("phase: 'reconcile' when task.md overwrite fails after event commit", async () => {
     const paths = await setupPaths();
@@ -1726,7 +1726,7 @@ describe("reconcileTask failure phases (Step 19)", () => {
   });
 });
 
-describe("reconcileAllTasks (Step 19)", () => {
+describe("reconcileAllTasks", () => {
   // 7
   it("empty workspace: { results: [], failed: [], scanned: 0 }", async () => {
     const paths = await setupPaths();

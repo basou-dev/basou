@@ -886,8 +886,7 @@ describe("task list happy stderr stays empty", () => {
 });
 
 // ============================================================================
-// task reconcile (Step 19)
-// ============================================================================
+// task reconcile// ============================================================================
 
 // ULID body excludes I, L, O, U — use Crockford-valid suffixes only.
 const BROKEN_SES_TR = "ses_01HXBRKENABCDEFGH1234567B1";
@@ -1185,7 +1184,7 @@ describe("doRunTaskReconcile (--json)", () => {
   });
 });
 
-describe("renderTaskError extended phases (Step 19)", () => {
+describe("renderTaskError extended phases", () => {
   // 41a: reconcile
   it("t-rec-14: phase 'reconcile' warning calls out task.md reconciliation failed", async () => {
     const repo = await setupInitedRepo();
@@ -1280,10 +1279,9 @@ describe("doRunTaskReconcile (verbose)", () => {
 });
 
 // ============================================================================
-// task show extensions (Step 19)
-// ============================================================================
+// task show extensions// ============================================================================
 
-describe("doRunTaskShow with task_reconciled events (Step 19)", () => {
+describe("doRunTaskShow with task_reconciled events", () => {
   async function setupReconciledFixture(): Promise<{ repo: string; taskId: string }> {
     const repo = await setupInitedRepo();
     await createSession(repo, { id: REACHABLE_SES_TR, status: "running", taskId: null });
