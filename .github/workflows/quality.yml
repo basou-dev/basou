@@ -24,14 +24,19 @@ jobs:
           node-version: "20"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Typecheck
-        # tsc --noEmit per package; mirrors the local `pnpm typecheck`
-        # script in CONTRIBUTING.md's release-flow step 4.
-        run: pnpm typecheck
       - name: Build
-        # tsup per package; verifies dist/ generates cleanly and catches
+        # tsup per package; produces dist/ artifacts (including .d.ts
+        # files) that downstream packages import from. Must run before
+        # typecheck so the @basou/core type references in @basou/cli
+        # resolve under fresh CI checkouts; locally, the same step runs
+        # first in CONTRIBUTING.md's release-flow step 4. Also catches
         # publish-time export-shape regressions before they reach npm.
         run: pnpm -r build
+      - name: Typecheck
+        # tsc --noEmit per package; depends on the prior Build step
+        # having generated downstream .d.ts files. Verifies that all
+        # workspace packages typecheck against the published shape.
+        run: pnpm typecheck
       - name: Test
         # vitest per package; the v0.3.1 baseline is 1015 tests
         # (cli 367 + core 647 + sdk 1). Any test break here fails CI.
