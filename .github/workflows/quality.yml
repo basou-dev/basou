@@ -1,0 +1,46 @@
+name: Quality scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality checks (typecheck / build / test / lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        # pnpm version is read from the `packageManager` field of the
+        # workspace root package.json; the action errors out if both
+        # are specified.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        # tsc --noEmit per package; mirrors the local `pnpm typecheck`
+        # script in CONTRIBUTING.md's release-flow step 4.
+        run: pnpm typecheck
+      - name: Build
+        # tsup per package; verifies dist/ generates cleanly and catches
+        # publish-time export-shape regressions before they reach npm.
+        run: pnpm -r build
+      - name: Test
+        # vitest per package; the v0.3.1 baseline is 1015 tests
+        # (cli 367 + core 647 + sdk 1). Any test break here fails CI.
+        run: pnpm -r test
+      - name: Lint
+        # biome check across the workspace; this is the gap that the
+        # security workflow alone did not cover and that let a
+        # package.json keywords format violation land in 240de59
+        # un-noticed until 2026-05-23. Local `pnpm lint` is no longer
+        # the only verifier of CONTRIBUTING.md's "Both must pass"
+        # contract.
+        run: pnpm lint
