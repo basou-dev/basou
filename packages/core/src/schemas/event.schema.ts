@@ -33,7 +33,7 @@ const SessionEndedEventSchema = BaseEventSchema.extend({
 });
 
 // `from`/`to` use `string` to keep this module independent of session.schema
-// and avoid a circular import. Step 5 (event-replay) may narrow these to
+// and avoid a circular import. A later event-replay layer may narrow these to
 // SessionStatusSchema by relocating the enum into shared.schema.
 const SessionStatusChangedEventSchema = BaseEventSchema.extend({
   type: z.literal("session_status_changed"),

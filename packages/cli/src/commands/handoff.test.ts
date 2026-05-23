@@ -456,7 +456,7 @@ describe("basou handoff generate", () => {
     expect(generate).toBeDefined();
   });
 
-  it("case 17: stdout summary includes a tasks: count (Step 17)", async () => {
+  it("case 17: stdout summary includes a tasks: count", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
     await doRunHandoffGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });

@@ -5,7 +5,7 @@ import { enumerateArchivedTaskIds, enumerateTaskIds } from "../storage/tasks.js"
 /**
  * Resolve a possibly-truncated session id prefix to a full session id by
  * scanning `<paths.sessions>/`. Existing message contract (carried over
- * from `packages/cli/src/commands/session.ts` 経由の Step 12 実装) is
+ * from `packages/cli/src/commands/session.ts`) is
  * preserved exactly so callers that grep stderr keep working:
  *
  *   - `"Session id is empty"`

@@ -186,8 +186,8 @@ async function assertImportedTaskReferencesAreReachable(
     taskIdsToCheck.add(effectiveSessionTaskId);
   }
   if (taskIdsToCheck.size === 0) {
-    // Step 21 L-2: skip the tasks-dir scan when nothing references a task,
-    // so imports that carry no task_id at all keep the pre-Step-19 perf.
+    // skip the tasks-dir scan when nothing references a task,
+    // so imports that carry no task_id at all keep the original perf.
     return;
   }
   const knownTaskIds = new Set(await enumerateTaskIds(paths));

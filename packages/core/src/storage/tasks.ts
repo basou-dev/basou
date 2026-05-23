@@ -924,7 +924,7 @@ async function createTaskAttachLocked(input: AttachTaskInput): Promise<CreateTas
   }
 
   // 2. Append `task_created` to events.jsonl. We use appendEventToExistingSession
-  //    so the same status/imported-rejection logic is shared with Step 16 paths.
+  //    so the same status/imported-rejection logic is shared across attach-flavoured callers.
   const appendResult = await appendEventToExistingSession({
     paths: input.paths,
     sessionId: input.sessionId,

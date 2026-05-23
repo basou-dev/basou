@@ -577,7 +577,7 @@ function printNoSessions(options: SessionListOptions): void {
 }
 
 // ----------------------------------------------------------------------------
-// session import (Step 15)
+// session import
 // ----------------------------------------------------------------------------
 
 export type SessionImportOptions = {
@@ -729,7 +729,7 @@ function printSessionImportResult(
 }
 
 // ----------------------------------------------------------------------------
-// session note (Step 16)
+// session note
 // ----------------------------------------------------------------------------
 
 const NOTE_BODY_PREVIEW_LIMIT = 80;
