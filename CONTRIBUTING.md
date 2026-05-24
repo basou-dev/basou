@@ -69,6 +69,17 @@ exposes a `basou` binary on your `$PATH`. The
 
 ## Commits and pull requests
 
+- **English-only convention**: Commit messages (subject + body), pull
+  request titles and descriptions, issue text, GitHub Discussions, and
+  the bundled `.github/` issue / PR templates are all written in
+  English. This follows the project's OSS global accessibility stance —
+  English as a lingua franca for global contributors and users — and is
+  not exclusion of any specific language. The same convention applies
+  to comments inside `.github/workflows/*`. The one exception is the
+  `AGENTS.md` symlink at the repository root: its target lives in the
+  internal planning repository, is git-ignored from this repository, so
+  it follows that repository's language conventions (Japanese) rather
+  than this one.
 - **Commit prefix**: `basou:` for source / behaviour changes, `docs:`
   for documentation. Body explains the *why*, not just the *what*.
 - **One commit, one topic**. Avoid bundling unrelated fixes.
