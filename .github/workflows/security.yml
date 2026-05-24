@@ -103,6 +103,54 @@ jobs:
             echo "No Step N references remain."
           fi
 
+  commit-message-ascii:
+    name: Commit message ASCII check
+    # PR is the only path to main (protect-main ruleset). Push/schedule/
+    # dispatch events cannot provide a meaningful base..head range, and
+    # pre-existing non-ASCII commits in history must not be rescanned
+    # (informational retention, not rewritten). Gating on pull_request
+    # both prevents new violations and avoids retroactive failures.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so git log base..head can resolve commits
+          # between the PR base and head; the default depth=1 would fail.
+          fetch-depth: 0
+      - name: Scan new commits for non-ASCII bytes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          # CONTRIBUTING.md "English-only convention" requires commit
+          # messages (subject + body) to be ASCII. The strict range is
+          # 0x00-0x7F; tab and newline are inside that range and remain
+          # allowed (the negated class below preserves them).
+          # Merge commits are excluded: their auto-generated subjects
+          # are ASCII by construction and merge bodies are not author-
+          # written content.
+          # perl is preinstalled on ubuntu-latest and macOS, so the same
+          # check can be dry-run locally (BSD grep on macOS lacks -P).
+          FAIL=0
+          while IFS= read -r -d '' SHA; do
+            MSG=$(git log -1 --format=%B "$SHA")
+            SUBJECT=$(git log -1 --format=%s "$SHA")
+            HITS=$(printf '%s\n' "$MSG" | LC_ALL=C perl -ne 'print "$.:$_" if /[^\x00-\x7F]/')
+            if [ -n "$HITS" ]; then
+              FAIL=1
+              echo "::error::Non-ASCII bytes in commit ${SHA}: ${SUBJECT}"
+              echo "$HITS" | sed 's/^/    /'
+            fi
+          done < <(git log --no-merges -z --format=%H "${BASE_SHA}..${HEAD_SHA}")
+          if [ "$FAIL" -ne 0 ]; then
+            echo "::error::One or more new commits contain non-ASCII bytes. See CONTRIBUTING.md 'English-only convention'."
+            exit 1
+          fi
+          echo "All new commits are ASCII-only."
+
   audit:
     name: Dependency vulnerability audit
     runs-on: ubuntu-latest
