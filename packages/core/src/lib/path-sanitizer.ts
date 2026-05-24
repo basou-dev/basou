@@ -64,14 +64,14 @@ export function sanitizePath(rawPath: string, opts: SanitizePathOptions): string
     return normalized;
   }
 
-  // (1) workingDirectory 配下 → repo-relative.
+  // (1) workingDirectory-internal -> repo-relative.
   if (normalized === wd) return ".";
   const wdRel = path.relative(wd, normalized);
   if (wdRel !== "" && !wdRel.startsWith("..")) {
     return wdRel;
   }
 
-  // (2) homedir 配下 → ~/...
+  // (2) homedir-internal -> ~/...
   if (normalized === home) return "~";
   const homeRel = path.relative(home, normalized);
   if (homeRel !== "" && !homeRel.startsWith("..")) {

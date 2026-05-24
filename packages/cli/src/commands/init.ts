@@ -94,10 +94,10 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
 
   await writeManifest(paths, manifest, { force: options.force === true });
 
-  // .gitignore は best-effort: 失敗しても init 全体は成功とみなす。
-  // 「既存 Git repo で安全に実行できる」という完了条件を担保するため、
-  // permission denied 等で manifest だけ書けて .gitignore が書けない
-  // ケースでも基本機能は使える。
+  // .gitignore is best-effort: init succeeds even if this step fails.
+  // The "safe to run on an existing Git repo" completion contract holds
+  // even when manifest writes but .gitignore cannot (e.g. permission
+  // denied) -- the core feature set still works.
   try {
     await appendBasouGitignore(repositoryRoot);
   } catch (error: unknown) {

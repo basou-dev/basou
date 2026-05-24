@@ -3,8 +3,8 @@ import { join } from "node:path";
 
 const MARKER = "# Basou - default ignore";
 
-// 推奨 .gitignore ブロック（ignore + commit）。spec drift 検知のため
-// テストで spec 文字列リテラルとの完全一致を assert する。
+// Recommended .gitignore block (ignore + commit). The test asserts an
+// exact match against this spec string literal to detect spec drift.
 const BASOU_GITIGNORE_BLOCK =
   "# Basou - default ignore\n" +
   ".basou/logs/\n" +
