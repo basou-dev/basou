@@ -65,8 +65,8 @@ cat .basou/handoff.md
 ```
 
 For a step-by-step walkthrough with failure modes and sample output, see
-[docs/quickstart.md](docs/quickstart.md). For the underlying data model,
-see [docs/spec/](docs/spec/).
+[basou.dev/quickstart/](https://basou.dev/quickstart/). For the
+underlying data model, see [docs/spec/](docs/spec/).
 
 ## Packages
 
@@ -77,7 +77,7 @@ see [docs/spec/](docs/spec/).
 | `@basou/sdk`   | Type-only SDK for adapter authors                                  | v0.3.0 — type stubs |
 
 \* published locally via `pnpm link --global`; npm publish is a planned
-post-dogfood milestone (see [docs/quickstart.md](docs/quickstart.md)).
+post-dogfood milestone (see [basou.dev/installation/](https://basou.dev/installation/)).
 
 ## Installation
 
@@ -129,7 +129,7 @@ basou/
 │   ├── cli/     # @basou/cli  — `basou` command
 │   └── sdk/     # @basou/sdk  — adapter SDK (type-only)
 ├── docs/
-│   ├── quickstart.md   # 30-min walkthrough for first-time users
+│   ├── quickstart.md   # Redirect stub → basou.dev/quickstart/
 │   └── spec/           # workspace layout, schemas, CLI surface, ...
 ├── apps/        # Reserved for future GUI / desktop apps
 ├── CHANGELOG.md
@@ -142,6 +142,7 @@ Apache 2.0 — see [LICENSE](LICENSE). Copyright Basou Project Contributors.
 
 ## Links
 
-- Website: https://basou.dev
-- GitHub:  https://github.com/basou-dev/basou
-- npm:     https://www.npmjs.com/org/basou
+- Documentation: https://basou.dev/getting-started/
+- Website:       https://basou.dev
+- GitHub:        https://github.com/basou-dev/basou
+- npm:           https://www.npmjs.com/org/basou

@@ -16,9 +16,9 @@ using one of the templates:
 - **Bug report** — when the CLI errors out, prints something
   surprising, or `pnpm test` fails on a fresh checkout. Please run
   through the
-  [docs/quickstart.md](docs/quickstart.md#sanity-check-checklist)
-  sanity-check first — if any of those four lines fails, mention
-  which one in the issue title.
+  [Quickstart sanity-check checklist](https://basou.dev/quickstart/#sanity-check-checklist)
+  first — if any of those four lines fails, mention which one in
+  the issue title.
 - **Feature request / UX friction** — when something *works* but is
   unintuitive (e.g. `basou status` printed a confusing label, a
   spec section is missing, a command spelling surprised you).
@@ -44,7 +44,8 @@ Prerequisites:
 
 After the first build, `pnpm --filter @basou/cli link --global`
 exposes a `basou` binary on your `$PATH`. The
-[quickstart](docs/quickstart.md) walks through the rest end-to-end.
+[quickstart](https://basou.dev/quickstart/) walks through the rest
+end-to-end.
 
 ## Coding conventions
 
