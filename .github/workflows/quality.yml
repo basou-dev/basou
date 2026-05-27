@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         # pnpm version is read from the `packageManager` field of the
         # workspace root package.json; the action errors out if both
         # are specified.
