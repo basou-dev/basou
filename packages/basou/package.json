@@ -21,13 +21,23 @@
     "url": "git+https://github.com/basou-dev/basou.git",
     "directory": "packages/basou"
   },
-  "publishConfig": { "access": "public" },
+  "homepage": "https://basou.dev",
+  "bugs": {
+    "url": "https://github.com/basou-dev/basou/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "bin": {
     "basou": "./bin.mjs"
   },
   "files": ["bin.mjs"],
   "engines": {
     "node": ">=20.10.0"
+  },
+  "scripts": {
+    "prepublishOnly": "pnpm -w run build"
   },
   "dependencies": {
     "@basou/cli": "workspace:*"
