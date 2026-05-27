@@ -5,11 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import { type BasouPaths, basouPaths, ensureBasouDirectory } from "./basou-dir.js";
 import {
-  type SessionSkipReason,
   classifySuspect,
   enumerateSessionDirs,
   loadSessionEntries,
   readSessionYaml,
+  type SessionSkipReason,
 } from "./sessions.js";
 
 const FIXED_WS_ID = "ws_01HXABCDEF1234567890ABCDEF" as const;

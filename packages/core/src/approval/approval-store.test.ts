@@ -3,8 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Approval } from "../schemas/approval.schema.js";
-import { type BasouPaths, basouPaths } from "../storage/basou-dir.js";
-import { ensureBasouDirectory } from "../storage/basou-dir.js";
+import { type BasouPaths, basouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { writeYamlFile } from "../storage/yaml-store.js";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "./approval-store.js";
 

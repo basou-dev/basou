@@ -5,7 +5,15 @@
   "license": "Apache-2.0",
   "description": "Core primitives for Basou: sessions, events, approvals, git capability",
   "author": "Takashi Matsuyama",
-  "keywords": ["ai", "agent", "session", "audit", "provenance", "git", "claude-code"],
+  "keywords": [
+    "ai",
+    "agent",
+    "session",
+    "audit",
+    "provenance",
+    "git",
+    "claude-code"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/basou-dev/basou.git",
@@ -29,7 +37,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=20.10.0"
   },

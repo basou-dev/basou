@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
@@ -9,18 +9,18 @@ import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { SessionStatus } from "../schemas/session.schema.js";
 import { IsoTimestampSchema, SessionIdSchema, TaskIdSchema } from "../schemas/shared.schema.js";
-import type { TaskIndexEntry } from "../schemas/task-index.schema.js";
 import {
   type Task,
   TaskSchema,
   type TaskStatus,
   TaskStatusSchema,
 } from "../schemas/task.schema.js";
+import type { TaskIndexEntry } from "../schemas/task-index.schema.js";
 import {
   type AttachableStatus,
-  FailedToFinalizeError,
   appendEventToExistingSession,
   createAdHocSessionWithEvent,
+  FailedToFinalizeError,
 } from "./ad-hoc-session.js";
 import { atomicCreate, atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";

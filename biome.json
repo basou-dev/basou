@@ -1,14 +1,21 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
     "useIgnoreFile": true
   },
   "files": {
-    "ignore": ["**/dist", "**/node_modules", "**/coverage", "**/*.tsbuildinfo", "pnpm-lock.yaml"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/coverage",
+      "!**/*.tsbuildinfo",
+      "!**/pnpm-lock.yaml"
+    ]
   },
-  "organizeImports": { "enabled": true },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
@@ -43,7 +50,7 @@
   },
   "overrides": [
     {
-      "include": ["**/tsup.config.ts", "**/vite.config.ts", "**/vitest.config.ts"],
+      "includes": ["**/tsup.config.ts", "**/vite.config.ts", "**/vitest.config.ts"],
       "linter": {
         "rules": {
           "style": { "noDefaultExport": "off" }

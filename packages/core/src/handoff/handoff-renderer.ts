@@ -3,12 +3,12 @@ import { enumerateApprovals } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import {
+  loadSessionEntries,
   type SessionEntry,
   type SessionSkipReason,
   type SuspectReason,
-  loadSessionEntries,
 } from "../storage/sessions.js";
-import { type TaskDocument, type TaskSkipReason, loadTaskEntries } from "../storage/tasks.js";
+import { loadTaskEntries, type TaskDocument, type TaskSkipReason } from "../storage/tasks.js";
 
 /** Input contract for {@link renderHandoff}. */
 export type HandoffRendererInput = {

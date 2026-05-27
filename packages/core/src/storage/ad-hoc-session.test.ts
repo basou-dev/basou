@@ -6,9 +6,9 @@ import { parse } from "yaml";
 import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import {
-  FailedToFinalizeError,
   appendEventToExistingSession,
   createAdHocSessionWithEvent,
+  FailedToFinalizeError,
 } from "./ad-hoc-session.js";
 import { type BasouPaths, ensureBasouDirectory } from "./basou-dir.js";
 import { linkYamlFile, overwriteYamlFile } from "./yaml-store.js";

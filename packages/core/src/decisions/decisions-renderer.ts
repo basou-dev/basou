@@ -2,7 +2,7 @@ import { lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
-import { type SessionSkipReason, loadSessionEntries } from "../storage/sessions.js";
+import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
 
 export type DecisionsRendererInput = {
   paths: BasouPaths;

@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   type BasouPaths,
-  StatusSchema,
   basouPaths,
   createManifest,
   ensureBasouDirectory,
+  StatusSchema,
   writeManifest,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
