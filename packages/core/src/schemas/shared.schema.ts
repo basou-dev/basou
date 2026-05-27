@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type IdPrefix, type PrefixedId, isValidPrefixedId } from "../ids/ulid.js";
+import { type IdPrefix, isValidPrefixedId, type PrefixedId } from "../ids/ulid.js";
 
 /**
  * Schema version literal pinned to "0.1.0" for Basou v0.1.

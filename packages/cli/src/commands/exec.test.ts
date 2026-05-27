@@ -1,17 +1,17 @@
 import type { ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
-  type ProcessRunner,
-  type RunOptions,
-  type RunResult,
   appendEvent,
   basouPaths,
   createManifest,
   ensureBasouDirectory,
+  type ProcessRunner,
+  type RunOptions,
+  type RunResult,
   writeManifest,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
