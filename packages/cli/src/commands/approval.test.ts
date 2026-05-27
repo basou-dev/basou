@@ -629,14 +629,24 @@ describe("runApprovalReject", () => {
     await createApproval(repo, { id: approvalId });
     const program = new Command();
     registerApprovalCommand(program);
-    program.exitOverride();
     let stderrBuf = "";
-    program.configureOutput({
-      writeErr: (msg) => {
-        stderrBuf += msg;
-      },
-      writeOut: () => undefined,
-    });
+    // commander 14 stopped propagating `exitOverride()` and `configureOutput()`
+    // from the parent program to nested subcommands. The missing-required-option
+    // error is raised on the leaf `approval reject` subcommand, so the same
+    // overrides have to be re-applied across the whole tree to keep the test
+    // hermetic (otherwise commander writes to process.stderr and exits the
+    // worker).
+    const applyOverrides = (cmd: Command): void => {
+      cmd.exitOverride();
+      cmd.configureOutput({
+        writeErr: (msg) => {
+          stderrBuf += msg;
+        },
+        writeOut: () => undefined,
+      });
+      for (const sub of cmd.commands) applyOverrides(sub);
+    };
+    applyOverrides(program);
     let captured: unknown;
     try {
       await program.parseAsync(["node", "basou", "approval", "reject", approvalId]);
