@@ -1,0 +1,38 @@
+version: 2
+
+# All third-party GitHub Actions are SHA-pinned (Codex W2 supply-chain
+# hardening). Dependabot does NOT convert tag pins to SHA pins on its
+# own, so pinning must be done by hand at commit time; Dependabot then
+# keeps the existing SHA pins fresh.
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: 'Asia/Tokyo'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: 'Update'
+      include: scope
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: 'Asia/Tokyo'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+    commit-message:
+      prefix: 'Update'
+      include: scope
+    versioning-strategy: increase
