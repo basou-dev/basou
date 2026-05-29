@@ -1,15 +1,21 @@
 # Basou
 
 > Provenance layer for AI development.
-> AI 時代の見えない労働を、証跡化する。
+
+**Today:** Basou wraps Claude Code only — the one implemented adapter.
+**Roadmap (no dates):** Codex and OpenCode (agent CLIs that fit the same
+process-wrap model). OpenRouter / Ollama are tracked separately as a
+per-request capture mode, not yet designed.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Version: v0.3.0](https://img.shields.io/badge/version-v0.3.0-blue.svg)]()
-[![Status: dogfood-ready](https://img.shields.io/badge/status-dogfood--ready-green.svg)]()
+[![Version: v0.4.0](https://img.shields.io/badge/version-v0.4.0-blue.svg)]()
+[![Status: personal-tool](https://img.shields.io/badge/status-personal--tool-orange.svg)]()
 
-**Status**: v0.3.0 (2026-05-21). Dogfood-ready, pre-OSS publish.
-The CLI surface is frozen for v0.3.x; internal `@basou/core` APIs
-may still change between minor releases.
+**Status**: personal tool, v0.4.0. Built by one author for their own Claude
+Code sessions and updated occasionally — not a supported product. The CLI
+surface is frozen for the 0.x line; internal `@basou/core` APIs may still
+change between minor releases. Bug reports are welcome; feature requests are
+evaluated against the author's own use case.
 
 ## What is Basou?
 
@@ -26,9 +32,10 @@ next to your code.
 - **Tasks as the goal unit.** A task may span multiple sessions; the
   `task.md` snapshot stays in sync with the event log via
   `basou task reconcile` / `basou task refresh-linkage`.
-- **Claude Code as the beachhead adapter.** `basou run claude-code` wraps
-  the process so the surrounding session is recorded without Basou knowing
-  about Anthropic-internal formats.
+- **Claude Code is the one implemented adapter today.** `basou run claude-code`
+  wraps the process so the surrounding session is recorded without Basou knowing
+  about Anthropic-internal formats. Other adapters (Codex, OpenCode) are on the
+  roadmap, not yet built.
 
 What's new in v0.3:
 
@@ -72,9 +79,9 @@ underlying data model, see [docs/spec/](docs/spec/).
 
 | Package        | Description                                                        | Status              |
 | -------------- | ------------------------------------------------------------------ | ------------------- |
-| `@basou/cli`   | The `basou` command-line tool                                      | v0.3.0 — published* |
-| `@basou/core`  | Core library: sessions, events, approvals, git capability          | v0.3.0 — published* |
-| `@basou/sdk`   | Type-only SDK for adapter authors                                  | v0.3.0 — type stubs |
+| `@basou/cli`   | The `basou` command-line tool                                      | v0.4.0 — published* |
+| `@basou/core`  | Core library: sessions, events, approvals, git capability          | v0.4.0 — published* |
+| `@basou/sdk`   | Type-only SDK for adapter authors                                  | v0.4.0 — type stubs |
 
 \* published locally via `pnpm link --global`; npm publish is a planned
 post-dogfood milestone (see [basou.dev/installation/](https://basou.dev/installation/)).
@@ -97,13 +104,12 @@ pnpm -r build
 pnpm --filter @basou/cli link --global
 
 # Verify
-basou --version    # → 0.3.0
+basou --version    # → 0.4.0
 ```
 
 ### From npm (future)
 
-`@basou/cli` is not yet published to npm. v0.3.x or v0.4 will publish
-after external feedback consolidates.
+`@basou/cli` is not yet published to npm; install from source for now.
 
 ```bash
 # Once published:
@@ -116,7 +122,7 @@ npm install -g @basou/cli
 pnpm install
 pnpm typecheck
 pnpm lint
-pnpm test          # 1014 tests at v0.3.0
+pnpm test          # full unit + integration suite
 pnpm -r build
 ```
 
