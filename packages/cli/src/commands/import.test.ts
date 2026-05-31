@@ -10,6 +10,7 @@ import {
   readYamlFile,
   SessionSchema,
   writeManifest,
+  writeYamlFile,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doRunImportClaudeCode } from "./import.js";
@@ -140,6 +141,47 @@ describe("basou import claude-code", () => {
     expect(types).toContain("file_changed");
     expect(types[0]).toBe("session_started");
     expect(types[types.length - 1]).toBe("session_ended");
+  });
+
+  it("is idempotent: re-import skips an already-imported session", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    expect(await listSessionDirs(repo)).toHaveLength(1);
+
+    // A second run over the same transcript must not create a duplicate.
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    expect(await listSessionDirs(repo)).toHaveLength(1);
+  });
+
+  it("dedups a pre-external_id import via its label (migration safety)", async () => {
+    const repo = await setupInitedRepo();
+    // Simulate a session imported before source.external_id existed: it carries
+    // only the `claude-code import <id>` label. The dedup must still recognize it.
+    const sid = "ses_01HXABCDEF1234567890ABCDEF";
+    const dir = join(basouPaths(repo).sessions, sid);
+    await mkdir(dir, { recursive: true });
+    await writeYamlFile(join(dir, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: {
+        id: sid,
+        workspace_id: FIXED_WS_ID,
+        source: { kind: "claude-code-import", version: "0.1.0" },
+        started_at: "2026-05-10T00:00:00.000Z",
+        status: "imported",
+        working_directory: ".",
+        invocation: { command: "claude", args: [], exit_code: null },
+        related_files: [],
+        events_log: "events.jsonl",
+        label: "claude-code import sess-1",
+      },
+    });
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    // sess-1 is recognized via the label and not imported again.
+    expect(await listSessionDirs(repo)).toHaveLength(1);
   });
 
   it("--session imports a single transcript by id", async () => {

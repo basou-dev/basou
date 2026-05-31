@@ -40,6 +40,9 @@ export const SessionInnerImportSchema = z
     source: z.object({
       kind: SessionSourceKindSchema,
       version: z.literal("0.1.0"),
+      // Source-tool-native id (e.g. Claude Code session UUID), retained so
+      // re-imports of the same source can be deduplicated.
+      external_id: z.string().optional(),
     }),
     started_at: IsoTimestampSchema,
     ended_at: IsoTimestampSchema.optional(),

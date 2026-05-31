@@ -16,10 +16,14 @@ All notable changes to **basou** are recorded here. The project follows
   transcript for a project, `--session <id>` imports one, and `--dry-run`
   previews without writing. Transcripts with no observable command / file
   action are skipped. Imports reuse the existing `session import` pipeline,
-  so path sanitization and id minting are unchanged.
+  so path sanitization and id minting are unchanged. Re-running an import is
+  idempotent: a transcript already imported is skipped rather than duplicated.
 - `claude-code-import` session `source.kind` (additive enum value) to
   distinguish transcript-derived sessions from live `claude-code-adapter`
   runs and Basou-format `import`s.
+- `session.source.external_id` (additive, optional) — records the originating
+  session id in the source tool's namespace (e.g. the Claude Code session
+  UUID), the key that makes re-imports idempotent.
 
 ## 0.3.1 — 2026-05-21
 
