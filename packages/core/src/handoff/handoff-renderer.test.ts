@@ -18,6 +18,17 @@ const APPR = (s: string): string => `appr_01HXABCDEF1234567890ABC${s}`;
 const TASK = (s: string): string => `task_01HXABCDEF1234567890ABC${s}`;
 const WS_ID = "ws_01HXABCDEF1234567890ABCDEF";
 
+// Mirror handoff-renderer's prose-line short id: type prefix + the first 10
+// chars of the ULID body (e.g. `task_01HXABCDEF...`). NOTE: every fixture id in
+// this file shares the same leading ULID chars, so distinct sessions / tasks /
+// decisions collapse to the SAME short id here — assertions therefore key on
+// human text (label / title) to distinguish records, and use SHORT only to pin
+// the rendered shape.
+const SHORT = (id: string): string => {
+  const sep = id.indexOf("_");
+  return id.slice(0, sep + 1) + id.slice(sep + 1, sep + 1 + 10);
+};
+
 let workDir: string | undefined;
 
 beforeEach(async () => {
@@ -55,6 +66,8 @@ type SessionFixture = {
   endedAt?: string;
   source?: "claude-code-adapter" | "human" | "import" | "terminal";
   label?: string;
+  /** Omit the `label` field entirely, to exercise the no-label fallback. */
+  omitLabel?: boolean;
   relatedFiles?: string[];
 };
 
@@ -69,7 +82,9 @@ async function placeSession(
     schema_version: "0.1.0",
     session: {
       id: fixture.id,
-      label: fixture.label ?? `fixture ${fixture.id.slice(-3)}`,
+      ...(fixture.omitLabel === true
+        ? {}
+        : { label: fixture.label ?? `fixture ${fixture.id.slice(-3)}` }),
       task_id: null,
       workspace_id: FIXED_WS_ID,
       source: { kind: fixture.source ?? "terminal", version: "0.1.0" },
@@ -232,7 +247,7 @@ describe("handoff-renderer", () => {
     await placeSession(paths, { id, status: "completed" });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.sessionCount).toBe(1);
-    expect(result.body).toContain(`from ${id}..${id}`);
+    expect(result.body).toContain(`from ${SHORT(id)}..${SHORT(id)}`);
   });
 
   it("case 3: aggregates related_files across sessions and dedups", async () => {
@@ -274,7 +289,7 @@ describe("handoff-renderer", () => {
     await placeSession(paths, { id }, events);
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.decisionCount).toBe(3);
-    expect(result.body).toContain(`- ${dec3}: third`);
+    expect(result.body).toContain(`- third [${SHORT(dec3)}]`);
     expect(result.body).toContain("(3 decisions total — see decisions.md)");
   });
 
@@ -364,11 +379,25 @@ describe("handoff-renderer", () => {
     await placeSession(paths, { id, status: "completed", relatedFiles: ["src/x.ts"] }, events);
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain("# Handoff");
-    expect(result.body).toContain(`- 最終 session: ${id} (completed)`);
+    expect(result.body).toContain(
+      `- 最終 session: fixture ${id.slice(-3)} (completed) [${SHORT(id)}]`,
+    );
     expect(result.body).toContain("- src/x.ts");
-    expect(result.body).toContain(`- ${dec}: pick A`);
+    expect(result.body).toContain(`- pick A [${SHORT(dec)}]`);
     expect(result.body).toContain("| short_id | status | started_at | label |");
     expect(result.body).toContain("Sessions: 1 (completed 1). Tasks: 0.");
+  });
+
+  it("case 11b: 最終 session falls back to the short id when the session has no label", async () => {
+    const paths = await setupPaths();
+    const id = SES("X0R");
+    await placeSession(paths, { id, status: "completed", omitLabel: true });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    // No label -> the short id becomes the primary text and the trailing [id]
+    // bracket is dropped so the same id is not repeated.
+    expect(result.body).toContain(`- 最終 session: ${SHORT(id)} (completed)`);
+    const stateSection = sliceSection(result.body, "## 現在の状態", "## ");
+    expect(stateSection).not.toContain(`[${SHORT(id)}]`);
   });
 
   it("case 12: nowIso is reflected in the generated_at header", async () => {
@@ -403,8 +432,8 @@ describe("handoff-renderer", () => {
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.taskCount).toBe(1);
     expect(result.pendingTaskCount).toBe(1);
-    expect(result.body).toContain(`- 最終 task: ${taskId} (planned): form revamp`);
-    expect(result.body).toContain(`- ${taskId} (planned): form revamp`);
+    expect(result.body).toContain(`- 最終 task: form revamp (planned) [${SHORT(taskId)}]`);
+    expect(result.body).toContain(`- form revamp (planned) [${SHORT(taskId)}]`);
     expect(result.body).toContain("Sessions: 1 (running 1). Tasks: 1.");
   });
 
@@ -432,7 +461,7 @@ describe("handoff-renderer", () => {
       sessionId: sid,
     });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).toContain(`- 最終 task: ${t2} (planned): second task`);
+    expect(result.body).toContain(`- 最終 task: second task (planned) [${SHORT(t2)}]`);
   });
 
   it("case 15b: latest task_status_changed wins over task_created when both exist", async () => {
@@ -461,8 +490,11 @@ describe("handoff-renderer", () => {
     });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     // The status-change wins: t1 (now done) surfaces in 最終 task, NOT t2.
-    expect(result.body).toContain(`- 最終 task: ${t1} (done): older task`);
-    expect(result.body).not.toContain(`- 最終 task: ${t2}`);
+    expect(result.body).toContain(`- 最終 task: older task (done) [${SHORT(t1)}]`);
+    // t2 collapses to the same short id as t1 in this fixture set, so
+    // distinguish by title: the newer task's title must not appear in 現在の状態.
+    const stateSection = sliceSection(result.body, "## 現在の状態", "## ");
+    expect(stateSection).not.toContain("newer task");
   });
 
   it("case 15e: task_status_changed without matching task_created falls back to (title unknown)", async () => {
@@ -490,7 +522,7 @@ describe("handoff-renderer", () => {
       sessionId: sid,
     });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).toContain(`- 最終 task: ${taskId} (in_progress): (title unknown)`);
+    expect(result.body).toContain(`- 最終 task: (title unknown) (in_progress) [${SHORT(taskId)}]`);
   });
 
   it("case 15c: multi-session task surfaces a (linked_sessions: N) suffix", async () => {
@@ -520,7 +552,7 @@ describe("handoff-renderer", () => {
     });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain(
-      `- 最終 task: ${taskId} (in_progress): spans 3 sessions (linked_sessions: 3)`,
+      `- 最終 task: spans 3 sessions (in_progress, linked_sessions: 3) [${SHORT(taskId)}]`,
     );
   });
 
@@ -539,7 +571,7 @@ describe("handoff-renderer", () => {
       // linkedSessions defaults to [sid] = single-session — suffix MUST NOT appear.
     });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).toContain(`- 最終 task: ${taskId} (planned): lone task`);
+    expect(result.body).toContain(`- 最終 task: lone task (planned) [${SHORT(taskId)}]`);
     expect(result.body).not.toContain("linked_sessions:");
   });
 
@@ -553,9 +585,11 @@ describe("handoff-renderer", () => {
     await placeSession(paths, { id: sid, status: "running" }, events);
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain(
-      `- 最終 task: ${taskId} (status unknown — task.md missing or invalid): orphaned`,
+      `- 最終 task: orphaned (status unknown — task.md missing or invalid) [${SHORT(taskId)}]`,
     );
-    expect(result.body).not.toContain(`- 最終 task: ${taskId} (planned):`);
+    // The fabricated "planned" status must not leak in: there is no task.md, so
+    // no pending task exists and "(planned)" should appear nowhere.
+    expect(result.body).not.toContain("(planned)");
   });
 
   it("case 16: pending list excludes done / cancelled tasks", async () => {
@@ -593,9 +627,13 @@ describe("handoff-renderer", () => {
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.taskCount).toBe(3);
     expect(result.pendingTaskCount).toBe(1);
-    expect(result.body).toContain(`- ${t1} (in_progress): ongoing`);
-    expect(result.body).not.toMatch(new RegExp(`- ${t2} `));
-    expect(result.body).not.toMatch(new RegExp(`- ${t3} `));
+    // Pending list shows only the in_progress task; done / cancelled excluded.
+    // Scope to the section because the latest-activity task (t3, cancelled)
+    // still surfaces in 最終 task above with its title.
+    const pendingSection = sliceSection(result.body, "## 次に実行すべき作業", "## ");
+    expect(pendingSection).toContain(`- ongoing (in_progress) [${SHORT(t1)}]`);
+    expect(pendingSection).not.toContain("completed");
+    expect(pendingSection).not.toContain("abandoned");
   });
 
   it("case 17a: Sessions line splits mixed completed / failed sessions", async () => {
