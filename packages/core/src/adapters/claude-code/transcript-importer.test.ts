@@ -71,6 +71,8 @@ describe("claudeTranscriptToImportPayload", () => {
     expect(payload.session.related_files).toEqual([`${CWD}/a.ts`, `${CWD}/b.ts`]);
     // The transcript's own sessionId becomes the source external_id (dedup key).
     expect(payload.session.source.external_id).toBe("abc-123");
+    // The label is a human-readable summary (date + counts), not an opaque id.
+    expect(payload.session.label).toBe("claude-code 2026-05-10: 1 command, 2 files");
 
     const types = payload.events.map((e) => e.type);
     expect(types).toEqual([
@@ -177,7 +179,9 @@ describe("claudeTranscriptToImportPayload", () => {
     expect(payload).not.toBeNull();
     if (payload === null) return;
     expect(payload.session.source.external_id).toBe("from-option");
-    expect(payload.session.label).toContain("from-option");
+    // The id lives in source.external_id; the label is a content summary, not the id.
+    expect(payload.session.label).not.toContain("from-option");
+    expect(payload.session.label).toMatch(/^claude-code \d{4}-\d{2}-\d{2}: \d+ command/);
   });
 
   it("returns null when no observable command / file action exists", () => {

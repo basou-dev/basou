@@ -124,8 +124,15 @@ export function claudeTranscriptToImportPayload(
   ];
 
   const externalId = options.externalId ?? claudeSessionId;
-  const label =
-    externalId !== undefined ? `claude-code import ${externalId}` : "claude-code import";
+  // Human-readable label: when + how much, so the session reads as content in
+  // `basou session list` / handoff rather than an opaque id. The source id is
+  // kept structurally in `source.external_id` (not the label), and paths are
+  // deliberately excluded — the label is NOT path-sanitized downstream, so a
+  // raw file path here would leak an operator-private prefix.
+  const commandCount = derived.reduce((n, e) => (e.type === "command_executed" ? n + 1 : n), 0);
+  const fileCount = relatedFiles.size;
+  const date = minTs.slice(0, 10);
+  const label = `claude-code ${date}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}, ${fileCount} ${fileCount === 1 ? "file" : "files"}`;
 
   const payload: SessionImportPayload = {
     schema_version: "0.1.0",
