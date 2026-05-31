@@ -21,9 +21,18 @@ export const SessionStatusSchema = z.enum([
 /** Inferred runtime type for {@link SessionStatusSchema}. */
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 
-/** Source kind that produced the session. */
+/**
+ * Source kind that produced the session.
+ *
+ * - `claude-code-adapter` — a live `basou run claude-code` process wrap.
+ * - `claude-code-import` — derived after the fact from a Claude Code native
+ *   transcript (`~/.claude/projects/*.jsonl`) by `basou import claude-code`.
+ * - `import` — a round-trip of a Basou-format export (`basou session import`).
+ * - `human` / `terminal` — manually-authored / terminal-recorded sessions.
+ */
 export const SessionSourceKindSchema = z.enum([
   "claude-code-adapter",
+  "claude-code-import",
   "human",
   "import",
   "terminal",

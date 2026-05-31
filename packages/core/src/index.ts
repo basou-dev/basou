@@ -4,9 +4,15 @@
  */
 export const BASOU_CORE_VERSION = "0.1.0";
 
-export type { CommandLookup } from "./adapters/claude-code/index.js";
+export type {
+  ClaudeTranscriptRecord,
+  ClaudeTranscriptToPayloadOptions,
+  CommandLookup,
+} from "./adapters/claude-code/index.js";
 export {
+  CLAUDE_IMPORT_SOURCE,
   claudeCodeAdapterMetadata,
+  claudeTranscriptToImportPayload,
   resolveClaudeCodeCommand,
   summarizeAdapterOutput,
 } from "./adapters/claude-code/index.js";
