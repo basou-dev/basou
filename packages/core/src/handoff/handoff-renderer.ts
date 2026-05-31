@@ -221,7 +221,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   const lastEntry = entries[entries.length - 1];
   const sessionRange =
     firstEntry !== undefined && lastEntry !== undefined
-      ? `${firstEntry.sessionId}..${lastEntry.sessionId}`
+      ? `${shortIdWithPrefix(firstEntry.sessionId)}..${shortIdWithPrefix(lastEntry.sessionId)}`
       : "";
 
   const body = formatHandoffBody({
@@ -282,9 +282,18 @@ function formatHandoffBody(args: {
   lines.push("## 現在の状態");
   lines.push("");
   if (args.latestSession !== undefined) {
-    const sid = args.latestSession.sessionId;
     const status = args.latestSession.session.session.status;
-    lines.push(`- 最終 session: ${sid} (${status})`);
+    const label = args.latestSession.session.session.label;
+    const shortId = shortIdWithPrefix(args.latestSession.sessionId);
+    // Lead with the human-readable label; the raw id is demoted to a trailing
+    // [short id]. When the session has no label the short id is the only handle
+    // available, so it becomes the primary text and the bracket is dropped to
+    // avoid repeating it.
+    if (label !== undefined && label !== "") {
+      lines.push(`- 最終 session: ${label} (${status}) [${shortId}]`);
+    } else {
+      lines.push(`- 最終 session: ${shortId} (${status})`);
+    }
   } else {
     lines.push("- 最終 session: (no live sessions)");
   }
@@ -297,15 +306,17 @@ function formatHandoffBody(args: {
       args.latestTaskDoc !== undefined
         ? args.latestTaskDoc.task.task.status
         : "status unknown — task.md missing or invalid";
-    // Surface linked_sessions cardinality as a trailing parenthetical when
+    // Surface linked_sessions cardinality inside the status parenthetical when
     // the latest task spans more than one session. Suppressed when the
     // task is single-session (the common case) or when task.md is
     // unavailable, keeping single-session output visually quiet.
     const linkedCount = args.latestTaskDoc?.task.task.linked_sessions?.length;
     const linkedSuffix =
-      linkedCount !== undefined && linkedCount > 1 ? ` (linked_sessions: ${linkedCount})` : "";
+      linkedCount !== undefined && linkedCount > 1 ? `, linked_sessions: ${linkedCount}` : "";
+    // Lead with the task title; the raw id is demoted to a trailing [short id]
+    // and linked_sessions rides alongside the status.
     lines.push(
-      `- 最終 task: ${args.latestActivityRecord.taskId} (${statusLabel}): ${args.latestActivityRecord.title}${linkedSuffix}`,
+      `- 最終 task: ${args.latestActivityRecord.title} (${statusLabel}${linkedSuffix}) [${shortIdWithPrefix(args.latestActivityRecord.taskId)}]`,
     );
   } else {
     lines.push("- 最終 task: (no tasks recorded yet)");
@@ -330,7 +341,9 @@ function formatHandoffBody(args: {
     lines.push("(no decisions recorded yet)");
   } else {
     const last = args.decisions[args.decisions.length - 1] as DecisionRecord;
-    lines.push(`- ${last.decisionId}: ${last.title}`);
+    // Lead with the decision title; the raw id is demoted to a trailing
+    // [short id].
+    lines.push(`- ${last.title} [${shortIdWithPrefix(last.decisionId)}]`);
     lines.push("");
     lines.push(`(${args.decisions.length} decisions total — see decisions.md)`);
   }
@@ -368,7 +381,10 @@ function formatHandoffBody(args: {
     lines.push("(no pending tasks)");
   } else {
     for (const t of args.pendingTasks) {
-      lines.push(`- ${t.task.task.id} (${t.task.task.status}): ${t.task.task.title}`);
+      // Lead with the task title; the raw id is demoted to a trailing [short id].
+      lines.push(
+        `- ${t.task.task.title} (${t.task.task.status}) [${shortIdWithPrefix(t.task.task.id)}]`,
+      );
     }
   }
   lines.push("");
@@ -459,4 +475,16 @@ function shortHandoffId(sessionId: string): string {
   const SES = "ses_";
   if (sessionId.startsWith(SES)) return sessionId.slice(SES.length, SES.length + 10);
   return sessionId.slice(0, 10);
+}
+
+// Prose-line short id: keeps the type prefix (`ses_` / `task_` / `decision_`)
+// and truncates the ULID body to its first 10 chars, e.g.
+// `task_01KRNHYRS91F5GBX2VTN9ADJFV` -> `task_01KRNHYRS9`. Unlike the session
+// table — whose column header already marks the column as ids — body lines mix
+// session / task / decision ids inline, so the prefix is kept to keep each id
+// self-describing while still demoting it behind the human-readable text.
+function shortIdWithPrefix(id: string): string {
+  const sep = id.indexOf("_");
+  if (sep === -1) return id.slice(0, 10);
+  return id.slice(0, sep + 1) + id.slice(sep + 1, sep + 1 + 10);
 }
