@@ -43,6 +43,10 @@ export type SessionSourceKind = z.infer<typeof SessionSourceKindSchema>;
 const SessionSourceSchema = z.object({
   kind: SessionSourceKindSchema,
   version: z.literal("0.1.0"),
+  // Optional id of the originating session in the SOURCE tool's own
+  // namespace (e.g. the Claude Code session UUID for a `claude-code-import`).
+  // Lets re-imports of the same source be deduplicated; absent for live runs.
+  external_id: z.string().optional(),
 });
 
 const InvocationSchema = z.object({

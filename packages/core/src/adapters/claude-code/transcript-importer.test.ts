@@ -69,6 +69,8 @@ describe("claudeTranscriptToImportPayload", () => {
     expect(payload.session.working_directory).toBe(CWD);
     expect(payload.session.workspace_id).toBe(WS_ID);
     expect(payload.session.related_files).toEqual([`${CWD}/a.ts`, `${CWD}/b.ts`]);
+    // The transcript's own sessionId becomes the source external_id (dedup key).
+    expect(payload.session.source.external_id).toBe("abc-123");
 
     const types = payload.events.map((e) => e.type);
     expect(types).toEqual([
@@ -156,6 +158,26 @@ describe("claudeTranscriptToImportPayload", () => {
     if (commands[0]?.type === "command_executed") {
       expect(commands[0].args).toEqual(["-c", "first"]);
     }
+  });
+
+  it("prefers the provided externalId over the records' sessionId", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: CWD,
+        sessionId: "from-records",
+        message: { content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }] },
+      },
+    ];
+    const payload = claudeTranscriptToImportPayload(records, {
+      workspaceId: WS_ID,
+      externalId: "from-option",
+    });
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.source.external_id).toBe("from-option");
+    expect(payload.session.label).toContain("from-option");
   });
 
   it("returns null when no observable command / file action exists", () => {

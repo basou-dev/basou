@@ -1,16 +1,20 @@
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   assertBasouRootSafe,
+  type BasouPaths,
   basouPaths,
   type ClaudeTranscriptRecord,
   claudeTranscriptToImportPayload,
+  enumerateSessionDirs,
   findErrorCode,
   type ImportSessionResult,
   importSessionFromJson,
   readManifest,
+  readSessionYaml,
   resolveRepositoryRoot,
+  type Session,
   SessionImportPayloadSchema,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -100,17 +104,29 @@ export async function doRunImportClaudeCode(
   const transcriptDir = join(projectsRoot, encodeProjectDir(projectPath));
 
   const files = await selectTranscriptFiles(transcriptDir, options);
+  const alreadyImported = await loadExistingExternalIds(paths);
 
   const results: ImportSessionResult[] = [];
-  let skipped = 0;
+  let skippedNoAction = 0;
+  let skippedExisting = 0;
   let sanitizedPaths = 0;
   for (const file of files) {
+    // The transcript filename is the Claude session id. Dedup on it before
+    // any read so re-imports are idempotent — the same session is never
+    // written twice under fresh Basou ids.
+    const externalId = basename(file, ".jsonl");
+    if (alreadyImported.has(externalId)) {
+      skippedExisting++;
+      continue;
+    }
+
     const records = await readTranscript(file);
     const payload = claudeTranscriptToImportPayload(records, {
       workspaceId: manifest.workspace.id,
+      externalId,
     });
     if (payload === null) {
-      skipped++;
+      skippedNoAction++;
       continue;
     }
 
@@ -126,6 +142,8 @@ export async function doRunImportClaudeCode(
       dryRun: options.dryRun === true,
     });
     results.push(result);
+    // Guard against a same-run duplicate (two files for one session id).
+    alreadyImported.add(externalId);
     sanitizedPaths +=
       result.pathSanitizeReport.relatedFiles +
       (result.pathSanitizeReport.workingDirectoryRewritten ? 1 : 0);
@@ -135,7 +153,7 @@ export async function doRunImportClaudeCode(
     console.error(`Imported sessions: ${sanitizedPaths} path(s) sanitized`);
   }
 
-  printImportResult(options, results, skipped);
+  printImportResult(options, results, { skippedNoAction, skippedExisting });
 }
 
 /**
@@ -147,6 +165,40 @@ export async function doRunImportClaudeCode(
  */
 function encodeProjectDir(projectPath: string): string {
   return projectPath.replaceAll("/", "-");
+}
+
+/**
+ * Set of source external_ids already present in the workspace, so a re-import
+ * skips sessions it has already seen. Recognises both the structured
+ * `source.external_id` (current imports) and the `claude-code import <id>`
+ * label form (sessions imported before external_id existed), so existing
+ * dogfood imports are not duplicated. Unreadable sessions are skipped.
+ */
+async function loadExistingExternalIds(paths: BasouPaths): Promise<Set<string>> {
+  const ids = new Set<string>();
+  let sessionIds: string[];
+  try {
+    sessionIds = await enumerateSessionDirs(paths);
+  } catch {
+    return ids;
+  }
+  for (const sessionId of sessionIds) {
+    let session: Session;
+    try {
+      session = await readSessionYaml(paths, sessionId);
+    } catch {
+      continue;
+    }
+    const ext = session.session.source.external_id;
+    if (typeof ext === "string" && ext.length > 0) {
+      ids.add(ext);
+      continue;
+    }
+    const label = session.session.label;
+    const match = typeof label === "string" ? label.match(/^claude-code import (\S+)$/) : null;
+    if (match?.[1] !== undefined) ids.add(match[1]);
+  }
+  return ids;
 }
 
 async function selectTranscriptFiles(
@@ -205,10 +257,11 @@ async function readTranscript(file: string): Promise<ClaudeTranscriptRecord[]> {
 function printImportResult(
   options: ImportClaudeCodeOptions,
   results: ImportSessionResult[],
-  skipped: number,
+  skips: { skippedNoAction: number; skippedExisting: number },
 ): void {
   const isDry = options.dryRun === true;
   const eventTotal = results.reduce((sum, r) => sum + r.eventCount, 0);
+  const { skippedNoAction, skippedExisting } = skips;
 
   if (options.json === true) {
     console.log(
@@ -220,7 +273,8 @@ function printImportResult(
           source: { kind: r.finalSourceKind, version: "0.1.0" },
         })),
         imported_count: results.length,
-        skipped_count: skipped,
+        skipped_no_action: skippedNoAction,
+        skipped_already_imported: skippedExisting,
         event_total: eventTotal,
         dry_run: isDry,
       }),
@@ -228,28 +282,30 @@ function printImportResult(
     return;
   }
 
+  const skipParts: string[] = [];
+  if (skippedNoAction > 0) skipParts.push(`${skippedNoAction} with no actions`);
+  if (skippedExisting > 0) skipParts.push(`${skippedExisting} already imported`);
+  const skipSuffix = skipParts.length > 0 ? `; skipped ${skipParts.join(", ")}` : "";
+
   if (results.length === 0) {
     console.log(
-      skipped > 0
-        ? `No sessions imported (${skipped} transcript(s) had no importable actions)`
+      skipParts.length > 0
+        ? `No new sessions imported (skipped ${skipParts.join(", ")})`
         : "No transcripts found to import",
     );
     return;
   }
 
-  const skippedSuffix = skipped > 0 ? `; skipped ${skipped} with no actions` : "";
   if (isDry) {
     console.log(
-      `Dry run: would import ${results.length} session(s) (${eventTotal} events)${skippedSuffix}`,
+      `Dry run: would import ${results.length} session(s) (${eventTotal} events)${skipSuffix}`,
     );
     return;
   }
 
   const single =
     results.length === 1 && results[0] !== undefined ? ` (${shortId(results[0].sessionId)})` : "";
-  console.log(
-    `Imported ${results.length} session(s)${single} (${eventTotal} events)${skippedSuffix}`,
-  );
+  console.log(`Imported ${results.length} session(s)${single} (${eventTotal} events)${skipSuffix}`);
 }
 
 function shortId(id: string): string {

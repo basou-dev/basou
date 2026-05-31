@@ -23,6 +23,12 @@ export type ClaudeTranscriptRecord = Record<string, unknown>;
 export type ClaudeTranscriptToPayloadOptions = {
   /** Workspace id of the target Basou workspace (from its manifest). */
   workspaceId: Manifest["workspace"]["id"];
+  /**
+   * Claude Code session id (transcript filename / `sessionId`). Stored as
+   * `session.source.external_id` so re-imports can be deduplicated. Falls
+   * back to the `sessionId` read from the records when omitted.
+   */
+  externalId?: string;
 };
 
 /**
@@ -117,15 +123,20 @@ export function claudeTranscriptToImportPayload(
     sessionEndedEvent(maxTs, placeholderSessionId),
   ];
 
+  const externalId = options.externalId ?? claudeSessionId;
   const label =
-    claudeSessionId !== undefined ? `claude-code import ${claudeSessionId}` : "claude-code import";
+    externalId !== undefined ? `claude-code import ${externalId}` : "claude-code import";
 
   const payload: SessionImportPayload = {
     schema_version: "0.1.0",
     session: {
       label,
       workspace_id: options.workspaceId,
-      source: { kind: CLAUDE_IMPORT_SOURCE, version: "0.1.0" },
+      source: {
+        kind: CLAUDE_IMPORT_SOURCE,
+        version: "0.1.0",
+        ...(externalId !== undefined ? { external_id: externalId } : {}),
+      },
       started_at: minTs,
       ended_at: maxTs,
       // Validated against the canonical enum here; importSessionFromJson
