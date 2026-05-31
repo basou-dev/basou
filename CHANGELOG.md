@@ -18,6 +18,9 @@ All notable changes to **basou** are recorded here. The project follows
   action are skipped. Imports reuse the existing `session import` pipeline,
   so path sanitization and id minting are unchanged. Re-running an import is
   idempotent: a transcript already imported is skipped rather than duplicated.
+  Imported sessions are labelled with a human summary
+  (`claude-code <date>: <n> commands, <m> files`) instead of the raw session
+  id, so they read as content in `basou session list` and the handoff.
 - `claude-code-import` session `source.kind` (additive enum value) to
   distinguish transcript-derived sessions from live `claude-code-adapter`
   runs and Basou-format `import`s.
