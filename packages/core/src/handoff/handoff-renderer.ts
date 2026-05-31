@@ -387,11 +387,15 @@ function formatHandoffBody(args: {
   }
   lines.push("");
 
-  // セッション一覧 — live sessions first, then a separate
-  // 「Imported sessions」 sub-section so the operator can tell at a glance
-  // which sessions belong to the current workspace's live work vs. which
-  // were brought in via `basou session import`. The "(no sessions yet)"
-  // placeholder fires only when the workspace is completely empty.
+  // セッション一覧 — the main table lists the operator's own sessions newest
+  // first. This deliberately includes `claude-code-import` sessions: a
+  // transcript captured after the fact via `basou import claude-code` is still
+  // the operator's own work, so it belongs here rather than below. The separate
+  // 「Imported sessions」 sub-section holds ONLY cross-workspace round-trips
+  // brought in via `basou session import` (source.kind === "import"), so it is
+  // absent whenever there are none. The "(no sessions yet)" placeholder fires
+  // only when the workspace is completely empty; "(no live sessions; …)" fires
+  // when every session is such a round-trip import.
   const liveTableEntries = args.entries.filter((e) => e.session.session.source.kind !== "import");
   const importedTableEntries = args.entries.filter(
     (e) => e.session.session.source.kind === "import",
