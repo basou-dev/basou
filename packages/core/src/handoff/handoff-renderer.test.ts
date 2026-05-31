@@ -250,12 +250,15 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain(`from ${SHORT(id)}..${SHORT(id)}`);
   });
 
-  it("case 3: aggregates related_files across sessions and dedups", async () => {
+  it("case 3: 直近の変更ファイル shows only the most recent session's related_files", async () => {
     const paths = await setupPaths();
+    // Older session — its unique files must NOT appear once a newer session
+    // supersedes it.
     await placeSession(paths, {
       id: SES("X02"),
       relatedFiles: ["src/a.ts", "src/b.ts"],
     });
+    // More recent session (later started_at) — this one wins.
     await placeSession(paths, {
       id: SES("X03"),
       relatedFiles: ["src/b.ts", "src/c.ts"],
@@ -263,15 +266,13 @@ describe("handoff-renderer", () => {
     });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.sessionCount).toBe(2);
-    // dedup + sort asc, scoped to the 直近の変更ファイル section. The next-to-
-    // read section deliberately reuses `displayedFiles.slice(0, 3)`, so a
-    // global count would over-report by design.
     const recentSection = sliceSection(result.body, "## 直近の変更ファイル", "##");
-    const idxA = recentSection.indexOf("- src/a.ts");
+    // src/a.ts is only in the older session, so it is excluded; the newer
+    // session's files appear, sorted asc.
+    expect(recentSection).not.toContain("- src/a.ts");
     const idxB = recentSection.indexOf("- src/b.ts");
     const idxC = recentSection.indexOf("- src/c.ts");
-    expect(idxA).toBeGreaterThanOrEqual(0);
-    expect(idxB).toBeGreaterThan(idxA);
+    expect(idxB).toBeGreaterThanOrEqual(0);
     expect(idxC).toBeGreaterThan(idxB);
     expect(recentSection.split("- src/b.ts\n").length - 1).toBe(1);
   });
