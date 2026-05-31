@@ -75,7 +75,7 @@ type TaskStatusChangedRecord = {
  * the spec's `handoff.md` sections in order:
  *
  * 1. `現在の状態`: latest live session (status not archived, source not import).
- * 2. `直近の変更ファイル`: union of `related_files` across sessions, dedup +
+ * 2. `直近の変更ファイル`: the most recent session's `related_files`, dedup +
  *    sorted asc + truncated to `relatedFilesLimit` (default 20).
  * 3. `直近の判断`: latest `decision_recorded` event (chronological).
  * 4. `未決事項`: pending-approval count + suspect-session count.
@@ -202,16 +202,14 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     (a, b) => Date.parse(b.session.session.started_at) - Date.parse(a.session.session.started_at),
   )[0];
 
-  // 「直近の変更ファイル」 collects related_files from live sessions only.
-  // Imported sessions are historical / cross-workspace and would otherwise
-  // pollute the "what changed recently" view with paths that don't belong
-  // to the current workspace's live work.
-  const allFiles = new Set<string>();
-  for (const e of entries) {
-    if (e.session.session.source.kind === "import") continue;
-    for (const f of e.session.session.related_files) allFiles.add(f);
-  }
-  const sortedFiles = [...allFiles].sort();
+  // 「直近の変更ファイル」 shows the files touched by the single most recent
+  // session — the same session surfaced as 最終 session above — so the section
+  // reflects the latest activity rather than the whole history. Unioning every
+  // session's related_files turned this into a whole-history dump once
+  // transcript imports became the primary source, since each import carries a
+  // full day of file changes.
+  const latestFiles = latestSession?.session.session.related_files ?? [];
+  const sortedFiles = [...new Set(latestFiles)].sort();
   const displayedFiles = sortedFiles.slice(0, limit);
   const overflow = Math.max(0, sortedFiles.length - limit);
 

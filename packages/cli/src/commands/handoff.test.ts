@@ -196,15 +196,21 @@ describe("basou handoff generate", () => {
     expect(joinCalls(out)).toContain("sessions: 1");
   });
 
-  it("case 3: aggregates multiple sessions and unions related_files", async () => {
+  it("case 3: 直近の変更ファイル shows only the most recent session's related_files", async () => {
     const repo = await setupInitedRepo();
+    // Older session — its files must NOT appear once a newer session supersedes it.
     await placeSession(repo, { id: SES("X02"), relatedFiles: ["src/a.ts"] });
-    await placeSession(repo, { id: SES("X03"), relatedFiles: ["src/b.ts"] });
+    // More recent session (later started_at) — this one wins.
+    await placeSession(repo, {
+      id: SES("X03"),
+      relatedFiles: ["src/b.ts"],
+      startedAt: "2026-05-08T12:00:00+09:00",
+    });
     const out = captureStdout();
     await doRunHandoffGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });
     expect(joinCalls(out)).toContain("sessions: 2");
     const body = await readFile(basouPaths(repo).files.handoff, "utf8");
-    expect(body).toContain("- src/a.ts");
+    expect(body).not.toContain("- src/a.ts");
     expect(body).toContain("- src/b.ts");
   });
 
