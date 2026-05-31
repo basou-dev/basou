@@ -5,6 +5,22 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Added
+
+- `basou import claude-code` — derive Basou sessions from Claude Code native
+  transcripts (`~/.claude/projects/<encoded-cwd>/*.jsonl`) after the fact,
+  rather than wrapping a live process. Each transcript becomes one imported
+  session carrying `session_started` / `session_ended`, `command_executed`
+  (from `Bash` tool uses, recorded as `bash -c "<line>"`), and `file_changed`
+  (from `Edit` / `Write` / `NotebookEdit` tool uses). `--all` imports every
+  transcript for a project, `--session <id>` imports one, and `--dry-run`
+  previews without writing. Transcripts with no observable command / file
+  action are skipped. Imports reuse the existing `session import` pipeline,
+  so path sanitization and id minting are unchanged.
+- `claude-code-import` session `source.kind` (additive enum value) to
+  distinguish transcript-derived sessions from live `claude-code-adapter`
+  runs and Basou-format `import`s.
+
 ## 0.3.1 — 2026-05-21
 
 A small follow-up that picks two paper-cut issues out of the v0.3.0
