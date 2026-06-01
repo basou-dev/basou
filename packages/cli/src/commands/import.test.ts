@@ -236,4 +236,41 @@ describe("basou import claude-code", () => {
       doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() }),
     ).rejects.toThrow("Claude transcript directory not found for project");
   });
+
+  it("--force replaces an already-imported session instead of skipping", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const firstDirs = await listSessionDirs(repo);
+    expect(firstDirs).toHaveLength(1);
+    const firstId = firstDirs[0] as string;
+
+    // --force deletes the prior session and re-imports under a fresh id, so the
+    // count stays at one (replaced, not duplicated).
+    await doRunImportClaudeCode(
+      { all: true, force: true },
+      { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+    );
+    const secondDirs = await listSessionDirs(repo);
+    expect(secondDirs).toHaveLength(1);
+    expect(secondDirs[0]).not.toBe(firstId);
+  });
+
+  it("--force --dry-run leaves the existing session untouched", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const firstDirs = await listSessionDirs(repo);
+    expect(firstDirs).toHaveLength(1);
+    const firstId = firstDirs[0] as string;
+
+    await doRunImportClaudeCode(
+      { all: true, force: true, dryRun: true },
+      { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+    );
+    // No delete under dry-run: the original session id is still present.
+    expect(await listSessionDirs(repo)).toEqual([firstId]);
+  });
 });

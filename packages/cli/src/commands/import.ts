@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -27,6 +27,7 @@ export type ImportClaudeCodeOptions = {
   project?: string;
   session?: string;
   all?: boolean;
+  force?: boolean;
   dryRun?: boolean;
   json?: boolean;
   verbose?: boolean;
@@ -61,6 +62,10 @@ export function registerImportCommand(program: Command): void {
     )
     .option("--session <id>", "Import a single transcript by its Claude session id")
     .option("--all", "Import every transcript found for the project")
+    .option(
+      "--force",
+      "Re-import sessions already imported: delete and replace them instead of skipping",
+    )
     .option("--dry-run", "Validate and preview only; do not write to disk")
     .option("--json", "Output the result as JSON")
     .option("-v, --verbose", "Show error causes")
@@ -104,18 +109,27 @@ export async function doRunImportClaudeCode(
   const transcriptDir = join(projectsRoot, encodeProjectDir(projectPath));
 
   const files = await selectTranscriptFiles(transcriptDir, options);
-  const alreadyImported = await loadExistingExternalIds(paths);
+  const existingByExternalId = await loadExistingByExternalId(paths);
+  // Session ids imported earlier in THIS run, so two transcript files that map
+  // to one Claude session id never double-import within a single invocation.
+  const seenThisRun = new Set<string>();
 
   const results: ImportSessionResult[] = [];
   let skippedNoAction = 0;
   let skippedExisting = 0;
+  let replaced = 0;
   let sanitizedPaths = 0;
   for (const file of files) {
-    // The transcript filename is the Claude session id. Dedup on it before
-    // any read so re-imports are idempotent — the same session is never
-    // written twice under fresh Basou ids.
+    // The transcript filename is the Claude session id; dedup on it.
     const externalId = basename(file, ".jsonl");
-    if (alreadyImported.has(externalId)) {
+    if (seenThisRun.has(externalId)) {
+      skippedExisting++;
+      continue;
+    }
+    // Already imported in a prior run: skip so re-imports are idempotent,
+    // unless --force asks to delete and replace the existing session.
+    const priorSessionIds = existingByExternalId.get(externalId) ?? [];
+    if (priorSessionIds.length > 0 && options.force !== true) {
       skippedExisting++;
       continue;
     }
@@ -138,12 +152,23 @@ export async function doRunImportClaudeCode(
       throw new Error(`Unsupported import schema_version: ${parsed.data.schema_version}`);
     }
 
+    // --force replace: delete the prior session(s) for this external id, but
+    // only once the fresh payload is known good, so a failed re-derivation
+    // never destroys the existing import. Skipped under --dry-run.
+    if (priorSessionIds.length > 0 && options.force === true) {
+      if (options.dryRun !== true) {
+        for (const sid of priorSessionIds) {
+          await rm(join(paths.sessions, sid), { recursive: true, force: true });
+        }
+      }
+      replaced++;
+    }
+
     const result = await importSessionFromJson(paths, manifest, parsed.data, {
       dryRun: options.dryRun === true,
     });
     results.push(result);
-    // Guard against a same-run duplicate (two files for one session id).
-    alreadyImported.add(externalId);
+    seenThisRun.add(externalId);
     sanitizedPaths +=
       result.pathSanitizeReport.relatedFiles +
       (result.pathSanitizeReport.workingDirectoryRewritten ? 1 : 0);
@@ -153,7 +178,7 @@ export async function doRunImportClaudeCode(
     console.error(`Imported sessions: ${sanitizedPaths} path(s) sanitized`);
   }
 
-  printImportResult(options, results, { skippedNoAction, skippedExisting });
+  printImportResult(options, results, { skippedNoAction, skippedExisting, replaced });
 }
 
 /**
@@ -168,19 +193,25 @@ function encodeProjectDir(projectPath: string): string {
 }
 
 /**
- * Set of source external_ids already present in the workspace, so a re-import
- * skips sessions it has already seen. Recognises both the structured
+ * Map of source external_id -> Basou session id(s) already present in the
+ * workspace, so a re-import can skip (default) or, under --force, delete and
+ * replace the existing session. Recognises both the structured
  * `source.external_id` (current imports) and the `claude-code import <id>`
  * label form (sessions imported before external_id existed), so existing
- * dogfood imports are not duplicated. Unreadable sessions are skipped.
+ * dogfood imports are matched either way. Unreadable sessions are skipped.
  */
-async function loadExistingExternalIds(paths: BasouPaths): Promise<Set<string>> {
-  const ids = new Set<string>();
+async function loadExistingByExternalId(paths: BasouPaths): Promise<Map<string, string[]>> {
+  const byExternalId = new Map<string, string[]>();
+  const add = (externalId: string, sessionId: string): void => {
+    const list = byExternalId.get(externalId);
+    if (list === undefined) byExternalId.set(externalId, [sessionId]);
+    else list.push(sessionId);
+  };
   let sessionIds: string[];
   try {
     sessionIds = await enumerateSessionDirs(paths);
   } catch {
-    return ids;
+    return byExternalId;
   }
   for (const sessionId of sessionIds) {
     let session: Session;
@@ -191,14 +222,14 @@ async function loadExistingExternalIds(paths: BasouPaths): Promise<Set<string>> 
     }
     const ext = session.session.source.external_id;
     if (typeof ext === "string" && ext.length > 0) {
-      ids.add(ext);
+      add(ext, sessionId);
       continue;
     }
     const label = session.session.label;
     const match = typeof label === "string" ? label.match(/^claude-code import (\S+)$/) : null;
-    if (match?.[1] !== undefined) ids.add(match[1]);
+    if (match?.[1] !== undefined) add(match[1], sessionId);
   }
-  return ids;
+  return byExternalId;
 }
 
 async function selectTranscriptFiles(
@@ -257,11 +288,11 @@ async function readTranscript(file: string): Promise<ClaudeTranscriptRecord[]> {
 function printImportResult(
   options: ImportClaudeCodeOptions,
   results: ImportSessionResult[],
-  skips: { skippedNoAction: number; skippedExisting: number },
+  counts: { skippedNoAction: number; skippedExisting: number; replaced: number },
 ): void {
   const isDry = options.dryRun === true;
   const eventTotal = results.reduce((sum, r) => sum + r.eventCount, 0);
-  const { skippedNoAction, skippedExisting } = skips;
+  const { skippedNoAction, skippedExisting, replaced } = counts;
 
   if (options.json === true) {
     console.log(
@@ -273,6 +304,7 @@ function printImportResult(
           source: { kind: r.finalSourceKind, version: "0.1.0" },
         })),
         imported_count: results.length,
+        replaced_count: replaced,
         skipped_no_action: skippedNoAction,
         skipped_already_imported: skippedExisting,
         event_total: eventTotal,
@@ -286,6 +318,8 @@ function printImportResult(
   if (skippedNoAction > 0) skipParts.push(`${skippedNoAction} with no actions`);
   if (skippedExisting > 0) skipParts.push(`${skippedExisting} already imported`);
   const skipSuffix = skipParts.length > 0 ? `; skipped ${skipParts.join(", ")}` : "";
+  const eventsPart =
+    replaced > 0 ? `${eventTotal} events, ${replaced} replaced` : `${eventTotal} events`;
 
   if (results.length === 0) {
     console.log(
@@ -297,15 +331,13 @@ function printImportResult(
   }
 
   if (isDry) {
-    console.log(
-      `Dry run: would import ${results.length} session(s) (${eventTotal} events)${skipSuffix}`,
-    );
+    console.log(`Dry run: would import ${results.length} session(s) (${eventsPart})${skipSuffix}`);
     return;
   }
 
   const single =
     results.length === 1 && results[0] !== undefined ? ` (${shortId(results[0].sessionId)})` : "";
-  console.log(`Imported ${results.length} session(s)${single} (${eventTotal} events)${skipSuffix}`);
+  console.log(`Imported ${results.length} session(s)${single} (${eventsPart})${skipSuffix}`);
 }
 
 function shortId(id: string): string {
