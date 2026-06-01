@@ -227,6 +227,19 @@ describe("basou view server", () => {
     });
   });
 
+  it("serves work stats", async () => {
+    const repo = await setupInitedRepo();
+    await writeCodexRollout(repo);
+    await withServer(repo, {}, async (handle) => {
+      await postJson(handle, "/api/import/codex", {});
+      const { status, data } = await getJson(handle, "/api/stats");
+      expect(status).toBe(200);
+      const d = data as { totals: { sessionCount: number }; bySource: unknown[] };
+      expect(d.totals.sessionCount).toBe(1);
+      expect(d.bySource).toHaveLength(1);
+    });
+  });
+
   it("regenerates handoff via POST and writes the marked-up file", async () => {
     const repo = await setupInitedRepo();
     await withServer(repo, {}, async (handle) => {

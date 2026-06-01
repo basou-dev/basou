@@ -60,6 +60,23 @@ const InvocationSchema = z.object({
   exit_code: z.number().int().nullable(),
 });
 
+/**
+ * Optional model-usage rollup for the session, computed at import time from
+ * the source tool's native log (the transcript carries per-message token
+ * usage; this is the session total). All fields optional because not every
+ * source records them: `reasoning_output_tokens` is Codex-only, and live
+ * `run`/`exec` sessions carry no token usage at all. Absent on sessions
+ * imported before this field existed (re-import to backfill).
+ */
+export const SessionMetricsSchema = z.object({
+  output_tokens: z.number().int().nonnegative().optional(),
+  input_tokens: z.number().int().nonnegative().optional(),
+  cached_input_tokens: z.number().int().nonnegative().optional(),
+  reasoning_output_tokens: z.number().int().nonnegative().optional(),
+});
+/** Inferred runtime type for {@link SessionMetricsSchema}. */
+export type SessionMetrics = z.infer<typeof SessionMetricsSchema>;
+
 const SessionInnerSchema = z.object({
   id: SessionIdSchema,
   label: z.string().optional(),
@@ -75,6 +92,7 @@ const SessionInnerSchema = z.object({
   related_files: z.array(z.string()).default([]),
   events_log: z.string().default("events.jsonl"),
   summary: z.string().nullable().optional(),
+  metrics: SessionMetricsSchema.optional(),
 });
 
 /**

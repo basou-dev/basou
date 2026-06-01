@@ -275,6 +275,7 @@ function buildSessionRecord(
     related_files: relatedSanitized.sanitized,
     events_log: "events.jsonl",
     summary: input.summary ?? null,
+    ...(input.metrics !== undefined ? { metrics: input.metrics } : {}),
   };
   return {
     record: { schema_version: "0.1.0", session: inner },

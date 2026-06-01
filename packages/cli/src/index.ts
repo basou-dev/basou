@@ -10,6 +10,7 @@ import { registerInitCommand } from "./commands/init.js";
 import { registerRefreshCommand } from "./commands/refresh.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerSessionCommand } from "./commands/session.js";
+import { registerStatsCommand } from "./commands/stats.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerTaskCommand } from "./commands/task.js";
 import { registerViewCommand } from "./commands/view.js";
@@ -36,6 +37,7 @@ program
 
 registerInitCommand(program);
 registerStatusCommand(program);
+registerStatsCommand(program);
 registerExecCommand(program);
 registerRunCommand(program);
 registerSessionCommand(program);

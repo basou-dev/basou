@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import {
   type BasouPaths,
+  computeWorkStats,
   enumerateApprovals,
   findErrorCode,
   isLazyExpired,
@@ -188,6 +189,10 @@ async function handleGet(
   }
   if (pathname === "/api/handoff") {
     sendJson(res, 200, await handoffView(deps));
+    return;
+  }
+  if (pathname === "/api/stats") {
+    sendJson(res, 200, await computeWorkStats({ paths: deps.paths, now: deps.nowProvider() }));
     return;
   }
   sendError(res, 404, "Not found");

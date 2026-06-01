@@ -70,6 +70,7 @@ export type {
   SessionEndedEvent,
   SessionImportPayload,
   SessionInnerImportInput,
+  SessionMetrics,
   SessionSourceKind,
   SessionStartedEvent,
   SessionStatus,
@@ -99,6 +100,7 @@ export {
   SessionIdSchema,
   SessionImportPayloadSchema,
   SessionInnerImportSchema,
+  SessionMetricsSchema,
   SessionSchema,
   SessionSourceKindSchema,
   SessionStatusSchema,
@@ -108,6 +110,17 @@ export {
   TaskStatusSchema,
   WorkspaceIdSchema,
 } from "./schemas/index.js";
+export type {
+  MeasureAvailability,
+  SessionWorkStats,
+  SourceWorkStats,
+  StatusCount,
+  TokenTotals,
+  WorkStatsInput,
+  WorkStatsResult,
+  WorkStatsTotals,
+} from "./stats/index.js";
+export { ACTIVE_GAP_CAP_MS, computeWorkStats, sessionWorkStatsFromEvents } from "./stats/index.js";
 export type {
   AppendBasouGitignoreResult,
   AppendEventToExistingInput,

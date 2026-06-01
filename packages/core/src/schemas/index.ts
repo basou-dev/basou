@@ -28,8 +28,14 @@ export type {
 export { EventSchema } from "./event.schema.js";
 export type { Manifest } from "./manifest.schema.js";
 export { ManifestSchema } from "./manifest.schema.js";
-export type { Session, SessionSourceKind, SessionStatus } from "./session.schema.js";
+export type {
+  Session,
+  SessionMetrics,
+  SessionSourceKind,
+  SessionStatus,
+} from "./session.schema.js";
 export {
+  SessionMetricsSchema,
   SessionSchema,
   SessionSourceKindSchema,
   SessionStatusSchema,

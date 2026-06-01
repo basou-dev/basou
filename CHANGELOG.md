@@ -7,6 +7,24 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- `basou stats` — report how much the AI worked across the workspace's
+  sessions. It leads with output VOLUME (model output tokens, plus command /
+  file / decision counts), which is the most direct "how much work" signal,
+  and reports TIME measures as labeled proxies: `active` (a focus heuristic
+  that excludes idle gaps over 5 minutes), `span` (total elapsed, running
+  sessions counted to now), and `command` (real shell-execution time).
+  Availability is tracked per source so the output never silently misleads:
+  `claude-code-import` sessions report no shell time, and token totals are
+  absent until a session is (re-)imported. `--by-source` breaks the totals
+  down by source kind; `--json` emits the full structured result. The same
+  per-session summary appears as a `Work:` line in `basou session show`, and a
+  Stats tab in `basou view`.
+- `session.metrics` (additive, optional) — a model-usage rollup on
+  `session.yaml`: `output_tokens` / `input_tokens` / `cached_input_tokens` /
+  `reasoning_output_tokens` (Codex-only). Populated at import time by the
+  Claude and Codex adapters from the native log's token usage; absent for live
+  `run` / `exec` sessions and for sessions imported before this field existed
+  (re-import with `--force`, or `basou refresh`, to backfill).
 - `basou refresh` — one command that imports every adapter's native logs for
   the project and regenerates `handoff.md` + `decisions.md`, instead of running
   four commands by hand. Best-effort: an adapter whose source-log directory is

@@ -214,4 +214,44 @@ describe("codexRolloutToImportPayload", () => {
     ]);
     expect(payload.session.working_directory).toBe(CWD);
   });
+
+  it("captures the last cumulative token_count into session.metrics", () => {
+    const tokenEvent = (ts: string, total: Record<string, number>): CodexRolloutRecord => ({
+      type: "event_msg",
+      timestamp: ts,
+      payload: { type: "token_count", info: { total_token_usage: total } },
+    });
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      tokenEvent("2026-05-10T00:00:01.000Z", { input_tokens: 100, output_tokens: 50 }),
+      execCall("2026-05-10T00:00:02.000Z", "call_1", "ls"),
+      // The later cumulative value is the session total.
+      tokenEvent("2026-05-10T00:00:03.000Z", {
+        input_tokens: 19524,
+        cached_input_tokens: 5504,
+        output_tokens: 768,
+        reasoning_output_tokens: 462,
+      }),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.metrics).toEqual({
+      input_tokens: 19524,
+      cached_input_tokens: 5504,
+      output_tokens: 768,
+      reasoning_output_tokens: 462,
+    });
+  });
+
+  it("omits metrics when no token_count event is present", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      execCall("2026-05-10T00:00:01.000Z", "call_1", "ls"),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.metrics).toBeUndefined();
+  });
 });

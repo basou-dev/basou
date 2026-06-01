@@ -77,6 +77,9 @@ export function codexRolloutToImportPayload(
   let maxTs: string | undefined;
   let workingDir: string | undefined;
   let codexSessionId: string | undefined;
+  // Codex emits cumulative token_count events; the last one's
+  // total_token_usage is the session total (see metrics on the payload below).
+  let lastTokenTotals: Record<string, unknown> | undefined;
 
   for (const record of records) {
     const ts = readString(record.timestamp);
@@ -92,6 +95,15 @@ export function codexRolloutToImportPayload(
       // and dedup key; take the first occurrence and keep it.
       if (workingDir === undefined) workingDir = readString(payload.cwd);
       if (codexSessionId === undefined) codexSessionId = readString(payload.id);
+      continue;
+    }
+
+    if (readString(record.type) === "event_msg" && readString(payload.type) === "token_count") {
+      const info = isObject(payload.info) ? payload.info : undefined;
+      const totals =
+        info !== undefined && isObject(info.total_token_usage) ? info.total_token_usage : undefined;
+      // Cumulative; keep the latest so the final value is the session total.
+      if (totals !== undefined) lastTokenTotals = totals;
       continue;
     }
 
@@ -136,6 +148,27 @@ export function codexRolloutToImportPayload(
   const date = minTs.slice(0, 10);
   const label = `codex ${date}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}`;
 
+  // Token totals from the last cumulative token_count event; include only the
+  // fields actually present (> 0), omitting metrics entirely if none.
+  const metricsFields =
+    lastTokenTotals === undefined
+      ? {}
+      : {
+          ...(readNonNegInt(lastTokenTotals.output_tokens) > 0
+            ? { output_tokens: readNonNegInt(lastTokenTotals.output_tokens) }
+            : {}),
+          ...(readNonNegInt(lastTokenTotals.input_tokens) > 0
+            ? { input_tokens: readNonNegInt(lastTokenTotals.input_tokens) }
+            : {}),
+          ...(readNonNegInt(lastTokenTotals.cached_input_tokens) > 0
+            ? { cached_input_tokens: readNonNegInt(lastTokenTotals.cached_input_tokens) }
+            : {}),
+          ...(readNonNegInt(lastTokenTotals.reasoning_output_tokens) > 0
+            ? { reasoning_output_tokens: readNonNegInt(lastTokenTotals.reasoning_output_tokens) }
+            : {}),
+        };
+  const metrics = Object.keys(metricsFields).length > 0 ? metricsFields : undefined;
+
   const payload: SessionImportPayload = {
     schema_version: "0.1.0",
     session: {
@@ -155,6 +188,7 @@ export function codexRolloutToImportPayload(
       invocation: { command: "codex", args: [], exit_code: null },
       related_files: [],
       summary: null,
+      ...(metrics !== undefined ? { metrics } : {}),
     },
     events,
   };
@@ -212,6 +246,11 @@ function commandExecutedEvent(
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Read a non-negative integer token count, treating anything else as 0. */
+function readNonNegInt(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
