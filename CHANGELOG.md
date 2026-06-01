@@ -27,6 +27,21 @@ All notable changes to **basou** are recorded here. The project follows
 - `session.source.external_id` (additive, optional) — records the originating
   session id in the source tool's namespace (e.g. the Claude Code session
   UUID), the key that makes re-imports idempotent.
+- `basou import codex` — derive Basou sessions from OpenAI Codex native
+  rollout logs (`~/.codex/sessions/<date>/rollout-*.jsonl`) after the fact.
+  Each rollout becomes one imported session carrying `session_started` /
+  `session_ended` and `command_executed` (from `exec_command` calls, recorded
+  as `bash -c "<line>"`) with the real `exit_code` and `duration_ms` parsed
+  from the paired command output. Because Codex stores rollouts by date rather
+  than per project, discovery walks the tree and matches each rollout's
+  recorded working directory against `--project` (default: the current
+  repository root); only sessions started in that project are imported.
+  `--all`, `--session <id>`, `--force`, `--dry-run`, and `--json` behave as
+  for `import claude-code`. File changes and decisions are not derived: Codex
+  applies edits inside `exec_command` (no dedicated edit tool) and has no
+  structured question / answer record, so neither has a clean signal to map.
+- `codex-import` session `source.kind` (additive enum value) to distinguish
+  Codex-rollout-derived sessions from Claude imports and live adapter runs.
 
 ## 0.3.1 — 2026-05-21
 
