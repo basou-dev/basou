@@ -7,10 +7,12 @@ import { registerExecCommand } from "./commands/exec.js";
 import { registerHandoffCommand } from "./commands/handoff.js";
 import { registerImportCommand } from "./commands/import.js";
 import { registerInitCommand } from "./commands/init.js";
+import { registerRefreshCommand } from "./commands/refresh.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerSessionCommand } from "./commands/session.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerTaskCommand } from "./commands/task.js";
+import { registerViewCommand } from "./commands/view.js";
 import { isVerbose, renderCliError } from "./lib/error-render.js";
 
 // Read the CLI release version directly from the sibling package.json so
@@ -38,6 +40,8 @@ registerExecCommand(program);
 registerRunCommand(program);
 registerSessionCommand(program);
 registerImportCommand(program);
+registerRefreshCommand(program);
+registerViewCommand(program);
 registerApprovalCommand(program);
 registerDecisionCommand(program);
 registerTaskCommand(program);
