@@ -9,8 +9,9 @@ All notable changes to **basou** are recorded here. The project follows
 
 - `basou refresh` — one command that imports every adapter's native logs for
   the project and regenerates `handoff.md` + `decisions.md`, instead of running
-  four commands by hand. Best-effort: an adapter with no logs for the project is
-  skipped, not an error. `--project <path>` targets a different project,
+  four commands by hand. Best-effort: an adapter whose source-log directory is
+  absent for the project is skipped, not an error (a present-but-empty source
+  imports zero sessions). `--project <path>` targets a different project,
   `--force` re-imports, `--dry-run` previews imports and leaves the markdown
   untouched, `--json` prints the structured result.
 - `basou view` — a localhost-only web UI (default `http://127.0.0.1:4319`) to
