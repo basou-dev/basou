@@ -461,4 +461,57 @@ describe("basou import codex", () => {
       ),
     ).rejects.toThrow("Codex sessions directory not found");
   });
+
+  it("errors when --session matches no rollout in the project", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("codex-1", codexActionRollout(repo, "codex-1"));
+    await expect(
+      doRunImportCodex({ session: "nope" }, { cwd: repo, codexSessionsDir: getCodexRoot() }),
+    ).rejects.toThrow("Codex rollout not found for session id in project");
+  });
+
+  it("dedup is scoped by source kind: never touches a Claude session sharing an id", async () => {
+    const repo = await setupInitedRepo();
+    // A Claude-derived session whose external_id collides with a Codex id.
+    const claudeSid = "ses_01HXABCDEF1234567890ABCDEF";
+    const dir = join(basouPaths(repo).sessions, claudeSid);
+    await mkdir(dir, { recursive: true });
+    await writeYamlFile(join(dir, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: {
+        id: claudeSid,
+        workspace_id: FIXED_WS_ID,
+        source: { kind: "claude-code-import", version: "0.1.0", external_id: "shared-id" },
+        started_at: "2026-05-10T00:00:00.000Z",
+        status: "imported",
+        working_directory: ".",
+        invocation: { command: "claude", args: [], exit_code: null },
+        related_files: [],
+        events_log: "events.jsonl",
+        label: "claude-code 2026-05-10: 1 command",
+      },
+    });
+    await writeRollout("shared-id", codexActionRollout(repo, "shared-id"));
+
+    // --force would delete a same-id session; the Claude one must survive
+    // because dedup is scoped to source.kind.
+    await doRunImportCodex(
+      { all: true, force: true },
+      { cwd: repo, codexSessionsDir: getCodexRoot() },
+    );
+
+    const dirs = await listSessionDirs(repo);
+    expect(dirs).toContain(claudeSid);
+    expect(dirs).toHaveLength(2);
+    const kinds = await Promise.all(
+      dirs.map(
+        async (d) =>
+          SessionSchema.parse(
+            await readYamlFile(join(basouPaths(repo).sessions, d, "session.yaml")),
+          ).session.source.kind,
+      ),
+    );
+    expect(kinds.filter((k) => k === "claude-code-import")).toHaveLength(1);
+    expect(kinds.filter((k) => k === "codex-import")).toHaveLength(1);
+  });
 });

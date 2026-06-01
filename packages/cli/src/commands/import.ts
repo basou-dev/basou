@@ -7,7 +7,9 @@ import {
   assertBasouRootSafe,
   type BasouPaths,
   basouPaths,
+  CLAUDE_IMPORT_SOURCE,
   type ClaudeTranscriptRecord,
+  CODEX_IMPORT_SOURCE,
   type CodexRolloutRecord,
   claudeTranscriptToImportPayload,
   codexRolloutToImportPayload,
@@ -22,6 +24,7 @@ import {
   type Session,
   type SessionImportPayload,
   SessionImportPayloadSchema,
+  type SessionSourceKind,
 } from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
@@ -178,7 +181,7 @@ export async function doRunImportClaudeCode(
     };
   });
 
-  await importDerivedSessions(paths, manifest, options, candidates);
+  await importDerivedSessions(paths, manifest, options, CLAUDE_IMPORT_SOURCE, candidates);
 }
 
 export async function doRunImportCodex(
@@ -201,7 +204,7 @@ export async function doRunImportCodex(
       }),
   }));
 
-  await importDerivedSessions(paths, manifest, options, candidates);
+  await importDerivedSessions(paths, manifest, options, CODEX_IMPORT_SOURCE, candidates);
 }
 
 function assertSelector(options: ImportOptions): void {
@@ -225,15 +228,18 @@ async function resolveImportTarget(
  * The vendor-neutral import core: dedup, derive, validate, and write each
  * candidate, then report. Every `basou import <adapter>` funnels its
  * discovered candidates through here, so dedup / `--force` / `--dry-run`
- * semantics stay identical across adapters.
+ * semantics stay identical across adapters. Dedup is scoped to `sourceKind`
+ * so one adapter never matches (or, under `--force`, deletes) another
+ * adapter's session that happens to share an id string.
  */
 async function importDerivedSessions(
   paths: BasouPaths,
   manifest: Manifest,
   options: ImportOptions,
+  sourceKind: SessionSourceKind,
   candidates: ReadonlyArray<ImportCandidate>,
 ): Promise<void> {
-  const existingByExternalId = await loadExistingByExternalId(paths);
+  const existingByExternalId = await loadExistingByExternalId(paths, sourceKind);
   // Session ids imported earlier in THIS run, so two source files that map to
   // one session id never double-import within a single invocation.
   const seenThisRun = new Set<string>();
@@ -312,13 +318,19 @@ function encodeProjectDir(projectPath: string): string {
 
 /**
  * Map of source external_id -> Basou session id(s) already present in the
- * workspace, so a re-import can skip (default) or, under --force, delete and
- * replace the existing session. Recognises both the structured
- * `source.external_id` (current imports) and the `claude-code import <id>`
- * label form (sessions imported before external_id existed), so existing
- * dogfood imports are matched either way. Unreadable sessions are skipped.
+ * workspace for the given `sourceKind`, so a re-import can skip (default) or,
+ * under --force, delete and replace the existing session. Scoping to one
+ * source kind keeps each adapter's id namespace separate: a Codex import must
+ * never dedup against, or delete, a Claude-derived session that happens to
+ * share an id string. Recognises both the structured `source.external_id`
+ * (current imports) and the `claude-code import <id>` label form (sessions
+ * imported before external_id existed), so existing dogfood imports are
+ * matched either way. Unreadable sessions are skipped.
  */
-async function loadExistingByExternalId(paths: BasouPaths): Promise<Map<string, string[]>> {
+async function loadExistingByExternalId(
+  paths: BasouPaths,
+  sourceKind: SessionSourceKind,
+): Promise<Map<string, string[]>> {
   const byExternalId = new Map<string, string[]>();
   const add = (externalId: string, sessionId: string): void => {
     const list = byExternalId.get(externalId);
@@ -338,6 +350,7 @@ async function loadExistingByExternalId(paths: BasouPaths): Promise<Map<string, 
     } catch {
       continue;
     }
+    if (session.session.source.kind !== sourceKind) continue;
     const ext = session.session.source.external_id;
     if (typeof ext === "string" && ext.length > 0) {
       add(ext, sessionId);
@@ -378,7 +391,10 @@ async function selectTranscriptFiles(
  * tree is walked and each rollout's `session_meta.cwd` is matched against the
  * project. The exact-match is also the safety boundary: only sessions started
  * in the requested project are ever imported. `--session` narrows to a single
- * rollout by its Codex session id within that project.
+ * rollout by its Codex session id within that project; a session id that
+ * matches no rollout in the project is an error, mirroring how the Claude
+ * path fails on a missing `--session` transcript rather than reporting a
+ * silent success.
  */
 async function discoverCodexRollouts(
   sessionsRoot: string,
@@ -393,6 +409,9 @@ async function discoverCodexRollouts(
     if (meta.cwd !== projectPath) continue;
     if (options.session !== undefined && meta.id !== options.session) continue;
     matched.push({ file, externalId: meta.id });
+  }
+  if (options.session !== undefined && matched.length === 0) {
+    throw new Error("Codex rollout not found for session id in project");
   }
   return matched;
 }
