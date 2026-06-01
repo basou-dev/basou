@@ -57,6 +57,9 @@ export type SessionShowOptions = {
 export type SessionContext = {
   /** Defaults to `process.cwd()`. Injectable for tests. */
   cwd?: string;
+  /** Defaults to `() => new Date()`. Injectable so the `session show` work
+   * span is deterministic in tests and for a running session. */
+  nowProvider?: () => Date;
 };
 
 type SessionListRecord = {
@@ -271,7 +274,8 @@ export async function doRunSessionShow(
     return;
   }
 
-  printSessionShowText(session, events, options, repositoryRoot);
+  const now = ctx.nowProvider?.() ?? new Date();
+  printSessionShowText(session, events, options, repositoryRoot, now);
 }
 
 function suspectLabel(reason: string | null): string {
@@ -330,6 +334,7 @@ function printSessionShowText(
   events: Event[],
   options: SessionShowOptions,
   repositoryRoot: string,
+  now: Date,
 ): void {
   const s = session.session;
   console.log(`Session: ${s.id}  (status: ${s.status})`);
@@ -358,7 +363,7 @@ function printSessionShowText(
   }
 
   console.log("");
-  console.log(`Work:          ${formatSessionWork(session, events)}`);
+  console.log(`Work:          ${formatSessionWork(session, events, now)}`);
 
   if (events.length === 0) return;
 
@@ -378,8 +383,8 @@ function printSessionShowText(
  * time proxies, reusing the same per-session computation as `basou stats`.
  * `command n/a (import)` flags sources whose shell time is unrecorded.
  */
-function formatSessionWork(session: Session, events: Event[]): string {
-  const w = sessionWorkStatsFromEvents(session.session.id, session.session, events, new Date());
+function formatSessionWork(session: Session, events: Event[], now: Date): string {
+  const w = sessionWorkStatsFromEvents(session.session.id, session.session, events, now);
   const parts: string[] = [];
   if (w.tokens.output > 0) parts.push(`${w.tokens.output.toLocaleString("en-US")} output tokens`);
   parts.push(`${w.commandCount} cmd / ${w.fileChangedCount} files / ${w.decisionCount} dec`);

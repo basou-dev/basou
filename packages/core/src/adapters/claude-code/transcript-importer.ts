@@ -83,6 +83,10 @@ export function claudeTranscriptToImportPayload(
   let outputTokens = 0;
   let inputTokens = 0;
   let cachedInputTokens = 0;
+  // A single assistant message is split across multiple records (thinking /
+  // text / tool_use), each carrying the SAME message.id and the SAME usage.
+  // Count usage once per message.id to avoid multiplying the token totals.
+  const seenMessageIds = new Set<string>();
 
   for (const record of records) {
     const ts = readString(record.timestamp);
@@ -97,9 +101,15 @@ export function claudeTranscriptToImportPayload(
     const message = isObject(record.message) ? record.message : undefined;
     const usage = message !== undefined && isObject(message.usage) ? message.usage : undefined;
     if (usage !== undefined) {
-      outputTokens += readNonNegInt(usage.output_tokens);
-      inputTokens += readNonNegInt(usage.input_tokens);
-      cachedInputTokens += readNonNegInt(usage.cache_read_input_tokens);
+      // Dedup by message.id; records without an id are counted individually.
+      const messageId = message !== undefined ? readString(message.id) : undefined;
+      const alreadyCounted = messageId !== undefined && seenMessageIds.has(messageId);
+      if (!alreadyCounted) {
+        if (messageId !== undefined) seenMessageIds.add(messageId);
+        outputTokens += readNonNegInt(usage.output_tokens);
+        inputTokens += readNonNegInt(usage.input_tokens);
+        cachedInputTokens += readNonNegInt(usage.cache_read_input_tokens);
+      }
     }
 
     const cwd = readString(record.cwd) ?? workingDir ?? ".";
