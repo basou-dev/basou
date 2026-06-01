@@ -27,12 +27,15 @@ export type SessionStatus = z.infer<typeof SessionStatusSchema>;
  * - `claude-code-adapter` — a live `basou run claude-code` process wrap.
  * - `claude-code-import` — derived after the fact from a Claude Code native
  *   transcript (`~/.claude/projects/*.jsonl`) by `basou import claude-code`.
+ * - `codex-import` — derived after the fact from an OpenAI Codex native
+ *   rollout log (date-partitioned `~/.codex/sessions`) by `basou import codex`.
  * - `import` — a round-trip of a Basou-format export (`basou session import`).
  * - `human` / `terminal` — manually-authored / terminal-recorded sessions.
  */
 export const SessionSourceKindSchema = z.enum([
   "claude-code-adapter",
   "claude-code-import",
+  "codex-import",
   "human",
   "import",
   "terminal",

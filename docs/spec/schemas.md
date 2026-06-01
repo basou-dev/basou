@@ -66,7 +66,7 @@ session:
   workspace_id: "ws_01HXWS..."
 
   source:
-    kind: "claude-code-adapter"  # or "human", "import", "terminal"
+    kind: "claude-code-adapter"  # or "claude-code-import", "codex-import", "human", "import", "terminal"
     version: "0.1.0"
 
   started_at: "2026-05-04T09:00:00+09:00"

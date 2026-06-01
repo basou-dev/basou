@@ -13,7 +13,7 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { doRunImportClaudeCode } from "./import.js";
+import { doRunImportClaudeCode, doRunImportCodex } from "./import.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,10 +28,12 @@ const FIXED_DATE = new Date("2026-05-09T03:00:00.000Z");
 
 let tmpRepo: string | undefined;
 let projectsRoot: string | undefined;
+let codexRoot: string | undefined;
 
 beforeEach(async () => {
   tmpRepo = await mkdtemp(join(tmpdir(), "basou-import-cli-test-"));
   projectsRoot = await mkdtemp(join(tmpdir(), "basou-import-projects-"));
+  codexRoot = await mkdtemp(join(tmpdir(), "basou-import-codex-"));
   await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: tmpRepo, env: ENV });
   await execFileAsync("git", ["config", "user.email", "test@example.com"], {
     cwd: tmpRepo,
@@ -41,11 +43,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const dir of [tmpRepo, projectsRoot]) {
+  for (const dir of [tmpRepo, projectsRoot, codexRoot]) {
     if (dir !== undefined) await rm(dir, { recursive: true, force: true });
   }
   tmpRepo = undefined;
   projectsRoot = undefined;
+  codexRoot = undefined;
   process.exitCode = 0;
   vi.restoreAllMocks();
 });
@@ -53,6 +56,11 @@ afterEach(async () => {
 function getProjectsRoot(): string {
   if (projectsRoot === undefined) throw new Error("projectsRoot not initialized");
   return projectsRoot;
+}
+
+function getCodexRoot(): string {
+  if (codexRoot === undefined) throw new Error("codexRoot not initialized");
+  return codexRoot;
 }
 
 async function setupInitedRepo(): Promise<string> {
@@ -272,5 +280,185 @@ describe("basou import claude-code", () => {
     );
     // No delete under dry-run: the original session id is still present.
     expect(await listSessionDirs(repo)).toEqual([firstId]);
+  });
+});
+
+/** Write a synthetic Codex rollout under a date directory in the sessions root. */
+async function writeRollout(
+  sessionId: string,
+  records: Array<Record<string, unknown>>,
+  subdir = join("2026", "05", "10"),
+): Promise<void> {
+  const dir = join(getCodexRoot(), subdir);
+  await mkdir(dir, { recursive: true });
+  const body = records.map((r) => JSON.stringify(r)).join("\n");
+  await writeFile(join(dir, `rollout-${sessionId}.jsonl`), body);
+}
+
+function codexActionRollout(cwd: string, sessionId: string): Array<Record<string, unknown>> {
+  return [
+    {
+      type: "session_meta",
+      timestamp: "2026-05-10T00:00:00.000Z",
+      payload: { id: sessionId, cwd, timestamp: "2026-05-10T00:00:00.000Z" },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:01.000Z",
+      payload: {
+        type: "function_call",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "npm test", workdir: cwd }),
+        call_id: "call_1",
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:02.000Z",
+      payload: {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "Wall time: 0.5000 seconds\nProcess exited with code 0\nOutput:\nok",
+      },
+    },
+  ];
+}
+
+describe("basou import codex", () => {
+  it("--all imports a rollout whose session cwd matches the project", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("codex-1", codexActionRollout(repo, "codex-1"));
+
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+
+    const dirs = await listSessionDirs(repo);
+    expect(dirs).toHaveLength(1);
+
+    const sessionDir = join(basouPaths(repo).sessions, dirs[0] as string);
+    const session = SessionSchema.parse(await readYamlFile(join(sessionDir, "session.yaml")));
+    expect(session.session.source.kind).toBe("codex-import");
+    expect(session.session.source.external_id).toBe("codex-1");
+    expect(session.session.status).toBe("imported");
+
+    const eventsBody = await readFile(join(sessionDir, "events.jsonl"), "utf8");
+    const types = eventsBody
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => (JSON.parse(l) as { type: string }).type);
+    expect(types).toContain("command_executed");
+    expect(types[0]).toBe("session_started");
+    expect(types[types.length - 1]).toBe("session_ended");
+  });
+
+  it("imports only rollouts started in the requested project", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("codex-here", codexActionRollout(repo, "codex-here"));
+    // A rollout from a different project must not be imported.
+    await writeRollout(
+      "codex-other",
+      codexActionRollout("/some/other/project", "codex-other"),
+      join("2026", "05", "11"),
+    );
+
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+
+    const dirs = await listSessionDirs(repo);
+    expect(dirs).toHaveLength(1);
+    const session = SessionSchema.parse(
+      await readYamlFile(join(basouPaths(repo).sessions, dirs[0] as string, "session.yaml")),
+    );
+    expect(session.session.source.external_id).toBe("codex-here");
+  });
+
+  it("--session imports a single rollout by its Codex session id", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("codex-1", codexActionRollout(repo, "codex-1"));
+    await writeRollout("codex-2", codexActionRollout(repo, "codex-2"), join("2026", "05", "11"));
+
+    await doRunImportCodex({ session: "codex-2" }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+
+    const dirs = await listSessionDirs(repo);
+    expect(dirs).toHaveLength(1);
+    const session = SessionSchema.parse(
+      await readYamlFile(join(basouPaths(repo).sessions, dirs[0] as string, "session.yaml")),
+    );
+    expect(session.session.source.external_id).toBe("codex-2");
+  });
+
+  it("is idempotent: re-import skips an already-imported rollout", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("codex-1", codexActionRollout(repo, "codex-1"));
+
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+    expect(await listSessionDirs(repo)).toHaveLength(1);
+
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+    expect(await listSessionDirs(repo)).toHaveLength(1);
+  });
+
+  it("--force replaces an already-imported rollout instead of skipping", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("codex-1", codexActionRollout(repo, "codex-1"));
+
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+    const firstDirs = await listSessionDirs(repo);
+    expect(firstDirs).toHaveLength(1);
+    const firstId = firstDirs[0] as string;
+
+    await doRunImportCodex(
+      { all: true, force: true },
+      { cwd: repo, codexSessionsDir: getCodexRoot() },
+    );
+    const secondDirs = await listSessionDirs(repo);
+    expect(secondDirs).toHaveLength(1);
+    expect(secondDirs[0]).not.toBe(firstId);
+  });
+
+  it("--dry-run writes nothing to disk", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("codex-1", codexActionRollout(repo, "codex-1"));
+
+    await doRunImportCodex(
+      { all: true, dryRun: true },
+      { cwd: repo, codexSessionsDir: getCodexRoot() },
+    );
+
+    expect(await listSessionDirs(repo)).toHaveLength(0);
+  });
+
+  it("skips rollouts with no exec_command", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("codex-empty", [
+      {
+        type: "session_meta",
+        timestamp: "2026-05-10T00:00:00.000Z",
+        payload: { id: "codex-empty", cwd: repo, timestamp: "2026-05-10T00:00:00.000Z" },
+      },
+      {
+        type: "response_item",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        payload: { type: "reasoning", summary: [] },
+      },
+    ]);
+
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+    expect(await listSessionDirs(repo)).toHaveLength(0);
+  });
+
+  it("requires --session or --all", async () => {
+    const repo = await setupInitedRepo();
+    await expect(
+      doRunImportCodex({}, { cwd: repo, codexSessionsDir: getCodexRoot() }),
+    ).rejects.toThrow("Specify --session <id> or --all");
+  });
+
+  it("errors when the Codex sessions directory is absent", async () => {
+    const repo = await setupInitedRepo();
+    await expect(
+      doRunImportCodex(
+        { all: true },
+        { cwd: repo, codexSessionsDir: join(getCodexRoot(), "does-not-exist") },
+      ),
+    ).rejects.toThrow("Codex sessions directory not found");
   });
 });
