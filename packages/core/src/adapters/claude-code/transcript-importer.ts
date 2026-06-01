@@ -78,6 +78,11 @@ export function claudeTranscriptToImportPayload(
   let maxTs: string | undefined;
   let workingDir: string | undefined;
   let claudeSessionId: string | undefined;
+  // Model-usage rollup: the transcript carries per-assistant-message token
+  // usage; sum it into a session total (see metrics on the payload below).
+  let outputTokens = 0;
+  let inputTokens = 0;
+  let cachedInputTokens = 0;
 
   for (const record of records) {
     const ts = readString(record.timestamp);
@@ -88,6 +93,15 @@ export function claudeTranscriptToImportPayload(
     if (claudeSessionId === undefined) claudeSessionId = readString(record.sessionId);
 
     if (readString(record.type) !== "assistant") continue;
+
+    const message = isObject(record.message) ? record.message : undefined;
+    const usage = message !== undefined && isObject(message.usage) ? message.usage : undefined;
+    if (usage !== undefined) {
+      outputTokens += readNonNegInt(usage.output_tokens);
+      inputTokens += readNonNegInt(usage.input_tokens);
+      cachedInputTokens += readNonNegInt(usage.cache_read_input_tokens);
+    }
+
     const cwd = readString(record.cwd) ?? workingDir ?? ".";
     for (const item of toolUses(record)) {
       const name = readString(item.name);
@@ -159,6 +173,15 @@ export function claudeTranscriptToImportPayload(
   const date = minTs.slice(0, 10);
   const label = `claude-code ${date}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}, ${fileCount} ${fileCount === 1 ? "file" : "files"}`;
 
+  // Only include token fields actually present (> 0); omit metrics entirely
+  // for a transcript that carried no usage at all.
+  const metricsFields = {
+    ...(outputTokens > 0 ? { output_tokens: outputTokens } : {}),
+    ...(inputTokens > 0 ? { input_tokens: inputTokens } : {}),
+    ...(cachedInputTokens > 0 ? { cached_input_tokens: cachedInputTokens } : {}),
+  };
+  const metrics = Object.keys(metricsFields).length > 0 ? metricsFields : undefined;
+
   const payload: SessionImportPayload = {
     schema_version: "0.1.0",
     session: {
@@ -178,6 +201,7 @@ export function claudeTranscriptToImportPayload(
       invocation: { command: "claude", args: [], exit_code: null },
       related_files: [...relatedFiles].sort(),
       summary: null,
+      ...(metrics !== undefined ? { metrics } : {}),
     },
     events,
   };
@@ -261,6 +285,11 @@ function decisionRecordedEvent(
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Read a non-negative integer token count, treating anything else as 0. */
+function readNonNegInt(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

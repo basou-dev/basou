@@ -73,7 +73,7 @@ export const VIEW_HTML = `<!doctype html>
 </main>
 <script>
 (function () {
-  var TABS = ['overview', 'sessions', 'tasks', 'decisions', 'approvals', 'handoff'];
+  var TABS = ['overview', 'stats', 'sessions', 'tasks', 'decisions', 'approvals', 'handoff'];
   var state = { tab: 'overview', repoRoot: '' };
 
   function $(id) { return document.getElementById(id); }
@@ -191,6 +191,7 @@ export const VIEW_HTML = `<!doctype html>
     clear($('detail'));
     clear($('list'));
     if (name === 'overview') return loadOverview();
+    if (name === 'stats') return loadStats();
     if (name === 'sessions') return loadSessions();
     if (name === 'tasks') return loadTasks();
     if (name === 'decisions') return loadMarkdown('/api/decisions', 'decisions');
@@ -232,6 +233,53 @@ export const VIEW_HTML = `<!doctype html>
       el('div', { class: 'n', text: String(n) }),
       el('div', { class: 'l', text: label })
     ]);
+  }
+
+  function numfmt(n) { return (n || 0).toLocaleString('en-US'); }
+  function fmtDur(ms) {
+    var s = Math.round((ms || 0) / 1000);
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (h > 0) return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
+    if (m > 0) return m + 'm ' + (sec < 10 ? '0' : '') + sec + 's';
+    return sec + 's';
+  }
+  function kvrow(k, v) {
+    return el('tr', {}, [el('td', { class: 'k', text: k }), el('td', { text: v })]);
+  }
+
+  function loadStats() {
+    single(true);
+    fetchJson('/api/stats').then(function (d) {
+      var detail = $('detail');
+      var t = d.totals;
+      detail.appendChild(el('p', { text: 'Sessions: ' + t.sessionCount }));
+      detail.appendChild(el('h3', { text: 'Volume (what the AI produced)' }));
+      detail.appendChild(el('div', { class: 'cards' }, [
+        card(numfmt(t.tokens.output), 'output tokens'),
+        (t.tokens.reasoning > 0 ? card(numfmt(t.tokens.reasoning), 'reasoning tokens') : null),
+        card(t.commandCount, 'commands'),
+        card(t.fileChangedCount, 'files'),
+        card(t.decisionCount, 'decisions')
+      ]));
+      if (!t.tokensAvailable) {
+        detail.appendChild(el('p', { class: 'muted', text: 'No token data captured; re-import to backfill.' }));
+      }
+      detail.appendChild(el('h3', { text: 'Time (proxies, not model compute)' }));
+      detail.appendChild(el('table', { class: 'kv' }, [el('tbody', {}, [
+        kvrow('active', fmtDur(t.activeTimeMs) + '  (idle gaps > 5m excluded)'),
+        kvrow('span', fmtDur(t.sessionSpanMs) + (t.openSessionCount > 0 ? '  (' + t.openSessionCount + ' open)' : '')),
+        kvrow('command', fmtDur(t.commandTimeMs) + (t.commandTimeReliable ? '' : '  (some sessions report 0)'))
+      ])]));
+      if (d.bySource && d.bySource.length) {
+        detail.appendChild(el('h3', { text: 'By source' }));
+        d.bySource.forEach(function (s) {
+          var cmd = s.commandTimeReliable ? fmtDur(s.commandTimeMs) : 'n/a';
+          detail.appendChild(el('div', { class: 'row' }, [
+            el('span', { text: s.sourceKind + ': ' + s.sessionCount + ' sessions, ' + numfmt(s.tokens.output) + ' out tok, active ' + fmtDur(s.activeTimeMs) + ', command ' + cmd })
+          ]));
+        });
+      }
+    }).catch(fail);
   }
 
   function loadSessions() {

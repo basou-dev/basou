@@ -22,6 +22,7 @@ import {
   SessionSchema,
   type SessionStatus,
   SessionStatusSchema,
+  sessionWorkStatsFromEvents,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 import {
@@ -30,6 +31,7 @@ import {
   printSessionListSkip,
   renderCliError,
 } from "../lib/error-render.js";
+import { formatDurationMs } from "../lib/format-duration.js";
 
 const SES_PREFIX = "ses_";
 const TASK_PREFIX = "task_";
@@ -355,6 +357,9 @@ function printSessionShowText(
     console.log(`  ${pad(`${type}:`, 24)} ${n}`);
   }
 
+  console.log("");
+  console.log(`Work:          ${formatSessionWork(session, events)}`);
+
   if (events.length === 0) return;
 
   const last = options.last ?? 5;
@@ -366,6 +371,26 @@ function printSessionShowText(
   for (const ev of slice) {
     console.log(`  ${formatEventLine(ev)}`);
   }
+}
+
+/**
+ * One-line work summary for `session show`: output volume + action counts +
+ * time proxies, reusing the same per-session computation as `basou stats`.
+ * `command n/a (import)` flags sources whose shell time is unrecorded.
+ */
+function formatSessionWork(session: Session, events: Event[]): string {
+  const w = sessionWorkStatsFromEvents(session.session.id, session.session, events, new Date());
+  const parts: string[] = [];
+  if (w.tokens.output > 0) parts.push(`${w.tokens.output.toLocaleString("en-US")} output tokens`);
+  parts.push(`${w.commandCount} cmd / ${w.fileChangedCount} files / ${w.decisionCount} dec`);
+  parts.push(`active ${formatDurationMs(w.activeTimeMs)}`);
+  parts.push(`span ${formatDurationMs(w.sessionSpanMs)}${w.open ? " (open)" : ""}`);
+  parts.push(
+    w.availability.commandTime
+      ? `command ${formatDurationMs(w.commandTimeMs)}`
+      : "command n/a (import)",
+  );
+  return parts.join(", ");
 }
 
 function formatWorkingDir(

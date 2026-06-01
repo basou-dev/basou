@@ -305,4 +305,50 @@ describe("claudeTranscriptToImportPayload", () => {
     expect(payload.events.some((e) => e.type === "decision_recorded")).toBe(false);
     expect(payload.events.some((e) => e.type === "command_executed")).toBe(true);
   });
+
+  it("sums assistant message usage into session.metrics", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: CWD,
+        message: {
+          content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }],
+          usage: { output_tokens: 300, input_tokens: 10, cache_read_input_tokens: 5000 },
+        },
+      },
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:02.000Z",
+        cwd: CWD,
+        message: {
+          content: [{ type: "tool_use", name: "Bash", input: { command: "pwd" } }],
+          usage: { output_tokens: 200, input_tokens: 4, cache_read_input_tokens: 6000 },
+        },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.metrics).toEqual({
+      output_tokens: 500,
+      input_tokens: 14,
+      cached_input_tokens: 11000,
+    });
+  });
+
+  it("omits metrics when no usage is present", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: CWD,
+        message: { content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }] },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.metrics).toBeUndefined();
+  });
 });

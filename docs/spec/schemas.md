@@ -86,6 +86,15 @@ session:
   events_log: "events.jsonl"  # relative path
 
   summary: null  # optional; generated or hand-written later
+
+  # optional model-usage rollup, computed at import from the source tool's
+  # native token usage. All fields optional; reasoning_output_tokens is
+  # Codex-only; absent for live run/exec and pre-feature imports.
+  metrics:
+    output_tokens: 5000
+    input_tokens: 20000
+    cached_input_tokens: 5504
+    reasoning_output_tokens: 462
 ```
 
 ## §5.2 Notes

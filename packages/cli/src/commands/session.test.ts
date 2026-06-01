@@ -470,6 +470,9 @@ describe("doRunSessionShow", () => {
     expect(stdout).toContain("Events: 2 total");
     expect(stdout).toContain("session_started:");
     expect(stdout).toContain("session_ended:");
+    // Work summary line: action counts + time proxies.
+    expect(stdout).toContain("Work:");
+    expect(stdout).toContain("dec");
   });
 
   it("case 12: unique prefix hit resolves to the full ID", async () => {

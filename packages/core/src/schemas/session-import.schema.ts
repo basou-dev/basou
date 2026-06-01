@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { EventSchema } from "./event.schema.js";
-import { SessionSourceKindSchema, SessionStatusSchema } from "./session.schema.js";
+import {
+  SessionMetricsSchema,
+  SessionSourceKindSchema,
+  SessionStatusSchema,
+} from "./session.schema.js";
 import {
   IsoTimestampSchema,
   SessionIdSchema,
@@ -56,6 +60,7 @@ export const SessionInnerImportSchema = z
     related_files: z.array(z.string()).default([]),
     events_log: z.string().optional(),
     summary: z.string().nullable().optional(),
+    metrics: SessionMetricsSchema.optional(),
   })
   .strict();
 
