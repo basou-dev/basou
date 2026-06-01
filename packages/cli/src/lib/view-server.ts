@@ -109,6 +109,9 @@ function isAddressInfo(value: string | AddressInfo | null): value is AddressInfo
 function closeServer(server: Server): Promise<void> {
   return new Promise((resolve) => {
     server.close(() => resolve());
+    // Force-terminate any in-flight connection (e.g. a client holding a POST
+    // body open) so close() resolves promptly instead of hanging shutdown.
+    server.closeAllConnections();
   });
 }
 
@@ -323,9 +326,16 @@ async function taskDetail(deps: ViewServerDeps, taskId: string): Promise<Record<
 }
 
 async function decisionsView(deps: ViewServerDeps): Promise<Record<string, unknown>> {
+  // Prefer the on-disk decisions.md so hand-edited content (outside the
+  // generated markers) is shown, mirroring the handoff view; fall back to a
+  // fresh render when the file does not exist yet.
+  const fromDisk = await readMarkdownFile(deps.paths.files.decisions);
+  if (fromDisk !== null) {
+    return { body: fromDisk, fromDisk: true };
+  }
   const nowIso = deps.nowProvider().toISOString();
   const result = await renderDecisions({ paths: deps.paths, nowIso });
-  return { body: result.body, decisionCount: result.decisionCount };
+  return { body: result.body, decisionCount: result.decisionCount, fromDisk: false };
 }
 
 async function approvalsView(deps: ViewServerDeps): Promise<Record<string, unknown>> {
@@ -398,9 +408,28 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
 
 function matchId(pathname: string, prefix: string): string | null {
   if (!pathname.startsWith(prefix)) return null;
-  const rest = pathname.slice(prefix.length);
-  if (rest.length === 0 || rest.includes("/")) return null;
-  return decodeURIComponent(rest);
+  const encoded = pathname.slice(prefix.length);
+  if (encoded.length === 0 || encoded.includes("/")) return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(encoded);
+  } catch {
+    return null; // malformed percent-escape
+  }
+  // Reject anything that could escape the storage root once decoded: a path
+  // separator (incl. the percent-encoded `%2f` that slips past the check
+  // above) or a `.`/`..` segment. Ids are otherwise opaque to this layer.
+  if (
+    id.length === 0 ||
+    id.includes("/") ||
+    id.includes("\\") ||
+    id.includes("\0") ||
+    id === "." ||
+    id === ".."
+  ) {
+    return null;
+  }
+  return id;
 }
 
 function sendJson(res: ServerResponse, status: number, data: unknown): void {

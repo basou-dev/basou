@@ -294,6 +294,33 @@ describe("basou view server", () => {
       expect(badJson.status).toBe(400);
     });
   });
+
+  it("blocks percent-encoded path traversal in session / task ids", async () => {
+    const repo = await setupInitedRepo();
+    await withServer(repo, {}, async (handle) => {
+      const host = `127.0.0.1:${handle.port}`;
+      // %2e%2e%2f decodes to "../"; it must not escape the storage root.
+      const task = await raw(handle.port, {
+        path: "/api/tasks/%2e%2e%2f%2e%2e%2fREADME",
+        headers: { Host: host },
+      });
+      expect(task.status).toBe(404);
+      const session = await raw(handle.port, {
+        path: "/api/sessions/%2e%2e%2f%2e%2e%2fpackage",
+        headers: { Host: host },
+      });
+      expect(session.status).toBe(404);
+    });
+  });
+
+  it("serves decisions from the on-disk file once generated", async () => {
+    const repo = await setupInitedRepo();
+    await withServer(repo, {}, async (handle) => {
+      await postJson(handle, "/api/decisions/generate", {});
+      const res = await getJson(handle, "/api/decisions");
+      expect((res.data as { fromDisk: boolean }).fromDisk).toBe(true);
+    });
+  });
 });
 
 describe("basou view (CLI wrapper)", () => {

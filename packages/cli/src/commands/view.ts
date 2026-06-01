@@ -88,17 +88,19 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
   const port = options.port ?? DEFAULT_PORT;
   const handle = await startListening(port, deps);
 
-  console.log(`basou view running at ${handle.url}`);
-  console.log(
-    "Localhost only, no authentication. Do not expose this port beyond your machine. Press Ctrl+C to stop.",
-  );
-
-  if (options.open !== false) {
-    openInBrowser(handle.url, ctx.openBrowser);
-  }
-  ctx.onListening?.(handle);
-
+  // Everything past listen runs under try/finally so a throw from the browser
+  // launch or the onListening callback still closes the server.
   try {
+    console.log(`basou view running at ${handle.url}`);
+    console.log(
+      "Localhost only, no authentication. Do not expose this port beyond your machine. Press Ctrl+C to stop.",
+    );
+
+    if (options.open !== false) {
+      openInBrowser(handle.url, ctx.openBrowser);
+    }
+    ctx.onListening?.(handle);
+
     await waitForShutdown(ctx.signal);
   } finally {
     await handle.close();
