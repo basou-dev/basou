@@ -261,8 +261,16 @@ export const VIEW_HTML = `<!doctype html>
         card(t.fileChangedCount, 'files'),
         card(t.decisionCount, 'decisions')
       ]));
+      var sessions = d.sessions || [];
+      var tokenSessions = sessions.filter(function (s) { return s.availability && s.availability.tokens; }).length;
       if (!t.tokensAvailable) {
         detail.appendChild(el('p', { class: 'muted', text: 'No token data captured; re-import to backfill.' }));
+      } else if (tokenSessions < t.sessionCount) {
+        detail.appendChild(el('p', { class: 'muted', text: 'Token data on ' + tokenSessions + ' of ' + t.sessionCount + ' sessions; re-import to backfill the rest.' }));
+      }
+      var degraded = sessions.filter(function (s) { return s.eventsUnreadable; }).length;
+      if (degraded > 0) {
+        detail.appendChild(el('p', { class: 'muted', text: degraded + ' session(s) had unreadable event logs; their counts are incomplete.' }));
       }
       detail.appendChild(el('h3', { text: 'Time (proxies, not model compute)' }));
       detail.appendChild(el('table', { class: 'kv' }, [el('tbody', {}, [

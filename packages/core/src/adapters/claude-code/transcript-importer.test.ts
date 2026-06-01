@@ -337,6 +337,26 @@ describe("claudeTranscriptToImportPayload", () => {
     });
   });
 
+  it("counts usage once per message.id (split thinking/text/tool_use records)", () => {
+    // A single assistant message split across 3 records, each repeating the
+    // same id + usage; the token total must count it once, not thrice.
+    const dupRecord = (text: string) => ({
+      type: "assistant",
+      timestamp: "2026-05-10T00:00:01.000Z",
+      cwd: CWD,
+      message: {
+        id: "msg_duplicate",
+        content: [{ type: "tool_use", name: "Bash", input: { command: text } }],
+        usage: { output_tokens: 1000, input_tokens: 20 },
+      },
+    });
+    const records: ClaudeTranscriptRecord[] = [dupRecord("a"), dupRecord("b"), dupRecord("c")];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.metrics).toEqual({ output_tokens: 1000, input_tokens: 20 });
+  });
+
   it("omits metrics when no usage is present", () => {
     const records: ClaudeTranscriptRecord[] = [
       {
