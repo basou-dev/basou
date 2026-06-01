@@ -36,6 +36,12 @@ next to your code.
   wraps the process so the surrounding session is recorded without Basou knowing
   about Anthropic-internal formats. Other adapters (Codex, OpenCode) are on the
   roadmap, not yet built.
+- **A local cockpit, for the author.** `basou refresh` imports the project's
+  native agent logs and regenerates the markdown in one step; `basou view`
+  opens a localhost-only web UI to browse sessions, tasks, decisions, and
+  handoff and run those actions by clicking. Both are conveniences — the CLI
+  and Markdown stay the primary surface, and the viewer binds to 127.0.0.1
+  with no authentication (a personal tool, never exposed beyond your machine).
 
 What's new in v0.3:
 
@@ -69,6 +75,12 @@ basou session note --body "Started exploring auth.ts"
 # 4. Regenerate the human-readable summary
 basou handoff generate
 cat .basou/handoff.md
+
+# 5. Or skip the per-command typing: import the project's native agent logs
+#    and regenerate handoff + decisions in one step, then browse it all in a
+#    local web UI (localhost only, no authentication)
+basou refresh
+basou view
 ```
 
 For a step-by-step walkthrough with failure modes and sample output, see

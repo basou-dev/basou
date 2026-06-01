@@ -7,6 +7,19 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- `basou refresh` — one command that imports every adapter's native logs for
+  the project and regenerates `handoff.md` + `decisions.md`, instead of running
+  four commands by hand. Best-effort: an adapter with no logs for the project is
+  skipped, not an error. `--project <path>` targets a different project,
+  `--force` re-imports, `--dry-run` previews imports and leaves the markdown
+  untouched, `--json` prints the structured result.
+- `basou view` — a localhost-only web UI (default `http://127.0.0.1:4319`) to
+  browse sessions and their event timeline, tasks, decisions, approvals, and
+  handoff, and to run imports / regeneration by clicking (the buttons share the
+  `refresh` pipeline). `--port <n>` chooses the port, `--no-open` suppresses the
+  browser launch. It binds to 127.0.0.1, validates the Host / Origin headers,
+  and ships no authentication: a personal cockpit for the author, never to be
+  exposed beyond the local machine.
 - `basou import claude-code` — derive Basou sessions from Claude Code native
   transcripts (`~/.claude/projects/<encoded-cwd>/*.jsonl`) after the fact,
   rather than wrapping a live process. Each transcript becomes one imported
