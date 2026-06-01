@@ -228,4 +228,81 @@ describe("claudeTranscriptToImportPayload", () => {
       "session_ended",
     ]);
   });
+
+  it("derives decision_recorded from AskUserQuestion, titled question -> chosen answer", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: CWD,
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_ask1",
+              name: "AskUserQuestion",
+              input: {
+                questions: [
+                  { question: "Which DB?", header: "DB", options: [{ label: "Postgres" }] },
+                  { question: "Cache?", header: "Cache", options: [{ label: "Redis" }] },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      // The chosen answers arrive on the later result record, keyed by question.
+      {
+        type: "user",
+        timestamp: "2026-05-10T00:00:02.000Z",
+        cwd: CWD,
+        toolUseResult: { questions: [], answers: { "Which DB?": "Postgres", "Cache?": "Redis" } },
+        message: { content: [{ type: "tool_result", tool_use_id: "toolu_ask1", content: "ok" }] },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    // A decisions-only transcript still carries provenance worth importing.
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+    expect(payload.events.map((e) => e.type)).toEqual([
+      "session_started",
+      "decision_recorded",
+      "decision_recorded",
+      "session_ended",
+    ]);
+    const titles = payload.events.flatMap((e) => (e.type === "decision_recorded" ? [e.title] : []));
+    expect(titles).toEqual(["Which DB? -> Postgres", "Cache? -> Redis"]);
+    for (const e of payload.events) {
+      if (e.type === "decision_recorded") expect(e.decision_id).toMatch(/^decision_/);
+    }
+  });
+
+  it("skips AskUserQuestion decisions when no structured answer is recorded", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: CWD,
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_ask2",
+              name: "AskUserQuestion",
+              input: { questions: [{ question: "Q?", header: "Q", options: [] }] },
+            },
+            // A real action so the session is not skipped outright.
+            { type: "tool_use", name: "Bash", input: { command: "ls" } },
+          ],
+        },
+      },
+      // No result record carries answers for toolu_ask2.
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.events.some((e) => e.type === "decision_recorded")).toBe(false);
+    expect(payload.events.some((e) => e.type === "command_executed")).toBe(true);
+  });
 });

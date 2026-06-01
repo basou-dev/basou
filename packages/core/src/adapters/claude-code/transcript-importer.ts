@@ -43,13 +43,17 @@ export type ClaudeTranscriptToPayloadOptions = {
  * - `command_executed` from each `Bash` tool use, recorded as `bash -c "<cmd>"`
  *   (the transcript carries the shell line, not a parsed argv).
  * - `file_changed` from each `Edit` / `Write` / `NotebookEdit` tool use.
+ * - `decision_recorded` from each `AskUserQuestion` tool use: one decision per
+ *   question, titled `<question> -> <chosen answer>`. The chosen answer is read
+ *   from the paired result record's structured `toolUseResult.answers` map; a
+ *   question with no recorded string answer is skipped.
  *
  * Exit codes and per-command durations are not present in the transcript, so
  * `command_executed.exit_code` is `null` and `duration_ms` is `0`.
  *
  * Returns `null` when the transcript has no timestamped records, or no
- * observable command / file action — such sessions carry no provenance worth
- * importing and are skipped by the caller.
+ * observable command / file / decision action — such sessions carry no
+ * provenance worth importing and are skipped by the caller.
  *
  * Event `id` / `session_id` are placeholders; `importSessionFromJson` mints
  * fresh ids on the way in. They are valid-by-construction so the payload
@@ -60,6 +64,10 @@ export function claudeTranscriptToImportPayload(
   options: ClaudeTranscriptToPayloadOptions,
 ): SessionImportPayload | null {
   const placeholderSessionId = prefixedUlid("ses");
+  // AskUserQuestion answers live on the *result* record, which arrives after
+  // the originating tool_use; pre-index them so decisions can be derived at the
+  // tool_use site in the single forward pass below.
+  const askAnswers = indexAskAnswers(records);
   const derived: Event[] = [];
   const relatedFiles = new Set<string>();
   // Real transcripts are NOT strictly ordered by timestamp on disk
@@ -90,6 +98,23 @@ export function claudeTranscriptToImportPayload(
         const command = readString(input.command);
         if (command !== undefined) {
           derived.push(commandExecutedEvent(ts, placeholderSessionId, command, cwd));
+        }
+        continue;
+      }
+
+      if (name === "AskUserQuestion") {
+        const useId = readString(item.id);
+        const answers = useId !== undefined ? askAnswers.get(useId) : undefined;
+        if (answers !== undefined) {
+          // One decision per question; preserve the order the questions were
+          // asked (Object.entries keeps insertion order for string keys, and
+          // the stable sort below keeps it among the same-timestamp events).
+          for (const [question, answer] of Object.entries(answers)) {
+            if (question.length === 0) continue;
+            const answerStr = typeof answer === "string" && answer.length > 0 ? answer : undefined;
+            const title = answerStr !== undefined ? `${question} -> ${answerStr}` : question;
+            derived.push(decisionRecordedEvent(ts, placeholderSessionId, title));
+          }
         }
         continue;
       }
@@ -219,6 +244,19 @@ function fileChangedEvent(
   };
 }
 
+function decisionRecordedEvent(
+  occurredAt: string,
+  sessionId: PrefixedId<"ses">,
+  title: string,
+): Event {
+  return {
+    ...baseEvent(occurredAt, sessionId),
+    type: "decision_recorded",
+    decision_id: prefixedUlid("decision"),
+    title,
+  };
+}
+
 // --- defensive readers ----------------------------------------------------
 
 function readString(value: unknown): string | undefined {
@@ -244,4 +282,33 @@ function toolUses(record: ClaudeTranscriptRecord): Array<Record<string, unknown>
     }
   }
   return result;
+}
+
+/**
+ * Index the structured answers of every `AskUserQuestion` tool use by its
+ * tool_use id. The chosen answers live on the *result* record's
+ * `toolUseResult.answers` — a `{ "<question>": "<chosen answer>" }` map — which
+ * is only present on AskUserQuestion results, so its presence is the
+ * discriminator. The result record carries the originating tool_use id inside
+ * its `message.content[].tool_use_id`.
+ */
+function indexAskAnswers(
+  records: ReadonlyArray<ClaudeTranscriptRecord>,
+): Map<string, Record<string, unknown>> {
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const record of records) {
+    const result = record.toolUseResult;
+    if (!isObject(result)) continue;
+    const answers = result.answers;
+    if (!isObject(answers)) continue;
+    const message = isObject(record.message) ? record.message : undefined;
+    const content = message !== undefined && Array.isArray(message.content) ? message.content : [];
+    for (const item of content) {
+      if (isObject(item) && readString(item.type) === "tool_result") {
+        const id = readString(item.tool_use_id);
+        if (id !== undefined) byId.set(id, answers);
+      }
+    }
+  }
+  return byId;
 }
