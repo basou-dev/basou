@@ -272,18 +272,30 @@ export const VIEW_HTML = `<!doctype html>
       if (degraded > 0) {
         detail.appendChild(el('p', { class: 'muted', text: degraded + ' session(s) had unreadable event logs; their counts are incomplete.' }));
       }
-      detail.appendChild(el('h3', { text: 'Time (proxies, not model compute)' }));
-      detail.appendChild(el('table', { class: 'kv' }, [el('tbody', {}, [
-        kvrow('active', fmtDur(t.activeTimeMs) + '  (idle gaps > 5m excluded)'),
-        kvrow('span', fmtDur(t.sessionSpanMs) + (t.openSessionCount > 0 ? '  (' + t.openSessionCount + ' open)' : '')),
-        kvrow('command', fmtDur(t.commandTimeMs) + (t.commandTimeReliable ? '' : '  (some sessions report 0)'))
-      ])]));
+      detail.appendChild(el('h3', { text: 'Time (human harness labor; active = billing primary)' }));
+      var turnSessions = sessions.filter(function (s) { return s.activeTimeBasis === 'engaged-turns'; }).length;
+      var basisNote = turnSessions === t.sessionCount ? 'engaged turns' : (turnSessions === 0 ? 'event stream; re-import to capture conversation' : 'engaged turns on ' + turnSessions + ' of ' + t.sessionCount + ' sessions');
+      var timeRows = [kvrow('billable active', fmtDur(t.billableActiveTimeMs) + '  (union; ' + basisNote + '; idle gaps > 5m excluded; tz ' + d.timeZone + ')')];
+      if (t.activeTimeMs !== t.billableActiveTimeMs) {
+        timeRows.push(kvrow('summed', fmtDur(t.activeTimeMs) + '  (concurrent sessions double-counted)'));
+      }
+      timeRows.push(kvrow('span', fmtDur(t.sessionSpanMs) + (t.openSessionCount > 0 ? '  (' + t.openSessionCount + ' open)' : '')));
+      timeRows.push(kvrow('command', fmtDur(t.commandTimeMs) + (t.commandTimeReliable ? '' : '  (some sessions report 0)')));
+      detail.appendChild(el('table', { class: 'kv' }, [el('tbody', {}, timeRows)]));
       if (d.bySource && d.bySource.length) {
         detail.appendChild(el('h3', { text: 'By source' }));
         d.bySource.forEach(function (s) {
           var cmd = s.commandTimeReliable ? fmtDur(s.commandTimeMs) : 'n/a';
           detail.appendChild(el('div', { class: 'row' }, [
             el('span', { text: s.sourceKind + ': ' + s.sessionCount + ' sessions, ' + numfmt(s.tokens.output) + ' out tok, active ' + fmtDur(s.activeTimeMs) + ', command ' + cmd })
+          ]));
+        });
+      }
+      if (d.byDay && d.byDay.length) {
+        detail.appendChild(el('h3', { text: 'By day (billable time x volume)' }));
+        d.byDay.forEach(function (day) {
+          detail.appendChild(el('div', { class: 'row' }, [
+            el('span', { text: day.date + ': ' + fmtDur(day.billableActiveTimeMs) + ' active, ' + numfmt(day.tokens.output) + ' out tok, ' + day.commandCount + ' cmd / ' + day.fileChangedCount + ' files / ' + day.decisionCount + ' dec' })
           ]));
         });
       }

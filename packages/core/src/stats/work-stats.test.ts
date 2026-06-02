@@ -113,6 +113,9 @@ describe("computeWorkStats", () => {
     expect(result.totals.sessionCount).toBe(0);
     expect(result.totals.commandTimeReliable).toBe(true);
     expect(result.totals.tokensAvailable).toBe(false);
+    expect(result.totals.billableActiveTimeMs).toBe(0);
+    expect(result.byDay).toHaveLength(0);
+    expect(result.activeGapCapMs).toBe(ACTIVE_GAP_CAP_MS);
     expect(result.generatedAt).toBe(NOW.toISOString());
   });
 
@@ -144,6 +147,8 @@ describe("computeWorkStats", () => {
     expect(s?.tokens.reasoning).toBe(800);
     expect(s?.availability.commandTime).toBe(true);
     expect(s?.availability.tokens).toBe(true);
+    // No stored engaged-time intervals: active time falls back to the events.
+    expect(s?.activeTimeBasis).toBe("events");
     expect(r.totals.commandTimeReliable).toBe(true);
     expect(r.totals.tokensAvailable).toBe(true);
   });
@@ -254,6 +259,88 @@ describe("computeWorkStats", () => {
     expect(codex?.commandTimeReliable).toBe(true);
     expect(claude?.commandTimeReliable).toBe(false);
     expect(r.totals.commandTimeReliable).toBe(false);
+  });
+
+  it("prefers stored engaged-time intervals over the event-derived measure", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDEA";
+    await placeSession(
+      paths,
+      {
+        id,
+        endedAt: "2026-05-10T01:00:00.000Z",
+        metrics: {
+          active_time_ms: 30 * 60 * 1000,
+          active_gap_cap_ms: ACTIVE_GAP_CAP_MS,
+          active_time_method: "engaged-turns",
+          active_intervals: [
+            { start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:30:00.000Z" },
+          ],
+        },
+      },
+      // Sparse events alone would credit only a capped 5 minutes.
+      started(id, "2026-05-10T00:00:00.000Z") + ended(id, "2026-05-10T01:00:00.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW });
+    const s = r.sessions[0];
+    expect(s?.activeTimeBasis).toBe("engaged-turns");
+    expect(s?.activeTimeMs).toBe(30 * 60 * 1000);
+    expect(s?.availability.activeTime).toBe(true);
+  });
+
+  it("de-duplicates overlapping sessions in the billable total", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const a = "ses_01HXABCDEF1234567890ABCDEB";
+    const b = "ses_01HXABCDEF1234567890ABCDEC";
+    await placeSession(paths, {
+      id: a,
+      startedAt: "2026-05-10T00:00:00.000Z",
+      endedAt: "2026-05-10T00:30:00.000Z",
+      metrics: {
+        active_intervals: [{ start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:30:00.000Z" }],
+      },
+    });
+    await placeSession(paths, {
+      id: b,
+      startedAt: "2026-05-10T00:15:00.000Z",
+      endedAt: "2026-05-10T00:45:00.000Z",
+      metrics: {
+        active_intervals: [{ start: "2026-05-10T00:15:00.000Z", end: "2026-05-10T00:45:00.000Z" }],
+      },
+    });
+    const r = await computeWorkStats({ paths, now: NOW });
+    // Summed = 30 + 30 = 60 min; union [00:00, 00:45] = 45 min.
+    expect(r.totals.activeTimeMs).toBe(60 * 60 * 1000);
+    expect(r.totals.billableActiveTimeMs).toBe(45 * 60 * 1000);
+  });
+
+  it("buckets billable time by day in the given timezone, summing to the total", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const d1 = "ses_01HXABCDEF1234567890ABCDED";
+    const d2 = "ses_01HXABCDEF1234567890ABCDEE";
+    await placeSession(paths, {
+      id: d1,
+      startedAt: "2026-05-09T10:00:00.000Z",
+      endedAt: "2026-05-09T10:20:00.000Z",
+      metrics: {
+        active_intervals: [{ start: "2026-05-09T10:00:00.000Z", end: "2026-05-09T10:20:00.000Z" }],
+      },
+    });
+    await placeSession(paths, {
+      id: d2,
+      startedAt: "2026-05-10T10:00:00.000Z",
+      endedAt: "2026-05-10T10:10:00.000Z",
+      metrics: {
+        active_intervals: [{ start: "2026-05-10T10:00:00.000Z", end: "2026-05-10T10:10:00.000Z" }],
+      },
+    });
+    const r = await computeWorkStats({ paths, now: NOW, timeZone: "UTC" });
+    expect(r.timeZone).toBe("UTC");
+    expect(r.byDay.map((d) => d.date)).toEqual(["2026-05-09", "2026-05-10"]);
+    expect(r.byDay[0]?.billableActiveTimeMs).toBe(20 * 60 * 1000);
+    expect(r.byDay[1]?.billableActiveTimeMs).toBe(10 * 60 * 1000);
+    const summed = r.byDay.reduce((n, d) => n + d.billableActiveTimeMs, 0);
+    expect(summed).toBe(r.totals.billableActiveTimeMs);
   });
 
   it("flags a session whose events.jsonl is unreadable", async () => {

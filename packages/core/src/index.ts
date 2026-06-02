@@ -111,6 +111,8 @@ export {
   WorkspaceIdSchema,
 } from "./schemas/index.js";
 export type {
+  ActiveTimeBasis,
+  DayWorkStats,
   MeasureAvailability,
   SessionWorkStats,
   SourceWorkStats,

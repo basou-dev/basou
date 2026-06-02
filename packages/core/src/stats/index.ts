@@ -1,4 +1,6 @@
 export type {
+  ActiveTimeBasis,
+  DayWorkStats,
   MeasureAvailability,
   SessionWorkStats,
   SourceWorkStats,

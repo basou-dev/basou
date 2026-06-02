@@ -61,18 +61,35 @@ const InvocationSchema = z.object({
 });
 
 /**
- * Optional model-usage rollup for the session, computed at import time from
- * the source tool's native log (the transcript carries per-message token
- * usage; this is the session total). All fields optional because not every
- * source records them: `reasoning_output_tokens` is Codex-only, and live
- * `run`/`exec` sessions carry no token usage at all. Absent on sessions
- * imported before this field existed (re-import to backfill).
+ * Optional per-session metrics, computed at import time from the source tool's
+ * native log. Two groups, both optional because not every source records them:
+ *
+ * - Model-usage rollup (`*_tokens`): the transcript carries per-message token
+ *   usage; these are the session totals. `reasoning_output_tokens` is
+ *   Codex-only, and live `run`/`exec` sessions carry no token usage at all.
+ * - Engaged-time metrics (`active_*`): the billing-oriented active time derived
+ *   from the session's genuine engagement timestamps (conversation turns plus
+ *   action events), with idle gaps capped. `active_intervals` are the merged
+ *   wall-clock ranges (so cross-session totals can de-duplicate overlapping
+ *   work by interval union); `active_time_ms` is their summed duration;
+ *   `active_gap_cap_ms` and `active_time_method` lock the methodology so the
+ *   stored numbers stay interpretable if the method changes later.
+ *
+ * Absent on sessions imported before a given field existed (re-import to
+ * backfill). Live sessions carry no engaged-time metrics and fall back to
+ * event-derived active time at stats time.
  */
 export const SessionMetricsSchema = z.object({
   output_tokens: z.number().int().nonnegative().optional(),
   input_tokens: z.number().int().nonnegative().optional(),
   cached_input_tokens: z.number().int().nonnegative().optional(),
   reasoning_output_tokens: z.number().int().nonnegative().optional(),
+  active_time_ms: z.number().int().nonnegative().optional(),
+  active_intervals: z
+    .array(z.object({ start: IsoTimestampSchema, end: IsoTimestampSchema }))
+    .optional(),
+  active_gap_cap_ms: z.number().int().nonnegative().optional(),
+  active_time_method: z.string().optional(),
 });
 /** Inferred runtime type for {@link SessionMetricsSchema}. */
 export type SessionMetrics = z.infer<typeof SessionMetricsSchema>;

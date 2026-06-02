@@ -2,6 +2,12 @@ import { type PrefixedId, prefixedUlid } from "../../ids/ulid.js";
 import type { Event } from "../../schemas/event.schema.js";
 import type { Manifest } from "../../schemas/manifest.schema.js";
 import type { SessionImportPayload } from "../../schemas/session-import.schema.js";
+import {
+  ACTIVE_GAP_CAP_MS,
+  activeTimeFromTimestamps,
+  ENGAGED_TURNS_METHOD,
+  intervalsMsToIso,
+} from "../../stats/active-time.js";
 
 /**
  * The `source` string stamped on every event derived from a Claude Code
@@ -87,6 +93,14 @@ export function claudeTranscriptToImportPayload(
   // text / tool_use), each carrying the SAME message.id and the SAME usage.
   // Count usage once per message.id to avoid multiplying the token totals.
   const seenMessageIds = new Set<string>();
+  // Genuine engagement timestamps for the billing-oriented active-time metric:
+  // real human prompts and assistant messages (action tool uses live inside
+  // assistant messages, so they are subsumed). Sub-agent sidechains and
+  // tool-result / meta records are excluded so autonomous loops and noise do
+  // not inflate billable time. Assistant messages are counted once per
+  // message.id, matching the token dedup above.
+  const engagementTsMs: number[] = [];
+  const seenEngagementMessageIds = new Set<string>();
 
   for (const record of records) {
     const ts = readString(record.timestamp);
@@ -95,6 +109,23 @@ export function claudeTranscriptToImportPayload(
     if (maxTs === undefined || Date.parse(ts) > Date.parse(maxTs)) maxTs = ts;
     if (workingDir === undefined) workingDir = readString(record.cwd);
     if (claudeSessionId === undefined) claudeSessionId = readString(record.sessionId);
+
+    if (record.isSidechain !== true) {
+      const tsMs = Date.parse(ts);
+      if (Number.isFinite(tsMs)) {
+        const recType = readString(record.type);
+        if (recType === "user") {
+          if (isHumanUserMessage(record)) engagementTsMs.push(tsMs);
+        } else if (recType === "assistant") {
+          const msg = isObject(record.message) ? record.message : undefined;
+          const mid = msg !== undefined ? readString(msg.id) : undefined;
+          if (mid === undefined || !seenEngagementMessageIds.has(mid)) {
+            if (mid !== undefined) seenEngagementMessageIds.add(mid);
+            engagementTsMs.push(tsMs);
+          }
+        }
+      }
+    }
 
     if (readString(record.type) !== "assistant") continue;
 
@@ -183,12 +214,28 @@ export function claudeTranscriptToImportPayload(
   const date = minTs.slice(0, 10);
   const label = `claude-code ${date}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}, ${fileCount} ${fileCount === 1 ? "file" : "files"}`;
 
-  // Only include token fields actually present (> 0); omit metrics entirely
-  // for a transcript that carried no usage at all.
+  // Engaged-active time from the genuine engagement series (needs >= 2 points
+  // to bound any gap); omitted when too sparse so stats falls back to the
+  // event-derived measure.
+  const active =
+    engagementTsMs.length >= 2
+      ? activeTimeFromTimestamps(engagementTsMs, ACTIVE_GAP_CAP_MS)
+      : undefined;
+
+  // Only include fields actually present; omit metrics entirely for a
+  // transcript that carried neither token usage nor an engaged-time signal.
   const metricsFields = {
     ...(outputTokens > 0 ? { output_tokens: outputTokens } : {}),
     ...(inputTokens > 0 ? { input_tokens: inputTokens } : {}),
     ...(cachedInputTokens > 0 ? { cached_input_tokens: cachedInputTokens } : {}),
+    ...(active !== undefined && active.ms > 0
+      ? {
+          active_time_ms: active.ms,
+          active_intervals: intervalsMsToIso(active.intervals),
+          active_gap_cap_ms: ACTIVE_GAP_CAP_MS,
+          active_time_method: ENGAGED_TURNS_METHOD,
+        }
+      : {}),
   };
   const metrics = Object.keys(metricsFields).length > 0 ? metricsFields : undefined;
 
@@ -304,6 +351,28 @@ function readNonNegInt(value: unknown): number {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A `user` record is a genuine human prompt when its message content is a
+ * non-empty string, or an array containing at least one non-`tool_result`
+ * block (e.g. text / image). A record whose content is only `tool_result`
+ * blocks is the assistant's tool-feedback loop, not human input, and is
+ * excluded from the engagement series.
+ */
+function isHumanUserMessage(record: ClaudeTranscriptRecord): boolean {
+  const message = isObject(record.message) ? record.message : undefined;
+  if (message === undefined) return false;
+  const content = message.content;
+  if (typeof content === "string") return content.length > 0;
+  if (Array.isArray(content)) {
+    return content.some((block) => {
+      if (!isObject(block)) return false;
+      const type = readString(block.type);
+      return type !== undefined && type !== "tool_result";
+    });
+  }
+  return false;
 }
 
 /**
