@@ -9,18 +9,38 @@ import type {
 } from "../schemas/session.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
+import {
+  ACTIVE_GAP_CAP_MS,
+  activeTimeFromTimestamps,
+  type IntervalMs,
+  type IsoInterval,
+  intervalsIsoToMs,
+  intervalsMsToIso,
+  unionDurationMs,
+} from "./active-time.js";
+
+// Re-exported for callers that imported the cap from this module historically.
+export { ACTIVE_GAP_CAP_MS };
 
 /**
- * Gap longer than this between two consecutive events is treated as idle and
- * excluded from `activeTimeMs`. A deliberately coarse heuristic: "active" time
- * is a focus proxy, NOT a measure of model compute. 5 minutes.
+ * Resolve the timezone used to bucket per-day stats. Native logs are UTC, so a
+ * billing day needs an explicit timezone; default to the host's local zone.
  */
-export const ACTIVE_GAP_CAP_MS = 5 * 60 * 1000;
+function resolveTimeZone(timeZone: string | undefined): string {
+  if (timeZone !== undefined && timeZone.length > 0) return timeZone;
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
 
 export type WorkStatsInput = {
   paths: BasouPaths;
   /** Shared clock; running sessions are measured up to this instant. */
   now: Date;
+  /**
+   * IANA timezone used to bucket the per-day breakdown (logs are UTC, so a
+   * billing day needs an explicit zone). Defaults to the host's local zone;
+   * injectable for deterministic tests.
+   */
+  timeZone?: string;
   onWarning?: (warning: ReplayWarning, sessionId: string) => void;
   onSessionSkip?: (sessionId: string, reason: SessionSkipReason) => void;
 };
@@ -34,7 +54,7 @@ export type MeasureAvailability = {
    * whose transcript carries no per-command duration (recorded as 0).
    */
   commandTime: boolean;
-  /** Meaningful only with >= 2 timestamped events. */
+  /** At least one active interval could be measured (stored or event-derived). */
   activeTime: boolean;
   /** Token totals were captured (model-usage metrics present). */
   tokens: boolean;
@@ -48,6 +68,9 @@ export type TokenTotals = {
   reasoning: number;
 };
 
+/** How a session's active time was derived. */
+export type ActiveTimeBasis = "engaged-turns" | "events";
+
 export type SessionWorkStats = {
   sessionId: string;
   label: string | undefined;
@@ -60,6 +83,18 @@ export type SessionWorkStats = {
   sessionSpanMs: number;
   commandTimeMs: number;
   activeTimeMs: number;
+  /**
+   * How `activeTimeMs` / `activeIntervals` were derived: `engaged-turns` from
+   * the engagement timestamps stored at import (captures conversation), or
+   * `events` from the action-event stream (live sessions and pre-v2 imports).
+   */
+  activeTimeBasis: ActiveTimeBasis;
+  /**
+   * Merged active wall-clock ranges. Their summed duration equals
+   * `activeTimeMs`; the aggregator unions them across sessions so overlapping
+   * (concurrent) work is not double-counted in billable totals.
+   */
+  activeIntervals: IsoInterval[];
   commandCount: number;
   fileChangedCount: number;
   decisionCount: number;
@@ -91,12 +126,36 @@ export type SourceWorkStats = {
 
 export type StatusCount = { status: SessionStatus; count: number };
 
+/**
+ * One calendar day of the time x volume billing view. `billableActiveTimeMs` is
+ * the union of active intervals starting on this date (so per-day sums to the
+ * de-duplicated workspace total); volume is attributed to each session's
+ * `started_at` date.
+ */
+export type DayWorkStats = {
+  /** Calendar date `YYYY-MM-DD` in the report timezone. */
+  date: string;
+  billableActiveTimeMs: number;
+  sessionCount: number;
+  commandCount: number;
+  fileChangedCount: number;
+  decisionCount: number;
+  tokens: TokenTotals;
+};
+
 export type WorkStatsTotals = {
   sessionCount: number;
   openSessionCount: number;
   sessionSpanMs: number;
   commandTimeMs: number;
+  /** Naive sum of per-session active time; double-counts overlapping sessions. */
   activeTimeMs: number;
+  /**
+   * Billable active time: the UNION of every session's active intervals, so
+   * concurrent sessions do not double-count human wall-clock. Equals
+   * `activeTimeMs` when no sessions overlap, and is smaller when they do.
+   */
+  billableActiveTimeMs: number;
   commandCount: number;
   fileChangedCount: number;
   decisionCount: number;
@@ -109,11 +168,17 @@ export type WorkStatsTotals = {
 
 export type WorkStatsResult = {
   generatedAt: string;
+  /** Idle-gap cap applied to active time (methodology lock). */
+  activeGapCapMs: number;
+  /** IANA timezone used to bucket {@link WorkStatsResult.byDay}. */
+  timeZone: string;
   totals: WorkStatsTotals;
   /** Per session, started_at ascending (loadSessionEntries order). */
   sessions: SessionWorkStats[];
   bySource: SourceWorkStats[];
   byStatus: StatusCount[];
+  /** Per-day time x volume billing view, date ascending. */
+  byDay: DayWorkStats[];
 };
 
 // Fixed display order, mirroring the handoff renderer (+ archived appended).
@@ -129,20 +194,36 @@ const STATUS_ORDER: readonly SessionStatus[] = [
 ];
 
 /**
- * Aggregate "how much the AI worked" across the workspace's sessions.
+ * Aggregate work + engaged-time across the workspace's sessions.
  *
  * Honesty note: this returns a LABELED SET of measures, not one number. Token
- * volume (when captured) is the most direct "how much work" signal; the time
- * measures are proxies — `sessionSpanMs` overcounts (includes idle),
- * `commandTimeMs` is shell-execution only (and 0 for `claude-code-import`),
- * and `activeTimeMs` is a gap-capped focus heuristic. Availability flags let
- * callers caveat each measure rather than present a misleading total.
+ * volume (when captured) is the most direct "how much the AI produced" signal.
+ * The time measures are proxies, ordered from most to least billing-relevant:
+ *
+ * - `billableActiveTimeMs` (totals) is the headline for billing human harness
+ *   labor: the UNION of every session's active intervals, so two sessions run
+ *   concurrently do not bill the same wall-clock twice. `activeTimeMs` is the
+ *   naive sum, kept only to expose the overlap delta.
+ * - Per-session active time is derived from the session's ENGAGED series. For
+ *   imported sessions this is the genuine engagement timestamps captured at
+ *   import (conversation turns plus action events), so design discussion that
+ *   produced few tool calls is still counted; idle gaps over `ACTIVE_GAP_CAP_MS`
+ *   (5 min) are not credited. Live sessions and pre-v2 imports lack that signal
+ *   and fall back to the action-event stream (`activeTimeBasis: "events"`).
+ * - `sessionSpanMs` overcounts (includes idle) and `commandTimeMs` is
+ *   shell-execution only (0 for `claude-code-import`); both are kept as context.
+ *
+ * The per-day view buckets the union intervals by `timeZone` (logs are UTC, so
+ * a billing day needs an explicit zone). A union interval crossing local
+ * midnight is attributed to its start day; per-day time still sums to the
+ * billable total. Availability flags let callers caveat each measure.
  *
  * Session enumeration goes through {@link loadSessionEntries} (the handoff /
  * decisions path), so `session.yaml`-broken sessions are skipped consistently.
  */
 export async function computeWorkStats(input: WorkStatsInput): Promise<WorkStatsResult> {
   const { now } = input;
+  const timeZone = resolveTimeZone(input.timeZone);
   // Surface events_jsonl_unreadable exactly once per session even when the
   // throw happens in our own replay loop below (verbatim from the renderers).
   const unreadableEmitted = new Set<string>();
@@ -181,12 +262,21 @@ export async function computeWorkStats(input: WorkStatsInput): Promise<WorkStats
     );
   }
 
+  // Union every session's active intervals once; both the billable total and
+  // the per-day view are attributed from the same merged ranges so they agree.
+  const allIntervals: IntervalMs[] = [];
+  for (const s of sessions) allIntervals.push(...intervalsIsoToMs(s.activeIntervals));
+  const union = unionDurationMs(allIntervals);
+
   return {
     generatedAt: now.toISOString(),
-    totals: computeTotals(sessions),
+    activeGapCapMs: ACTIVE_GAP_CAP_MS,
+    timeZone,
+    totals: computeTotals(sessions, union.ms),
     sessions,
     bySource: computeBySource(sessions),
     byStatus: computeByStatus(sessions),
+    byDay: computeByDay(sessions, union.merged, timeZone),
   };
 }
 
@@ -221,6 +311,7 @@ export function sessionWorkStatsFromEvents(
   }
   const span = computeSpan(inner.started_at, inner.ended_at, now);
   const tokens = readTokens(inner.metrics);
+  const active = resolveActiveTime(inner.metrics, timestamps);
   return {
     sessionId,
     label: inner.label,
@@ -231,7 +322,9 @@ export function sessionWorkStatsFromEvents(
     open: inner.ended_at === undefined,
     sessionSpanMs: span.ms,
     commandTimeMs,
-    activeTimeMs: activeTime(timestamps),
+    activeTimeMs: active.ms,
+    activeTimeBasis: active.basis,
+    activeIntervals: intervalsMsToIso(active.intervals),
     commandCount,
     fileChangedCount,
     decisionCount,
@@ -240,12 +333,32 @@ export function sessionWorkStatsFromEvents(
     availability: {
       span: true,
       commandTime: inner.source.kind !== "claude-code-import",
-      activeTime: timestamps.length >= 2,
+      activeTime: active.intervals.length > 0,
       tokens: hasTokens(tokens),
     },
     spanClamped: span.clamped,
     eventsUnreadable,
   };
+}
+
+/**
+ * Resolve a session's active time + intervals. Prefer the engaged-time
+ * intervals stored at import (they capture conversation turns the event stream
+ * misses); otherwise derive from the action-event timestamps. Either way
+ * `ms` equals the summed interval duration.
+ */
+function resolveActiveTime(
+  metrics: SessionMetrics | undefined,
+  eventTimestamps: number[],
+): { ms: number; intervals: IntervalMs[]; basis: ActiveTimeBasis } {
+  const stored = metrics?.active_intervals;
+  if (stored !== undefined && stored.length > 0) {
+    const intervals = intervalsIsoToMs(stored);
+    const ms = intervals.reduce((n, [start, end]) => n + (end - start), 0);
+    return { ms, intervals, basis: "engaged-turns" };
+  }
+  const derived = activeTimeFromTimestamps(eventTimestamps, ACTIVE_GAP_CAP_MS);
+  return { ms: derived.ms, intervals: derived.intervals, basis: "events" };
 }
 
 function computeSpan(
@@ -258,21 +371,6 @@ function computeSpan(
   if (!Number.isFinite(start) || !Number.isFinite(end)) return { ms: 0, clamped: true };
   const raw = end - start;
   return raw < 0 ? { ms: 0, clamped: true } : { ms: raw, clamped: false };
-}
-
-/** Sum of inter-event gaps, each clamped to [0, ACTIVE_GAP_CAP_MS]. */
-function activeTime(timestamps: number[]): number {
-  if (timestamps.length < 2) return 0;
-  const sorted = [...timestamps].sort((a, b) => a - b);
-  let total = 0;
-  for (let i = 1; i < sorted.length; i++) {
-    const prev = sorted[i - 1];
-    const curr = sorted[i];
-    if (prev === undefined || curr === undefined) continue;
-    const gap = curr - prev;
-    total += Math.min(Math.max(gap, 0), ACTIVE_GAP_CAP_MS);
-  }
-  return total;
 }
 
 function readTokens(metrics: SessionMetrics | undefined): TokenTotals {
@@ -299,7 +397,10 @@ function addTokens(a: TokenTotals, b: TokenTotals): void {
   a.reasoning += b.reasoning;
 }
 
-function computeTotals(sessions: readonly SessionWorkStats[]): WorkStatsTotals {
+function computeTotals(
+  sessions: readonly SessionWorkStats[],
+  billableActiveTimeMs: number,
+): WorkStatsTotals {
   const tokens = emptyTokens();
   const totals: WorkStatsTotals = {
     sessionCount: sessions.length,
@@ -307,6 +408,7 @@ function computeTotals(sessions: readonly SessionWorkStats[]): WorkStatsTotals {
     sessionSpanMs: 0,
     commandTimeMs: 0,
     activeTimeMs: 0,
+    billableActiveTimeMs,
     commandCount: 0,
     fileChangedCount: 0,
     decisionCount: 0,
@@ -376,4 +478,58 @@ function computeByStatus(sessions: readonly SessionWorkStats[]): StatusCount[] {
     if (count !== undefined && count > 0) ordered.push({ status, count });
   }
   return ordered;
+}
+
+/**
+ * Build the per-day billing view. Time comes from the pre-merged union
+ * intervals, attributed to each interval's start date so the per-day totals sum
+ * exactly to `totals.billableActiveTimeMs`. Volume (tokens, action counts) is
+ * attributed to each session's `started_at` date.
+ */
+function computeByDay(
+  sessions: readonly SessionWorkStats[],
+  unionMerged: readonly IntervalMs[],
+  timeZone: string,
+): DayWorkStats[] {
+  const days = new Map<string, DayWorkStats>();
+  const ensure = (date: string): DayWorkStats => {
+    let day = days.get(date);
+    if (day === undefined) {
+      day = {
+        date,
+        billableActiveTimeMs: 0,
+        sessionCount: 0,
+        commandCount: 0,
+        fileChangedCount: 0,
+        decisionCount: 0,
+        tokens: emptyTokens(),
+      };
+      days.set(date, day);
+    }
+    return day;
+  };
+  for (const [start, end] of unionMerged) {
+    ensure(tzDate(start, timeZone)).billableActiveTimeMs += end - start;
+  }
+  for (const s of sessions) {
+    const startedMs = Date.parse(s.startedAt);
+    if (!Number.isFinite(startedMs)) continue;
+    const day = ensure(tzDate(startedMs, timeZone));
+    day.sessionCount++;
+    day.commandCount += s.commandCount;
+    day.fileChangedCount += s.fileChangedCount;
+    day.decisionCount += s.decisionCount;
+    addTokens(day.tokens, s.tokens);
+  }
+  return [...days.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Calendar date (`YYYY-MM-DD`) of an instant in the given IANA timezone. */
+function tzDate(ms: number, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(ms));
 }

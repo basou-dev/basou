@@ -330,11 +330,10 @@ describe("claudeTranscriptToImportPayload", () => {
     const payload = transform(records);
     expect(payload).not.toBeNull();
     if (payload === null) return;
-    expect(payload.session.metrics).toEqual({
-      output_tokens: 500,
-      input_tokens: 14,
-      cached_input_tokens: 11000,
-    });
+    // Token fields are summed; engaged-time fields may also be present.
+    expect(payload.session.metrics?.output_tokens).toBe(500);
+    expect(payload.session.metrics?.input_tokens).toBe(14);
+    expect(payload.session.metrics?.cached_input_tokens).toBe(11000);
   });
 
   it("counts usage once per message.id (split thinking/text/tool_use records)", () => {
@@ -357,7 +356,7 @@ describe("claudeTranscriptToImportPayload", () => {
     expect(payload.session.metrics).toEqual({ output_tokens: 1000, input_tokens: 20 });
   });
 
-  it("omits metrics when no usage is present", () => {
+  it("omits metrics when no usage and too few turns are present", () => {
     const records: ClaudeTranscriptRecord[] = [
       {
         type: "assistant",
@@ -370,5 +369,106 @@ describe("claudeTranscriptToImportPayload", () => {
     expect(payload).not.toBeNull();
     if (payload === null) return;
     expect(payload.session.metrics).toBeUndefined();
+  });
+
+  it("captures engaged-time intervals from human and assistant turns", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "user",
+        timestamp: "2026-05-10T00:00:00.000Z",
+        cwd: CWD,
+        message: { content: [{ type: "text", text: "do X" }] },
+      },
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:01:00.000Z",
+        cwd: CWD,
+        message: {
+          id: "m1",
+          content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }],
+        },
+      },
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:02:00.000Z",
+        cwd: CWD,
+        message: { id: "m2", content: [{ type: "text", text: "done" }] },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+    // Two sub-cap 1-minute gaps merge into one 2-minute active interval.
+    expect(payload.session.metrics?.active_time_ms).toBe(2 * 60 * 1000);
+    expect(payload.session.metrics?.active_gap_cap_ms).toBe(5 * 60 * 1000);
+    expect(payload.session.metrics?.active_time_method).toBe("engaged-turns");
+    expect(payload.session.metrics?.active_intervals).toEqual([
+      { start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:02:00.000Z" },
+    ]);
+  });
+
+  it("excludes tool_result-only user records from the engagement series", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "user",
+        timestamp: "2026-05-10T00:00:00.000Z",
+        cwd: CWD,
+        message: { content: [{ type: "text", text: "go" }] },
+      },
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:01:00.000Z",
+        cwd: CWD,
+        message: {
+          id: "m1",
+          content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }],
+        },
+      },
+      // Tool-feedback loop 9 min later: must not extend engaged time.
+      {
+        type: "user",
+        timestamp: "2026-05-10T00:10:00.000Z",
+        cwd: CWD,
+        message: { content: [{ type: "tool_result", tool_use_id: "x", content: "ok" }] },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    // Only the human prompt -> assistant gap (1 min) is credited.
+    expect(payload.session.metrics?.active_time_ms).toBe(60 * 1000);
+  });
+
+  it("excludes sidechain records from the engagement series", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "user",
+        timestamp: "2026-05-10T00:00:00.000Z",
+        cwd: CWD,
+        message: { content: [{ type: "text", text: "go" }] },
+      },
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:01:00.000Z",
+        cwd: CWD,
+        message: {
+          id: "m1",
+          content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }],
+        },
+      },
+      // A sub-agent sidechain turn 9 min later: concurrent, not human-driven.
+      {
+        type: "assistant",
+        isSidechain: true,
+        timestamp: "2026-05-10T00:10:00.000Z",
+        cwd: CWD,
+        message: { id: "side", content: [{ type: "text", text: "..." }] },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.metrics?.active_time_ms).toBe(60 * 1000);
   });
 });

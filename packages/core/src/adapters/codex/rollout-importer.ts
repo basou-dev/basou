@@ -2,6 +2,12 @@ import { type PrefixedId, prefixedUlid } from "../../ids/ulid.js";
 import type { Event } from "../../schemas/event.schema.js";
 import type { Manifest } from "../../schemas/manifest.schema.js";
 import type { SessionImportPayload } from "../../schemas/session-import.schema.js";
+import {
+  ACTIVE_GAP_CAP_MS,
+  activeTimeFromTimestamps,
+  ENGAGED_TURNS_METHOD,
+  intervalsMsToIso,
+} from "../../stats/active-time.js";
 
 /**
  * The `source` string stamped on every event derived from an OpenAI Codex
@@ -80,6 +86,11 @@ export function codexRolloutToImportPayload(
   // Codex emits cumulative token_count events; the last one's
   // total_token_usage is the session total (see metrics on the payload below).
   let lastTokenTotals: Record<string, unknown> | undefined;
+  // Genuine engagement timestamps for the billing-oriented active-time metric:
+  // conversation turns (user / agent messages and task boundaries) plus the
+  // exec_command actions. Token-count heartbeats, reasoning, web-search and
+  // tool-output records are excluded so they cannot inflate billable time.
+  const engagementTsMs: number[] = [];
 
   for (const record of records) {
     const ts = readString(record.timestamp);
@@ -107,6 +118,21 @@ export function codexRolloutToImportPayload(
       continue;
     }
 
+    if (readString(record.type) === "event_msg") {
+      const pt = readString(payload.type);
+      if (
+        pt === "user_message" ||
+        pt === "agent_message" ||
+        pt === "task_started" ||
+        pt === "task_complete"
+      ) {
+        const tsMs = Date.parse(ts);
+        if (Number.isFinite(tsMs)) engagementTsMs.push(tsMs);
+      }
+      // event_msg records are never response_items; skip the rest.
+      continue;
+    }
+
     if (readString(record.type) !== "response_item") continue;
     if (readString(payload.type) !== "function_call") continue;
     if (readString(payload.name) !== "exec_command") continue;
@@ -115,6 +141,8 @@ export function codexRolloutToImportPayload(
     if (command === undefined) continue;
     const cwd = command.workdir ?? workingDir ?? ".";
     const output = readCallId(payload.call_id, outputsByCallId);
+    const execTsMs = Date.parse(ts);
+    if (Number.isFinite(execTsMs)) engagementTsMs.push(execTsMs);
     derived.push(
       commandExecutedEvent(ts, placeholderSessionId, command.cmd, cwd, {
         exitCode: parseExitCode(output),
@@ -148,9 +176,18 @@ export function codexRolloutToImportPayload(
   const date = minTs.slice(0, 10);
   const label = `codex ${date}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}`;
 
+  // Engaged-active time from the genuine engagement series (needs >= 2 points
+  // to bound any gap); omitted when too sparse so stats falls back to the
+  // event-derived measure.
+  const active =
+    engagementTsMs.length >= 2
+      ? activeTimeFromTimestamps(engagementTsMs, ACTIVE_GAP_CAP_MS)
+      : undefined;
+
   // Token totals from the last cumulative token_count event; include only the
-  // fields actually present (> 0), omitting metrics entirely if none.
-  const metricsFields =
+  // fields actually present (> 0). Metrics is emitted if either token usage or
+  // an engaged-time signal is present.
+  const tokenFields =
     lastTokenTotals === undefined
       ? {}
       : {
@@ -167,6 +204,17 @@ export function codexRolloutToImportPayload(
             ? { reasoning_output_tokens: readNonNegInt(lastTokenTotals.reasoning_output_tokens) }
             : {}),
         };
+  const metricsFields = {
+    ...tokenFields,
+    ...(active !== undefined && active.ms > 0
+      ? {
+          active_time_ms: active.ms,
+          active_intervals: intervalsMsToIso(active.intervals),
+          active_gap_cap_ms: ACTIVE_GAP_CAP_MS,
+          active_time_method: ENGAGED_TURNS_METHOD,
+        }
+      : {}),
+  };
   const metrics = Object.keys(metricsFields).length > 0 ? metricsFields : undefined;
 
   const payload: SessionImportPayload = {

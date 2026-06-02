@@ -56,8 +56,9 @@ async function placeSession(
   opts: {
     id: string;
     source: string;
+    startedAt?: string;
     endedAt?: string;
-    metrics?: Record<string, number>;
+    metrics?: Record<string, unknown>;
     commands?: Array<{ at: string; durationMs: number }>;
   },
 ): Promise<void> {
@@ -69,7 +70,7 @@ async function placeSession(
       id: opts.id,
       workspace_id: FIXED_WS_ID,
       source: { kind: opts.source, version: "0.1.0" },
-      started_at: "2026-05-10T00:00:00.000Z",
+      started_at: opts.startedAt ?? "2026-05-10T00:00:00.000Z",
       ...(opts.endedAt !== undefined ? { ended_at: opts.endedAt } : {}),
       status: "imported",
       working_directory: "/tmp/fixture",
@@ -134,7 +135,7 @@ describe("basou stats", () => {
     expect(text).toContain("Sessions: 1");
     expect(text).toContain("Output tokens:     5,000");
     expect(text).toContain("Reasoning tokens:");
-    expect(text).toContain("Active:");
+    expect(text).toContain("Billable active:");
     expect(text).toContain("Command:");
   });
 
@@ -163,15 +164,19 @@ describe("basou stats", () => {
     const out = captureStdout();
     await doRunStats({ json: true }, ctx(repo));
     const parsed = JSON.parse(out.join("\n")) as {
-      totals: { sessionCount: number };
+      totals: { sessionCount: number; billableActiveTimeMs: number };
       sessions: unknown[];
       bySource: unknown[];
       byStatus: unknown[];
+      byDay: unknown[];
       generatedAt: string;
+      timeZone: string;
     };
     expect(parsed.totals.sessionCount).toBe(1);
     expect(parsed.sessions).toHaveLength(1);
     expect(parsed.bySource).toHaveLength(1);
+    expect(Array.isArray(parsed.byDay)).toBe(true);
+    expect(typeof parsed.totals.billableActiveTimeMs).toBe("number");
     expect(parsed.generatedAt).toBe(NOW.toISOString());
   });
 
@@ -188,6 +193,53 @@ describe("basou stats", () => {
     const text = out.join("\n");
     expect(text).toContain("By source:");
     expect(text).toContain("codex-import:");
+  });
+
+  it("--by-day prints a per-day billing breakdown", async () => {
+    const repo = await setupInitedRepo();
+    await placeSession(repo, {
+      id: "ses_01HXABCDEF1234567890ABCDE5",
+      source: "codex-import",
+      endedAt: "2026-05-10T00:30:00.000Z",
+      metrics: {
+        output_tokens: 1000,
+        active_intervals: [{ start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:30:00.000Z" }],
+        active_gap_cap_ms: 300000,
+        active_time_method: "engaged-turns",
+      },
+      commands: [{ at: "2026-05-10T00:00:30.000Z", durationMs: 1000 }],
+    });
+    const out = captureStdout();
+    await doRunStats({ byDay: true }, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("By day");
+    // tz-agnostic: the interval lands on 2026-05-09 or -10 depending on host tz.
+    expect(text).toMatch(/2026-05-\d{2}: /);
+  });
+
+  it("shows a summed line only when concurrent sessions overlap", async () => {
+    const repo = await setupInitedRepo();
+    await placeSession(repo, {
+      id: "ses_01HXABCDEF1234567890ABCDE6",
+      source: "codex-import",
+      endedAt: "2026-05-10T00:30:00.000Z",
+      metrics: {
+        active_intervals: [{ start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:30:00.000Z" }],
+      },
+    });
+    await placeSession(repo, {
+      id: "ses_01HXABCDEF1234567890ABCDE7",
+      source: "codex-import",
+      endedAt: "2026-05-10T00:45:00.000Z",
+      metrics: {
+        active_intervals: [{ start: "2026-05-10T00:15:00.000Z", end: "2026-05-10T00:45:00.000Z" }],
+      },
+    });
+    const out = captureStdout();
+    await doRunStats({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("Billable active:");
+    expect(text).toContain("Summed:");
   });
 
   it("exits 1 on an uninitialized workspace", async () => {

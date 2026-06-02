@@ -244,7 +244,7 @@ describe("codexRolloutToImportPayload", () => {
     });
   });
 
-  it("omits metrics when no token_count event is present", () => {
+  it("omits metrics when no token_count and too few turns are present", () => {
     const records: CodexRolloutRecord[] = [
       sessionMeta("2026-05-10T00:00:00.000Z"),
       execCall("2026-05-10T00:00:01.000Z", "call_1", "ls"),
@@ -253,5 +253,40 @@ describe("codexRolloutToImportPayload", () => {
     expect(payload).not.toBeNull();
     if (payload === null) return;
     expect(payload.session.metrics).toBeUndefined();
+  });
+
+  it("captures engaged time from conversation + exec, excluding token_count heartbeats", () => {
+    const eventMsg = (ts: string, type: string): CodexRolloutRecord => ({
+      type: "event_msg",
+      timestamp: ts,
+      payload: { type, message: "..." },
+    });
+    const tokenEvent = (ts: string): CodexRolloutRecord => ({
+      type: "event_msg",
+      timestamp: ts,
+      payload: { type: "token_count", info: { total_token_usage: { output_tokens: 1 } } },
+    });
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      eventMsg("2026-05-10T00:00:00.000Z", "user_message"),
+      execCall("2026-05-10T00:01:00.000Z", "call_1", "ls"),
+      eventMsg("2026-05-10T00:02:00.000Z", "agent_message"),
+      // A token_count heartbeat 6 min after the last turn: if it were part of
+      // the engagement series it would add a capped 5-min interval. It must not.
+      tokenEvent("2026-05-10T00:08:00.000Z"),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+    // user(00:00) -> exec(00:01) -> agent(00:02): two sub-cap gaps = 2 minutes.
+    expect(payload.session.metrics?.active_time_ms).toBe(2 * 60 * 1000);
+    expect(payload.session.metrics?.active_gap_cap_ms).toBe(5 * 60 * 1000);
+    expect(payload.session.metrics?.active_time_method).toBe("engaged-turns");
+    expect(payload.session.metrics?.active_intervals).toEqual([
+      { start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:02:00.000Z" },
+    ]);
+    // The token_count is still captured as token usage, just not as engagement.
+    expect(payload.session.metrics?.output_tokens).toBe(1);
   });
 });

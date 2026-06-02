@@ -388,7 +388,8 @@ function formatSessionWork(session: Session, events: Event[], now: Date): string
   const parts: string[] = [];
   if (w.tokens.output > 0) parts.push(`${w.tokens.output.toLocaleString("en-US")} output tokens`);
   parts.push(`${w.commandCount} cmd / ${w.fileChangedCount} files / ${w.decisionCount} dec`);
-  parts.push(`active ${formatDurationMs(w.activeTimeMs)}`);
+  const activeBasis = w.activeTimeBasis === "engaged-turns" ? "turns" : "events";
+  parts.push(`active ${formatDurationMs(w.activeTimeMs)} (${activeBasis})`);
   parts.push(`span ${formatDurationMs(w.sessionSpanMs)}${w.open ? " (open)" : ""}`);
   parts.push(
     w.availability.commandTime

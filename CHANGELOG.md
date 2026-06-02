@@ -10,20 +10,31 @@ All notable changes to **basou** are recorded here. The project follows
 - `basou stats` — report how much the AI worked across the workspace's
   sessions. It leads with output VOLUME (model output tokens, plus command /
   file / decision counts), which is the most direct "how much work" signal,
-  and reports TIME measures as labeled proxies: `active` (a focus heuristic
-  that excludes idle gaps over 5 minutes), `span` (total elapsed, running
-  sessions counted to now), and `command` (real shell-execution time).
-  Availability is tracked per source so the output never silently misleads:
-  `claude-code-import` sessions report no shell time, and token totals are
-  absent until a session is (re-)imported. `--by-source` breaks the totals
-  down by source kind; `--json` emits the full structured result. The same
+  and reports TIME measures as labeled proxies for billable human harness
+  labor, with active time as the billing primary. `Billable active` is the
+  UNION of every session's active intervals, so two sessions run concurrently
+  do not bill the same wall-clock twice; the naive per-session `Summed` is
+  shown alongside only when sessions overlapped. Per-session active time comes
+  from each session's genuine engagement series (conversation turns plus action
+  events), so design discussion that produced few tool calls is still counted;
+  idle gaps over 5 minutes are not credited. `span` (total elapsed) and
+  `command` (real shell-execution time) remain as context. Availability is
+  tracked per source so the output never silently misleads:
+  `claude-code-import` sessions report no shell time, sessions without captured
+  engagement fall back to the event stream, and token totals are absent until a
+  session is (re-)imported. `--by-source` breaks the totals down by source
+  kind; `--by-day` shows the per-day time x volume billing view (bucketed in
+  the host timezone); `--json` emits the full structured result. The same
   per-session summary appears as a `Work:` line in `basou session show`, and a
   Stats tab in `basou view`.
-- `session.metrics` (additive, optional) — a model-usage rollup on
-  `session.yaml`: `output_tokens` / `input_tokens` / `cached_input_tokens` /
-  `reasoning_output_tokens` (Codex-only). Populated at import time by the
-  Claude and Codex adapters from the native log's token usage; absent for live
-  `run` / `exec` sessions and for sessions imported before this field existed
+- `session.metrics` (additive, optional) — a per-session rollup on
+  `session.yaml`. Model usage: `output_tokens` / `input_tokens` /
+  `cached_input_tokens` / `reasoning_output_tokens` (Codex-only). Engaged time:
+  `active_time_ms`, the merged wall-clock `active_intervals`, and the
+  `active_gap_cap_ms` / `active_time_method` methodology lock. Populated at
+  import time by the Claude and Codex adapters from the native log (token usage,
+  and the engagement timestamps the event stream otherwise discards); absent for
+  live `run` / `exec` sessions and for sessions imported before a field existed
   (re-import with `--force`, or `basou refresh`, to backfill).
 - `basou refresh` — one command that imports every adapter's native logs for
   the project and regenerates `handoff.md` + `decisions.md`, instead of running

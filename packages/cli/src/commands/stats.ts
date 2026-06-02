@@ -19,6 +19,7 @@ import { formatDurationMs } from "../lib/format-duration.js";
 export type StatsOptions = {
   json?: boolean;
   bySource?: boolean;
+  byDay?: boolean;
   verbose?: boolean;
 };
 
@@ -39,6 +40,7 @@ export function registerStatsCommand(program: Command): void {
     .command("stats")
     .description("Report how much the AI worked (output volume + time proxies) across sessions")
     .option("--by-source", "Break the totals down by session source kind")
+    .option("--by-day", "Break billable time and volume down by calendar day")
     .option("--json", "Output the full stats as JSON")
     .option("-v, --verbose", "Show error causes")
     .action(async (options: StatsOptions) => {
@@ -75,10 +77,10 @@ export async function doRunStats(options: StatsOptions, ctx: StatsContext): Prom
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  printStatsText(result, options.bySource === true);
+  printStatsText(result, options.bySource === true, options.byDay === true);
 }
 
-function printStatsText(result: WorkStatsResult, bySource: boolean): void {
+function printStatsText(result: WorkStatsResult, bySource: boolean, byDay: boolean): void {
   const t = result.totals;
   const statusPart =
     result.byStatus.length > 0
@@ -104,17 +106,31 @@ function printStatsText(result: WorkStatsResult, bySource: boolean): void {
   );
 
   console.log("");
-  console.log("Time (proxies, not model compute):");
+  console.log("Time (proxies for human harness labor; active = billing primary):");
+  const turnSessions = result.sessions.filter((s) => s.activeTimeBasis === "engaged-turns").length;
+  const basisCaveat =
+    turnSessions === t.sessionCount
+      ? "engaged turns"
+      : turnSessions === 0
+        ? "event stream; re-import to capture conversation"
+        : `engaged turns on ${turnSessions} of ${t.sessionCount} sessions, event stream on the rest`;
+  console.log(
+    `  Billable active: ${formatDurationMs(t.billableActiveTimeMs)}  (union; ${basisCaveat}; idle gaps > 5m excluded; tz ${result.timeZone})`,
+  );
+  if (t.activeTimeMs !== t.billableActiveTimeMs) {
+    console.log(
+      `  Summed:          ${formatDurationMs(t.activeTimeMs)}  (per-session sum; concurrent sessions double-counted)`,
+    );
+  }
   const openPart = t.openSessionCount > 0 ? `; ${t.openSessionCount} open counted to now` : "";
   console.log(
-    `  Active:   ${formatDurationMs(t.activeTimeMs)}  (heuristic: idle gaps > 5m excluded)`,
+    `  Span:            ${formatDurationMs(t.sessionSpanMs)}  (total elapsed${openPart})`,
   );
-  console.log(`  Span:     ${formatDurationMs(t.sessionSpanMs)}  (total elapsed${openPart})`);
   const cmdCaveat = t.commandTimeReliable
     ? ""
     : "; some sessions (e.g. claude-code-import) report 0 shell time";
   console.log(
-    `  Command:  ${formatDurationMs(t.commandTimeMs)}  (real shell execution${cmdCaveat})`,
+    `  Command:         ${formatDurationMs(t.commandTimeMs)}  (real shell execution${cmdCaveat})`,
   );
 
   if (bySource && result.bySource.length > 0) {
@@ -122,6 +138,16 @@ function printStatsText(result: WorkStatsResult, bySource: boolean): void {
     console.log("By source:");
     for (const s of result.bySource) {
       console.log(`  ${s.sourceKind}: ${describeSource(s)}`);
+    }
+  }
+
+  if (byDay && result.byDay.length > 0) {
+    console.log("");
+    console.log("By day (billable time x volume):");
+    for (const d of result.byDay) {
+      console.log(
+        `  ${d.date}: ${formatDurationMs(d.billableActiveTimeMs)} active, ${formatInt(d.tokens.output)} out tok, ${d.commandCount} cmd / ${d.fileChangedCount} files / ${d.decisionCount} dec`,
+      );
     }
   }
 }
