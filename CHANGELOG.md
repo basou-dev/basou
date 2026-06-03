@@ -3,7 +3,7 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
-## Unreleased
+## 0.5.0 — 2026-06-04
 
 ### Added
 
@@ -85,6 +85,11 @@ All notable changes to **basou** are recorded here. The project follows
   structured question / answer record, so neither has a clean signal to map.
 - `codex-import` session `source.kind` (additive enum value) to distinguish
   Codex-rollout-derived sessions from Claude imports and live adapter runs.
+- `@basou/cli/program` — a side-effect-free `buildProgram()` (and
+  `BASOU_CLI_VERSION`) export. Importing it builds the full command tree
+  without parsing `argv` or running the CLI, so tooling can introspect the
+  command surface — for example to generate the command reference on
+  basou.dev — instead of scraping `--help`.
 
 ## 0.3.1 — 2026-05-21
 
