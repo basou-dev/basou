@@ -1,0 +1,92 @@
+name: Docs-site bump smoke test
+
+# TEMPORARY. Validates the cross-repo docs-bump path end to end — App token
+# -> checkout basou-site -> pnpm -> create-pull-request — without cutting a
+# real release. It opens a "TEST (do not merge)" pull request on basou-site
+# using a throwaway one-line diff. Delete this workflow once the path is
+# verified. workflow_dispatch only, so it never runs on push or tag.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    name: Open a TEST docs bump PR on basou-site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check for the docs-site bump App credentials
+        env:
+          APP_ID: ${{ secrets.SITE_BUMP_APP_ID }}
+          PRIVATE_KEY: ${{ secrets.SITE_BUMP_APP_PRIVATE_KEY }}
+        run: |
+          if [ -z "$APP_ID" ] || [ -z "$PRIVATE_KEY" ]; then
+            echo "::error::SITE_BUMP_APP_ID / SITE_BUMP_APP_PRIVATE_KEY are not both set; cannot run the smoke test."
+            exit 1
+          fi
+
+      - name: Mint a GitHub App token scoped to basou-site
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SITE_BUMP_APP_ID }}
+          private-key: ${{ secrets.SITE_BUMP_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: basou-site
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Checkout basou-site
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ github.repository_owner }}/basou-site
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+          path: basou-site
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
+        with:
+          package_json_file: basou-site/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version-file: basou-site/.nvmrc
+
+      - name: Run the generator and force a throwaway diff
+        working-directory: basou-site
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          # Exercise the same generator the real job runs (a no-op at the
+          # current published version).
+          if [ -f scripts/gen-docs.mjs ]; then
+            pnpm gen:docs
+          fi
+          # Force a harmless one-line diff inside the PR allowlist so
+          # create-pull-request has something to open. It is an MDX comment
+          # (invisible) and this PR is never merged.
+          printf '\n{/* docs-site bump smoke test — safe to discard, do not merge */}\n' >> src/content/docs/index.mdx
+
+      - name: Open the TEST pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          path: basou-site
+          base: main
+          branch: smoke-test/docs-site-bump
+          delete-branch: true
+          add-paths: |
+            src/content/docs/**
+          commit-message: 'test: docs-site bump path smoke test (do not merge)'
+          title: 'TEST (do not merge): docs-site bump path smoke test'
+          body: |
+            Verifies the cross-repo docs bump path — App token, checkout,
+            pnpm, create-pull-request — end to end. Safe to close without
+            merging; the diff is a throwaway MDX comment.
