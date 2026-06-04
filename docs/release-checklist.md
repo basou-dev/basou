@@ -19,9 +19,25 @@ release.
 ## Pre-publish dry-run (verified 2026-05-22)
 
 Run from `~/projects/basou` after a clean `pnpm -r build`. Each
-command should exit 0 and print a `Tarball Contents` block listing
-exactly five files (`LICENSE`, `dist/index.js`, `dist/index.js.map`,
-`dist/index.d.ts`, `package.json`).
+command should exit 0 and print a `Tarball Contents` block. The file
+set is no longer "five files for everyone": it grew as the packages
+did, so compare against the most recent captured output below rather
+than a fixed count. As of `0.6.0`:
+
+- `@basou/sdk` — five files (`LICENSE`, `dist/index.{js,js.map,d.ts}`,
+  `package.json`); now a real read-only runtime API rather than the
+  `0.3.1` types-only placeholder.
+- `@basou/cli` — eight files: the five above plus a second
+  `dist/program.{js,js.map,d.ts}` entry point (the side-effect-free
+  `@basou/cli/program` export added in `0.5.0`).
+- `@basou/core` — thirteen files: the five above plus the eight
+  `schemas/*.json` JSON Schema artifacts shipped under `./schemas/*`
+  (added in `0.6.0`).
+
+Since publishing is now done by the OIDC trusted-publisher workflow on
+a `vX.Y.Z` tag push (`.github/workflows/release.yml`), this dry-run is
+a pre-tag sanity check rather than the publish mechanism itself; the
+manual `pnpm publish` procedure below remains the documented fallback.
 
 ```bash
 pnpm -r build
@@ -61,6 +77,50 @@ Per-file sizes (`npm notice` lines):
   dist/index.js     114 B
   dist/index.js.map 153 B
   package.json     979 B
+```
+
+### Captured dry-run output (`0.6.0`, verified 2026-06-05)
+
+| Package        | Package size | Unpacked size | Files | Notes                                            |
+|----------------|--------------|---------------|-------|--------------------------------------------------|
+| `@basou/core`  | 204.3 kB     | 930.6 kB      | 13    | dist (3) + 8 `schemas/*.json` + LICENSE + manifest |
+| `@basou/cli`   | 266.7 kB     |   1.2 MB      | 8     | two entry points (`index` + `program`)           |
+| `@basou/sdk`   |  12.5 kB     |  45.0 kB      | 5     | now a real runtime read API, not a placeholder   |
+
+Per-file sizes (`npm notice` lines):
+
+```
+@basou/core@0.6.0
+  LICENSE                          11.4 kB
+  dist/index.d.ts                 165.0 kB
+  dist/index.js                   161.5 kB
+  dist/index.js.map               482.0 kB
+  package.json                      1.5 kB
+  schemas/approval.schema.json      3.4 kB
+  schemas/event.schema.json        36.9 kB
+  schemas/manifest.schema.json      3.7 kB
+  schemas/session-import.schema.json 51.0 kB
+  schemas/session.schema.json       7.1 kB
+  schemas/status.schema.json        2.2 kB
+  schemas/task-index.schema.json    2.1 kB
+  schemas/task.schema.json          2.8 kB
+
+@basou/cli@0.6.0
+  LICENSE            11.4 kB
+  dist/index.d.ts      13 B
+  dist/index.js     194.7 kB
+  dist/index.js.map 404.9 kB
+  dist/program.d.ts   590 B
+  dist/program.js   194.5 kB
+  dist/program.js.map 403.6 kB
+  package.json        1.3 kB
+
+@basou/sdk@0.6.0
+  LICENSE            11.4 kB
+  dist/index.d.ts     7.9 kB
+  dist/index.js       5.5 kB
+  dist/index.js.map  19.0 kB
+  package.json        1.2 kB
 ```
 
 If any number diverges by more than ~10% on a future release without
