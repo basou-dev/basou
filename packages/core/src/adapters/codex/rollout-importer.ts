@@ -6,7 +6,10 @@ import {
   ACTIVE_GAP_CAP_MS,
   activeTimeFromTimestamps,
   ENGAGED_TURNS_METHOD,
+  type IntervalMs,
   intervalsMsToIso,
+  TURN_INTERVALS_METHOD,
+  unionDurationMs,
 } from "../../stats/active-time.js";
 
 /**
@@ -51,6 +54,13 @@ export type CodexRolloutToPayloadOptions = {
  *   are parsed from the paired `function_call_output` (matched by `call_id`),
  *   whose text carries `Process exited with code N` and `Wall time: X seconds`.
  *
+ * Per-session `metrics` are also derived: token totals from the cumulative
+ * `token_count` events; active time from the real `task_started` ->
+ * `task_complete` turn spans (in-turn, uncapped) unioned with the gap-capped
+ * engagement series (between-turn bridging), labeled `turn-intervals`; and
+ * `machine_active_time_ms` from the summed `task_complete.duration_ms` (model
+ * compute time, a subset of active time).
+ *
  * Unlike the Claude importer this derives no `file_changed`: Codex has no
  * dedicated edit tool and applies edits inside `exec_command` (e.g.
  * `apply_patch`), so there is no clean file-change signal to map. Decisions
@@ -75,6 +85,10 @@ export function codexRolloutToImportPayload(
   // which arrives after the originating `function_call`; pre-index outputs by
   // call_id so commands can be completed in the single forward pass below.
   const outputsByCallId = indexOutputs(records);
+  // A turn's start lives on its `task_started`; pair it with the matching
+  // `task_complete` by turn_id so each turn yields a real wall-clock interval.
+  // Pre-indexed (rather than matched inline) so it is robust to record order.
+  const turnStartMsByTurnId = indexTaskStarts(records);
   const derived: Event[] = [];
   // Real rollouts are written in arrival order, but track the earliest /
   // latest timestamp explicitly (rather than trusting first / last line) and
@@ -90,7 +104,22 @@ export function codexRolloutToImportPayload(
   // conversation turns (user / agent messages and task boundaries) plus the
   // exec_command actions. Token-count heartbeats, reasoning, web-search and
   // tool-output records are excluded so they cannot inflate billable time.
+  // These bridge BETWEEN turns (gap-capped); within a turn the explicit
+  // task interval below supersedes them on merge.
   const engagementTsMs: number[] = [];
+  // Real per-turn wall-clock spans (`task_started` -> `task_complete`). Used
+  // for the in-turn portion of active time (uncapped, and crediting the final
+  // turn), unioned with the gap-capped engagement series above.
+  // One per (deduped) `task_complete`: the turn's wall-clock interval and its
+  // reported model-compute duration. Resolved into active time + machine time
+  // after the loop, once `minTs` is known (so a reconstructed start can be
+  // clamped to the session floor). `durationMs` is 0 when the rollout records
+  // none (older format).
+  const completions: Array<{ interval: IntervalMs | undefined; durationMs: number }> = [];
+  // De-dup completions by turn_id: a duplicate `task_complete` for the same
+  // turn would double-count machine time (breaking machine <= active) while the
+  // union-merged interval counts the turn once. First completion per turn wins.
+  const completedTurnIds = new Set<string>();
 
   for (const record of records) {
     const ts = readString(record.timestamp);
@@ -128,6 +157,17 @@ export function codexRolloutToImportPayload(
       ) {
         const tsMs = Date.parse(ts);
         if (Number.isFinite(tsMs)) engagementTsMs.push(tsMs);
+      }
+      if (pt === "task_complete") {
+        const turnId = readString(payload.turn_id);
+        // Skip a duplicate completion for an already-counted turn (F1).
+        if (turnId === undefined || !completedTurnIds.has(turnId)) {
+          if (turnId !== undefined) completedTurnIds.add(turnId);
+          completions.push({
+            interval: turnIntervalFromComplete(ts, payload, turnStartMsByTurnId),
+            durationMs: readNonNegInt(payload.duration_ms),
+          });
+        }
       }
       // event_msg records are never response_items; skip the rest.
       continue;
@@ -176,13 +216,45 @@ export function codexRolloutToImportPayload(
   const date = minTs.slice(0, 10);
   const label = `codex ${date}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}`;
 
-  // Engaged-active time from the genuine engagement series (needs >= 2 points
-  // to bound any gap); omitted when too sparse so stats falls back to the
-  // event-derived measure.
+  // Resolve per-turn intervals + machine compute now that `minTs` is known.
+  // A turn whose `task_started` is absent has its start reconstructed as
+  // `end - duration_ms`, which can precede the earliest record (and thus
+  // `started_at`); clamp to `minTs` so no active interval predates the session
+  // (F3). Machine compute for each turn is bounded by its clamped in-session
+  // span, so a clamped turn can never push the session's machine time above its
+  // active time (the documented `machine <= active` subset; F1). For ordinary
+  // fully-logged turns the span is >= the reported duration, so this is exactly
+  // `duration_ms`. `machine` is honest only when EVERY completed turn carried a
+  // duration: a mix of duration-bearing and duration-less completions would
+  // report a partial compute total as if complete, so it is omitted then (F2).
+  const minTsMs = Date.parse(minTs);
+  const turnIntervals: IntervalMs[] = [];
+  let machineActiveMs = 0;
+  let allCompletedTurnsHaveDuration = true;
+  for (const { interval, durationMs } of completions) {
+    if (durationMs <= 0) allCompletedTurnsHaveDuration = false;
+    if (interval === undefined) continue;
+    const start = Number.isFinite(minTsMs) ? Math.max(interval[0], minTsMs) : interval[0];
+    const end = interval[1];
+    if (!(start < end)) continue;
+    turnIntervals.push([start, end]);
+    machineActiveMs += Math.min(durationMs, end - start);
+  }
+
+  // Active time = union of the real per-turn intervals (in-turn, uncapped) and
+  // the gap-capped engagement series (between-turn bridging). The merge dedups
+  // their overlap, so the in-turn portion is the turn span while between-turn
+  // human time is still credited up to the cap. A single explicit turn is
+  // enough to bound active time, so the >= 2-point fallback only matters when
+  // no turn intervals exist. Omitted when neither yields a span, so stats falls
+  // back to the event-derived measure. Method label reflects which was used.
+  const pointResult = activeTimeFromTimestamps(engagementTsMs, ACTIVE_GAP_CAP_MS);
   const active =
-    engagementTsMs.length >= 2
-      ? activeTimeFromTimestamps(engagementTsMs, ACTIVE_GAP_CAP_MS)
+    turnIntervals.length > 0 || pointResult.intervals.length > 0
+      ? unionDurationMs([...turnIntervals, ...pointResult.intervals])
       : undefined;
+  const activeMethod = turnIntervals.length > 0 ? TURN_INTERVALS_METHOD : ENGAGED_TURNS_METHOD;
+  const machineActive = allCompletedTurnsHaveDuration ? machineActiveMs : 0;
 
   // Token totals from the last cumulative token_count event; include only the
   // fields actually present (> 0). Metrics is emitted if either token usage or
@@ -209,11 +281,12 @@ export function codexRolloutToImportPayload(
     ...(active !== undefined && active.ms > 0
       ? {
           active_time_ms: active.ms,
-          active_intervals: intervalsMsToIso(active.intervals),
+          active_intervals: intervalsMsToIso(active.merged),
           active_gap_cap_ms: ACTIVE_GAP_CAP_MS,
-          active_time_method: ENGAGED_TURNS_METHOD,
+          active_time_method: activeMethod,
         }
       : {}),
+    ...(machineActive > 0 ? { machine_active_time_ms: machineActive } : {}),
   };
   const metrics = Object.keys(metricsFields).length > 0 ? metricsFields : undefined;
 
@@ -328,6 +401,51 @@ function readExecCommand(value: unknown): { cmd: string; workdir: string | undef
 function readCallId(value: unknown, outputs: ReadonlyMap<string, string>): string | undefined {
   const callId = readString(value);
   return callId !== undefined ? outputs.get(callId) : undefined;
+}
+
+/**
+ * Build a turn's `[start, end]` wall-clock interval from its `task_complete`.
+ * `end` is the completion record's own timestamp (ISO, ms precision); `start`
+ * is the matching `task_started`'s timestamp, or — when that record is absent
+ * (a session whose first turn was already in progress at import) —
+ * reconstructed as `end - duration_ms`. Returns `undefined` when no start can
+ * be resolved or the span is non-positive, so the caller falls back to the
+ * gap-capped engagement series for that turn.
+ */
+function turnIntervalFromComplete(
+  endTs: string,
+  payload: Record<string, unknown>,
+  startMsByTurnId: ReadonlyMap<string, number>,
+): IntervalMs | undefined {
+  const endMs = Date.parse(endTs);
+  if (!Number.isFinite(endMs)) return undefined;
+  const turnId = readString(payload.turn_id);
+  const indexedStart = turnId !== undefined ? startMsByTurnId.get(turnId) : undefined;
+  const durationMs = readNonNegInt(payload.duration_ms);
+  const startMs =
+    indexedStart !== undefined ? indexedStart : durationMs > 0 ? endMs - durationMs : undefined;
+  if (startMs === undefined || !(startMs < endMs)) return undefined;
+  return [startMs, endMs];
+}
+
+/**
+ * Index each turn's start time (epoch ms) by its `turn_id` from the
+ * `task_started` records. First occurrence wins. Lets a `task_complete` recover
+ * the real turn start regardless of record order.
+ */
+function indexTaskStarts(records: ReadonlyArray<CodexRolloutRecord>): Map<string, number> {
+  const byTurnId = new Map<string, number>();
+  for (const record of records) {
+    if (readString(record.type) !== "event_msg") continue;
+    const payload = isObject(record.payload) ? record.payload : undefined;
+    if (payload === undefined || readString(payload.type) !== "task_started") continue;
+    const turnId = readString(payload.turn_id);
+    const startMs = Date.parse(readString(record.timestamp) ?? "");
+    if (turnId !== undefined && Number.isFinite(startMs) && !byTurnId.has(turnId)) {
+      byTurnId.set(turnId, startMs);
+    }
+  }
+  return byTurnId;
 }
 
 /**

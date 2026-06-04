@@ -73,7 +73,17 @@ const InvocationSchema = z.object({
  *   wall-clock ranges (so cross-session totals can de-duplicate overlapping
  *   work by interval union); `active_time_ms` is their summed duration;
  *   `active_gap_cap_ms` and `active_time_method` lock the methodology so the
- *   stored numbers stay interpretable if the method changes later.
+ *   stored numbers stay interpretable if the method changes later. When a
+ *   source records explicit per-turn intervals (Codex), `active_time_method` is
+ *   `turn-intervals` and the in-turn time is the log's real wall-clock span
+ *   rather than a gap-capped approximation; the active semantics are unchanged.
+ * - `machine_active_time_ms`: model compute time — the summed duration of the
+ *   source's per-turn spans (Codex `task_complete.duration_ms`), a SUBSET of a
+ *   single session's engaged active time. Unlike `active_intervals` it is a
+ *   plain sum, NOT wall-clock-deduplicated, so two concurrent sessions can sum
+ *   past their billable (union) active wall-clock — that is intended (two models
+ *   working at once did two machine-hours in one wall-clock hour). Captured only
+ *   for sources that record per-turn duration (Codex); absent otherwise.
  *
  * Absent on sessions imported before a given field existed (re-import to
  * backfill). Live sessions carry no engaged-time metrics and fall back to
@@ -90,6 +100,7 @@ export const SessionMetricsSchema = z.object({
     .optional(),
   active_gap_cap_ms: z.number().int().nonnegative().optional(),
   active_time_method: z.string().optional(),
+  machine_active_time_ms: z.number().int().nonnegative().optional(),
 });
 /** Inferred runtime type for {@link SessionMetricsSchema}. */
 export type SessionMetrics = z.infer<typeof SessionMetricsSchema>;

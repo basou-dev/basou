@@ -109,12 +109,16 @@ type SessionFixture = {
   startedAt?: string;
   endedAt?: string;
   workingDirectory?: string;
-  source?: { kind: "claude-code-adapter" | "human" | "import" | "terminal"; version: "0.1.0" };
+  source?: {
+    kind: "claude-code-adapter" | "codex-import" | "human" | "import" | "terminal";
+    version: "0.1.0";
+  };
   label?: string;
   exitCode?: number | null;
   args?: string[];
   command?: string;
   relatedFiles?: string[];
+  metrics?: Record<string, unknown>;
   events?: string; // raw events.jsonl body (concatenated lines, each with \n)
 };
 
@@ -142,6 +146,7 @@ async function createSession(repo: string, fixture: SessionFixture): Promise<str
       },
       related_files: fixture.relatedFiles ?? [],
       events_log: "events.jsonl",
+      ...(fixture.metrics !== undefined ? { metrics: fixture.metrics } : {}),
     },
   };
   await writeYamlFile(join(sessionDir, "session.yaml"), session);
@@ -473,6 +478,35 @@ describe("doRunSessionShow", () => {
     // Work summary line: action counts + time proxies.
     expect(stdout).toContain("Work:");
     expect(stdout).toContain("dec");
+    // No machine metrics on this session, so no machine segment.
+    expect(stdout).not.toContain("machine ");
+  });
+
+  it("case 11b: Work line shows machine compute when captured", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("Y0M");
+    const events =
+      SESSION_STARTED_LINE(id, "M01", "2026-05-08T11:00:00+09:00") +
+      SESSION_ENDED_LINE(id, "M02", "2026-05-08T11:30:00+09:00");
+    await createSession(repo, {
+      id,
+      source: { kind: "codex-import", version: "0.1.0" },
+      endedAt: "2026-05-08T11:30:00+09:00",
+      metrics: {
+        active_time_ms: 30 * 60 * 1000,
+        active_intervals: [
+          { start: "2026-05-08T11:00:00+09:00", end: "2026-05-08T11:30:00+09:00" },
+        ],
+        active_time_method: "turn-intervals",
+        machine_active_time_ms: 12 * 60 * 1000,
+      },
+      events,
+    });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("Work:");
+    expect(stdout).toContain("machine 12m");
   });
 
   it("case 12: unique prefix hit resolves to the full ID", async () => {

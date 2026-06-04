@@ -58,6 +58,8 @@ export type MeasureAvailability = {
   activeTime: boolean;
   /** Token totals were captured (model-usage metrics present). */
   tokens: boolean;
+  /** Model compute time was captured (`machine_active_time_ms`; Codex only). */
+  machineActive: boolean;
 };
 
 /** Token rollup. Zero when not captured; `reasoning` is Codex-only. */
@@ -95,6 +97,18 @@ export type SessionWorkStats = {
    * (concurrent) work is not double-counted in billable totals.
    */
   activeIntervals: IsoInterval[];
+  /**
+   * Model compute time: the source's summed per-turn duration
+   * (`metrics.machine_active_time_ms`). A subset of `activeTimeMs`; 0 when the
+   * source records no per-turn duration (everything but Codex today).
+   */
+  machineActiveTimeMs: number;
+  /**
+   * Methodology lock copied from `metrics.active_time_method` (e.g.
+   * `turn-intervals` / `engaged-turns`); undefined when active time was derived
+   * from the event stream rather than stored metrics.
+   */
+  activeTimeMethod: string | undefined;
   commandCount: number;
   fileChangedCount: number;
   decisionCount: number;
@@ -113,6 +127,7 @@ export type SourceWorkStats = {
   sessionSpanMs: number;
   commandTimeMs: number;
   activeTimeMs: number;
+  machineActiveTimeMs: number;
   commandCount: number;
   fileChangedCount: number;
   decisionCount: number;
@@ -122,6 +137,8 @@ export type SourceWorkStats = {
   commandTimeReliable: boolean;
   /** At least one session of this kind captured token totals. */
   tokensAvailable: boolean;
+  /** At least one session of this kind captured model compute time. */
+  machineActiveAvailable: boolean;
 };
 
 export type StatusCount = { status: SessionStatus; count: number };
@@ -136,6 +153,12 @@ export type DayWorkStats = {
   /** Calendar date `YYYY-MM-DD` in the report timezone. */
   date: string;
   billableActiveTimeMs: number;
+  /**
+   * Model compute time for sessions started on this date (summed
+   * `machine_active_time_ms`). Not wall-clock-deduplicated, so — unlike
+   * `billableActiveTimeMs` — concurrent sessions sum freely.
+   */
+  machineActiveTimeMs: number;
   sessionCount: number;
   commandCount: number;
   fileChangedCount: number;
@@ -156,6 +179,13 @@ export type WorkStatsTotals = {
    * `activeTimeMs` when no sessions overlap, and is smaller when they do.
    */
   billableActiveTimeMs: number;
+  /**
+   * Workspace-wide model compute time: summed `machine_active_time_ms`. A plain
+   * sum (not interval union), so it can exceed `billableActiveTimeMs` when
+   * sessions ran concurrently — two models working at once is two machine-hours
+   * in one wall-clock hour.
+   */
+  machineActiveTimeMs: number;
   commandCount: number;
   fileChangedCount: number;
   decisionCount: number;
@@ -164,6 +194,8 @@ export type WorkStatsTotals = {
   /** No `claude-code-import` sessions present, so command time is workspace-wide real. */
   commandTimeReliable: boolean;
   tokensAvailable: boolean;
+  /** At least one session captured model compute time (`machine_active_time_ms`). */
+  machineActiveAvailable: boolean;
 };
 
 export type WorkStatsResult = {
@@ -312,6 +344,7 @@ export function sessionWorkStatsFromEvents(
   const span = computeSpan(inner.started_at, inner.ended_at, now);
   const tokens = readTokens(inner.metrics);
   const active = resolveActiveTime(inner.metrics, timestamps);
+  const machineActiveTimeMs = inner.metrics?.machine_active_time_ms ?? 0;
   return {
     sessionId,
     label: inner.label,
@@ -325,6 +358,8 @@ export function sessionWorkStatsFromEvents(
     activeTimeMs: active.ms,
     activeTimeBasis: active.basis,
     activeIntervals: intervalsMsToIso(active.intervals),
+    machineActiveTimeMs,
+    activeTimeMethod: inner.metrics?.active_time_method,
     commandCount,
     fileChangedCount,
     decisionCount,
@@ -335,6 +370,7 @@ export function sessionWorkStatsFromEvents(
       commandTime: inner.source.kind !== "claude-code-import",
       activeTime: active.intervals.length > 0,
       tokens: hasTokens(tokens),
+      machineActive: machineActiveTimeMs > 0,
     },
     spanClamped: span.clamped,
     eventsUnreadable,
@@ -409,6 +445,7 @@ function computeTotals(
     commandTimeMs: 0,
     activeTimeMs: 0,
     billableActiveTimeMs,
+    machineActiveTimeMs: 0,
     commandCount: 0,
     fileChangedCount: 0,
     decisionCount: 0,
@@ -416,12 +453,14 @@ function computeTotals(
     tokens,
     commandTimeReliable: true,
     tokensAvailable: false,
+    machineActiveAvailable: false,
   };
   for (const s of sessions) {
     if (s.open) totals.openSessionCount++;
     totals.sessionSpanMs += s.sessionSpanMs;
     totals.commandTimeMs += s.commandTimeMs;
     totals.activeTimeMs += s.activeTimeMs;
+    totals.machineActiveTimeMs += s.machineActiveTimeMs;
     totals.commandCount += s.commandCount;
     totals.fileChangedCount += s.fileChangedCount;
     totals.decisionCount += s.decisionCount;
@@ -429,6 +468,7 @@ function computeTotals(
     addTokens(tokens, s.tokens);
     if (!s.availability.commandTime) totals.commandTimeReliable = false;
     if (s.availability.tokens) totals.tokensAvailable = true;
+    if (s.availability.machineActive) totals.machineActiveAvailable = true;
   }
   return totals;
 }
@@ -444,6 +484,7 @@ function computeBySource(sessions: readonly SessionWorkStats[]): SourceWorkStats
         sessionSpanMs: 0,
         commandTimeMs: 0,
         activeTimeMs: 0,
+        machineActiveTimeMs: 0,
         commandCount: 0,
         fileChangedCount: 0,
         decisionCount: 0,
@@ -451,6 +492,7 @@ function computeBySource(sessions: readonly SessionWorkStats[]): SourceWorkStats
         tokens: emptyTokens(),
         commandTimeReliable: true,
         tokensAvailable: false,
+        machineActiveAvailable: false,
       };
       map.set(s.sourceKind, row);
     }
@@ -458,6 +500,7 @@ function computeBySource(sessions: readonly SessionWorkStats[]): SourceWorkStats
     row.sessionSpanMs += s.sessionSpanMs;
     row.commandTimeMs += s.commandTimeMs;
     row.activeTimeMs += s.activeTimeMs;
+    row.machineActiveTimeMs += s.machineActiveTimeMs;
     row.commandCount += s.commandCount;
     row.fileChangedCount += s.fileChangedCount;
     row.decisionCount += s.decisionCount;
@@ -465,6 +508,7 @@ function computeBySource(sessions: readonly SessionWorkStats[]): SourceWorkStats
     addTokens(row.tokens, s.tokens);
     if (!s.availability.commandTime) row.commandTimeReliable = false;
     if (s.availability.tokens) row.tokensAvailable = true;
+    if (s.availability.machineActive) row.machineActiveAvailable = true;
   }
   return [...map.values()].sort((a, b) => a.sourceKind.localeCompare(b.sourceKind));
 }
@@ -498,6 +542,7 @@ function computeByDay(
       day = {
         date,
         billableActiveTimeMs: 0,
+        machineActiveTimeMs: 0,
         sessionCount: 0,
         commandCount: 0,
         fileChangedCount: 0,
@@ -516,6 +561,7 @@ function computeByDay(
     if (!Number.isFinite(startedMs)) continue;
     const day = ensure(tzDate(startedMs, timeZone));
     day.sessionCount++;
+    day.machineActiveTimeMs += s.machineActiveTimeMs;
     day.commandCount += s.commandCount;
     day.fileChangedCount += s.fileChangedCount;
     day.decisionCount += s.decisionCount;

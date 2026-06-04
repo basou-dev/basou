@@ -20,6 +20,19 @@ export type IsoInterval = { start: string; end: string };
 export const ENGAGED_TURNS_METHOD = "engaged-turns";
 
 /**
+ * Identifier stored in `metrics.active_time_method` for active time that uses a
+ * source's explicit per-turn intervals (e.g. Codex `task_started` /
+ * `task_complete`) for the in-turn duration, with the gap-capped engagement
+ * series only bridging between turns. More faithful than {@link
+ * ENGAGED_TURNS_METHOD}: in-turn time is the log's real wall-clock span, not a
+ * gap-capped approximation, and a session's final turn is credited. The active
+ * semantics are unchanged — still human-engaged time with idle gaps excluded —
+ * only the in-turn precision improves. Bump this string if the derivation
+ * method changes, so stored numbers stay interpretable.
+ */
+export const TURN_INTERVALS_METHOD = "turn-intervals";
+
+/**
  * Build active intervals from a list of engagement timestamps (epoch ms).
  *
  * Each consecutive pair credits the range `[t_prev, t_prev + min(gap, capMs)]`:

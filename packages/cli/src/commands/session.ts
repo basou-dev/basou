@@ -390,6 +390,9 @@ function formatSessionWork(session: Session, events: Event[], now: Date): string
   parts.push(`${w.commandCount} cmd / ${w.fileChangedCount} files / ${w.decisionCount} dec`);
   const activeBasis = w.activeTimeBasis === "engaged-turns" ? "turns" : "events";
   parts.push(`active ${formatDurationMs(w.activeTimeMs)} (${activeBasis})`);
+  if (w.availability.machineActive) {
+    parts.push(`machine ${formatDurationMs(w.machineActiveTimeMs)}`);
+  }
   parts.push(`span ${formatDurationMs(w.sessionSpanMs)}${w.open ? " (open)" : ""}`);
   parts.push(
     w.availability.commandTime

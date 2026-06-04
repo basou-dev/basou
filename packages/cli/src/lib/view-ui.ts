@@ -279,6 +279,10 @@ export const VIEW_HTML = `<!doctype html>
       if (t.activeTimeMs !== t.billableActiveTimeMs) {
         timeRows.push(kvrow('summed', fmtDur(t.activeTimeMs) + '  (concurrent sessions double-counted)'));
       }
+      if (t.machineActiveAvailable) {
+        var machineSessions = sessions.filter(function (s) { return s.availability && s.availability.machineActive; }).length;
+        timeRows.push(kvrow('model working', fmtDur(t.machineActiveTimeMs) + '  (model compute, subset of active; Codex turn duration on ' + machineSessions + ' of ' + t.sessionCount + ' sessions; not wall-clock-deduped)'));
+      }
       timeRows.push(kvrow('span', fmtDur(t.sessionSpanMs) + (t.openSessionCount > 0 ? '  (' + t.openSessionCount + ' open)' : '')));
       timeRows.push(kvrow('command', fmtDur(t.commandTimeMs) + (t.commandTimeReliable ? '' : '  (some sessions report 0)')));
       detail.appendChild(el('table', { class: 'kv' }, [el('tbody', {}, timeRows)]));
@@ -286,16 +290,18 @@ export const VIEW_HTML = `<!doctype html>
         detail.appendChild(el('h3', { text: 'By source' }));
         d.bySource.forEach(function (s) {
           var cmd = s.commandTimeReliable ? fmtDur(s.commandTimeMs) : 'n/a';
+          var machine = s.machineActiveAvailable ? ', model ' + fmtDur(s.machineActiveTimeMs) : '';
           detail.appendChild(el('div', { class: 'row' }, [
-            el('span', { text: s.sourceKind + ': ' + s.sessionCount + ' sessions, ' + numfmt(s.tokens.output) + ' out tok, active ' + fmtDur(s.activeTimeMs) + ', command ' + cmd })
+            el('span', { text: s.sourceKind + ': ' + s.sessionCount + ' sessions, ' + numfmt(s.tokens.output) + ' out tok, active ' + fmtDur(s.activeTimeMs) + machine + ', command ' + cmd })
           ]));
         });
       }
       if (d.byDay && d.byDay.length) {
         detail.appendChild(el('h3', { text: 'By day (billable time x volume)' }));
         d.byDay.forEach(function (day) {
+          var dayMachine = day.machineActiveTimeMs > 0 ? ' (model ' + fmtDur(day.machineActiveTimeMs) + ')' : '';
           detail.appendChild(el('div', { class: 'row' }, [
-            el('span', { text: day.date + ': ' + fmtDur(day.billableActiveTimeMs) + ' active, ' + numfmt(day.tokens.output) + ' out tok, ' + day.commandCount + ' cmd / ' + day.fileChangedCount + ' files / ' + day.decisionCount + ' dec' })
+            el('span', { text: day.date + ': ' + fmtDur(day.billableActiveTimeMs) + ' active' + dayMachine + ', ' + numfmt(day.tokens.output) + ' out tok, ' + day.commandCount + ' cmd / ' + day.fileChangedCount + ' files / ' + day.decisionCount + ' dec' })
           ]));
         });
       }
