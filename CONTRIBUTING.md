@@ -122,8 +122,11 @@ discuss the test plan than have you guess.
 1. Land all `## Unreleased` items on `main`.
 2. Promote the section header (`## Unreleased` → `## X.Y.Z —
    YYYY-MM-DD`).
-3. Bump `version` in `packages/cli/package.json`,
-   `packages/core/package.json`, `packages/sdk/package.json`.
+3. Bump `version` in all four package manifests in lockstep:
+   `packages/core/package.json`, `packages/cli/package.json`,
+   `packages/sdk/package.json`, and `packages/basou/package.json`
+   (the `basou` installer tracks the same version even though it is
+   not yet auto-published — see [docs/release-checklist.md](docs/release-checklist.md)).
 4. `pnpm install` (refreshes `pnpm-lock.yaml`), then `pnpm -r
    build && pnpm typecheck && pnpm test && pnpm lint`.
 5. Commit as `basou: Release vX.Y.Z (<headline>)`.
