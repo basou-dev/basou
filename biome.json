@@ -12,7 +12,8 @@
       "!**/node_modules",
       "!**/coverage",
       "!**/*.tsbuildinfo",
-      "!**/pnpm-lock.yaml"
+      "!**/pnpm-lock.yaml",
+      "!packages/core/schemas"
     ]
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } },

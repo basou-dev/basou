@@ -7,6 +7,19 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- `@basou/core` now ships JSON Schema artifacts for the on-disk `.basou/`
+  document formats, generated from the canonical Zod schemas (so they cannot
+  drift from validation). One schema per document — `manifest`, `session`,
+  `event` (a `oneOf` over the event type), `task`, `approval`, `status`,
+  `task-index`, and `session-import` — each a draft 2020-12 document with a
+  stable `$id` (`https://basou.dev/schemas/0.1.0/<name>.schema.json`). They let
+  non-JavaScript / cross-language tooling and editors validate `.basou/` files
+  directly. Published under the package's `./schemas/*` export (e.g.
+  `@basou/core/schemas/session.schema.json`). Prefixed-id fields carry a faithful
+  ULID `pattern`; other refinement-only constraints are not expressible in JSON
+  Schema and are omitted. Regenerate with `pnpm --filter @basou/core
+  gen:schemas`; a drift-guard test fails CI if the committed files fall behind
+  the Zod source.
 - `@basou/sdk` v0.2 — the package gains a runtime, read-only programmatic API
   for reading a workspace's provenance (it was types-only before). It is a
   thin, ergonomic, semver-stable facade over `@basou/core`'s readers, so
