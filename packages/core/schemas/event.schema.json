@@ -1,0 +1,1188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://basou.dev/schemas/0.1.0/event.schema.json",
+  "title": "Basou Event",
+  "description": "One line of a `.basou/sessions/<id>/events.jsonl` stream (a discriminated union over the event `type`).",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "session_started"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "session_ended"
+        },
+        "exit_code": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "session_status_changed"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "from",
+        "to"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "approval_requested"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^appr_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou appr id: `appr_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "expires_at": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "risk_level": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": {}
+        },
+        "reason": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "const": "pending"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "approval_id",
+        "risk_level",
+        "action",
+        "reason",
+        "status"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "approval_approved"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^appr_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou appr id: `appr_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "resolver": {
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "approval_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "approval_rejected"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^appr_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou appr id: `appr_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "resolver": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "approval_id",
+        "reason"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "approval_expired"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^appr_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou appr id: `appr_` followed by a 26-character Crockford Base32 ULID."
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "approval_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "command_executed"
+        },
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "received_signal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "command",
+        "args",
+        "cwd",
+        "exit_code",
+        "duration_ms"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "git_snapshot"
+        },
+        "head": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "staged": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unstaged": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "untracked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ahead": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "behind": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "head",
+        "branch",
+        "dirty",
+        "staged",
+        "unstaged",
+        "untracked"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "file_changed"
+        },
+        "path": {
+          "type": "string"
+        },
+        "change_type": {
+          "type": "string",
+          "enum": [
+            "added",
+            "modified",
+            "deleted",
+            "renamed"
+          ]
+        },
+        "old_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "path",
+        "change_type"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "decision_recorded"
+        },
+        "decision_id": {
+          "type": "string",
+          "pattern": "^decision_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou decision id: `decision_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "title": {
+          "type": "string"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rejected_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "linked_events": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+            "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+          }
+        },
+        "linked_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "decision_id",
+        "title"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "task_created"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^task_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou task id: `task_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "task_id",
+        "title"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "task_status_changed"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^task_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou task id: `task_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "task_id",
+        "from",
+        "to"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "task_reconciled"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^task_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou task id: `task_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "removed_created_in_session": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+              "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_in_session_replacement": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+              "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "removed_linked_sessions": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+            "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "task_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "task_linkage_refreshed"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^task_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou task id: `task_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "added_linked_sessions": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+            "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+          }
+        },
+        "removed_linked_sessions": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+            "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+          }
+        },
+        "final_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "task_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "task_deleted"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^task_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou task id: `task_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "task_id",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "task_archived"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^task_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou task id: `task_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "task_id",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "note_added"
+        },
+        "body": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "body"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "const": "adapter_output"
+        },
+        "stream": {
+          "type": "string",
+          "enum": [
+            "stdout",
+            "stderr"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "raw_ref": {
+          "type": "string"
+        },
+        "redacted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "stream",
+        "summary",
+        "raw_ref"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

@@ -17,10 +17,25 @@ export const IsoTimestampSchema = z.string().datetime({ offset: true });
 
 // Internal factory shared by every prefixed-ID schema. Not exported because
 // the public API surface should only expose the six fully-typed ID schemas.
+//
+// The `.refine` carries the real (ULID-aware) validation but is opaque to JSON
+// Schema generation, so the `.meta` mirrors the prefix + ULID-body shape as a
+// representable `pattern` (and a description). This is METADATA ONLY: it does
+// not affect parsing — `isValidPrefixedId` still gates acceptance — it just
+// lets `z.toJSONSchema` emit a faithful pattern for the published artifact. The
+// pattern mirrors `ULID_BODY_REGEX` (leading 0-7, then 25 Crockford symbols
+// excluding I/L/O/U); it is intentionally slightly looser than the library
+// `isValid` check, matching the documented id shape.
 const createPrefixedIdSchema = <P extends IdPrefix>(prefix: P) => {
   const refiner = (value: string): value is PrefixedId<P> =>
     isValidPrefixedId(value) && value.startsWith(`${prefix}_`);
-  return z.string().refine(refiner, { message: `Expected ${prefix}_<ULID>` });
+  return z
+    .string()
+    .refine(refiner, { message: `Expected ${prefix}_<ULID>` })
+    .meta({
+      pattern: `^${prefix}_[0-7][0-9A-HJKMNP-TV-Z]{25}$`,
+      description: `Basou ${prefix} id: \`${prefix}_\` followed by a 26-character Crockford Base32 ULID.`,
+    });
 };
 
 /** Workspace ID schema: validates `ws_<26-char ULID>`. */
