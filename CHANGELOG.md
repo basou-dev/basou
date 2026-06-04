@@ -3,6 +3,36 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `session.metrics.machine_active_time_ms` (additive, optional) — model compute
+  time: the summed duration of a source's per-turn spans (Codex
+  `task_complete.duration_ms`). A SUBSET of a session's active time, kept as a
+  separate labeled measure. Unlike `active_intervals` it is a plain sum, NOT
+  wall-clock-deduplicated, so two concurrent sessions can sum past their
+  billable (union) active wall-clock — intended, as two models working at once
+  did two machine-hours in one wall-clock hour. Captured only for sources that
+  record per-turn duration (Codex today); absent otherwise. Surfaced as a
+  `Model working` line in `basou stats` (and `--by-source` / `--by-day` /
+  `--json`), as a `machine` segment on the `basou session show` `Work:` line,
+  and in the `basou view` Stats tab. Re-import (`--force`, or `basou refresh`)
+  to backfill existing Codex sessions.
+
+### Changed
+
+- Codex active time is now derived from the rollout's real per-turn intervals
+  (`task_started` → `task_complete`) for the in-turn portion — the log's true
+  wall-clock span, uncapped, and crediting the session's final turn — unioned
+  with the gap-capped engagement series for between-turn bridging.
+  `active_time_method` is `turn-intervals` for these sessions. The active-time
+  SEMANTICS are unchanged (still human-engaged time with idle gaps over 5
+  minutes excluded); only the in-turn precision improves, so a re-imported Codex
+  session's active time typically rises (long turns are no longer truncated at
+  the gap cap, and the final turn is counted). Claude imports are unchanged
+  (their transcripts carry no explicit per-turn duration).
+
 ## 0.5.0 — 2026-06-04
 
 ### Added

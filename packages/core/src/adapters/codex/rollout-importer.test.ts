@@ -37,6 +37,22 @@ function execOutput(ts: string, callId: string, output: string): CodexRolloutRec
   };
 }
 
+function eventMsg(ts: string, type: string): CodexRolloutRecord {
+  return { type: "event_msg", timestamp: ts, payload: { type, message: "..." } };
+}
+
+function taskStarted(ts: string, turnId: string): CodexRolloutRecord {
+  return { type: "event_msg", timestamp: ts, payload: { type: "task_started", turn_id: turnId } };
+}
+
+function taskComplete(ts: string, turnId: string, durationMs: number): CodexRolloutRecord {
+  return {
+    type: "event_msg",
+    timestamp: ts,
+    payload: { type: "task_complete", turn_id: turnId, duration_ms: durationMs },
+  };
+}
+
 function transform(records: CodexRolloutRecord[]) {
   return codexRolloutToImportPayload(records, { workspaceId: WS_ID });
 }
@@ -256,11 +272,6 @@ describe("codexRolloutToImportPayload", () => {
   });
 
   it("captures engaged time from conversation + exec, excluding token_count heartbeats", () => {
-    const eventMsg = (ts: string, type: string): CodexRolloutRecord => ({
-      type: "event_msg",
-      timestamp: ts,
-      payload: { type, message: "..." },
-    });
     const tokenEvent = (ts: string): CodexRolloutRecord => ({
       type: "event_msg",
       timestamp: ts,
@@ -288,5 +299,140 @@ describe("codexRolloutToImportPayload", () => {
     ]);
     // The token_count is still captured as token usage, just not as engagement.
     expect(payload.session.metrics?.output_tokens).toBe(1);
+    // No task records: in-turn time stays gap-capped and machine time is absent.
+    expect(payload.session.metrics?.machine_active_time_ms).toBeUndefined();
+  });
+
+  it("uses real task intervals (uncapped in-turn) and captures machine compute", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      eventMsg("2026-05-10T00:00:00.000Z", "user_message"),
+      taskStarted("2026-05-10T00:00:00.000Z", "t1"),
+      // The only intermediate engagement point; the gap to task_complete is far
+      // over the cap, so the gap-capped series alone would credit < the turn.
+      execCall("2026-05-10T00:00:30.000Z", "call_1", "ls"),
+      taskComplete("2026-05-10T00:10:00.000Z", "t1", 10 * 60 * 1000),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+    // The full 10-min turn span is credited (not the ~5.5 min the 5-min gap cap
+    // over the points would give), and the method is labeled accordingly.
+    expect(payload.session.metrics?.active_time_ms).toBe(10 * 60 * 1000);
+    expect(payload.session.metrics?.active_time_method).toBe("turn-intervals");
+    expect(payload.session.metrics?.active_intervals).toEqual([
+      { start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:10:00.000Z" },
+    ]);
+    // Machine compute = summed task_complete.duration_ms.
+    expect(payload.session.metrics?.machine_active_time_ms).toBe(10 * 60 * 1000);
+  });
+
+  it("bridges a sub-cap inter-turn gap but not an over-cap idle, and sums machine", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      taskStarted("2026-05-10T00:00:00.000Z", "t1"),
+      execCall("2026-05-10T00:00:30.000Z", "call_1", "ls"),
+      taskComplete("2026-05-10T00:01:00.000Z", "t1", 60 * 1000),
+      // 9-min idle before the next turn: over the 5-min cap, so not bridged.
+      taskStarted("2026-05-10T00:10:00.000Z", "t2"),
+      execCall("2026-05-10T00:10:30.000Z", "call_2", "ls"),
+      taskComplete("2026-05-10T00:11:00.000Z", "t2", 60 * 1000),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+    // Turn 1 [00:00,00:01] extends to 00:06 (5-min post-turn human-engaged
+    // credit from the gap cap), then idle; turn 2 [00:10,00:11] stands alone.
+    expect(payload.session.metrics?.active_intervals).toEqual([
+      { start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:06:00.000Z" },
+      { start: "2026-05-10T00:10:00.000Z", end: "2026-05-10T00:11:00.000Z" },
+    ]);
+    expect(payload.session.metrics?.active_time_ms).toBe(7 * 60 * 1000);
+    expect(payload.session.metrics?.machine_active_time_ms).toBe(2 * 60 * 1000);
+  });
+
+  it("reconstructs the turn start from duration when task_started is absent", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      // A session that began mid-turn: only task_complete is present.
+      execCall("2026-05-10T00:05:00.000Z", "call_1", "ls"),
+      taskComplete("2026-05-10T00:10:00.000Z", "t1", 10 * 60 * 1000),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+    // start = completion (00:10) - duration (10 min) = 00:00, even though the
+    // earliest engagement point is the exec at 00:05.
+    expect(payload.session.metrics?.active_intervals).toEqual([
+      { start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:10:00.000Z" },
+    ]);
+    expect(payload.session.metrics?.active_time_method).toBe("turn-intervals");
+    expect(payload.session.metrics?.machine_active_time_ms).toBe(10 * 60 * 1000);
+  });
+
+  it("de-duplicates a repeated task_complete so machine stays a subset of active", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      taskStarted("2026-05-10T00:00:00.000Z", "t1"),
+      execCall("2026-05-10T00:00:30.000Z", "call_1", "ls"),
+      taskComplete("2026-05-10T00:10:00.000Z", "t1", 10 * 60 * 1000),
+      // A duplicate completion for the same turn must not double-count machine.
+      taskComplete("2026-05-10T00:10:00.000Z", "t1", 10 * 60 * 1000),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const m = payload.session.metrics;
+    expect(m?.machine_active_time_ms).toBe(10 * 60 * 1000);
+    expect(m?.machine_active_time_ms).toBeLessThanOrEqual(m?.active_time_ms ?? 0);
+  });
+
+  it("omits machine compute when only some completions carry a duration", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      taskStarted("2026-05-10T00:00:00.000Z", "t1"),
+      execCall("2026-05-10T00:00:30.000Z", "call_1", "ls"),
+      taskComplete("2026-05-10T00:01:00.000Z", "t1", 60 * 1000),
+      taskStarted("2026-05-10T00:02:00.000Z", "t2"),
+      execCall("2026-05-10T00:02:30.000Z", "call_2", "ls"),
+      // Second turn carries no duration_ms (older format); machine is then
+      // partial and must be omitted rather than reported as complete.
+      {
+        type: "event_msg",
+        timestamp: "2026-05-10T00:03:00.000Z",
+        payload: { type: "task_complete", turn_id: "t2" },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    // Active time is still derived from the turn intervals.
+    expect(payload.session.metrics?.active_time_method).toBe("turn-intervals");
+    expect(payload.session.metrics?.active_time_ms).toBeGreaterThan(0);
+    expect(payload.session.metrics?.machine_active_time_ms).toBeUndefined();
+  });
+
+  it("clamps a reconstructed turn start to the session floor", () => {
+    const records: CodexRolloutRecord[] = [
+      // Session first becomes visible at 00:05; the only turn completed at 00:10
+      // reporting a 10-min duration, so its reconstructed start (00:00) precedes
+      // the session and must be clamped to 00:05.
+      sessionMeta("2026-05-10T00:05:00.000Z"),
+      execCall("2026-05-10T00:05:00.000Z", "call_1", "ls"),
+      taskComplete("2026-05-10T00:10:00.000Z", "t1", 10 * 60 * 1000),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.metrics?.active_intervals).toEqual([
+      { start: "2026-05-10T00:05:00.000Z", end: "2026-05-10T00:10:00.000Z" },
+    ]);
+    expect(payload.session.metrics?.active_time_ms).toBe(5 * 60 * 1000);
+    // Machine is bounded to the in-session span (5 min), not the full 10-min
+    // duration, so it stays a subset of active time.
+    expect(payload.session.metrics?.machine_active_time_ms).toBe(5 * 60 * 1000);
   });
 });

@@ -137,6 +137,29 @@ describe("basou stats", () => {
     expect(text).toContain("Reasoning tokens:");
     expect(text).toContain("Billable active:");
     expect(text).toContain("Command:");
+    // No machine_active_time_ms on this session, so no model-working line.
+    expect(text).not.toContain("Model working:");
+  });
+
+  it("prints a model-working line when machine compute was captured", async () => {
+    const repo = await setupInitedRepo();
+    await placeSession(repo, {
+      id: "ses_01HXABCDEF1234567890ABCDE1",
+      source: "codex-import",
+      endedAt: "2026-05-10T00:30:00.000Z",
+      metrics: {
+        active_time_ms: 30 * 60 * 1000,
+        active_intervals: [{ start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:30:00.000Z" }],
+        active_time_method: "turn-intervals",
+        machine_active_time_ms: 12 * 60 * 1000,
+      },
+    });
+    const out = captureStdout();
+    await doRunStats({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("Model working:");
+    expect(text).toContain("12m");
+    expect(text).toContain("1 of 1 sessions");
   });
 
   it("caveats command time when a claude-code-import session is present", async () => {
@@ -215,6 +238,24 @@ describe("basou stats", () => {
     expect(text).toContain("By day");
     // tz-agnostic: the interval lands on 2026-05-09 or -10 depending on host tz.
     expect(text).toMatch(/2026-05-\d{2}: /);
+  });
+
+  it("--by-day shows model compute on a day with machine time", async () => {
+    const repo = await setupInitedRepo();
+    await placeSession(repo, {
+      id: "ses_01HXABCDEF1234567890ABCDE6",
+      source: "codex-import",
+      endedAt: "2026-05-10T00:30:00.000Z",
+      metrics: {
+        active_intervals: [{ start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:30:00.000Z" }],
+        active_time_method: "turn-intervals",
+        machine_active_time_ms: 12 * 60 * 1000,
+      },
+    });
+    const out = captureStdout();
+    await doRunStats({ byDay: true }, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toMatch(/active \(model 12m/);
   });
 
   it("shows a summed line only when concurrent sessions overlap", async () => {

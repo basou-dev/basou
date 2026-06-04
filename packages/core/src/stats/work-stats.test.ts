@@ -288,6 +288,53 @@ describe("computeWorkStats", () => {
     expect(s?.availability.activeTime).toBe(true);
   });
 
+  it("rolls up machine compute time per-session, by source, and in totals", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const codex = "ses_01HXABCDEF1234567890ABCDM1";
+    const claude = "ses_01HXABCDEF1234567890ABCDM2";
+    await placeSession(paths, {
+      id: codex,
+      source: "codex-import",
+      startedAt: "2026-05-10T00:00:00.000Z",
+      endedAt: "2026-05-10T00:30:00.000Z",
+      metrics: {
+        active_time_ms: 30 * 60 * 1000,
+        active_intervals: [{ start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:30:00.000Z" }],
+        active_time_method: "turn-intervals",
+        machine_active_time_ms: 12 * 60 * 1000,
+      },
+    });
+    // A claude-code-import session has active time but no machine compute.
+    await placeSession(paths, {
+      id: claude,
+      source: "claude-code-import",
+      startedAt: "2026-05-10T00:00:00.000Z",
+      endedAt: "2026-05-10T00:30:00.000Z",
+      metrics: {
+        active_intervals: [{ start: "2026-05-10T00:00:00.000Z", end: "2026-05-10T00:10:00.000Z" }],
+        active_time_method: "engaged-turns",
+      },
+    });
+    const r = await computeWorkStats({ paths, now: NOW, timeZone: "UTC" });
+    const cs = r.sessions.find((s) => s.sessionId === codex);
+    const ls = r.sessions.find((s) => s.sessionId === claude);
+    expect(cs?.machineActiveTimeMs).toBe(12 * 60 * 1000);
+    expect(cs?.availability.machineActive).toBe(true);
+    expect(cs?.activeTimeMethod).toBe("turn-intervals");
+    expect(ls?.machineActiveTimeMs).toBe(0);
+    expect(ls?.availability.machineActive).toBe(false);
+    // Totals: summed (not wall-clock-deduped), available because one session has it.
+    expect(r.totals.machineActiveTimeMs).toBe(12 * 60 * 1000);
+    expect(r.totals.machineActiveAvailable).toBe(true);
+    const codexSource = r.bySource.find((s) => s.sourceKind === "codex-import");
+    const claudeSource = r.bySource.find((s) => s.sourceKind === "claude-code-import");
+    expect(codexSource?.machineActiveTimeMs).toBe(12 * 60 * 1000);
+    expect(codexSource?.machineActiveAvailable).toBe(true);
+    expect(claudeSource?.machineActiveAvailable).toBe(false);
+    // Per-day: attributed to the session start date.
+    expect(r.byDay.find((d) => d.date === "2026-05-10")?.machineActiveTimeMs).toBe(12 * 60 * 1000);
+  });
+
   it("de-duplicates overlapping sessions in the billable total", async () => {
     const paths = await ensureBasouDirectory(getWorkDir());
     const a = "ses_01HXABCDEF1234567890ABCDEB";

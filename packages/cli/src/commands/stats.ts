@@ -122,6 +122,12 @@ function printStatsText(result: WorkStatsResult, bySource: boolean, byDay: boole
       `  Summed:          ${formatDurationMs(t.activeTimeMs)}  (per-session sum; concurrent sessions double-counted)`,
     );
   }
+  if (t.machineActiveAvailable) {
+    const machineSessions = result.sessions.filter((s) => s.availability.machineActive).length;
+    console.log(
+      `  Model working:   ${formatDurationMs(t.machineActiveTimeMs)}  (model compute, subset of active; Codex turn duration on ${machineSessions} of ${t.sessionCount} sessions; summed, not wall-clock-deduped)`,
+    );
+  }
   const openPart = t.openSessionCount > 0 ? `; ${t.openSessionCount} open counted to now` : "";
   console.log(
     `  Span:            ${formatDurationMs(t.sessionSpanMs)}  (total elapsed${openPart})`,
@@ -145,8 +151,10 @@ function printStatsText(result: WorkStatsResult, bySource: boolean, byDay: boole
     console.log("");
     console.log("By day (billable time x volume):");
     for (const d of result.byDay) {
+      const machine =
+        d.machineActiveTimeMs > 0 ? ` (model ${formatDurationMs(d.machineActiveTimeMs)})` : "";
       console.log(
-        `  ${d.date}: ${formatDurationMs(d.billableActiveTimeMs)} active, ${formatInt(d.tokens.output)} out tok, ${d.commandCount} cmd / ${d.fileChangedCount} files / ${d.decisionCount} dec`,
+        `  ${d.date}: ${formatDurationMs(d.billableActiveTimeMs)} active${machine}, ${formatInt(d.tokens.output)} out tok, ${d.commandCount} cmd / ${d.fileChangedCount} files / ${d.decisionCount} dec`,
       );
     }
   }
@@ -155,7 +163,10 @@ function printStatsText(result: WorkStatsResult, bySource: boolean, byDay: boole
 function describeSource(s: SourceWorkStats): string {
   const cmd = s.commandTimeReliable ? formatDurationMs(s.commandTimeMs) : "n/a";
   const tokens = s.tokensAvailable ? `${formatInt(s.tokens.output)} out tok` : "no tokens";
-  return `${s.sessionCount} sessions, ${tokens}, active ${formatDurationMs(s.activeTimeMs)}, command ${cmd}`;
+  const machine = s.machineActiveAvailable
+    ? `, model ${formatDurationMs(s.machineActiveTimeMs)}`
+    : "";
+  return `${s.sessionCount} sessions, ${tokens}, active ${formatDurationMs(s.activeTimeMs)}${machine}, command ${cmd}`;
 }
 
 /** "1,234,567" — thousands-separated, fixed en-US so output is deterministic. */

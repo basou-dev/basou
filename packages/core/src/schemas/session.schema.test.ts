@@ -62,4 +62,35 @@ describe("SessionSchema", () => {
     };
     expect(SessionSchema.safeParse(variant).success).toBe(true);
   });
+
+  it("accepts metrics with machine_active_time_ms", () => {
+    const variant = {
+      ...VALID_SESSION,
+      session: {
+        ...VALID_SESSION.session,
+        metrics: {
+          output_tokens: 768,
+          active_time_ms: 600000,
+          active_intervals: [
+            { start: "2026-05-04T09:00:00+09:00", end: "2026-05-04T09:10:00+09:00" },
+          ],
+          active_gap_cap_ms: 300000,
+          active_time_method: "turn-intervals",
+          machine_active_time_ms: 420000,
+        },
+      },
+    };
+    expect(SessionSchema.safeParse(variant).success).toBe(true);
+  });
+
+  it("rejects a negative machine_active_time_ms", () => {
+    const variant = {
+      ...VALID_SESSION,
+      session: {
+        ...VALID_SESSION.session,
+        metrics: { machine_active_time_ms: -1 },
+      },
+    };
+    expect(SessionSchema.safeParse(variant).success).toBe(false);
+  });
 });
