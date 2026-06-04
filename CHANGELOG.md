@@ -7,6 +7,26 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- `@basou/sdk` v0.2 — the package gains a runtime, read-only programmatic API
+  for reading a workspace's provenance (it was types-only before). It is a
+  thin, ergonomic, semver-stable facade over `@basou/core`'s readers, so
+  third-party tooling can read `.basou/` without stitching low-level calls
+  together and without any risk of mutating provenance (no writers are
+  exposed). `openWorkspace(repoRoot, options?)` returns a `Workspace` handle —
+  `repoRoot` is any directory holding a `.basou/` (no git required);
+  `resolveWorkspaceRoot(cwd)` is a git-based convenience for finding it. The
+  handle exposes `manifest()`, `status()`, `listSessions()` /
+  `getSession(idOrPrefix)`, `readEvents(idOrPrefix)` /
+  `streamEvents(idOrPrefix)`, `listTasks()` / `getTask(idOrPrefix)`,
+  `listApprovals()` / `getApproval(id)`, `stats(options?)`, and
+  `renderHandoff()` / `renderDecisions()`. Session, task, and event lookups
+  accept a unique prefix (matching nothing yields `null`, matching more than
+  one throws `AmbiguousIdError`); `getApproval` takes an exact id. A missing or
+  invalid `.basou/` throws `WorkspaceNotFoundError`. A `now` clock is injectable
+  for deterministic reads.
+  Read types (`Session`, `Event`, `Task`, `WorkStatsResult`, etc.) are
+  re-exported so consumers import only from `@basou/sdk`. `BASOU_SDK_VERSION`
+  is now `0.2.0`.
 - `session.metrics.machine_active_time_ms` (additive, optional) — model compute
   time: the summed duration of a source's per-turn spans (Codex
   `task_complete.duration_ms`). A SUBSET of a session's active time, kept as a
