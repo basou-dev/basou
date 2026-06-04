@@ -254,7 +254,7 @@ jobs:
         with:
           node-version-file: basou-site/.nvmrc
 
-      - name: Bump @basou/core and regenerate docs
+      - name: Bump @basou/core + @basou/cli and regenerate docs
         id: bump
         if: steps.guard.outputs.enabled == 'true'
         working-directory: basou-site
@@ -271,20 +271,20 @@ jobs:
           # Pin exactly to the version just published by the jobs above. npm
           # may need a moment to propagate the new version, so retry briefly.
           for attempt in 1 2 3 4 5; do
-            if pnpm add -E "@basou/core@${version}"; then
+            if pnpm add -E "@basou/core@${version}" "@basou/cli@${version}"; then
               break
             fi
             if [ "$attempt" -eq 5 ]; then
-              echo "::error::@basou/core@${version} is not installable after retries."
+              echo "::error::@basou/core@${version} / @basou/cli@${version} are not installable after retries."
               exit 1
             fi
-            echo "Attempt ${attempt} failed; waiting for npm to propagate @basou/core@${version}..."
+            echo "Attempt ${attempt} failed; waiting for npm to propagate @basou/core@${version} / @basou/cli@${version}..."
             sleep 15
           done
           pnpm gen:docs
           # Decide on a bump using only the paths the PR will actually stage.
           if git diff --quiet -- package.json pnpm-lock.yaml src/content/docs; then
-            echo "::notice::basou-site is already at @basou/core@${version}; nothing to bump."
+            echo "::notice::basou-site is already at @basou/core + @basou/cli @${version}; nothing to bump."
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -303,18 +303,18 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           path: basou-site
           base: main
-          branch: bump/basou-core-${{ steps.bump.outputs.version }}
+          branch: bump/basou-${{ steps.bump.outputs.version }}
           delete-branch: true
           add-paths: |
             package.json
             pnpm-lock.yaml
             src/content/docs/**
-          commit-message: 'chore(deps): bump @basou/core to ${{ steps.bump.outputs.version }} and regenerate docs'
-          title: 'chore(deps): bump @basou/core to ${{ steps.bump.outputs.version }} and regenerate docs'
+          commit-message: 'chore(deps): bump @basou/core + @basou/cli to ${{ steps.bump.outputs.version }} and regenerate docs'
+          title: 'chore(deps): bump @basou/core + @basou/cli to ${{ steps.bump.outputs.version }} and regenerate docs'
           body: |
             Automated by the basou release pipeline after publishing `${{ github.ref_name }}`.
 
-            - Bumps the pinned `@basou/core` dependency to `${{ steps.bump.outputs.version }}`.
-            - Regenerates the version-coupled docs regions with `pnpm gen:docs`.
+            - Bumps the pinned `@basou/core` and `@basou/cli` dependencies to `${{ steps.bump.outputs.version }}`.
+            - Regenerates the version-coupled docs regions and the CLI command reference with `pnpm gen:docs`.
 
             Review the regenerated docs in the diff, then merge to deploy.
