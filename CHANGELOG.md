@@ -7,6 +7,21 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- `basou refresh --watch [--interval <seconds>]` — keep the workspace current
+  automatically instead of re-running `basou refresh` by hand. It does one
+  catch-up refresh on start, then polls the native-log stores (`~/.codex/sessions`,
+  `~/.claude/projects`) and re-imports + regenerates only when they have settled
+  (unchanged since the previous poll, so no session is captured mid-write) AND
+  changed since the last import. Handoff / decisions are regenerated only when
+  something was actually imported, so unrelated AI work elsewhere never rewrites
+  this workspace's files. Polling (default 30s, min 5s) is dependency-free and
+  cross-platform; latency is the interval, not real-time. Ctrl-C / SIGTERM stops
+  after the in-flight cycle. `--watch` cannot be combined with `--dry-run`,
+  `--json`, or `--force`. Because import is idempotent, a session that was
+  already imported is not re-imported in watch mode — so a session still active
+  when the watcher starts (caught by the start-up catch-up) or one that resumes
+  after it settled is captured only up to that point; run `basou refresh --force`
+  to rebuild those from the latest logs.
 - Multi-root capture — one `.basou/` workspace can now aggregate the native
   logs of several sibling repositories. This matters when a single logical
   project spans multiple checkouts (e.g. an implementation repo, a planning
