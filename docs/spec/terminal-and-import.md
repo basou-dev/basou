@@ -124,3 +124,27 @@ Discovery therefore accepts a set of **source roots** instead of one:
 Each session is sanitized against its own `working_directory`, so
 aggregating sibling repos never relativizes a path across repositories or
 leaks an absolute host path beyond the existing pathless contract.
+
+## §14.4 Keeping the corpus current (`--watch`)
+
+Import is a pull, so the corpus only advances when `basou refresh` runs.
+`basou refresh --watch [--interval <seconds>]` keeps it current without a
+manual step:
+
+- It runs one catch-up refresh on start, then polls the native-log stores
+  (`~/.codex/sessions`, `~/.claude/projects`) every `interval` seconds
+  (default 30, minimum 5).
+- A cycle re-imports and regenerates only when the logs have **settled**
+  (unchanged since the previous poll, so an in-progress session is not
+  captured mid-write) **and** changed since the last import. Handoff /
+  decisions regenerate only when something was actually imported, so AI
+  work in unrelated projects never rewrites this workspace's files.
+- Polling is dependency-free and cross-platform; the trade-off is that
+  capture latency is the poll interval, not real-time. Ctrl-C / SIGTERM
+  stops the watcher after the current cycle (never mid-write).
+- `--watch` cannot be combined with `--dry-run`, `--json`, or `--force`.
+  Because import is idempotent (already-imported sessions are skipped), a
+  session that is still **active when the watcher starts** (captured by the
+  start-up catch-up) or that **resumes** after it settled is recorded only up
+  to that point and is not re-imported; run `basou refresh --force` to rebuild
+  those from the latest logs.

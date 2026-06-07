@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { doRunRefresh, runRefresh } from "./refresh.js";
+import { doRunRefresh, doRunRefreshWatch, parseInterval, runRefresh } from "./refresh.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -247,5 +247,29 @@ describe("basou refresh", () => {
     await runRefresh({}, ctxFor(repo));
     expect(process.exitCode).toBe(1);
     expect(errSpy.mock.calls.flat().join(" ")).toContain("Workspace not initialized");
+  });
+});
+
+describe("basou refresh --watch (validation)", () => {
+  it("rejects --watch combined with --dry-run / --json / --force", async () => {
+    const repo = await setupInitedRepo();
+    await expect(doRunRefreshWatch({ watch: true, dryRun: true }, ctxFor(repo))).rejects.toThrow(
+      /--watch cannot be combined with --dry-run/,
+    );
+    await expect(doRunRefreshWatch({ watch: true, json: true }, ctxFor(repo))).rejects.toThrow(
+      /--watch cannot be combined with --json/,
+    );
+    await expect(doRunRefreshWatch({ watch: true, force: true }, ctxFor(repo))).rejects.toThrow(
+      /--watch cannot be combined with --force/,
+    );
+  });
+
+  it("parseInterval accepts in-range integers and rejects out-of-range / non-integers", () => {
+    expect(parseInterval("30")).toBe(30);
+    expect(parseInterval("5")).toBe(5);
+    expect(parseInterval("86400")).toBe(86400);
+    for (const bad of ["4", "0", "-1", "2.5", "abc", "", "999999999"]) {
+      expect(() => parseInterval(bad)).toThrow();
+    }
   });
 });
