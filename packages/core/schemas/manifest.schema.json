@@ -135,6 +135,20 @@
           ]
         }
       }
+    },
+    "import": {
+      "type": "object",
+      "properties": {
+        "source_roots": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![~/\\\\])(?![A-Za-z]:)[^\\0\\\\]+$"
+          }
+        }
+      }
     }
   },
   "required": [

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -277,5 +277,45 @@ describe("runInit (process-state wrapper)", () => {
     expect(stderr).toContain("Caused by:");
     expect(stderr).not.toContain(repo);
     expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("doRunInit --source-root", () => {
+  it("persists a sibling --source-root as a repo-root-relative path", async () => {
+    const repo = await realpath(getTmpRepo());
+    await doRunInit({ sourceRoot: ["../sibling-x"] }, { cwd: repo });
+    const manifest = await readManifest(basouPaths(repo));
+    expect(manifest.import?.source_roots).toEqual(["../sibling-x"]);
+  });
+
+  it("normalizes an absolute --source-root equal to the repo to '.'", async () => {
+    const repo = await realpath(getTmpRepo());
+    await doRunInit({ sourceRoot: [repo] }, { cwd: repo });
+    const manifest = await readManifest(basouPaths(repo));
+    expect(manifest.import?.source_roots).toEqual(["."]);
+  });
+
+  it("collects multiple --source-root values in order", async () => {
+    const repo = await realpath(getTmpRepo());
+    await doRunInit({ sourceRoot: [".", "../basou", "../basou-workspace"] }, { cwd: repo });
+    const manifest = await readManifest(basouPaths(repo));
+    expect(manifest.import?.source_roots).toEqual([".", "../basou", "../basou-workspace"]);
+  });
+
+  it("resolves a --source-root against the invocation cwd when run from a subdirectory", async () => {
+    const repo = await realpath(getTmpRepo());
+    const sub = join(repo, "src");
+    await mkdir(sub, { recursive: true });
+    // "." from the subdir resolves to the subdir, stored relative to repo root.
+    await doRunInit({ sourceRoot: ["."] }, { cwd: sub });
+    const manifest = await readManifest(basouPaths(repo));
+    expect(manifest.import?.source_roots).toEqual(["src"]);
+  });
+
+  it("omits the import block when no --source-root is given", async () => {
+    const repo = await realpath(getTmpRepo());
+    await doRunInit({}, { cwd: repo });
+    const manifest = await readManifest(basouPaths(repo));
+    expect("import" in manifest).toBe(false);
   });
 });

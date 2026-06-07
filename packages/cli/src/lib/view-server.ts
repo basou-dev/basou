@@ -372,10 +372,19 @@ async function handoffView(deps: ViewServerDeps): Promise<Record<string, unknown
 
 function readActionOptions(body: Record<string, unknown>): RefreshActionOptions {
   const options: RefreshActionOptions = {};
-  if (typeof body.project === "string" && body.project.length > 0) options.project = body.project;
+  // Accept `project` as a single string (the UI sends one) or an array of
+  // strings (multi-root callers); normalize to a non-empty string[].
+  const project = normalizeProject(body.project);
+  if (project.length > 0) options.project = project;
   if (body.force === true) options.force = true;
   if (body.dryRun === true) options.dryRun = true;
   return options;
+}
+
+/** Coerce a request body `project` field into a list of non-empty path strings. */
+function normalizeProject(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : [value];
+  return raw.filter((p): p is string => typeof p === "string" && p.length > 0);
 }
 
 function hostAllowed(req: IncomingMessage, port: number): boolean {

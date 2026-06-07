@@ -18,6 +18,14 @@ export type CreateManifestInput = {
   now?: Date;
   /** Override for tests; defaults to a freshly generated `ws_<ULID>`. */
   workspaceId?: PrefixedId<"ws">;
+  /**
+   * Import source roots, each RELATIVE to the repository root (e.g. `"."`,
+   * `"../basou-workspace"`). Persisted under `import.source_roots` so
+   * `basou refresh` / `basou import` aggregate several sibling repos into one
+   * `.basou/`. Validated by `ManifestSchema` (absolute paths are rejected).
+   * Omitted from the manifest entirely when absent or empty.
+   */
+  sourceRoots?: string[];
 };
 
 /**
@@ -59,6 +67,9 @@ export function createManifest(input: CreateManifestInput): Manifest {
       "claude-code": { enabled: true },
     },
     git: { events_log: "ignore" },
+    ...(input.sourceRoots !== undefined && input.sourceRoots.length > 0
+      ? { import: { source_roots: input.sourceRoots } }
+      : {}),
   };
   return ManifestSchema.parse(manifest);
 }

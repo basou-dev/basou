@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import {
   appendBasouGitignore,
   createManifest,
@@ -15,9 +15,20 @@ export type InitOptions = {
   projectName?: string;
   projectDescription?: string;
   repoUrl?: string;
+  /**
+   * Import source roots (repeatable). Each may be absolute or relative to the
+   * invocation cwd; persisted as a path relative to the repository root under
+   * `import.source_roots`, so one `.basou/` can aggregate sibling repos.
+   */
+  sourceRoot?: string[];
   force?: boolean;
   verbose?: boolean;
 };
+
+/** Commander collector: accumulate a repeatable option into an array. */
+function collectValue(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
 
 export type InitContext = {
   /** Defaults to `process.cwd()`. Injectable for tests. */
@@ -40,6 +51,12 @@ export function registerInitCommand(program: Command): void {
     .option(
       "--repo-url <url>",
       "Repository URL (defaults to git remote.origin.url; pass empty string for null)",
+    )
+    .option(
+      "--source-root <path>",
+      "Extra import source root, relative to the repo root (repeatable; aggregates sibling repos into this workspace)",
+      collectValue,
+      [],
     )
     .option("-f, --force", "Overwrite an existing manifest")
     .option("-v, --verbose", "Show error causes")
@@ -82,6 +99,14 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
     repositoryUrl = await tryRemoteUrl(repositoryRoot);
   }
 
+  // Normalize each --source-root to a repo-root-relative path. A root that is
+  // the repo root itself becomes ".". Stored relative so the committed manifest
+  // carries no absolute machine paths.
+  const sourceRoots = (options.sourceRoot ?? []).map((p) => {
+    const rel = relative(repositoryRoot, resolve(cwd, p));
+    return rel === "" ? "." : rel;
+  });
+
   const paths = await ensureBasouDirectory(repositoryRoot);
   const manifest = createManifest({
     workspaceName,
@@ -90,6 +115,7 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
       ? { projectDescription: options.projectDescription }
       : {}),
     ...(repositoryUrl !== undefined ? { repositoryUrl } : {}),
+    ...(sourceRoots.length > 0 ? { sourceRoots } : {}),
   });
 
   await writeManifest(paths, manifest, { force: options.force === true });

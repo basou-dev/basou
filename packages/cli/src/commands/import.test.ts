@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
@@ -513,5 +513,186 @@ describe("basou import codex", () => {
     );
     expect(kinds.filter((k) => k === "claude-code-import")).toHaveLength(1);
     expect(kinds.filter((k) => k === "codex-import")).toHaveLength(1);
+  });
+});
+
+// --- Multi-root source roots -------------------------------------------------
+
+/** Like setupInitedRepo, but persists `import.source_roots` in the manifest. */
+async function setupInitedRepoWithSourceRoots(roots: string[]): Promise<string> {
+  const repo = await realpath(tmpRepo as string);
+  const paths = await ensureBasouDirectory(repo);
+  const manifest = createManifest({
+    workspaceName: "fixture-ws",
+    now: FIXED_DATE,
+    workspaceId: FIXED_WS_ID,
+    sourceRoots: roots,
+  });
+  await writeManifest(paths, manifest);
+  return repo;
+}
+
+/** Write a Claude transcript into the encoded per-project dir of `sourcePath`. */
+async function writeTranscriptFor(
+  sourcePath: string,
+  sessionId: string,
+  records: Array<Record<string, unknown>>,
+): Promise<void> {
+  const dir = join(getProjectsRoot(), sourcePath.replaceAll("/", "-"));
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, `${sessionId}.jsonl`),
+    records.map((r) => JSON.stringify(r)).join("\n"),
+  );
+}
+
+/** Sorted source.external_id of every imported session in the workspace. */
+async function importedExternalIds(repo: string): Promise<string[]> {
+  const dirs = await listSessionDirs(repo);
+  const ids = await Promise.all(
+    dirs.map(
+      async (d) =>
+        SessionSchema.parse(await readYamlFile(join(basouPaths(repo).sessions, d, "session.yaml")))
+          .session.source.external_id,
+    ),
+  );
+  return ids.filter((x): x is string => typeof x === "string").sort();
+}
+
+describe("multi-root source roots", () => {
+  it("codex --project (repeatable) unions rollouts across roots", async () => {
+    const repo = await setupInitedRepo();
+    const sibling = join(dirname(repo), "sibling-codex");
+    await writeRollout("c-host", codexActionRollout(repo, "c-host"));
+    await writeRollout("c-sib", codexActionRollout(sibling, "c-sib"), join("2026", "05", "11"));
+
+    await doRunImportCodex(
+      { all: true, project: [repo, sibling] },
+      { cwd: repo, codexSessionsDir: getCodexRoot() },
+    );
+
+    expect(await importedExternalIds(repo)).toEqual(["c-host", "c-sib"]);
+  });
+
+  it("codex aggregates manifest import.source_roots with no --project", async () => {
+    const repo = await setupInitedRepoWithSourceRoots([".", "../sibling-codex2"]);
+    const sibling = join(dirname(repo), "sibling-codex2");
+    await writeRollout("c-host", codexActionRollout(repo, "c-host"));
+    await writeRollout("c-sib", codexActionRollout(sibling, "c-sib"), join("2026", "05", "11"));
+
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+
+    expect(await importedExternalIds(repo)).toEqual(["c-host", "c-sib"]);
+  });
+
+  it("codex --project overrides manifest source_roots", async () => {
+    const repo = await setupInitedRepoWithSourceRoots(["."]);
+    const sibling = join(dirname(repo), "sibling-codex3");
+    await writeRollout("c-host", codexActionRollout(repo, "c-host"));
+    await writeRollout("c-sib", codexActionRollout(sibling, "c-sib"), join("2026", "05", "11"));
+
+    await doRunImportCodex(
+      { all: true, project: [sibling] },
+      { cwd: repo, codexSessionsDir: getCodexRoot() },
+    );
+
+    // Only the flag's root is imported; the manifest's "." (the repo) is ignored.
+    expect(await importedExternalIds(repo)).toEqual(["c-sib"]);
+  });
+
+  it("codex de-duplicates a root listed twice", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("c-host", codexActionRollout(repo, "c-host"));
+
+    await doRunImportCodex(
+      { all: true, project: [repo, repo] },
+      { cwd: repo, codexSessionsDir: getCodexRoot() },
+    );
+
+    expect(await importedExternalIds(repo)).toEqual(["c-host"]);
+  });
+
+  it("imports a sibling-root session without a '..'-escape in working_directory", async () => {
+    const repo = await setupInitedRepo();
+    const sibling = join(dirname(repo), "sibling-wd");
+    await writeRollout("c-sib", codexActionRollout(sibling, "c-sib"));
+
+    await doRunImportCodex(
+      { all: true, project: [sibling] },
+      { cwd: repo, codexSessionsDir: getCodexRoot() },
+    );
+
+    const dirs = await listSessionDirs(repo);
+    const session = SessionSchema.parse(
+      await readYamlFile(join(basouPaths(repo).sessions, dirs[0] as string, "session.yaml")),
+    );
+    // Each session is sanitized against its OWN cwd, never relativized against
+    // the host repo, so no '..'-escape leaks into the committed session.yaml.
+    expect(session.session.working_directory.includes("..")).toBe(false);
+  });
+
+  it("claude --project (repeatable) unions transcripts across roots", async () => {
+    const repo = await setupInitedRepo();
+    const sibling = join(dirname(repo), "sibling-claude");
+    await writeTranscriptFor(repo, "cl-host", actionTranscript(repo));
+    await writeTranscriptFor(sibling, "cl-sib", actionTranscript(sibling));
+
+    await doRunImportClaudeCode(
+      { all: true, project: [repo, sibling] },
+      { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+    );
+
+    expect(await importedExternalIds(repo)).toEqual(["cl-host", "cl-sib"]);
+  });
+
+  it("claude tolerates an absent root dir when another has transcripts", async () => {
+    const repo = await setupInitedRepo();
+    const absent = join(dirname(repo), "nope-claude");
+    await writeTranscriptFor(repo, "cl-host", actionTranscript(repo));
+
+    await doRunImportClaudeCode(
+      { all: true, project: [repo, absent] },
+      { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+    );
+
+    expect(await importedExternalIds(repo)).toEqual(["cl-host"]);
+  });
+
+  it("claude errors only when no root has a transcript directory", async () => {
+    const repo = await setupInitedRepo();
+    const absent1 = join(dirname(repo), "nope-1");
+    const absent2 = join(dirname(repo), "nope-2");
+
+    await expect(
+      doRunImportClaudeCode(
+        { all: true, project: [absent1, absent2] },
+        { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+      ),
+    ).rejects.toThrow(/transcript directory not found/);
+  });
+
+  it("claude --session finds the transcript in a sibling root", async () => {
+    const repo = await setupInitedRepo();
+    const sibling = join(dirname(repo), "sibling-session");
+    await writeTranscriptFor(sibling, "only-sib", actionTranscript(sibling));
+
+    await doRunImportClaudeCode(
+      { session: "only-sib", project: [repo, sibling] },
+      { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+    );
+
+    expect(await importedExternalIds(repo)).toEqual(["only-sib"]);
+  });
+
+  it("claude --session errors when no root has that transcript", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscriptFor(repo, "exists", actionTranscript(repo));
+
+    await expect(
+      doRunImportClaudeCode(
+        { session: "missing", project: [repo] },
+        { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+      ),
+    ).rejects.toThrow(/not found for session id/);
   });
 });

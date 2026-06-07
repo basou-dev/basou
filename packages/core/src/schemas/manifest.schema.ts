@@ -29,6 +29,38 @@ const GitConfigSchema = z.object({
   events_log: z.enum(["ignore", "commit"]).default("ignore"),
 });
 
+/**
+ * A source root is RELATIVE to the manifest's repository root (it is resolved
+ * to an absolute path at import time). manifest.yaml is a commit candidate, so
+ * absolute machine paths (`/Users/...`), home-expansion (`~`), and stray
+ * backslashes are rejected to keep committed manifests path-clean and
+ * machine-portable. A `..`-prefixed sibling (e.g. `../basou-workspace`) is
+ * allowed.
+ *
+ * Encoded as a regex (not a Zod refinement) so the constraint is also emitted
+ * into the published JSON Schema's `pattern`, letting cross-language validators
+ * enforce the same rule. It rejects: a leading `~` (home), a leading `/` (POSIX
+ * absolute), any backslash anywhere (UNC / Windows / stray), a `<drive>:`
+ * prefix, and null bytes; `min(1)` rejects the empty string.
+ */
+const SOURCE_ROOT_PATTERN = /^(?![~/\\])(?![A-Za-z]:)[^\0\\]+$/;
+
+const SourceRootSchema = z.string().min(1).regex(SOURCE_ROOT_PATTERN, {
+  message:
+    "source_roots entries must be relative paths (no absolute path, '~', '\\', or null byte)",
+});
+
+/**
+ * Optional import config. `source_roots` lets one `.basou/` aggregate the
+ * native logs of several sibling repositories (each a path relative to the
+ * repo root, e.g. `["."`, `"../basou"]`). `basou refresh` / `basou import`
+ * scan every listed root; the list is the complete set, so include `"."` to
+ * keep the host repository itself. Absent => the host repository root only.
+ */
+const ImportConfigSchema = z.object({
+  source_roots: z.array(SourceRootSchema).min(1).optional(),
+});
+
 const WorkspaceMetaSchema = z.object({
   id: WorkspaceIdSchema,
   name: z.string().min(1),
@@ -52,6 +84,7 @@ export const ManifestSchema = z.object({
   approval: ApprovalConfigSchema,
   adapters: AdaptersSchema,
   git: GitConfigSchema,
+  import: ImportConfigSchema.optional(),
 });
 
 /** Inferred runtime type for {@link ManifestSchema}. */

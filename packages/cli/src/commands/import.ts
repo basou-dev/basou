@@ -1,7 +1,7 @@
 import { createReadStream, type Dirent } from "node:fs";
-import { readdir, readFile, rm } from "node:fs/promises";
+import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
   assertBasouRootSafe,
@@ -34,7 +34,12 @@ const SHORT_ID_LEN = 6;
 
 /** Options shared by every `basou import <adapter>` subcommand. */
 export type ImportOptions = {
-  project?: string;
+  /**
+   * Source project roots whose native logs to import. Repeatable on the CLI;
+   * empty means "fall back to the manifest's `import.source_roots`, then the
+   * repository root". Each entry may be absolute or relative to the cwd.
+   */
+  project?: string[];
   session?: string;
   all?: boolean;
   force?: boolean;
@@ -42,6 +47,11 @@ export type ImportOptions = {
   json?: boolean;
   verbose?: boolean;
 };
+
+/** Commander collector: accumulate a repeatable option into an array. */
+function collectPath(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
 
 export type ImportClaudeCodeOptions = ImportOptions;
 export type ImportCodexOptions = ImportOptions;
@@ -87,7 +97,9 @@ export function registerImportCommand(program: Command): void {
     .description("Derive Basou sessions from Claude Code native transcripts (~/.claude/projects)")
     .option(
       "--project <path>",
-      "Source project path whose transcripts to import (defaults to the current repository root)",
+      "Source project path whose transcripts to import (repeatable; defaults to the manifest source roots, then the repository root)",
+      collectPath,
+      [],
     )
     .option("--session <id>", "Import a single transcript by its Claude session id")
     .option("--all", "Import every transcript found for the project")
@@ -107,7 +119,9 @@ export function registerImportCommand(program: Command): void {
     .description("Derive Basou sessions from OpenAI Codex native rollout logs (~/.codex/sessions)")
     .option(
       "--project <path>",
-      "Source project path whose rollouts to import (defaults to the current repository root)",
+      "Source project path whose rollouts to import (repeatable; defaults to the manifest source roots, then the repository root)",
+      collectPath,
+      [],
     )
     .option("--session <id>", "Import a single rollout by its Codex session id")
     .option("--all", "Import every rollout found for the project")
@@ -155,6 +169,31 @@ export async function runImportCodex(
   }
 }
 
+/**
+ * Resolve the absolute source roots to import from, applying precedence:
+ * explicit `--project` flags first (resolved against the cwd), else the
+ * manifest's `import.source_roots` (resolved against the repo root), else the
+ * repository root alone. The result is de-duplicated, so a root listed twice
+ * (or equal to the repo root) is scanned once.
+ */
+function resolveSourceRoots(args: {
+  projectFlags: string[];
+  manifest: Manifest;
+  repoRoot: string;
+  cwd: string;
+}): string[] {
+  const { projectFlags, manifest, repoRoot, cwd } = args;
+  let resolved: string[];
+  if (projectFlags.length > 0) {
+    resolved = projectFlags.map((p) => resolve(cwd, p));
+  } else {
+    const roots = manifest.import?.source_roots;
+    resolved =
+      roots !== undefined && roots.length > 0 ? roots.map((r) => resolve(repoRoot, r)) : [repoRoot];
+  }
+  return [...new Set(resolved)];
+}
+
 export async function doRunImportClaudeCode(
   options: ImportClaudeCodeOptions,
   ctx: ImportContext,
@@ -162,11 +201,15 @@ export async function doRunImportClaudeCode(
   assertSelector(options);
   const { repositoryRoot, paths, manifest } = await resolveImportTarget(ctx);
 
-  const projectPath = options.project ?? repositoryRoot;
+  const projectPaths = resolveSourceRoots({
+    projectFlags: options.project ?? [],
+    manifest,
+    repoRoot: repositoryRoot,
+    cwd: ctx.cwd ?? process.cwd(),
+  });
   const projectsRoot = ctx.claudeProjectsDir ?? join(homedir(), ".claude", "projects");
-  const transcriptDir = join(projectsRoot, encodeProjectDir(projectPath));
 
-  const files = await selectTranscriptFiles(transcriptDir, options);
+  const files = await selectTranscriptFiles(projectsRoot, projectPaths, options);
   const candidates: ImportCandidate[] = files.map((file) => {
     // The transcript filename is the Claude session id; it is both the dedup
     // key and the source external_id.
@@ -191,10 +234,15 @@ export async function doRunImportCodex(
   assertSelector(options);
   const { repositoryRoot, paths, manifest } = await resolveImportTarget(ctx);
 
-  const projectPath = options.project ?? repositoryRoot;
+  const projectPaths = resolveSourceRoots({
+    projectFlags: options.project ?? [],
+    manifest,
+    repoRoot: repositoryRoot,
+    cwd: ctx.cwd ?? process.cwd(),
+  });
   const sessionsRoot = ctx.codexSessionsDir ?? join(homedir(), ".codex", "sessions");
 
-  const rollouts = await discoverCodexRollouts(sessionsRoot, projectPath, options);
+  const rollouts = await discoverCodexRollouts(sessionsRoot, projectPaths, options);
   const candidates: ImportCandidate[] = rollouts.map(({ file, externalId }) => ({
     externalId,
     toPayload: async () =>
@@ -363,50 +411,88 @@ async function loadExistingByExternalId(
   return byExternalId;
 }
 
+/**
+ * Select the Claude transcript files to import across one or more source roots.
+ * Each root maps to a per-project transcript directory under `projectsRoot`.
+ * With `--session`, every root is probed and only existing matches are returned
+ * (an error is raised only if no root holds that transcript). With `--all`, the
+ * `.jsonl` files of every root are unioned; a root whose directory is absent
+ * contributes nothing. The missing-directory error is raised only when NO root
+ * has a transcript directory, so refresh classifies "nothing anywhere" as a
+ * skip rather than a failure.
+ */
 async function selectTranscriptFiles(
-  transcriptDir: string,
+  projectsRoot: string,
+  projectPaths: string[],
   options: ImportClaudeCodeOptions,
 ): Promise<string[]> {
   if (options.session !== undefined) {
-    return [join(transcriptDir, `${options.session}.jsonl`)];
-  }
-  let entries: string[];
-  try {
-    entries = await readdir(transcriptDir);
-  } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) {
-      throw new Error("Claude transcript directory not found for project", { cause: error });
+    const matches: string[] = [];
+    for (const projectPath of projectPaths) {
+      const file = join(projectsRoot, encodeProjectDir(projectPath), `${options.session}.jsonl`);
+      if (await pathExists(file)) matches.push(file);
     }
-    throw new Error("Failed to read Claude transcript directory", { cause: error });
+    if (matches.length === 0) {
+      throw new Error("Claude transcript not found for session id in project");
+    }
+    return [...new Set(matches)];
   }
-  return entries
-    .filter((name) => name.endsWith(".jsonl"))
-    .sort()
-    .map((name) => join(transcriptDir, name));
+  const files: string[] = [];
+  let anyDirFound = false;
+  for (const projectPath of projectPaths) {
+    const transcriptDir = join(projectsRoot, encodeProjectDir(projectPath));
+    let entries: string[];
+    try {
+      entries = await readdir(transcriptDir);
+    } catch (error: unknown) {
+      if (findErrorCode(error, "ENOENT")) continue; // this root has no transcripts; try the next
+      throw new Error("Failed to read Claude transcript directory", { cause: error });
+    }
+    anyDirFound = true;
+    for (const name of entries) {
+      if (name.endsWith(".jsonl")) files.push(join(transcriptDir, name));
+    }
+  }
+  if (!anyDirFound) {
+    throw new Error("Claude transcript directory not found for project");
+  }
+  return [...new Set(files)].sort();
+}
+
+/** Whether `file` exists (ENOENT => false; any other error propagates). */
+async function pathExists(file: string): Promise<boolean> {
+  try {
+    await stat(file);
+    return true;
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) return false;
+    throw error;
+  }
 }
 
 /**
- * Discover the Codex rollouts that belong to `projectPath`. Codex stores
- * rollouts under date directories (not per-project like Claude), so the whole
- * tree is walked and each rollout's `session_meta.cwd` is matched against the
- * project. The exact-match is also the safety boundary: only sessions started
- * in the requested project are ever imported. `--session` narrows to a single
- * rollout by its Codex session id within that project; a session id that
- * matches no rollout in the project is an error, mirroring how the Claude
- * path fails on a missing `--session` transcript rather than reporting a
+ * Discover the Codex rollouts that belong to any of `projectPaths`. Codex
+ * stores rollouts under date directories (not per-project like Claude), so the
+ * whole tree is walked once and each rollout's `session_meta.cwd` is matched
+ * against the set of requested roots. The exact-match is also the safety
+ * boundary: only sessions started in a requested root are ever imported.
+ * `--session` narrows to a single rollout by its Codex session id within those
+ * roots; a session id that matches no rollout is an error, mirroring how the
+ * Claude path fails on a missing `--session` transcript rather than reporting a
  * silent success.
  */
 async function discoverCodexRollouts(
   sessionsRoot: string,
-  projectPath: string,
+  projectPaths: string[],
   options: ImportCodexOptions,
 ): Promise<Array<{ file: string; externalId: string }>> {
+  const projectSet = new Set(projectPaths);
   const files = await findRolloutFiles(sessionsRoot);
   const matched: Array<{ file: string; externalId: string }> = [];
   for (const file of files) {
     const meta = await readRolloutMeta(file);
     if (meta === undefined) continue;
-    if (meta.cwd !== projectPath) continue;
+    if (!projectSet.has(meta.cwd)) continue;
     if (options.session !== undefined && meta.id !== options.session) continue;
     matched.push({ file, externalId: meta.id });
   }

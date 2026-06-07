@@ -100,6 +100,25 @@ describe("createManifest", () => {
     expect("repository_url" in manifest.project).toBe(false);
   });
 
+  it("includes import.source_roots when provided (relative paths)", () => {
+    const manifest = createManifest({
+      workspaceName: "x",
+      sourceRoots: [".", "../basou-workspace"],
+    });
+    expect(manifest.import?.source_roots).toEqual([".", "../basou-workspace"]);
+  });
+
+  it("omits the import block when sourceRoots is absent or empty", () => {
+    expect("import" in createManifest({ workspaceName: "x" })).toBe(false);
+    expect("import" in createManifest({ workspaceName: "x", sourceRoots: [] })).toBe(false);
+  });
+
+  it("throws on an absolute source root (schema rejects absolute paths)", () => {
+    expect(() =>
+      createManifest({ workspaceName: "x", sourceRoots: ["/Users/example/projects/basou"] }),
+    ).toThrow();
+  });
+
   it("throws on empty workspaceName", () => {
     expect(() => createManifest({ workspaceName: "" })).toThrow(/Workspace name is empty/);
   });

@@ -5,12 +5,17 @@ import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/prove
 import type { ImportContext } from "./import.js";
 
 export type RefreshOptions = {
-  project?: string;
+  project?: string[];
   force?: boolean;
   dryRun?: boolean;
   json?: boolean;
   verbose?: boolean;
 };
+
+/** Commander collector: accumulate a repeatable option into an array. */
+function collectPath(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
 
 export type RefreshContext = ImportContext & {
   /** Defaults to `() => new Date()`. Injectable for tests. */
@@ -30,7 +35,9 @@ export function registerRefreshCommand(program: Command): void {
     )
     .option(
       "--project <path>",
-      "Source project path to import (defaults to the current repository root)",
+      "Source project path to import (repeatable; defaults to the manifest source roots, then the repository root)",
+      collectPath,
+      [],
     )
     .option("--force", "Re-import sessions already imported instead of skipping")
     .option("--dry-run", "Preview imports and skip writing handoff / decisions")
@@ -71,7 +78,9 @@ export async function doRunRefresh(
   const nowIso = (ctx.nowProvider?.() ?? new Date()).toISOString();
   const result = await refreshAll({
     options: {
-      ...(options.project !== undefined ? { project: options.project } : {}),
+      ...(options.project !== undefined && options.project.length > 0
+        ? { project: options.project }
+        : {}),
       ...(options.force === true ? { force: true } : {}),
       ...(options.dryRun === true ? { dryRun: true } : {}),
     },
