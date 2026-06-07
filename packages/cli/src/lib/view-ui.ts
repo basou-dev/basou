@@ -55,7 +55,7 @@ export const VIEW_HTML = `<!doctype html>
 <body>
 <header>
   <h1>basou view</h1>
-  <input type="text" id="project" placeholder="project path" />
+  <input type="text" id="project" placeholder="source root (optional override)" />
   <button class="primary" id="btn-refresh">Refresh all</button>
   <button id="btn-import-claude">Import claude-code</button>
   <button id="btn-import-codex">Import codex</button>
@@ -209,7 +209,10 @@ export const VIEW_HTML = `<!doctype html>
         detail.appendChild(el('p', { class: 'muted', text: 'Workspace not initialized.' }));
         return;
       }
-      $('project').value = $('project').value || d.repoRoot || '';
+      // Leave the project field empty by default so refresh / import use the
+      // manifest's import.source_roots (then the repo root) -- pre-filling the
+      // repo root here would send it as an explicit --project and silently
+      // override multi-root source roots. The field is an optional override.
       state.repoRoot = d.repoRoot || '';
       detail.appendChild(el('p', {}, [
         el('strong', { text: d.workspace.name }), '  ',

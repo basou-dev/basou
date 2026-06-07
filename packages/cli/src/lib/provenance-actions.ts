@@ -59,7 +59,7 @@ export type RefreshResult = {
 };
 
 export type RefreshActionOptions = {
-  project?: string;
+  project?: string[];
   force?: boolean;
   dryRun?: boolean;
 };

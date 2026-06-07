@@ -97,3 +97,30 @@ basou session import --source codex
 basou session import --source gemini
 basou session import --source copilot
 ```
+
+## §14.3 Multi-root source roots
+
+A single logical project can span several sibling repositories — for
+example an implementation repo, a planning repo, and a shared agent
+working directory the AI is launched from. The AI's native logs are
+recorded under whichever directory it ran in (Codex keys each rollout by
+its session `cwd`; Claude Code stores transcripts under a per-project
+directory), but the provenance belongs to one `.basou/` workspace.
+
+Discovery therefore accepts a set of **source roots** instead of one:
+
+- `--project <path>` is repeatable on `basou import claude-code`,
+  `basou import codex`, and `basou refresh`. Each path is a source root;
+  several paths union their sessions into the workspace. Resolved against
+  the cwd, then de-duplicated.
+- `manifest.import.source_roots` is an optional, ordered list of roots
+  **relative to the repository root** (e.g. `[".", "../basou-workspace"]`).
+  `basou refresh` with no `--project` reads it. The list is complete —
+  include `"."` to keep the host repository. Absolute paths, `~`-expansion,
+  and empty entries are rejected so the committed manifest stays path-clean.
+- Precedence: explicit `--project` flags, else `import.source_roots`, else
+  the repository root alone (the prior single-root behaviour).
+
+Each session is sanitized against its own `working_directory`, so
+aggregating sibling repos never relativizes a path across repositories or
+leaks an absolute host path beyond the existing pathless contract.

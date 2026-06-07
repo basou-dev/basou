@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -126,6 +126,42 @@ async function writeCodexRollout(repo: string): Promise<void> {
   );
 }
 
+/** Write a Codex rollout whose session cwd is `cwd`, under a unique filename. */
+async function writeCodexRolloutAt(cwd: string, id: string): Promise<void> {
+  const dir = join(getCodexRoot(), "2026", "05", "10");
+  await mkdir(dir, { recursive: true });
+  const records = [
+    {
+      type: "session_meta",
+      timestamp: "2026-05-10T00:00:00.000Z",
+      payload: { id, cwd, timestamp: "2026-05-10T00:00:00.000Z" },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:01.000Z",
+      payload: {
+        type: "function_call",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "ls", workdir: cwd }),
+        call_id: "c1",
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:02.000Z",
+      payload: {
+        type: "function_call_output",
+        call_id: "c1",
+        output: "Wall time: 0.1000 seconds\nProcess exited with code 0\n",
+      },
+    },
+  ];
+  await writeFile(
+    join(dir, `rollout-${id}.jsonl`),
+    records.map((r) => JSON.stringify(r)).join("\n"),
+  );
+}
+
 function ctxFor(repo: string) {
   return { cwd: repo, claudeProjectsDir: getClaudeRoot(), codexSessionsDir: getCodexRoot() };
 }
@@ -180,6 +216,29 @@ describe("basou refresh", () => {
 
     const paths = basouPaths(repo);
     await expect(access(paths.files.handoff)).rejects.toThrow();
+  });
+
+  it("aggregates manifest import.source_roots across sibling repos in one run", async () => {
+    const repo = await realpath(tmpRepo as string);
+    const sibling = join(dirname(repo), "sibling-refresh");
+    const paths = await ensureBasouDirectory(repo);
+    await writeManifest(
+      paths,
+      createManifest({
+        workspaceName: "fixture-ws",
+        now: FIXED_DATE,
+        workspaceId: FIXED_WS_ID,
+        sourceRoots: [".", "../sibling-refresh"],
+      }),
+    );
+    await writeCodexRolloutAt(repo, "codex-host");
+    await writeCodexRolloutAt(sibling, "codex-sib");
+
+    // No --project: refresh reads the manifest's source roots and unions them.
+    const result = await doRunRefresh({}, ctxFor(repo));
+
+    expect(result.codex.status).toBe("ran");
+    if (result.codex.status === "ran") expect(result.codex.importedCount).toBe(2);
   });
 
   it("errors with exit code 1 on an uninitialized workspace", async () => {

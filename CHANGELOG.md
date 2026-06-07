@@ -3,6 +3,32 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- Multi-root capture — one `.basou/` workspace can now aggregate the native
+  logs of several sibling repositories. This matters when a single logical
+  project spans multiple checkouts (e.g. an implementation repo, a planning
+  repo, and a shared agent working directory): the AI's sessions are recorded
+  under whichever directory it ran in, but the provenance belongs to one
+  workspace. Two ways to drive it, applied symmetrically to both the
+  `claude-code` and `codex` importers (and to `basou refresh`):
+  - `--project <path>` is now **repeatable** on `basou import claude-code`,
+    `basou import codex`, and `basou refresh`. Each path is a source root to
+    scan; passing several unions their sessions into the current workspace
+    (deduplicated, so a root listed twice is scanned once). Explicit
+    `--project` flags take precedence over the manifest setting below.
+  - `manifest.import.source_roots` — an optional, ordered list of source roots
+    **relative to the repository root** (e.g. `[".", "../basou-workspace"]`),
+    so `basou refresh` with no arguments aggregates every listed repo. The list
+    is complete: include `"."` to keep the host repository itself. Absent means
+    "the host repository only" (the prior behaviour, unchanged). Absolute
+    paths, `~`-expansion, and empty entries are rejected by the schema so the
+    committed manifest stays path-clean and machine-portable.
+  - `basou init --source-root <path>` (repeatable) seeds `import.source_roots`
+    for a new workspace, normalizing each value to a repo-root-relative path.
+
 ## 0.6.0 — 2026-06-05
 
 ### Added
