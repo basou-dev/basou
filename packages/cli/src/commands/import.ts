@@ -256,6 +256,9 @@ export async function doRunImportCodex(
 }
 
 function assertSelector(options: ImportOptions): void {
+  if (options.session !== undefined && options.all === true) {
+    throw new Error("Specify either --session <id> or --all, not both");
+  }
   if (options.session === undefined && options.all !== true) {
     throw new Error("Specify --session <id> or --all");
   }

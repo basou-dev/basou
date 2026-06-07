@@ -44,6 +44,13 @@ All notable changes to **basou** are recorded here. The project follows
   - `basou init --source-root <path>` (repeatable) seeds `import.source_roots`
     for a new workspace, normalizing each value to a repo-root-relative path.
 
+### Fixed
+
+- `basou import claude-code` and `basou import codex` now reject `--session`
+  and `--all` together instead of silently honouring `--session` and ignoring
+  `--all`. The selector must be unambiguous: import exactly one transcript or
+  every one, never both at once.
+
 ## 0.6.0 — 2026-06-05
 
 ### Added

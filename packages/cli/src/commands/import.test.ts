@@ -238,6 +238,16 @@ describe("basou import claude-code", () => {
     ).rejects.toThrow("Specify --session <id> or --all");
   });
 
+  it("rejects --session combined with --all", async () => {
+    const repo = await setupInitedRepo();
+    await expect(
+      doRunImportClaudeCode(
+        { session: "any-id", all: true },
+        { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+      ),
+    ).rejects.toThrow("Specify either --session <id> or --all, not both");
+  });
+
   it("errors when the project's transcript directory is absent", async () => {
     const repo = await setupInitedRepo();
     await expect(
@@ -450,6 +460,16 @@ describe("basou import codex", () => {
     await expect(
       doRunImportCodex({}, { cwd: repo, codexSessionsDir: getCodexRoot() }),
     ).rejects.toThrow("Specify --session <id> or --all");
+  });
+
+  it("rejects --session combined with --all", async () => {
+    const repo = await setupInitedRepo();
+    await expect(
+      doRunImportCodex(
+        { session: "any-id", all: true },
+        { cwd: repo, codexSessionsDir: getCodexRoot() },
+      ),
+    ).rejects.toThrow("Specify either --session <id> or --all, not both");
   });
 
   it("errors when the Codex sessions directory is absent", async () => {
