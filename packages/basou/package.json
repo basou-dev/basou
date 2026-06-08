@@ -1,6 +1,6 @@
 {
   "name": "basou",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Convenience installer for the @basou/cli command. `npm install -g basou` exposes the same `basou` binary as `npm install -g @basou/cli`.",
