@@ -17,7 +17,7 @@ basou session new
 basou session list
 basou session show <session_id>
 basou session note <session_id>
-basou session import --format json
+basou session import --format json --from <path>
 
 # Task management
 basou task new
@@ -67,5 +67,9 @@ basou team new
 basou review-flow new
 basou report generate
 basou analytics
-basou session import --source <name>
 ```
+
+> Native-log import did ship — but as its own `basou import <adapter>`
+> command group (`basou import claude-code` / `basou import codex`), not as a
+> `basou session import --source` flag. See
+> [terminal-and-import.md](terminal-and-import.md) §14.2.
