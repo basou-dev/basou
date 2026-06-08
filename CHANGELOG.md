@@ -50,6 +50,9 @@ All notable changes to **basou** are recorded here. The project follows
   and `--all` together instead of silently honouring `--session` and ignoring
   `--all`. The selector must be unambiguous: import exactly one transcript or
   every one, never both at once.
+- The published `session-import` JSON Schema description no longer mentions a
+  `basou session export` command, which does not exist. It now documents only
+  `basou session import` as the consumer of the payload.
 
 ## 0.6.0 — 2026-06-05
 
