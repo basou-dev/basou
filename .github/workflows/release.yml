@@ -283,7 +283,7 @@ jobs:
           done
           pnpm gen:docs
           # Decide on a bump using only the paths the PR will actually stage.
-          if git diff --quiet -- package.json pnpm-lock.yaml src/content/docs; then
+          if git diff --quiet -- package.json pnpm-lock.yaml src/content/docs public/schemas; then
             echo "::notice::basou-site is already at @basou/core + @basou/cli @${version}; nothing to bump."
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -292,7 +292,7 @@ jobs:
           fi
           # Surface anything generated outside the committed allowlist so it is
           # not silently dropped from the PR.
-          if ! git diff --quiet -- . ':!package.json' ':!pnpm-lock.yaml' ':!src/content/docs'; then
+          if ! git diff --quiet -- . ':!package.json' ':!pnpm-lock.yaml' ':!src/content/docs' ':!public/schemas'; then
             echo "::warning::Changes outside the docs allowlist were produced; they will not be included in the PR."
           fi
 
@@ -305,10 +305,16 @@ jobs:
           base: main
           branch: bump/basou-${{ steps.bump.outputs.version }}
           delete-branch: true
+          # Stage exactly what `pnpm gen:docs` regenerates: the version-coupled
+          # mdx under src/content/docs and the verbatim JSON Schema artifacts
+          # under public/schemas (served at basou.dev/schemas/). Both move
+          # together with a release, so both must be staged or basou-site's
+          # gen:docs:check fails on the drifted, unstaged schemas.
           add-paths: |
             package.json
             pnpm-lock.yaml
             src/content/docs/**
+            public/schemas/**
           commit-message: 'chore(deps): bump @basou/core + @basou/cli to ${{ steps.bump.outputs.version }} and regenerate docs'
           title: 'chore(deps): bump @basou/core + @basou/cli to ${{ steps.bump.outputs.version }} and regenerate docs'
           body: |
