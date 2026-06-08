@@ -80,8 +80,7 @@ const DOCUMENTS: ReadonlyArray<{
     name: "session-import",
     schema: SessionImportPayloadSchema,
     title: "Basou Session Import Payload",
-    description:
-      "The portable session payload consumed by `basou session import` (and produced by `basou session export`).",
+    description: "The portable session payload consumed by `basou session import`.",
   },
 ];
 

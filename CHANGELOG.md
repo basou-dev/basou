@@ -3,7 +3,7 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
-## Unreleased
+## 0.7.0 — 2026-06-08
 
 ### Added
 
@@ -43,6 +43,16 @@ All notable changes to **basou** are recorded here. The project follows
     committed manifest stays path-clean and machine-portable.
   - `basou init --source-root <path>` (repeatable) seeds `import.source_roots`
     for a new workspace, normalizing each value to a repo-root-relative path.
+
+### Fixed
+
+- `basou import claude-code` and `basou import codex` now reject `--session`
+  and `--all` together instead of silently honouring `--session` and ignoring
+  `--all`. The selector must be unambiguous: import exactly one transcript or
+  every one, never both at once.
+- The published `session-import` JSON Schema description no longer mentions a
+  `basou session export` command, which does not exist. It now documents only
+  `basou session import` as the consumer of the payload.
 
 ## 0.6.0 — 2026-06-05
 
