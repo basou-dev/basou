@@ -2,16 +2,17 @@
 
 > Provenance layer for AI development.
 
-**Today:** Basou wraps Claude Code only — the one implemented adapter.
-**Roadmap (no dates):** Codex and OpenCode (agent CLIs that fit the same
-process-wrap model). OpenRouter / Ollama are tracked separately as a
+**Today:** Basou live-wraps Claude Code only (`basou run claude-code`) and
+imports native logs from both Claude Code and Codex (`basou import ...`).
+**Roadmap (no dates):** live-wrap for more agent CLIs (OpenCode) that fit the
+same process-wrap model. OpenRouter / Ollama are tracked separately as a
 per-request capture mode, not yet designed.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Version: v0.4.0](https://img.shields.io/badge/version-v0.4.0-blue.svg)]()
+[![Version: v0.7.0](https://img.shields.io/badge/version-v0.7.0-blue.svg)]()
 [![Status: personal-tool](https://img.shields.io/badge/status-personal--tool-orange.svg)]()
 
-**Status**: personal tool, v0.4.0. Built by one author for their own Claude
+**Status**: personal tool, v0.7.0. Built by one author for their own Claude
 Code sessions and updated occasionally — not a supported product. The CLI
 surface is frozen for the 0.x line; internal `@basou/core` APIs may still
 change between minor releases. Bug reports are welcome; feature requests are
@@ -32,10 +33,12 @@ next to your code.
 - **Tasks as the goal unit.** A task may span multiple sessions; the
   `task.md` snapshot stays in sync with the event log via
   `basou task reconcile` / `basou task refresh-linkage`.
-- **Claude Code is the one implemented adapter today.** `basou run claude-code`
+- **Claude Code is the one live-run adapter today.** `basou run claude-code`
   wraps the process so the surrounding session is recorded without Basou knowing
-  about Anthropic-internal formats. Other adapters (Codex, OpenCode) are on the
-  roadmap, not yet built.
+  about Anthropic-internal formats. Native-log **import** additionally covers
+  Codex: `basou import claude-code` and `basou import codex` derive sessions
+  from each tool's own logs after the fact. More live-run adapters (OpenCode)
+  are on the roadmap, not yet built.
 - **A local cockpit, for the author.** `basou refresh` imports the project's
   native agent logs and regenerates the markdown in one step; `basou view`
   opens a localhost-only web UI to browse sessions, tasks, decisions, and
@@ -43,26 +46,25 @@ next to your code.
   and Markdown stay the primary surface, and the viewer binds to 127.0.0.1
   with no authentication (a personal tool, never exposed beyond your machine).
 
-What's new in v0.3:
+Recent highlights:
 
-- **Concurrency**: per-task and per-session advisory lockfiles, plus a
-  workspace-scoped `tasks/index.json` cache for faster `basou task list`.
-- **Security**: a path sanitizer rewrites operator-private absolute paths
-  (homedir / working-directory prefixes) inside `related_files` and
-  `working_directory` so `.basou/` stays portable.
-- **UX**: handoff rendering picks the latest task from `task_status_changed`
-  events, splits the session footer by status, and breaks imported sessions
-  out into their own table.
+- **Native-log import**: `basou import claude-code` / `basou import codex`
+  derive sessions from each tool's own logs, with multi-root capture across
+  sibling repositories.
+- **Local cockpit**: `basou refresh` (and `basou refresh --watch`) keep the
+  workspace current; `basou view` opens a localhost-only web UI.
+- **Work stats**: `basou stats` reports per-session and aggregate activity.
+- **Read-only SDK + JSON Schemas**: `@basou/sdk` reads a workspace's
+  provenance programmatically, and `@basou/core` ships JSON Schemas for the
+  on-disk `.basou/` formats.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full per-release breakdown.
 
 ## Quickstart (5 minutes)
 
 ```bash
-# 1. Build from source (see Installation below for full prerequisites)
-git clone https://github.com/basou-dev/basou.git
-cd basou && pnpm install && pnpm -r build
-pnpm --filter @basou/cli link --global   # exposes the `basou` binary
+# 1. Install the CLI from npm (see Installation below for the from-source path)
+npm install -g @basou/cli
 
 # 2. Initialize a workspace at the root of any Git repo
 cd /path/to/your/project
@@ -91,16 +93,29 @@ underlying data model, see [docs/spec/](docs/spec/).
 
 | Package        | Description                                                        | Status              |
 | -------------- | ------------------------------------------------------------------ | ------------------- |
-| `@basou/cli`   | The `basou` command-line tool                                      | v0.4.0 — published* |
-| `@basou/core`  | Core library: sessions, events, approvals, git capability          | v0.4.0 — published* |
-| `@basou/sdk`   | Type-only SDK for adapter authors                                  | v0.4.0 — type stubs |
-
-\* published locally via `pnpm link --global`; npm publish is a planned
-post-dogfood milestone (see [basou.dev/installation/](https://basou.dev/installation/)).
+| `@basou/cli`   | The `basou` command-line tool                                      | v0.7.0 — published on npm |
+| `@basou/core`  | Core library: sessions, events, approvals, git capability          | v0.7.0 — published on npm |
+| `@basou/sdk`   | Read-only SDK for reading a workspace's provenance                 | v0.7.0 — published on npm |
 
 ## Installation
 
-### From source (current)
+### From npm (recommended)
+
+Requires Node.js >= 20.10.0.
+
+```bash
+npm install -g @basou/cli
+
+# Verify
+basou --version    # → 0.7.0
+```
+
+See [basou.dev/installation/](https://basou.dev/installation/) for upgrade and
+troubleshooting notes.
+
+### From source
+
+Build from `main` to track changes ahead of the published releases.
 
 Requirements:
 
@@ -116,16 +131,7 @@ pnpm -r build
 pnpm --filter @basou/cli link --global
 
 # Verify
-basou --version    # → 0.4.0
-```
-
-### From npm (future)
-
-`@basou/cli` is not yet published to npm; install from source for now.
-
-```bash
-# Once published:
-npm install -g @basou/cli
+basou --version    # → 0.7.0
 ```
 
 ## Development
@@ -145,7 +151,7 @@ basou/
 ├── packages/
 │   ├── core/    # @basou/core — provenance primitives
 │   ├── cli/     # @basou/cli  — `basou` command
-│   └── sdk/     # @basou/sdk  — adapter SDK (type-only)
+│   └── sdk/     # @basou/sdk  — read-only provenance SDK
 ├── docs/
 │   ├── quickstart.md   # Redirect stub → basou.dev/quickstart/
 │   └── spec/           # workspace layout, schemas, CLI surface, ...
