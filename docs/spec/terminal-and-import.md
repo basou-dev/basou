@@ -73,30 +73,40 @@ Internally, basou spawns the command as a child process and records a
 
 ---
 
-## §14.1 v0.1 import implementation
+## §14.1 The `basou session import` command
 
-Only the minimal `basou session import` form is supported:
+`basou session import` reads a portable session payload from a JSON file:
 
 ```bash
-basou session import --format json
+basou session import --format json --from <path>
 ```
 
-- JSON is read from stdin.
+- `--format` and `--from` are both required; the JSON is read from the
+  `--from` file (not from stdin).
 - It is converted to the basou event schema.
 - Events are appended to
   `.basou/sessions/<session_id>/events.jsonl`.
 - `session.status` is fixed to `imported`.
 
-## §14.2 v0.2 import extensions
+It also accepts optional `--label` and `--task` overrides; run
+`basou session import --help` for the full option list.
 
-Source-specific parsers are reconsidered for v0.2:
+## §14.2 Native-log import adapters
+
+Source-specific import shipped as its own `basou import <adapter>` command
+group, not as a `basou session import --source` flag. Two adapters derive
+sessions from a tool's own native logs:
 
 ```bash
-basou session import --source claude-code
-basou session import --source codex
-basou session import --source gemini
-basou session import --source copilot
+basou import claude-code --all          # or --session <id>
+basou import codex --all                # or --session <id>
 ```
+
+Both accept a repeatable `--project <path>` plus `--force`, `--dry-run`,
+`--json`, and `--verbose`; run `basou import <adapter> --help` for the
+authoritative option list. A Gemini adapter was dropped (the upstream CLI was
+discontinued); a
+Copilot adapter remains unimplemented.
 
 ## §14.3 Multi-root source roots
 
