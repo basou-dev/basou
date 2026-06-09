@@ -16,7 +16,7 @@ on:
         default: true
 
 # Minimum-required default; each job tightens or expands as needed
-# (Codex W2 / supply-chain hardening).
+# (supply-chain hardening).
 permissions:
   contents: read
 

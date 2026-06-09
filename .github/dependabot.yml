@@ -1,6 +1,6 @@
 version: 2
 
-# All third-party GitHub Actions are SHA-pinned (Codex W2 supply-chain
+# All third-party GitHub Actions are SHA-pinned (supply-chain
 # hardening). Dependabot does NOT convert tag pins to SHA pins on its
 # own, so pinning must be done by hand at commit time; Dependabot then
 # keeps the existing SHA pins fresh.

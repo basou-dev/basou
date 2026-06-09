@@ -205,6 +205,59 @@ All notable changes to **basou** are recorded here. The project follows
   command surface — for example to generate the command reference on
   basou.dev — instead of scraping `--help`.
 
+## 0.4.0 — 2026-05-27
+
+The release that turns the repository into a properly operated public OSS
+project. No CLI commands, flags, or on-disk data formats changed; this is
+continuous integration, publishing, governance, and dependency hardening on top
+of v0.3.1.
+
+### Added
+
+- **Quality CI workflow** — typecheck, build, test, and lint run on every pull
+  request.
+- **Security CI workflow** — secret scanning (gitleaks), a dependency
+  vulnerability audit, and guards against absolute-path and internal-identifier
+  leaks in tracked files.
+- **OIDC trusted-publishing release workflow** — tag-driven npm publishing with
+  provenance and no long-lived tokens, plus a cosign-signed GitHub Release that
+  attaches the packed tarballs. Each package's metadata and the pinned Node
+  version were prepared for it.
+- **Dependabot** for the GitHub Actions and npm ecosystems.
+- **ASCII-only commit-message enforcement** in CI.
+- **Contributor governance**: `CONTRIBUTING.md` (including the English-only
+  convention for commits, pull requests, and issues), `CODE_OF_CONDUCT.md`
+  (Contributor Covenant 2.1), bug-report and feature-request issue templates,
+  and a pull request template.
+- **`docs/release-checklist.md`** with the publish dry-run procedure and the
+  first scoped-release evidence.
+- The bare-name `basou` redirect package (prepared, not yet published).
+
+### Changed
+
+- Migrated the Biome configuration and reformatted the tree for Biome 2.4.15;
+  bumped TypeScript to 6.0.3 and silenced its `baseUrl` deprecation.
+- Bumped pinned GitHub Actions (checkout, setup-node, pnpm/action-setup,
+  cosign-installer, action-gh-release) via Dependabot.
+- Tightened the three published packages' metadata ahead of the first scoped npm
+  publish, pointed the README and CONTRIBUTING links at basou.dev (the
+  quickstart became a redirect stub), and made the governance-doc security
+  contact concrete — a live email, with GitHub Security Advisories documented as
+  the private reporting channel.
+
+### Fixed
+
+- Sanitized public-facing internal identifiers and non-English comments out of
+  the source and tests ahead of the public publish, and added the CI leak guard
+  that scans for them.
+- Fixed a pre-existing `package.json` keyword-format lint violation and an
+  initial-run failure in the security workflow.
+
+### Tests
+
+Baseline unchanged at 1015 (v0.3.1 close → v0.4.0 close); this release adds CI,
+publishing, and governance scaffolding rather than feature tests.
+
 ## 0.3.1 — 2026-05-21
 
 A small follow-up that picks two paper-cut issues out of the v0.3.0
