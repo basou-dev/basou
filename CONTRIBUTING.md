@@ -1,11 +1,11 @@
 # Contributing to Basou
 
-Thanks for your interest in Basou! Basou is in early pre-OSS stage —
-the v0.3.x line is dogfood-ready, the public APIs are still in flux,
-and we're collecting feedback from a small set of trial users before
-opening contributions broadly. This document describes how to set up
-the project, the change conventions we follow, and the easiest way to
-report problems while we're in this state.
+Thanks for your interest in Basou! Basou is in a pre-1.0 stage — the
+scoped `@basou/*` packages are published to npm and dogfood-ready, the
+public APIs are still stabilizing, and we're collecting feedback from a
+small set of trial users before opening contributions broadly. This
+document describes how to set up the project, the change conventions we
+follow, and the easiest way to report problems while we're in this state.
 
 ## Reporting issues / friction
 
@@ -63,10 +63,10 @@ end-to-end.
   pull request.
 - **`pnpm test`** (= vitest) runs each package's suite; new
   features land with tests in the same commit.
-- **Error messages stay pathless on the CLI surface.** v0.1
-  established a "no absolute paths in stderr" contract; v0.3
-  added a workspace-write-time path sanitizer that follows the same
-  principle. See [docs/spec/](docs/spec/) for the full rules.
+- **Error messages stay pathless on the CLI surface.** basou
+  maintains a "no absolute paths in stderr" contract, and a
+  workspace-write-time path sanitizer follows the same principle. See
+  [docs/spec/](docs/spec/) for the full rules.
 
 ## Commits and pull requests
 
