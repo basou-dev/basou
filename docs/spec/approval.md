@@ -1,8 +1,8 @@
 # Approval events
 
 This document specifies the approval event family. Approval is a core
-capability in v0.1: the schema is fixed and the local CLI provides the
-minimal implementation. Remote endpoints are out of scope for v0.1.
+capability: the schema is fixed and the local CLI provides the
+minimal implementation. Remote endpoints are out of scope.
 
 ## §9.1 `approval_requested`
 
@@ -60,7 +60,7 @@ minimal implementation. Remote endpoints are out of scope for v0.1.
 
 ## §9.4 `risk_level` vocabulary
 
-v0.1 fixes four values:
+The vocabulary fixes four values:
 
 - `low`: routine activity; informational only.
 - `medium`: limited impact, but confirmation recommended.
@@ -71,7 +71,7 @@ v0.1 fixes four values:
 
 - Default: `null` (no expiry).
 - An ISO 8601 timestamp may be provided.
-- v0.1 does not run a background job that automatically transitions
+- basou does not run a background job that automatically transitions
   `pending` approvals to `expired` when `expires_at` is reached.
 - `basou approval list` lazily evaluates `expires_at`: an entry is marked
   `expired` when the list is consulted, without mutating the YAML file.

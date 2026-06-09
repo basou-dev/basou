@@ -93,9 +93,9 @@ underlying data model, see [docs/spec/](docs/spec/).
 
 | Package        | Description                                                        | Status              |
 | -------------- | ------------------------------------------------------------------ | ------------------- |
-| `@basou/cli`   | The `basou` command-line tool                                      | v0.7.0 — published on npm |
-| `@basou/core`  | Core library: sessions, events, approvals, git capability          | v0.7.0 — published on npm |
-| `@basou/sdk`   | Read-only SDK for reading a workspace's provenance                 | v0.7.0 — published on npm |
+| `@basou/cli`   | The `basou` command-line tool                                      | Published on npm |
+| `@basou/core`  | Core library: sessions, events, approvals, git capability          | Published on npm |
+| `@basou/sdk`   | Read-only SDK for reading a workspace's provenance                 | Published on npm |
 
 ## Installation
 
@@ -107,7 +107,7 @@ Requires Node.js >= 20.10.0.
 npm install -g @basou/cli
 
 # Verify
-basou --version    # → 0.7.0
+basou --version
 ```
 
 See [basou.dev/installation/](https://basou.dev/installation/) for upgrade and
@@ -131,7 +131,7 @@ pnpm -r build
 pnpm --filter @basou/cli link --global
 
 # Verify
-basou --version    # → 0.7.0
+basou --version
 ```
 
 ## Development

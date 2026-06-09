@@ -4,8 +4,8 @@ This document is the maintainer-facing companion to
 [CONTRIBUTING.md](../CONTRIBUTING.md) "Release flow". CONTRIBUTING.md
 spells out the contributor-side steps that every release shares (land
 `## Unreleased`, bump versions, tag); this file expands the publish
-side that only maintainers run, plus the dry-run evidence that the
-current `0.3.1` line is safe to push to the public registry.
+side that only maintainers run, plus the dry-run evidence that a
+scoped `@basou/*` release is safe to push to the public registry.
 
 Read this before running `pnpm -r publish --access public` on a new
 release.
@@ -15,6 +15,10 @@ release.
 | Date       | Version | Packages                                  | Notes                                                                                                                            |
 |------------|---------|-------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
 | 2026-05-22 | 0.3.1   | `@basou/core`, `@basou/cli`, `@basou/sdk` | First public scoped release. Published in dependency order (core → cli → sdk); each `pnpm publish` re-authed via the npm web 2FA flow. Registry confirmed all three via `npm view @basou/<pkg> versions`. |
+| 2026-05-27 | 0.4.0   | `@basou/core`, `@basou/cli`, `@basou/sdk` | Scoped release (no dedicated CHANGELOG section). |
+| 2026-06-04 | 0.5.0   | `@basou/core`, `@basou/cli`, `@basou/sdk` | `basou stats` and the generated CLI command reference. |
+| 2026-06-05 | 0.6.0   | `@basou/core`, `@basou/cli`, `@basou/sdk` | `@basou/sdk` read-only runtime API and shipped JSON Schema artifacts. |
+| 2026-06-08 | 0.7.0   | `@basou/core`, `@basou/cli`, `@basou/sdk` | Multi-root capture and `basou refresh --watch`. |
 
 ## Pre-publish dry-run (verified 2026-05-22)
 

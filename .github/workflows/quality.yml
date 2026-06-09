@@ -38,8 +38,7 @@ jobs:
         # workspace packages typecheck against the published shape.
         run: pnpm typecheck
       - name: Test
-        # vitest per package; the v0.3.1 baseline is 1015 tests
-        # (cli 367 + core 647 + sdk 1). Any test break here fails CI.
+        # vitest per package; any test break here fails CI.
         run: pnpm -r test
       - name: Lint
         # biome check across the workspace; this is the gap that the

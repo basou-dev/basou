@@ -1,66 +1,49 @@
-# CLI command catalog (v0.1 + v0.2)
+# CLI command catalog
 
-This document lists the CLI surface delivered by v0.1 and amended by v0.2.
+basou's command surface is organized into a few top-level command groups. The
+**authoritative, always-current flag-level reference** is generated from the
+CLI itself and published at <https://basou.dev/commands/reference/>; you can
+also read it locally with `basou <command> --help`. This document gives the
+conceptual map and records what is intentionally deferred.
 
-## §15.1 v0.1 commands (with v0.2 additions)
+## §15.1 Top-level command groups
 
-> **Note**: this section is the v0.1 source of truth and is augmented as
-> additional commands are introduced in v0.2 maintenance. Lines added in
-> v0.2 carry a `# v0.2` comment for differentiation.
+```text
+# Workspace
+basou init                  # create a .basou/ workspace at the Git repo root
+basou status                # show the current workspace status
+basou stats                 # report how much the AI worked (volume + time proxies)
 
-```bash
-# Initialization
-basou init
+# Sessions and execution
+basou exec <command> [args...]   # run a command and record it as a session
+basou run claude-code [args...]  # run an AI tool through basou as a tracked session
+basou session ...                # inspect sessions (list / show / note / import)
+basou import claude-code|codex   # import provenance from a tool's native logs
+basou refresh                    # import all adapters + regenerate handoff/decisions
+basou view                       # open a local web UI to browse provenance
 
-# Session management
-basou session new
-basou session list
-basou session show <session_id>
-basou session note <session_id>
-basou session import --format json --from <path>
+# Tasks
+basou task ...              # purpose units spanning sessions (new / list / show /
+                            #   status / reconcile / refresh-linkage / edit /
+                            #   delete / archive)
 
-# Task management
-basou task new
-basou task list
-basou task show <task_id>
-basou task status <task_id> <new_status>
-basou task reconcile [--task <task_id>] [--write] [--json] [-v|--verbose]  # v0.2
-basou task refresh-linkage <task_id> [--write]                              # v0.2
-basou task edit <task_id> [--title <text>] [...]                            # v0.2
-basou task delete <task_id> --yes                                           # v0.2
-basou task archive <task_id> --yes                                          # v0.2
+# Decisions and approvals
+basou decision record      # record a human-authored decision as an event
+basou approval ...         # manage approval requests (list / show / approve / reject)
 
-# Decision records
-basou decision record
-
-# Adapter-mediated execution
-basou run claude-code [args...]
-
-# Environment observation
-basou exec <command>
-
-# Approval
-basou approval list
-basou approval show <approval_id>
-basou approval approve <approval_id>
-basou approval reject <approval_id> --reason "..."
-
-# Status
-basou status
-
-# Regenerate generated artifacts
-basou handoff generate
-basou decisions generate
-
-# Configuration
-basou config <key> <value>
+# Generated artifacts
+basou handoff generate     # generate or inspect .basou/handoff.md
+basou decisions generate   # generate or inspect .basou/decisions.md
 ```
 
-## §15.2 Commands deferred to v0.3 or later
+For exact flags, subcommands, and arguments, see the generated reference linked
+above — it is regenerated from the CLI on every release, so it never drifts from
+the implementation.
 
-The following commands are intentionally **not** implemented in v0.1 or
-v0.2. They are listed for transparency and are reconsidered when v0.3
-planning starts:
+## §15.2 Commands considered but not implemented
+
+The following are intentionally **not** implemented. They are listed for
+transparency and reconsidered in a future release:
 
 ```bash
 basou team new
@@ -68,8 +51,3 @@ basou review-flow new
 basou report generate
 basou analytics
 ```
-
-> Native-log import did ship — but as its own `basou import <adapter>`
-> command group (`basou import claude-code` / `basou import codex`), not as a
-> `basou session import --source` flag. See
-> [terminal-and-import.md](terminal-and-import.md) §14.2.

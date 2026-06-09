@@ -103,7 +103,7 @@ These fields originate from `decision_recorded` events.
 
 ## §10.5 decisions.md generation principle
 
-**In v0.1, only entries that originate from `decision_recorded` events make
+**Only entries that originate from `decision_recorded` events make
 it into decisions.md.**
 
 - basou does not infer "decisions" from raw AI output or git diffs.
@@ -111,7 +111,7 @@ it into decisions.md.**
   equivalent) are considered. The events.jsonl history remains the source
   of truth; `decisions.md` is a UX-only projection of the rich fields
   attached to each `decision_recorded` event.
-- AI-assisted decision extraction is reconsidered for v0.2 or later.
+- AI-assisted decision extraction is reconsidered for a future release.
 
 This follows basou's principle that an evidence trail must carry human
 intent.

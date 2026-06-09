@@ -41,7 +41,7 @@ For long output, fence it in a triple-backtick block.
 
 ## Environment
 
-- `basou --version` (e.g. `0.3.1`):
+- `basou --version`:
 - Node.js version (`node --version`):
 - pnpm version (`pnpm --version`):
 - OS (macOS / Linux + version):
@@ -58,7 +58,7 @@ If the bug touches a specific workspace, paste the Workspace ID from
 <!--
 If `pnpm test` or `basou` failed on a fresh checkout, mention which
 line of the quickstart sanity-check passed last and which one failed.
-Reference: docs/quickstart.md#sanity-check-checklist
+Reference: https://basou.dev/quickstart/#sanity-check-checklist
 -->
 
 - Last passing line:
