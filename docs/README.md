@@ -24,11 +24,10 @@ docs/
   [`README.md`](../README.md).
 - For the specification of basou's data model and CLI behavior, read the files
   under [`spec/`](spec/).
-- This documentation tracks the v0.1 / v0.2 implementation. Sections that
-  cover features deferred to v0.3 or later are explicitly marked as such.
+- This documentation tracks the current implementation. Sections that
+  cover deferred features are explicitly marked as such.
 
 ## Versioning
 
-These documents describe the behavior of basou as released in v0.2.x. When new
-features land in a future release, the corresponding section is updated as
-part of that release.
+These documents describe basou's current behavior. When new features land in a
+future release, the corresponding section is updated as part of that release.

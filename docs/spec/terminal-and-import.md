@@ -1,8 +1,8 @@
 # Session lifecycle, terminal recording, import
 
 This document covers three related areas: the session lifecycle (including
-the `imported` terminal state), the v0.1 terminal-recording strategy, and
-the v0.1 import surface.
+the `imported` terminal state), the terminal-recording strategy, and
+the import surface.
 
 ## §6.1 Session lifecycle states
 
@@ -15,7 +15,7 @@ the v0.1 import surface.
 | `failed` | abnormal termination (non-zero exit code or exception) |
 | `interrupted` | user interrupted (e.g. Ctrl+C) |
 | `imported` | imported from an external source; basou did not run the session |
-| `archived` | compressed historical session; **not implemented in v0.1** (the value is reserved) |
+| `archived` | compressed historical session; **not implemented** (the value is reserved) |
 
 ## §6.2 Transition diagram
 
@@ -28,24 +28,24 @@ running --> completed
 running --> failed
 running --> interrupted
 imported   (independent terminal state; does not transition)
-archived   (not implemented in v0.1)
+archived   (not implemented)
 ```
 
 ## §6.3 Notes
 
-- v0.1 does **not** guarantee automatic resumption from `waiting_approval`.
+- basou does **not** guarantee automatic resumption from `waiting_approval`.
   Full pause / resume orchestration by the adapter is reconsidered for
-  v0.2 or later.
+  a future release.
 - The state is recorded, but the actual control flow is human-driven.
 
 ---
 
 ## §13.1 Terminal recording strategy
 
-**Staged adoption: v0.1 ships a wrapper only; v0.2 may add an opt-in
-precmd hook.**
+**Staged adoption: basou ships a wrapper only; a future release may add an
+opt-in precmd hook.**
 
-## §13.2 v0.1 implementation
+## §13.2 Implementation
 
 The user explicitly runs commands through `basou exec`:
 
@@ -60,13 +60,14 @@ Internally, basou spawns the command as a child process and records a
 
 ## §13.3 Rationale
 
-- In v0.1, the user is encouraged to be deliberate about what is recorded;
+- The user is encouraged to be deliberate about what is recorded;
   this aligns with the evidence-trail philosophy.
 - Many basou users handle confidential workloads. Explicit recording is
   safer than automatic capture for those contexts.
-- Resolving zsh / bash precmd-hook differences cleanly is deferred to v0.2.
+- Resolving zsh / bash precmd-hook differences cleanly is deferred to a
+  future release.
 
-## §13.4 v0.2 candidates
+## §13.4 Future candidates
 
 - zsh / bash precmd hook (opt-in mode)
 - `script(1)` wrapping (full output capture)

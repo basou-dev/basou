@@ -6,10 +6,16 @@ out on disk.
 ## §1.1 Confirmed invariants
 
 - `.basou/` is placed at the **Git repository root**.
-- The v0.1 baseline is **one repository = one workspace**.
-- monorepo / subproject support is out of scope for v0.1.
+- The baseline is **one repository = one workspace**: a single `.basou/`
+  owns the provenance.
+- A single logical project may still span several sibling repositories;
+  `basou import` aggregates their native logs into one workspace via the
+  repeatable `--project` flag / `manifest.import.source_roots` (see
+  terminal-and-import.md §14.3). Per-subproject workspaces inside a monorepo
+  remain out of scope.
 - A session is **bound to a single workspace**. Cross-repository work is
-  split across separate sessions.
+  split across separate sessions, which a multi-root import attributes to
+  the aggregating workspace.
 - `manifest.yaml` carries `workspace_id`, leaving room for multi-workspace
   configurations in a future release.
 
@@ -71,8 +77,8 @@ out on disk.
   auto-recovered. To force a clean rebuild, remove the index
   (`rm .basou/tasks/index.json`) and run any command that calls
   `enumerateTaskIds` (e.g. `basou task list`); a workspace-wide index
-  lock is a v0.3.x candidate if dogfood surfaces this drift.
-- In v0.2, `basou task reconcile` detects and repairs broken references in
+  lock remains a candidate if dogfood surfaces this drift.
+- `basou task reconcile` detects and repairs broken references in
   `created_in_session` and `linked_sessions[]`. The default is dry-run;
   `--write` actually mutates state, and only the write path emits a
   `task_reconciled` event from an ad-hoc session.
@@ -115,10 +121,10 @@ approval originals, and adapter raw output are ignored.
 
 - **Conceptual name**: `task-events.log` (the legacy term from the original
   design notes).
-- **v0.1 actual file**: `.basou/sessions/<session_id>/events.jsonl`.
+- **Actual file**: `.basou/sessions/<session_id>/events.jsonl`.
 - Separating concept from file name leaves room for a future
   workspace-aggregated log (`.basou/events/task-events.log`).
-- v0.1 does not produce an aggregated log.
+- basou does not produce an aggregated log.
 
 ## §1.5 Concurrency control
 
@@ -163,21 +169,21 @@ the stale lockfile and retries once.
   bounded by start and end times.
 - A **task** is a goal unit and may bundle multiple sessions.
 - 1 task : N sessions is allowed.
-- 1 session : 1 task. (1 session : N tasks is **not** allowed in v0.1.)
+- 1 session : 1 task. (1 session : N tasks is **not** allowed.)
 - A session may exist without a task (for ad-hoc work).
 - A session is bound to a single workspace.
 
 ## §2.2 Every event is bound to a session
 
-In v0.1, every event must belong to some session and is written to
+Every event must belong to some session and is written to
 `.basou/sessions/<session_id>/events.jsonl`.
 
 - `task_created` and `task_status_changed` are written to the events.jsonl of
   the session that executed them.
-- Creating a task without going through a session is not allowed in v0.1.
-- CLI flows that create a task directly (e.g. `basou task create`)
+- Creating a task without going through a session is not allowed.
+- CLI flows that create a task directly (e.g. `basou task new`)
   implicitly create an ad-hoc session.
-- A workspace-aggregated event log is reconsidered in v0.2 or later.
+- A workspace-aggregated event log is reconsidered in a future release.
 
 ## §2.3 Example relationship
 
@@ -200,7 +206,7 @@ linked_workspaces:
   - ws_yyy
 ```
 
-This is not implemented in v0.1.
+This is not implemented.
 
 ---
 

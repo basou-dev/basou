@@ -31,7 +31,7 @@ capabilities:
 approval:
   required_for:
     - destructive_command
-    - external_send  # reserved; detection may be limited in v0.1
+    - external_send  # reserved; detection may be limited
   default_risk_level: medium
 
 adapters:
@@ -45,12 +45,12 @@ git:
 
 ## §4.2 Notes
 
-- `approval.required_for` includes `external_send` as reserved because v0.1
-  detection is limited.
+- `approval.required_for` includes `external_send` as reserved because
+  detection is currently limited.
 - `capabilities.enabled` is heterogeneous in granularity; it is kept as-is
-  for v0.1 and may be normalized in a later release.
+  for now and may be normalized in a later release.
 - The schema reserves room for `providers:` / `policies:` / `teams:` /
-  `review_flows:` to extend in the future (unused in v0.1).
+  `review_flows:` to extend in the future (currently unused).
 
 ---
 
@@ -115,7 +115,7 @@ session:
   operator that deliberately recorded a system file path is not redacted
   by surprise. A null byte in the input is rejected with `Invalid path:
   contains null byte`; Windows-style backslashes are folded to forward
-  slashes (v0.3 targets macOS / Linux; full Windows support is a v0.4+
+  slashes (basou targets macOS / Linux; full Windows support is a future
   task).
 - `working_directory` is sanitized via a sentinel-based variant that skips
   rule (1) when applied to the field's own value — feeding the live cwd
@@ -130,9 +130,9 @@ session:
   succeeds; the warning is informational and fires for `--dry-run` too
   so the operator can preview a rewrite before committing.
 - Backward compatibility: existing session.yaml files written before the
-  v0.3 sanitizer are NOT retroactively rewritten. A future v0.4+ release
-  may introduce `basou session migrate` to sanitize existing data on
-  request.
+  path sanitizer was introduced are NOT retroactively rewritten. A future
+  release may introduce `basou session migrate` to sanitize existing data
+  on request.
 
 ---
 
@@ -152,7 +152,7 @@ session:
 Every event carries a `session_id` (see [Workspace, sessions, tasks, IDs
 §2.2](workspace.md#22-every-event-is-bound-to-a-session)).
 
-## §7.2 v0.1 / v0.2 event catalog
+## §7.2 Event catalog
 
 | Category | event type | Description |
 |---|---|---|
