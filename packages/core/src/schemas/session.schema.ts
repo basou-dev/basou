@@ -50,6 +50,14 @@ const SessionSourceSchema = z.object({
   // namespace (e.g. the Claude Code session UUID for a `claude-code-import`).
   // Lets re-imports of the same source be deduplicated; absent for live runs.
   external_id: z.string().optional(),
+  // Byte size of the source native log at import time, recorded so a later
+  // import can detect that an append-only transcript GREW and re-import it
+  // (scoped, preserving the session id) instead of skipping it as already
+  // imported. Additive optional => no schema_version bump (precedent:
+  // external_id, metrics). Absent on sessions imported before this field
+  // existed (treated as legacy: never auto-re-imported, populated on the next
+  // fresh import or `--force`).
+  source_size_bytes: z.number().int().nonnegative().optional(),
 });
 
 const InvocationSchema = z.object({

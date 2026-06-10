@@ -56,6 +56,11 @@
             },
             "external_id": {
               "type": "string"
+            },
+            "source_size_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           },
           "required": [

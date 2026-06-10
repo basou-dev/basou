@@ -30,8 +30,14 @@ export {
 export type {
   ImportSessionOptions,
   ImportSessionResult,
+  ReimportOptions,
+  ReimportResult,
 } from "./session-import.js";
-export { importSessionFromJson } from "./session-import.js";
+export {
+  importSessionFromJson,
+  isImportDerivedSource,
+  reimportPreservingId,
+} from "./session-import.js";
 export type {
   LoadSessionEntriesOptions,
   SessionEntry,

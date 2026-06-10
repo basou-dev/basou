@@ -205,9 +205,11 @@ function describeImport(outcome: ImportOutcome): string {
   }
   const verb = outcome.dryRun ? "would import" : "imported";
   const parts = [`${outcome.importedCount} session(s)`, `${outcome.eventTotal} events`];
+  if (outcome.reimportedCount > 0) parts.push(`${outcome.reimportedCount} re-imported`);
   if (outcome.replacedCount > 0) parts.push(`${outcome.replacedCount} replaced`);
   if (outcome.skippedAlreadyImported > 0)
     parts.push(`${outcome.skippedAlreadyImported} already imported`);
+  if (outcome.skippedLegacyUntracked > 0) parts.push(`${outcome.skippedLegacyUntracked} legacy`);
   return `${outcome.adapter}: ${verb} ${parts.join(", ")}`;
 }
 

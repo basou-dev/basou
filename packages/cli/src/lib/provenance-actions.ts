@@ -30,8 +30,12 @@ export type ImportOutcome =
       status: "ran";
       importedCount: number;
       replacedCount: number;
+      /** Sessions re-imported in place because their source grew. */
+      reimportedCount: number;
       skippedNoAction: number;
       skippedAlreadyImported: number;
+      /** Already imported but with no recorded source size (pre-size-tracking); not re-imported. */
+      skippedLegacyUntracked: number;
       eventTotal: number;
       dryRun: boolean;
     }
@@ -126,8 +130,10 @@ async function runImport(adapter: ImportAdapter, fn: () => Promise<void>): Promi
       status: "ran",
       importedCount: readCount(json.imported_count),
       replacedCount: readCount(json.replaced_count),
+      reimportedCount: readCount(json.reimported_count),
       skippedNoAction: readCount(json.skipped_no_action),
       skippedAlreadyImported: readCount(json.skipped_already_imported),
+      skippedLegacyUntracked: readCount(json.skipped_legacy_untracked),
       eventTotal: readCount(json.event_total),
       dryRun: json.dry_run === true,
     };

@@ -86,14 +86,23 @@ export function scansEqual(a: SourceLogScan, b: SourceLogScan): boolean {
   return true;
 }
 
-function importedCount(outcome: ImportOutcome): number {
-  return outcome.status === "ran" ? outcome.importedCount : 0;
+/**
+ * How many sessions an import outcome changed on disk: new imports PLUS
+ * in-place re-imports of grown sources PLUS --force replacements. Any
+ * non-zero count must trigger a handoff / decisions regeneration, so a session
+ * that was re-imported (not freshly imported) does not leave the derived
+ * markdown stale.
+ */
+function changedCount(outcome: ImportOutcome): number {
+  return outcome.status === "ran"
+    ? outcome.importedCount + outcome.reimportedCount + outcome.replacedCount
+    : 0;
 }
 
 function describeOutcome(outcome: ImportOutcome): string {
-  return outcome.status === "ran"
-    ? `${outcome.adapter} +${outcome.importedCount}`
-    : `${outcome.adapter} skipped`;
+  if (outcome.status !== "ran") return `${outcome.adapter} skipped`;
+  const reimported = outcome.reimportedCount > 0 ? ` ~${outcome.reimportedCount}` : "";
+  return `${outcome.adapter} +${outcome.importedCount}${reimported}`;
 }
 
 function hms(date: Date): string {
@@ -117,10 +126,10 @@ export type WatchDeps = {
 /** Import both adapters for the workspace's source roots; returns the outcomes + total imported. */
 async function runImports(
   deps: WatchDeps,
-): Promise<{ claude: ImportOutcome; codex: ImportOutcome; imported: number }> {
+): Promise<{ claude: ImportOutcome; codex: ImportOutcome; changed: number }> {
   const claude = await importClaudeCode(deps.importOptions, deps.ctx);
   const codex = await importCodex(deps.importOptions, deps.ctx);
-  return { claude, codex, imported: importedCount(claude) + importedCount(codex) };
+  return { claude, codex, changed: changedCount(claude) + changedCount(codex) };
 }
 
 /** Regenerate handoff + decisions; returns the handoff session count. */
@@ -176,8 +185,8 @@ export async function runRefreshWatch(deps: WatchDeps): Promise<void> {
       const current = await scanSourceLogs(roots);
       // Quiescent since the previous poll AND changed since the last import.
       if (scansEqual(current, lastScan) && !scansEqual(current, importedScan)) {
-        const { claude, codex, imported } = await runImports(deps);
-        if (imported > 0) pendingRegen = true;
+        const { claude, codex, changed } = await runImports(deps);
+        if (changed > 0) pendingRegen = true;
         if (pendingRegen) {
           const sessions = await regenerate(deps);
           pendingRegen = false;

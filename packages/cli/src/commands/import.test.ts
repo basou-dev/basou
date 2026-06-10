@@ -716,3 +716,425 @@ describe("multi-root source roots", () => {
     ).rejects.toThrow(/not found for session id/);
   });
 });
+
+// --- scoped re-import of a changed source -------------------------------
+
+/** The action transcript plus one more Bash command, so the file grows. */
+function grownTranscript(repo: string): Array<Record<string, unknown>> {
+  return [
+    ...actionTranscript(repo),
+    {
+      type: "assistant",
+      timestamp: "2026-05-10T00:00:03.000Z",
+      cwd: repo,
+      message: {
+        content: [{ type: "tool_use", name: "Bash", input: { command: "npm run build" } }],
+      },
+    },
+  ];
+}
+
+/** The codex action rollout plus one more exec_command, so the file grows. */
+function grownCodexRollout(cwd: string, sessionId: string): Array<Record<string, unknown>> {
+  return [
+    ...codexActionRollout(cwd, sessionId),
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:03.000Z",
+      payload: {
+        type: "function_call",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "npm run build", workdir: cwd }),
+        call_id: "call_2",
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:04.000Z",
+      payload: {
+        type: "function_call_output",
+        call_id: "call_2",
+        output: "Wall time: 0.5000 seconds\nProcess exited with code 0\nOutput:\nok",
+      },
+    },
+  ];
+}
+
+type StoredEvent = {
+  id: string;
+  type: string;
+  occurred_at: string;
+  source: string;
+  args?: unknown;
+  body?: unknown;
+};
+
+async function readEvents(repo: string, sid: string): Promise<StoredEvent[]> {
+  const body = await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8");
+  return body
+    .split("\n")
+    .filter((l) => l.trim().length > 0)
+    .map((l) => JSON.parse(l) as StoredEvent);
+}
+
+function readSession(
+  repo: string,
+  sid: string,
+): ReturnType<typeof SessionSchema.parse> | Promise<ReturnType<typeof SessionSchema.parse>> {
+  return readYamlFile(join(basouPaths(repo).sessions, sid, "session.yaml")).then((y) =>
+    SessionSchema.parse(y),
+  );
+}
+
+function commandLine(event: StoredEvent): string | undefined {
+  return Array.isArray(event.args) ? (event.args[1] as string | undefined) : undefined;
+}
+
+describe("basou import claude-code — scoped re-import of a grown source", () => {
+  it("records the source byte size on a fresh import", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    const sid = (await listSessionDirs(repo))[0] as string;
+    const session = await readSession(repo, sid);
+    const encoded = repo.replaceAll("/", "-");
+    const size = (await readFile(join(getProjectsRoot(), encoded, "sess-1.jsonl"))).length;
+    expect(session.session.source.source_size_bytes).toBe(size);
+  });
+
+  it("re-imports a grown source into the SAME id, refreshing events + size + label", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    const before = await readSession(repo, sid);
+    expect((await readEvents(repo, sid)).filter((e) => e.type === "command_executed")).toHaveLength(
+      1,
+    );
+
+    await writeTranscript(repo, "sess-1", grownTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    expect(await listSessionDirs(repo)).toEqual([sid]);
+    const after = await readSession(repo, sid);
+    const afterEvents = await readEvents(repo, sid);
+    expect(afterEvents.filter((e) => e.type === "command_executed")).toHaveLength(2);
+    expect(after.session.source.source_size_bytes as number).toBeGreaterThan(
+      before.session.source.source_size_bytes as number,
+    );
+    expect(after.session.label).not.toBe(before.session.label);
+    expect(afterEvents[0]?.type).toBe("session_started");
+    expect(afterEvents[afterEvents.length - 1]?.type).toBe("session_ended");
+  });
+
+  it("reuses prior derived event ids for unchanged derivations", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    const before = await readEvents(repo, sid);
+    const npmTestBefore = before.find((e) => commandLine(e) === "npm test");
+    const startedBefore = before.find((e) => e.type === "session_started");
+    const endedBefore = before.find((e) => e.type === "session_ended");
+    expect(npmTestBefore).toBeDefined();
+
+    await writeTranscript(repo, "sess-1", grownTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    const after = await readEvents(repo, sid);
+    const npmTestAfter = after.find((e) => commandLine(e) === "npm test");
+    const startedAfter = after.find((e) => e.type === "session_started");
+    const endedAfter = after.find((e) => e.type === "session_ended");
+    // Unchanged derivations keep their id (cross-session linked_events survive).
+    expect(npmTestAfter?.id).toBe(npmTestBefore?.id);
+    expect(startedAfter?.id).toBe(startedBefore?.id);
+    // session_ended keeps its id but advances occurred_at to the new end.
+    expect(endedAfter?.id).toBe(endedBefore?.id);
+    expect(endedAfter?.occurred_at).not.toBe(endedBefore?.occurred_at);
+    // The genuinely new command is a fresh event id.
+    const buildAfter = after.find((e) => commandLine(e) === "npm run build");
+    expect(buildAfter).toBeDefined();
+    expect(before.map((e) => e.id)).not.toContain(buildAfter?.id);
+  });
+
+  it("preserves a non-derived event and keeps the merged stream chronological", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+
+    // Inject a human note (source local-cli) directly: attach to imported
+    // sessions is rejected, so direct write is the only way one lands. Its
+    // timestamp sits between the original end and the upcoming new end.
+    const evPath = join(basouPaths(repo).sessions, sid, "events.jsonl");
+    const note = {
+      schema_version: "0.1.0",
+      id: "evt_01HXABCDEF1234567890ABCDEF",
+      session_id: sid,
+      occurred_at: "2026-05-10T00:00:02.500Z",
+      source: "local-cli",
+      type: "note_added",
+      body: "human note",
+    };
+    await writeFile(evPath, `${await readFile(evPath, "utf8")}${JSON.stringify(note)}\n`);
+
+    await writeTranscript(repo, "sess-1", grownTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    const after = await readEvents(repo, sid);
+    const preserved = after.find((e) => e.type === "note_added");
+    expect(preserved?.id).toBe("evt_01HXABCDEF1234567890ABCDEF");
+    expect(preserved?.body).toBe("human note");
+    const times = after.map((e) => Date.parse(e.occurred_at));
+    for (let i = 1; i < times.length; i++) {
+      expect(times[i] ?? 0).toBeGreaterThanOrEqual(times[i - 1] ?? 0);
+    }
+  });
+
+  it("skips an unchanged source (size matches)", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    const before = await readEvents(repo, sid);
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    expect((await readEvents(repo, sid)).map((e) => e.id)).toEqual(before.map((e) => e.id));
+  });
+
+  it("does not auto-replace a shrunken source (truncate/rotate)", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", grownTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    const before = await readEvents(repo, sid);
+    expect(before.filter((e) => e.type === "command_executed")).toHaveLength(2);
+
+    await writeTranscript(repo, "sess-1", actionTranscript(repo)); // shrink
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const after = await readEvents(repo, sid);
+    expect(after.filter((e) => e.type === "command_executed")).toHaveLength(2);
+    expect(after.map((e) => e.id)).toEqual(before.map((e) => e.id));
+  });
+
+  it("does not re-import a legacy session that has no recorded size", async () => {
+    const repo = await setupInitedRepo();
+    const sid = "ses_01HXABCDEF1234567890ABCDEF";
+    const dir = join(basouPaths(repo).sessions, sid);
+    await mkdir(dir, { recursive: true });
+    await writeYamlFile(join(dir, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: {
+        id: sid,
+        workspace_id: FIXED_WS_ID,
+        source: { kind: "claude-code-import", version: "0.1.0", external_id: "sess-1" },
+        started_at: "2026-05-10T00:00:00.000Z",
+        status: "imported",
+        working_directory: ".",
+        invocation: { command: "claude", args: [], exit_code: null },
+        related_files: [],
+        events_log: "events.jsonl",
+        label: "claude-code legacy",
+      },
+    });
+    await writeFile(join(dir, "events.jsonl"), "");
+    await writeTranscript(repo, "sess-1", grownTranscript(repo));
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    expect(await listSessionDirs(repo)).toEqual([sid]);
+    expect(await readEvents(repo, sid)).toHaveLength(0);
+  });
+
+  it("dry-run previews a re-import without writing", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    const before = await readEvents(repo, sid);
+
+    await writeTranscript(repo, "sess-1", grownTranscript(repo));
+    await doRunImportClaudeCode(
+      { all: true, dryRun: true },
+      { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+    );
+    const after = await readEvents(repo, sid);
+    expect(after.map((e) => e.id)).toEqual(before.map((e) => e.id));
+    expect(after.filter((e) => e.type === "command_executed")).toHaveLength(1);
+  });
+
+  it("aborts the re-import when the prior events.jsonl has an unreadable line", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    const evPath = join(basouPaths(repo).sessions, sid, "events.jsonl");
+    await writeFile(evPath, `${await readFile(evPath, "utf8")}{ this is not json\n`);
+
+    await writeTranscript(repo, "sess-1", grownTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    // Aborted: the corrupt line + original single derivation remain; the new
+    // command was NOT added.
+    const body = await readFile(evPath, "utf8");
+    expect(body).toContain("{ this is not json");
+    expect(body.split("\n").filter((l) => l.includes('"command_executed"'))).toHaveLength(1);
+  });
+
+  it("skips an anomalous >1-prior duplicate instead of replacing it", async () => {
+    const repo = await setupInitedRepo();
+    const sids = ["ses_01HXABCDEF1234567890ABCDEF", "ses_01HXABCDEF1234567890ABCDEG"];
+    for (const sid of sids) {
+      const dir = join(basouPaths(repo).sessions, sid);
+      await mkdir(dir, { recursive: true });
+      await writeYamlFile(join(dir, "session.yaml"), {
+        schema_version: "0.1.0",
+        session: {
+          id: sid,
+          workspace_id: FIXED_WS_ID,
+          source: {
+            kind: "claude-code-import",
+            version: "0.1.0",
+            external_id: "sess-1",
+            source_size_bytes: 1,
+          },
+          started_at: "2026-05-10T00:00:00.000Z",
+          status: "imported",
+          working_directory: ".",
+          invocation: { command: "claude", args: [], exit_code: null },
+          related_files: [],
+          events_log: "events.jsonl",
+        },
+      });
+      await writeFile(join(dir, "events.jsonl"), "");
+    }
+    await writeTranscript(repo, "sess-1", grownTranscript(repo));
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    expect((await listSessionDirs(repo)).sort()).toEqual([...sids].sort());
+  });
+
+  it("aborts (skips) when a non-append change would drop a prior derived event", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    const before = await readEvents(repo, sid);
+    expect(before.find((e) => commandLine(e) === "npm test")).toBeDefined();
+
+    // A LARGER transcript that REPLACES the original command (drops "npm test")
+    // — a non-append edit. Re-deriving would drop the prior command event's id,
+    // so the re-import must abort and leave the session untouched.
+    await writeTranscript(repo, "sess-1", [
+      {
+        type: "user",
+        timestamp: "2026-05-10T00:00:00.000Z",
+        cwd: repo,
+        sessionId: "sess-1",
+        message: { role: "user", content: [{ type: "text", text: "go" }] },
+      },
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: repo,
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              name: "Bash",
+              input: { command: "this-replaces-the-original-command-and-grows-the-byte-size" },
+            },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:02.000Z",
+        cwd: repo,
+        message: {
+          content: [{ type: "tool_use", name: "Edit", input: { file_path: `${repo}/a.ts` } }],
+        },
+      },
+    ]);
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    // Untouched: the original derivation (with the original command id) remains.
+    const after = await readEvents(repo, sid);
+    expect(after.map((e) => e.id)).toEqual(before.map((e) => e.id));
+    expect(after.find((e) => commandLine(e) === "npm test")).toBeDefined();
+  });
+});
+
+describe("basou import codex — scoped re-import of a grown source", () => {
+  it("re-imports a grown rollout into the same session id", async () => {
+    const repo = await setupInitedRepo();
+    await writeRollout("codex-1", codexActionRollout(repo, "codex-1"));
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    expect((await readEvents(repo, sid)).filter((e) => e.type === "command_executed")).toHaveLength(
+      1,
+    );
+
+    await writeRollout("codex-1", grownCodexRollout(repo, "codex-1"));
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+
+    expect(await listSessionDirs(repo)).toEqual([sid]);
+    expect((await readEvents(repo, sid)).filter((e) => e.type === "command_executed")).toHaveLength(
+      2,
+    );
+  });
+
+  it("refreshes a command's outcome on re-import while keeping its event id", async () => {
+    const repo = await setupInitedRepo();
+    const meta = {
+      type: "session_meta",
+      timestamp: "2026-05-10T00:00:00.000Z",
+      payload: { id: "codex-1", cwd: repo, timestamp: "2026-05-10T00:00:00.000Z" },
+    };
+    const call = {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:01.000Z",
+      payload: {
+        type: "function_call",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "ls", workdir: repo }),
+        call_id: "c1",
+      },
+    };
+    // First import: the command is still running (no function_call_output yet),
+    // so its exit_code is null and duration is 0.
+    await writeRollout("codex-1", [meta, call]);
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    type CmdEvent = StoredEvent & { exit_code: number | null; duration_ms: number };
+    const cmdBefore = (await readEvents(repo, sid)).find(
+      (e) => e.type === "command_executed",
+    ) as CmdEvent;
+    expect(cmdBefore.exit_code).toBeNull();
+    expect(cmdBefore.duration_ms).toBe(0);
+
+    // The command completes: its output is appended (file grows). Re-import must
+    // refresh the outcome while keeping the same event id.
+    await writeRollout("codex-1", [
+      meta,
+      call,
+      {
+        type: "response_item",
+        timestamp: "2026-05-10T00:00:02.000Z",
+        payload: {
+          type: "function_call_output",
+          call_id: "c1",
+          output: "Wall time: 0.5000 seconds\nProcess exited with code 0\n",
+        },
+      },
+    ]);
+    await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+
+    const cmdAfter = (await readEvents(repo, sid)).find(
+      (e) => e.type === "command_executed",
+    ) as CmdEvent;
+    expect(cmdAfter.id).toBe(cmdBefore.id); // id reused (linked_events stable)
+    expect(cmdAfter.exit_code).toBe(0); // outcome refreshed
+    expect(cmdAfter.duration_ms).toBe(500);
+  });
+});
