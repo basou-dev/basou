@@ -118,6 +118,81 @@ async function codexSessionIds(repo: string): Promise<string[]> {
   return ids.sort();
 }
 
+/** Re-write a rollout with one extra exec_command so its byte size grows. */
+async function writeGrownCodexRolloutAt(cwd: string, id: string): Promise<void> {
+  const dir = join(getCodexRoot(), "2026", "05", "10");
+  await mkdir(dir, { recursive: true });
+  const records = [
+    {
+      type: "session_meta",
+      timestamp: "2026-05-10T00:00:00.000Z",
+      payload: { id, cwd, timestamp: "2026-05-10T00:00:00.000Z" },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:01.000Z",
+      payload: {
+        type: "function_call",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "ls", workdir: cwd }),
+        call_id: "c1",
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:02.000Z",
+      payload: {
+        type: "function_call_output",
+        call_id: "c1",
+        output: "Wall time: 0.1000 seconds\nProcess exited with code 0\n",
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:03.000Z",
+      payload: {
+        type: "function_call",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "npm test", workdir: cwd }),
+        call_id: "c2",
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:04.000Z",
+      payload: {
+        type: "function_call_output",
+        call_id: "c2",
+        output: "Wall time: 0.2000 seconds\nProcess exited with code 0\n",
+      },
+    },
+  ];
+  await writeFile(
+    join(dir, `rollout-${id}.jsonl`),
+    records.map((r) => JSON.stringify(r)).join("\n"),
+  );
+}
+
+/** Total command_executed events across the workspace's codex-import sessions. */
+async function commandEventCount(repo: string): Promise<number> {
+  const paths = basouPaths(repo);
+  const { readFile } = await import("node:fs/promises");
+  let dirs: string[];
+  try {
+    dirs = await readdir(paths.sessions);
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const dir of dirs) {
+    const session = await readSessionYaml(paths, dir);
+    if (session.session.source.kind !== "codex-import") continue;
+    const body = await readFile(join(paths.sessions, dir, "events.jsonl"), "utf8");
+    count += body.split("\n").filter((l) => l.includes('"command_executed"')).length;
+  }
+  return count;
+}
+
 /**
  * A fake `sleep` that runs one scripted step per cycle, then aborts when the
  * steps run out (so the watcher loop terminates deterministically).
@@ -228,6 +303,31 @@ describe("runRefreshWatch", () => {
     // regenerated nothing and added NO further "refreshed:" line (no churn).
     const refreshed = logs.filter((l) => l.includes("refreshed:"));
     expect(refreshed).toHaveLength(1);
+    expect(logs[logs.length - 1]).toBe("watch stopped");
+  });
+
+  it("re-imports a grown already-imported session and regenerates", async () => {
+    const repo = await setupRepo();
+    await writeCodexRolloutAt(repo, "c-grow"); // imported by the initial catch-up
+    const controller = new AbortController();
+    // Cycle 1: the rollout grows (not yet stable -> skipped).
+    // Cycle 2: unchanged (settled) -> re-imported in place + regenerated.
+    const sleep = scriptedSleep(controller, [
+      async () => writeGrownCodexRolloutAt(repo, "c-grow"),
+      () => {},
+    ]);
+    const deps = watchDeps(repo, controller, sleep);
+
+    await runRefreshWatch(deps);
+
+    // Same session (external id unchanged), now carrying the extra command.
+    expect(await codexSessionIds(repo)).toEqual(["c-grow"]);
+    expect(await commandEventCount(repo)).toBe(2);
+    const logs = (deps as WatchDeps & { logs: string[] }).logs;
+    // Two "refreshed:" lines: the initial catch-up and the re-import cycle.
+    expect(logs.filter((l) => l.includes("refreshed:"))).toHaveLength(2);
+    // The re-import cycle reports a re-imported (not freshly imported) session.
+    expect(logs.some((l) => l.includes("codex +0 ~1"))).toBe(true);
     expect(logs[logs.length - 1]).toBe("watch stopped");
   });
 

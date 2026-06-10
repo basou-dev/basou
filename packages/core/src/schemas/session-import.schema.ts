@@ -47,6 +47,12 @@ export const SessionInnerImportSchema = z
       // Source-tool-native id (e.g. Claude Code session UUID), retained so
       // re-imports of the same source can be deduplicated.
       external_id: z.string().optional(),
+      // Byte size of the source native log at import time. Declared here too
+      // (not only in session.schema.ts) because this inner `source` object is
+      // a plain z.object: zod strips keys it does not declare, so a field
+      // absent here would be dropped from the parsed payload before persist
+      // and the size could never be stored.
+      source_size_bytes: z.number().int().nonnegative().optional(),
     }),
     started_at: IsoTimestampSchema,
     ended_at: IsoTimestampSchema.optional(),

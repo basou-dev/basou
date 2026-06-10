@@ -20,6 +20,7 @@ import {
   type Manifest,
   readManifest,
   readSessionYaml,
+  reimportPreservingId,
   resolveRepositoryRoot,
   type Session,
   type SessionImportPayload,
@@ -79,6 +80,12 @@ export type ImportContext = {
  */
 type ImportCandidate = {
   externalId: string;
+  /**
+   * Absolute path of the source native log. The orchestrator stats this (a
+   * cheap, parse-free probe) to decide whether an already-imported source
+   * changed, before paying to read + derive it.
+   */
+  sourcePath: string;
   toPayload: () => Promise<SessionImportPayload | null>;
 };
 
@@ -216,11 +223,15 @@ export async function doRunImportClaudeCode(
     const externalId = basename(file, ".jsonl");
     return {
       externalId,
-      toPayload: async () =>
-        claudeTranscriptToImportPayload(await readJsonlRecords(file), {
+      sourcePath: file,
+      toPayload: async () => {
+        const { records, sizeBytes } = await readJsonlRecords(file);
+        return claudeTranscriptToImportPayload(records, {
           workspaceId: manifest.workspace.id,
           externalId,
-        }),
+          sourceSizeBytes: sizeBytes,
+        });
+      },
     };
   });
 
@@ -245,11 +256,15 @@ export async function doRunImportCodex(
   const rollouts = await discoverCodexRollouts(sessionsRoot, projectPaths, options);
   const candidates: ImportCandidate[] = rollouts.map(({ file, externalId }) => ({
     externalId,
-    toPayload: async () =>
-      codexRolloutToImportPayload((await readJsonlRecords(file)) as CodexRolloutRecord[], {
+    sourcePath: file,
+    toPayload: async () => {
+      const { records, sizeBytes } = await readJsonlRecords(file);
+      return codexRolloutToImportPayload(records as CodexRolloutRecord[], {
         workspaceId: manifest.workspace.id,
         externalId,
-      }),
+        sourceSizeBytes: sizeBytes,
+      });
+    },
   }));
 
   await importDerivedSessions(paths, manifest, options, CODEX_IMPORT_SOURCE, candidates);
@@ -296,29 +311,21 @@ async function importDerivedSessions(
   const seenThisRun = new Set<string>();
 
   const results: ImportSessionResult[] = [];
-  let skippedNoAction = 0;
-  let skippedExisting = 0;
-  let replaced = 0;
+  const counts: ImportCounts = {
+    skippedNoAction: 0,
+    skippedExisting: 0,
+    replaced: 0,
+    reimported: 0,
+    skippedLegacy: 0,
+    skippedDecreased: 0,
+    skippedDuplicate: 0,
+  };
   let sanitizedPaths = 0;
-  for (const { externalId, toPayload } of candidates) {
-    if (seenThisRun.has(externalId)) {
-      skippedExisting++;
-      continue;
-    }
-    // Already imported in a prior run: skip so re-imports are idempotent,
-    // unless --force asks to delete and replace the existing session.
-    const priorSessionIds = existingByExternalId.get(externalId) ?? [];
-    if (priorSessionIds.length > 0 && options.force !== true) {
-      skippedExisting++;
-      continue;
-    }
 
-    const payload = await toPayload();
-    if (payload === null) {
-      skippedNoAction++;
-      continue;
-    }
-
+  // Parse + version-gate a derived payload before it touches disk. Returns null
+  // when the source carried no provenance worth importing (the caller skips).
+  const validate = (payload: SessionImportPayload | null): SessionImportPayload | null => {
+    if (payload === null) return null;
     const parsed = SessionImportPayloadSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error("Invalid import payload", { cause: parsed.error });
@@ -326,20 +333,78 @@ async function importDerivedSessions(
     if (parsed.data.schema_version !== "0.1.0") {
       throw new Error(`Unsupported import schema_version: ${parsed.data.schema_version}`);
     }
+    return parsed.data;
+  };
+
+  for (const { externalId, sourcePath, toPayload } of candidates) {
+    if (seenThisRun.has(externalId)) {
+      counts.skippedExisting++;
+      continue;
+    }
+    const priors = existingByExternalId.get(externalId) ?? [];
+
+    // Already imported in a prior run. Default is to skip (idempotent), but a
+    // source whose native log GREW is re-imported in place, and --force
+    // deletes + replaces regardless.
+    if (priors.length > 0 && options.force !== true) {
+      const prior = await classifyReimport(priors, sourcePath, externalId, counts);
+      if (prior === null) continue; // skip recorded by classifyReimport
+      const payload = validate(await toPayload());
+      if (payload === null) {
+        counts.skippedNoAction++;
+        continue;
+      }
+      // Re-confirm growth against the size ACTUALLY read (the decision above used
+      // a cheap pre-read stat): if the source was truncated / rotated between the
+      // stat and the read, the smaller buffer must not be re-imported as a grow.
+      const readSize = payload.session.source.source_size_bytes;
+      if (
+        prior.sourceSizeBytes !== undefined &&
+        readSize !== undefined &&
+        readSize <= prior.sourceSizeBytes
+      ) {
+        console.error(
+          `Import: ${externalId} source changed during read (now ${readSize} <= ${prior.sourceSizeBytes} bytes); re-import skipped`,
+        );
+        counts.skippedDecreased++;
+        continue;
+      }
+      const outcome = await reimportPreservingId(paths, manifest, prior.sessionId, payload, {
+        dryRun: options.dryRun === true,
+      });
+      if (outcome.status === "skipped") {
+        const detail =
+          outcome.reason === "prior_events_unreadable"
+            ? "prior events.jsonl has unreadable lines"
+            : "source changed in a non-append way (derived events would be dropped)";
+        console.error(`Import: ${externalId} ${detail}; re-import skipped`);
+        counts.skippedNoAction++;
+        continue;
+      }
+      counts.reimported++;
+      seenThisRun.add(externalId);
+      continue;
+    }
+
+    const payload = validate(await toPayload());
+    if (payload === null) {
+      counts.skippedNoAction++;
+      continue;
+    }
 
     // --force replace: delete the prior session(s) for this external id, but
     // only once the fresh payload is known good, so a failed re-derivation
     // never destroys the existing import. Skipped under --dry-run.
-    if (priorSessionIds.length > 0 && options.force === true) {
+    if (priors.length > 0 && options.force === true) {
       if (options.dryRun !== true) {
-        for (const sid of priorSessionIds) {
-          await rm(join(paths.sessions, sid), { recursive: true, force: true });
+        for (const { sessionId } of priors) {
+          await rm(join(paths.sessions, sessionId), { recursive: true, force: true });
         }
       }
-      replaced++;
+      counts.replaced++;
     }
 
-    const result = await importSessionFromJson(paths, manifest, parsed.data, {
+    const result = await importSessionFromJson(paths, manifest, payload, {
       dryRun: options.dryRun === true,
     });
     results.push(result);
@@ -353,7 +418,78 @@ async function importDerivedSessions(
     console.error(`Imported sessions: ${sanitizedPaths} path(s) sanitized`);
   }
 
-  printImportResult(options, results, { skippedNoAction, skippedExisting, replaced });
+  printImportResult(options, results, counts);
+}
+
+/** Mutable tally of every import disposition, surfaced by {@link printImportResult}. */
+type ImportCounts = {
+  skippedNoAction: number;
+  /** Already imported and unchanged (or a duplicate-within-this-run). */
+  skippedExisting: number;
+  /** Deleted + replaced under --force. */
+  replaced: number;
+  /** Re-imported in place because the source grew. */
+  reimported: number;
+  /** Already imported but with no recorded size (pre-size-tracking import); not re-imported. */
+  skippedLegacy: number;
+  /** Source shrank since import (truncated / rotated); needs --force to replace. */
+  skippedDecreased: number;
+  /** More than one prior session for one external id (anomalous); needs --force. */
+  skippedDuplicate: number;
+};
+
+/**
+ * Decide whether an already-imported external id should be re-imported in place
+ * because its source grew. Returns the single prior import to re-import into, or
+ * `null` (recording the right skip count) when it must be left alone:
+ * unchanged / shrank / legacy (no recorded size) / anomalously duplicated. The
+ * size probe is a parse-free `stat`, so unchanged sources are dismissed cheaply.
+ */
+async function classifyReimport(
+  priors: PriorImport[],
+  sourcePath: string,
+  externalId: string,
+  counts: ImportCounts,
+): Promise<PriorImport | null> {
+  if (priors.length > 1) {
+    // Anomalous: a scoped re-import cannot pick which id to preserve, and
+    // delete+recreate would orphan any linked_events. Leave it to --force.
+    console.error(
+      `Import: ${externalId} has ${priors.length} prior sessions; re-import skipped (use --force)`,
+    );
+    counts.skippedDuplicate++;
+    return null;
+  }
+  const prior = priors[0];
+  if (prior === undefined) {
+    counts.skippedExisting++;
+    return null;
+  }
+  const currentSize = await statSize(sourcePath);
+  if (currentSize === undefined) {
+    // Source vanished between discovery and now; nothing to re-import.
+    counts.skippedExisting++;
+    return null;
+  }
+  if (prior.sourceSizeBytes === undefined) {
+    // Legacy import (no recorded size baseline): never auto-re-import; the size
+    // populates on the next --force / fresh import.
+    counts.skippedLegacy++;
+    return null;
+  }
+  if (currentSize === prior.sourceSizeBytes) {
+    counts.skippedExisting++; // unchanged
+    return null;
+  }
+  if (currentSize < prior.sourceSizeBytes) {
+    // Truncated / rotated: do NOT auto-replace derived provenance; --force only.
+    console.error(
+      `Import: ${externalId} source shrank (${currentSize} < ${prior.sourceSizeBytes} bytes); re-import skipped (use --force to replace)`,
+    );
+    counts.skippedDecreased++;
+    return null;
+  }
+  return prior; // grew => re-import preserving id
 }
 
 /**
@@ -378,15 +514,22 @@ function encodeProjectDir(projectPath: string): string {
  * imported before external_id existed), so existing dogfood imports are
  * matched either way. Unreadable sessions are skipped.
  */
+/**
+ * A prior Basou session for an external id, with the source byte size recorded
+ * at its last import (absent for legacy imports made before the field existed).
+ * The size lets a re-import detect that an append-only source GREW.
+ */
+type PriorImport = { sessionId: string; sourceSizeBytes?: number };
+
 async function loadExistingByExternalId(
   paths: BasouPaths,
   sourceKind: SessionSourceKind,
-): Promise<Map<string, string[]>> {
-  const byExternalId = new Map<string, string[]>();
-  const add = (externalId: string, sessionId: string): void => {
+): Promise<Map<string, PriorImport[]>> {
+  const byExternalId = new Map<string, PriorImport[]>();
+  const add = (externalId: string, prior: PriorImport): void => {
     const list = byExternalId.get(externalId);
-    if (list === undefined) byExternalId.set(externalId, [sessionId]);
-    else list.push(sessionId);
+    if (list === undefined) byExternalId.set(externalId, [prior]);
+    else list.push(prior);
   };
   let sessionIds: string[];
   try {
@@ -402,14 +545,19 @@ async function loadExistingByExternalId(
       continue;
     }
     if (session.session.source.kind !== sourceKind) continue;
+    const sourceSizeBytes = session.session.source.source_size_bytes;
+    // Build once; omit the size key entirely when absent (legacy import) so the
+    // optional property stays absent rather than explicitly undefined.
+    const prior: PriorImport =
+      sourceSizeBytes !== undefined ? { sessionId, sourceSizeBytes } : { sessionId };
     const ext = session.session.source.external_id;
     if (typeof ext === "string" && ext.length > 0) {
-      add(ext, sessionId);
+      add(ext, prior);
       continue;
     }
     const label = session.session.label;
     const match = typeof label === "string" ? label.match(/^claude-code import (\S+)$/) : null;
-    if (match?.[1] !== undefined) add(match[1], sessionId);
+    if (match?.[1] !== undefined) add(match[1], prior);
   }
   return byExternalId;
 }
@@ -469,6 +617,16 @@ async function pathExists(file: string): Promise<boolean> {
     return true;
   } catch (error: unknown) {
     if (findErrorCode(error, "ENOENT")) return false;
+    throw error;
+  }
+}
+
+/** The file's byte size, or undefined if it vanished (ENOENT); other errors propagate. */
+async function statSize(file: string): Promise<number | undefined> {
+  try {
+    return (await stat(file)).size;
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) return undefined;
     throw error;
   }
 }
@@ -582,14 +740,19 @@ async function readFirstLine(file: string): Promise<string | undefined> {
 }
 
 /**
- * Read a JSONL native log into an array of records. A malformed line is
- * skipped rather than failing the whole file, so partial native logs still
- * yield best-effort provenance.
+ * Read a JSONL native log into an array of records, plus the file's exact byte
+ * size. A malformed line is skipped rather than failing the whole file, so
+ * partial native logs still yield best-effort provenance. The byte size is read
+ * from the SAME buffer that produced the records (an immutable snapshot), so the
+ * size persisted as `source.source_size_bytes` always matches the imported
+ * content even if the file is being appended to concurrently.
  */
-async function readJsonlRecords(file: string): Promise<ClaudeTranscriptRecord[]> {
-  let body: string;
+async function readJsonlRecords(
+  file: string,
+): Promise<{ records: ClaudeTranscriptRecord[]; sizeBytes: number }> {
+  let buffer: Buffer;
   try {
-    body = await readFile(file, "utf8");
+    buffer = await readFile(file);
   } catch (error: unknown) {
     if (findErrorCode(error, "ENOENT")) {
       throw new Error("Source log not found", { cause: error });
@@ -601,7 +764,7 @@ async function readJsonlRecords(file: string): Promise<ClaudeTranscriptRecord[]>
   }
 
   const records: ClaudeTranscriptRecord[] = [];
-  for (const line of body.split("\n")) {
+  for (const line of buffer.toString("utf8").split("\n")) {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
     try {
@@ -613,7 +776,7 @@ async function readJsonlRecords(file: string): Promise<ClaudeTranscriptRecord[]>
       // A malformed line is skipped rather than failing the whole file.
     }
   }
-  return records;
+  return { records, sizeBytes: buffer.length };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -623,11 +786,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function printImportResult(
   options: ImportOptions,
   results: ImportSessionResult[],
-  counts: { skippedNoAction: number; skippedExisting: number; replaced: number },
+  counts: ImportCounts,
 ): void {
   const isDry = options.dryRun === true;
   const eventTotal = results.reduce((sum, r) => sum + r.eventCount, 0);
-  const { skippedNoAction, skippedExisting, replaced } = counts;
+  const {
+    skippedNoAction,
+    skippedExisting,
+    replaced,
+    reimported,
+    skippedLegacy,
+    skippedDecreased,
+    skippedDuplicate,
+  } = counts;
 
   if (options.json === true) {
     console.log(
@@ -640,8 +811,12 @@ function printImportResult(
         })),
         imported_count: results.length,
         replaced_count: replaced,
+        reimported_count: reimported,
         skipped_no_action: skippedNoAction,
         skipped_already_imported: skippedExisting,
+        skipped_legacy_untracked: skippedLegacy,
+        skipped_decreased: skippedDecreased,
+        skipped_duplicate: skippedDuplicate,
         event_total: eventTotal,
         dry_run: isDry,
       }),
@@ -652,11 +827,23 @@ function printImportResult(
   const skipParts: string[] = [];
   if (skippedNoAction > 0) skipParts.push(`${skippedNoAction} with no actions`);
   if (skippedExisting > 0) skipParts.push(`${skippedExisting} already imported`);
+  if (skippedLegacy > 0) skipParts.push(`${skippedLegacy} legacy (untracked size)`);
+  if (skippedDecreased > 0) skipParts.push(`${skippedDecreased} shrank`);
+  if (skippedDuplicate > 0) skipParts.push(`${skippedDuplicate} duplicated`);
   const skipSuffix = skipParts.length > 0 ? `; skipped ${skipParts.join(", ")}` : "";
   const eventsPart =
     replaced > 0 ? `${eventTotal} events, ${replaced} replaced` : `${eventTotal} events`;
 
-  if (results.length === 0) {
+  if (isDry) {
+    const parts: string[] = [];
+    if (results.length > 0) parts.push(`import ${results.length} session(s) (${eventsPart})`);
+    if (reimported > 0) parts.push(`re-import ${reimported} changed session(s)`);
+    const head = parts.length > 0 ? `Dry run: would ${parts.join(", ")}` : "Dry run: no changes";
+    console.log(`${head}${skipSuffix}`);
+    return;
+  }
+
+  if (results.length === 0 && reimported === 0) {
     console.log(
       skipParts.length > 0
         ? `No new sessions imported (skipped ${skipParts.join(", ")})`
@@ -665,14 +852,18 @@ function printImportResult(
     return;
   }
 
-  if (isDry) {
-    console.log(`Dry run: would import ${results.length} session(s) (${eventsPart})${skipSuffix}`);
-    return;
+  const segments: string[] = [];
+  if (results.length > 0) {
+    const single =
+      results.length === 1 && results[0] !== undefined ? ` (${shortId(results[0].sessionId)})` : "";
+    segments.push(`Imported ${results.length} session(s)${single} (${eventsPart})`);
   }
-
-  const single =
-    results.length === 1 && results[0] !== undefined ? ` (${shortId(results[0].sessionId)})` : "";
-  console.log(`Imported ${results.length} session(s)${single} (${eventsPart})${skipSuffix}`);
+  if (reimported > 0) {
+    segments.push(
+      `${results.length > 0 ? "re-imported" : "Re-imported"} ${reimported} changed session(s)`,
+    );
+  }
+  console.log(`${segments.join(", ")}${skipSuffix}`);
 }
 
 function shortId(id: string): string {

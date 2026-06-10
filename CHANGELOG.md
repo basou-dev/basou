@@ -3,6 +3,36 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- Import now keeps an already-imported source **current** instead of skipping it
+  unconditionally. When a native log has **grown** since it was imported (an
+  append-only transcript the AI resumed), `basou import` / `basou refresh` /
+  `basou refresh --watch` re-import it **in place**: the Basou session id is
+  preserved, the adapter's events are re-derived, and any human-authored or
+  other-source events are kept and merged back in chronological order. Prior
+  derived event ids are reused for unchanged derivations, so cross-session
+  references (a decision's `linked_events`) stay valid across the re-import.
+  Previously a grown source stayed stale until a global `basou refresh --force`.
+
+### Added
+
+- `session.source.source_size_bytes` — the byte size of the source native log at
+  import time (additive optional field; no schema-version bump). It is the
+  baseline that detects a grown source for in-place re-import.
+
+### Notes
+
+- Change detection is by source byte size: a source that **shrank** (truncated /
+  rotated) is not auto-replaced (use `--force`), and a rewrite that leaves the
+  size unchanged is not detected. Sessions imported before `source_size_bytes`
+  existed carry no baseline and are left untouched until the next `--force`. An
+  external id mapped to more than one session (anomalous) is skipped for in-place
+  re-import rather than replaced. `--force` is unchanged (full delete + recreate
+  under a fresh id).
+
 ## 0.7.0 — 2026-06-08
 
 ### Added

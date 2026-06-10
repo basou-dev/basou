@@ -38,6 +38,14 @@ export type CodexRolloutToPayloadOptions = {
    * to the id read from the rollout's `session_meta` record when omitted.
    */
   externalId?: string;
+  /**
+   * Byte size of the source rollout that produced `records`, stored as
+   * `session.source.source_size_bytes` so a later import can detect growth and
+   * re-import the session. The caller passes the size of the buffer it actually
+   * read (an immutable snapshot of the parsed bytes), so the stored size always
+   * matches the imported content. Omitted => the field is not recorded.
+   */
+  sourceSizeBytes?: number;
 };
 
 /**
@@ -299,6 +307,9 @@ export function codexRolloutToImportPayload(
         kind: CODEX_IMPORT_SOURCE,
         version: "0.1.0",
         ...(externalId !== undefined ? { external_id: externalId } : {}),
+        ...(options.sourceSizeBytes !== undefined
+          ? { source_size_bytes: options.sourceSizeBytes }
+          : {}),
       },
       started_at: minTs,
       ended_at: maxTs,

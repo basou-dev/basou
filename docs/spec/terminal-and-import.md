@@ -109,6 +109,19 @@ authoritative option list. A Gemini adapter was dropped (the upstream CLI was
 discontinued); a
 Copilot adapter remains unimplemented.
 
+Re-import is **idempotent and self-updating**. An unchanged source is skipped;
+a source whose native log **grew** since it was imported (an append-only
+transcript the AI resumed) is re-imported **in place** — the Basou session id
+is preserved, the adapter's derived events are re-derived (reusing the prior
+event ids for unchanged derivations, so cross-session references stay valid),
+and any human-authored or other-source events are kept and merged back in
+chronological order. Change is detected by the source's byte size, recorded as
+`source.source_size_bytes` at import (sessions imported before this field
+existed carry no baseline and are left untouched until the next `--force`). A
+source that **shrank** (truncated / rotated) is not auto-replaced — that needs
+`--force` — and a rewrite that leaves the byte size unchanged is not detected.
+`--force` still deletes and re-creates the session under a fresh id.
+
 ## §14.3 Multi-root source roots
 
 A single logical project can span several sibling repositories — for
@@ -154,8 +167,9 @@ manual step:
   capture latency is the poll interval, not real-time. Ctrl-C / SIGTERM
   stops the watcher after the current cycle (never mid-write).
 - `--watch` cannot be combined with `--dry-run`, `--json`, or `--force`.
-  Because import is idempotent (already-imported sessions are skipped), a
-  session that is still **active when the watcher starts** (captured by the
-  start-up catch-up) or that **resumes** after it settled is recorded only up
-  to that point and is not re-imported; run `basou refresh --force` to rebuild
-  those from the latest logs.
+  A session whose log **grows** — including one still active when the watcher
+  starts, or one that **resumes** after it settled — is re-imported in place on
+  the next settled cycle (the session id is preserved; see §14.2), so the
+  watcher keeps active work current automatically. The residual gaps are a
+  rewrite that leaves the byte size unchanged (not detected) and a truncated /
+  rotated log (needs `basou refresh --force`).

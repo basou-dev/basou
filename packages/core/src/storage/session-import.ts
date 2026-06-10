@@ -1,6 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readAllEvents } from "../events/event-replay.js";
 import { writeEventsBulk } from "../events/event-writer.js";
 import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
@@ -14,8 +15,10 @@ import type {
 } from "../schemas/session-import.schema.js";
 import { TaskIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
+import { acquireLock } from "./lockfile.js";
+import { readSessionYaml } from "./sessions.js";
 import { enumerateTaskIds } from "./tasks.js";
-import { linkYamlFile } from "./yaml-store.js";
+import { linkYamlFile, overwriteYamlFile } from "./yaml-store.js";
 
 /**
  * Options for {@link importSessionFromJson}. All fields are optional.
@@ -284,4 +287,267 @@ function buildSessionRecord(
       workingDirectoryRewritten: workingDirectorySanitized !== workingDirectoryRaw,
     },
   };
+}
+
+/**
+ * The closed allowlist of session source kinds that are import-DERIVED (an
+ * adapter mechanically derived the events from a native log). Used to
+ * discriminate the events a scoped re-import re-derives from the ones it
+ * preserves. `EventSourceSchema` is open vocab, so this is a deliberate
+ * allowlist: any source NOT in it is treated as non-derived and preserved.
+ */
+const IMPORT_DERIVED_SOURCES: ReadonlySet<string> = new Set<SessionSourceKind>([
+  "claude-code-import",
+  "codex-import",
+]);
+
+/** Whether `source` is one of the known import-derived event sources. */
+export function isImportDerivedSource(source: string): boolean {
+  return IMPORT_DERIVED_SOURCES.has(source);
+}
+
+/** Options for {@link reimportPreservingId}. */
+export type ReimportOptions = {
+  /** Compute the re-import and return its preview without writing to disk. */
+  dryRun?: boolean;
+};
+
+/** Result of {@link reimportPreservingId}. */
+export type ReimportResult =
+  | {
+      status: "reimported";
+      sessionId: PrefixedId<"ses">;
+      /** Total events written to the merged `events.jsonl`. */
+      eventCount: number;
+      /** Non-derived events (human / unknown source) carried over unchanged. */
+      preservedCount: number;
+      /** Derived events whose prior id (and decision_id) was reused. */
+      reusedIdCount: number;
+    }
+  | {
+      status: "skipped";
+      // `prior_events_unreadable`: the prior events.jsonl had a line that could
+      //   not be preserved, so the re-import was aborted to avoid dropping data
+      //   on the atomic rewrite.
+      // `prior_derived_dropped`: re-deriving the (grown) source would NOT
+      //   reproduce some prior derived event, so its id would vanish — only
+      //   possible on a non-append-only source change, which is out of scope.
+      //   Aborted so an id a cross-session `linked_events` may reference is
+      //   never silently dropped; `--force` rebuilds from scratch.
+      reason: "prior_events_unreadable" | "prior_derived_dropped";
+    };
+
+/**
+ * A stable content key for a DERIVED event, used to match a freshly-derived
+ * event to its counterpart in the prior import so the prior event's id (and any
+ * id-bearing field such as `decision_id`) can be reused — keeping cross-session
+ * `decision_recorded.linked_events` references valid across a re-import. The key
+ * is `type + occurred_at + the variant's salient derived fields` (the fields the
+ * importers populate deterministically from the source records), so matching is
+ * robust to record reordering between imports (a positional match is not).
+ * `session_started` / `session_ended` are matched by role instead (a session has
+ * exactly one of each, and `session_ended`'s occurred_at moves as the log grows).
+ */
+function derivedEventContentKey(event: Event): string {
+  const base = `${event.type} ${event.occurred_at}`;
+  switch (event.type) {
+    case "command_executed":
+      return `${base} ${event.command} ${event.args.join("")} ${event.cwd}`;
+    case "file_changed":
+      return `${base} ${event.path} ${event.change_type}`;
+    case "decision_recorded":
+      return `${base} ${event.title}`;
+    default:
+      return base;
+  }
+}
+
+/**
+ * Re-key the freshly-derived events (which carry placeholder ids) onto the
+ * session being re-imported, reusing prior derived events' IDS wherever the
+ * derivation is unchanged so their ids stay stable across the re-import:
+ *
+ * - `session_started` / `session_ended`: matched by role (a session has exactly
+ *   one of each). The prior id is reused with the FRESH content, so
+ *   `session_ended`'s occurred_at advances to the log's new end while the id is
+ *   stable.
+ * - every other derived event: matched to a prior derived event by content key
+ *   (FIFO per key for same-key duplicates). A match reuses the prior `id` (and,
+ *   for `decision_recorded`, the prior `decision_id`) but keeps the FRESH
+ *   content, so a re-derived field that changed between imports (e.g. a Codex
+ *   command's `exit_code` / `duration_ms` that filled in once it completed)
+ *   updates; a miss is a genuinely new event and gets a fresh ULID.
+ *
+ * `droppedPriorDerived` is true when a prior derived event was NOT reproduced by
+ * the fresh derivation — its id would be dropped. That cannot happen for an
+ * append-only growth (the prior derivations all recur); it signals a non-append
+ * source change, which the caller treats as out of scope and skips.
+ */
+function reuseDerivedIds(
+  priorDerived: ReadonlyArray<Event>,
+  freshDerived: ReadonlyArray<Event>,
+  sessionId: PrefixedId<"ses">,
+): { events: Event[]; reusedIdCount: number; droppedPriorDerived: boolean } {
+  const priorStarted = priorDerived.find((e) => e.type === "session_started");
+  const priorEnded = priorDerived.find((e) => e.type === "session_ended");
+  let startedUsed = false;
+  let endedUsed = false;
+  // FIFO queue of prior MIDDLE events per content key.
+  const middleByKey = new Map<string, Event[]>();
+  for (const e of priorDerived) {
+    if (e.type === "session_started" || e.type === "session_ended") continue;
+    const key = derivedEventContentKey(e);
+    const list = middleByKey.get(key);
+    if (list === undefined) middleByKey.set(key, [e]);
+    else list.push(e);
+  }
+  let reusedIdCount = 0;
+  // Reuse the prior id (so a cross-session `linked_events` target survives) but
+  // keep the FRESH content; carry the prior `decision_id` so a decision's
+  // identity is stable too.
+  const withReusedId = (fresh: Event, prior: Event): Event => {
+    reusedIdCount++;
+    if (fresh.type === "decision_recorded" && prior.type === "decision_recorded") {
+      return { ...fresh, id: prior.id, session_id: sessionId, decision_id: prior.decision_id };
+    }
+    return { ...fresh, id: prior.id, session_id: sessionId };
+  };
+  const events = freshDerived.map((fresh): Event => {
+    if (fresh.type === "session_started") {
+      if (priorStarted !== undefined) {
+        startedUsed = true;
+        return withReusedId(fresh, priorStarted);
+      }
+      return { ...fresh, id: prefixedUlid("evt"), session_id: sessionId };
+    }
+    if (fresh.type === "session_ended") {
+      if (priorEnded !== undefined) {
+        endedUsed = true;
+        return withReusedId(fresh, priorEnded);
+      }
+      return { ...fresh, id: prefixedUlid("evt"), session_id: sessionId };
+    }
+    const match = middleByKey.get(derivedEventContentKey(fresh))?.shift();
+    if (match !== undefined) return withReusedId(fresh, match);
+    return { ...fresh, id: prefixedUlid("evt"), session_id: sessionId };
+  });
+  // A prior derived event not consumed above would be DROPPED on the rewrite.
+  const droppedPriorDerived =
+    (priorStarted !== undefined && !startedUsed) ||
+    (priorEnded !== undefined && !endedUsed) ||
+    [...middleByKey.values()].some((q) => q.length > 0);
+  return { events, reusedIdCount, droppedPriorDerived };
+}
+
+/**
+ * Re-import a source whose native log GREW into the SAME Basou session,
+ * preserving its id and any non-derived events, instead of skipping it (default
+ * dedup) or deleting + recreating it (`--force`). The caller has already
+ * validated `freshPayload` and confirmed (by source byte size) that the source
+ * changed; this function re-derives the adapter's events, reuses prior derived
+ * event ids for unchanged derivations (so `linked_events` references survive),
+ * preserves human / unknown-source events, and rewrites `events.jsonl` +
+ * `session.yaml` atomically under the session lock.
+ *
+ * The whole read-modify-write runs under {@link acquireLock} so a concurrent
+ * writer cannot interleave; `dryRun` computes the result and writes nothing
+ * (and takes no lock). If the prior `events.jsonl` has any line that cannot be
+ * preserved (malformed / schema-invalid / half-written), the re-import is
+ * ABORTED (`status: "skipped"`) rather than risk dropping data on the rewrite.
+ */
+export async function reimportPreservingId(
+  paths: BasouPaths,
+  manifest: Manifest,
+  priorSessionId: string,
+  freshPayload: SessionImportPayload,
+  options: ReimportOptions = {},
+): Promise<ReimportResult> {
+  // The id originates from an on-disk session directory, so it is already a
+  // valid `ses_<ULID>`; the cast threads it into the typed record builders.
+  const sessionId = priorSessionId as PrefixedId<"ses">;
+  const importSource = freshPayload.session.source.kind;
+  const sessionDir = join(paths.sessions, priorSessionId);
+
+  const lock = options.dryRun === true ? null : await acquireLock(paths, "session", priorSessionId);
+  try {
+    // Strict read of the prior events: abort on ANY unpreservable line so the
+    // atomic rewrite below never silently drops a human / unknown-source event.
+    let priorUnreadable = false;
+    const priorEvents = await readAllEvents(sessionDir, {
+      onWarning: () => {
+        priorUnreadable = true;
+      },
+    });
+    if (priorUnreadable) {
+      return { status: "skipped", reason: "prior_events_unreadable" };
+    }
+
+    // Partition by event source: re-derive exactly the events THIS adapter
+    // produced (source === importSource); preserve everything else (human
+    // local-cli notes / decisions AND any unknown-source event, since
+    // EventSourceSchema is open vocab).
+    const priorDerived = priorEvents.filter((e) => e.source === importSource);
+    const preserved = priorEvents.filter((e) => e.source !== importSource);
+
+    const {
+      events: rederived,
+      reusedIdCount,
+      droppedPriorDerived,
+    } = reuseDerivedIds(priorDerived, freshPayload.events, sessionId);
+    if (droppedPriorDerived) {
+      // The grown source no longer reproduces some prior derived event, so its
+      // id would vanish (only happens on a non-append-only change). Abort rather
+      // than silently drop an id a cross-session linked_events may reference.
+      return { status: "skipped", reason: "prior_derived_dropped" };
+    }
+
+    // Merge derived + preserved into one stream ordered by occurred_at (stable
+    // sort => derived before preserved at an equal timestamp) and enforce the
+    // same monotonic invariant a fresh import guarantees, so a re-imported
+    // session is indistinguishable in shape from a freshly imported one.
+    const mergedEvents = [...rederived, ...preserved].sort(
+      (a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at),
+    );
+    assertChronologicalOrder(mergedEvents);
+
+    // Rebuild session.yaml from the fresh derivation (label, metrics, source +
+    // size, related_files, timestamps, sanitized paths), preserving the id and
+    // the human-owned fields a re-derivation must not clobber.
+    const prior = await readSessionYaml(paths, priorSessionId);
+    const { record } = buildSessionRecord(freshPayload.session, manifest, sessionId, {});
+    const preservedInner: Session["session"] = {
+      ...record.session,
+      // A human may have linked this imported session to a task
+      // (`basou task link` updates session.yaml.task_id even for imported
+      // sessions); never drop that link on a re-derive.
+      task_id: prior.session.task_id ?? null,
+      // Re-derivation always yields a null summary; keep a prior non-null one.
+      summary: prior.session.summary ?? record.session.summary ?? null,
+    };
+    const updatedRecord: Session = { schema_version: "0.1.0", session: preservedInner };
+
+    if (options.dryRun !== true) {
+      await writeEventsBulk(sessionDir, mergedEvents);
+      try {
+        await overwriteYamlFile(join(sessionDir, "session.yaml"), updatedRecord);
+      } catch (error: unknown) {
+        // events.jsonl and session.yaml are two separate atomic writes. If the
+        // yaml write fails after the events were rewritten, roll the events back
+        // to the prior set so the session is never left with fresh events paired
+        // with stale metadata (size / label / metrics).
+        await writeEventsBulk(sessionDir, priorEvents).catch(() => undefined);
+        throw error;
+      }
+    }
+
+    return {
+      status: "reimported",
+      sessionId,
+      eventCount: mergedEvents.length,
+      preservedCount: preserved.length,
+      reusedIdCount,
+    };
+  } finally {
+    await lock?.release();
+  }
 }
