@@ -3,6 +3,37 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **Tamper-evident imported event logs.** `events.jsonl` written by the import
+  paths (`basou import`, `basou refresh`, in-place re-import of a grown
+  source) now carries a per-line hash chain: each event records `prev_hash`,
+  the sha-256 of the previous line's written bytes, with a session-bound
+  genesis hash on the first line. `session.yaml` gains an `integrity` head
+  anchor (`head_hash` + `event_count`) so tail truncation is detected
+  independently. Both fields are additive optional — no schema-version bump;
+  existing sessions are unaffected until their next re-import.
+- `basou verify [--session <id>] [--all] [--json]` — read-only integrity
+  checker. Reports `verified` / `unchained` / `empty` / `incomplete` /
+  `tampered` per session and exits non-zero only when something is
+  `tampered`. Live / ad-hoc and pre-feature sessions are `unchained`
+  (informational).
+- The in-place re-import refuses to rebuild a session whose prior chain fails
+  verification (skip reason `prior_chain_broken`), so a broken chain cannot be
+  laundered into a freshly valid one. `--force` remains the explicit override.
+
+### Notes
+
+- The chain is **non-cryptographic** tamper-evidence, not a signature: an
+  attacker rewriting both `events.jsonl` and `session.yaml` consistently is
+  not detected. It raises the bar from "edit one line" to "recompute and
+  rewrite two coordinated files". Signing / external anchoring is a possible
+  follow-up.
+- v1 scope is import-only: live `exec` / `run` / ad-hoc sessions stay
+  unchained for now; chaining the live append path is a planned follow-up.
+
 ## 0.8.0 — 2026-06-10
 
 ### Changed

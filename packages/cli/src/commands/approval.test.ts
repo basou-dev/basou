@@ -846,3 +846,61 @@ describe("resolveApprovalId regression", () => {
     expect(joinCalls(out)).toContain("status: approved");
   });
 });
+
+describe("imported-session fence (D-6b)", () => {
+  async function writeImportedSessionYaml(repo: string, sessionId: string): Promise<void> {
+    const paths = basouPaths(repo);
+    await mkdir(join(paths.sessions, sessionId), { recursive: true });
+    await writeYamlFile(join(paths.sessions, sessionId, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: {
+        id: sessionId,
+        task_id: null,
+        workspace_id: FIXED_WS_ID,
+        source: { kind: "codex-import", version: "0.1.0" },
+        started_at: "2026-05-04T09:00:00+09:00",
+        status: "imported",
+        working_directory: "~/projects/example",
+        invocation: { command: "codex", args: [], exit_code: 0 },
+        related_files: [],
+        events_log: "events.jsonl",
+        summary: null,
+      },
+    });
+  }
+
+  it("approve refuses to append a resolution event to an imported session", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P31");
+    const sessionId = SES("S31");
+    await createApproval(repo, { id: approvalId, sessionId });
+    await appendRequestedEvent(repo, sessionId, approvalId, "2026-05-04T10:00:00+09:00", "E31");
+    await writeImportedSessionYaml(repo, sessionId);
+
+    const err = captureStderr();
+    await runApprovalApprove(approvalId, {}, { cwd: repo });
+    expect(process.exitCode).toBe(1);
+    expect(joinCalls(err)).toContain("imported session");
+
+    // Nothing was appended and the pending YAML is untouched.
+    const lines = await readEventsLines(repo, sessionId);
+    expect(lines.length).toBe(1);
+    const paths = basouPaths(repo);
+    expect(await readdir(paths.approvals.pending)).toContain(`${approvalId}.yaml`);
+  });
+
+  it("reject refuses to append a resolution event to an imported session", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P32");
+    const sessionId = SES("S32");
+    await createApproval(repo, { id: approvalId, sessionId });
+    await appendRequestedEvent(repo, sessionId, approvalId, "2026-05-04T10:00:00+09:00", "E32");
+    await writeImportedSessionYaml(repo, sessionId);
+
+    const err = captureStderr();
+    await runApprovalReject(approvalId, { reason: "no" }, { cwd: repo });
+    expect(process.exitCode).toBe(1);
+    expect(joinCalls(err)).toContain("imported session");
+    expect((await readEventsLines(repo, sessionId)).length).toBe(1);
+  });
+});

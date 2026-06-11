@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { EventSchema } from "./event.schema.js";
 import {
+  SessionIntegritySchema,
   SessionMetricsSchema,
   SessionSourceKindSchema,
   SessionStatusSchema,
@@ -67,6 +68,11 @@ export const SessionInnerImportSchema = z
     events_log: z.string().optional(),
     summary: z.string().nullable().optional(),
     metrics: SessionMetricsSchema.optional(),
+    // Accepted so a payload assembled from an on-disk chained session.yaml
+    // round-trips, and DISCARDED by the importer (buildSessionRecord never
+    // copies it): the integrity anchor is computed at write time, never
+    // imported. Mirrors the accept-and-discard of `prev_hash` on events.
+    integrity: SessionIntegritySchema.optional(),
   })
   .strict();
 

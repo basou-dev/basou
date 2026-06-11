@@ -17,6 +17,7 @@ import {
   linkYamlFile,
   loadApproval,
   prefixedUlid,
+  readSessionYaml,
   readYamlFile,
   replayEvents,
   resolveRepositoryRoot,
@@ -404,6 +405,22 @@ async function doRunApprovalResolve(
   const now = new Date();
   if (isLazyExpired(approval, now)) {
     throw new Error(`Approval already expired: ${idInput}`);
+  }
+
+  // Step D-6b: imported-session fence. An imported session's events.jsonl is
+  // a closed, hash-chained corpus written only by the import paths; appending
+  // a resolution line here would break its chain. No approval producer
+  // targets imported sessions today, so this is defensive. Only a positively
+  // read "imported" status blocks — a missing or unreadable session.yaml
+  // falls through to the pre-existing behavior.
+  let sessionStatus: string | null = null;
+  try {
+    sessionStatus = (await readSessionYaml(paths, approval.session_id)).session.status;
+  } catch {
+    sessionStatus = null;
+  }
+  if (sessionStatus === "imported") {
+    throw new Error(`Cannot resolve an approval for an imported session: ${idInput}`);
   }
 
   // Step D-7: prepare event id + occurred_at (shared with step 9 below).

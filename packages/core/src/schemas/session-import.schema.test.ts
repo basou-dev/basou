@@ -59,6 +59,28 @@ describe("SessionImportPayloadSchema", () => {
     expect(SessionImportPayloadSchema.safeParse(empty).success).toBe(true);
   });
 
+  it("accepts a round-trip payload carrying session.integrity and event prev_hash", () => {
+    // A payload assembled from an on-disk CHAINED session (yaml integrity +
+    // per-line prev_hash) must validate; the importer discards both and
+    // recomputes the chain at write time.
+    const chained = buildPayload({
+      session: buildSession({
+        integrity: { head_hash: "a".repeat(64), event_count: 1 },
+      }),
+      events: [{ ...VALID_EVENT, prev_hash: "b".repeat(64) }],
+    });
+    expect(SessionImportPayloadSchema.safeParse(chained).success).toBe(true);
+  });
+
+  it("rejects an integrity anchor with unknown keys (strict inner object)", () => {
+    const poisoned = buildPayload({
+      session: buildSession({
+        integrity: { head_hash: "a".repeat(64), event_count: 1, extra: true },
+      }),
+    });
+    expect(SessionImportPayloadSchema.safeParse(poisoned).success).toBe(false);
+  });
+
   it("accepts a payload with many events", () => {
     const events = Array.from({ length: 5 }, (_, i) => ({
       ...VALID_EVENT,

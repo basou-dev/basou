@@ -376,7 +376,9 @@ async function importDerivedSessions(
         const detail =
           outcome.reason === "prior_events_unreadable"
             ? "prior events.jsonl has unreadable lines"
-            : "source changed in a non-append way (derived events would be dropped)";
+            : outcome.reason === "prior_chain_broken"
+              ? "prior events.jsonl failed hash-chain verification (run 'basou verify')"
+              : "source changed in a non-append way (derived events would be dropped)";
         console.error(`Import: ${externalId} ${detail}; re-import skipped`);
         counts.skippedNoAction++;
         continue;

@@ -19,6 +19,13 @@ const BaseEventSchema = z.object({
   session_id: SessionIdSchema,
   occurred_at: IsoTimestampSchema,
   source: EventSourceSchema,
+  // Tamper-evidence back-pointer (hex sha-256 of the PREVIOUS event line's
+  // written bytes; the first line carries the session-bound genesis hash).
+  // Present only on sessions written with chaining enabled (import paths);
+  // live/ad-hoc sessions omit it. Declared on the base so the `.strict()`
+  // variants below treat it as a known key. Additive optional => no
+  // schema_version bump.
+  prev_hash: z.string().optional(),
 });
 
 // --- Session lifecycle events ---

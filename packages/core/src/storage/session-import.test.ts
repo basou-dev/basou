@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse, stringify as stringifyYaml } from "yaml";
+import { verifyEventsChain } from "../events/verify.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { SessionImportPayload } from "../schemas/session-import.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "./basou-dir.js";
@@ -322,6 +323,73 @@ describe("importSessionFromJson", () => {
     const eventsPath = join(paths.sessions, result.sessionId, "events.jsonl");
     const info = await stat(eventsPath);
     expect(info.size).toBe(0);
+  });
+
+  it("writes a hash-chained events.jsonl and a matching integrity anchor", async () => {
+    const paths = await setupPaths();
+    const result = await importSessionFromJson(paths, makeManifest(), makePayload(), {});
+
+    const yaml = await readSessionYaml(paths, result.sessionId);
+    const integrity = yaml.session.integrity as { head_hash: string; event_count: number };
+    expect(integrity.event_count).toBe(1);
+    expect(integrity.head_hash).toMatch(/^[0-9a-f]{64}$/);
+
+    const events = await readEventsJsonl(paths, result.sessionId);
+    expect(typeof events[0]?.prev_hash).toBe("string");
+
+    expect(await verifyEventsChain(paths, result.sessionId)).toEqual({
+      status: "verified",
+      eventCount: 1,
+    });
+  });
+
+  it("discards a payload-supplied integrity anchor and prev_hash, recomputing both", async () => {
+    const paths = await setupPaths();
+    const poisonedEvent = {
+      schema_version: "0.1.0",
+      type: "session_started",
+      id: INPUT_EVT_ID,
+      session_id: INPUT_SES_ID,
+      occurred_at: "2026-05-04T09:00:00+09:00",
+      source: "claude-code-adapter",
+      prev_hash: "b".repeat(64),
+    } as SessionImportPayload["events"][number];
+    const result = await importSessionFromJson(
+      paths,
+      makeManifest(),
+      makePayload({
+        session: { integrity: { head_hash: "a".repeat(64), event_count: 99 } },
+        events: [poisonedEvent],
+      }),
+      {},
+    );
+
+    const yaml = await readSessionYaml(paths, result.sessionId);
+    const integrity = yaml.session.integrity as { head_hash: string; event_count: number };
+    expect(integrity.event_count).toBe(1);
+    expect(integrity.head_hash).not.toBe("a".repeat(64));
+    const events = await readEventsJsonl(paths, result.sessionId);
+    expect(events[0]?.prev_hash).not.toBe("b".repeat(64));
+    expect(await verifyEventsChain(paths, result.sessionId)).toEqual({
+      status: "verified",
+      eventCount: 1,
+    });
+  });
+
+  it("writes no integrity anchor for a zero-event import (verdict: empty)", async () => {
+    const paths = await setupPaths();
+    const result = await importSessionFromJson(
+      paths,
+      makeManifest(),
+      makePayload({ events: [] }),
+      {},
+    );
+    const yaml = await readSessionYaml(paths, result.sessionId);
+    expect(yaml.session.integrity).toBeUndefined();
+    expect(await verifyEventsChain(paths, result.sessionId)).toEqual({
+      status: "empty",
+      eventCount: 0,
+    });
   });
 
   it("preserves variant-specific cross-reference ids across rewrite", async () => {

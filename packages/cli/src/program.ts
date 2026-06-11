@@ -13,6 +13,7 @@ import { registerSessionCommand } from "./commands/session.js";
 import { registerStatsCommand } from "./commands/stats.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerTaskCommand } from "./commands/task.js";
+import { registerVerifyCommand } from "./commands/verify.js";
 import { registerViewCommand } from "./commands/view.js";
 
 // Read the CLI release version directly from the sibling package.json so
@@ -52,6 +53,7 @@ export function buildProgram(): Command {
   registerSessionCommand(program);
   registerImportCommand(program);
   registerRefreshCommand(program);
+  registerVerifyCommand(program);
   registerViewCommand(program);
   registerApprovalCommand(program);
   registerDecisionCommand(program);

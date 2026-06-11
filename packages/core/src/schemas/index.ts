@@ -32,11 +32,13 @@ export type { Manifest } from "./manifest.schema.js";
 export { ManifestSchema } from "./manifest.schema.js";
 export type {
   Session,
+  SessionIntegrity,
   SessionMetrics,
   SessionSourceKind,
   SessionStatus,
 } from "./session.schema.js";
 export {
+  SessionIntegritySchema,
   SessionMetricsSchema,
   SessionSchema,
   SessionSourceKindSchema,
