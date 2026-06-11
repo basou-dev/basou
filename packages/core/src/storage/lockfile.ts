@@ -1,5 +1,5 @@
-import { readFile, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { atomicCreate } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
@@ -43,6 +43,9 @@ export type LockHandle = {
  *
  * Acquisition strategy:
  *   1. {@link atomicCreate} the lockfile (POSIX link(2) + EEXIST).
+ *      On ENOENT (a workspace from before `.basou/locks/` existed), create
+ *      the directory and retry once; a retry failure throws the pathless
+ *      `"Failed to acquire lock"`.
  *   2. On EEXIST, probe the existing lockfile via {@link isStaleLock}.
  *      - If stale (= holder pid is dead or lock is older than
  *        {@link STALE_LOCK_MAX_AGE_MS}), `unlink` the stale file and retry
@@ -71,6 +74,22 @@ export async function acquireLock(
   try {
     await atomicCreate(lockPath, serialised);
   } catch (error: unknown) {
+    // A workspace checked out (or created) before the locks directory
+    // existed lacks `.basou/locks/`; create it and retry once rather than
+    // failing every lock-taking command on such a workspace.
+    if (findErrorCode(error, "ENOENT")) {
+      try {
+        await mkdir(dirname(lockPath), { recursive: true });
+        await atomicCreate(lockPath, serialised);
+        return {
+          release: async () => {
+            await unlink(lockPath).catch(() => undefined);
+          },
+        };
+      } catch (retryError: unknown) {
+        throw new Error("Failed to acquire lock", { cause: retryError });
+      }
+    }
     if (!findErrorCode(error, "EEXIST")) {
       throw error;
     }

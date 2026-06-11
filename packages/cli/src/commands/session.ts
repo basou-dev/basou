@@ -6,14 +6,17 @@ import {
   assertBasouRootSafe,
   basouPaths,
   type Event,
+  enumerateSessionDirs,
   findErrorCode,
   type ImportSessionOptions,
   type ImportSessionResult,
   importSessionFromJson,
   loadSessionEntries,
+  type RechainResult,
   readAllEvents,
   readManifest,
   readYamlFile,
+  rechainSessionInPlace,
   resolveRepositoryRoot,
   resolveSessionId,
   resolveTaskId,
@@ -60,6 +63,26 @@ export type SessionContext = {
   /** Defaults to `() => new Date()`. Injectable so the `session show` work
    * span is deterministic in tests and for a running session. */
   nowProvider?: () => Date;
+};
+
+export type SessionRechainOptions = {
+  session?: string;
+  all?: boolean;
+  dryRun?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+/** One row of `basou session rechain` output. */
+export type RechainRow = {
+  session_id: string;
+  status: "rechained" | "skipped" | "error";
+  /** Skip reason, present when status is "skipped". */
+  reason?: Extract<RechainResult, { status: "skipped" }>["reason"];
+  /** Chained event count, present when status is "rechained". */
+  event_count?: number;
+  /** Fixed error message, present when status is "error". */
+  message?: string;
 };
 
 type SessionListRecord = {
@@ -133,6 +156,20 @@ export function registerSessionCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (sessionIdInput: string, options: SessionNoteOptions) => {
       await runSessionNote(sessionIdInput, options);
+    });
+
+  session
+    .command("rechain")
+    .description(
+      "Add the tamper-evidence hash chain, in place, to imported sessions created before chaining existed",
+    )
+    .option("--session <id>", "Rechain a single session (unique id prefix accepted)")
+    .option("--all", "Rechain every session in the workspace")
+    .option("--dry-run", "Compute the outcomes only; do not write")
+    .option("--json", "Output the outcomes as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (options: SessionRechainOptions) => {
+      await runSessionRechain(options);
     });
 }
 
@@ -560,7 +597,7 @@ function maxLen(values: readonly string[], floor: number): number {
 
 async function resolveRepositoryRootForSession(
   cwd: string,
-  subcmd: "list" | "show" | "import" | "note",
+  subcmd: "list" | "show" | "import" | "note" | "rechain",
 ): Promise<string> {
   try {
     return await resolveRepositoryRoot(cwd);
@@ -901,4 +938,109 @@ function printSessionNoteResult(
   const preview =
     body.length > NOTE_BODY_PREVIEW_LIMIT ? `${body.slice(0, NOTE_BODY_PREVIEW_HEAD)}...` : body;
   console.log(`Added note to session ${sid} (${sessionStatus}): ${preview}`);
+}
+
+/**
+ * Programmatic entry for `basou session rechain` that owns process exit
+ * state. Tests should prefer {@link doRunSessionRechain} for the success
+ * path.
+ */
+export async function runSessionRechain(
+  options: SessionRechainOptions,
+  ctx: SessionContext = {},
+): Promise<void> {
+  try {
+    await doRunSessionRechain(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Runner for `session rechain`. A WRITE command, so an explicit selector is
+ * required (`--session <id>` or `--all`). Per-session outcomes are collected
+ * into rows; an I/O failure on one session becomes an `error` row and the
+ * sweep CONTINUES, so one unreadable directory cannot hide the rest of the
+ * report. Exit is non-zero when any session was found `tampered` or errored
+ * operationally; plain skips and successes exit 0.
+ */
+export async function doRunSessionRechain(
+  options: SessionRechainOptions,
+  ctx: SessionContext,
+): Promise<void> {
+  if (options.session !== undefined && options.all === true) {
+    throw new Error("Specify either --session <id> or --all, not both");
+  }
+  if (options.session === undefined && options.all !== true) {
+    throw new Error("Specify --session <id> or --all");
+  }
+
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForSession(cwd, "rechain");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+
+  const sessionIds =
+    options.session !== undefined
+      ? [await resolveSessionId(paths, options.session)]
+      : await enumerateSessionDirs(paths);
+
+  const dryRun = options.dryRun === true;
+  const rows: RechainRow[] = [];
+  for (const sessionId of sessionIds) {
+    let outcome: RechainResult;
+    try {
+      outcome = await rechainSessionInPlace(paths, sessionId, { dryRun });
+    } catch (error: unknown) {
+      rows.push({
+        session_id: sessionId,
+        status: "error",
+        message: error instanceof Error ? error.message : "Unknown error",
+      });
+      continue;
+    }
+    if (outcome.status === "rechained") {
+      rows.push({ session_id: sessionId, status: "rechained", event_count: outcome.eventCount });
+    } else {
+      rows.push({ session_id: sessionId, status: "skipped", reason: outcome.reason });
+    }
+  }
+
+  const tamperedCount = rows.filter((r) => r.reason === "tampered").length;
+  const errorCount = rows.filter((r) => r.status === "error").length;
+
+  if (options.json === true) {
+    console.log(JSON.stringify(rows, null, 2));
+  } else {
+    for (const row of rows) {
+      console.log(`${row.session_id}  ${renderRechainRow(row, dryRun)}`);
+    }
+    const rechained = rows.filter((r) => r.status === "rechained").length;
+    const skipped = rows.filter((r) => r.status === "skipped").length;
+    console.log(
+      `Sessions: ${rows.length} total — ${rechained} ${dryRun ? "would be rechained" : "rechained"}, ` +
+        `${skipped} skipped, ${errorCount} errors`,
+    );
+  }
+
+  // A tampered session or an operational failure must be visible in the
+  // exit status; ordinary skips (already chained / live / empty) are not
+  // failures.
+  if (tamperedCount > 0 || errorCount > 0) {
+    process.exitCode = 1;
+  }
+}
+
+function renderRechainRow(row: RechainRow, dryRun: boolean): string {
+  switch (row.status) {
+    case "rechained":
+      return `${dryRun ? "would rechain" : "rechained"} (${row.event_count} events)`;
+    case "skipped":
+      return row.reason === "tampered"
+        ? "skipped (TAMPERED — inspect with 'basou verify')"
+        : `skipped (${row.reason})`;
+    case "error":
+      return `error (${row.message})`;
+  }
 }

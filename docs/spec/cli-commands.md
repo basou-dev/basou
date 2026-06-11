@@ -17,7 +17,7 @@ basou stats                 # report how much the AI worked (volume + time proxi
 # Sessions and execution
 basou exec <command> [args...]   # run a command and record it as a session
 basou run claude-code [args...]  # run an AI tool through basou as a tracked session
-basou session ...                # inspect sessions (list / show / note / import)
+basou session ...                # inspect sessions (list / show / note / import / rechain)
 basou import claude-code|codex   # import provenance from a tool's native logs
 basou refresh                    # import all adapters + regenerate handoff/decisions
 basou verify                     # check the tamper-evidence hash chain of imported event logs

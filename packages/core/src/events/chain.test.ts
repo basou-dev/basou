@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { Event } from "../schemas/event.schema.js";
-import { chainEvents, genesisHash, lineHash, serializeEventLine } from "./chain.js";
+import {
+  chainEvents,
+  chainRawJsonLines,
+  genesisHash,
+  lineHash,
+  serializeEventLine,
+} from "./chain.js";
 
 const SES_ID = "ses_01HXABCDEF1234567890ABCSE1";
 const OTHER_SES_ID = "ses_01HXABCDEF1234567890ABCSE2";
@@ -80,5 +86,28 @@ describe("chainEvents", () => {
     const { lines } = chainEvents([event], SES_ID);
     const expected = serializeEventLine({ ...event, prev_hash: genesisHash(SES_ID) });
     expect(lines[0]).toBe(expected);
+  });
+});
+
+describe("chainRawJsonLines", () => {
+  it("threads the chain through original lines, preserving fields and key order", () => {
+    // Deliberately unusual key order and an unknown field: both must
+    // survive, with prev_hash appended as the final member.
+    const original = ['{"zeta":1,"id":"evt_x","custom_field":"kept","alpha":[2,3]}', '{"b":null}'];
+    const { lines, headHash, count } = chainRawJsonLines(original, SES_ID);
+
+    expect(count).toBe(2);
+    expect(lines[0]).toBe(
+      `{"zeta":1,"id":"evt_x","custom_field":"kept","alpha":[2,3],"prev_hash":"${genesisHash(SES_ID)}"}`,
+    );
+    expect(lines[1]).toBe(`{"b":null,"prev_hash":"${lineHash(lines[0] as string)}"}`);
+    expect(headHash).toBe(lineHash(lines[1] as string));
+  });
+
+  it("returns the genesis head for an empty input", () => {
+    const { lines, headHash, count } = chainRawJsonLines([], SES_ID);
+    expect(lines).toHaveLength(0);
+    expect(count).toBe(0);
+    expect(headHash).toBe(genesisHash(SES_ID));
   });
 });

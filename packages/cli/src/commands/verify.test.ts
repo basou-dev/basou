@@ -20,7 +20,7 @@ const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: dev
 const FIXED_WS_ID = "ws_01HXABCDEF1234567890ABCDEF" as const;
 const FIXED_DATE = new Date("2026-05-09T03:00:00.000Z");
 const INPUT_SES_ID = "ses_01HXABCDEF1234567890ABCSE1" as const;
-const LIVE_SES_ID = "ses_01HXABCDEF1234567890ABCLV1" as const;
+const LIVE_SES_ID = "ses_01HXABCDEF1234567890ABCV01" as const;
 
 let tmpRepo: string | undefined;
 
@@ -112,7 +112,7 @@ async function writeLiveSession(repo: string): Promise<void> {
   });
   const line = JSON.stringify({
     schema_version: "0.1.0",
-    id: "evt_01HXABCDEF1234567890ABCLV1",
+    id: "evt_01HXABCDEF1234567890ABCV01",
     session_id: LIVE_SES_ID,
     occurred_at: "2026-05-04T09:00:00+09:00",
     source: "terminal-recording",

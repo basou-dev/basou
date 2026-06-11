@@ -76,3 +76,31 @@ export function chainEvents(events: ReadonlyArray<Event>, sessionId: string): Ch
   }
   return { lines, headHash: prev, count: lines.length };
 }
+
+/**
+ * Chain PRE-EXISTING serialized event lines WITHOUT re-serializing them
+ * through the schema layer: each original line is JSON-parsed, given a
+ * `prev_hash`, and stringified again. Because `JSON.parse`/`JSON.stringify`
+ * round-trips key insertion order and every value verbatim, the output line
+ * is the original line with only the `prev_hash` member appended — no zod
+ * key-stripping or default materialization can occur. Used by the in-place
+ * rechain migration of pre-chaining imported sessions.
+ *
+ * Callers MUST gate validity first (non-empty, JSON-parseable,
+ * schema-valid, byte-identical JSON round-trip); this helper assumes
+ * parseable lines and throws raw on a parse failure.
+ */
+export function chainRawJsonLines(
+  rawLines: ReadonlyArray<string>,
+  sessionId: string,
+): ChainedEvents {
+  let prev = genesisHash(sessionId);
+  const lines: string[] = [];
+  for (const rawLine of rawLines) {
+    const parsed = JSON.parse(rawLine) as Record<string, unknown>;
+    const line = JSON.stringify({ ...parsed, prev_hash: prev });
+    lines.push(line);
+    prev = lineHash(line);
+  }
+  return { lines, headHash: prev, count: lines.length };
+}
