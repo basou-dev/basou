@@ -6,7 +6,8 @@ import {
   ApprovalSchema,
   type ApprovalStatus,
   ApprovalStatusSchema,
-  appendEvent,
+  acquireLock,
+  appendChainedEventLocked,
   assertBasouRootSafe,
   type BasouPaths,
   basouPaths,
@@ -380,82 +381,101 @@ async function doRunApprovalResolve(
     throw new Error(`Approval status mismatch: pending YAML has status=${approval.status}`);
   }
 
-  // Step D-5: events.jsonl fence — if a resolution event already exists
-  // for this approval, refuse to fire a second one. This guards the
-  // crash-mid-orchestration window where step 8 succeeded but step 10
-  // failed (events.jsonl is the source-of-truth, not the YAML mirror).
-  const sessionDir = join(paths.sessions, approval.session_id);
-  for await (const ev of replayEvents(sessionDir, {
-    onWarning: (w) => printReplayWarning(w, approval.session_id),
-  })) {
-    if (
-      isApprovalEvent(ev) &&
-      ev.approval_id === approval.id &&
-      (ev.type === "approval_approved" ||
-        ev.type === "approval_rejected" ||
-        ev.type === "approval_expired")
-    ) {
-      throw new Error(`Approval already resolved (per events.jsonl): ${idInput}`);
-    }
-  }
-
-  // Step D-6: lazy expire state-fence. No event is fired here; the
-  // approval_expired event is reserved for a later step that owns
-  // expiry-side orchestration.
+  // Step D-6/D-7 timestamps + event id, computed up front so they are shared
+  // with the resolved-side YAML (Step D-9, built after the lock is released).
   const now = new Date();
-  if (isLazyExpired(approval, now)) {
-    throw new Error(`Approval already expired: ${idInput}`);
-  }
-
-  // Step D-6b: imported-session fence. An imported session's events.jsonl is
-  // a closed, hash-chained corpus written only by the import paths; appending
-  // a resolution line here would break its chain. No approval producer
-  // targets imported sessions today, so this is defensive. Only a positively
-  // read "imported" status blocks — a missing or unreadable session.yaml
-  // falls through to the pre-existing behavior.
-  let sessionStatus: string | null = null;
-  try {
-    sessionStatus = (await readSessionYaml(paths, approval.session_id)).session.status;
-  } catch {
-    sessionStatus = null;
-  }
-  if (sessionStatus === "imported") {
-    throw new Error(`Cannot resolve an approval for an imported session: ${idInput}`);
-  }
-
-  // Step D-7: prepare event id + occurred_at (shared with step 9 below).
   const occurredAt = now.toISOString();
   const eventId = prefixedUlid("evt");
 
-  // Step D-8: append the resolution event to events.jsonl. After this
-  // point the trail is committed; subsequent failures must not roll back
-  // the event because that would break the source-of-truth invariant.
-  if (decision === "approve") {
-    const note = (options as ApprovalApproveOptions).note ?? null;
-    await appendEvent(sessionDir, {
-      schema_version: "0.1.0",
-      id: eventId,
-      session_id: approval.session_id,
-      occurred_at: occurredAt,
-      source: "local-cli",
-      type: "approval_approved",
-      approval_id: approval.id,
-      resolver: "local-cli",
-      note,
-    });
-  } else {
-    const reason = (options as ApprovalRejectOptions).reason;
-    await appendEvent(sessionDir, {
-      schema_version: "0.1.0",
-      id: eventId,
-      session_id: approval.session_id,
-      occurred_at: occurredAt,
-      source: "local-cli",
-      type: "approval_rejected",
-      approval_id: approval.id,
-      resolver: "local-cli",
-      reason,
-    });
+  // Hold the session lock across the replay fence and the resolution append so
+  // two concurrent resolvers cannot both pass the fence before either appends
+  // (closing a pre-existing double-resolution race) and so the resolution line
+  // chains onto the session's on-disk tail. The caller owns the critical
+  // section, so the lock-assumed append primitive is used here.
+  const sessionLock = await acquireLock(paths, "session", approval.session_id);
+  try {
+    // Step D-5: events.jsonl fence — if a resolution event already exists
+    // for this approval, refuse to fire a second one. This guards the
+    // crash-mid-orchestration window where step 8 succeeded but step 10
+    // failed (events.jsonl is the source-of-truth, not the YAML mirror).
+    const sessionDir = join(paths.sessions, approval.session_id);
+    for await (const ev of replayEvents(sessionDir, {
+      onWarning: (w) => printReplayWarning(w, approval.session_id),
+    })) {
+      if (
+        isApprovalEvent(ev) &&
+        ev.approval_id === approval.id &&
+        (ev.type === "approval_approved" ||
+          ev.type === "approval_rejected" ||
+          ev.type === "approval_expired")
+      ) {
+        throw new Error(`Approval already resolved (per events.jsonl): ${idInput}`);
+      }
+    }
+
+    // Step D-6: lazy expire state-fence. No event is fired here; the
+    // approval_expired event is reserved for a later step that owns
+    // expiry-side orchestration.
+    if (isLazyExpired(approval, now)) {
+      throw new Error(`Approval already expired: ${idInput}`);
+    }
+
+    // Step D-6b: attachable-status fence. An approval is resolved while its
+    // session is still live (initialized / running / waiting_approval). Refuse
+    // any other status — matching every other attach path — so a resolution
+    // line is never chained onto a finalized (anchored) or imported log, which
+    // `verify` would otherwise read as tampered (the at-rest anchor would no
+    // longer match the extended log). Only a positively read non-attachable
+    // status blocks; a missing or unreadable session.yaml falls through to the
+    // pre-existing behavior.
+    let sessionStatus: string | null = null;
+    try {
+      sessionStatus = (await readSessionYaml(paths, approval.session_id)).session.status;
+    } catch {
+      sessionStatus = null;
+    }
+    const attachable =
+      sessionStatus === "initialized" ||
+      sessionStatus === "running" ||
+      sessionStatus === "waiting_approval";
+    if (sessionStatus !== null && !attachable) {
+      throw new Error(
+        `Cannot resolve an approval for a session that is not active (status=${sessionStatus}): ${idInput}`,
+      );
+    }
+
+    // Step D-8: append the resolution event to events.jsonl, chained onto the
+    // on-disk tail. After this point the trail is committed; subsequent
+    // failures must not roll back the event (the source-of-truth invariant).
+    if (decision === "approve") {
+      const note = (options as ApprovalApproveOptions).note ?? null;
+      await appendChainedEventLocked(paths, approval.session_id, {
+        schema_version: "0.1.0",
+        id: eventId,
+        session_id: approval.session_id,
+        occurred_at: occurredAt,
+        source: "local-cli",
+        type: "approval_approved",
+        approval_id: approval.id,
+        resolver: "local-cli",
+        note,
+      });
+    } else {
+      const reason = (options as ApprovalRejectOptions).reason;
+      await appendChainedEventLocked(paths, approval.session_id, {
+        schema_version: "0.1.0",
+        id: eventId,
+        session_id: approval.session_id,
+        occurred_at: occurredAt,
+        source: "local-cli",
+        type: "approval_rejected",
+        approval_id: approval.id,
+        resolver: "local-cli",
+        reason,
+      });
+    }
+  } finally {
+    await sessionLock.release();
   }
 
   // Step D-9: build the resolved-side YAML body in memory.

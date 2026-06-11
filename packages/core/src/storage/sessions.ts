@@ -1,10 +1,12 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { inspectChainTail } from "../events/chained-append.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import { type Session, SessionSchema } from "../schemas/session.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
-import { readYamlFile } from "./yaml-store.js";
+import { acquireLock } from "./lockfile.js";
+import { overwriteYamlFile, readYamlFile } from "./yaml-store.js";
 
 /**
  * Threshold above which a still-`running` session with no `session_ended`
@@ -99,6 +101,54 @@ export async function readSessionYaml(paths: BasouPaths, sessionId: string): Pro
     throw new Error("Failed to read session.yaml", { cause: result.error });
   }
   return result.data;
+}
+
+/**
+ * Apply a terminal-status mutation to a live session's `session.yaml` AND, in
+ * the same locked write, stamp the tamper-evidence head anchor derived from the
+ * on-disk `events.jsonl` tail. Used by the `exec` / `run` orchestrators for
+ * BOTH terminal writers (the normal end-of-run finalize and the spawn-failure
+ * `failed` finalize).
+ *
+ * Why locked + anchor-from-tail: live appends chain the LOG only and leave the
+ * anchor for finalize. Reading the final tail under the session lock means a
+ * foreign line appended just before finalize (e.g. a `decision record` attached
+ * to a still-running session) is included in the anchor, and a foreign attach
+ * that arrives after the terminal status is set is rejected by the attach gate
+ * — so the anchor can never disagree with the at-rest log. The whole-document
+ * read-modify-write also preserves any field a foreign locked writer set (e.g.
+ * a task attach's `task_id`).
+ *
+ * The anchor is written only when the log is actually chained with at least one
+ * line; a legacy unchained session (and an empty log) is left with no
+ * `integrity` anchor, matching the import writers. The mutator receives the
+ * full {@link Session} document and typically sets
+ * `session.session.status` / `ended_at` / `invocation.exit_code` /
+ * `related_files`.
+ *
+ * Throws the {@link inspectChainTail} errors (torn / mixed log), the
+ * {@link readSessionYaml} errors, a zod error if the mutation produces an
+ * invalid document, or `Error("Failed to overwrite YAML file")` on a disk
+ * failure.
+ */
+export async function finalizeSessionYaml(
+  paths: BasouPaths,
+  sessionId: string,
+  mutate: (session: Session) => void,
+): Promise<void> {
+  const lock = await acquireLock(paths, "session", sessionId);
+  try {
+    const session = await readSessionYaml(paths, sessionId);
+    mutate(session);
+    const tail = await inspectChainTail(paths, sessionId);
+    if (tail.chained && tail.count > 0) {
+      session.session.integrity = { head_hash: tail.head, event_count: tail.count };
+    }
+    const validated = SessionSchema.parse(session);
+    await overwriteYamlFile(join(paths.sessions, sessionId, "session.yaml"), validated);
+  } finally {
+    await lock.release();
+  }
 }
 
 /**

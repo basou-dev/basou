@@ -12,10 +12,13 @@ import { chainEvents, serializeEventLine } from "./chain.js";
  * Validation enforces the per-variant contract (required fields, source
  * vocabulary, strict variants such as `adapter_output`).
  *
- * Appended lines are NOT hash-chained: chaining is exclusive to the bulk
- * import writers ({@link writeEventsBulk} with `chain: true`), and imported
- * sessions reject every append path, so a chained file never receives an
- * unchained appended line.
+ * This LOW-LEVEL writer does NOT hash-chain — it writes the validated event as
+ * a plain line. Hash-chained appends go through `appendChainedEvent` /
+ * `appendChainedEventLocked` (the live `exec` / `run` / attach / approval
+ * paths), and the bulk import writers chain via {@link writeEventsBulk} with
+ * `chain: true`. A direct caller of this raw export can still add an unchained
+ * line to a chained log; that is DETECTED by `basou verify`
+ * (`missing_prev_hash`), not prevented — a documented boundary.
  *
  * Atomicity: writes go through `appendFile` which uses `O_APPEND`. Lines up
  * to `PIPE_BUF` bytes (Linux 4096 / macOS 512) are written atomically by the

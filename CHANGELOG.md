@@ -3,6 +3,40 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **Live event logs are now tamper-evident.** Sessions written through the
+  append path — `basou exec` / `run`, ad-hoc `decision` / `note` / `task`, and
+  the attach and approval-resolution paths — now hash-chain their
+  `events.jsonl` like imported logs do. Each append derives its `prev_hash`
+  from the real on-disk tail under a short-lived session lock, and the
+  `integrity` head anchor is stamped once, at the terminal-status finalize.
+  Sessions created before this change keep their plain unchained logs (never
+  half-chained) and still verify as `unchained`. No schema-version bump — the
+  `prev_hash` and `integrity` fields already existed.
+
+### Added
+
+- `basou verify` gains the `in_progress` verdict for a still-live (non-terminal)
+  session: its internal chain is fully verified while the legitimately growing
+  tail and not-yet-written anchor are forgiven (exit 0). A crashed live append
+  (an unterminated final line) is benign on a live session and abandons it; a
+  later append refuses rather than corrupting the chain.
+
+### Notes
+
+- `verify` stays read-only and lock-free; it re-snapshots once before returning
+  a strict `anchor_mismatch`, so verifying a session that is being finalized
+  concurrently is not mistaken for tampering.
+- Resolving an approval now holds the session lock across the duplicate-check
+  fence and the resolution append, closing a pre-existing double-resolution
+  race in addition to chaining the resolution line. It also refuses a session
+  that is not active (any non-attachable status, not just `imported`), matching
+  every other attach path, so a resolution line is never chained onto a
+  finalized log.
+
 ## 0.9.0 — 2026-06-11
 
 ### Added

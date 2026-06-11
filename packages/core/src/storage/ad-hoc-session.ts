@@ -1,7 +1,8 @@
 import { mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, writeEventsBulk } from "../events/event-writer.js";
+import { appendChainedEventLocked } from "../events/chained-append.js";
+import { writeEventsBulk } from "../events/event-writer.js";
 import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import { sanitizeWorkingDirectory } from "../lib/path-sanitizer.js";
@@ -16,6 +17,7 @@ import {
 } from "../schemas/session.schema.js";
 import { SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
+import { acquireLock } from "./lockfile.js";
 import { readSessionYaml } from "./sessions.js";
 import { linkYamlFile, overwriteYamlFile } from "./yaml-store.js";
 
@@ -184,101 +186,117 @@ export async function createAdHocSessionWithEvent(
     }),
   );
 
-  // 4. Create the session directory (recursive=true so a stripped-down
-  //    workspace with `.basou/sessions` missing still recovers).
+  // Hold the session lock across the whole create sequence (initial yaml ->
+  // bulk events -> final yaml). The session is briefly `initialized` and thus
+  // attachable; without the lock a foreign attach could append a line into
+  // that window which the atomic bulk write would then clobber, breaking the
+  // chain. The session id is freshly minted, so no caller already holds it.
   const sessionDir = join(input.paths.sessions, sessionId);
-  try {
-    await mkdir(sessionDir, { recursive: true });
-  } catch (error: unknown) {
-    throw new Error("Failed to create session directory", { cause: error });
-  }
-
-  // 5. Initial session.yaml write (status=initialized).
   const sessionYamlPath = join(sessionDir, "session.yaml");
+  const lock = await acquireLock(input.paths, "session", sessionId);
+  let bulkResult: Awaited<ReturnType<typeof writeEventsBulk>> = null;
   try {
-    await linkYamlFile(sessionYamlPath, initialSession);
-  } catch (error: unknown) {
-    await rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
-    if (findErrorCode(error, "EEXIST")) {
-      throw new Error("Session directory collision (retry the command)", {
-        cause: error,
-      });
+    // 4. Create the session directory (recursive=true so a stripped-down
+    //    workspace with `.basou/sessions` missing still recovers).
+    try {
+      await mkdir(sessionDir, { recursive: true });
+    } catch (error: unknown) {
+      throw new Error("Failed to create session directory", { cause: error });
     }
-    throw error;
-  }
 
-  // 6. events.jsonl bulk write — five events written atomically in a single
-  //    tmp+rename pass. A failure here removes the session directory so no
-  //    partial state survives (status=initialized + no events is not visible
-  //    in `basou session list`).
-  try {
-    const targetEvents: Event[] = input.targetEventBuilders.map((build, index) => {
-      const targetEventId = targetEventIds[index] as PrefixedId<"evt">;
-      return assertTargetEventIdentity(build(sessionId, targetEventId), sessionId, targetEventId);
-    });
-    const events: Event[] = [
-      {
-        schema_version: "0.1.0",
-        id: startedEventId,
-        session_id: sessionId,
-        occurred_at: input.occurredAt,
-        source: "local-cli",
-        type: "session_started",
-      },
-      {
-        schema_version: "0.1.0",
-        id: statusToRunningEventId,
-        session_id: sessionId,
-        occurred_at: input.occurredAt,
-        source: "local-cli",
-        type: "session_status_changed",
-        from: "initialized",
-        to: "running",
-      },
-      ...targetEvents,
-      {
-        schema_version: "0.1.0",
-        id: statusToCompletedEventId,
-        session_id: sessionId,
-        occurred_at: input.occurredAt,
-        source: "local-cli",
-        type: "session_status_changed",
-        from: "running",
-        to: "completed",
-      },
-      {
-        schema_version: "0.1.0",
-        id: endedEventId,
-        session_id: sessionId,
-        occurred_at: input.occurredAt,
-        source: "local-cli",
-        type: "session_ended",
-        exit_code: 0,
-      },
-    ];
-    await writeEventsBulk(sessionDir, events);
-  } catch (error: unknown) {
-    await rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
-  }
+    // 5. Initial session.yaml write (status=initialized).
+    try {
+      await linkYamlFile(sessionYamlPath, initialSession);
+    } catch (error: unknown) {
+      await rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
+      if (findErrorCode(error, "EEXIST")) {
+        throw new Error("Session directory collision (retry the command)", {
+          cause: error,
+        });
+      }
+      throw error;
+    }
 
-  // 7. Finalize: overwrite session.yaml with status=completed + ended_at +
-  //    invocation.exit_code=0. Failure is fatal but events.jsonl is already
-  //    complete, so the directory is intentionally NOT removed — the caller
-  //    surfaces the partial state via FailedToFinalizeError.
-  try {
-    const finalSession: Session = SessionSchema.parse({
-      ...initialSession,
-      session: {
-        ...initialSession.session,
-        status: "completed" satisfies SessionStatus,
-        ended_at: input.occurredAt,
-        invocation: { ...initialSession.session.invocation, exit_code: 0 },
-      },
-    });
-    await overwriteYamlFile(sessionYamlPath, finalSession);
-  } catch (error: unknown) {
-    throw new FailedToFinalizeError(sessionId, targetEventIds, error);
+    // 6. events.jsonl bulk write — the full lifecycle batch written atomically
+    //    in a single tmp+rename pass, hash-chained (chain:true) so the ad-hoc
+    //    log is tamper-evident like an imported one. A failure here removes the
+    //    session directory so no partial state survives (status=initialized +
+    //    no events is not visible in `basou session list`).
+    try {
+      const targetEvents: Event[] = input.targetEventBuilders.map((build, index) => {
+        const targetEventId = targetEventIds[index] as PrefixedId<"evt">;
+        return assertTargetEventIdentity(build(sessionId, targetEventId), sessionId, targetEventId);
+      });
+      const events: Event[] = [
+        {
+          schema_version: "0.1.0",
+          id: startedEventId,
+          session_id: sessionId,
+          occurred_at: input.occurredAt,
+          source: "local-cli",
+          type: "session_started",
+        },
+        {
+          schema_version: "0.1.0",
+          id: statusToRunningEventId,
+          session_id: sessionId,
+          occurred_at: input.occurredAt,
+          source: "local-cli",
+          type: "session_status_changed",
+          from: "initialized",
+          to: "running",
+        },
+        ...targetEvents,
+        {
+          schema_version: "0.1.0",
+          id: statusToCompletedEventId,
+          session_id: sessionId,
+          occurred_at: input.occurredAt,
+          source: "local-cli",
+          type: "session_status_changed",
+          from: "running",
+          to: "completed",
+        },
+        {
+          schema_version: "0.1.0",
+          id: endedEventId,
+          session_id: sessionId,
+          occurred_at: input.occurredAt,
+          source: "local-cli",
+          type: "session_ended",
+          exit_code: 0,
+        },
+      ];
+      bulkResult = await writeEventsBulk(sessionDir, events, { chain: true });
+    } catch (error: unknown) {
+      await rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+
+    // 7. Finalize: overwrite session.yaml with status=completed + ended_at +
+    //    invocation.exit_code=0 + the integrity head anchor from the chained
+    //    bulk write. Failure is fatal but events.jsonl is already complete, so
+    //    the directory is intentionally NOT removed — the caller surfaces the
+    //    partial state via FailedToFinalizeError.
+    try {
+      const finalSession: Session = SessionSchema.parse({
+        ...initialSession,
+        session: {
+          ...initialSession.session,
+          status: "completed" satisfies SessionStatus,
+          ended_at: input.occurredAt,
+          invocation: { ...initialSession.session.invocation, exit_code: 0 },
+          ...(bulkResult !== null
+            ? { integrity: { head_hash: bulkResult.headHash, event_count: bulkResult.count } }
+            : {}),
+        },
+      });
+      await overwriteYamlFile(sessionYamlPath, finalSession);
+    } catch (error: unknown) {
+      throw new FailedToFinalizeError(sessionId, targetEventIds, error);
+    }
+  } finally {
+    await lock.release();
   }
 
   return {
@@ -382,10 +400,11 @@ export async function appendEventToExistingSession(
   const eventId = prefixedUlid("evt");
   const event = assertTargetEventIdentity(input.eventBuilder(eventId), input.sessionId, eventId);
 
-  // 5. Append (appendEvent validates with EventSchema; bad payloads are
-  //    rejected with the fixed `"Invalid Basou event payload"` message).
-  const sessionDir = join(input.paths.sessions, input.sessionId);
-  await appendEvent(sessionDir, event);
+  // 5. Append, chaining onto the on-disk tail. The CALLER owns the session
+  //    lock (decision record / session note / task attach each acquire it
+  //    around this whole read-check-append window), so the lock-assumed
+  //    primitive is used here and must NOT re-acquire the lock.
+  await appendChainedEventLocked(input.paths, input.sessionId, event);
 
   return { eventId, sessionStatus: status };
 }

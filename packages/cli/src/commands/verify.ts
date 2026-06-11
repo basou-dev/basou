@@ -36,9 +36,7 @@ export type VerifyRow = {
 export function registerVerifyCommand(program: Command): void {
   program
     .command("verify")
-    .description(
-      "Verify the tamper-evidence hash chain of imported sessions' event logs (read-only)",
-    )
+    .description("Verify the tamper-evidence hash chain of sessions' event logs (read-only)")
     .option("--session <id>", "Verify a single session (unique id prefix accepted)")
     .option("--all", "Verify every session (the default when --session is omitted)")
     .option("--json", "Output the verdicts as JSON")
@@ -97,12 +95,13 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
     console.log(
       `Sessions: ${rows.length} total — ${tally("verified")} verified, ` +
         `${tally("unchained")} unchained, ${tally("empty")} empty, ` +
-        `${tally("incomplete")} incomplete, ${tamperedCount} tampered`,
+        `${tally("incomplete")} incomplete, ${tally("in_progress")} in_progress, ` +
+        `${tamperedCount} tampered`,
     );
   }
 
   // Only a real integrity break fails the command; unchained / empty /
-  // incomplete are informational states.
+  // incomplete / in_progress are informational states.
   if (tamperedCount > 0) {
     process.exitCode = 1;
   }
@@ -118,8 +117,10 @@ function renderVerdict(row: VerifyRow): string {
         : `TAMPERED (${row.reason})`;
     case "incomplete":
       return "incomplete (session.yaml missing; re-import to repair)";
+    case "in_progress":
+      return `in_progress (${row.event_count} events; live session, anchor written at finalize)`;
     case "unchained":
-      return "unchained (not an imported session, or imported before chaining)";
+      return "unchained (session created before event-log chaining)";
     case "empty":
       return "empty";
   }

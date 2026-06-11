@@ -146,7 +146,7 @@ describe("basou verify", () => {
     expect(text).toContain(`${importedId}  verified (3 events)`);
     expect(text).toContain(`${LIVE_SES_ID}  unchained`);
     expect(text).toContain(
-      "Sessions: 2 total — 1 verified, 1 unchained, 0 empty, 0 incomplete, 0 tampered",
+      "Sessions: 2 total — 1 verified, 1 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 tampered",
     );
     expect(process.exitCode ?? 0).toBe(0);
   });

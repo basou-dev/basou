@@ -6,6 +6,12 @@ export {
   lineHash,
   serializeEventLine,
 } from "./chain.js";
+export type { ChainTailState } from "./chained-append.js";
+export {
+  appendChainedEvent,
+  appendChainedEventLocked,
+  inspectChainTail,
+} from "./chained-append.js";
 export type { ReplayOptions, ReplayWarning } from "./event-replay.js";
 export { readAllEvents, replayEvents } from "./event-replay.js";
 export type { BulkChainResult, WriteEventsBulkOptions } from "./event-writer.js";

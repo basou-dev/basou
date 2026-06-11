@@ -4,10 +4,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
+  acquireLock,
   assertBasouRootSafe,
+  type BasouPaths,
   basouPaths,
   ChildProcessRunner,
-  appendEvent as coreAppendEvent,
+  appendChainedEvent as coreAppendChainedEvent,
+  finalizeSessionYaml,
   getSnapshot,
   overwriteYamlFile,
   type PrefixedId,
@@ -26,7 +29,10 @@ import {
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 
-type AppendEventFn = typeof coreAppendEvent;
+// Appends one event to the session's events.jsonl. The `sessionDir` argument
+// is retained for the test-injection seam (ctx.appendEvent); the production
+// binding ignores it and chains via paths + sessionId.
+type AppendEventFn = (sessionDir: string, event: unknown) => Promise<void>;
 
 /**
  * `basou exec` orchestration: spawn an arbitrary child as a single new
@@ -91,7 +97,6 @@ export async function runExec(
 ): Promise<number> {
   const runner = ctx.runner ?? new ChildProcessRunner();
   const now = ctx.now ?? (() => new Date());
-  const appendEvent: AppendEventFn = ctx.appendEvent ?? coreAppendEvent;
   const cwd = options.cwd ?? process.cwd();
 
   // 0. timeout option fail-fast: invalid timeout never creates a session.
@@ -112,6 +117,15 @@ export async function runExec(
   const sessionId = prefixedUlid("ses");
   const sessionDir = join(paths.sessions, sessionId);
   await mkdir(sessionDir, { recursive: true });
+
+  // Every append chains onto the on-disk tail under a short-lived session lock
+  // (the self-locking wrapper); the lock is NEVER held across the child. Tests
+  // inject ctx.appendEvent to force append failures.
+  const appendEvent: AppendEventFn =
+    ctx.appendEvent ??
+    (async (_sessionDir, event) => {
+      await coreAppendChainedEvent(paths, sessionId, event);
+    });
 
   const startedAt = now().toISOString();
   const sessionYamlPath = join(sessionDir, "session.yaml");
@@ -152,9 +166,16 @@ export async function runExec(
     from: "initialized",
     to: "running",
   });
-  await mutateSessionYaml(sessionYamlPath, (s) => {
-    s.session.status = "running";
-  });
+  // Lock the status write so it cannot interleave-clobber a foreign locked
+  // session.yaml writer (e.g. a task attach setting task_id on this session).
+  const runningLock = await acquireLock(paths, "session", sessionId);
+  try {
+    await mutateSessionYaml(sessionYamlPath, (s) => {
+      s.session.status = "running";
+    });
+  } finally {
+    await runningLock.release();
+  }
 
   // 8. Transient signal hooks: SIGINT / SIGTERM / exit. The exit hook is
   //    a synchronous last-resort SIGKILL if the parent exits abnormally.
@@ -202,7 +223,7 @@ export async function runExec(
       // Spawn-time error / pre-aborted / validation error: tear down the
       // session as failed before propagating so events.jsonl and session.yaml
       // are consistent even on error.
-      await finalizeSessionAsFailed(sessionDir, sessionYamlPath, sessionId, appendEvent, {
+      await finalizeSessionAsFailed(paths, sessionDir, sessionId, appendEvent, {
         command,
         args,
         cwd,
@@ -268,8 +289,11 @@ export async function runExec(
     ...(result.exit_code !== null ? { exit_code: result.exit_code } : {}),
   });
 
-  // 13. Final session.yaml update (status / ended_at / invocation.exit_code).
-  await mutateSessionYaml(sessionYamlPath, (s) => {
+  // 13. Final session.yaml update (status / ended_at / invocation.exit_code)
+  //     plus the integrity head anchor, written from the on-disk tail under the
+  //     session lock so a foreign line appended just before finalize is
+  //     anchored and a later attach (now terminal) is rejected.
+  await finalizeSessionYaml(paths, sessionId, (s) => {
     s.session.status = finalStatus;
     s.session.ended_at = endedAt;
     s.session.invocation.exit_code = result.exit_code;
@@ -403,8 +427,8 @@ async function mutateSessionYaml(
 }
 
 async function finalizeSessionAsFailed(
+  paths: BasouPaths,
   sessionDir: string,
-  sessionYamlPath: string,
   sessionId: string,
   appendEvent: AppendEventFn,
   ctx: {
@@ -448,7 +472,7 @@ async function finalizeSessionAsFailed(
     occurred_at: ctx.occurredAt,
     source: "terminal-recording",
   });
-  await mutateSessionYaml(sessionYamlPath, (s) => {
+  await finalizeSessionYaml(paths, sessionId, (s) => {
     s.session.status = "failed";
     s.session.ended_at = ctx.occurredAt;
     s.session.invocation.exit_code = null;

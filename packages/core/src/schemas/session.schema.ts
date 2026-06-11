@@ -114,12 +114,14 @@ export const SessionMetricsSchema = z.object({
 export type SessionMetrics = z.infer<typeof SessionMetricsSchema>;
 
 /**
- * Tamper-evidence head anchor for sessions whose `events.jsonl` was written
- * with hash chaining (import / in-place re-import): `head_hash` is the hex
- * sha-256 of the last written event line (excluding the trailing newline),
- * `event_count` the number of chained lines. Absent on live / ad-hoc /
- * pre-feature sessions. Additive optional => no schema_version bump.
- * `.strict()` because the import writer fully owns the shape.
+ * Tamper-evidence head anchor for a session whose `events.jsonl` is hash
+ * chained: `head_hash` is the hex sha-256 of the last written event line
+ * (excluding the trailing newline), `event_count` the number of chained lines.
+ * Written by the import / in-place re-import writers and, for a live session
+ * (`exec` / `run` / ad-hoc), by the finalize once it reaches a terminal status.
+ * Absent on a still-live session (the anchor is stamped at finalize) and on a
+ * pre-feature unchained session. Additive optional => no schema_version bump.
+ * `.strict()` because the writers fully own the shape.
  */
 export const SessionIntegritySchema = z
   .object({
