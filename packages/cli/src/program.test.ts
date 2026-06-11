@@ -47,6 +47,7 @@ describe("buildProgram", () => {
       "stats",
       "status",
       "task",
+      "verify",
       "view",
     ]);
   });

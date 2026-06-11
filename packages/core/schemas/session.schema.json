@@ -213,6 +213,24 @@
               "maximum": 9007199254740991
             }
           }
+        },
+        "integrity": {
+          "type": "object",
+          "properties": {
+            "head_hash": {
+              "type": "string"
+            },
+            "event_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "head_hash",
+            "event_count"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

@@ -1,8 +1,10 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendEvent } from "./event-writer.js";
+import type { Event } from "../schemas/event.schema.js";
+import { genesisHash, lineHash } from "./chain.js";
+import { appendEvent, writeEventsBulk } from "./event-writer.js";
 
 const BASE = {
   schema_version: "0.1.0" as const,
@@ -101,5 +103,78 @@ describe("appendEvent", () => {
         unknown_extra: "should be rejected",
       }),
     ).rejects.toThrow("Invalid Basou event payload");
+  });
+});
+
+describe("writeEventsBulk", () => {
+  let workDir: string;
+  let chainDir: string;
+
+  // The chained write binds the genesis to basename(sessionDir), so the
+  // fixture dir is named like a real session directory.
+  const CHAIN_SES_ID = "ses_01HXABCDEF1234567890ABCDEF";
+
+  function makeNote(suffix: string, extra: Partial<Event> = {}): Event {
+    return {
+      ...BASE,
+      id: `evt_01HXABCDEF1234567890ABCE${suffix}`,
+      type: "note_added",
+      body: `note ${suffix}`,
+      ...extra,
+    } as Event;
+  }
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(tmpdir(), "basou-event-writer-bulk-"));
+    chainDir = join(workDir, CHAIN_SES_ID);
+    await mkdir(chainDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  it("writes unchained lines and returns null by default (current behavior)", async () => {
+    const result = await writeEventsBulk(chainDir, [makeNote("V1"), makeNote("V2")]);
+    expect(result).toBeNull();
+    const content = await readFile(join(chainDir, "events.jsonl"), "utf8");
+    const lines = content.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(JSON.parse(line)).not.toHaveProperty("prev_hash");
+    }
+  });
+
+  it("chains the batch and returns the head anchor with chain: true", async () => {
+    const result = await writeEventsBulk(chainDir, [makeNote("V1"), makeNote("V2")], {
+      chain: true,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.count).toBe(2);
+
+    const content = await readFile(join(chainDir, "events.jsonl"), "utf8");
+    expect(content.endsWith("\n")).toBe(true);
+    const lines = content.slice(0, -1).split("\n");
+    expect(lines).toHaveLength(2);
+    const first = JSON.parse(lines[0] as string) as { prev_hash: string };
+    const second = JSON.parse(lines[1] as string) as { prev_hash: string };
+    expect(first.prev_hash).toBe(genesisHash(CHAIN_SES_ID));
+    expect(second.prev_hash).toBe(lineHash(lines[0] as string));
+    expect(result?.headHash).toBe(lineHash(lines[1] as string));
+  });
+
+  it("writes a zero-byte file and returns null for an empty chained batch", async () => {
+    const result = await writeEventsBulk(chainDir, [], { chain: true });
+    expect(result).toBeNull();
+    const content = await readFile(join(chainDir, "events.jsonl"), "utf8");
+    expect(content).toBe("");
+  });
+
+  it("discards an incoming prev_hash and recomputes the chain", async () => {
+    const poisoned = makeNote("V1", { prev_hash: "f".repeat(64) } as Partial<Event>);
+    await writeEventsBulk(chainDir, [poisoned], { chain: true });
+    const content = await readFile(join(chainDir, "events.jsonl"), "utf8");
+    const first = JSON.parse(content.trim()) as { prev_hash: string };
+    expect(first.prev_hash).toBe(genesisHash(CHAIN_SES_ID));
   });
 });

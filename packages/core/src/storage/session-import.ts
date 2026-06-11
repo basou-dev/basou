@@ -1,8 +1,9 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readAllEvents } from "../events/event-replay.js";
-import { writeEventsBulk } from "../events/event-writer.js";
+import { type BulkChainResult, writeEventsBulk } from "../events/event-writer.js";
+import { verifyEventsChain } from "../events/verify.js";
 import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import { sanitizeRelatedFiles, sanitizeWorkingDirectory } from "../lib/path-sanitizer.js";
@@ -14,6 +15,7 @@ import type {
   SessionInnerImportInput,
 } from "../schemas/session-import.schema.js";
 import { TaskIdSchema } from "../schemas/shared.schema.js";
+import { atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
 import { readSessionYaml } from "./sessions.js";
@@ -130,8 +132,11 @@ export async function importSessionFromJson(
     throw new Error("Failed to create session directory", { cause: error });
   }
 
+  // Chained write: imported sessions are the tamper-evident corpus, so the
+  // bulk write threads the per-line hash chain and returns the head anchor.
+  let chainResult: BulkChainResult | null;
   try {
-    await writeEventsBulk(sessionDir, rewrittenEvents);
+    chainResult = await writeEventsBulk(sessionDir, rewrittenEvents, { chain: true });
   } catch (error: unknown) {
     await rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
@@ -139,7 +144,7 @@ export async function importSessionFromJson(
 
   try {
     const sessionYamlPath = join(sessionDir, "session.yaml");
-    await linkYamlFile(sessionYamlPath, sessionRecord);
+    await linkYamlFile(sessionYamlPath, withIntegrity(sessionRecord, chainResult));
   } catch (error: unknown) {
     await rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
     if (findErrorCode(error, "EEXIST")) {
@@ -230,6 +235,20 @@ function assertChronologicalOrder(events: Event[]): void {
       throw new Error("Events are not in chronological order");
     }
   }
+}
+
+// Attach the head anchor returned by a chained writeEventsBulk to a session
+// record about to be persisted. A null chain result (empty event batch) leaves
+// the record anchor-less, matching the zero-byte events.jsonl on disk.
+function withIntegrity(record: Session, chainResult: BulkChainResult | null): Session {
+  if (chainResult === null) return record;
+  return {
+    ...record,
+    session: {
+      ...record.session,
+      integrity: { head_hash: chainResult.headHash, event_count: chainResult.count },
+    },
+  };
 }
 
 function buildSessionRecord(
@@ -334,7 +353,11 @@ export type ReimportResult =
       //   possible on a non-append-only source change, which is out of scope.
       //   Aborted so an id a cross-session `linked_events` may reference is
       //   never silently dropped; `--force` rebuilds from scratch.
-      reason: "prior_events_unreadable" | "prior_derived_dropped";
+      // `prior_chain_broken`: the prior events.jsonl failed hash-chain
+      //   verification (tampered). Aborted so a re-import cannot launder a
+      //   broken chain into a freshly-valid one; the operator inspects with
+      //   `basou verify` and decides (`--force` rebuilds from scratch).
+      reason: "prior_events_unreadable" | "prior_derived_dropped" | "prior_chain_broken";
     };
 
 /**
@@ -470,6 +493,17 @@ export async function reimportPreservingId(
 
   const lock = options.dryRun === true ? null : await acquireLock(paths, "session", priorSessionId);
   try {
+    // Pre-verify the prior chain BEFORE deriving anything from it: a re-import
+    // that reuses event ids out of a hash-broken log would launder the break
+    // into a freshly-valid chain. An `unchained` prior (imported before
+    // chaining existed) passes — there is no chain to break, and the rewrite
+    // below chains it. `incomplete` (yaml lost) also passes: the events are
+    // internally consistent and the rewrite repairs the missing anchor.
+    const priorVerdict = await verifyEventsChain(paths, priorSessionId);
+    if (priorVerdict.status === "tampered") {
+      return { status: "skipped", reason: "prior_chain_broken" };
+    }
+
     // Strict read of the prior events: abort on ANY unpreservable line so the
     // atomic rewrite below never silently drops a human / unknown-source event.
     let priorUnreadable = false;
@@ -517,9 +551,8 @@ export async function reimportPreservingId(
     const { record } = buildSessionRecord(freshPayload.session, manifest, sessionId, {});
     const preservedInner: Session["session"] = {
       ...record.session,
-      // A human may have linked this imported session to a task
-      // (`basou task link` updates session.yaml.task_id even for imported
-      // sessions); never drop that link on a re-derive.
+      // Defensive: keep any task_id already present on the prior yaml so a
+      // re-derive never drops a link, whatever wrote it.
       task_id: prior.session.task_id ?? null,
       // Re-derivation always yields a null summary; keep a prior non-null one.
       summary: prior.session.summary ?? record.session.summary ?? null,
@@ -527,15 +560,38 @@ export async function reimportPreservingId(
     const updatedRecord: Session = { schema_version: "0.1.0", session: preservedInner };
 
     if (options.dryRun !== true) {
-      await writeEventsBulk(sessionDir, mergedEvents);
+      // Capture the prior events.jsonl RAW BYTES before the rewrite so a
+      // session.yaml failure can restore them VERBATIM. Re-serializing
+      // `priorEvents` here instead would write an UNCHAINED file (the parsed
+      // events lost their byte-exact form), contradicting the prior anchor.
+      const eventsPath = join(sessionDir, "events.jsonl");
+      let priorEventsRaw: Buffer | null = null;
       try {
-        await overwriteYamlFile(join(sessionDir, "session.yaml"), updatedRecord);
+        priorEventsRaw = await readFile(eventsPath);
+      } catch (error: unknown) {
+        if (!findErrorCode(error, "ENOENT")) {
+          throw new Error("Failed to read events.jsonl", { cause: error });
+        }
+      }
+
+      const chainResult = await writeEventsBulk(sessionDir, mergedEvents, { chain: true });
+      try {
+        await overwriteYamlFile(
+          join(sessionDir, "session.yaml"),
+          withIntegrity(updatedRecord, chainResult),
+        );
       } catch (error: unknown) {
         // events.jsonl and session.yaml are two separate atomic writes. If the
-        // yaml write fails after the events were rewritten, roll the events back
-        // to the prior set so the session is never left with fresh events paired
-        // with stale metadata (size / label / metrics).
-        await writeEventsBulk(sessionDir, priorEvents).catch(() => undefined);
+        // yaml write fails after the events were rewritten, restore the prior
+        // events bytes so the session is never left with fresh events paired
+        // with stale metadata (size / label / metrics / integrity anchor). The
+        // yaml itself needs no restore: an atomic replace that threw never
+        // renamed over the prior file.
+        if (priorEventsRaw !== null) {
+          await atomicReplace(eventsPath, priorEventsRaw).catch(() => undefined);
+        } else {
+          await rm(eventsPath, { force: true }).catch(() => undefined);
+        }
         throw error;
       }
     }

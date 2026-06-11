@@ -113,6 +113,23 @@ export const SessionMetricsSchema = z.object({
 /** Inferred runtime type for {@link SessionMetricsSchema}. */
 export type SessionMetrics = z.infer<typeof SessionMetricsSchema>;
 
+/**
+ * Tamper-evidence head anchor for sessions whose `events.jsonl` was written
+ * with hash chaining (import / in-place re-import): `head_hash` is the hex
+ * sha-256 of the last written event line (excluding the trailing newline),
+ * `event_count` the number of chained lines. Absent on live / ad-hoc /
+ * pre-feature sessions. Additive optional => no schema_version bump.
+ * `.strict()` because the import writer fully owns the shape.
+ */
+export const SessionIntegritySchema = z
+  .object({
+    head_hash: z.string(),
+    event_count: z.number().int().nonnegative(),
+  })
+  .strict();
+/** Inferred runtime type for {@link SessionIntegritySchema}. */
+export type SessionIntegrity = z.infer<typeof SessionIntegritySchema>;
+
 const SessionInnerSchema = z.object({
   id: SessionIdSchema,
   label: z.string().optional(),
@@ -129,6 +146,7 @@ const SessionInnerSchema = z.object({
   events_log: z.string().default("events.jsonl"),
   summary: z.string().nullable().optional(),
   metrics: SessionMetricsSchema.optional(),
+  integrity: SessionIntegritySchema.optional(),
 });
 
 /**

@@ -20,6 +20,7 @@ basou run claude-code [args...]  # run an AI tool through basou as a tracked ses
 basou session ...                # inspect sessions (list / show / note / import)
 basou import claude-code|codex   # import provenance from a tool's native logs
 basou refresh                    # import all adapters + regenerate handoff/decisions
+basou verify                     # check the tamper-evidence hash chain of imported event logs
 basou view                       # open a local web UI to browse provenance
 
 # Tasks

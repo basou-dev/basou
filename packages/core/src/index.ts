@@ -25,8 +25,27 @@ export type { ApprovalLocation, LoadedApproval } from "./approval/index.js";
 export { enumerateApprovals, isLazyExpired, loadApproval } from "./approval/index.js";
 export type { DecisionsRendererInput, DecisionsRendererResult } from "./decisions/index.js";
 export { renderDecisions } from "./decisions/index.js";
-export type { ReplayOptions, ReplayWarning } from "./events/index.js";
-export { appendEvent, readAllEvents, replayEvents, writeEventsBulk } from "./events/index.js";
+export type {
+  BulkChainResult,
+  ChainBreakReason,
+  ChainedEvents,
+  ChainVerdict,
+  ChainVerdictStatus,
+  ReplayOptions,
+  ReplayWarning,
+  WriteEventsBulkOptions,
+} from "./events/index.js";
+export {
+  appendEvent,
+  chainEvents,
+  genesisHash,
+  lineHash,
+  readAllEvents,
+  replayEvents,
+  serializeEventLine,
+  verifyEventsChain,
+  writeEventsBulk,
+} from "./events/index.js";
 export type { DiffResult, FileChange, FileChangeStatus } from "./git/diff.js";
 export { getDiff } from "./git/diff.js";
 export type { GitSnapshot } from "./git/snapshot.js";
@@ -71,6 +90,7 @@ export type {
   SessionEndedEvent,
   SessionImportPayload,
   SessionInnerImportInput,
+  SessionIntegrity,
   SessionMetrics,
   SessionSourceKind,
   SessionStartedEvent,
@@ -103,6 +123,7 @@ export {
   SessionIdSchema,
   SessionImportPayloadSchema,
   SessionInnerImportSchema,
+  SessionIntegritySchema,
   SessionMetricsSchema,
   SessionSchema,
   SessionSourceKindSchema,

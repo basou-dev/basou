@@ -95,6 +95,14 @@ session:
     input_tokens: 20000
     cached_input_tokens: 5504
     reasoning_output_tokens: 462
+
+  # optional tamper-evidence head anchor, written only by the import paths
+  # (fresh import and in-place re-import) together with the per-line hash
+  # chain in events.jsonl — see "Event-log integrity" below. Absent on live /
+  # ad-hoc / pre-feature sessions.
+  integrity:
+    head_hash: "9f2c...64 hex chars...ab10"  # sha-256 of the last event line
+    event_count: 42
 ```
 
 ## §5.2 Notes
@@ -151,6 +159,10 @@ session:
 
 Every event carries a `session_id` (see [Workspace, sessions, tasks, IDs
 §2.2](workspace.md#22-every-event-is-bound-to-a-session)).
+
+Events written by the import paths additionally carry an optional top-level
+`prev_hash` (hex sha-256) — the tamper-evidence back-pointer described in
+"Event-log integrity" below. Live / ad-hoc writers omit it.
 
 ## §7.2 Event catalog
 
@@ -209,3 +221,62 @@ content (`content`, `body`, `raw`, etc.) belongs in
 - events.jsonl carries only the `summary` and `raw_ref`.
 - This keeps the raw output out of the repository even when events.jsonl is
   opted in for commit.
+
+## §7.5 Event-log integrity: hash chain + head anchor
+
+`events.jsonl` written by the **import paths** (`basou import`, `basou
+refresh`, and the in-place re-import of a grown source) is tamper-evident:
+
+- **Per-line chain.** Every event line carries a top-level `prev_hash` — the
+  hex sha-256 of the PREVIOUS line's literal written bytes (UTF-8, excluding
+  the trailing `\n`). Line 1 carries the session-bound genesis hash
+  `sha256("basou:event-chain:v1:" + session_id)`, so a chain copied verbatim
+  from another session fails at line 1 even though its internal back-pointers
+  are intact. Hashing covers the literal bytes on disk — there is no
+  canonical-JSON step; verification re-hashes exactly what it reads.
+- **Head anchor.** `session.yaml.integrity = { head_hash, event_count }`
+  records the sha-256 of the last written line and the line count, so a tail
+  truncation (which leaves a perfectly valid shorter chain) is detected
+  independently of the chain itself.
+- **Line discipline.** A chained file ends with `\n` and contains no blank
+  lines; imports are atomic whole-file writes, so an unterminated tail can
+  only come from out-of-band editing and is reported as tampering.
+
+**Scope.** Only imported sessions are chained. Imported sessions are written
+exclusively by the atomic bulk import writers and reject every append path
+(task attach, notes, decisions, status changes, approval resolution), so the
+chained corpus is closed: nothing can legitimately append an unchained line to
+it. Live `exec` / `run` and ad-hoc sessions stay UNCHAINED for now (chaining
+the append path is a planned follow-up) and verification reports them
+`unchained` (informational, not a failure).
+
+**`basou verify [--session <id>] [--all] [--json]`** is the read-only checker.
+Per-session verdicts:
+
+| Verdict | Meaning | Exit |
+|---|---|---|
+| `verified` | chain, genesis, session ids, line discipline, and head anchor all consistent | 0 |
+| `unchained` | no line carries `prev_hash` and no anchor exists (live / ad-hoc / pre-feature session) | 0 |
+| `empty` | zero events and no anchor | 0 |
+| `incomplete` | chained log but `session.yaml` is entirely absent (an import crashed between the two writes); a re-import repairs it | 0 |
+| `tampered` | a real break: bad back-pointer or genesis, foreign `session_id`, torn tail, blank or malformed line, anchor missing / mismatching, or an anchor left behind with no chained log | non-zero |
+
+`unchained` / `empty` / `incomplete` exit 0; an I/O failure while reading a
+log (e.g. permissions) aborts the command with a non-zero exit as an
+operational error — distinct from a `tampered` verdict, but still fail-closed.
+
+A legitimate basou rewrite (in-place re-import, `--force`) recomputes a valid
+chain and anchor; `verify` proves on-disk internal consistency against the
+anchor, not provenance against an external notary. The in-place re-import
+additionally refuses to rebuild a session whose prior chain fails verification
+(`prior_chain_broken`), so a broken chain cannot be laundered into a fresh
+valid one — inspect it with `basou verify`, then decide (a `--force` rebuild
+is the explicit override).
+
+**Threat model (honest).** The chain and anchor are NOT cryptographic
+signatures. `session.yaml` is as editable as the log itself; an attacker who
+rewrites BOTH files consistently (recomputing every hash) is not detected.
+This feature raises the bar from "edit one line" to "recompute and rewrite two
+coordinated files", which is the right primitive for catching accidental and
+casual mutation of the provenance corpus. Signing / external anchoring is a
+named follow-up and out of scope here.

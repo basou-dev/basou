@@ -211,6 +211,24 @@
               "maximum": 9007199254740991
             }
           }
+        },
+        "integrity": {
+          "type": "object",
+          "properties": {
+            "head_hash": {
+              "type": "string"
+            },
+            "event_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "head_hash",
+            "event_count"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -253,6 +271,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "session_started"
@@ -292,6 +313,9 @@
               "source": {
                 "type": "string",
                 "minLength": 1
+              },
+              "prev_hash": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
@@ -337,6 +361,9 @@
               "source": {
                 "type": "string",
                 "minLength": 1
+              },
+              "prev_hash": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
@@ -385,6 +412,9 @@
               "source": {
                 "type": "string",
                 "minLength": 1
+              },
+              "prev_hash": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
@@ -477,6 +507,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "approval_approved"
@@ -536,6 +569,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "approval_rejected"
@@ -589,6 +625,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "approval_expired"
@@ -634,6 +673,9 @@
               "source": {
                 "type": "string",
                 "minLength": 1
+              },
+              "prev_hash": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
@@ -729,6 +771,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "git_snapshot"
@@ -812,6 +857,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "file_changed"
@@ -875,6 +923,9 @@
               "source": {
                 "type": "string",
                 "minLength": 1
+              },
+              "prev_hash": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
@@ -969,6 +1020,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "task_created"
@@ -1018,6 +1072,9 @@
               "source": {
                 "type": "string",
                 "minLength": 1
+              },
+              "prev_hash": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
@@ -1072,6 +1129,9 @@
               "source": {
                 "type": "string",
                 "minLength": 1
+              },
+              "prev_hash": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
@@ -1155,6 +1215,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "task_linkage_refreshed"
@@ -1225,6 +1288,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "task_deleted"
@@ -1276,6 +1342,9 @@
               "source": {
                 "type": "string",
                 "minLength": 1
+              },
+              "prev_hash": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
@@ -1329,6 +1398,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "prev_hash": {
+                "type": "string"
+              },
               "type": {
                 "type": "string",
                 "const": "note_added"
@@ -1372,6 +1444,9 @@
               "source": {
                 "type": "string",
                 "minLength": 1
+              },
+              "prev_hash": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
