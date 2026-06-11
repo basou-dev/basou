@@ -405,3 +405,87 @@ describe("verifyEventsChain — anchor tampering", () => {
     expect(verdict.reason).toBe("anchor_without_chain");
   });
 });
+
+// Write a chained session.yaml carrying an arbitrary status (the shared
+// makeSessionRecord hardcodes "imported"). Used for the live / strict matrix.
+async function writeChainedSessionWithStatus(
+  paths: BasouPaths,
+  sessionId: string,
+  status: Session["session"]["status"],
+  options: { anchor?: boolean; count?: number } = {},
+): Promise<SessionFixture> {
+  const count = options.count ?? 3;
+  const fixture = await writeChainedSession(paths, sessionId, count, {
+    anchor: options.anchor ?? true,
+  });
+  const record = makeSessionRecord(
+    sessionId,
+    options.anchor === false
+      ? undefined
+      : { head_hash: fixture.headHash, event_count: fixture.count },
+  );
+  record.session.status = status;
+  await writeFile(fixture.yamlPath, stringifyYaml(record));
+  return fixture;
+}
+
+describe("verifyEventsChain — live (in_progress) verdicts", () => {
+  it("reports a running chained session with no anchor as in_progress", async () => {
+    const paths = await setupPaths();
+    await writeChainedSessionWithStatus(paths, SES_ID, "running", { anchor: false });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "in_progress", eventCount: 3 });
+  });
+
+  it("reports a running chained session with a torn tail as in_progress (crashed append)", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSessionWithStatus(paths, SES_ID, "running", {
+      anchor: false,
+    });
+    // Drop the trailing newline => torn tail.
+    await writeFile(fixture.eventsPath, fixture.lines.join("\n"));
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict.status).toBe("in_progress");
+  });
+
+  it("forgives a lagging anchor on a running session (in_progress, not anchor_mismatch)", async () => {
+    const paths = await setupPaths();
+    // anchor present but for fewer events than on disk (a stale running anchor).
+    const fixture = await writeChainedSession(paths, SES_ID, 3, {
+      anchor: { head_hash: "stale", event_count: 1 },
+    });
+    const record = makeSessionRecord(SES_ID, { head_hash: "stale", event_count: 1 });
+    record.session.status = "running";
+    await writeFile(fixture.yamlPath, stringifyYaml(record));
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict.status).toBe("in_progress");
+  });
+
+  it("still flags an internal chain break on a running session as tampered", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSessionWithStatus(paths, SES_ID, "running", {
+      anchor: false,
+    });
+    const lines = [...fixture.lines];
+    lines[1] = (lines[1] as string).replace("note V2", "note v2");
+    await writeFile(fixture.eventsPath, `${lines.join("\n")}\n`);
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict.status).toBe("tampered");
+    expect(verdict.reason).toBe("broken_link");
+  });
+
+  it("verifies a chained completed (finalized live) session against its anchor", async () => {
+    const paths = await setupPaths();
+    await writeChainedSessionWithStatus(paths, SES_ID, "completed");
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "verified", eventCount: 3 });
+  });
+
+  it("treats archived as strict: a chained archived session with no anchor is tampered", async () => {
+    const paths = await setupPaths();
+    await writeChainedSessionWithStatus(paths, SES_ID, "archived", { anchor: false });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict.status).toBe("tampered");
+    expect(verdict.reason).toBe("anchor_missing");
+  });
+});

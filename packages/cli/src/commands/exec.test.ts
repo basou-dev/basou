@@ -12,6 +12,7 @@ import {
   type ProcessRunner,
   type RunOptions,
   type RunResult,
+  verifyEventsChain,
   writeManifest,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -187,6 +188,45 @@ describe("runExec", () => {
     ]);
     const ce = JSON.parse(lines[2] ?? "{}");
     expect(ce.exit_code).toBeNull();
+  });
+
+  // 3b: the chain end-to-end — a finalized exec session verifies.
+  it("hash-chains the happy-path session so verify reports verified", async () => {
+    const repo = await setupInitedRepo();
+    const runner = makeFakeRunner({ exit_code: 0 });
+    await runExec(
+      "node",
+      ["-e", "process.exit(0)"],
+      { cwd: repo, snapshot: false },
+      { runner, now: () => FIXED_DATE },
+    );
+    const sessionId = await findOnlySessionId(repo);
+    const lines = await readEventsLines(repo, sessionId);
+    expect(JSON.parse(lines[0] ?? "{}")).toHaveProperty("prev_hash");
+    const verdict = await verifyEventsChain(basouPaths(repo), sessionId);
+    expect(verdict).toEqual({ status: "verified", eventCount: 5 });
+  });
+
+  // 3c: the spawn-failure terminal writer also anchors, so verify is verified
+  //     (not a false `tampered` from a chained-but-anchorless terminal log).
+  it("anchors the spawn-failure session so verify reports verified", async () => {
+    const repo = await setupInitedRepo();
+    const runner: ProcessRunner = {
+      run: async () => {
+        throw new Error("Command not found", { cause: { code: "ENOENT" } });
+      },
+    };
+    await expect(
+      runExec(
+        "nonexistent-cmd",
+        [],
+        { cwd: repo, snapshot: false },
+        { runner, now: () => FIXED_DATE },
+      ),
+    ).rejects.toThrow("Command not found");
+    const sessionId = await findOnlySessionId(repo);
+    const verdict = await verifyEventsChain(basouPaths(repo), sessionId);
+    expect(verdict.status).toBe("verified");
   });
 
   // 4

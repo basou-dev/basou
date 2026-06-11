@@ -4,12 +4,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
+  acquireLock,
   assertBasouRootSafe,
+  type BasouPaths,
   basouPaths,
   ChildProcessRunner,
   claudeCodeAdapterMetadata,
-  appendEvent as coreAppendEvent,
+  appendChainedEvent as coreAppendChainedEvent,
   type DiffResult,
+  finalizeSessionYaml,
   type GitSnapshot,
   getDiff,
   getSnapshot,
@@ -31,7 +34,10 @@ import {
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 
-type AppendEventFn = typeof coreAppendEvent;
+// Appends one event to the session's events.jsonl. The `sessionDir` argument
+// is retained for the test-injection seam (ctx.appendEvent); the production
+// binding ignores it and chains via paths + sessionId.
+type AppendEventFn = (sessionDir: string, event: unknown) => Promise<void>;
 type ResolveCommandFn = typeof resolveClaudeCodeCommand;
 type GetDiffFn = typeof getDiff;
 
@@ -131,7 +137,6 @@ export async function runClaudeCode(
 ): Promise<number> {
   const runner = ctx.runner ?? new ChildProcessRunner();
   const now = ctx.now ?? (() => new Date());
-  const appendEvent: AppendEventFn = ctx.appendEvent ?? coreAppendEvent;
   const resolveCommand: ResolveCommandFn = ctx.resolveCommand ?? resolveClaudeCodeCommand;
   const getDiffFn: GetDiffFn = ctx.getDiff ?? getDiff;
 
@@ -156,6 +161,15 @@ export async function runClaudeCode(
   const sessionId = prefixedUlid("ses");
   const sessionDir = join(paths.sessions, sessionId);
   await mkdir(sessionDir, { recursive: true });
+
+  // Every append chains onto the on-disk tail under a short-lived session lock
+  // (the self-locking wrapper); the lock is NEVER held across the child. Tests
+  // inject ctx.appendEvent to force append failures.
+  const appendEvent: AppendEventFn =
+    ctx.appendEvent ??
+    (async (_sessionDir, event) => {
+      await coreAppendChainedEvent(paths, sessionId, event);
+    });
 
   const startedAt = now().toISOString();
   const sessionYamlPath = join(sessionDir, "session.yaml");
@@ -197,9 +211,16 @@ export async function runClaudeCode(
     from: "initialized",
     to: "running",
   });
-  await mutateSessionYaml(sessionYamlPath, (s) => {
-    s.session.status = "running";
-  });
+  // Lock the status write so it cannot interleave-clobber a foreign locked
+  // session.yaml writer (e.g. a task attach setting task_id on this session).
+  const runningLock = await acquireLock(paths, "session", sessionId);
+  try {
+    await mutateSessionYaml(sessionYamlPath, (s) => {
+      s.session.status = "running";
+    });
+  } finally {
+    await runningLock.release();
+  }
 
   // 9. Transient signal hooks (SIGINT / SIGTERM / exit). The exit hook is a
   //    last-resort SIGKILL if the parent dies abnormally.
@@ -242,7 +263,7 @@ export async function runClaudeCode(
         },
       });
     } catch (spawnError: unknown) {
-      await finalizeSessionAsFailed(sessionDir, sessionYamlPath, sessionId, appendEvent, {
+      await finalizeSessionAsFailed(paths, sessionDir, sessionId, appendEvent, {
         command,
         args,
         cwd: repoRoot,
@@ -338,8 +359,10 @@ export async function runClaudeCode(
   });
 
   // 20. Final session.yaml update (status / ended_at / invocation.exit_code /
-  //     related_files).
-  await mutateSessionYaml(sessionYamlPath, (s) => {
+  //     related_files) plus the integrity head anchor, written from the on-disk
+  //     tail under the session lock so a foreign line appended just before
+  //     finalize is anchored and a later attach (now terminal) is rejected.
+  await finalizeSessionYaml(paths, sessionId, (s) => {
     s.session.status = finalStatus;
     s.session.ended_at = endedAt;
     s.session.invocation.exit_code = result.exit_code;
@@ -535,8 +558,8 @@ async function mutateSessionYaml(
 }
 
 async function finalizeSessionAsFailed(
+  paths: BasouPaths,
   sessionDir: string,
-  sessionYamlPath: string,
   sessionId: string,
   appendEvent: AppendEventFn,
   ctx: {
@@ -580,7 +603,7 @@ async function finalizeSessionAsFailed(
     occurred_at: ctx.occurredAt,
     source: claudeCodeAdapterMetadata.kind,
   });
-  await mutateSessionYaml(sessionYamlPath, (s) => {
+  await finalizeSessionYaml(paths, sessionId, (s) => {
     s.session.status = "failed";
     s.session.ended_at = ctx.occurredAt;
     s.session.invocation.exit_code = null;

@@ -224,8 +224,10 @@ content (`content`, `body`, `raw`, etc.) belongs in
 
 ## §7.5 Event-log integrity: hash chain + head anchor
 
-`events.jsonl` written by the **import paths** (`basou import`, `basou
-refresh`, and the in-place re-import of a grown source) is tamper-evident:
+`events.jsonl` is tamper-evident — both the **import paths** (`basou import`,
+`basou refresh`, the in-place re-import of a grown source) and the **live
+append paths** (`basou exec` / `run`, ad-hoc `decision` / `note` / `task`, the
+attach and approval-resolution paths) hash-chain their event logs:
 
 - **Per-line chain.** Every event line carries a top-level `prev_hash` — the
   hex sha-256 of the PREVIOUS line's literal written bytes (UTF-8, excluding
@@ -239,16 +241,29 @@ refresh`, and the in-place re-import of a grown source) is tamper-evident:
   truncation (which leaves a perfectly valid shorter chain) is detected
   independently of the chain itself.
 - **Line discipline.** A chained file ends with `\n` and contains no blank
-  lines; imports are atomic whole-file writes, so an unterminated tail can
-  only come from out-of-band editing and is reported as tampering.
+  lines; an unterminated tail can only come from out-of-band editing (or a
+  crashed live append) and is reported as tampering on an at-rest log.
 
-**Scope.** Only imported sessions are chained. Imported sessions are written
-exclusively by the atomic bulk import writers and reject every append path
-(task attach, notes, decisions, status changes, approval resolution), so the
-chained corpus is closed: nothing can legitimately append an unchained line to
-it. Live `exec` / `run` and ad-hoc sessions stay UNCHAINED for now (chaining
-the append path is a planned follow-up) and verification reports them
-`unchained` (informational, not a failure).
+**Scope.** Imported and live sessions are both chained. Imported logs are
+atomic whole-file bulk writes. Live `exec` / `run`, ad-hoc, attach and
+approval-resolution lines go through ONE locked append primitive that derives
+each `prev_hash` from the real on-disk tail (so concurrent writers — e.g. a
+`decision record` attached to a running `exec` — stay consistent), and the head
+anchor is stamped once, at the terminal-status finalize, from the final tail. A
+session that began life UNCHAINED (created before this feature) keeps receiving
+plain unchained lines — it is never half-chained — and verifies as `unchained`.
+
+**Live sessions and the anchor.** A live session's `events.jsonl` is
+legitimately still growing and its head anchor is not written until the session
+reaches a terminal status. So verification of a non-terminal session
+(`initialized` / `running` / `waiting_approval`) reports `in_progress`: the
+internal back-pointer chain is fully checked, but the mutable tail and the
+not-yet-written anchor are forgiven. A crashed live append (an unterminated
+final line) is benign on a live session (`in_progress`) and the session is
+treated as abandoned — a further append refuses rather than gluing a line onto
+the torn fragment. Tamper-evidence for the tail + anchor activates once the
+session is finalized (`completed` / `failed` / `interrupted`), after which the
+strict rules apply.
 
 **`basou verify [--session <id>] [--all] [--json]`** is the read-only checker.
 Per-session verdicts:
@@ -256,14 +271,19 @@ Per-session verdicts:
 | Verdict | Meaning | Exit |
 |---|---|---|
 | `verified` | chain, genesis, session ids, line discipline, and head anchor all consistent | 0 |
-| `unchained` | no line carries `prev_hash` and no anchor exists (live / ad-hoc / pre-feature session) | 0 |
+| `unchained` | no line carries `prev_hash` and no anchor exists (a pre-feature session created before chaining) | 0 |
 | `empty` | zero events and no anchor | 0 |
 | `incomplete` | chained log but `session.yaml` is entirely absent (an import crashed between the two writes); a re-import repairs it | 0 |
-| `tampered` | a real break: bad back-pointer or genesis, foreign `session_id`, torn tail, blank or malformed line, anchor missing / mismatching, or an anchor left behind with no chained log | non-zero |
+| `in_progress` | chained log on a still-live session (`initialized` / `running` / `waiting_approval`); the internal chain is verified, the mutable tail and not-yet-written anchor are forgiven | 0 |
+| `tampered` | a real break: bad back-pointer or genesis, foreign `session_id`, torn tail (on an at-rest session), blank or malformed line, anchor missing / mismatching, or an anchor left behind with no chained log | non-zero |
 
-`unchained` / `empty` / `incomplete` exit 0; an I/O failure while reading a
-log (e.g. permissions) aborts the command with a non-zero exit as an
-operational error — distinct from a `tampered` verdict, but still fail-closed.
+`unchained` / `empty` / `incomplete` / `in_progress` exit 0; an I/O failure
+while reading a log (e.g. permissions) aborts the command with a non-zero exit
+as an operational error — distinct from a `tampered` verdict, but still
+fail-closed. A still-live session being finalized concurrently can momentarily
+present an old log with a new anchor; `verify` re-snapshots once before
+returning a strict `anchor_mismatch`, so a finalize-in-flight is not reported as
+tampering.
 
 A legitimate basou rewrite (in-place re-import, `--force`) recomputes a valid
 chain and anchor; `verify` proves on-disk internal consistency against the
@@ -296,8 +316,8 @@ This feature raises the bar from "edit one line" to "recompute and rewrite two
 coordinated files", which is the right primitive for catching accidental and
 casual mutation of the provenance corpus. Signing / external anchoring is a
 named follow-up and out of scope here. One further boundary: the low-level
-`appendEvent` API does not itself read the session status; the supported
-append paths all reject imported sessions, but a hypothetical direct caller
-appending to a chained log is DETECTED by `verify` (`missing_prev_hash`)
-rather than prevented — a writer-side gate belongs to the live-session
-chaining follow-up.
+`appendEvent` export does not itself read the session status. The supported
+append paths (attach, approval, the live `exec` / `run` orchestrators, ad-hoc)
+prevent appending an unchained or out-of-place line, but a hypothetical direct
+caller of the raw export is DETECTED by `verify` (`missing_prev_hash`) rather
+than prevented; a writer-side gate on the raw export stays out of scope.

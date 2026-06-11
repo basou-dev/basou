@@ -50,6 +50,7 @@ export type {
 export {
   classifySuspect,
   enumerateSessionDirs,
+  finalizeSessionYaml,
   loadSessionEntries,
   readSessionYaml,
   STUCK_THRESHOLD_MS,

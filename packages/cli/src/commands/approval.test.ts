@@ -847,8 +847,12 @@ describe("resolveApprovalId regression", () => {
   });
 });
 
-describe("imported-session fence (D-6b)", () => {
-  async function writeImportedSessionYaml(repo: string, sessionId: string): Promise<void> {
+describe("attachable-status fence (D-6b)", () => {
+  async function writeSessionYamlWithStatus(
+    repo: string,
+    sessionId: string,
+    status: string,
+  ): Promise<void> {
     const paths = basouPaths(repo);
     await mkdir(join(paths.sessions, sessionId), { recursive: true });
     await writeYamlFile(join(paths.sessions, sessionId, "session.yaml"), {
@@ -859,7 +863,7 @@ describe("imported-session fence (D-6b)", () => {
         workspace_id: FIXED_WS_ID,
         source: { kind: "codex-import", version: "0.1.0" },
         started_at: "2026-05-04T09:00:00+09:00",
-        status: "imported",
+        status,
         working_directory: "~/projects/example",
         invocation: { command: "codex", args: [], exit_code: 0 },
         related_files: [],
@@ -875,12 +879,12 @@ describe("imported-session fence (D-6b)", () => {
     const sessionId = SES("S31");
     await createApproval(repo, { id: approvalId, sessionId });
     await appendRequestedEvent(repo, sessionId, approvalId, "2026-05-04T10:00:00+09:00", "E31");
-    await writeImportedSessionYaml(repo, sessionId);
+    await writeSessionYamlWithStatus(repo, sessionId, "imported");
 
     const err = captureStderr();
     await runApprovalApprove(approvalId, {}, { cwd: repo });
     expect(process.exitCode).toBe(1);
-    expect(joinCalls(err)).toContain("imported session");
+    expect(joinCalls(err)).toContain("status=imported");
 
     // Nothing was appended and the pending YAML is untouched.
     const lines = await readEventsLines(repo, sessionId);
@@ -895,12 +899,28 @@ describe("imported-session fence (D-6b)", () => {
     const sessionId = SES("S32");
     await createApproval(repo, { id: approvalId, sessionId });
     await appendRequestedEvent(repo, sessionId, approvalId, "2026-05-04T10:00:00+09:00", "E32");
-    await writeImportedSessionYaml(repo, sessionId);
+    await writeSessionYamlWithStatus(repo, sessionId, "imported");
 
     const err = captureStderr();
     await runApprovalReject(approvalId, { reason: "no" }, { cwd: repo });
     expect(process.exitCode).toBe(1);
-    expect(joinCalls(err)).toContain("imported session");
+    expect(joinCalls(err)).toContain("status=imported");
+    expect((await readEventsLines(repo, sessionId)).length).toBe(1);
+  });
+
+  it("refuses to resolve an approval for a finalized (terminal) session", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P33");
+    const sessionId = SES("S33");
+    await createApproval(repo, { id: approvalId, sessionId });
+    await appendRequestedEvent(repo, sessionId, approvalId, "2026-05-04T10:00:00+09:00", "E33");
+    await writeSessionYamlWithStatus(repo, sessionId, "completed");
+
+    const err = captureStderr();
+    await runApprovalApprove(approvalId, {}, { cwd: repo });
+    expect(process.exitCode).toBe(1);
+    expect(joinCalls(err)).toContain("status=completed");
+    // No resolution line was chained onto the finalized session.
     expect((await readEventsLines(repo, sessionId)).length).toBe(1);
   });
 });

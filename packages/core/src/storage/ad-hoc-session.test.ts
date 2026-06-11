@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+import { verifyEventsChain } from "../events/verify.js";
 import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import {
@@ -174,6 +175,28 @@ describe("createAdHocSessionWithEvent", () => {
     expect(invocation.command).toBe("basou decision record");
     expect(invocation.args).toEqual(["--title", "x"]);
     expect(invocation.exit_code).toBe(0);
+  });
+
+  it("hash-chains the ad-hoc log and stamps a matching anchor (verify => verified)", async () => {
+    const paths = await setupPaths();
+    const occurredAt = "2026-05-11T12:00:00+09:00";
+    const result = await createAdHocSessionWithEvent({
+      paths,
+      manifest: makeManifest(),
+      label: "Ad-hoc decision: chained",
+      occurredAt,
+      sessionSource: "human",
+      workingDirectory: "/srv/example-project",
+      invocation: { command: "basou decision record", args: [] },
+      targetEventBuilders: [
+        buildDecisionTargetEvent("decision_01HXABCDEF1234567890ABCDE3", "chained", occurredAt),
+      ],
+    });
+
+    const yaml = await readSessionYaml(paths, result.sessionId);
+    expect(yaml.session.integrity).toBeDefined();
+    const verdict = await verifyEventsChain(paths, result.sessionId);
+    expect(verdict).toEqual({ status: "verified", eventCount: 5 });
   });
 
   it("emits the 5-event lifecycle in chronological order", async () => {
