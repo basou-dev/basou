@@ -273,10 +273,31 @@ additionally refuses to rebuild a session whose prior chain fails verification
 valid one — inspect it with `basou verify`, then decide (a `--force` rebuild
 is the explicit override).
 
+**Migrating pre-existing imported sessions.** Sessions imported before
+chaining existed stay `unchained` until their source grows (in-place
+re-import) — and a `--force` re-import mints new ids, breaking cross-session
+references. `basou session rechain (--session <id> | --all) [--dry-run] [--json]`
+migrates them in place: each original event line is re-emitted with ONLY the
+`prev_hash` member appended (field sets, values, key order and ids are
+preserved exactly — the migration never re-serializes through the schema
+layer), and the existing `session.yaml` is rewritten with only the
+`integrity` anchor added. Only sessions with status `imported` are eligible
+(the closed, append-rejecting corpus); a `tampered` log is refused rather
+than laundered into a fresh valid chain, and any line that cannot be
+preserved byte-exactly (blank or padded lines, invalid UTF-8, malformed or
+schema-invalid JSON, a foreign `session_id`) skips the session untouched.
+Rechaining asserts tamper-evidence FROM NOW ON; it does not retroactively
+prove the pre-existing content was never modified before the migration ran.
+
 **Threat model (honest).** The chain and anchor are NOT cryptographic
 signatures. `session.yaml` is as editable as the log itself; an attacker who
 rewrites BOTH files consistently (recomputing every hash) is not detected.
 This feature raises the bar from "edit one line" to "recompute and rewrite two
 coordinated files", which is the right primitive for catching accidental and
 casual mutation of the provenance corpus. Signing / external anchoring is a
-named follow-up and out of scope here.
+named follow-up and out of scope here. One further boundary: the low-level
+`appendEvent` API does not itself read the session status; the supported
+append paths all reject imported sessions, but a hypothetical direct caller
+appending to a chained log is DETECTED by `verify` (`missing_prev_hash`)
+rather than prevented — a writer-side gate belongs to the live-session
+chaining follow-up.

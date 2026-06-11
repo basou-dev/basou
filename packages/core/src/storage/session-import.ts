@@ -1,13 +1,14 @@
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { chainRawJsonLines } from "../events/chain.js";
 import { readAllEvents } from "../events/event-replay.js";
 import { type BulkChainResult, writeEventsBulk } from "../events/event-writer.js";
 import { verifyEventsChain } from "../events/verify.js";
 import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import { sanitizeRelatedFiles, sanitizeWorkingDirectory } from "../lib/path-sanitizer.js";
-import type { Event } from "../schemas/event.schema.js";
+import { type Event, EventSchema } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { Session, SessionSourceKind, SessionStatus } from "../schemas/session.schema.js";
 import type {
@@ -605,5 +606,185 @@ export async function reimportPreservingId(
     };
   } finally {
     await lock?.release();
+  }
+}
+
+/** Options for {@link rechainSessionInPlace}. */
+export type RechainOptions = {
+  /**
+   * Compute the outcome and write nothing. The session lock is STILL taken:
+   * an unlocked read could observe a concurrent in-place re-import's
+   * two-file write window (events rewritten, yaml not yet) and report a
+   * state a locked run would never see.
+   */
+  dryRun?: boolean;
+};
+
+/** Result of {@link rechainSessionInPlace}. */
+export type RechainResult =
+  | { status: "rechained"; eventCount: number }
+  | {
+      status: "skipped";
+      // `already_chained`: the session is `verified` — idempotent no-op.
+      // `empty`: zero events; nothing to chain and no anchor is written
+      //   (same rule as the import writers).
+      // `not_imported`: only the closed imported corpus may be chained — a
+      //   live/ad-hoc session would be appended to afterwards and turn
+      //   `tampered`.
+      // `tampered`: the log already fails verification; rechaining it would
+      //   launder the break into a fresh valid chain. Inspect with
+      //   `basou verify`; `--force` re-import is the explicit override.
+      // `events_unreadable`: a line cannot be preserved EXACTLY (blank or
+      //   whitespace-only line, invalid UTF-8, JSON parse failure, schema
+      //   gate failure, or a non-byte-identical JSON round-trip) — rechain
+      //   never normalizes or drops content.
+      // `session_id_mismatch`: a line's session_id is not this session's id;
+      //   chaining it would manufacture an instantly-tampered session.
+      // `yaml_missing` / `yaml_unreadable`: session.yaml absent / unparseable.
+      reason:
+        | "already_chained"
+        | "empty"
+        | "not_imported"
+        | "tampered"
+        | "events_unreadable"
+        | "session_id_mismatch"
+        | "yaml_missing"
+        | "yaml_unreadable";
+    };
+
+/**
+ * Add the tamper-evidence hash chain, IN PLACE, to an imported session that
+ * was written before chaining existed (or whose chain was legitimately never
+ * computed). Event ids, order, field sets, values and key order are all
+ * preserved exactly — each original line is re-emitted with only `prev_hash`
+ * appended (see {@link chainRawJsonLines}); `session.yaml` is rewritten as
+ * read with only `integrity` added. Nothing else changes, so cross-session
+ * references (`linked_events`) survive, unlike a `--force` re-import.
+ *
+ * Rechaining asserts tamper-evidence FROM NOW ON; it does not retroactively
+ * prove the pre-existing content was never modified before the migration.
+ *
+ * Refuses anything it cannot preserve exactly or that is not the closed
+ * imported corpus — see {@link RechainResult} reasons. Throws (rather than
+ * returning a skip) on environment-level I/O failures, mirroring
+ * `verifyEventsChain`.
+ */
+export async function rechainSessionInPlace(
+  paths: BasouPaths,
+  sessionId: string,
+  options: RechainOptions = {},
+): Promise<RechainResult> {
+  const sessionDir = join(paths.sessions, sessionId);
+  // Wrap lock-acquisition failures in the fixed pathless vocabulary: the CLI
+  // surfaces per-session error messages verbatim, so a raw fs error here
+  // would leak an absolute lockfile path.
+  let lock: Awaited<ReturnType<typeof acquireLock>>;
+  try {
+    lock = await acquireLock(paths, "session", sessionId);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "Lock is held by another process") {
+      throw error;
+    }
+    throw new Error("Failed to acquire lock", { cause: error });
+  }
+  try {
+    // 1. Status gate: only the imported corpus is closed against appends.
+    let record: Session;
+    try {
+      record = await readSessionYaml(paths, sessionId);
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === "YAML file not found") {
+        return { status: "skipped", reason: "yaml_missing" };
+      }
+      return { status: "skipped", reason: "yaml_unreadable" };
+    }
+    if (record.session.status !== "imported") {
+      return { status: "skipped", reason: "not_imported" };
+    }
+
+    // 2. Verdict gate. Only a clean `unchained` log proceeds; `incomplete`
+    // is unreachable here because the yaml-missing case returned above.
+    const verdict = await verifyEventsChain(paths, sessionId);
+    if (verdict.status === "verified") {
+      return { status: "skipped", reason: "already_chained" };
+    }
+    if (verdict.status === "empty") {
+      return { status: "skipped", reason: "empty" };
+    }
+    if (verdict.status !== "unchained") {
+      return { status: "skipped", reason: "tampered" };
+    }
+
+    // 3. Raw-line gate: every line must be preservable EXACTLY. The decoded
+    // text must re-encode to the same bytes (invalid UTF-8 would silently
+    // normalize to U+FFFD), and every line must be byte-identical to its own
+    // JSON round-trip (whitespace padding, duplicate keys or non-canonical
+    // escapes would otherwise be silently rewritten). Every line a basou
+    // writer produced satisfies both.
+    const eventsPath = join(sessionDir, "events.jsonl");
+    let priorRaw: Buffer;
+    try {
+      priorRaw = await readFile(eventsPath);
+    } catch (error: unknown) {
+      throw new Error("Failed to read events.jsonl", { cause: error });
+    }
+    if (priorRaw.length === 0 || priorRaw[priorRaw.length - 1] !== 0x0a) {
+      return { status: "skipped", reason: "events_unreadable" };
+    }
+    const text = priorRaw.toString("utf8");
+    if (!priorRaw.equals(Buffer.from(text, "utf8"))) {
+      return { status: "skipped", reason: "events_unreadable" };
+    }
+    const rawLines = text.slice(0, -1).split("\n");
+    for (const line of rawLines) {
+      if (line.trim().length === 0) {
+        return { status: "skipped", reason: "events_unreadable" };
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        return { status: "skipped", reason: "events_unreadable" };
+      }
+      if (JSON.stringify(parsed) !== line) {
+        return { status: "skipped", reason: "events_unreadable" };
+      }
+      // Gate ONLY: the parsed/validated output is never written.
+      if (!EventSchema.safeParse(parsed).success) {
+        return { status: "skipped", reason: "events_unreadable" };
+      }
+      if ((parsed as Record<string, unknown>).session_id !== sessionId) {
+        return { status: "skipped", reason: "session_id_mismatch" };
+      }
+    }
+
+    if (options.dryRun === true) {
+      return { status: "rechained", eventCount: rawLines.length };
+    }
+
+    // 4-6. Chain the ORIGINAL lines, write atomically, anchor the yaml read
+    // in step 1 (all other fields preserved as-is). On a yaml failure,
+    // restore the prior events bytes verbatim — same rollback as the
+    // in-place re-import.
+    const chainResult = chainRawJsonLines(rawLines, sessionId);
+    const body = `${chainResult.lines.join("\n")}\n`;
+    try {
+      await atomicReplace(eventsPath, body);
+    } catch (error: unknown) {
+      throw new Error("Failed to write events.jsonl", { cause: error });
+    }
+    try {
+      await overwriteYamlFile(
+        join(sessionDir, "session.yaml"),
+        withIntegrity(record, { headHash: chainResult.headHash, count: chainResult.count }),
+      );
+    } catch (error: unknown) {
+      await atomicReplace(eventsPath, priorRaw).catch(() => undefined);
+      throw error;
+    }
+
+    return { status: "rechained", eventCount: chainResult.count };
+  } finally {
+    await lock.release();
   }
 }

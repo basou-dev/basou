@@ -2,8 +2,19 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { atomicCreate } from "./atomic.js";
 import { basouPaths, ensureBasouDirectory } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
+
+// Pass-through vi.fn wrapper so a single test can inject a non-EEXIST,
+// non-ENOENT failure; every other call delegates to the real implementation.
+vi.mock("./atomic.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./atomic.js")>();
+  return {
+    ...actual,
+    atomicCreate: vi.fn(actual.atomicCreate),
+  };
+});
 
 let workDir: string | undefined;
 
@@ -143,15 +154,14 @@ describe("acquireLock", () => {
     );
   });
 
-  it("propagates unexpected (non-EEXIST) atomicCreate errors without translating", async () => {
-    // Acquire under a non-existent locks dir to force ENOENT from the tmp write.
-    const ghost = await mkdtemp(join(tmpdir(), "basou-lockfile-ghost-"));
-    const ghostPaths = basouPaths(ghost);
-    // Intentionally do NOT call ensureBasouDirectory so locks/ is missing.
+  it("propagates unexpected (non-EEXIST, non-ENOENT) atomicCreate errors without translating", async () => {
+    // ENOENT now self-heals (see the missing-locks-directory suite below), so
+    // the no-mistranslation guarantee is exercised with a permission failure.
+    const eacces = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    vi.mocked(atomicCreate).mockRejectedValueOnce(eacces);
     await expect(
-      acquireLock(ghostPaths, "task", "task_01HXGHOST000000000000000"),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await rm(ghost, { recursive: true, force: true });
+      acquireLock(paths(), "task", "task_01HXGHOST000000000000000"),
+    ).rejects.toMatchObject({ code: "EACCES" });
   });
 });
 
@@ -169,5 +179,20 @@ describe("ensureBasouDirectory + locks", () => {
       recursive: true,
     });
     expect(lockSubdir === undefined || typeof lockSubdir === "string").toBe(true);
+  });
+});
+
+describe("acquireLock — missing locks directory", () => {
+  it("creates .basou/locks on demand and acquires (pre-locks-era workspace)", async () => {
+    // A workspace checked out from before the locks directory existed: the
+    // first lock-taking command must self-heal instead of failing ENOENT.
+    await rm(paths().locks, { recursive: true, force: true });
+
+    const sessionId = "ses_01HXLOCKDIR0000000000000";
+    const handle = await acquireLock(paths(), "session", sessionId);
+    const entries = await readdir(paths().locks);
+    expect(entries).toContain("session_01HXLOCKDIR0000000000000.lock");
+    await handle.release();
+    expect(await readdir(paths().locks)).not.toContain("session_01HXLOCKDIR0000000000000.lock");
   });
 });

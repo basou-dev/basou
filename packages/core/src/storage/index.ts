@@ -30,12 +30,15 @@ export {
 export type {
   ImportSessionOptions,
   ImportSessionResult,
+  RechainOptions,
+  RechainResult,
   ReimportOptions,
   ReimportResult,
 } from "./session-import.js";
 export {
   importSessionFromJson,
   isImportDerivedSource,
+  rechainSessionInPlace,
   reimportPreservingId,
 } from "./session-import.js";
 export type {

@@ -23,6 +23,15 @@ All notable changes to **basou** are recorded here. The project follows
 - The in-place re-import refuses to rebuild a session whose prior chain fails
   verification (skip reason `prior_chain_broken`), so a broken chain cannot be
   laundered into a freshly valid one. `--force` remains the explicit override.
+- `basou session rechain (--session <id> | --all) [--dry-run] [--json]` — migrate
+  imported sessions created **before** chaining existed: adds the hash chain
+  and head anchor **in place**, preserving event ids, order, field sets and
+  key order exactly (each original line is re-emitted with only `prev_hash`
+  appended), so cross-session references survive — unlike a `--force`
+  re-import. Only `imported` sessions are eligible; a `tampered` log is
+  refused (no laundering), and any line that cannot be preserved byte-exactly
+  skips the session untouched. Rechaining asserts tamper-evidence from now
+  on; it does not retroactively prove the prior history.
 
 ### Notes
 
