@@ -3,6 +3,26 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou report generate` — a neutral, point-in-time **work report**: a
+  human-readable export explaining the work captured in a workspace (volume and
+  active time, decisions, approvals, tasks, changed files, and per-session
+  integrity verdicts). It composes the existing read primitives only and
+  introduces no new persisted schema. Markdown to stdout by default; `--out
+  <path>` writes a file (confirmation on stderr); `--json` emits a curated,
+  pipe-safe structured shape; `--title <text>` sets a subject line. A successful
+  render always exits 0 — integrity verdicts inside it are informational and
+  never fail the command (unlike `basou verify`). The report is an
+  "explain your own work" export, not an audit or billing product: the word
+  "billable" never appears and the integrity section states internal hash-chain
+  consistency only, not a third-party cryptographic proof.
+- `@basou/sdk` exposes `Workspace.renderReport(options?)` (returning the report
+  markdown), alongside the existing `renderHandoff` / `renderDecisions`
+  (`BASOU_SDK_VERSION` → `0.3.0`).
+
 ## 0.10.0 — 2026-06-12
 
 ### Changed

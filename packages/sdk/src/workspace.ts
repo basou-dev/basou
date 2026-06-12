@@ -16,6 +16,7 @@ import {
   readTaskFileWithArchiveFallback,
   renderDecisions,
   renderHandoff,
+  renderReport,
   replayEvents,
   resolveRepositoryRoot,
   resolveSessionId,
@@ -112,7 +113,26 @@ export interface Workspace {
   renderHandoff(): Promise<string>;
   /** The rendered `decisions.md` body (recomputed, without generated markers). */
   renderDecisions(): Promise<string>;
+  /**
+   * A rendered work report — a point-in-time markdown export explaining the
+   * work captured in this workspace (volume, decisions, approvals, tasks,
+   * changed files, and the local provenance integrity verdicts). Read-only,
+   * markerless. The CLI's `--json` structured shape is a CLI concern; the SDK
+   * facade returns the markdown body, mirroring `renderHandoff` / `renderDecisions`.
+   */
+  renderReport(options?: ReportOptions): Promise<string>;
 }
+
+/** Options for {@link Workspace.renderReport}. */
+export type ReportOptions = {
+  /** Subject line shown in the report header. */
+  title?: string;
+  /**
+   * IANA timezone used to label the report's time figures. Defaults to the
+   * host's local zone (matching {@link StatsOptions.timeZone}).
+   */
+  timeZone?: string;
+};
 
 /**
  * Resolve the Basou workspace root for a working directory by finding the
@@ -258,6 +278,19 @@ export async function openWorkspace(
         nowIso: now().toISOString(),
         onWarning: (w, sid) => onWarning(w, sid),
         onSessionSkip: onSkip,
+      });
+      return result.body;
+    },
+
+    renderReport: async (reportOptions) => {
+      const result = await renderReport({
+        paths,
+        nowIso: now().toISOString(),
+        ...(reportOptions?.title !== undefined ? { title: reportOptions.title } : {}),
+        ...(reportOptions?.timeZone !== undefined ? { timeZone: reportOptions.timeZone } : {}),
+        onWarning: (w, sid) => onWarning(w, sid),
+        onSessionSkip: onSkip,
+        onTaskSkip: onSkip,
       });
       return result.body;
     },

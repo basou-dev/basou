@@ -8,6 +8,7 @@ import { registerHandoffCommand } from "./commands/handoff.js";
 import { registerImportCommand } from "./commands/import.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerRefreshCommand } from "./commands/refresh.js";
+import { registerReportCommand } from "./commands/report.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerSessionCommand } from "./commands/session.js";
 import { registerStatsCommand } from "./commands/stats.js";
@@ -60,6 +61,7 @@ export function buildProgram(): Command {
   registerTaskCommand(program);
   registerHandoffCommand(program);
   registerDecisionsCommand(program);
+  registerReportCommand(program);
 
   return program;
 }

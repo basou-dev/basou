@@ -35,6 +35,7 @@ basou approval ...         # manage approval requests (list / show / approve / r
 # Generated artifacts
 basou handoff generate     # generate or inspect .basou/handoff.md
 basou decisions generate   # generate or inspect .basou/decisions.md
+basou report generate      # generate a work report (stdout / --out / --json)
 ```
 
 For exact flags, subcommands, and arguments, see the generated reference linked
@@ -49,6 +50,11 @@ transparency and reconsidered in a future release:
 ```bash
 basou team new
 basou review-flow new
-basou report generate
 basou analytics
 ```
+
+`basou report generate` graduated from this list: it now ships as a generated
+artifact (see §15.1). It is a neutral, point-in-time work-explanation export
+that composes the existing read primitives — it is not an audit or billing
+product, and it adds no orchestration (the reason `team new` / `review-flow new`
+remain deferred).
