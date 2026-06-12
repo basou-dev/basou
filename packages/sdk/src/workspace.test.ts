@@ -242,6 +242,14 @@ describe("openWorkspace", () => {
     expect(typeof (await ws.renderDecisions())).toBe("string");
   });
 
+  it("renders the work report markdown, honoring title and timezone", async () => {
+    const ws = await openWorkspace(await setupWorkspace());
+    const body = await ws.renderReport({ title: "Client X", timeZone: "UTC" });
+    expect(typeof body).toBe("string");
+    expect(body).toContain("# Report — Client X");
+    expect(body).toContain("## 整合性");
+  });
+
   it("injects a clock for time-sensitive reads", async () => {
     const fixed = new Date("2026-05-10T01:00:00.000Z");
     const ws = await openWorkspace(await setupWorkspace(), { now: () => fixed });

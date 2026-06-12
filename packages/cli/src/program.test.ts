@@ -42,6 +42,7 @@ describe("buildProgram", () => {
       "import",
       "init",
       "refresh",
+      "report",
       "run",
       "session",
       "stats",
