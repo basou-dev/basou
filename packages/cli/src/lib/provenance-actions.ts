@@ -3,6 +3,7 @@ import {
   readMarkdownFile,
   renderDecisions,
   renderHandoff,
+  renderOrientation,
   renderWithMarkers,
   writeMarkdownFile,
 } from "@basou/core";
@@ -53,12 +54,20 @@ export type HandoffCounts = {
   pendingApprovalsCount: number;
 };
 
+export type OrientationCounts = {
+  sessionCount: number;
+  inFlightTaskCount: number;
+  pendingApprovalsCount: number;
+  suspectCount: number;
+};
+
 /** Structured result of {@link refreshAll}. */
 export type RefreshResult = {
   claudeCode: ImportOutcome;
   codex: ImportOutcome;
   handoff: GenerateOutcome<HandoffCounts>;
   decisions: GenerateOutcome<{ decisionCount: number }>;
+  orientation: GenerateOutcome<OrientationCounts>;
   dryRun: boolean;
 };
 
@@ -209,6 +218,26 @@ export async function regenerateDecisions(
 }
 
 /**
+ * Regenerate `.basou/orientation.md` and return the orientation counts. Unlike
+ * handoff/decisions this is a transient, gitignored snapshot, so the whole file
+ * is overwritten (no GENERATED markers to preserve a hand-edited region).
+ */
+export async function regenerateOrientation(
+  paths: BasouPaths,
+  nowIso: string,
+  callbacks?: Omit<Parameters<typeof renderOrientation>[0], "paths" | "nowIso">,
+): Promise<OrientationCounts> {
+  const result = await renderOrientation({ paths, nowIso, ...callbacks });
+  await writeMarkdownFile(paths.files.orientation, `${result.body}\n`);
+  return {
+    sessionCount: result.sessionCount,
+    inFlightTaskCount: result.inFlightTaskCount,
+    pendingApprovalsCount: result.pendingApprovalsCount,
+    suspectCount: result.suspectCount,
+  };
+}
+
+/**
  * The shared refresh pipeline: import both adapters (best-effort) for the
  * project, then regenerate handoff + decisions. Under `dryRun`, imports run in
  * preview mode and the markdown files are left untouched. The caller resolves
@@ -228,16 +257,25 @@ export async function refreshAll(args: {
 
   if (dryRun) {
     const skipped = { status: "skipped" as const, reason: "dry-run" };
-    return { claudeCode, codex, handoff: skipped, decisions: skipped, dryRun };
+    return {
+      claudeCode,
+      codex,
+      handoff: skipped,
+      decisions: skipped,
+      orientation: skipped,
+      dryRun,
+    };
   }
 
   const handoffCounts = await regenerateHandoff(paths, nowIso);
   const decisionCounts = await regenerateDecisions(paths, nowIso);
+  const orientationCounts = await regenerateOrientation(paths, nowIso);
   return {
     claudeCode,
     codex,
     handoff: { status: "generated", ...handoffCounts },
     decisions: { status: "generated", ...decisionCounts },
+    orientation: { status: "generated", ...orientationCounts },
     dryRun,
   };
 }

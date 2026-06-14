@@ -228,6 +228,13 @@ function printRefreshSummary(result: RefreshResult): void {
   } else {
     console.log(`decisions: skipped (${result.decisions.reason})`);
   }
+  if (result.orientation.status === "generated") {
+    console.log(
+      `orientation: regenerated (in-flight: ${result.orientation.inFlightTaskCount}, pending approvals: ${result.orientation.pendingApprovalsCount}, suspect: ${result.orientation.suspectCount})`,
+    );
+  } else {
+    console.log(`orientation: skipped (${result.orientation.reason})`);
+  }
 }
 
 async function resolveRepositoryRootForRefresh(cwd: string): Promise<string> {
