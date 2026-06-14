@@ -7,6 +7,7 @@ import { registerExecCommand } from "./commands/exec.js";
 import { registerHandoffCommand } from "./commands/handoff.js";
 import { registerImportCommand } from "./commands/import.js";
 import { registerInitCommand } from "./commands/init.js";
+import { registerOrientCommand } from "./commands/orient.js";
 import { registerRefreshCommand } from "./commands/refresh.js";
 import { registerReportCommand } from "./commands/report.js";
 import { registerRunCommand } from "./commands/run.js";
@@ -62,6 +63,7 @@ export function buildProgram(): Command {
   registerHandoffCommand(program);
   registerDecisionsCommand(program);
   registerReportCommand(program);
+  registerOrientCommand(program);
 
   return program;
 }

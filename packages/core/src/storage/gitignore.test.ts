@@ -32,6 +32,7 @@ const SPEC_BLOCK =
   ".basou/tmp/\n" +
   ".basou/locks/\n" +
   ".basou/status.json\n" +
+  ".basou/orientation.md\n" +
   ".basou/sessions/*/events.jsonl\n" +
   ".basou/sessions/*/artifacts/\n" +
   ".basou/approvals/pending/\n" +

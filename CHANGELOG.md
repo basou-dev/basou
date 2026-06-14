@@ -3,6 +3,22 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou orient` — a read-first "current position" command for a supervisor who
+  delegated execution to AI agents. It answers four orientation questions (where
+  am I now / what is in flight / where am I heading / is this current) and leads
+  with structured facts an LLM cannot reliably derive from raw transcripts: the
+  pending-approval list (risk / action / reason, not just a count), suspect
+  sessions, in-flight task linkage, and capture freshness / coverage. It prints
+  to stdout by default and also writes `.basou/orientation.md` — a transient,
+  gitignored, markerless snapshot overwritten whole on each run; `--quiet` writes
+  the file only. `basou orient` runs no import, so the freshness section reflects
+  already-captured state (run `basou refresh` to re-import). `basou refresh` now
+  regenerates `.basou/orientation.md` alongside handoff and decisions.
+
 ## 0.11.0 — 2026-06-12
 
 ### Added

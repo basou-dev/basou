@@ -1,4 +1,4 @@
-# Generated Markdown: handoff.md, decisions.md, and report
+# Generated Markdown: handoff.md, decisions.md, report, and orientation
 
 This document specifies the human-facing Markdown artifacts basou generates by
 reading provenance. They fall into two categories:
@@ -9,8 +9,12 @@ reading provenance. They fall into two categories:
 - **Snapshot export** — `basou report generate`. A point-in-time document with
   **no markers**: it is printed to stdout (or written to a `--out` path) as a
   whole, and is never partially re-generated. See §10.6.
+- **Transient current-position view** — `.basou/orientation.md`, written by
+  `basou orient`. A markerless, **gitignored** snapshot of the workspace's
+  current position; the whole file is overwritten on every run (no hand-edited
+  region to preserve) and it is also printed to stdout. See §10.7.
 
-All three share the same surface convention: an English document title, a
+All four share the same surface convention: an English document title, a
 `> Generated at <iso>` line, and Japanese `##` section headings with
 mostly-English inline content.
 
@@ -182,3 +186,36 @@ Provenance internally tamper-checked: 10 verified, 2 unchained, 0 empty, 0 incom
 
 This reflects internal consistency of the local event-log hash chain — not a third-party cryptographic proof.
 ```
+
+## §10.7 orientation (transient current-position view)
+
+`basou orient` produces `.basou/orientation.md`: a point-in-time **current
+position** view for a supervisor who has delegated execution to AI agents and
+needs to re-orient — *where am I now, what is in flight, where am I heading, is
+this current*. It composes the existing read primitives only and adds no new
+persisted schema.
+
+**Transient, not living.** Unlike `handoff.md` / `decisions.md` it carries **no
+markers** and is **gitignored**: the whole file is overwritten on every run
+(there is no hand-edited region to preserve), so it is a re-derivable cache of
+the current position rather than a committed artifact. `basou orient` also prints
+the body to stdout (the primary surface); `--quiet` writes the file only.
+
+**Runs no import.** `basou orient` reflects already-captured state and never
+triggers an import, so the freshness section is an honest staleness signal rather
+than an always-"just now" no-op (run `basou refresh` to re-import — which also
+regenerates `orientation.md`).
+
+**Structured facts over prose.** The value is the structured state an LLM cannot
+reliably derive from raw transcripts: the pending-approval list (risk / action /
+reason, not just a count), suspect sessions, in-flight task linkage, and capture
+freshness / coverage.
+
+**Positioning.** It shows product state, blockers, freshness, confidence, and
+next intent only. It MUST NOT show per-agent scorecards, productivity
+comparisons, or utilization — orientation is self-orientation about your own
+product, not surveillance of the fleet.
+
+**Sections** (in order): `## 今どこにいる` (where am I now), `## 何が動く`
+(what is in flight — structured facts), `## どこへ向かう` (where am I heading),
+`## これは最新か` (is this current — capture freshness / coverage).

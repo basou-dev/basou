@@ -42,6 +42,7 @@ out on disk.
 │       └── <approval_id>.yaml
 ├── decisions.md             # generated + manually appendable
 ├── handoff.md               # generated + manually appendable
+├── orientation.md           # generated current-position view (transient, gitignored)
 ├── locks/                   # gitignored (advisory lockfiles, see §1.5)
 ├── logs/                    # gitignored
 ├── raw/                     # gitignored (adapter raw output, etc.)
@@ -99,6 +100,7 @@ out on disk.
 .basou/tmp/
 .basou/locks/
 .basou/status.json
+.basou/orientation.md
 .basou/sessions/*/events.jsonl
 .basou/sessions/*/artifacts/
 .basou/approvals/pending/

@@ -36,6 +36,7 @@ basou approval ...         # manage approval requests (list / show / approve / r
 basou handoff generate     # generate or inspect .basou/handoff.md
 basou decisions generate   # generate or inspect .basou/decisions.md
 basou report generate      # generate a work report (stdout / --out / --json)
+basou orient               # show the current position (also writes .basou/orientation.md)
 ```
 
 For exact flags, subcommands, and arguments, see the generated reference linked

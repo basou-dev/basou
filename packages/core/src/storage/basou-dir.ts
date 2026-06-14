@@ -31,6 +31,7 @@ export type BasouPaths = {
     readonly status: string;
     readonly handoff: string;
     readonly decisions: string;
+    readonly orientation: string;
   };
 };
 
@@ -65,6 +66,7 @@ export function basouPaths(repositoryRoot: string): BasouPaths {
       status: join(root, "status.json"),
       handoff: join(root, "handoff.md"),
       decisions: join(root, "decisions.md"),
+      orientation: join(root, "orientation.md"),
     },
   };
 }
