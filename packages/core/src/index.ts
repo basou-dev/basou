@@ -68,8 +68,12 @@ export {
   sanitizeRelatedFiles,
   sanitizeWorkingDirectory,
 } from "./lib/path-sanitizer.js";
-export type { OrientationRendererInput, OrientationRendererResult } from "./orientation/index.js";
-export { renderOrientation } from "./orientation/index.js";
+export type {
+  OrientationRendererInput,
+  OrientationRendererResult,
+  OrientationSummary,
+} from "./orientation/index.js";
+export { renderOrientation, summarizeOrientation } from "./orientation/index.js";
 export type {
   ReportApprovalItem,
   ReportData,

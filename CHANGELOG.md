@@ -18,6 +18,14 @@ All notable changes to **basou** are recorded here. The project follows
   the file only. `basou orient` runs no import, so the freshness section reflects
   already-captured state (run `basou refresh` to re-import). `basou refresh` now
   regenerates `.basou/orientation.md` alongside handoff and decisions.
+- `@basou/core` exposes `summarizeOrientation()` returning a serializable
+  `OrientationSummary` — the structured facts behind orientation (latest
+  session, latest decision, in-flight tasks with linkage, the pending-approval
+  list with risk/reason, suspect sessions, and capture freshness / source
+  breakdown). `renderOrientation` now formats this summary, so its markdown is
+  unchanged; programmatic consumers read the facts without parsing prose. The
+  summary carries no work-stats and no per-agent / productivity / utilization
+  metrics — orientation shows product state, not surveillance.
 
 ## 0.11.0 — 2026-06-12
 
