@@ -6,13 +6,12 @@ import type { BasouPaths } from "../storage/basou-dir.js";
 import { readManifest } from "../storage/manifest.js";
 import {
   loadSessionEntries,
-  type SessionEntry,
   type SessionSkipReason,
   type SuspectReason,
 } from "../storage/sessions.js";
-import { loadTaskEntries, type TaskDocument, type TaskSkipReason } from "../storage/tasks.js";
+import { loadTaskEntries, type TaskSkipReason } from "../storage/tasks.js";
 
-/** Input contract for {@link renderOrientation}. */
+/** Input contract for {@link renderOrientation} and {@link summarizeOrientation}. */
 export type OrientationRendererInput = {
   paths: BasouPaths;
   /** ISO timestamp embedded in the header AND used as "now" for freshness + suspect classification. */
@@ -47,25 +46,64 @@ type PendingApproval = {
   expired: boolean;
 };
 
+type InFlightTask = { id: string; title: string; status: string; linkedSessions: number };
+type PlannedTask = { id: string; title: string };
+type SuspectSession = { sessionId: string; status: string; reason: SuspectReason | null };
+type LatestSession = { sessionId: string; label: string | null; status: string };
+type SourceCount = { kind: string; count: number };
+
 /**
- * Render `.basou/orientation.md`: a point-in-time "current position" view for a
- * supervisor who delegated execution to AI agents. Unlike `handoff.md` (a
- * session-resume narrative) this answers four orientation questions —
- * where am I now / what is in flight / where am I heading / is this current —
- * and deliberately leads with STRUCTURED FACTS an LLM cannot reliably derive
- * from raw transcripts (the
- * pending-approval list with risk/reason, suspect sessions, in-flight task
- * linkage, capture freshness/coverage) rather than prose synthesis.
+ * The vendor-neutral, serializable structured summary behind orientation. This
+ * is the single source of the four orientation questions (where am I now / what
+ * is in flight / where am I heading / is this current). {@link renderOrientation}
+ * formats it into markdown; programmatic consumers (e.g. a multi-workspace
+ * portfolio view) read it directly without parsing prose.
  *
- * The renderer is read-only and runs NO imports: the freshness section reflects
- * already-captured state, so a stale capture is visible rather than silently
- * refreshed (use `basou refresh` to re-import). It must never emit per-agent
- * scorecards, productivity, or utilization metrics — orientation shows product
- * state, not surveillance of the fleet.
+ * It carries STRUCTURED FACTS only — the pending-approval list with risk/reason,
+ * suspect sessions, in-flight task linkage, capture freshness/coverage, the
+ * latest decision. It deliberately holds NO work-stats (volume / active time /
+ * tokens) and NO per-agent scorecards, productivity, or utilization metrics:
+ * orientation shows product state, not surveillance of the fleet.
  */
-export async function renderOrientation(
+export type OrientationSummary = {
+  /** ISO "now"; the header timestamp and the basis for freshness/suspect classification. */
+  generatedAt: string;
+  /** All captured sessions (archived included), matching the count line. */
+  sessionCount: number;
+  /** Newest non-archived, non-import session ("where am I now"); null when none. */
+  latestSession: LatestSession | null;
+  /** Most recent `decision_recorded` across all sessions; null when none. */
+  latestDecision: DecisionRecord | null;
+  decisionCount: number;
+  /** related_files of the latest session, deduped + sorted + capped at the display limit. */
+  relatedFiles: { displayed: string[]; overflow: number };
+  /** Tasks whose status is `planned` or `in_progress`. */
+  inFlightTasks: InFlightTask[];
+  /** Tasks whose status is `planned` ("where am I heading"). */
+  plannedTasks: PlannedTask[];
+  pendingApprovals: PendingApproval[];
+  suspects: SuspectSession[];
+  freshness: {
+    /** started_at of the newest non-archived session, or null when none captured. */
+    newestStartedAt: string | null;
+    /** Session counts per source kind, sorted by kind. Counts only — never volume/time. */
+    bySource: SourceCount[];
+    /** manifest `import.source_roots`, or null when single-root / unreadable. */
+    sourceRoots: string[] | null;
+  };
+};
+
+/**
+ * Gather the structured orientation facts for a workspace. Read-only and runs
+ * NO imports: freshness reflects already-captured state, so a stale capture is
+ * visible rather than silently refreshed (run `basou refresh` to re-import).
+ *
+ * Returns a fully serializable {@link OrientationSummary}. See its docstring for
+ * the positioning constraint (no work-stats, no surveillance metrics).
+ */
+export async function summarizeOrientation(
   input: OrientationRendererInput,
-): Promise<OrientationRendererResult> {
+): Promise<OrientationSummary> {
   const limit = input.relatedFilesLimit ?? 10;
   const now = new Date(input.nowIso);
 
@@ -107,10 +145,17 @@ export async function renderOrientation(
   const taskLoadOpts: Parameters<typeof loadTaskEntries>[1] = {};
   if (input.onTaskSkip !== undefined) taskLoadOpts.onSkip = input.onTaskSkip;
   const taskEntries = await loadTaskEntries(input.paths, taskLoadOpts);
-  const inFlight = taskEntries.filter(
-    (t) => t.task.task.status === "in_progress" || t.task.task.status === "planned",
-  );
-  const planned = taskEntries.filter((t) => t.task.task.status === "planned");
+  const inFlightTasks: InFlightTask[] = taskEntries
+    .filter((t) => t.task.task.status === "in_progress" || t.task.task.status === "planned")
+    .map((t) => ({
+      id: t.task.task.id,
+      title: t.task.task.title,
+      status: t.task.task.status,
+      linkedSessions: t.task.task.linked_sessions?.length ?? 0,
+    }));
+  const plannedTasks: PlannedTask[] = taskEntries
+    .filter((t) => t.task.task.status === "planned")
+    .map((t) => ({ id: t.task.task.id, title: t.task.task.title }));
 
   // Pending approvals: enumerateApprovals returns IDs only, so each pending id
   // is read via loadApproval to surface risk / action / reason (handoff shows
@@ -132,7 +177,13 @@ export async function renderOrientation(
     });
   }
 
-  const suspects = entries.filter((e) => e.suspect);
+  const suspects: SuspectSession[] = entries
+    .filter((e) => e.suspect)
+    .map((e) => ({
+      sessionId: e.sessionId,
+      status: e.session.session.status,
+      reason: e.suspectReason,
+    }));
 
   // "where am I now" latest session: exclude archived + cross-workspace round-trip
   // imports (`source.kind === "import"`), matching the handoff renderer.
@@ -141,101 +192,125 @@ export async function renderOrientation(
   const liveEntries = entries.filter(
     (e) => e.session.session.status !== "archived" && e.session.session.source.kind !== "import",
   );
-  const latestSession = [...liveEntries].sort(
+  const latestEntry = [...liveEntries].sort(
     (a, b) => Date.parse(b.session.session.started_at) - Date.parse(a.session.session.started_at),
   )[0];
+  // `label` is `z.string().optional()` in the session schema — a parsed session
+  // is `string | undefined`, never `null`. So `?? null` only maps `undefined`,
+  // and the formatter's `label !== null && label !== ""` is byte-identical to
+  // the original `label !== undefined && label !== ""` predicate.
+  const latestSession: LatestSession | null =
+    latestEntry !== undefined
+      ? {
+          sessionId: latestEntry.sessionId,
+          label: latestEntry.session.session.label ?? null,
+          status: latestEntry.session.session.status,
+        }
+      : null;
 
   // Freshness: newest started_at over all non-archived sessions (= most recent
   // captured activity). This is an honest staleness signal, NOT a completeness
-  // claim — `basou orient` runs no import, so what is not yet captured is not
+  // claim — orientation runs no import, so what is not yet captured is not
   // counted here.
   const activityEntries = entries.filter((e) => e.session.session.status !== "archived");
   const newest = [...activityEntries].sort(
     (a, b) => Date.parse(b.session.session.started_at) - Date.parse(a.session.session.started_at),
   )[0];
 
-  const bySource = new Map<string, number>();
+  const bySourceMap = new Map<string, number>();
   for (const e of entries) {
     const k = e.session.session.source.kind;
-    bySource.set(k, (bySource.get(k) ?? 0) + 1);
+    bySourceMap.set(k, (bySourceMap.get(k) ?? 0) + 1);
   }
+  const bySource: SourceCount[] = [...bySourceMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([kind, count]) => ({ kind, count }));
 
-  let sourceRoots: ReadonlyArray<string> | undefined;
+  let sourceRoots: string[] | null = null;
   try {
     const manifest = await readManifest(input.paths);
-    sourceRoots = manifest.import?.source_roots;
+    sourceRoots = manifest.import?.source_roots ?? null;
   } catch {
     // A missing / unreadable manifest leaves the source-roots line absent; the
     // CLI asserts the workspace is initialized before calling, so this is rare.
-    sourceRoots = undefined;
+    sourceRoots = null;
   }
 
-  const latestFiles = latestSession?.session.session.related_files ?? [];
-  const displayedFiles = [...new Set(latestFiles)].sort().slice(0, limit);
-  const filesOverflow = Math.max(0, new Set(latestFiles).size - limit);
-
-  const body = formatOrientationBody({
-    nowIso: input.nowIso,
-    now,
-    sessionCount: entries.length,
-    latestSession,
-    latestDecision,
-    decisionCount: decisions.length,
-    displayedFiles,
-    filesOverflow,
-    inFlight,
-    planned,
-    pendingApprovals,
-    suspects,
-    newest,
-    bySource,
-    sourceRoots,
-  });
+  const latestFiles = latestEntry?.session.session.related_files ?? [];
+  const uniqueFiles = new Set(latestFiles);
+  const displayed = [...uniqueFiles].sort().slice(0, limit);
+  const overflow = Math.max(0, uniqueFiles.size - limit);
 
   return {
-    body,
+    generatedAt: input.nowIso,
     sessionCount: entries.length,
-    pendingApprovalsCount: pendingApprovals.length,
-    suspectCount: suspects.length,
-    inFlightTaskCount: inFlight.length,
+    latestSession,
+    latestDecision: latestDecision ?? null,
     decisionCount: decisions.length,
+    relatedFiles: { displayed, overflow },
+    inFlightTasks,
+    plannedTasks,
+    pendingApprovals,
+    suspects,
+    freshness: {
+      newestStartedAt: newest?.session.session.started_at ?? null,
+      bySource,
+      sourceRoots,
+    },
   };
 }
 
-function formatOrientationBody(args: {
-  nowIso: string;
-  now: Date;
-  sessionCount: number;
-  latestSession: SessionEntry | undefined;
-  latestDecision: DecisionRecord | undefined;
-  decisionCount: number;
-  displayedFiles: ReadonlyArray<string>;
-  filesOverflow: number;
-  inFlight: ReadonlyArray<TaskDocument>;
-  planned: ReadonlyArray<TaskDocument>;
-  pendingApprovals: ReadonlyArray<PendingApproval>;
-  suspects: ReadonlyArray<SessionEntry>;
-  newest: SessionEntry | undefined;
-  bySource: ReadonlyMap<string, number>;
-  sourceRoots: ReadonlyArray<string> | undefined;
-}): string {
+/**
+ * Render `.basou/orientation.md`: a point-in-time "current position" view for a
+ * supervisor who delegated execution to AI agents. Unlike `handoff.md` (a
+ * session-resume narrative) this answers four orientation questions —
+ * where am I now / what is in flight / where am I heading / is this current —
+ * and deliberately leads with STRUCTURED FACTS an LLM cannot reliably derive
+ * from raw transcripts (the
+ * pending-approval list with risk/reason, suspect sessions, in-flight task
+ * linkage, capture freshness/coverage) rather than prose synthesis.
+ *
+ * The renderer is read-only and runs NO imports: the freshness section reflects
+ * already-captured state, so a stale capture is visible rather than silently
+ * refreshed (use `basou refresh` to re-import). It must never emit per-agent
+ * scorecards, productivity, or utilization metrics — orientation shows product
+ * state, not surveillance of the fleet.
+ *
+ * Formatting only: the facts come from {@link summarizeOrientation}.
+ */
+export async function renderOrientation(
+  input: OrientationRendererInput,
+): Promise<OrientationRendererResult> {
+  const summary = await summarizeOrientation(input);
+  return {
+    body: formatOrientationBody(summary),
+    sessionCount: summary.sessionCount,
+    pendingApprovalsCount: summary.pendingApprovals.length,
+    suspectCount: summary.suspects.length,
+    inFlightTaskCount: summary.inFlightTasks.length,
+    decisionCount: summary.decisionCount,
+  };
+}
+
+function formatOrientationBody(summary: OrientationSummary): string {
   const lines: string[] = [];
-  const newestRel = relativeAge(args.newest?.session.session.started_at, args.now);
+  const now = new Date(summary.generatedAt);
+  const newestRel = relativeAge(summary.freshness.newestStartedAt ?? undefined, now);
 
   lines.push("# Orientation");
   lines.push("");
   lines.push(
-    `> Generated at ${args.nowIso} · sessions ${args.sessionCount} · newest ${newestRel} · pending ${args.pendingApprovals.length} · suspect ${args.suspects.length}`,
+    `> Generated at ${summary.generatedAt} · sessions ${summary.sessionCount} · newest ${newestRel} · pending ${summary.pendingApprovals.length} · suspect ${summary.suspects.length}`,
   );
   lines.push("");
 
   // "where am I now"
   lines.push("## 今どこにいる");
   lines.push("");
-  if (args.latestSession !== undefined) {
-    const s = args.latestSession.session.session;
-    const sid = shortId(args.latestSession.sessionId);
-    if (s.label !== undefined && s.label !== "") {
+  if (summary.latestSession !== null) {
+    const s = summary.latestSession;
+    const sid = shortId(s.sessionId);
+    if (s.label !== null && s.label !== "") {
       lines.push(`- 最終 session: ${s.label} (${s.status}) [${sid}]`);
     } else {
       lines.push(`- 最終 session: ${sid} (${s.status})`);
@@ -243,19 +318,20 @@ function formatOrientationBody(args: {
   } else {
     lines.push("- 最終 session: (no live sessions)");
   }
-  if (args.latestDecision !== undefined) {
+  if (summary.latestDecision !== null) {
     lines.push(
-      `- 直近の判断: ${args.latestDecision.title} [${shortId(args.latestDecision.decisionId)}]`,
+      `- 直近の判断: ${summary.latestDecision.title} [${shortId(summary.latestDecision.decisionId)}]`,
     );
-    if (args.decisionCount > 1) {
-      lines.push(`  - ${args.decisionCount} decisions total — see decisions.md`);
+    if (summary.decisionCount > 1) {
+      lines.push(`  - ${summary.decisionCount} decisions total — see decisions.md`);
     }
   } else {
     lines.push("- 直近の判断: (no decisions recorded yet)");
   }
-  if (args.displayedFiles.length > 0) {
-    const shown = args.displayedFiles.join(", ");
-    const more = args.filesOverflow > 0 ? ` (... +${args.filesOverflow} more)` : "";
+  if (summary.relatedFiles.displayed.length > 0) {
+    const shown = summary.relatedFiles.displayed.join(", ");
+    const more =
+      summary.relatedFiles.overflow > 0 ? ` (... +${summary.relatedFiles.overflow} more)` : "";
     lines.push(`- 直近の変更ファイル: ${shown}${more}`);
   } else {
     lines.push("- 直近の変更ファイル: (none recorded)");
@@ -265,23 +341,21 @@ function formatOrientationBody(args: {
   // "what is in flight" — structured facts
   lines.push("## 何が動く");
   lines.push("");
-  lines.push(`### 進行中 task (${args.inFlight.length})`);
-  if (args.inFlight.length === 0) {
+  lines.push(`### 進行中 task (${summary.inFlightTasks.length})`);
+  if (summary.inFlightTasks.length === 0) {
     lines.push("- (none)");
   } else {
-    for (const t of args.inFlight) {
-      const task = t.task.task;
-      const linked = task.linked_sessions?.length ?? 0;
-      const linkedSuffix = linked > 1 ? ` — linked_sessions: ${linked}` : "";
-      lines.push(`- ${task.title} (${task.status}) [${shortId(task.id)}]${linkedSuffix}`);
+    for (const t of summary.inFlightTasks) {
+      const linkedSuffix = t.linkedSessions > 1 ? ` — linked_sessions: ${t.linkedSessions}` : "";
+      lines.push(`- ${t.title} (${t.status}) [${shortId(t.id)}]${linkedSuffix}`);
     }
   }
   lines.push("");
-  lines.push(`### 承認待ち (${args.pendingApprovals.length})`);
-  if (args.pendingApprovals.length === 0) {
+  lines.push(`### 承認待ち (${summary.pendingApprovals.length})`);
+  if (summary.pendingApprovals.length === 0) {
     lines.push("- (none)");
   } else {
-    for (const a of args.pendingApprovals) {
+    for (const a of summary.pendingApprovals) {
       const expired = a.expired ? " (expired)" : "";
       lines.push(
         `- [${a.risk}] ${a.kind}: ${a.reason} — session ${shortId(a.sessionId)}, since ${a.createdAt}${expired}`,
@@ -289,14 +363,12 @@ function formatOrientationBody(args: {
     }
   }
   lines.push("");
-  lines.push(`### 要注意 session (${args.suspects.length})`);
-  if (args.suspects.length === 0) {
+  lines.push(`### 要注意 session (${summary.suspects.length})`);
+  if (summary.suspects.length === 0) {
     lines.push("- (none)");
   } else {
-    for (const e of args.suspects) {
-      lines.push(
-        `- ${shortId(e.sessionId)} (${e.session.session.status}) — ${suspectText(e.suspectReason)}`,
-      );
+    for (const e of summary.suspects) {
+      lines.push(`- ${shortId(e.sessionId)} (${e.status}) — ${suspectText(e.reason)}`);
     }
   }
   lines.push("");
@@ -304,14 +376,14 @@ function formatOrientationBody(args: {
   // "where am I heading"
   lines.push("## どこへ向かう");
   lines.push("");
-  if (args.planned.length === 0) {
+  if (summary.plannedTasks.length === 0) {
     lines.push("- (no planned tasks — direction is inferred from recent decisions)");
-    if (args.latestDecision !== undefined) {
-      lines.push(`  - 直近の判断: ${args.latestDecision.title}`);
+    if (summary.latestDecision !== null) {
+      lines.push(`  - 直近の判断: ${summary.latestDecision.title}`);
     }
   } else {
-    for (const t of args.planned) {
-      lines.push(`- ${t.task.task.title} [${shortId(t.task.task.id)}]`);
+    for (const t of summary.plannedTasks) {
+      lines.push(`- ${t.title} [${shortId(t.id)}]`);
     }
   }
   lines.push("");
@@ -319,26 +391,23 @@ function formatOrientationBody(args: {
   // "is this current" — capture freshness / coverage
   lines.push("## これは最新か");
   lines.push("");
-  if (args.newest !== undefined) {
-    lines.push(
-      `- newest captured session: ${args.newest.session.session.started_at} (${newestRel})`,
-    );
+  if (summary.freshness.newestStartedAt !== null) {
+    lines.push(`- newest captured session: ${summary.freshness.newestStartedAt} (${newestRel})`);
   } else {
     lines.push("- newest captured session: (no sessions captured yet)");
   }
-  const sourceBreakdown = [...args.bySource.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([k, n]) => `${k} ${n}`)
+  const sourceBreakdown = summary.freshness.bySource
+    .map(({ kind, count }) => `${kind} ${count}`)
     .join(", ");
   lines.push(
-    `- sessions: ${args.sessionCount}${sourceBreakdown !== "" ? ` (${sourceBreakdown})` : ""}`,
+    `- sessions: ${summary.sessionCount}${sourceBreakdown !== "" ? ` (${sourceBreakdown})` : ""}`,
   );
-  if (args.sourceRoots !== undefined && args.sourceRoots.length > 0) {
-    lines.push(`- source roots: ${args.sourceRoots.join(", ")}`);
+  if (summary.freshness.sourceRoots !== null && summary.freshness.sourceRoots.length > 0) {
+    lines.push(`- source roots: ${summary.freshness.sourceRoots.join(", ")}`);
   } else {
     lines.push("- source roots: (single root)");
   }
-  lines.push(`- suspect sessions: ${args.suspects.length}`);
+  lines.push(`- suspect sessions: ${summary.suspects.length}`);
   lines.push("- reflects already-captured state; run `basou refresh` to re-import.");
 
   return lines.join("\n");
