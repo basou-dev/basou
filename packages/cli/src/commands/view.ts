@@ -1,8 +1,23 @@
 import { spawn } from "node:child_process";
-import { assertBasouRootSafe, basouPaths, findErrorCode, resolveRepositoryRoot } from "@basou/core";
+import { createHash } from "node:crypto";
+import { basename, resolve } from "node:path";
+import {
+  assertBasouRootSafe,
+  basouPaths,
+  findErrorCode,
+  readManifest,
+  resolveRepositoryRoot,
+} from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
-import { startViewServer, type ViewServerDeps, type ViewServerHandle } from "../lib/view-server.js";
+import { loadPortfolioConfig, type PortfolioWorkspace } from "../lib/portfolio-config.js";
+import {
+  startViewServer,
+  type ViewServerDeps,
+  type ViewServerHandle,
+  type WorkspaceEntry,
+} from "../lib/view-server.js";
+import type { ImportContext } from "./import.js";
 
 const DEFAULT_PORT = 4319;
 
@@ -10,6 +25,10 @@ export type ViewOptions = {
   port?: number;
   open?: boolean;
   verbose?: boolean;
+  /** Read `~/.basou/portfolio.yaml` and serve every listed workspace. */
+  portfolio?: boolean;
+  /** Ad-hoc workspace paths (repeatable); resolved against the cwd. Implies portfolio mode. */
+  workspace?: string[];
 };
 
 export type ViewContext = {
@@ -27,6 +46,8 @@ export type ViewContext = {
   signal?: AbortSignal;
   /** Called once the server is listening, with its handle (for tests). */
   onListening?: (handle: ViewServerHandle) => void;
+  /** Override the portfolio config path (tests). */
+  portfolioConfigPath?: string;
 };
 
 function parsePort(value: string): number {
@@ -38,8 +59,18 @@ function parsePort(value: string): number {
 }
 
 /**
+ * Commander collector: accumulate a repeatable option into an array. Commander
+ * passes `undefined` as `previous` on the first occurrence (no option default),
+ * so default it to `[]` rather than spreading `undefined`.
+ */
+function collectPath(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+/**
  * Wire `basou view` onto `program`. Starts a localhost-only web UI for
- * browsing provenance and running imports / regeneration by clicking.
+ * browsing provenance and running imports / regeneration by clicking. With
+ * `--portfolio` / `--workspace` it serves several workspaces side by side.
  */
 export function registerViewCommand(program: Command): void {
   program
@@ -47,6 +78,15 @@ export function registerViewCommand(program: Command): void {
     .description("Open a local web UI to browse provenance and run imports (localhost only)")
     .option("--port <number>", "Port to listen on (default 4319)", parsePort)
     .option("--no-open", "Do not open the browser automatically")
+    .option(
+      "--portfolio",
+      "Serve every workspace listed in ~/.basou/portfolio.yaml (cross-repo orientation)",
+    )
+    .option(
+      "--workspace <path>",
+      "Workspace repo path to include (repeatable; implies portfolio mode; resolved against the cwd)",
+      collectPath,
+    )
     .option("-v, --verbose", "Show error causes")
     .action(async (options: ViewOptions) => {
       await runView(options);
@@ -64,26 +104,18 @@ export async function runView(options: ViewOptions, ctx: ViewContext = {}): Prom
 }
 
 /**
- * Pure runner: resolve the workspace, start the server, open the browser, and
+ * Pure runner: resolve the workspace(s), start the server, open the browser, and
  * keep running until SIGINT / SIGTERM (or an injected abort signal). The
  * server is always closed on the way out.
  */
 export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForView(cwd);
-  const paths = basouPaths(repositoryRoot);
-  await assertWorkspaceInitialized(paths.root);
+  const workspaceFlags = options.workspace ?? [];
+  const isPortfolio = workspaceFlags.length > 0 || options.portfolio === true;
 
-  const deps: ViewServerDeps = {
-    paths,
-    repoRoot: repositoryRoot,
-    importCtx: {
-      cwd: repositoryRoot,
-      ...(ctx.claudeProjectsDir !== undefined ? { claudeProjectsDir: ctx.claudeProjectsDir } : {}),
-      ...(ctx.codexSessionsDir !== undefined ? { codexSessionsDir: ctx.codexSessionsDir } : {}),
-    },
-    nowProvider: ctx.nowProvider ?? (() => new Date()),
-  };
+  const deps = isPortfolio
+    ? await buildPortfolioDeps(workspaceFlags, ctx, cwd)
+    : await buildSingleDeps(ctx, cwd);
 
   const port = options.port ?? DEFAULT_PORT;
   const handle = await startListening(port, deps);
@@ -92,6 +124,9 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
   // launch or the onListening callback still closes the server.
   try {
     console.log(`basou view running at ${handle.url}`);
+    if (deps.mode === "portfolio") {
+      console.log(`Portfolio mode: ${deps.workspaces.length} workspace(s).`);
+    }
     console.log(
       "Localhost only, no authentication. Do not expose this port beyond your machine. Press Ctrl+C to stop.",
     );
@@ -105,6 +140,94 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
   } finally {
     await handle.close();
   }
+}
+
+/** Single-workspace mode: resolve the cwd's repo (git required) and serve it alone. */
+async function buildSingleDeps(ctx: ViewContext, cwd: string): Promise<ViewServerDeps> {
+  const repositoryRoot = await resolveRepositoryRootForView(cwd);
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+  const entry = await buildWorkspaceEntry(repositoryRoot, ctx);
+  return { workspaces: [entry], mode: "single", nowProvider: nowProviderOf(ctx) };
+}
+
+/**
+ * Portfolio mode: serve several workspaces. Sources are the explicit
+ * `--workspace` flags (resolved against the cwd) or, absent those,
+ * `~/.basou/portfolio.yaml`. No git check and no "initialized" assertion — a
+ * missing / uninitialized path becomes a degraded card rather than an error.
+ */
+async function buildPortfolioDeps(
+  workspaceFlags: string[],
+  ctx: ViewContext,
+  cwd: string,
+): Promise<ViewServerDeps> {
+  const specs: PortfolioWorkspace[] =
+    workspaceFlags.length > 0
+      ? workspaceFlags.map((p) => ({ path: resolve(cwd, p) }))
+      : await loadPortfolioConfig(ctx.portfolioConfigPath);
+
+  const entries: WorkspaceEntry[] = [];
+  const seenPath = new Set<string>();
+  const seenKey = new Set<string>();
+  for (const spec of specs) {
+    const repoRoot = resolve(spec.path);
+    if (seenPath.has(repoRoot)) continue;
+    seenPath.add(repoRoot);
+    const entry = await buildWorkspaceEntry(repoRoot, ctx, spec.label);
+    let key = entry.key;
+    for (let n = 1; seenKey.has(key); n++) key = `${entry.key}-${n}`;
+    seenKey.add(key);
+    entries.push({ ...entry, key });
+  }
+  if (entries.length === 0) throw new Error("No workspaces to show.");
+  return { workspaces: entries, mode: "portfolio", nowProvider: nowProviderOf(ctx) };
+}
+
+/**
+ * Build one workspace entry from a repo root. Reads the manifest best-effort for
+ * a stable key (workspace id) and label; an unreadable manifest yields a
+ * degraded entry keyed by a path hash (never the path itself, to stay pathless).
+ */
+async function buildWorkspaceEntry(
+  repoRoot: string,
+  ctx: ViewContext,
+  labelOverride?: string,
+): Promise<WorkspaceEntry> {
+  const paths = basouPaths(repoRoot);
+  const importCtx: ImportContext = {
+    cwd: repoRoot,
+    ...(ctx.claudeProjectsDir !== undefined ? { claudeProjectsDir: ctx.claudeProjectsDir } : {}),
+    ...(ctx.codexSessionsDir !== undefined ? { codexSessionsDir: ctx.codexSessionsDir } : {}),
+  };
+  try {
+    const manifest = await readManifest(paths);
+    return {
+      key: manifest.workspace.id,
+      label: labelOverride ?? manifest.workspace.name,
+      paths,
+      repoRoot,
+      importCtx,
+      initialized: true,
+    };
+  } catch (error: unknown) {
+    // "YAML file not found" (ENOENT) = never initialized; anything else (parse /
+    // permission error) = present but unreadable, surfaced so the card can say so.
+    const notFound = error instanceof Error && error.message === "YAML file not found";
+    return {
+      key: `ws-${createHash("sha1").update(repoRoot).digest("hex").slice(0, 12)}`,
+      label: labelOverride ?? basename(repoRoot),
+      paths,
+      repoRoot,
+      importCtx,
+      initialized: false,
+      ...(notFound ? {} : { manifestError: "manifest unreadable or invalid" }),
+    };
+  }
+}
+
+function nowProviderOf(ctx: ViewContext): () => Date {
+  return ctx.nowProvider ?? (() => new Date());
 }
 
 async function startListening(port: number, deps: ViewServerDeps): Promise<ViewServerHandle> {

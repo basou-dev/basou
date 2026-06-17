@@ -53,6 +53,20 @@ async function setupInitedRepo(): Promise<string> {
   return repo;
 }
 
+const WS_ID_A = "ws_01HXABCDEF1234567890ABCDEF" as const;
+const WS_ID_B = "ws_01HXABCDEF1234567890ABCDEG" as const;
+
+/** Initialize a `.basou/` workspace at an arbitrary dir (no git), for portfolio tests. */
+async function initWorkspaceAt(root: string, id: string, name: string): Promise<string> {
+  const real = await realpath(root);
+  const paths = await ensureBasouDirectory(real);
+  await writeManifest(
+    paths,
+    createManifest({ workspaceName: name, now: FIXED_DATE, workspaceId: id as typeof WS_ID_A }),
+  );
+  return real;
+}
+
 async function writeCodexRollout(repo: string): Promise<void> {
   const dir = join(getCodexRoot(), "2026", "05", "10");
   await mkdir(dir, { recursive: true });
@@ -113,6 +127,41 @@ async function withServer(
   };
   vi.spyOn(console, "log").mockImplementation(() => {});
   const running = doRunView({ port: 0 }, ctx);
+  await ready;
+  try {
+    if (handle === undefined) throw new Error("server never listened");
+    await body(handle);
+  } finally {
+    controller.abort();
+    await running;
+  }
+}
+
+/** Start the view server in portfolio mode over the given workspace paths. */
+async function withPortfolioServer(
+  workspacePaths: string[],
+  extra: Partial<ViewContext>,
+  body: (handle: ViewServerHandle) => Promise<void>,
+): Promise<void> {
+  const controller = new AbortController();
+  let handle: ViewServerHandle | undefined;
+  let markReady: () => void = () => {};
+  const ready = new Promise<void>((resolve) => {
+    markReady = resolve;
+  });
+  const ctx: ViewContext = {
+    cwd: workspacePaths[0] ?? tmpdir(),
+    signal: controller.signal,
+    openBrowser: () => {},
+    codexSessionsDir: getCodexRoot(),
+    onListening: (h) => {
+      handle = h;
+      markReady();
+    },
+    ...extra,
+  };
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  const running = doRunView({ port: 0, workspace: workspacePaths }, ctx);
   await ready;
   try {
     if (handle === undefined) throw new Error("server never listened");
@@ -333,6 +382,87 @@ describe("basou view server", () => {
       const res = await getJson(handle, "/api/decisions");
       expect((res.data as { fromDisk: boolean }).fromDisk).toBe(true);
     });
+  });
+});
+
+describe("basou view portfolio mode", () => {
+  it("aggregates multiple workspaces (no git needed) and serves ws-scoped routes", async () => {
+    const rawA = await mkdtemp(join(tmpdir(), "basou-pf-a-"));
+    const rawB = await mkdtemp(join(tmpdir(), "basou-pf-b-"));
+    try {
+      const wsA = await initWorkspaceAt(rawA, WS_ID_A, "alpha");
+      const wsB = await initWorkspaceAt(rawB, WS_ID_B, "beta");
+      await withPortfolioServer([wsA, wsB], {}, async (handle) => {
+        const { status, data } = await getJson(handle, "/api/portfolio");
+        expect(status).toBe(200);
+        const d = data as {
+          mode: string;
+          workspaces: Array<{
+            key: string;
+            label: string;
+            initialized: boolean;
+            sessionCount: number;
+          }>;
+        };
+        expect(d.mode).toBe("portfolio");
+        expect(d.workspaces).toHaveLength(2);
+        expect(d.workspaces.map((w) => w.label).sort()).toEqual(["alpha", "beta"]);
+        expect(d.workspaces.every((w) => w.initialized)).toBe(true);
+        expect(d.workspaces.every((w) => w.sessionCount === 0)).toBe(true);
+
+        // ws-scoped drill-in resolves the right workspace.
+        const ov = await getJson(handle, `/api/ws/${WS_ID_A}/overview`);
+        expect(ov.status).toBe(200);
+        const o = ov.data as { initialized: boolean; repoRoot: string };
+        expect(o.initialized).toBe(true);
+        expect(o.repoRoot).toBe(wsA);
+
+        // Unknown workspace key → 404 (the key is an allowlist lookup, never a path).
+        const unknown = await getJson(handle, "/api/ws/ws_doesnotexist/overview");
+        expect(unknown.status).toBe(404);
+
+        // Flat routes still target the first workspace (single-mode compatibility).
+        const flat = await getJson(handle, "/api/overview");
+        expect((flat.data as { repoRoot: string }).repoRoot).toBe(wsA);
+      });
+    } finally {
+      await rm(rawA, { recursive: true, force: true });
+      await rm(rawB, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces an unreadable manifest as an error on the degraded card", async () => {
+    const raw = await mkdtemp(join(tmpdir(), "basou-pf-corrupt-"));
+    try {
+      const ws = await realpath(raw);
+      const paths = await ensureBasouDirectory(ws);
+      await writeFile(paths.files.manifest, "::: not yaml :::\n");
+      await withPortfolioServer([ws], {}, async (handle) => {
+        const { data } = await getJson(handle, "/api/portfolio");
+        const d = data as { workspaces: Array<{ initialized: boolean; error?: string }> };
+        expect(d.workspaces).toHaveLength(1);
+        expect(d.workspaces[0]?.initialized).toBe(false);
+        expect(typeof d.workspaces[0]?.error).toBe("string");
+      });
+    } finally {
+      await rm(raw, { recursive: true, force: true });
+    }
+  });
+
+  it("shows an uninitialized path as a degraded card without failing the response", async () => {
+    const raw = await mkdtemp(join(tmpdir(), "basou-pf-bare-"));
+    try {
+      const bare = await realpath(raw);
+      await withPortfolioServer([bare], {}, async (handle) => {
+        const { status, data } = await getJson(handle, "/api/portfolio");
+        expect(status).toBe(200);
+        const d = data as { workspaces: Array<{ initialized: boolean }> };
+        expect(d.workspaces).toHaveLength(1);
+        expect(d.workspaces[0]?.initialized).toBe(false);
+      });
+    } finally {
+      await rm(raw, { recursive: true, force: true });
+    }
   });
 });
 

@@ -22,6 +22,7 @@ basou import claude-code|codex   # import provenance from a tool's native logs
 basou refresh                    # import all adapters + regenerate handoff/decisions
 basou verify                     # check the tamper-evidence hash chain of session event logs
 basou view                       # open a local web UI to browse provenance
+                                 #   (--portfolio / --workspace: several workspaces at once)
 
 # Tasks
 basou task ...              # purpose units spanning sessions (new / list / show /
@@ -59,3 +60,49 @@ artifact (see §15.1). It is a neutral, point-in-time work-explanation export
 that composes the existing read primitives — it is not an audit or billing
 product, and it adds no orchestration (the reason `team new` / `review-flow new`
 remain deferred).
+
+## §15.3 Portfolio mode (cross-workspace orientation)
+
+`basou view` normally serves the one workspace at the Git repo root. With
+`--portfolio` (or one or more `--workspace <path>` flags) it instead serves
+several workspaces side by side — the multi-repo generalization of
+`basou orient`. A single owner who delegated execution to AI agents across many
+repos (private contract / NDA work, public OSS, personal projects) sees each
+repo's current position on one screen and drills into any one.
+
+```bash
+basou view --portfolio                       # every workspace in ~/.basou/portfolio.yaml
+basou view --workspace ../a --workspace ../b  # ad-hoc, resolved against the cwd
+```
+
+Discovery. `--portfolio` reads `~/.basou/portfolio.yaml`. This is **local GUI
+config, not provenance/trail data** — it is not part of the workspace schema
+bundle and is never written into a monitored repo. Because it is not a committed
+manifest, its paths are **absolute** (a leading `~` is expanded); the
+`import.source_roots` relative-only rule does not apply here. `--workspace`
+paths are ad-hoc and resolved against the cwd. An entry whose `.basou/` is
+missing or unreadable shows as a degraded card rather than failing the view.
+
+```yaml
+# ~/.basou/portfolio.yaml
+version: 1
+workspaces:
+  - path: /abs/path/to/project-a    # absolute (~ allowed)
+    label: project-a                # optional display label
+  - path: /abs/path/to/project-b
+```
+
+API. Portfolio mode adds `GET /api/portfolio` (the aggregate of per-workspace
+"current position" cards) and `/api/ws/<key>/*` (the existing single-workspace
+routes, scoped to one workspace by its stable key). The flat `/api/*` routes are
+unchanged and target the first workspace, so single mode behaves exactly as
+before.
+
+Boundaries (intentional, kept neutral). Aggregation is **read-only**: a
+portfolio load runs no import (a stale capture is shown as stale; run a refresh
+to re-import). Cards carry structured facts only — latest session/decision,
+in-flight count, pending-approval risk, suspect count, capture freshness — and
+**never** work-stats or per-agent productivity / utilization metrics: this is
+the owner orienting across their own work, not surveillance of a fleet. The
+server stays **localhost-only and unauthenticated** (do not expose the port);
+there is no orchestration, cost tracking, or analytics dashboard.
