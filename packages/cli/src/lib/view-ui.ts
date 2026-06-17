@@ -4,6 +4,12 @@
  * with createElement / textContent (never innerHTML), so session, task, and
  * command content cannot inject markup. The embedded script deliberately uses
  * no template literals (this file is itself a template literal).
+ *
+ * Two modes, distinguished by the `mode` field of `GET /api/portfolio`:
+ *  - single: one workspace; the tabbed detail view drives `/api/*` directly.
+ *  - portfolio: a landing of per-workspace cards; clicking one drills into the
+ *    same tabbed view scoped to `/api/ws/<key>/*`. All per-workspace fetches go
+ *    through `state.base`, so the single-mode code path is unchanged.
  */
 export const VIEW_HTML = `<!doctype html>
 <html lang="en">
@@ -23,8 +29,13 @@ export const VIEW_HTML = `<!doctype html>
   button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
   button:disabled { opacity: .5; cursor: default; }
   label.chk { font-size: 13px; opacity: .85; }
+  /* On the portfolio landing there is no selected workspace, so the per-workspace action bar is hidden. */
+  body.landing #project, body.landing label.chk,
+  body.landing #btn-refresh, body.landing #btn-import-claude, body.landing #btn-import-codex,
+  body.landing #btn-gen-handoff, body.landing #btn-gen-decisions { display: none; }
   #status { padding: 6px 16px; font-size: 13px; min-height: 20px; border-bottom: 1px solid #8884; white-space: pre-wrap; }
   #status.err { color: #dc2626; }
+  .err { color: #dc2626; }
   nav { display: flex; gap: 2px; padding: 6px 12px; border-bottom: 1px solid #8884; flex-wrap: wrap; }
   nav button { border: none; border-radius: 6px; background: transparent; }
   nav button.active { background: #2563eb22; font-weight: 600; }
@@ -46,6 +57,11 @@ export const VIEW_HTML = `<!doctype html>
   .card { border: 1px solid #8884; border-radius: 8px; padding: 10px 14px; min-width: 120px; }
   .card .n { font-size: 22px; font-weight: 700; }
   .card .l { font-size: 12px; opacity: .7; }
+  .pcard { min-width: 240px; max-width: 340px; }
+  .pcard.open { cursor: pointer; }
+  .pcard.open:hover { background: #8881; }
+  .pcard .l { font-size: 14px; font-weight: 700; opacity: 1; margin-bottom: 4px; }
+  .pcard .f { font-size: 13px; }
   .tl { border-left: 2px solid #8885; margin-left: 6px; padding-left: 12px; }
   .tl .ev { margin-bottom: 8px; }
   .tl .ev .t { font-size: 12px; opacity: .65; }
@@ -55,6 +71,7 @@ export const VIEW_HTML = `<!doctype html>
 <body>
 <header>
   <h1>basou view</h1>
+  <button id="btn-back" style="display:none">&larr; portfolio</button>
   <input type="text" id="project" placeholder="source root (optional override)" />
   <button class="primary" id="btn-refresh">Refresh all</button>
   <button id="btn-import-claude">Import claude-code</button>
@@ -74,7 +91,12 @@ export const VIEW_HTML = `<!doctype html>
 <script>
 (function () {
   var TABS = ['overview', 'stats', 'sessions', 'tasks', 'decisions', 'approvals', 'handoff'];
-  var state = { tab: 'overview', repoRoot: '' };
+  // base is the API prefix for the active workspace: '/api' in single mode,
+  // '/api/ws/<key>' once a portfolio card is opened.
+  // canAct gates the mutating action bar: true only when a concrete workspace
+  // is active (single mode, or a portfolio card opened). It is the real safety
+  // guard — body.landing also hides the buttons, but that is cosmetic.
+  var state = { tab: 'overview', repoRoot: '', base: '/api', mode: 'single', wsKey: null, canAct: false };
 
   function $(id) { return document.getElementById(id); }
   function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
@@ -138,7 +160,15 @@ export const VIEW_HTML = `<!doctype html>
     for (var i = 0; i < ids.length; i++) $(ids[i]).disabled = busy;
   }
 
+  // Enable the action bar only when a workspace is active; disabled buttons
+  // cannot post to a stale/wrong workspace even if a CSS regression un-hides them.
+  function updateActionBar() {
+    var ids = ['btn-refresh', 'btn-import-claude', 'btn-import-codex', 'btn-gen-handoff', 'btn-gen-decisions'];
+    for (var i = 0; i < ids.length; i++) $(ids[i]).disabled = !state.canAct;
+  }
+
   function post(path, label) {
+    if (!state.canAct) { setStatus('Open a workspace first.', true); return; }
     setBusy(true);
     setStatus(label + '...', false);
     fetchJson(path, {
@@ -171,6 +201,123 @@ export const VIEW_HTML = `<!doctype html>
     return (o.dryRun ? 'would import ' : 'imported ') + o.importedCount + ' (' + o.eventTotal + ' events)';
   }
 
+  // --- portfolio landing --------------------------------------------------
+
+  function boot() {
+    fetchJson('/api/portfolio').then(function (d) {
+      if (d && d.mode === 'portfolio') { state.mode = 'portfolio'; showLanding(d); }
+      else { enterSingle(); }
+    }).catch(function () {
+      // First-load bootstrap failure: the single-workspace view is the safe default.
+      enterSingle();
+    });
+  }
+
+  // Re-render the portfolio landing (the back button). Unlike boot(), a fetch
+  // failure here keeps the inert landing and shows an error rather than silently
+  // dropping into single mode pointed at the first workspace.
+  function backToPortfolio() {
+    enterLandingChrome();
+    fetchJson('/api/portfolio').then(function (d) {
+      if (d && d.workspaces) renderCards(d);
+      else portfolioError('Portfolio unavailable.');
+    }).catch(function (err) { portfolioError('Could not load portfolio: ' + err.message); });
+  }
+
+  function enterSingle() {
+    state.mode = 'single';
+    state.base = '/api';
+    state.wsKey = null;
+    state.canAct = true;
+    document.body.classList.remove('landing');
+    $('btn-back').style.display = 'none';
+    updateActionBar();
+    buildTabs();
+    loadTab('overview');
+  }
+
+  // Landing chrome: no workspace is active, so actions are disabled (and hidden
+  // by body.landing). The disable is the safety guard; the hide is cosmetic.
+  function enterLandingChrome() {
+    state.wsKey = null;
+    state.canAct = false;
+    document.body.classList.add('landing');
+    $('btn-back').style.display = 'none';
+    setStatus('', false);
+    clear($('tabs'));
+    updateActionBar();
+    single(true);
+  }
+
+  function showLanding(d) { enterLandingChrome(); renderCards(d); }
+
+  function renderCards(d) {
+    var detail = $('detail');
+    clear(detail);
+    var ws = d.workspaces || [];
+    detail.appendChild(el('p', { class: 'muted', text: 'Portfolio — ' + ws.length + ' workspace(s). Click a card to open it.' }));
+    var cards = el('div', { class: 'cards' }, []);
+    ws.forEach(function (w) { cards.appendChild(portfolioCard(w)); });
+    detail.appendChild(cards);
+  }
+
+  function portfolioError(msg) {
+    var detail = $('detail');
+    clear(detail);
+    detail.appendChild(el('p', { class: 'err', text: msg }));
+    detail.appendChild(el('button', { text: 'Retry', onclick: backToPortfolio }));
+  }
+
+  function highestRisk(approvals) {
+    var order = ['critical', 'high', 'medium', 'low'];
+    for (var i = 0; i < order.length; i++) {
+      for (var j = 0; j < approvals.length; j++) {
+        if (approvals[j].risk === order[i]) return order[i];
+      }
+    }
+    return approvals.length ? approvals[0].risk : '';
+  }
+
+  function portfolioCard(w) {
+    if (!w.initialized) {
+      return el('div', { class: 'card pcard muted' }, [
+        el('div', { class: 'l', text: w.label }),
+        el('div', { class: 'f', text: w.error ? ('unreadable: ' + w.error) : 'not initialized' })
+      ]);
+    }
+    if (w.error) {
+      return el('div', { class: 'card pcard' }, [
+        el('div', { class: 'l', text: w.label }),
+        el('div', { class: 'f' }, [el('span', { class: 'badge warn', text: 'unreadable: ' + w.error })])
+      ]);
+    }
+    var pend = w.pendingApprovals || [];
+    var pendText = 'pending ' + pend.length + (pend.length ? ' (' + highestRisk(pend) + ')' : '');
+    var now = w.latestSession ? ((w.latestSession.label || '(session)') + ' [' + w.latestSession.status + ']') : '(no live sessions)';
+    var dec = w.latestDecision ? w.latestDecision.title : '(no decisions yet)';
+    var newest = (w.freshness && w.freshness.newestStartedAt) ? w.freshness.newestStartedAt : '(none)';
+    return el('div', { class: 'card pcard open', onclick: function () { openWorkspace(w.key, w.label); } }, [
+      el('div', { class: 'l', text: w.label }),
+      el('div', { class: 'f', text: 'now: ' + now }),
+      el('div', { class: 'f', text: 'latest: ' + dec }),
+      el('div', { class: 'f', text: 'in-flight ' + w.inFlightCount + '  |  ' + pendText + '  |  suspect ' + w.suspectCount }),
+      el('div', { class: 'f muted', text: 'sessions ' + w.sessionCount + '  |  newest ' + newest })
+    ]);
+  }
+
+  function openWorkspace(key, label) {
+    state.mode = 'portfolio';
+    state.wsKey = key;
+    state.base = '/api/ws/' + encodeURIComponent(key);
+    state.canAct = true;
+    document.body.classList.remove('landing');
+    $('btn-back').style.display = '';
+    updateActionBar();
+    setStatus('workspace: ' + label, false);
+    buildTabs();
+    loadTab('overview');
+  }
+
   // --- tabs ---------------------------------------------------------------
 
   function buildTabs() {
@@ -194,16 +341,16 @@ export const VIEW_HTML = `<!doctype html>
     if (name === 'stats') return loadStats();
     if (name === 'sessions') return loadSessions();
     if (name === 'tasks') return loadTasks();
-    if (name === 'decisions') return loadMarkdown('/api/decisions', 'decisions');
+    if (name === 'decisions') return loadMarkdown(state.base + '/decisions', 'decisions');
     if (name === 'approvals') return loadApprovals();
-    if (name === 'handoff') return loadMarkdown('/api/handoff', 'handoff');
+    if (name === 'handoff') return loadMarkdown(state.base + '/handoff', 'handoff');
   }
 
   function fail(err) { setStatus(err.message, true); }
 
   function loadOverview() {
     single(true);
-    fetchJson('/api/overview').then(function (d) {
+    fetchJson(state.base + '/overview').then(function (d) {
       var detail = $('detail');
       if (!d || d.initialized === false) {
         detail.appendChild(el('p', { class: 'muted', text: 'Workspace not initialized.' }));
@@ -252,7 +399,7 @@ export const VIEW_HTML = `<!doctype html>
 
   function loadStats() {
     single(true);
-    fetchJson('/api/stats').then(function (d) {
+    fetchJson(state.base + '/stats').then(function (d) {
       var detail = $('detail');
       var t = d.totals;
       detail.appendChild(el('p', { text: 'Sessions: ' + t.sessionCount }));
@@ -313,7 +460,7 @@ export const VIEW_HTML = `<!doctype html>
 
   function loadSessions() {
     single(false);
-    fetchJson('/api/sessions').then(function (d) {
+    fetchJson(state.base + '/sessions').then(function (d) {
       var list = $('list');
       var rows = (d && d.sessions) || [];
       if (rows.length === 0) { list.appendChild(el('div', { class: 'row muted', text: 'no sessions' })); return; }
@@ -332,7 +479,7 @@ export const VIEW_HTML = `<!doctype html>
     row.classList.add('active');
     var detail = $('detail');
     clear(detail);
-    fetchJson('/api/sessions/' + encodeURIComponent(id)).then(function (d) {
+    fetchJson(state.base + '/sessions/' + encodeURIComponent(id)).then(function (d) {
       var s = d.session.session;
       detail.appendChild(el('h3', { text: s.label || id }));
       detail.appendChild(kv([
@@ -365,7 +512,7 @@ export const VIEW_HTML = `<!doctype html>
 
   function loadTasks() {
     single(false);
-    fetchJson('/api/tasks').then(function (d) {
+    fetchJson(state.base + '/tasks').then(function (d) {
       var list = $('list');
       var rows = (d && d.tasks) || [];
       if (rows.length === 0) { list.appendChild(el('div', { class: 'row muted', text: 'no tasks' })); return; }
@@ -384,7 +531,7 @@ export const VIEW_HTML = `<!doctype html>
     row.classList.add('active');
     var detail = $('detail');
     clear(detail);
-    fetchJson('/api/tasks/' + encodeURIComponent(id)).then(function (d) {
+    fetchJson(state.base + '/tasks/' + encodeURIComponent(id)).then(function (d) {
       detail.appendChild(el('h3', { text: (d.task && (d.task.title || d.task.label)) || id }));
       detail.appendChild(el('pre', { text: JSON.stringify(d.task, null, 2) }));
       if (d.body) detail.appendChild(el('pre', { text: d.body }));
@@ -403,7 +550,7 @@ export const VIEW_HTML = `<!doctype html>
 
   function loadApprovals() {
     single(true);
-    fetchJson('/api/approvals').then(function (d) {
+    fetchJson(state.base + '/approvals').then(function (d) {
       var detail = $('detail');
       var groups = [['pending', d.pending || []], ['resolved', d.resolved || []]];
       groups.forEach(function (g) {
@@ -428,14 +575,14 @@ export const VIEW_HTML = `<!doctype html>
 
   // --- wire up ------------------------------------------------------------
 
-  $('btn-refresh').addEventListener('click', function () { post('/api/refresh', 'Refresh all'); });
-  $('btn-import-claude').addEventListener('click', function () { post('/api/import/claude-code', 'Import claude-code'); });
-  $('btn-import-codex').addEventListener('click', function () { post('/api/import/codex', 'Import codex'); });
-  $('btn-gen-handoff').addEventListener('click', function () { post('/api/handoff/generate', 'Regenerate handoff'); });
-  $('btn-gen-decisions').addEventListener('click', function () { post('/api/decisions/generate', 'Regenerate decisions'); });
+  $('btn-back').addEventListener('click', function () { backToPortfolio(); });
+  $('btn-refresh').addEventListener('click', function () { post(state.base + '/refresh', 'Refresh all'); });
+  $('btn-import-claude').addEventListener('click', function () { post(state.base + '/import/claude-code', 'Import claude-code'); });
+  $('btn-import-codex').addEventListener('click', function () { post(state.base + '/import/codex', 'Import codex'); });
+  $('btn-gen-handoff').addEventListener('click', function () { post(state.base + '/handoff/generate', 'Regenerate handoff'); });
+  $('btn-gen-decisions').addEventListener('click', function () { post(state.base + '/decisions/generate', 'Regenerate decisions'); });
 
-  buildTabs();
-  loadTab('overview');
+  boot();
 })();
 </script>
 </body>

@@ -26,6 +26,19 @@ All notable changes to **basou** are recorded here. The project follows
   unchanged; programmatic consumers read the facts without parsing prose. The
   summary carries no work-stats and no per-agent / productivity / utilization
   metrics — orientation shows product state, not surveillance.
+- `basou view --portfolio` (and ad-hoc `basou view --workspace <path>`) — a
+  multi-workspace portfolio: the cross-repo generalization of `basou orient`. A
+  single owner sees the current position of several workspaces (separate repos)
+  on one localhost screen and drills into any one. `--portfolio` reads
+  `~/.basou/portfolio.yaml` (local GUI config, not trail data; absolute paths);
+  `--workspace` is ad-hoc and resolved against the cwd; a missing / uninitialized
+  path shows as a degraded card. New endpoints `GET /api/portfolio` (aggregate
+  cards) and `/api/ws/<key>/*` (workspace-scoped) are additive — the flat
+  `/api/*` routes and single-mode behavior are unchanged. Aggregation is
+  read-only (no import on load; stale capture shown as stale), cards carry
+  structured facts only (no work-stats / productivity metrics), and the server
+  stays localhost-only and unauthenticated. Monitored repos are never written
+  to (capture is import-based, from the agents' own logs).
 
 ## 0.11.0 — 2026-06-12
 
