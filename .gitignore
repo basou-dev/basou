@@ -41,12 +41,8 @@ CLAUDE.md
 GEMINI.md
 .github/copilot-instructions.md
 
-# Basou - default ignore
-.basou/logs/
-.basou/raw/
-.basou/tmp/
-.basou/status.json
-.basou/sessions/*/events.jsonl
-.basou/sessions/*/artifacts/
-.basou/approvals/pending/
-.basou/approvals/resolved/
+# Basou's own local tooling state is never committed (this repo ships no .basou/).
+# This is repo hygiene, not the recommended user block: the "ignore + commit"
+# block that `basou init` writes (see packages/core/src/storage/gitignore.ts) is
+# for a workspace repo that archives its trail.
+.basou/
