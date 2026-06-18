@@ -39,6 +39,15 @@ All notable changes to **basou** are recorded here. The project follows
   structured facts only (no work-stats / productivity metrics), and the server
   stays localhost-only and unauthenticated. Monitored repos are never written
   to (capture is import-based, from the agents' own logs).
+- `basou view --check` — a read-only safety preflight for portfolio mode. For
+  each workspace it derives the monitored repos (its `import.source_roots` other
+  than the workspace itself) and verifies none carries a `.basou/` footprint
+  (filesystem + `git ls-files`) and that no workspace's `.basou/` would land
+  inside a monitored repo, then prints a report and exits non-zero on any
+  finding. `basou view --portfolio` runs this preflight on start and aborts
+  before binding the port if it finds danger (override with
+  `--skip-safety-check`), so an irreversible footprint in an NDA / private repo
+  is caught up front.
 
 ## 0.11.0 — 2026-06-12
 

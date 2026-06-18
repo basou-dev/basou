@@ -106,3 +106,19 @@ in-flight count, pending-approval risk, suspect count, capture freshness — and
 the owner orienting across their own work, not surveillance of a fleet. The
 server stays **localhost-only and unauthenticated** (do not expose the port);
 there is no orchestration, cost tracking, or analytics dashboard.
+
+Safety preflight. Portfolio capture is import-based and writes only to each
+**workspace** repo's `.basou/`, never to a monitored repo (basou reads the
+agents' logs under `~/.claude/projects` / `~/.codex/sessions`, never the
+monitored repo itself). The one residual risk is a misconfiguration — pointing
+a workspace at a monitored repo, or a stray `basou init` / `run` / `exec` inside
+one — that would leave a `.basou/` in a repo you need kept clean (e.g. a private
+/ NDA repo). `basou view --check` makes this mechanical: for each workspace it
+derives the monitored repos (its `source_roots` other than the workspace
+itself) and verifies none has a `.basou/` footprint (filesystem + `git
+ls-files`) and that no workspace sits inside a monitored repo. It prints a
+report and exits non-zero on any finding, and `basou view --portfolio` runs it
+on start and refuses to launch on danger (`--skip-safety-check` overrides). The
+preflight is read-only — it only stats `.basou` and runs `git ls-files` against
+monitored repos. Workspaces should be dedicated planning repos (a sibling of
+each monitored repo), never the monitored repo itself.
