@@ -47,6 +47,14 @@ const SPEC_BLOCK =
   "# .basou/sessions/*/transcript.md\n" +
   "# .basou/sessions/*/changed-files.json\n";
 
+// Spec drift detector for the opt-in local-only block (`--local-only`).
+const SPEC_BLOCK_LOCAL_ONLY =
+  "# Basou - default ignore\n" +
+  "# Local-only: basou's trail is never committed (personal/local state,\n" +
+  "# regenerable by re-importing from the agents' own logs). Recommended for\n" +
+  "# monitored repos and any workspace kept out of version control.\n" +
+  ".basou/\n";
+
 describe("appendBasouGitignore", () => {
   it("creates .gitignore when absent", async () => {
     const root = getRepoRoot();
@@ -54,6 +62,24 @@ describe("appendBasouGitignore", () => {
     expect(result.appended).toBe(true);
     const body = await readFile(join(root, ".gitignore"), "utf8");
     expect(body).toBe(SPEC_BLOCK);
+  });
+
+  it("writes the local-only full-exclude block under --local-only", async () => {
+    const root = getRepoRoot();
+    const result = await appendBasouGitignore(root, { localOnly: true });
+    expect(result.appended).toBe(true);
+    const body = await readFile(join(root, ".gitignore"), "utf8");
+    expect(body).toBe(SPEC_BLOCK_LOCAL_ONLY);
+  });
+
+  it("is idempotent when a standalone .basou/ exclude is already present", async () => {
+    const root = getRepoRoot();
+    const existing = "node_modules/\n.basou/\n";
+    await writeFile(join(root, ".gitignore"), existing);
+    const result = await appendBasouGitignore(root, { localOnly: true });
+    expect(result.appended).toBe(false);
+    const body = await readFile(join(root, ".gitignore"), "utf8");
+    expect(body).toBe(existing);
   });
 
   it("appends to existing .gitignore preserving prior rules", async () => {

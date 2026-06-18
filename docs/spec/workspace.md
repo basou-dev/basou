@@ -119,6 +119,15 @@ out on disk.
 **Design principle**: Markdown a human has reviewed is committed; raw logs,
 approval originals, and adapter raw output are ignored.
 
+**Local-only mode (`basou init --local-only`)**: writes a single `.basou/`
+full-exclude block instead, so the whole trail stays out of version control —
+personal/local state, regenerable by re-importing from the agents' own logs.
+Use it for a workspace you keep private, and (the same idea) ensure any
+**monitored** repo a workspace imports from carries a `.basou/` full-exclude so
+basou leaves no committed footprint there. The default above (ignore + commit)
+is unchanged; `--local-only` is opt-in. The append stays idempotent: a marker
+line **or** a standalone `.basou/` line already present is left untouched.
+
 ## §1.4 task-events.log vs. events.jsonl
 
 - **Conceptual name**: `task-events.log` (the legacy term from the original

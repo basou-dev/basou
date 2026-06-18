@@ -172,6 +172,7 @@ export type {
 } from "./stats/index.js";
 export { ACTIVE_GAP_CAP_MS, computeWorkStats, sessionWorkStatsFromEvents } from "./stats/index.js";
 export type {
+  AppendBasouGitignoreOptions,
   AppendBasouGitignoreResult,
   AppendEventToExistingInput,
   AppendEventToExistingResult,

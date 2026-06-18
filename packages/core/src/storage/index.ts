@@ -12,7 +12,7 @@ export {
 } from "./ad-hoc-session.js";
 export type { BasouPaths } from "./basou-dir.js";
 export { basouPaths, ensureBasouDirectory } from "./basou-dir.js";
-export type { AppendBasouGitignoreResult } from "./gitignore.js";
+export type { AppendBasouGitignoreOptions, AppendBasouGitignoreResult } from "./gitignore.js";
 export { appendBasouGitignore } from "./gitignore.js";
 export type { LockHandle, LockScope } from "./lockfile.js";
 export { acquireLock } from "./lockfile.js";

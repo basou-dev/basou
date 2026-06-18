@@ -183,6 +183,15 @@ describe("doRunInit + .gitignore integration", () => {
     expect(body).toContain(".basou/logs/");
   });
 
+  it("--local-only writes a .basou/ full-exclude block (no ignore+commit lines)", async () => {
+    const repo = getTmpRepo();
+    await doRunInit({ localOnly: true }, { cwd: repo });
+    const body = await readFile(join(repo, ".gitignore"), "utf8");
+    expect(body).toMatch(/^\.basou\/$/m); // full-exclude line
+    expect(body).not.toContain(".basou/logs/"); // not the default ignore+commit block
+    expect(body).not.toContain("# Basou - default commit");
+  });
+
   it("appends to existing .gitignore preserving prior rules", async () => {
     const repo = getTmpRepo();
     await writeFile(join(repo, ".gitignore"), "node_modules/\n", "utf8");
