@@ -21,6 +21,8 @@ export type InitOptions = {
    * `import.source_roots`, so one `.basou/` can aggregate sibling repos.
    */
   sourceRoot?: string[];
+  /** Write a `.basou/` full-exclude .gitignore block instead of the default ignore+commit block. */
+  localOnly?: boolean;
   force?: boolean;
   verbose?: boolean;
 };
@@ -57,6 +59,10 @@ export function registerInitCommand(program: Command): void {
       "Extra import source root, relative to the repo root (repeatable; aggregates sibling repos into this workspace)",
       collectValue,
       [],
+    )
+    .option(
+      "--local-only",
+      "Write a .basou/ full-exclude .gitignore block (keep the trail out of version control) instead of the default ignore+commit block",
     )
     .option("-f, --force", "Overwrite an existing manifest")
     .option("-v, --verbose", "Show error causes")
@@ -125,7 +131,7 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
   // even when manifest writes but .gitignore cannot (e.g. permission
   // denied) -- the core feature set still works.
   try {
-    await appendBasouGitignore(repositoryRoot);
+    await appendBasouGitignore(repositoryRoot, { localOnly: options.localOnly === true });
   } catch (error: unknown) {
     renderGitignoreWarning(error, isVerbose(options));
   }

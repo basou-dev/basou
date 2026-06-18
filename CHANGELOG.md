@@ -48,6 +48,13 @@ All notable changes to **basou** are recorded here. The project follows
   before binding the port if it finds danger (override with
   `--skip-safety-check`), so an irreversible footprint in an NDA / private repo
   is caught up front.
+- `basou init --local-only` — write a single `.basou/` full-exclude `.gitignore`
+  block instead of the default ignore+commit block, so the trail is kept out of
+  version control (personal/local state, regenerable by re-importing). The
+  default is unchanged; the flag is opt-in. The `.gitignore` append is now
+  idempotent against a standalone `.basou/` line as well as the `# Basou`
+  marker, so it no longer double-appends on a repo that already excludes
+  `.basou/`.
 
 ## 0.11.0 — 2026-06-12
 
