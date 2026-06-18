@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ViewServerHandle } from "../lib/view-server.js";
-import { doRunView, runView, type ViewContext } from "./view.js";
+import { doRunView, runView, type ViewContext, type ViewOptions } from "./view.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -142,6 +142,7 @@ async function withPortfolioServer(
   workspacePaths: string[],
   extra: Partial<ViewContext>,
   body: (handle: ViewServerHandle) => Promise<void>,
+  opts: Partial<ViewOptions> = {},
 ): Promise<void> {
   const controller = new AbortController();
   let handle: ViewServerHandle | undefined;
@@ -161,7 +162,7 @@ async function withPortfolioServer(
     ...extra,
   };
   vi.spyOn(console, "log").mockImplementation(() => {});
-  const running = doRunView({ port: 0, workspace: workspacePaths }, ctx);
+  const running = doRunView({ port: 0, workspace: workspacePaths, ...opts }, ctx);
   await ready;
   try {
     if (handle === undefined) throw new Error("server never listened");
@@ -462,6 +463,80 @@ describe("basou view portfolio mode", () => {
       });
     } finally {
       await rm(raw, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("basou view safety preflight", () => {
+  // A planning workspace whose source_roots point at a sibling monitored repo
+  // that already has a .basou footprint (the danger the preflight must catch).
+  async function setupDangerousLayout(): Promise<{ root: string; ws: string }> {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "basou-pf-safety-")));
+    const ws = join(root, "ws");
+    const mon = join(root, "mon");
+    await mkdir(join(mon, ".basou"), { recursive: true });
+    const paths = await ensureBasouDirectory(ws);
+    await writeManifest(
+      paths,
+      createManifest({ workspaceName: "ws", workspaceId: WS_ID_A, sourceRoots: ["../mon"] }),
+    );
+    return { root, ws };
+  }
+
+  it("--check reports danger and does not start a server", async () => {
+    const { root, ws } = await setupDangerousLayout();
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+    let listened = false;
+    try {
+      await doRunView(
+        { port: 0, workspace: [ws], check: true },
+        {
+          cwd: root,
+          openBrowser: () => {},
+          onListening: () => {
+            listened = true;
+          },
+        },
+      );
+      expect(listened).toBe(false);
+      expect(process.exitCode).toBe(1);
+      expect(logs.join("\n")).toContain("DANGER");
+    } finally {
+      process.exitCode = 0;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts portfolio start when the preflight finds danger", async () => {
+    const { root, ws } = await setupDangerousLayout();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await expect(
+        doRunView({ port: 0, workspace: [ws] }, { cwd: root, openBrowser: () => {} }),
+      ).rejects.toThrow(/safety preflight failed/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("--skip-safety-check overrides the gate and starts the server", async () => {
+    const { root, ws } = await setupDangerousLayout();
+    try {
+      await withPortfolioServer(
+        [ws],
+        {},
+        async (handle) => {
+          const { status } = await getJson(handle, "/api/portfolio");
+          expect(status).toBe(200);
+        },
+        { skipSafetyCheck: true },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

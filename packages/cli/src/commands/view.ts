@@ -11,6 +11,7 @@ import {
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { loadPortfolioConfig, type PortfolioWorkspace } from "../lib/portfolio-config.js";
+import { checkPortfolioSafety, formatSafetyReport } from "../lib/portfolio-safety.js";
 import {
   startViewServer,
   type ViewServerDeps,
@@ -29,6 +30,10 @@ export type ViewOptions = {
   portfolio?: boolean;
   /** Ad-hoc workspace paths (repeatable); resolved against the cwd. Implies portfolio mode. */
   workspace?: string[];
+  /** Run the portfolio safety preflight and exit (no server). */
+  check?: boolean;
+  /** Skip the portfolio safety preflight on start (not recommended). */
+  skipSafetyCheck?: boolean;
 };
 
 export type ViewContext = {
@@ -87,6 +92,8 @@ export function registerViewCommand(program: Command): void {
       "Workspace repo path to include (repeatable; implies portfolio mode; resolved against the cwd)",
       collectPath,
     )
+    .option("--check", "Run the portfolio safety preflight and exit (no server)")
+    .option("--skip-safety-check", "Skip the portfolio safety preflight on start (not recommended)")
     .option("-v, --verbose", "Show error causes")
     .action(async (options: ViewOptions) => {
       await runView(options);
@@ -116,6 +123,36 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
   const deps = isPortfolio
     ? await buildPortfolioDeps(workspaceFlags, ctx, cwd)
     : await buildSingleDeps(ctx, cwd);
+
+  // --check: run the read-only safety preflight and exit (no server).
+  if (options.check === true) {
+    const result = await checkPortfolioSafety(deps.workspaces);
+    for (const line of formatSafetyReport(result)) console.log(line);
+    if (result.findings.length > 0) process.exitCode = 1;
+    return;
+  }
+
+  // Portfolio start auto-gates on the preflight. A footprint / overlap means a
+  // monitored repo has (or would get) a `.basou/` — an irreversible write risk —
+  // so the server is NOT started. An `unverifiable` item (e.g. an unreadable
+  // manifest) cannot cause a write through the read-only view, so it is warned
+  // about but does not block; `basou view --check` flags it strictly.
+  // `--skip-safety-check` overrides the abort entirely.
+  if (deps.mode === "portfolio" && options.skipSafetyCheck !== true) {
+    const result = await checkPortfolioSafety(deps.workspaces);
+    const blocking = result.findings.filter((f) => f.kind === "footprint" || f.kind === "overlap");
+    if (blocking.length > 0) {
+      for (const line of formatSafetyReport(result)) console.error(line);
+      throw new Error(
+        "Portfolio safety preflight failed (see findings above). Fix the monitored repos, or re-run with --skip-safety-check to override.",
+      );
+    }
+    if (result.findings.length > 0) {
+      console.error(
+        `Portfolio safety: ${result.findings.length} unverifiable item(s) — the read-only view will still open; run 'basou view --check' for detail.`,
+      );
+    }
+  }
 
   const port = options.port ?? DEFAULT_PORT;
   const handle = await startListening(port, deps);
