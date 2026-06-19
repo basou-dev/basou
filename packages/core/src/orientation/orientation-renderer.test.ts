@@ -356,6 +356,29 @@ describe("orientation-renderer", () => {
     expect(result.body).toContain("要注意セッションが 1 件あります。");
   });
 
+  it("これは最新か: unverifiable grown sessions block ✅ and point at verify/--force (no false-clear)", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    // newSessions/updatedSessions are 0 — without the unverifiable signal this
+    // would render the ✅ "current" verdict even though a grown source could
+    // not be re-imported safely. That silent ✅ is the false-clear F5 removes.
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 0, unverifiableSessions: 2 },
+    });
+    expect(result.body).toContain("⚠️ 最新か確認できません。");
+    expect(result.body).toContain("2 件");
+    expect(result.body).toContain("`basou verify`");
+    expect(result.body).toContain("`basou refresh --force`");
+    expect(result.body).not.toContain("✅ 最新です。");
+  });
+
   it("--verbose appends the raw freshness telemetry under the verdict", async () => {
     const paths = await setupPaths();
     await placeSession(paths, {

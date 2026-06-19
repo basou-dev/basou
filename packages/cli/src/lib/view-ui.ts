@@ -298,6 +298,8 @@ export const VIEW_HTML = `<!doctype html>
   function stalenessBadge(st) {
     if (!st) return null;
     if (!st.checked) return el('span', { class: 'badge', text: 'freshness unknown' });
+    if (st.unverifiableSessions > 0)
+      return el('span', { class: 'badge danger', text: '⚠ ' + st.unverifiableSessions + ' unverifiable — run verify' });
     if (st.newSessions > 0)
       return el('span', { class: 'badge danger', text: '⚠ ' + st.newSessions + ' uncaptured — run refresh' });
     if (st.updatedSessions > 0)

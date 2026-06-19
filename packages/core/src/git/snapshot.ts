@@ -33,6 +33,25 @@ export function isGitNotFound(error: unknown): boolean {
 }
 
 /**
+ * Detect git's canonical "not a git repository" failure across simple-git's
+ * error wrappers. This is the ONLY git failure that means `cwd` is genuinely
+ * outside a repo — every other non-zero exit (a corrupt repo, a permission
+ * error, a missing object store) is a real fault that must NOT be laundered
+ * into "Not a git repository", because that string drives the workspace-view
+ * symlink fallback in {@link resolveBasouRepositoryRoot}: misclassifying a
+ * broken repo as "no repo" would fire the fallback (or print a misleading
+ * "run git init") instead of surfacing the actual error.
+ */
+function isNotAGitRepository(error: unknown): boolean {
+  let cur: unknown = error;
+  for (let i = 0; i < 4 && cur instanceof Error; i++) {
+    if (/not a git repository/i.test(cur.message)) return true;
+    cur = (cur as Error).cause;
+  }
+  return false;
+}
+
+/**
  * Payload subset of `git_snapshot` event, mechanically derived from the
  * zod-inferred event type. The wrapping event-shape fields
  * (schema_version, id, session_id, occurred_at, source, type) are added by
@@ -73,9 +92,16 @@ export async function resolveRepositoryRoot(cwd: string): Promise<string> {
       throw new Error("Git executable not found in PATH. Install git first.", { cause: error });
     }
     if (error instanceof Error && error.message === "Not a git repository") {
-      throw error;
+      throw error; // the empty-root throw above, already in the fixed vocabulary
     }
-    throw new Error("Not a git repository", { cause: error });
+    if (isNotAGitRepository(error)) {
+      throw new Error("Not a git repository", { cause: error });
+    }
+    // A genuine git failure (corrupt repo, permission denied, broken object
+    // store, ...) is NOT "no repo here": surface it distinctly so callers do
+    // not fall through to the workspace-view fallback or tell the operator to
+    // `git init` over a repo that already exists.
+    throw new Error("Git command failed", { cause: error });
   }
 }
 

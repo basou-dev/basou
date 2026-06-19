@@ -27,7 +27,11 @@ export type OrientationRendererInput = {
    * Drives the plain "これは最新か" verdict. `null` / omitted = not probed, so
    * the verdict says it cannot confirm freshness rather than claiming current.
    */
-  staleness?: { newSessions: number; updatedSessions: number } | null;
+  staleness?: {
+    newSessions: number;
+    updatedSessions: number;
+    unverifiableSessions?: number;
+  } | null;
   /**
    * Append the raw freshness telemetry (ISO timestamp, per-source counts, source
    * roots, suspect count) under the plain verdict. Off by default so the section
@@ -313,7 +317,14 @@ export async function renderOrientation(
 
 function formatOrientationBody(
   summary: OrientationSummary,
-  opts: { staleness: { newSessions: number; updatedSessions: number } | null; verbose: boolean },
+  opts: {
+    staleness: {
+      newSessions: number;
+      updatedSessions: number;
+      unverifiableSessions?: number;
+    } | null;
+    verbose: boolean;
+  },
 ): string {
   const lines: string[] = [];
   const now = new Date(summary.generatedAt);
@@ -441,7 +452,7 @@ function formatOrientationBody(
     const probe =
       opts.staleness === null
         ? "not run"
-        : `new ${opts.staleness.newSessions}, updated ${opts.staleness.updatedSessions}`;
+        : `new ${opts.staleness.newSessions}, updated ${opts.staleness.updatedSessions}, unverifiable ${opts.staleness.unverifiableSessions ?? 0}`;
     lines.push(`- staleness probe: ${probe}`);
   }
 
@@ -479,10 +490,22 @@ function toolDisplayName(kind: string | null): string {
  */
 function freshnessVerdict(
   summary: OrientationSummary,
-  staleness: { newSessions: number; updatedSessions: number } | null,
+  staleness: { newSessions: number; updatedSessions: number; unverifiableSessions?: number } | null,
   now: Date,
 ): string[] {
-  // Stale wins first: uncaptured/grown native work means there IS work to pull
+  // Unverifiable wins absolutely first: a source that GREW but could not be
+  // re-imported safely (broken chain / unreadable / non-append) means the
+  // capture is provably behind AND a plain `basou refresh` would skip it again.
+  // Claiming "current" here is the false-clear this verdict exists to prevent,
+  // so it is surfaced ahead of every other state, including "no records".
+  if (staleness !== null && (staleness.unverifiableSessions ?? 0) > 0) {
+    return [
+      `⚠️ 最新か確認できません。変化したが安全に取り込めないセッションが ${staleness.unverifiableSessions} 件あります(ハッシュチェーン破損・非追記変更など)。`,
+      "`basou verify` で確認し、`basou refresh --force` で再取り込みしてください。",
+    ];
+  }
+
+  // Stale wins next: uncaptured/grown native work means there IS work to pull
   // in, even when the store itself is still empty — so this must be checked
   // before the "no records" branch.
   if (staleness !== null && (staleness.newSessions > 0 || staleness.updatedSessions > 0)) {

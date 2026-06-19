@@ -37,6 +37,8 @@ export type ImportOutcome =
       skippedAlreadyImported: number;
       /** Already imported but with no recorded source size (pre-size-tracking); not re-imported. */
       skippedLegacyUntracked: number;
+      /** Source grew but a safe re-import was refused (broken chain / unreadable / non-append); captured state is provably behind. */
+      skippedUnverifiable: number;
       eventTotal: number;
       dryRun: boolean;
     }
@@ -143,6 +145,7 @@ async function runImport(adapter: ImportAdapter, fn: () => Promise<void>): Promi
       skippedNoAction: readCount(json.skipped_no_action),
       skippedAlreadyImported: readCount(json.skipped_already_imported),
       skippedLegacyUntracked: readCount(json.skipped_legacy_untracked),
+      skippedUnverifiable: readCount(json.skipped_unverifiable),
       eventTotal: readCount(json.event_total),
       dryRun: json.dry_run === true,
     };
@@ -271,14 +274,25 @@ export async function refreshAll(args: {
   const decisionCounts = await regenerateDecisions(paths, nowIso);
   // A full refresh just imported every root, so the snapshot is current — record
   // a zero staleness so the file's "これは最新か" verdict reads as up to date
-  // instead of "run refresh to check". A `--project`-scoped refresh only touched
-  // some roots, so leave staleness unset (verdict: "cannot confirm") rather than
-  // claim the whole workspace is current.
+  // instead of "run refresh to check". It still carries the unverifiable count
+  // the import just hit: a session that grew but failed to re-import is behind
+  // even right after a refresh, so the verdict must not falsely read "current".
+  // A `--project`-scoped refresh only touched some roots, so leave staleness
+  // unset (verdict: "cannot confirm") rather than claim the whole workspace is
+  // current.
   const scoped = options.project !== undefined && options.project.length > 0;
   const orientationCounts = await regenerateOrientation(
     paths,
     nowIso,
-    scoped ? {} : { staleness: { newSessions: 0, updatedSessions: 0 } },
+    scoped
+      ? {}
+      : {
+          staleness: {
+            newSessions: 0,
+            updatedSessions: 0,
+            unverifiableSessions: wouldBlock(claudeCode) + wouldBlock(codex),
+          },
+        },
   );
   return {
     claudeCode,
@@ -300,8 +314,26 @@ function wouldUpdate(outcome: ImportOutcome): number {
   return outcome.status === "ran" ? outcome.reimportedCount + outcome.replacedCount : 0;
 }
 
-/** Counts of uncaptured / changed native sessions a real refresh would pick up. */
-export type StalenessProbe = { newSessions: number; updatedSessions: number };
+/**
+ * Sessions that GREW but a refresh would refuse to capture safely (broken prior
+ * chain, unreadable prior events, non-append change). The capture is provably
+ * behind, so a freshness verdict must NOT read as "up to date".
+ */
+function wouldBlock(outcome: ImportOutcome): number {
+  return outcome.status === "ran" ? outcome.skippedUnverifiable : 0;
+}
+
+/**
+ * Counts of native sessions a real refresh would act on: new imports, updates
+ * (grew / replaced), and `unverifiableSessions` — changed sources a refresh
+ * could NOT safely capture, which the freshness verdict treats as "can't
+ * confirm current" rather than a silent ✅.
+ */
+export type StalenessProbe = {
+  newSessions: number;
+  updatedSessions: number;
+  unverifiableSessions: number;
+};
 
 /**
  * Make a stale capture measurable instead of silent: run a read-only DRY-RUN
@@ -330,6 +362,7 @@ export async function probeStaleness(args: {
     return {
       newSessions: wouldImport(dry.claudeCode) + wouldImport(dry.codex),
       updatedSessions: wouldUpdate(dry.claudeCode) + wouldUpdate(dry.codex),
+      unverifiableSessions: wouldBlock(dry.claudeCode) + wouldBlock(dry.codex),
     };
   } catch {
     return null;

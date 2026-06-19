@@ -102,6 +102,25 @@ describe("resolveRepositoryRoot", () => {
     // Pathless contract: the wrapped message must not embed tmpRepo.
     expect((err as Error).message).not.toContain(tmpRepo);
   });
+
+  it("throws 'Git command failed' (NOT 'Not a git repository') when git fails for a non-'no repo' reason", async () => {
+    // A `.git` FILE with garbage makes git fail with "invalid gitfile format":
+    // a real fault, not "there is no repo here". It must NOT be laundered into
+    // the "Not a git repository" sentinel that drives the workspace-view
+    // fallback, or a corrupt repo would silently redirect / suggest `git init`.
+    await writeFile(join(tmpRepo, ".git"), "this is not a valid gitfile\n");
+    let err: unknown;
+    try {
+      await resolveRepositoryRoot(tmpRepo);
+    } catch (caught) {
+      err = caught;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("Git command failed");
+    expect((err as Error).cause).toBeInstanceOf(Error);
+    // Pathless contract holds on the new branch too.
+    expect((err as Error).message).not.toContain(tmpRepo);
+  });
 });
 
 describe("resolveBasouRepositoryRoot (workspace-view fallback)", () => {
@@ -153,6 +172,20 @@ describe("resolveBasouRepositoryRoot (workspace-view fallback)", () => {
 
   it("re-throws 'Not a git repository' for a non-git dir with no linked .basou repos", async () => {
     await expect(resolveBasouRepositoryRoot(tmpRepo)).rejects.toThrow("Not a git repository");
+  });
+
+  it("does NOT fall back to a linked repo when the view's own git is broken (corrupt, not 'no repo')", async () => {
+    const planning = await initBasouRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-view-"));
+    try {
+      await symlink(planning, join(view, "foo-planning"));
+      // A corrupt `.git` is a real git fault, not "no repo here": the fallback
+      // must surface the error, not silently redirect to the linked repo.
+      await writeFile(join(view, ".git"), "garbage\n");
+      await expect(resolveBasouRepositoryRoot(view)).rejects.toThrow("Git command failed");
+    } finally {
+      for (const d of [planning, view]) await rm(d, { recursive: true, force: true });
+    }
   });
 });
 

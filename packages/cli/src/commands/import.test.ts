@@ -981,6 +981,45 @@ describe("basou import claude-code — scoped re-import of a grown source", () =
     expect(body.split("\n").filter((l) => l.includes('"command_executed"'))).toHaveLength(1);
   });
 
+  it("counts a blocked re-import as skipped_unverifiable (not skipped_no_action) so freshness can flag it", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+    const sid = (await listSessionDirs(repo))[0] as string;
+    const evPath = join(basouPaths(repo).sessions, sid, "events.jsonl");
+    // Corrupt the prior log so a safe in-place re-import is refused, and grow the
+    // source so a re-import is attempted (and then blocked) rather than skipped
+    // as unchanged.
+    await writeFile(evPath, `${await readFile(evPath, "utf8")}{ this is not json\n`);
+    await writeTranscript(repo, "sess-1", grownTranscript(repo));
+
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((a) => String(a)).join(" "));
+    });
+    try {
+      await doRunImportClaudeCode(
+        { all: true, json: true },
+        { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    const result = lines
+      .map((l) => {
+        try {
+          return JSON.parse(l) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })
+      .find((r) => r !== null && "imported_count" in r);
+    expect(result).toBeDefined();
+    // The grown-but-blocked session is the unverifiable bucket, NOT a benign no-op.
+    expect(result?.skipped_unverifiable).toBe(1);
+    expect(result?.skipped_no_action).toBe(0);
+  });
+
   it("skips an anomalous >1-prior duplicate instead of replacing it", async () => {
     const repo = await setupInitedRepo();
     const sids = ["ses_01HXABCDEF1234567890ABCDEF", "ses_01HXABCDEF1234567890ABCDEG"];
