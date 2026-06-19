@@ -18,12 +18,15 @@ export type { LockHandle, LockScope } from "./lockfile.js";
 export { acquireLock } from "./lockfile.js";
 export type { CreateManifestInput } from "./manifest.js";
 export { createManifest, readManifest, writeManifest } from "./manifest.js";
-export type { MarkerSection } from "./markdown-store.js";
+export type { MarkerSection, Markers } from "./markdown-store.js";
 export {
   GENERATED_END,
   GENERATED_START,
+  PROTOCOL_END,
+  PROTOCOL_START,
   parseMarkers,
   readMarkdownFile,
+  removeMarkerSection,
   renderWithMarkers,
   writeMarkdownFile,
 } from "./markdown-store.js";
