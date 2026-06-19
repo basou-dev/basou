@@ -21,6 +21,23 @@ export type OrientationRendererInput = {
   onTaskSkip?: (taskId: string, reason: TaskSkipReason) => void;
   /** Maximum related_files entries to display before `... +N more`. Default 10. */
   relatedFilesLimit?: number;
+  /**
+   * Result of a read-only dry-run staleness probe (sessions a `basou refresh`
+   * would add or update), computed by the CLI which holds the import context.
+   * Drives the plain "これは最新か" verdict. `null` / omitted = not probed, so
+   * the verdict says it cannot confirm freshness rather than claiming current.
+   */
+  staleness?: {
+    newSessions: number;
+    updatedSessions: number;
+    unverifiableSessions?: number;
+  } | null;
+  /**
+   * Append the raw freshness telemetry (ISO timestamp, per-source counts, source
+   * roots, suspect count) under the plain verdict. Off by default so the section
+   * reads as a verdict for a supervisor, not developer diagnostics.
+   */
+  verbose?: boolean;
 };
 
 export type OrientationRendererResult = {
@@ -86,6 +103,8 @@ export type OrientationSummary = {
   freshness: {
     /** started_at of the newest non-archived session, or null when none captured. */
     newestStartedAt: string | null;
+    /** source.kind of the newest non-archived session, or null when none captured. */
+    newestSource: string | null;
     /** Session counts per source kind, sorted by kind. Counts only — never volume/time. */
     bySource: SourceCount[];
     /** manifest `import.source_roots`, or null when single-root / unreadable. */
@@ -254,6 +273,7 @@ export async function summarizeOrientation(
     suspects,
     freshness: {
       newestStartedAt: newest?.session.session.started_at ?? null,
+      newestSource: newest?.session.session.source.kind ?? null,
       bySource,
       sourceRoots,
     },
@@ -283,7 +303,10 @@ export async function renderOrientation(
 ): Promise<OrientationRendererResult> {
   const summary = await summarizeOrientation(input);
   return {
-    body: formatOrientationBody(summary),
+    body: formatOrientationBody(summary, {
+      staleness: input.staleness ?? null,
+      verbose: input.verbose === true,
+    }),
     sessionCount: summary.sessionCount,
     pendingApprovalsCount: summary.pendingApprovals.length,
     suspectCount: summary.suspects.length,
@@ -292,7 +315,17 @@ export async function renderOrientation(
   };
 }
 
-function formatOrientationBody(summary: OrientationSummary): string {
+function formatOrientationBody(
+  summary: OrientationSummary,
+  opts: {
+    staleness: {
+      newSessions: number;
+      updatedSessions: number;
+      unverifiableSessions?: number;
+    } | null;
+    verbose: boolean;
+  },
+): string {
   const lines: string[] = [];
   const now = new Date(summary.generatedAt);
   const newestRel = relativeAge(summary.freshness.newestStartedAt ?? undefined, now);
@@ -388,29 +421,141 @@ function formatOrientationBody(summary: OrientationSummary): string {
   }
   lines.push("");
 
-  // "is this current" — capture freshness / coverage
+  // "is this current" — a plain verdict for a supervisor, not telemetry: is what
+  // I am looking at the latest and complete, and if not, what should I do? Raw
+  // ISO / per-source counts / source roots / a zero suspect count are diagnostics
+  // and move under `--verbose`.
   lines.push("## これは最新か");
   lines.push("");
-  if (summary.freshness.newestStartedAt !== null) {
-    lines.push(`- newest captured session: ${summary.freshness.newestStartedAt} (${newestRel})`);
-  } else {
-    lines.push("- newest captured session: (no sessions captured yet)");
+  for (const line of freshnessVerdict(summary, opts.staleness, now)) lines.push(line);
+
+  if (opts.verbose) {
+    lines.push("");
+    lines.push("<!-- verbose: raw freshness telemetry -->");
+    if (summary.freshness.newestStartedAt !== null) {
+      lines.push(`- newest captured session: ${summary.freshness.newestStartedAt} (${newestRel})`);
+    } else {
+      lines.push("- newest captured session: (no sessions captured yet)");
+    }
+    const sourceBreakdown = summary.freshness.bySource
+      .map(({ kind, count }) => `${kind} ${count}`)
+      .join(", ");
+    lines.push(
+      `- sessions: ${summary.sessionCount}${sourceBreakdown !== "" ? ` (${sourceBreakdown})` : ""}`,
+    );
+    if (summary.freshness.sourceRoots !== null && summary.freshness.sourceRoots.length > 0) {
+      lines.push(`- source roots: ${summary.freshness.sourceRoots.join(", ")}`);
+    } else {
+      lines.push("- source roots: (single root)");
+    }
+    lines.push(`- suspect sessions: ${summary.suspects.length}`);
+    const probe =
+      opts.staleness === null
+        ? "not run"
+        : `new ${opts.staleness.newSessions}, updated ${opts.staleness.updatedSessions}, unverifiable ${opts.staleness.unverifiableSessions ?? 0}`;
+    lines.push(`- staleness probe: ${probe}`);
   }
-  const sourceBreakdown = summary.freshness.bySource
-    .map(({ kind, count }) => `${kind} ${count}`)
-    .join(", ");
-  lines.push(
-    `- sessions: ${summary.sessionCount}${sourceBreakdown !== "" ? ` (${sourceBreakdown})` : ""}`,
-  );
-  if (summary.freshness.sourceRoots !== null && summary.freshness.sourceRoots.length > 0) {
-    lines.push(`- source roots: ${summary.freshness.sourceRoots.join(", ")}`);
-  } else {
-    lines.push("- source roots: (single root)");
-  }
-  lines.push(`- suspect sessions: ${summary.suspects.length}`);
-  lines.push("- reflects already-captured state; run `basou refresh` to re-import.");
 
   return lines.join("\n");
+}
+
+/**
+ * Translate an internal source kind into the tool name a supervisor recognizes.
+ * Unknown kinds pass through verbatim so a new adapter is never silently mislabeled.
+ */
+function toolDisplayName(kind: string | null): string {
+  switch (kind) {
+    case "claude-code-import":
+    case "claude-code-adapter":
+      return "Claude Code";
+    case "codex-import":
+      return "Codex";
+    case "terminal":
+      return "ターミナル";
+    case "human":
+      return "手動メモ";
+    case "import":
+      return "他ワークスペース";
+    default:
+      return kind ?? "不明";
+  }
+}
+
+/**
+ * The plain "これは最新か" verdict: a status line plus one human sentence that
+ * answers "is this current, and if not what do I do?". Freshness comes from the
+ * dry-run `staleness` probe (uncaptured/grown native work); when it was not run
+ * the verdict says so instead of claiming current. A non-zero suspect count is
+ * surfaced as a caution even when the capture is fresh.
+ */
+function freshnessVerdict(
+  summary: OrientationSummary,
+  staleness: { newSessions: number; updatedSessions: number; unverifiableSessions?: number } | null,
+  now: Date,
+): string[] {
+  // Unverifiable wins absolutely first: a source that GREW but could not be
+  // re-imported safely (broken chain / unreadable / non-append) means the
+  // capture is provably behind AND a plain `basou refresh` would skip it again.
+  // Claiming "current" here is the false-clear this verdict exists to prevent,
+  // so it is surfaced ahead of every other state, including "no records".
+  if (staleness !== null && (staleness.unverifiableSessions ?? 0) > 0) {
+    return [
+      `⚠️ 最新か確認できません。変化したが安全に取り込めないセッションが ${staleness.unverifiableSessions} 件あります(ハッシュチェーン破損・非追記変更など)。`,
+      "`basou verify` で確認し、`basou refresh --force` で再取り込みしてください。",
+    ];
+  }
+
+  // Stale wins next: uncaptured/grown native work means there IS work to pull
+  // in, even when the store itself is still empty — so this must be checked
+  // before the "no records" branch.
+  if (staleness !== null && (staleness.newSessions > 0 || staleness.updatedSessions > 0)) {
+    const parts: string[] = [];
+    if (staleness.newSessions > 0) parts.push(`新規 ${staleness.newSessions} 件`);
+    if (staleness.updatedSessions > 0) parts.push(`更新 ${staleness.updatedSessions} 件`);
+    return [
+      `⚠️ 古いかもしれません。最後の取り込み以降に未取り込みの作業があります(${parts.join("・")})。`,
+      "`basou refresh` で更新してください。",
+    ];
+  }
+
+  if (summary.freshness.newestStartedAt === null) {
+    return [
+      "ℹ️ まだ記録がありません。",
+      "このワークスペースで作業すると、ここに現在地が表示されます。",
+    ];
+  }
+
+  const rel = relativeAgeJa(summary.freshness.newestStartedAt, now);
+  const tool = toolDisplayName(summary.freshness.newestSource);
+  const suspectCount = summary.suspects.length;
+  const suspectClause =
+    suspectCount > 0
+      ? `要注意セッションが ${suspectCount} 件あります。`
+      : "取りこぼし・要注意なし。";
+
+  if (staleness === null) {
+    return [
+      `ℹ️ 取り込み済みの状態を表示しています。最後の作業は ${rel}(${tool})。`,
+      "最新か確認するには `basou refresh` を実行してください。",
+    ];
+  }
+
+  return [`✅ 最新です。最後の作業は ${rel}(${tool})。${suspectClause}`];
+}
+
+/** Japanese relative age, e.g. "7時間26分前" / "3日前" / "たった今", for the verdict line. */
+function relativeAgeJa(startedAt: string | null, now: Date): string {
+  if (startedAt === null) return "(不明)";
+  const ms = now.getTime() - Date.parse(startedAt);
+  if (!Number.isFinite(ms) || ms < 0) return "たった今";
+  if (ms < 60_000) return "たった今";
+  const totalMin = Math.floor(ms / 60_000);
+  const days = Math.floor(totalMin / 1440);
+  const hours = Math.floor((totalMin % 1440) / 60);
+  const mins = totalMin % 60;
+  if (days > 0) return hours > 0 ? `${days}日${hours}時間前` : `${days}日前`;
+  if (hours > 0) return mins > 0 ? `${hours}時間${mins}分前` : `${hours}時間前`;
+  return `${mins}分前`;
 }
 
 /** "3h 05m ago" / "just now" / "(unknown)" for a session's age relative to `now`. */

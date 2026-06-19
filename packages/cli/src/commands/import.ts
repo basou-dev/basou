@@ -319,6 +319,7 @@ async function importDerivedSessions(
     skippedLegacy: 0,
     skippedDecreased: 0,
     skippedDuplicate: 0,
+    skippedUnverifiable: 0,
   };
   let sanitizedPaths = 0;
 
@@ -380,7 +381,11 @@ async function importDerivedSessions(
               ? "prior events.jsonl failed hash-chain verification (run 'basou verify')"
               : "source changed in a non-append way (derived events would be dropped)";
         console.error(`Import: ${externalId} ${detail}; re-import skipped`);
-        counts.skippedNoAction++;
+        // The source GREW but a safe in-place re-import was refused: this is NOT
+        // a benign no-op. Track it separately so freshness probes can flag that
+        // captured state is provably behind (vs `skippedNoAction`, which is a
+        // source with simply nothing to derive).
+        counts.skippedUnverifiable++;
         continue;
       }
       counts.reimported++;
@@ -438,6 +443,13 @@ type ImportCounts = {
   skippedDecreased: number;
   /** More than one prior session for one external id (anomalous); needs --force. */
   skippedDuplicate: number;
+  /**
+   * Source grew but a safe in-place re-import was refused — a broken prior hash
+   * chain, unreadable prior events, or a non-append change that would drop
+   * derived ids. Captured state is provably behind; needs `basou verify` then a
+   * `--force` re-import. Distinct from {@link skippedNoAction} (nothing to derive).
+   */
+  skippedUnverifiable: number;
 };
 
 /**
@@ -800,6 +812,7 @@ function printImportResult(
     skippedLegacy,
     skippedDecreased,
     skippedDuplicate,
+    skippedUnverifiable,
   } = counts;
 
   if (options.json === true) {
@@ -819,6 +832,7 @@ function printImportResult(
         skipped_legacy_untracked: skippedLegacy,
         skipped_decreased: skippedDecreased,
         skipped_duplicate: skippedDuplicate,
+        skipped_unverifiable: skippedUnverifiable,
         event_total: eventTotal,
         dry_run: isDry,
       }),
@@ -832,6 +846,8 @@ function printImportResult(
   if (skippedLegacy > 0) skipParts.push(`${skippedLegacy} legacy (untracked size)`);
   if (skippedDecreased > 0) skipParts.push(`${skippedDecreased} shrank`);
   if (skippedDuplicate > 0) skipParts.push(`${skippedDuplicate} duplicated`);
+  if (skippedUnverifiable > 0)
+    skipParts.push(`${skippedUnverifiable} unverifiable (run 'basou verify')`);
   const skipSuffix = skipParts.length > 0 ? `; skipped ${skipParts.join(", ")}` : "";
   const eventsPart =
     replaced > 0 ? `${eventTotal} events, ${replaced} replaced` : `${eventTotal} events`;

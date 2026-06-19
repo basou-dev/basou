@@ -49,6 +49,8 @@ export const VIEW_HTML = `<!doctype html>
   #detail { padding: 12px 16px; overflow: auto; max-height: 80vh; }
   .badge { display: inline-block; padding: 0 6px; border-radius: 6px; background: #8882; font-size: 12px; }
   .badge.warn { background: #f59e0b33; }
+  .badge.danger { background: #ef444433; }
+  .badge.ok { background: #22c55e33; }
   pre { background: #8881; padding: 12px; border-radius: 8px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
   table.kv { border-collapse: collapse; }
   table.kv td { padding: 2px 10px 2px 0; vertical-align: top; }
@@ -257,7 +259,7 @@ export const VIEW_HTML = `<!doctype html>
     var ws = d.workspaces || [];
     detail.appendChild(el('p', { class: 'muted', text: 'Portfolio — ' + ws.length + ' workspace(s). Click a card to open it.' }));
     var cards = el('div', { class: 'cards' }, []);
-    ws.forEach(function (w) { cards.appendChild(portfolioCard(w)); });
+    ws.forEach(function (w) { cards.appendChild(portfolioCard(w, d.generatedAt)); });
     detail.appendChild(cards);
   }
 
@@ -278,7 +280,34 @@ export const VIEW_HTML = `<!doctype html>
     return approvals.length ? approvals[0].risk : '';
   }
 
-  function portfolioCard(w) {
+  // Human-readable age of an ISO timestamp relative to the portfolio's
+  // generatedAt ("now"), so a stale capture reads as "3d ago" not a raw ISO.
+  function relAge(iso, nowIso) {
+    if (!iso) return '(none)';
+    var ms = Date.parse(nowIso) - Date.parse(iso);
+    if (!isFinite(ms)) return iso;
+    if (ms < 60000) return 'just now';
+    var m = Math.floor(ms / 60000); if (m < 60) return m + 'm ago';
+    var h = Math.floor(m / 60); if (h < 48) return h + 'h ago';
+    return Math.floor(h / 24) + 'd ago';
+  }
+
+  // A "run refresh" badge when a dry-run found uncaptured/changed native sessions,
+  // an "up to date" badge when the capture is current, and nothing loud when the
+  // staleness probe could not run (degrades to a quiet note).
+  function stalenessBadge(st) {
+    if (!st) return null;
+    if (!st.checked) return el('span', { class: 'badge', text: 'freshness unknown' });
+    if (st.unverifiableSessions > 0)
+      return el('span', { class: 'badge danger', text: '⚠ ' + st.unverifiableSessions + ' unverifiable — run verify' });
+    if (st.newSessions > 0)
+      return el('span', { class: 'badge danger', text: '⚠ ' + st.newSessions + ' uncaptured — run refresh' });
+    if (st.updatedSessions > 0)
+      return el('span', { class: 'badge warn', text: st.updatedSessions + ' updated — run refresh' });
+    return el('span', { class: 'badge ok', text: 'up to date' });
+  }
+
+  function portfolioCard(w, generatedAt) {
     if (!w.initialized) {
       return el('div', { class: 'card pcard muted' }, [
         el('div', { class: 'l', text: w.label }),
@@ -295,13 +324,18 @@ export const VIEW_HTML = `<!doctype html>
     var pendText = 'pending ' + pend.length + (pend.length ? ' (' + highestRisk(pend) + ')' : '');
     var now = w.latestSession ? ((w.latestSession.label || '(session)') + ' [' + w.latestSession.status + ']') : '(no live sessions)';
     var dec = w.latestDecision ? w.latestDecision.title : '(no decisions yet)';
-    var newest = (w.freshness && w.freshness.newestStartedAt) ? w.freshness.newestStartedAt : '(none)';
+    var newest = (w.freshness && w.freshness.newestStartedAt) ? w.freshness.newestStartedAt : null;
+    var badge = stalenessBadge(w.staleness);
     return el('div', { class: 'card pcard open', onclick: function () { openWorkspace(w.key, w.label); } }, [
-      el('div', { class: 'l', text: w.label }),
+      el('div', { class: 'l' }, [
+        el('span', { text: w.label }),
+        badge ? el('span', { text: '  ' }) : null,
+        badge
+      ]),
       el('div', { class: 'f', text: 'now: ' + now }),
       el('div', { class: 'f', text: 'latest: ' + dec }),
       el('div', { class: 'f', text: 'in-flight ' + w.inFlightCount + '  |  ' + pendText + '  |  suspect ' + w.suspectCount }),
-      el('div', { class: 'f muted', text: 'sessions ' + w.sessionCount + '  |  newest ' + newest })
+      el('div', { class: 'f muted', text: 'sessions ' + w.sessionCount + '  |  newest ' + relAge(newest, generatedAt) })
     ]);
   }
 

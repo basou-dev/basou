@@ -54,7 +54,12 @@ export {
 export type { DiffResult, FileChange, FileChangeStatus } from "./git/diff.js";
 export { getDiff } from "./git/diff.js";
 export type { GitSnapshot } from "./git/snapshot.js";
-export { getSnapshot, resolveRepositoryRoot, tryRemoteUrl } from "./git/snapshot.js";
+export {
+  getSnapshot,
+  resolveBasouRepositoryRoot,
+  resolveRepositoryRoot,
+  tryRemoteUrl,
+} from "./git/snapshot.js";
 export type { HandoffRendererInput, HandoffRendererResult } from "./handoff/index.js";
 export { renderHandoff } from "./handoff/index.js";
 export type { IdPrefix, PrefixedId } from "./ids/ulid.js";

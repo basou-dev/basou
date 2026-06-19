@@ -1,11 +1,26 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { doRunRefresh, doRunRefreshWatch, parseInterval, runRefresh } from "./refresh.js";
+import {
+  doRunRefresh,
+  doRunRefreshPortfolio,
+  doRunRefreshWatch,
+  parseInterval,
+  runRefresh,
+} from "./refresh.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -270,6 +285,129 @@ describe("basou refresh --watch (validation)", () => {
     expect(parseInterval("86400")).toBe(86400);
     for (const bad of ["4", "0", "-1", "2.5", "abc", "", "999999999"]) {
       expect(() => parseInterval(bad)).toThrow();
+    }
+  });
+});
+
+describe("basou refresh --portfolio", () => {
+  /** A fresh git repo with an initialized `.basou/` and a distinct workspace id. */
+  async function makeInitedRepo(id: `ws_${string}`): Promise<string> {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-pf-ws-")));
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+    await execFileAsync("git", ["config", "user.email", "test@example.com"], {
+      cwd: dir,
+      env: ENV,
+    });
+    await execFileAsync("git", ["config", "user.name", "test"], { cwd: dir, env: ENV });
+    const paths = await ensureBasouDirectory(dir);
+    await writeManifest(
+      paths,
+      createManifest({ workspaceName: `pf-${id}`, now: FIXED_DATE, workspaceId: id }),
+    );
+    return dir;
+  }
+
+  it("rejects --project (each workspace uses its own source roots)", async () => {
+    await expect(
+      doRunRefreshPortfolio({ portfolio: true, project: ["/some/path"] }, {}),
+    ).rejects.toThrow(/remove --project/);
+  });
+
+  it("rejects --watch", async () => {
+    await expect(doRunRefreshPortfolio({ portfolio: true, watch: true }, {})).rejects.toThrow(
+      /cannot be combined with --watch/,
+    );
+  });
+
+  it("refreshes every workspace listed in the portfolio config", async () => {
+    const wsA = await makeInitedRepo("ws_01HXABCDEF1234567890PFAAA1");
+    const wsB = await makeInitedRepo("ws_01HXABCDEF1234567890PFBBB2");
+    const cfgDir = await realpath(await mkdtemp(join(tmpdir(), "basou-pf-cfg-")));
+    try {
+      await writeCodexRolloutAt(wsA, "codex-a");
+      await writeCodexRolloutAt(wsB, "codex-b");
+      const configPath = join(cfgDir, "portfolio.yaml");
+      await writeFile(
+        configPath,
+        `workspaces:\n  - path: ${wsA}\n    label: A\n  - path: ${wsB}\n    label: B\n`,
+      );
+      vi.spyOn(console, "log").mockImplementation(() => {});
+
+      await doRunRefreshPortfolio(
+        { portfolio: true },
+        {
+          claudeProjectsDir: getClaudeRoot(),
+          codexSessionsDir: getCodexRoot(),
+          portfolioConfigPath: configPath,
+          nowProvider: () => FIXED_DATE,
+        },
+      );
+
+      // Each workspace got its own regenerated handoff (the refresh ran there).
+      await expect(access(basouPaths(wsA).files.handoff)).resolves.toBeUndefined();
+      await expect(access(basouPaths(wsB).files.handoff)).resolves.toBeUndefined();
+      expect(process.exitCode).not.toBe(1);
+    } finally {
+      for (const dir of [wsA, wsB, cfgDir]) await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues past a failing workspace and exits non-zero", async () => {
+    const wsA = await makeInitedRepo("ws_01HXABCDEF1234567890PFCCC3");
+    const missing = join(tmpdir(), "basou-pf-does-not-exist-zzz");
+    const cfgDir = await realpath(await mkdtemp(join(tmpdir(), "basou-pf-cfg-")));
+    try {
+      await writeCodexRolloutAt(wsA, "codex-c");
+      const configPath = join(cfgDir, "portfolio.yaml");
+      // The missing path comes first; the loop must still reach wsA.
+      await writeFile(configPath, `workspaces:\n  - path: ${missing}\n  - path: ${wsA}\n`);
+      vi.spyOn(console, "log").mockImplementation(() => {});
+
+      await doRunRefreshPortfolio(
+        { portfolio: true },
+        {
+          claudeProjectsDir: getClaudeRoot(),
+          codexSessionsDir: getCodexRoot(),
+          portfolioConfigPath: configPath,
+          nowProvider: () => FIXED_DATE,
+        },
+      );
+
+      await expect(access(basouPaths(wsA).files.handoff)).resolves.toBeUndefined();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      for (const dir of [wsA, cfgDir]) await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("basou refresh (workspace view)", () => {
+  it("redirects a non-git view to its linked repo and imports there", async () => {
+    const inited = await setupInitedRepo();
+    await writeCodexRollout(inited); // a Codex rollout whose cwd is the linked repo
+    const view = await realpath(await mkdtemp(join(tmpdir(), "basou-refresh-view-")));
+    try {
+      await symlink(inited, join(view, "fixture-planning"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "log").mockImplementation(() => {});
+
+      const result = await doRunRefresh(
+        {},
+        {
+          cwd: view,
+          claudeProjectsDir: getClaudeRoot(),
+          codexSessionsDir: getCodexRoot(),
+          nowProvider: () => FIXED_DATE,
+        },
+      );
+
+      expect(result.codex.status).toBe("ran");
+      if (result.codex.status === "ran") expect(result.codex.importedCount).toBe(1);
+      expect(errSpy.mock.calls.flat().join(" ")).toContain("Resolved workspace view to");
+      // Imported into the LINKED repo's .basou, not the view.
+      await expect(access(basouPaths(inited).files.handoff)).resolves.toBeUndefined();
+    } finally {
+      await rm(view, { recursive: true, force: true });
     }
   });
 });

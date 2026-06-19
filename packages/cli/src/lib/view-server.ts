@@ -24,6 +24,7 @@ import type { ImportContext } from "../commands/import.js";
 import {
   importClaudeCode,
   importCodex,
+  probeStaleness,
   type RefreshActionOptions,
   refreshAll,
   regenerateDecisions,
@@ -367,6 +368,23 @@ function matchWsRoute(pathname: string): { key: string; sub: string } | null {
 async function portfolio(deps: ViewServerDeps): Promise<Record<string, unknown>> {
   const nowIso = deps.nowProvider().toISOString();
   const workspaces = await Promise.all(deps.workspaces.map((ws) => portfolioCard(ws, nowIso)));
+  // Each staleness probe runs a dry-run import, which swaps the process-global
+  // console to capture output (see captureImportJson). That swap is NOT
+  // reentrant, so the probes must run ONE AT A TIME — running them inside the
+  // parallel map above let them clobber each other's capture and most failed.
+  // The summaries above are pure reads and stay parallel; only this loop serializes.
+  for (let i = 0; i < deps.workspaces.length; i++) {
+    const card = workspaces[i];
+    const ws = deps.workspaces[i];
+    if (
+      ws !== undefined &&
+      card !== undefined &&
+      card.initialized === true &&
+      card.error === undefined
+    ) {
+      card.staleness = await captureStaleness(ws, nowIso);
+    }
+  }
   return { mode: deps.mode, generatedAt: nowIso, workspaces };
 }
 
@@ -400,6 +418,21 @@ async function portfolioCard(ws: WorkspaceEntry, nowIso: string): Promise<Record
   } catch (error: unknown) {
     return { ...base, initialized: true, error: pathlessMessage(error) };
   }
+}
+
+/**
+ * Make a stale capture visible instead of silent: a non-zero count becomes a
+ * "run refresh" badge so the operator can tell a genuinely idle workspace from
+ * one merely behind on imports. Delegates to the shared {@link probeStaleness}
+ * (a read-only dry-run; the portfolio's read-only guarantee holds) and maps its
+ * `null` (probe failed) to `{ checked: false }` so a card still renders.
+ */
+async function captureStaleness(
+  ws: WorkspaceEntry,
+  nowIso: string,
+): Promise<Record<string, unknown>> {
+  const probe = await probeStaleness({ ctx: ws.importCtx, paths: ws.paths, nowIso });
+  return probe === null ? { checked: false } : { checked: true, ...probe };
 }
 
 async function overview(
