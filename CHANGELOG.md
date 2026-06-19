@@ -3,7 +3,7 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
-## Unreleased
+## 0.12.0 — 2026-06-20
 
 ### Added
 
@@ -55,6 +55,25 @@ All notable changes to **basou** are recorded here. The project follows
   idempotent against a standalone `.basou/` line as well as the `# Basou`
   marker, so it no longer double-appends on a repo that already excludes
   `.basou/`.
+- `basou refresh --portfolio` — refresh every workspace listed in
+  `~/.basou/portfolio.yaml` in one invocation (best-effort: a failing workspace
+  is reported and skipped, the rest continue, and the process exits non-zero if
+  any failed). The `basou view --portfolio` cards gain a read-only staleness
+  badge — the uncaptured / grown / unverifiable native sessions a real refresh
+  would pick up — so an out-of-date capture is visible instead of silently
+  stale. The probe writes nothing.
+- `basou orient` gains a plain one-line "is this current" verdict (current /
+  maybe-stale / cannot-confirm) driven by a read-only dry-run staleness probe,
+  with the raw freshness telemetry moved under `--verbose`. A grown source that
+  cannot be re-imported safely (broken prior hash chain, unreadable prior
+  events, or a non-append change) is surfaced as "cannot confirm" pointing at
+  `basou verify` / `basou refresh --force`, never as a false "current".
+- `basou orient` / `basou refresh` now run from an agents-workspace "view"
+  directory (a git-untracked dir that symlinks its planning repo): they resolve
+  to the single linked sibling repo whose git toplevel holds a `.basou/` store,
+  or report an ambiguity error naming the candidates. A git failure other than a
+  genuine "not a git repository" (e.g. a corrupt repo) surfaces as an error
+  rather than triggering the view fallback.
 
 ## 0.11.0 — 2026-06-12
 
