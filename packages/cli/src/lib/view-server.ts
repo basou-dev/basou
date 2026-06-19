@@ -22,6 +22,7 @@ import {
 } from "@basou/core";
 import type { ImportContext } from "../commands/import.js";
 import {
+  type ImportOutcome,
   importClaudeCode,
   importCodex,
   type RefreshActionOptions,
@@ -367,6 +368,23 @@ function matchWsRoute(pathname: string): { key: string; sub: string } | null {
 async function portfolio(deps: ViewServerDeps): Promise<Record<string, unknown>> {
   const nowIso = deps.nowProvider().toISOString();
   const workspaces = await Promise.all(deps.workspaces.map((ws) => portfolioCard(ws, nowIso)));
+  // Each staleness probe runs a dry-run import, which swaps the process-global
+  // console to capture output (see captureImportJson). That swap is NOT
+  // reentrant, so the probes must run ONE AT A TIME — running them inside the
+  // parallel map above let them clobber each other's capture and most failed.
+  // The summaries above are pure reads and stay parallel; only this loop serializes.
+  for (let i = 0; i < deps.workspaces.length; i++) {
+    const card = workspaces[i];
+    const ws = deps.workspaces[i];
+    if (
+      ws !== undefined &&
+      card !== undefined &&
+      card.initialized === true &&
+      card.error === undefined
+    ) {
+      card.staleness = await captureStaleness(ws, nowIso);
+    }
+  }
   return { mode: deps.mode, generatedAt: nowIso, workspaces };
 }
 
@@ -399,6 +417,45 @@ async function portfolioCard(ws: WorkspaceEntry, nowIso: string): Promise<Record
     };
   } catch (error: unknown) {
     return { ...base, initialized: true, error: pathlessMessage(error) };
+  }
+}
+
+/** Sessions a refresh would newly import for this workspace; 0 unless the adapter ran. */
+function wouldImport(outcome: ImportOutcome): number {
+  return outcome.status === "ran" ? outcome.importedCount : 0;
+}
+
+/** Already-imported sessions a refresh would re-import (grown) or replace. */
+function wouldUpdate(outcome: ImportOutcome): number {
+  return outcome.status === "ran" ? outcome.reimportedCount + outcome.replacedCount : 0;
+}
+
+/**
+ * Make a stale capture visible instead of silent. Runs a DRY-RUN refresh (reads
+ * the native logs, writes nothing — the portfolio's read-only guarantee holds)
+ * to count how many sessions a real `basou refresh` would add or update. The UI
+ * turns a non-zero count into a "run refresh" badge, so the operator can tell a
+ * genuinely idle workspace from one that is merely behind on imports. Best
+ * effort: a dry-run failure yields `{ checked: false }` rather than a broken card.
+ */
+async function captureStaleness(
+  ws: WorkspaceEntry,
+  nowIso: string,
+): Promise<Record<string, unknown>> {
+  try {
+    const dry = await refreshAll({
+      options: { dryRun: true },
+      ctx: ws.importCtx,
+      paths: ws.paths,
+      nowIso,
+    });
+    return {
+      checked: true,
+      newSessions: wouldImport(dry.claudeCode) + wouldImport(dry.codex),
+      updatedSessions: wouldUpdate(dry.claudeCode) + wouldUpdate(dry.codex),
+    };
+  } catch {
+    return { checked: false };
   }
 }
 

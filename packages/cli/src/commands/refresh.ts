@@ -1,6 +1,7 @@
 import { assertBasouRootSafe, basouPaths, findErrorCode, resolveRepositoryRoot } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
 import type { ImportContext } from "./import.js";
 import {
@@ -15,6 +16,8 @@ export type RefreshOptions = {
   force?: boolean;
   dryRun?: boolean;
   json?: boolean;
+  /** Refresh every workspace in `~/.basou/portfolio.yaml` instead of just the cwd's. */
+  portfolio?: boolean;
   /** Run as a long-lived watcher: re-import when the native logs change. */
   watch?: boolean;
   /** Poll interval in seconds for `--watch` (default {@link DEFAULT_WATCH_INTERVAL_SEC}). */
@@ -65,6 +68,8 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 export type RefreshContext = ImportContext & {
   /** Defaults to `() => new Date()`. Injectable for tests. */
   nowProvider?: () => Date;
+  /** Portfolio config path for `--portfolio`; defaults to `~/.basou/portfolio.yaml`. Injectable for tests. */
+  portfolioConfigPath?: string;
 };
 
 /**
@@ -88,6 +93,10 @@ export function registerRefreshCommand(program: Command): void {
     .option("--dry-run", "Preview imports and skip writing handoff / decisions")
     .option("--json", "Output the result as JSON")
     .option(
+      "--portfolio",
+      "Refresh every workspace listed in ~/.basou/portfolio.yaml (each with its own source roots)",
+    )
+    .option(
       "--watch",
       "Keep running: re-import + regenerate when the native logs change (Ctrl-C to stop)",
     )
@@ -108,7 +117,9 @@ export function registerRefreshCommand(program: Command): void {
  */
 export async function runRefresh(options: RefreshOptions, ctx: RefreshContext = {}): Promise<void> {
   try {
-    if (options.watch === true) {
+    if (options.portfolio === true) {
+      await doRunRefreshPortfolio(options, ctx);
+    } else if (options.watch === true) {
       await doRunRefreshWatch(options, ctx);
     } else {
       await doRunRefresh(options, ctx);
@@ -117,6 +128,64 @@ export async function runRefresh(options: RefreshOptions, ctx: RefreshContext = 
     renderCliError(error, { verbose: isVerbose(options) });
     process.exitCode = 1;
   }
+}
+
+/**
+ * `basou refresh --portfolio`: refresh every workspace in
+ * `~/.basou/portfolio.yaml` in one invocation, so the cross-repo orientation in
+ * `basou view --portfolio` can be trusted as current without nine manual
+ * refreshes. Best-effort: one workspace failing to refresh is reported and
+ * skipped, the rest continue, and the process exits non-zero if any failed.
+ */
+export async function doRunRefreshPortfolio(
+  options: RefreshOptions,
+  ctx: RefreshContext,
+): Promise<void> {
+  if (options.watch === true) throw new Error("--portfolio cannot be combined with --watch.");
+  if (options.project !== undefined && options.project.length > 0) {
+    throw new Error(
+      "--portfolio refreshes each workspace with its own source roots; remove --project.",
+    );
+  }
+
+  const workspaces = await loadPortfolioConfig(ctx.portfolioConfigPath);
+  const rollup: Array<
+    | { label: string; path: string; status: "ok"; result: RefreshResult }
+    | { label: string; path: string; status: "failed"; error: string }
+  > = [];
+
+  for (const ws of workspaces) {
+    const label = ws.label ?? ws.path;
+    try {
+      const result = await computeRefresh(
+        { ...options, portfolio: false },
+        { ...ctx, cwd: ws.path },
+      );
+      rollup.push({ label, path: ws.path, status: "ok", result });
+      if (options.json !== true) {
+        console.log(`\n## ${label} (${ws.path})`);
+        printRefreshSummary(result);
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      rollup.push({ label, path: ws.path, status: "failed", error: message });
+      if (options.json !== true) {
+        console.log(`\n## ${label} (${ws.path})`);
+        console.log(`  failed: ${message}`);
+      }
+    }
+  }
+
+  if (options.json === true) {
+    console.log(JSON.stringify({ portfolio: true, workspaces: rollup }));
+  } else {
+    const failed = rollup.filter((r) => r.status === "failed").length;
+    const ok = rollup.length - failed;
+    console.log(
+      `\nportfolio: ${ok}/${rollup.length} refreshed${failed > 0 ? `, ${failed} failed` : ""}.`,
+    );
+  }
+  if (rollup.some((r) => r.status === "failed")) process.exitCode = 1;
 }
 
 /**
@@ -164,11 +233,11 @@ export async function doRunRefreshWatch(
 }
 
 /**
- * Pure runner: resolves the workspace, runs the shared refresh pipeline, and
- * prints a summary (or JSON). Returns the {@link RefreshResult} so the same
- * pipeline can be exercised by tests and reused by the view server.
+ * Resolve the workspace and run the shared refresh pipeline, returning the
+ * {@link RefreshResult} without printing. Shared by {@link doRunRefresh} and the
+ * per-workspace loop in {@link doRunRefreshPortfolio}.
  */
-export async function doRunRefresh(
+async function computeRefresh(
   options: RefreshOptions,
   ctx: RefreshContext,
 ): Promise<RefreshResult> {
@@ -178,7 +247,7 @@ export async function doRunRefresh(
   await assertWorkspaceInitialized(paths.root);
 
   const nowIso = (ctx.nowProvider?.() ?? new Date()).toISOString();
-  const result = await refreshAll({
+  return refreshAll({
     options: {
       ...(options.project !== undefined && options.project.length > 0
         ? { project: options.project }
@@ -190,7 +259,18 @@ export async function doRunRefresh(
     paths,
     nowIso,
   });
+}
 
+/**
+ * Pure runner: resolves the workspace, runs the shared refresh pipeline, and
+ * prints a summary (or JSON). Returns the {@link RefreshResult} so the same
+ * pipeline can be exercised by tests and reused by the view server.
+ */
+export async function doRunRefresh(
+  options: RefreshOptions,
+  ctx: RefreshContext,
+): Promise<RefreshResult> {
+  const result = await computeRefresh(options, ctx);
   if (options.json === true) {
     console.log(JSON.stringify(result));
   } else {
