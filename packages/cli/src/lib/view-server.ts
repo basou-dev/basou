@@ -22,9 +22,9 @@ import {
 } from "@basou/core";
 import type { ImportContext } from "../commands/import.js";
 import {
-  type ImportOutcome,
   importClaudeCode,
   importCodex,
+  probeStaleness,
   type RefreshActionOptions,
   refreshAll,
   regenerateDecisions,
@@ -420,43 +420,19 @@ async function portfolioCard(ws: WorkspaceEntry, nowIso: string): Promise<Record
   }
 }
 
-/** Sessions a refresh would newly import for this workspace; 0 unless the adapter ran. */
-function wouldImport(outcome: ImportOutcome): number {
-  return outcome.status === "ran" ? outcome.importedCount : 0;
-}
-
-/** Already-imported sessions a refresh would re-import (grown) or replace. */
-function wouldUpdate(outcome: ImportOutcome): number {
-  return outcome.status === "ran" ? outcome.reimportedCount + outcome.replacedCount : 0;
-}
-
 /**
- * Make a stale capture visible instead of silent. Runs a DRY-RUN refresh (reads
- * the native logs, writes nothing — the portfolio's read-only guarantee holds)
- * to count how many sessions a real `basou refresh` would add or update. The UI
- * turns a non-zero count into a "run refresh" badge, so the operator can tell a
- * genuinely idle workspace from one that is merely behind on imports. Best
- * effort: a dry-run failure yields `{ checked: false }` rather than a broken card.
+ * Make a stale capture visible instead of silent: a non-zero count becomes a
+ * "run refresh" badge so the operator can tell a genuinely idle workspace from
+ * one merely behind on imports. Delegates to the shared {@link probeStaleness}
+ * (a read-only dry-run; the portfolio's read-only guarantee holds) and maps its
+ * `null` (probe failed) to `{ checked: false }` so a card still renders.
  */
 async function captureStaleness(
   ws: WorkspaceEntry,
   nowIso: string,
 ): Promise<Record<string, unknown>> {
-  try {
-    const dry = await refreshAll({
-      options: { dryRun: true },
-      ctx: ws.importCtx,
-      paths: ws.paths,
-      nowIso,
-    });
-    return {
-      checked: true,
-      newSessions: wouldImport(dry.claudeCode) + wouldImport(dry.codex),
-      updatedSessions: wouldUpdate(dry.claudeCode) + wouldUpdate(dry.codex),
-    };
-  } catch {
-    return { checked: false };
-  }
+  const probe = await probeStaleness({ ctx: ws.importCtx, paths: ws.paths, nowIso });
+  return probe === null ? { checked: false } : { checked: true, ...probe };
 }
 
 async function overview(

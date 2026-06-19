@@ -3,7 +3,6 @@ import {
   basouPaths,
   findErrorCode,
   renderOrientation,
-  resolveRepositoryRoot,
   writeMarkdownFile,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -14,12 +13,13 @@ import {
   printTaskSkip,
   renderCliError,
 } from "../lib/error-render.js";
+import { probeStaleness } from "../lib/provenance-actions.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
+import type { ImportContext } from "./import.js";
 
 export type OrientOptions = { verbose?: boolean; quiet?: boolean };
 
-export type OrientContext = {
-  /** Defaults to `process.cwd()`. Injectable for tests. */
-  cwd?: string;
+export type OrientContext = ImportContext & {
   /** Defaults to `() => new Date()`. Injectable for tests. */
   nowProvider?: () => Date;
 };
@@ -27,9 +27,10 @@ export type OrientContext = {
 /**
  * Wire `basou orient` onto `program`. A read-first "where am I" command: it
  * renders the current position, writes `.basou/orientation.md`, and prints the
- * body to stdout by default. It runs NO import — the freshness section reflects
- * already-captured state, so a stale capture is visible (use `basou refresh` to
- * re-import).
+ * body to stdout by default. It writes NO provenance — a read-only dry-run probe
+ * checks for uncaptured native work so the "これは最新か" verdict is honest (use
+ * `basou refresh` to actually re-import). `--verbose` appends raw freshness
+ * telemetry under the verdict.
  */
 export function registerOrientCommand(program: Command): void {
   program
@@ -61,14 +62,24 @@ export async function runOrient(options: OrientOptions, ctx: OrientContext = {})
  */
 export async function doRunOrient(options: OrientOptions, ctx: OrientContext): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForOrient(cwd);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "orient");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
   const nowIso = (ctx.nowProvider?.() ?? new Date()).toISOString();
+
+  // Read-only dry-run probe (writes nothing) so the freshness verdict reflects
+  // whether uncaptured native work exists, not just the last-captured state.
+  const probeCtx: ImportContext = { cwd: repositoryRoot };
+  if (ctx.claudeProjectsDir !== undefined) probeCtx.claudeProjectsDir = ctx.claudeProjectsDir;
+  if (ctx.codexSessionsDir !== undefined) probeCtx.codexSessionsDir = ctx.codexSessionsDir;
+  const staleness = await probeStaleness({ ctx: probeCtx, paths, nowIso });
+
   const result = await renderOrientation({
     paths,
     nowIso,
+    staleness,
+    verbose: options.verbose === true,
     onWarning: (w, sid) => printReplayWarning(w, sid),
     onSessionSkip: (sid, reason) => printSessionSkip(sid, reason),
     onTaskSkip: (taskId, reason) => printTaskSkip(taskId, reason),
@@ -84,19 +95,6 @@ export async function doRunOrient(options: OrientOptions, ctx: OrientContext): P
     );
   } else {
     console.log(result.body);
-  }
-}
-
-async function resolveRepositoryRootForOrient(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou orient'.", {
-        cause: error,
-      });
-    }
-    throw error;
   }
 }
 

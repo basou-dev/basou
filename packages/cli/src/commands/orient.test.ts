@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -30,9 +30,14 @@ const SES = (suffix: string) => `ses_01HXABCDEF1234567890ABC${suffix}`;
 const APPR = (suffix: string) => `appr_01HXABCDEF1234567890ABC${suffix}`;
 
 let tmpRepo: string | undefined;
+let claudeRoot: string | undefined;
+let codexRoot: string | undefined;
 
 beforeEach(async () => {
   tmpRepo = await mkdtemp(join(tmpdir(), "basou-orient-cli-test-"));
+  // Empty native-log roots keep the freshness probe hermetic (no real ~/.claude).
+  claudeRoot = await mkdtemp(join(tmpdir(), "basou-orient-claude-"));
+  codexRoot = await mkdtemp(join(tmpdir(), "basou-orient-codex-"));
   await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: tmpRepo, env: ENV });
   await execFileAsync("git", ["config", "user.email", "test@example.com"], {
     cwd: tmpRepo,
@@ -42,10 +47,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (tmpRepo !== undefined) {
-    await rm(tmpRepo, { recursive: true, force: true });
-    tmpRepo = undefined;
+  for (const dir of [tmpRepo, claudeRoot, codexRoot]) {
+    if (dir !== undefined) await rm(dir, { recursive: true, force: true });
   }
+  tmpRepo = undefined;
+  claudeRoot = undefined;
+  codexRoot = undefined;
   process.exitCode = 0;
   vi.restoreAllMocks();
 });
@@ -53,6 +60,61 @@ afterEach(async () => {
 function getTmpRepo(): string {
   if (tmpRepo === undefined) throw new Error("tmpRepo not initialized");
   return tmpRepo;
+}
+
+function getClaudeRoot(): string {
+  if (claudeRoot === undefined) throw new Error("claudeRoot not initialized");
+  return claudeRoot;
+}
+function getCodexRoot(): string {
+  if (codexRoot === undefined) throw new Error("codexRoot not initialized");
+  return codexRoot;
+}
+
+/** Orient context with the native-log roots wired to empty fixtures. */
+function ctxFor(repo: string) {
+  return {
+    cwd: repo,
+    claudeProjectsDir: getClaudeRoot(),
+    codexSessionsDir: getCodexRoot(),
+    nowProvider: () => FIXED_DATE,
+  };
+}
+
+/** A Codex rollout whose session cwd is `cwd` — an uncaptured session the probe should see. */
+async function writeCodexRolloutAt(cwd: string, id: string): Promise<void> {
+  const dir = join(getCodexRoot(), "2026", "05", "10");
+  await mkdir(dir, { recursive: true });
+  const records = [
+    {
+      type: "session_meta",
+      timestamp: "2026-05-10T00:00:00.000Z",
+      payload: { id, cwd, timestamp: "2026-05-10T00:00:00.000Z" },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:01.000Z",
+      payload: {
+        type: "function_call",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "ls", workdir: cwd }),
+        call_id: "c1",
+      },
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-05-10T00:00:02.000Z",
+      payload: {
+        type: "function_call_output",
+        call_id: "c1",
+        output: "Wall time: 0.1000 seconds\nProcess exited with code 0\n",
+      },
+    },
+  ];
+  await writeFile(
+    join(dir, `rollout-${id}.jsonl`),
+    records.map((r) => JSON.stringify(r)).join("\n"),
+  );
 }
 
 async function setupInitedRepo(): Promise<string> {
@@ -127,7 +189,7 @@ describe("basou orient", () => {
   it("prints the orientation body to stdout and writes .basou/orientation.md by default", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
-    await doRunOrient({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+    await doRunOrient({}, ctxFor(repo));
     const stdout = joinCalls(out);
     expect(stdout).toContain("# Orientation");
     expect(stdout).toContain("## 今どこにいる");
@@ -142,7 +204,7 @@ describe("basou orient", () => {
   it("--quiet writes the file and prints only a one-line summary", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
-    await doRunOrient({ quiet: true }, { cwd: repo, nowProvider: () => FIXED_DATE });
+    await doRunOrient({ quiet: true }, ctxFor(repo));
     const stdout = joinCalls(out);
     expect(stdout).toContain("Generated .basou/orientation.md");
     expect(stdout).not.toContain("## 今どこにいる");
@@ -155,7 +217,7 @@ describe("basou orient", () => {
     await placeSession(repo, { id: SES("S01") });
     await placePendingApproval(repo, APPR("A01"), SES("S01"));
     const out = captureStdout();
-    await doRunOrient({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+    await doRunOrient({}, ctxFor(repo));
     expect(joinCalls(out)).toContain("[high] command: deploy to production");
   });
 
@@ -165,7 +227,7 @@ describe("basou orient", () => {
     // A pre-existing file with arbitrary content + markers is fully replaced.
     await writeFile(orientationPath, `${GENERATED_START}\nstale\nmanual note\n`);
     captureStdout();
-    await doRunOrient({}, { cwd: repo, nowProvider: () => FIXED_DATE });
+    await doRunOrient({}, ctxFor(repo));
     const body = await readFile(orientationPath, "utf8");
     expect(body).not.toContain("manual note");
     expect(body).not.toContain(GENERATED_START);
@@ -179,6 +241,60 @@ describe("basou orient", () => {
     await runOrient({}, { cwd: tmp, nowProvider: () => FIXED_DATE });
     expect(process.exitCode).toBe(1);
     expect(joinCalls(err)).toContain("Workspace not initialized. Run 'basou init' first.");
+  });
+
+  it("これは最新か: a clean capture (no uncaptured native logs) prints the ✅ current verdict", async () => {
+    const repo = await setupInitedRepo();
+    await placeSession(repo, { id: SES("S01"), source: "claude-code-import" });
+    const out = captureStdout();
+    await doRunOrient({}, ctxFor(repo));
+    expect(joinCalls(out)).toContain("✅ 最新です。");
+  });
+
+  it("これは最新か: an uncaptured native session flips the verdict to ⚠️ stale → run refresh", async () => {
+    const repo = await setupInitedRepo();
+    // A Codex rollout for this repo exists in the native logs but was never imported.
+    await writeCodexRolloutAt(repo, "codex-uncaptured");
+    const out = captureStdout();
+    await doRunOrient({}, ctxFor(repo));
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("⚠️ 古いかもしれません。");
+    expect(stdout).toContain("`basou refresh`");
+  });
+
+  it("--verbose appends raw freshness telemetry; the default view omits it", async () => {
+    const repo = await setupInitedRepo();
+    await placeSession(repo, { id: SES("S01"), source: "claude-code-import" });
+
+    const plainOut = captureStdout();
+    await doRunOrient({}, ctxFor(repo));
+    expect(joinCalls(plainOut)).not.toContain("staleness probe:");
+    plainOut.mockRestore();
+
+    const verboseOut = captureStdout();
+    await doRunOrient({ verbose: true }, ctxFor(repo));
+    expect(joinCalls(verboseOut)).toContain("staleness probe:");
+  });
+
+  it("workspace view: resolves to the linked planning repo and notes the redirect", async () => {
+    const repo = await setupInitedRepo();
+    await placeSession(repo, { id: SES("S01"), source: "claude-code-import" });
+    // A git-untracked "view" dir that holds the repo only via a symlink.
+    const view = await realpath(await mkdtemp(join(tmpdir(), "basou-orient-view-")));
+    await symlink(repo, join(view, "fixture-planning"));
+    try {
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunOrient({}, { ...ctxFor(repo), cwd: view });
+      expect(joinCalls(out)).toContain("# Orientation");
+      expect(joinCalls(err)).toContain("Resolved workspace view to");
+      expect(joinCalls(err)).toContain("via fixture-planning");
+      // The orientation was written into the linked repo's .basou, not the view.
+      const body = await readFile(basouPaths(repo).files.orientation, "utf8");
+      expect(body).toContain("# Orientation");
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
   });
 
   it("register: wiring exposes 'orient' on the program", () => {

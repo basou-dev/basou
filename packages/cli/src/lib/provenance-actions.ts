@@ -269,7 +269,17 @@ export async function refreshAll(args: {
 
   const handoffCounts = await regenerateHandoff(paths, nowIso);
   const decisionCounts = await regenerateDecisions(paths, nowIso);
-  const orientationCounts = await regenerateOrientation(paths, nowIso);
+  // A full refresh just imported every root, so the snapshot is current — record
+  // a zero staleness so the file's "これは最新か" verdict reads as up to date
+  // instead of "run refresh to check". A `--project`-scoped refresh only touched
+  // some roots, so leave staleness unset (verdict: "cannot confirm") rather than
+  // claim the whole workspace is current.
+  const scoped = options.project !== undefined && options.project.length > 0;
+  const orientationCounts = await regenerateOrientation(
+    paths,
+    nowIso,
+    scoped ? {} : { staleness: { newSessions: 0, updatedSessions: 0 } },
+  );
   return {
     claudeCode,
     codex,
@@ -278,4 +288,50 @@ export async function refreshAll(args: {
     orientation: { status: "generated", ...orientationCounts },
     dryRun,
   };
+}
+
+/** Sessions a refresh would newly import for this adapter; 0 unless it ran. */
+function wouldImport(outcome: ImportOutcome): number {
+  return outcome.status === "ran" ? outcome.importedCount : 0;
+}
+
+/** Already-imported sessions a refresh would re-import (grown) or replace. */
+function wouldUpdate(outcome: ImportOutcome): number {
+  return outcome.status === "ran" ? outcome.reimportedCount + outcome.replacedCount : 0;
+}
+
+/** Counts of uncaptured / changed native sessions a real refresh would pick up. */
+export type StalenessProbe = { newSessions: number; updatedSessions: number };
+
+/**
+ * Make a stale capture measurable instead of silent: run a read-only DRY-RUN
+ * refresh (reads the native logs, writes nothing) and count the sessions a real
+ * `basou refresh` would add or update. Shared by the portfolio cards and the
+ * single-workspace `basou orient` verdict so both judge freshness identically.
+ * Returns `null` if the probe could not run (the caller renders "can't confirm"
+ * rather than a false "current").
+ *
+ * NOTE: the import capture swaps the process-global console and is NOT
+ * reentrant, so callers must never run two probes concurrently (e.g. the
+ * portfolio runs them serially).
+ */
+export async function probeStaleness(args: {
+  ctx: ImportContext;
+  paths: BasouPaths;
+  nowIso: string;
+}): Promise<StalenessProbe | null> {
+  try {
+    const dry = await refreshAll({
+      options: { dryRun: true },
+      ctx: args.ctx,
+      paths: args.paths,
+      nowIso: args.nowIso,
+    });
+    return {
+      newSessions: wouldImport(dry.claudeCode) + wouldImport(dry.codex),
+      updatedSessions: wouldUpdate(dry.claudeCode) + wouldUpdate(dry.codex),
+    };
+  } catch {
+    return null;
+  }
 }

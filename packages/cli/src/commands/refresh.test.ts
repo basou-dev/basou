@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -368,6 +377,37 @@ describe("basou refresh --portfolio", () => {
       expect(process.exitCode).toBe(1);
     } finally {
       for (const dir of [wsA, cfgDir]) await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("basou refresh (workspace view)", () => {
+  it("redirects a non-git view to its linked repo and imports there", async () => {
+    const inited = await setupInitedRepo();
+    await writeCodexRollout(inited); // a Codex rollout whose cwd is the linked repo
+    const view = await realpath(await mkdtemp(join(tmpdir(), "basou-refresh-view-")));
+    try {
+      await symlink(inited, join(view, "fixture-planning"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "log").mockImplementation(() => {});
+
+      const result = await doRunRefresh(
+        {},
+        {
+          cwd: view,
+          claudeProjectsDir: getClaudeRoot(),
+          codexSessionsDir: getCodexRoot(),
+          nowProvider: () => FIXED_DATE,
+        },
+      );
+
+      expect(result.codex.status).toBe("ran");
+      if (result.codex.status === "ran") expect(result.codex.importedCount).toBe(1);
+      expect(errSpy.mock.calls.flat().join(" ")).toContain("Resolved workspace view to");
+      // Imported into the LINKED repo's .basou, not the view.
+      await expect(access(basouPaths(inited).files.handoff)).resolves.toBeUndefined();
+    } finally {
+      await rm(view, { recursive: true, force: true });
     }
   });
 });

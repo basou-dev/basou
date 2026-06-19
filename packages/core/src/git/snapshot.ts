@@ -1,3 +1,5 @@
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
 import type { GitSnapshotEvent } from "../schemas/event.schema.js";
 import { findErrorCode } from "../storage/status.js";
@@ -75,6 +77,81 @@ export async function resolveRepositoryRoot(cwd: string): Promise<string> {
     }
     throw new Error("Not a git repository", { cause: error });
   }
+}
+
+/**
+ * Resolve the repository root that owns the `.basou/` store for `cwd`, with a
+ * fallback for agents-workspace "view" directories. A workspace view (e.g.
+ * `~/projects/foo-workspace`) is intentionally OUTSIDE git and holds no `.basou/`
+ * of its own; it aggregates sibling repos through symlinks (`foo-planning ->
+ * ../foo-planning`). Running `basou orient` / `refresh` from there would
+ * otherwise die with "Not a git repository" even though the view IS the
+ * operator's daily cwd.
+ *
+ * Resolution:
+ *  1. If `cwd` is inside a git repo, return its toplevel (unchanged behavior).
+ *  2. Otherwise inspect `cwd`'s direct symlinks; if exactly one points at a
+ *     directory that has a `.basou/` store, redirect to that repo (firing
+ *     `onRedirect`). Zero candidates re-throws the original "Not a git
+ *     repository"; two or more throws an ambiguity error naming them so the
+ *     operator can `cd` into the right one.
+ */
+export async function resolveBasouRepositoryRoot(
+  cwd: string,
+  opts?: { onRedirect?: (info: { via: string; root: string }) => void },
+): Promise<string> {
+  try {
+    return await resolveRepositoryRoot(cwd);
+  } catch (error: unknown) {
+    if (!(error instanceof Error) || error.message !== "Not a git repository") throw error;
+    const linked = await findLinkedBasouRepos(cwd);
+    const only = linked[0];
+    if (only !== undefined && linked.length === 1) {
+      opts?.onRedirect?.({ via: only.name, root: only.root });
+      return only.root;
+    }
+    if (linked.length > 1) {
+      const names = linked.map((l) => l.name).join(", ");
+      throw new Error(
+        `Ambiguous workspace view: ${linked.length} linked repos have a .basou store (${names}). cd into the one you want and re-run.`,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Direct children of `dir` that are symlinks to a git repository whose toplevel
+ * holds a `.basou/` store — the planning repos a workspace view aggregates.
+ * Detection keys off the git TOPLEVEL (where basou's store always lives), not
+ * the raw link target, so a link into a subdirectory is not mistaken for a root.
+ * Deduped by toplevel keeping the lexicographically-smallest link name (stable
+ * `via` across runs), and sorted by name. Best-effort: an unreadable dir, a
+ * broken link, or a non-git target yields no candidate.
+ */
+async function findLinkedBasouRepos(dir: string): Promise<{ name: string; root: string }[]> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
+  if (entries === null) return [];
+  const byRoot = new Map<string, string>(); // git toplevel -> chosen link name
+  for (const entry of entries) {
+    if (!entry.isSymbolicLink()) continue;
+    let root: string;
+    try {
+      root = await resolveRepositoryRoot(join(dir, entry.name));
+    } catch {
+      continue; // broken link or not a git repo
+    }
+    try {
+      if (!(await stat(join(root, ".basou"))).isDirectory()) continue;
+    } catch {
+      continue; // no .basou store at the repo root
+    }
+    const existing = byRoot.get(root);
+    if (existing === undefined || entry.name < existing) byRoot.set(root, entry.name);
+  }
+  return [...byRoot.entries()]
+    .map(([root, name]) => ({ name, root }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**

@@ -1,9 +1,15 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type GitSnapshot, getSnapshot, resolveRepositoryRoot, tryRemoteUrl } from "./snapshot.js";
+import {
+  type GitSnapshot,
+  getSnapshot,
+  resolveBasouRepositoryRoot,
+  resolveRepositoryRoot,
+  tryRemoteUrl,
+} from "./snapshot.js";
 
 const ENV_GLOBAL = process.platform === "win32" ? "\\\\.\\nul" : "/dev/null";
 // Minimal env for fixtures: only PATH / HOME / USERPROFILE are needed for
@@ -95,6 +101,58 @@ describe("resolveRepositoryRoot", () => {
     expect((err as Error).cause).toBeInstanceOf(Error);
     // Pathless contract: the wrapped message must not embed tmpRepo.
     expect((err as Error).message).not.toContain(tmpRepo);
+  });
+});
+
+describe("resolveBasouRepositoryRoot (workspace-view fallback)", () => {
+  /** A git repo with a `.basou/` store (the shape a planning repo has). */
+  async function initBasouRepo(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "basou-ws-"));
+    await initRepoWithCommit(dir);
+    await mkdir(join(dir, ".basou"));
+    return dir;
+  }
+
+  it("returns the git toplevel when cwd is a git repo (no fallback)", async () => {
+    await initRepoWithCommit(tmpRepo);
+    expect(await realpath(await resolveBasouRepositoryRoot(tmpRepo))).toBe(await realpath(tmpRepo));
+  });
+
+  it("redirects a non-git view to its single linked repo that has a .basou store", async () => {
+    const planning = await initBasouRepo();
+    const impl = await mkdtemp(join(tmpdir(), "basou-impl-")); // linked but NO .basou
+    await initRepoWithCommit(impl);
+    const view = await mkdtemp(join(tmpdir(), "basou-view-")); // git-untracked view dir
+    try {
+      await symlink(planning, join(view, "foo-planning"));
+      await symlink(impl, join(view, "foo"));
+      const redirects: { via: string; root: string }[] = [];
+      const root = await resolveBasouRepositoryRoot(view, {
+        onRedirect: (info) => redirects.push(info),
+      });
+      expect(await realpath(root)).toBe(await realpath(planning));
+      expect(redirects).toHaveLength(1);
+      expect(redirects[0]?.via).toBe("foo-planning");
+    } finally {
+      for (const d of [planning, impl, view]) await rm(d, { recursive: true, force: true });
+    }
+  });
+
+  it("throws an ambiguity error when several linked repos have a .basou store", async () => {
+    const a = await initBasouRepo();
+    const b = await initBasouRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-view-"));
+    try {
+      await symlink(a, join(view, "a-planning"));
+      await symlink(b, join(view, "b-planning"));
+      await expect(resolveBasouRepositoryRoot(view)).rejects.toThrow(/Ambiguous workspace view/);
+    } finally {
+      for (const d of [a, b, view]) await rm(d, { recursive: true, force: true });
+    }
+  });
+
+  it("re-throws 'Not a git repository' for a non-git dir with no linked .basou repos", async () => {
+    await expect(resolveBasouRepositoryRoot(tmpRepo)).rejects.toThrow("Not a git repository");
   });
 });
 

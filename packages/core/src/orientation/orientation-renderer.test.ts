@@ -181,8 +181,8 @@ describe("orientation-renderer", () => {
     expect(result.body).toContain("## どこへ向かう");
     expect(result.body).toContain("## これは最新か");
     expect(result.body).toContain("- 最終 session: (no live sessions)");
-    expect(result.body).toContain("newest captured session: (no sessions captured yet)");
-    expect(result.body).toContain("run `basou refresh` to re-import");
+    // Plain verdict (no sessions yet) replaces the raw telemetry in the default view.
+    expect(result.body).toContain("まだ記録がありません。");
   });
 
   it("renders the pending-approval LIST with risk / action / reason (not just a count)", async () => {
@@ -262,7 +262,9 @@ describe("orientation-renderer", () => {
       ),
     );
 
-    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    // Raw freshness telemetry (ISO, per-source counts, source roots) now lives
+    // under --verbose; render verbose to assert it is still emitted.
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO, verbose: true });
 
     expect(result.decisionCount).toBe(1);
     expect(result.body).toContain("直近の判断: adopt orientation re-centering");
@@ -281,6 +283,103 @@ describe("orientation-renderer", () => {
     expect(lower).not.toContain("scorecard");
     expect(lower).not.toContain("productivity");
     expect(lower).not.toContain("utilization");
+  });
+
+  it("これは最新か: a zero-staleness probe renders the ✅ current verdict with a translated tool name", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "codex-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 0 },
+    });
+    expect(result.body).toContain(
+      "✅ 最新です。最後の作業は たった今(Codex)。取りこぼし・要注意なし。",
+    );
+    // The default verdict translates the tool and hides the internal source enum.
+    expect(result.body).not.toContain("codex-import");
+  });
+
+  it("これは最新か: a non-zero staleness probe renders the ⚠️ stale verdict pointing at refresh", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T11:00:00+09:00",
+    });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 2, updatedSessions: 1 },
+    });
+    expect(result.body).toContain("⚠️ 古いかもしれません。");
+    expect(result.body).toContain("新規 2 件");
+    expect(result.body).toContain("更新 1 件");
+    expect(result.body).toContain("`basou refresh`");
+  });
+
+  it("これは最新か: an unrun probe (null) says it cannot confirm rather than claiming current", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("ℹ️ 取り込み済みの状態を表示しています。");
+    expect(result.body).toContain("最新か確認するには `basou refresh`");
+    expect(result.body).not.toContain("✅ 最新です。");
+  });
+
+  it("これは最新か: a fresh capture with suspect sessions still cautions in the verdict", async () => {
+    const paths = await setupPaths();
+    const id = SES("R01");
+    await placeSession(
+      paths,
+      { id, status: "running", source: "claude-code-import", startedAt: FIXED_NOW_ISO },
+      startedLine(id, "E01", "2026-05-08T11:00:00+09:00") +
+        endedLine(id, "E02", "2026-05-08T11:05:00+09:00"),
+    );
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 0 },
+    });
+    expect(result.body).toContain("✅ 最新です。");
+    expect(result.body).toContain("要注意セッションが 1 件あります。");
+  });
+
+  it("--verbose appends the raw freshness telemetry under the verdict", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    const plain = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 0 },
+    });
+    const verbose = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 0 },
+      verbose: true,
+    });
+    expect(plain.body).not.toContain("newest captured session:");
+    expect(plain.body).not.toContain("staleness probe:");
+    expect(verbose.body).toContain("newest captured session: ");
+    expect(verbose.body).toContain("- sessions: 1 (claude-code-import 1)");
+    expect(verbose.body).toContain("- staleness probe: new 0, updated 0");
   });
 
   // Output-invariance lock: renderOrientation must keep emitting byte-identical
@@ -318,11 +417,8 @@ describe("orientation-renderer", () => {
         "",
         "## これは最新か",
         "",
-        "- newest captured session: (no sessions captured yet)",
-        "- sessions: 0",
-        "- source roots: (single root)",
-        "- suspect sessions: 0",
-        "- reflects already-captured state; run `basou refresh` to re-import.",
+        "ℹ️ まだ記録がありません。",
+        "このワークスペースで作業すると、ここに現在地が表示されます。",
       ].join("\n"),
     );
   });
@@ -369,7 +465,12 @@ describe("orientation-renderer", () => {
       expiresAt: "2026-05-08T00:00:00.000Z",
     });
 
-    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO, relatedFilesLimit: 2 });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      relatedFilesLimit: 2,
+      staleness: { newSessions: 0, updatedSessions: 0 },
+    });
 
     expect(result.body).toBe(
       [
@@ -401,11 +502,7 @@ describe("orientation-renderer", () => {
         "",
         "## これは最新か",
         "",
-        "- newest captured session: 2026-05-09T03:00:00.000Z (just now)",
-        "- sessions: 2 (claude-code-import 1, codex-import 1)",
-        "- source roots: (single root)",
-        "- suspect sessions: 0",
-        "- reflects already-captured state; run `basou refresh` to re-import.",
+        "✅ 最新です。最後の作業は たった今(Claude Code)。取りこぼし・要注意なし。",
       ].join("\n"),
     );
   });
@@ -426,7 +523,12 @@ describe("summarizeOrientation", () => {
     expect(summary.plannedTasks).toEqual([]);
     expect(summary.pendingApprovals).toEqual([]);
     expect(summary.suspects).toEqual([]);
-    expect(summary.freshness).toEqual({ newestStartedAt: null, bySource: [], sourceRoots: null });
+    expect(summary.freshness).toEqual({
+      newestStartedAt: null,
+      newestSource: null,
+      bySource: [],
+      sourceRoots: null,
+    });
     // Round-trips through JSON unchanged (no Maps / Dates / class instances).
     expect(JSON.parse(JSON.stringify(summary))).toEqual(summary);
   });
@@ -495,6 +597,7 @@ describe("summarizeOrientation", () => {
       },
     ]);
     expect(summary.freshness.newestStartedAt).toBe("2026-05-08T11:00:00+09:00");
+    expect(summary.freshness.newestSource).toBe("claude-code-import");
     expect(summary.freshness.bySource).toEqual([{ kind: "claude-code-import", count: 1 }]);
   });
 
