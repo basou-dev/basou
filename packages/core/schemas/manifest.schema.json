@@ -149,6 +149,31 @@
           }
         }
       }
+    },
+    "repos": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![~/\\\\])(?![A-Za-z]:)[^\\0\\\\]+$"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "private",
+              "future-public"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
     }
   },
   "required": [
