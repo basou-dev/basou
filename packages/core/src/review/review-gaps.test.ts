@@ -474,11 +474,15 @@ describe("normalizeRepoPath (realpath resolution)", () => {
     if (root === undefined) throw new Error("root not initialized");
     return root;
   }
+  /** Create a directory that looks like a git repo root (has a `.git`). */
+  async function mkRepo(p: string): Promise<void> {
+    await mkdir(join(p, ".git"), { recursive: true });
+  }
 
   it("collapses a symlinked view to the real repo path regardless of the view's name", async () => {
     const base = getRoot();
     const realRepo = join(base, "myrepo");
-    await mkdir(realRepo);
+    await mkRepo(realRepo);
     // a view dir whose name is NOT `*-workspace`; the old string heuristic would
     // not collapse this, but realpath follows the symlink and does.
     const view = join(base, "dev-view");
@@ -495,7 +499,7 @@ describe("normalizeRepoPath (realpath resolution)", () => {
   it("binds a commit and a review reached through differently-named symlinked views", async () => {
     const base = getRoot();
     const repo = join(base, "alpha");
-    await mkdir(repo);
+    await mkRepo(repo);
     const view = join(base, "dev-view"); // not `*-workspace`
     await mkdir(view);
     await symlink(repo, join(view, "alpha"));
@@ -532,7 +536,7 @@ describe("normalizeRepoPath (realpath resolution)", () => {
   it("caches a resolution: a repeat lookup survives the target being removed mid-run", async () => {
     const base = getRoot();
     const realRepo = join(base, "cached");
-    await mkdir(realRepo);
+    await mkRepo(realRepo);
     const view = join(base, "view");
     await mkdir(view);
     const link = join(view, "cached");
@@ -545,6 +549,85 @@ describe("normalizeRepoPath (realpath resolution)", () => {
     // prior resolution, since the filesystem is assumed stable within a run.
     await rm(link);
     expect(normalizeRepoPath(link)).toBe(first);
+  });
+
+  it("abstains (null) for a real directory that is not a git repo root", async () => {
+    const base = getRoot();
+    const notRepo = join(base, "not-a-repo");
+    await mkdir(notRepo); // a real directory, but no `.git`
+    expect(normalizeRepoPath(notRepo)).toBeNull();
+    // a sibling that IS a repo root still resolves
+    const realRepo = join(base, "real-repo");
+    await mkRepo(realRepo);
+    expect(normalizeRepoPath(realRepo)).toBe(await realpath(realRepo));
+  });
+
+  it("a commit in a real non-git directory is an unknown unit, not a spurious repo", async () => {
+    const base = getRoot();
+    // a real directory that is NOT a git repo (e.g. a workspace view root, /tmp)
+    const viewRoot = join(base, "a-view");
+    await mkdir(viewRoot);
+    const paths = await ensureBasouDirectory(join(base, ".store"));
+    await placeSession(
+      paths,
+      { id: SES("CN1"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("CN1"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          viewRoot,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // the non-repo directory must not surface as a repo; the commit abstains
+    expect(s.repos.map((r) => r.repo)).not.toContain("a-view");
+    expect(s.unknowns).toHaveLength(1);
+    expect(s.unknowns[0]?.repo).toBe("(unknown)");
+  });
+
+  it("an explicit `cd <non-repo>` does not fall back to the cwd repo (no false candidate)", async () => {
+    const base = getRoot();
+    const repo = join(base, "alpha");
+    await mkRepo(repo);
+    const nonRepo = join(base, "scratch"); // real dir, no `.git`
+    await mkdir(nonRepo);
+    const paths = await ensureBasouDirectory(join(base, ".store"));
+    // a "review" whose cwd is the repo but which `cd`s to a non-repo and runs git
+    // diff there: it must NOT be credited to the repo cwd.
+    await placeSession(
+      paths,
+      { id: SES("RN1"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [
+        cmd(
+          SES("RN1"),
+          "codex-import",
+          "2026-05-09T09:30:00.000Z",
+          ["-c", `cd ${nonRepo} && git diff`],
+          repo,
+        ),
+      ],
+    );
+    // a real commit in the repo
+    await placeSession(
+      paths,
+      { id: SES("CN2"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("CN2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // the cd-to-non-repo review is not credited to the repo, so the commit stays a gap
+    expect(s.candidates).toHaveLength(0);
+    expect(s.gaps.some((u) => u.repo === "alpha" && u.verdict === "omission")).toBe(true);
   });
 
   it("does not collapse a non-`*-workspace` view that is absent on disk (fallback is name-bound)", () => {
