@@ -90,6 +90,15 @@ export type {
   TaskStatusCount,
 } from "./report/index.js";
 export { renderReport } from "./report/index.js";
+export type {
+  CitedReview,
+  ReviewGapRepoSummary,
+  ReviewGapsInput,
+  ReviewGapsSummary,
+  ReviewGapUnit,
+  ReviewGapVerdict,
+} from "./review/index.js";
+export { findReviewGaps, normalizeRepoKey } from "./review/index.js";
 export { ChildProcessRunner } from "./runtime/child-process-runner.js";
 export type {
   CaptureMode,

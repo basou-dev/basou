@@ -10,6 +10,7 @@ import { registerInitCommand } from "./commands/init.js";
 import { registerOrientCommand } from "./commands/orient.js";
 import { registerRefreshCommand } from "./commands/refresh.js";
 import { registerReportCommand } from "./commands/report.js";
+import { registerReviewGapsCommand } from "./commands/review-gaps.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerSessionCommand } from "./commands/session.js";
 import { registerStatsCommand } from "./commands/stats.js";
@@ -64,6 +65,7 @@ export function buildProgram(): Command {
   registerDecisionsCommand(program);
   registerReportCommand(program);
   registerOrientCommand(program);
+  registerReviewGapsCommand(program);
 
   return program;
 }
