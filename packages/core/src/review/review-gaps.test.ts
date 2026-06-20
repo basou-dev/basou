@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -456,5 +456,103 @@ describe("normalizeRepoPath", () => {
     expect(normalizeRepoPath("/home/u/projects/foo-workspace")).toBeNull();
     expect(normalizeRepoPath('"$SMOKE_DIR"')).toBeNull();
     expect(normalizeRepoPath("")).toBeNull();
+  });
+});
+
+describe("normalizeRepoPath (realpath resolution)", () => {
+  let root: string | undefined;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "basou-rg-fs-"));
+  });
+  afterEach(async () => {
+    if (root !== undefined) {
+      await rm(root, { recursive: true, force: true });
+      root = undefined;
+    }
+  });
+  function getRoot(): string {
+    if (root === undefined) throw new Error("root not initialized");
+    return root;
+  }
+
+  it("collapses a symlinked view to the real repo path regardless of the view's name", async () => {
+    const base = getRoot();
+    const realRepo = join(base, "myrepo");
+    await mkdir(realRepo);
+    // a view dir whose name is NOT `*-workspace`; the old string heuristic would
+    // not collapse this, but realpath follows the symlink and does.
+    const view = join(base, "dev-view");
+    await mkdir(view);
+    await symlink(realRepo, join(view, "myrepo"));
+
+    const viewRouted = join(view, "myrepo");
+    const canonical = await realpath(realRepo);
+    expect(normalizeRepoPath(viewRouted)).toBe(canonical);
+    // the view-routed path and the direct path collapse to one binding key
+    expect(normalizeRepoPath(viewRouted)).toBe(normalizeRepoPath(realRepo));
+  });
+
+  it("binds a commit and a review reached through differently-named symlinked views", async () => {
+    const base = getRoot();
+    const repo = join(base, "alpha");
+    await mkdir(repo);
+    const view = join(base, "dev-view"); // not `*-workspace`
+    await mkdir(view);
+    await symlink(repo, join(view, "alpha"));
+
+    const paths = await ensureBasouDirectory(join(base, ".store"));
+    // review examined the diff via the DIRECT repo path
+    await placeSession(
+      paths,
+      { id: SES("RP1"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [cmd(SES("RP1"), "codex-import", "2026-05-09T09:30:00.000Z", ["-c", "git diff"], repo)],
+    );
+    // commit reached the same repo through the symlinked, non-`*-workspace` view
+    await placeSession(
+      paths,
+      { id: SES("CP1"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("CP1"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", `cd ${join(view, "alpha")} && git commit -m x`],
+          view,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // realpath collapses both to the real repo, so the review binds as a candidate
+    expect(s.gaps).toHaveLength(0);
+    expect(s.candidates).toHaveLength(1);
+    expect(s.candidates[0]?.repo).toBe("alpha");
+    expect(s.candidates[0]?.reviews[0]?.sessionId).toBe(SES("RP1"));
+  });
+
+  it("caches a resolution: a repeat lookup survives the target being removed mid-run", async () => {
+    const base = getRoot();
+    const realRepo = join(base, "cached");
+    await mkdir(realRepo);
+    const view = join(base, "view");
+    await mkdir(view);
+    const link = join(view, "cached");
+    await symlink(realRepo, link);
+
+    const first = normalizeRepoPath(link);
+    expect(first).toBe(await realpath(realRepo));
+    // remove the symlink: without caching, the repeat would realpath-fail and
+    // fall back to a different (string-heuristic) key. The cache returns the
+    // prior resolution, since the filesystem is assumed stable within a run.
+    await rm(link);
+    expect(normalizeRepoPath(link)).toBe(first);
+  });
+
+  it("does not collapse a non-`*-workspace` view that is absent on disk (fallback is name-bound)", () => {
+    // realpath fails (absent), so the string fallback runs; it only collapses
+    // `*-workspace` views, so an arbitrarily-named absent view keeps its literal
+    // path. The live (on-disk) symlink case above is what generalizes the name.
+    expect(normalizeRepoPath("/home/u/projects/dev-view/myrepo")).toBe(
+      "/home/u/projects/dev-view/myrepo",
+    );
   });
 });
