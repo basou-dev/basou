@@ -1,5 +1,6 @@
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
@@ -89,14 +90,51 @@ function stripQuotes(s: string): string {
 }
 
 /**
- * Normalize a path to a stable BINDING key: the full path (NOT just a basename),
- * so a commit in `/u/projects/basou` and a review in `/u/projects/basou` bind,
- * while a same-named checkout elsewhere (`/tmp/x/basou`) does not. A workspace
- * "view" reaches sibling repos through symlinks
- * (`foo-workspace/foo-planning -> ../foo-planning`), and commits are often run
- * with `cd <view>/<repo>`; both the view-routed path and the direct path
- * collapse to the same key. Returns null for a view root itself, an unexpanded
- * shell var, or empty input.
+ * Per-process cache of realpath resolutions. A stored `null` records that
+ * realpath FAILED for that input (the path is absent), so a repeat lookup of the
+ * same absent path neither re-issues the syscall nor is mistaken for a cache
+ * miss. The filesystem is assumed stable for the duration of a single command
+ * run. Bounded in practice: one entry per distinct repo path seen (O(10–100)).
+ */
+const realpathCache = new Map<string, string | null>();
+
+/** realpath an absolute path, caching both success and failure; null when unresolvable. */
+function resolveRealpath(absPath: string): string | null {
+  // Stored values are `string | null`; only an ABSENT key reads back as
+  // `undefined`, so a cached failure (null) returns without re-issuing realpath.
+  const cached = realpathCache.get(absPath);
+  if (cached !== undefined) return cached;
+  let resolved: string | null;
+  try {
+    resolved = realpathSync(absPath);
+  } catch {
+    resolved = null;
+  }
+  realpathCache.set(absPath, resolved);
+  return resolved;
+}
+
+/**
+ * Normalize a path to a stable BINDING key: the canonical full path (NOT just a
+ * basename), so a commit in `/u/projects/basou` and a review in
+ * `/u/projects/basou` bind, while a same-named checkout elsewhere
+ * (`/tmp/x/basou`) does not.
+ *
+ * A workspace "view" reaches sibling repos through symlinks
+ * (`<view>/<repo> -> ../<repo>`), and commits are often run with
+ * `cd <view>/<repo>`. To collapse the view-routed path and the direct path to
+ * one key REGARDLESS of the view directory's name, the path is resolved with
+ * realpath (which also unifies platform aliases such as macOS `/tmp` ->
+ * `/private/tmp`). Only absolute paths are resolved; a relative `cd ../x` target
+ * would realpath against the wrong base, so it is left to the fallback.
+ *
+ * When realpath cannot resolve the path (e.g. a historical capture whose repo
+ * has since moved), it FALLS BACK to a string heuristic that collapses a
+ * `*-workspace`-named view and rejects the view root itself. Returns null for a
+ * view root, an unexpanded shell var, or empty input.
+ *
+ * The realpath probe is the only filesystem I/O this otherwise string-pure key
+ * function performs, and its results are cached for the process lifetime.
  */
 export function normalizeRepoPath(p: string | null | undefined): string | null {
   if (!p) return null;
@@ -105,6 +143,17 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
   // expand a leading ~ so the same repo recorded as `~/projects/x` and
   // `/Users/u/projects/x` collapses to one binding key (the events capture both).
   if (s.startsWith("~/")) s = homedir() + s.slice(1);
+
+  // Prefer the on-disk truth: realpath follows the view's symlink so ANY view
+  // name (not only `*-workspace`) collapses to the real repo path. Only absolute
+  // paths are resolved; a relative target would resolve against the wrong base.
+  if (isAbsolute(s)) {
+    const real = resolveRealpath(s);
+    if (real !== null) return real;
+  }
+
+  // Fallback for paths not present on disk (historical/imported captures): the
+  // legacy string heuristic, name-bound to `*-workspace` views.
   // a path THROUGH a *-workspace view: .../foo-workspace/foo-planning -> .../foo-planning
   s = s.replace(/\/[^/]*-workspace\/([^/]+)/, "/$1");
   const seg = s
