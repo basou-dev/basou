@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
@@ -114,6 +114,24 @@ function resolveRealpath(absPath: string): string | null {
   return resolved;
 }
 
+/** Per-process cache of git-repo-root checks, keyed by resolved (realpath) path. */
+const repoRootCache = new Map<string, boolean>();
+
+/**
+ * Whether a resolved path is a git repo root, i.e. contains a `.git` (a directory
+ * for a normal clone, a file for a worktree/submodule). Used to reject a real but
+ * non-repo directory (a workspace view root, `/tmp`, a scratch dir) so it never
+ * becomes a binding key. A bare repo (no working tree, no `.git` child) is not
+ * recognized — review-gaps tracks working-tree commits, which bare repos lack.
+ */
+function isRepoRoot(realPath: string): boolean {
+  const cached = repoRootCache.get(realPath);
+  if (cached !== undefined) return cached;
+  const result = existsSync(join(realPath, ".git"));
+  repoRootCache.set(realPath, result);
+  return result;
+}
+
 /**
  * Normalize a path to a stable BINDING key: the canonical full path (NOT just a
  * basename), so a commit in `/u/projects/basou` and a review in
@@ -128,13 +146,17 @@ function resolveRealpath(absPath: string): string | null {
  * `/private/tmp`). Only absolute paths are resolved; a relative `cd ../x` target
  * would realpath against the wrong base, so it is left to the fallback.
  *
- * When realpath cannot resolve the path (e.g. a historical capture whose repo
- * has since moved), it FALLS BACK to a string heuristic that collapses a
- * `*-workspace`-named view and rejects the view root itself. Returns null for a
- * view root, an unexpanded shell var, or empty input.
+ * A resolved path is accepted as a key only when it is an actual git repo root
+ * (contains `.git`); a real but non-repo directory (a view root, `/tmp`, a
+ * scratch dir) returns null so the caller abstains (`unknown`) rather than
+ * mislabeling it a repo. When realpath cannot resolve the path (e.g. a historical
+ * capture whose repo has since moved), it FALLS BACK to a string heuristic that
+ * collapses a `*-workspace`-named view and rejects the view root itself. Returns
+ * null for a non-repo / view root, an unexpanded shell var, or empty input.
  *
- * The realpath probe is the only filesystem I/O this otherwise string-pure key
- * function performs, and its results are cached for the process lifetime.
+ * The realpath / `.git` probes are the only filesystem I/O this otherwise
+ * string-pure key function performs, and their results are cached for the
+ * process lifetime.
  */
 export function normalizeRepoPath(p: string | null | undefined): string | null {
   if (!p) return null;
@@ -149,7 +171,15 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
   // paths are resolved; a relative target would resolve against the wrong base.
   if (isAbsolute(s)) {
     const real = resolveRealpath(s);
-    if (real !== null) return real;
+    if (real !== null) {
+      // Resolved on disk: bind only when it is an actual git repo root. A real
+      // but non-repo directory must not become a key, and must NOT fall through
+      // to the string heuristic (which would mislabel `/tmp`, scratch dirs, a
+      // view root) — abstain (null -> `unknown`) instead.
+      return isRepoRoot(real) ? real : null;
+    }
+    // real === null: path absent (e.g. a moved/historical capture) -> fall
+    // through to the legacy *-workspace string heuristic below.
   }
 
   // Fallback for paths not present on disk (historical/imported captures): the
@@ -198,8 +228,14 @@ function inspectCommand(args: string[]): { files: string[]; examinedDiff: boolea
 
 /** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
 function commandRepo(args: string[], cwd: string): string | null {
+  // An explicit `cd <target> &&` wins over cwd — and wins EVEN WHEN the target
+  // resolves to null (a non-repo dir): the command ran there, so it must not be
+  // silently re-credited to the session's cwd (which could falsely bind an
+  // unrelated repo and clear a real gap). Fall back to cwd only when there was
+  // no explicit `cd`.
   const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
-  return normalizeRepoPath(cd?.[1]) ?? normalizeRepoPath(cwd);
+  if (cd) return normalizeRepoPath(cd[1]);
+  return normalizeRepoPath(cwd);
 }
 
 /** True when a captured command exited non-zero (a failure is not evidence / not landed work). */
