@@ -171,6 +171,14 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
     lines.push("");
   }
 
+  if (summary.unknowns.length > 0) {
+    const n = summary.unknowns.reduce((sum, u) => sum + u.commitCount, 0);
+    lines.push(
+      `## 導出不可 (${summary.unknowns.length} 単位 / ${n} commit) — repo か時刻を捕捉から導けず、判定を保留(clear ではありません)`,
+    );
+    lines.push("");
+  }
+
   lines.push("## リポジトリ別");
   for (const r of summary.repos) {
     lines.push(

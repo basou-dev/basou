@@ -1,10 +1,11 @@
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
 
 /**
- * Review-gap surfacer (Y-14): a read-only, advisory check for the "external
+ * Review-gap surfacer: a read-only, advisory check for the "external
  * adversarial review before commit" protocol. For each unit of work that landed
  * commits, it asks whether a CROSS-MODEL review session (a different vendor than
  * the one that wrote the code — here: Codex) actually examined that repo's diff
@@ -73,23 +74,37 @@ export type ReviewGapsSummary = {
   gaps: ReviewGapUnit[];
   /** Units WITH a review candidate, recent-first (surfaced for confirmation). */
   candidates: ReviewGapUnit[];
+  /** Units whose repo/time could not be derived from the captured command; abstained, not cleared. */
+  unknowns: ReviewGapUnit[];
   /** Newest captured commit considered; commits not yet imported are invisible. */
   newestCommitAt: string | null;
 };
 
+/** Strip one layer of matching surrounding quotes (e.g. `cd "…/repo"`). */
+function stripQuotes(s: string): string {
+  if (s.length >= 2 && ((s[0] === '"' && s.at(-1) === '"') || (s[0] === "'" && s.at(-1) === "'"))) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
 /**
- * Normalize a path to a stable repo key. A workspace "view" reaches sibling
- * repos through symlinks (`foo-workspace/foo-planning -> ../foo-planning`), and
- * commits are often run with `cd <view>/<repo>`; both the view-routed path and
- * the direct repo path must collapse to the same key so a commit in repo X and
- * a review in repo X bind. Returns null for a path that is a view root itself
- * (not a repo) or empty.
+ * Normalize a path to a stable BINDING key: the full path (NOT just a basename),
+ * so a commit in `/u/projects/basou` and a review in `/u/projects/basou` bind,
+ * while a same-named checkout elsewhere (`/tmp/x/basou`) does not. A workspace
+ * "view" reaches sibling repos through symlinks
+ * (`foo-workspace/foo-planning -> ../foo-planning`), and commits are often run
+ * with `cd <view>/<repo>`; both the view-routed path and the direct path
+ * collapse to the same key. Returns null for a view root itself, an unexpanded
+ * shell var, or empty input.
  */
-export function normalizeRepoKey(p: string | null | undefined): string | null {
+export function normalizeRepoPath(p: string | null | undefined): string | null {
   if (!p) return null;
-  let s = p.trim();
-  if (s.length === 0) return null;
-  s = s.replace(/^~(?=\/|$)/, ""); // tilde: keep only the trailing segment anyway
+  let s = stripQuotes(p.trim()).replace(/\/+$/, "");
+  if (s.length === 0 || s === "~") return null;
+  // expand a leading ~ so the same repo recorded as `~/projects/x` and
+  // `/Users/u/projects/x` collapses to one binding key (the events capture both).
+  if (s.startsWith("~/")) s = homedir() + s.slice(1);
   // a path THROUGH a *-workspace view: .../foo-workspace/foo-planning -> .../foo-planning
   s = s.replace(/\/[^/]*-workspace\/([^/]+)/, "/$1");
   const seg = s
@@ -99,7 +114,17 @@ export function normalizeRepoKey(p: string | null | undefined): string | null {
   if (seg === undefined) return null;
   // the view dir itself is not a repo; an unexpanded shell var is not a repo
   if (/-workspace$/.test(seg) || seg.includes("$")) return null;
-  return seg;
+  return s;
+}
+
+/**
+ * Short repo key (the final path segment) for DISPLAY and `--scope` matching.
+ * Binding uses {@link normalizeRepoPath} to avoid basename collisions; this is
+ * only the human-facing label.
+ */
+export function normalizeRepoKey(p: string | null | undefined): string | null {
+  const full = normalizeRepoPath(p);
+  return full === null ? null : basename(full);
 }
 
 /** Files a single command read/inspected, and whether it inspected the git diff. */
@@ -122,11 +147,15 @@ function inspectCommand(args: string[]): { files: string[]; examinedDiff: boolea
   return { files: [...files], examinedDiff };
 }
 
-/** Derive the repo a `git commit` ran in: prefer an explicit `cd <repo> &&`, else cwd. */
-function commitRepo(args: string[], cwd: string): string | null {
-  const a = args.join(" ");
-  const cd = a.match(/cd\s+([^\s&]+)\s*&&/);
-  return normalizeRepoKey(cd?.[1]) ?? normalizeRepoKey(cwd);
+/** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
+function commandRepo(args: string[], cwd: string): string | null {
+  const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
+  return normalizeRepoPath(cd?.[1]) ?? normalizeRepoPath(cwd);
+}
+
+/** True when a captured command exited non-zero (a failure is not evidence / not landed work). */
+function commandFailed(exitCode: number | null): boolean {
+  return exitCode !== null && exitCode !== 0;
 }
 
 /** Changed files named inline on the commit's command (`git add A B`); heuristic. */
@@ -178,8 +207,10 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
   const reviews: ReviewRec[] = [];
-  // committing session -> repo -> commits
+  // committing session -> repo path -> commits
   const workUnits = new Map<string, Map<string, CommitRec[]>>();
+  // committing session -> commit times whose repo/time could not be derived
+  const unknownCommits = new Map<string, (number | null)[]>();
 
   for (const entry of entries) {
     const sessionDir = join(input.paths.sessions, entry.sessionId);
@@ -192,10 +223,15 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
         if (ev.type !== "command_executed") continue;
+        // A failed command is neither review evidence nor landed work.
+        if (commandFailed(ev.exit_code)) continue;
         const at = Date.parse(ev.occurred_at);
 
         if (isReview) {
-          const repo = normalizeRepoKey(ev.cwd);
+          // Bind to the repo the command actually ran in (an explicit `cd <repo>`
+          // wins over cwd), symmetric with commit derivation, so `cd other &&
+          // git diff` is not credited to the session's starting cwd.
+          const repo = commandRepo(ev.args, ev.cwd);
           if (repo === null) continue;
           const ins = inspectCommand(ev.args);
           const slot = reviewRepos.get(repo) ?? { examinedDiff: false, files: new Set() };
@@ -208,8 +244,14 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
 
         // committing (code-author) session: collect git-commit events
         if (!ev.args.join(" ").includes("git commit")) continue;
-        const repo = commitRepo(ev.args, ev.cwd);
-        if (repo === null || Number.isNaN(at)) continue;
+        const repo = commandRepo(ev.args, ev.cwd);
+        if (repo === null || Number.isNaN(at)) {
+          // Surface as unknown rather than silently dropping an observed commit.
+          const list = unknownCommits.get(entry.sessionId) ?? [];
+          list.push(Number.isNaN(at) ? null : at);
+          unknownCommits.set(entry.sessionId, list);
+          continue;
+        }
         const byRepo = workUnits.get(entry.sessionId) ?? new Map<string, CommitRec[]>();
         const list = byRepo.get(repo) ?? [];
         list.push({ repo, at, files: commitFiles(ev.args) });
@@ -231,46 +273,38 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
   let newestCommit: number | null = null;
 
   for (const [sessionId, byRepo] of workUnits) {
-    for (const [repo, commits] of byRepo) {
-      if (scope !== null && !scope.includes(repo)) continue;
+    for (const [repoPath, commits] of byRepo) {
+      const label = basename(repoPath);
+      if (scope !== null && !scope.includes(label)) continue;
       const times = commits.map((c) => c.at).sort((a, b) => a - b);
       const first = times[0] ?? null;
       const last = times[times.length - 1] ?? null;
       if (last !== null) newestCommit = newestCommit === null ? last : Math.max(newestCommit, last);
       const changedFiles = new Set(commits.flatMap((c) => c.files));
 
-      // candidate reviews: same repo, ended before this unit's first commit, in window
+      // candidate reviews: the SAME repo path (collision-safe), ended before this
+      // unit's first commit, within the coarse window. The window is only a
+      // pre-filter — binding is by examined diff / overlapping files, never by
+      // temporal proximity alone.
       const before = first ?? last ?? 0;
       const nearby = reviews.filter((r) => {
-        if (!r.repos.has(repo) || r.endedAt === null) return false;
+        if (!r.repos.has(repoPath) || r.endedAt === null) return false;
         return r.endedAt <= before && r.endedAt >= before - windowMs;
       });
       const bound = nearby.filter((r) => {
-        const touched = r.repos.get(repo);
+        const touched = r.repos.get(repoPath);
         if (touched === undefined) return false;
         if (touched.examinedDiff) return true;
         for (const f of changedFiles) if (touched.files.has(f)) return true;
         return false;
       });
 
-      let verdict: ReviewGapVerdict;
-      let cited: ReviewRec[];
-      if (first === null) {
-        verdict = "unknown";
-        cited = [];
-      } else if (bound.length > 0) {
-        verdict = "candidate";
-        cited = bound;
-      } else if (nearby.length > 0) {
-        verdict = "near_unbound";
-        cited = nearby;
-      } else {
-        verdict = "omission";
-        cited = [];
-      }
+      const verdict: ReviewGapVerdict =
+        bound.length > 0 ? "candidate" : nearby.length > 0 ? "near_unbound" : "omission";
+      const cited = verdict === "candidate" ? bound : verdict === "near_unbound" ? nearby : [];
 
       units.push({
-        repo,
+        repo: label,
         sessionId,
         commitCount: commits.length,
         firstCommitAt: first === null ? null : new Date(first).toISOString(),
@@ -278,10 +312,31 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         verdict,
         reviews: cited.map((r) => ({
           sessionId: r.sessionId,
-          examinedDiff: r.repos.get(repo)?.examinedDiff ?? false,
-          files: [...(r.repos.get(repo)?.files ?? [])].slice(0, 8),
+          examinedDiff: r.repos.get(repoPath)?.examinedDiff ?? false,
+          files: [...(r.repos.get(repoPath)?.files ?? [])].slice(0, 8),
           endedAt: r.endedAt === null ? null : new Date(r.endedAt).toISOString(),
         })),
+      });
+    }
+  }
+
+  // Observed commits whose repo/time could not be derived become explicit
+  // `unknown` units (an abstention, never a clear). They cannot be attributed to
+  // a scoped repo, so they are reported only when no `--repo` scope is applied.
+  if (scope === null) {
+    for (const [sessionId, times] of unknownCommits) {
+      const valid = times.filter((t): t is number => t !== null).sort((a, b) => a - b);
+      const first = valid[0] ?? null;
+      const last = valid[valid.length - 1] ?? null;
+      if (last !== null) newestCommit = newestCommit === null ? last : Math.max(newestCommit, last);
+      units.push({
+        repo: "(unknown)",
+        sessionId,
+        commitCount: times.length,
+        firstCommitAt: first === null ? null : new Date(first).toISOString(),
+        lastCommitAt: last === null ? null : new Date(last).toISOString(),
+        verdict: "unknown",
+        reviews: [],
       });
     }
   }
@@ -311,6 +366,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       .filter((u) => u.verdict === "omission" || u.verdict === "near_unbound")
       .sort(recentFirst),
     candidates: units.filter((u) => u.verdict === "candidate").sort(recentFirst),
+    unknowns: units.filter((u) => u.verdict === "unknown").sort(recentFirst),
     newestCommitAt: newestCommit === null ? null : new Date(newestCommit).toISOString(),
   };
 }

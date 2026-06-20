@@ -1,10 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
-import { findReviewGaps, normalizeRepoKey } from "./review-gaps.js";
+import { findReviewGaps, normalizeRepoKey, normalizeRepoPath } from "./review-gaps.js";
 
 const WS = "ws_01HXABCDEF1234567890ABCDEF";
 const NOW = "2026-05-10T00:00:00.000Z";
@@ -61,6 +61,7 @@ function cmd(
   occurredAt: string,
   args: string[],
   cwd: string,
+  exitCode = 0,
 ): string {
   evtSeq++;
   return JSON.stringify({
@@ -73,7 +74,7 @@ function cmd(
     command: "bash",
     args,
     cwd,
-    exit_code: 0,
+    exit_code: exitCode,
     duration_ms: 0,
   });
 }
@@ -269,5 +270,191 @@ describe("findReviewGaps", () => {
     );
     const s = await findReviewGaps({ paths, nowIso: NOW });
     expect(s.repos.map((r) => r.repo)).toEqual(["alpha"]);
+  });
+
+  it("does NOT bind a same-named repo at a different path (C2: no basename collision)", async () => {
+    const paths = await setup();
+    // a review that examined a DIFFERENT checkout that happens to be named "alpha"
+    await placeSession(
+      paths,
+      { id: SES("R4"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [
+        cmd(
+          SES("R4"),
+          "codex-import",
+          "2026-05-09T09:30:00.000Z",
+          ["-c", "git diff"],
+          "/tmp/x/alpha",
+        ),
+      ],
+    );
+    await placeSession(
+      paths,
+      { id: SES("C7"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("C7"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          ALPHA,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // /tmp/x/alpha review must not clear the /home/u/projects/alpha commit
+    expect(s.candidates).toHaveLength(0);
+    expect(s.gaps[0]?.verdict).toBe("omission");
+  });
+
+  it("ignores failed commands (C3): a failed git commit is not landed work, a failed git diff is not evidence", async () => {
+    const paths = await setup();
+    // failed review diff (exit 1) must not bind
+    await placeSession(
+      paths,
+      { id: SES("R5"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [cmd(SES("R5"), "codex-import", "2026-05-09T09:30:00.000Z", ["-c", "git diff"], ALPHA, 1)],
+    );
+    // failed commit (exit 1) must not count as a unit; a real commit follows
+    await placeSession(
+      paths,
+      { id: SES("C8"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("C8"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m fail"],
+          ALPHA,
+          1,
+        ),
+        cmd(
+          SES("C8"),
+          "claude-code-import",
+          "2026-05-09T10:06:00.000Z",
+          ["-c", "git commit -m ok"],
+          ALPHA,
+          0,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.candidates).toHaveLength(0); // failed diff did not bind
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.commitCount).toBe(1); // only the successful commit counted
+    expect(s.gaps[0]?.verdict).toBe("omission");
+  });
+
+  it("surfaces a commit with an underivable repo as an unknown unit (C4), never dropping it", async () => {
+    const paths = await setup();
+    // cwd is a view ROOT (not a repo) and there is no `cd <repo>` -> repo underivable
+    await placeSession(
+      paths,
+      { id: SES("C9"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("C9"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          "/home/u/projects/foo-workspace",
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(0);
+    expect(s.candidates).toHaveLength(0);
+    expect(s.unknowns).toHaveLength(1);
+    expect(s.unknowns[0]?.verdict).toBe("unknown");
+    expect(s.unknowns[0]?.repo).toBe("(unknown)");
+  });
+
+  it("strips quotes around a `cd` path (C5) so a quoted commit binds its review", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("R6"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [cmd(SES("R6"), "codex-import", "2026-05-09T09:30:00.000Z", ["-c", "git diff"], ALPHA)],
+    );
+    await placeSession(
+      paths,
+      { id: SES("C10"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("C10"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", 'cd "/home/u/projects/alpha" && git commit -m x'],
+          "/elsewhere",
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // quote stripped -> commit repo is "alpha" -> the alpha review binds as candidate
+    expect(s.gaps).toHaveLength(0);
+    expect(s.candidates[0]?.repo).toBe("alpha");
+  });
+
+  it("attributes a review's `cd <other> && git diff` to the other repo, not its cwd (C1)", async () => {
+    const paths = await setup();
+    // review session sits in alpha but inspects beta's diff via `cd`
+    await placeSession(
+      paths,
+      { id: SES("R7"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [
+        cmd(
+          SES("R7"),
+          "codex-import",
+          "2026-05-09T09:30:00.000Z",
+          ["-c", "cd /home/u/projects/beta && git diff"],
+          ALPHA,
+        ),
+      ],
+    );
+    // a commit in alpha must NOT be cleared by that beta-directed review
+    await placeSession(
+      paths,
+      { id: SES("C11"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("C11"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          ALPHA,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const alpha = [...s.gaps, ...s.candidates].find((u) => u.repo === "alpha");
+    expect(alpha?.verdict).toBe("omission");
+  });
+});
+
+describe("normalizeRepoPath", () => {
+  it("returns the full path (binding key) and collapses the view segment", () => {
+    expect(normalizeRepoPath("/home/u/projects/foo-workspace/foo-planning")).toBe(
+      "/home/u/projects/foo-planning",
+    );
+    expect(normalizeRepoPath("/home/u/projects/foo-planning")).toBe(
+      "/home/u/projects/foo-planning",
+    );
+  });
+  it("distinguishes same-named repos at different paths (no collision)", () => {
+    expect(normalizeRepoPath("/tmp/x/alpha")).not.toBe(normalizeRepoPath("/home/u/projects/alpha"));
+  });
+  it("strips surrounding quotes and a trailing slash", () => {
+    expect(normalizeRepoPath('"/home/u/projects/alpha"')).toBe("/home/u/projects/alpha");
+    expect(normalizeRepoPath("/home/u/projects/alpha/")).toBe("/home/u/projects/alpha");
+  });
+  it("expands a leading ~ so it binds with the absolute form", () => {
+    const tilde = normalizeRepoPath("~/projects/alpha");
+    expect(tilde).toBe(normalizeRepoPath(`${homedir()}/projects/alpha`));
+    expect(tilde?.startsWith("~")).toBe(false);
+  });
+  it("returns null for a view root, a shell var, and empty", () => {
+    expect(normalizeRepoPath("/home/u/projects/foo-workspace")).toBeNull();
+    expect(normalizeRepoPath('"$SMOKE_DIR"')).toBeNull();
+    expect(normalizeRepoPath("")).toBeNull();
   });
 });

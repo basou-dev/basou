@@ -98,7 +98,7 @@ export type {
   ReviewGapUnit,
   ReviewGapVerdict,
 } from "./review/index.js";
-export { findReviewGaps, normalizeRepoKey } from "./review/index.js";
+export { findReviewGaps, normalizeRepoKey, normalizeRepoPath } from "./review/index.js";
 export { ChildProcessRunner } from "./runtime/child-process-runner.js";
 export type {
   CaptureMode,
