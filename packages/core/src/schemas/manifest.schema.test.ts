@@ -114,4 +114,38 @@ describe("ManifestSchema", () => {
     const variant = { ...VALID_MANIFEST, import: { source_roots: [] } };
     expect(ManifestSchema.safeParse(variant).success).toBe(false);
   });
+
+  it("accepts a repos roster with relative paths and optional visibility", () => {
+    const variant = {
+      ...VALID_MANIFEST,
+      repos: [
+        { path: ".", visibility: "private" },
+        { path: "../takuhon", visibility: "public" },
+        { path: "../takuhon-site" }, // visibility optional
+      ],
+    };
+    expect(ManifestSchema.safeParse(variant).success).toBe(true);
+  });
+
+  it("accepts a manifest with no repos block (backward compatible)", () => {
+    expect("repos" in VALID_MANIFEST).toBe(false);
+    expect(ManifestSchema.safeParse(VALID_MANIFEST).success).toBe(true);
+  });
+
+  it("rejects an unknown repo visibility", () => {
+    const variant = { ...VALID_MANIFEST, repos: [{ path: "../x", visibility: "secret" }] };
+    expect(ManifestSchema.safeParse(variant).success).toBe(false);
+  });
+
+  it("rejects an absolute or '~' path in a repos entry", () => {
+    for (const bad of ["/abs/x", "~/x"]) {
+      const variant = { ...VALID_MANIFEST, repos: [{ path: bad }] };
+      expect(ManifestSchema.safeParse(variant).success).toBe(false);
+    }
+  });
+
+  it("rejects an empty repos array", () => {
+    const variant = { ...VALID_MANIFEST, repos: [] };
+    expect(ManifestSchema.safeParse(variant).success).toBe(false);
+  });
 });

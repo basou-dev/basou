@@ -8,6 +8,7 @@ import { registerHandoffCommand } from "./commands/handoff.js";
 import { registerImportCommand } from "./commands/import.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerOrientCommand } from "./commands/orient.js";
+import { registerProjectCommand } from "./commands/project.js";
 import { registerRefreshCommand } from "./commands/refresh.js";
 import { registerReportCommand } from "./commands/report.js";
 import { registerReviewGapsCommand } from "./commands/review-gaps.js";
@@ -66,6 +67,7 @@ export function buildProgram(): Command {
   registerReportCommand(program);
   registerOrientCommand(program);
   registerReviewGapsCommand(program);
+  registerProjectCommand(program);
 
   return program;
 }

@@ -61,6 +61,24 @@ const ImportConfigSchema = z.object({
   source_roots: z.array(SourceRootSchema).min(1).optional(),
 });
 
+/**
+ * A project's declared repo roster (the "saddle" model): the single source of
+ * truth for which repos make up this project. The capture config
+ * (`import.source_roots`) is reconciled against this list, and
+ * `basou project check` reports drift between the two (e.g. a companion repo
+ * wired into the workspace but never added to `source_roots`). Each `path` is
+ * relative to the manifest repo root, reusing the machine-portable source-root
+ * constraint. `visibility` is the repo's git visibility; richer per-repo fields
+ * (language, published surfaces) are deferred to later slices and not modeled
+ * here yet.
+ */
+const RepoVisibilitySchema = z.enum(["public", "private", "future-public"]);
+
+const RepoEntrySchema = z.object({
+  path: SourceRootSchema,
+  visibility: RepoVisibilitySchema.optional(),
+});
+
 const WorkspaceMetaSchema = z.object({
   id: WorkspaceIdSchema,
   name: z.string().min(1),
@@ -85,6 +103,7 @@ export const ManifestSchema = z.object({
   adapters: AdaptersSchema,
   git: GitConfigSchema,
   import: ImportConfigSchema.optional(),
+  repos: z.array(RepoEntrySchema).min(1).optional(),
 });
 
 /** Inferred runtime type for {@link ManifestSchema}. */
