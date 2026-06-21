@@ -1,5 +1,11 @@
+import { existsSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
+  type AdoptCandidate,
   basouPaths,
+  type Manifest,
+  planRosterAdoption,
+  type RosterAdoptionPlan,
   type RosterDriftSummary,
   readManifest,
   reconcileSourceRoots,
@@ -33,6 +39,23 @@ export type ProjectSyncResult = SourceRootsReconcile & {
   /** Whether a repo roster (`repos`) was declared at all (else there is nothing to sync from). */
   hasRoster: boolean;
   /** Whether the manifest was written (i.e. `--apply` was set AND there was drift to reconcile). */
+  applied: boolean;
+};
+
+export type ProjectAdoptOptions = {
+  apply?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+/** `now` is injectable so the `updated_at` bump on `--apply` is deterministic in tests. */
+export type ProjectAdoptContext = ImportContext & { now?: () => Date };
+
+/** Flat result of {@link doRunProjectAdopt}: the proposed roster plus what was done. */
+export type ProjectAdoptResult = RosterAdoptionPlan & {
+  /** Whether a `repos` roster was ALREADY declared (adopt is a one-time bootstrap; `--apply` refuses). */
+  alreadyDeclared: boolean;
+  /** Whether the manifest was written (i.e. `--apply` set, no existing roster, AND at least one repo found). */
   applied: boolean;
 };
 
@@ -73,6 +96,18 @@ export function registerProjectCommand(program: Command): void {
     .action(async (opts: ProjectSyncOptions) => {
       await runProjectSync(opts);
     });
+
+  project
+    .command("adopt")
+    .description(
+      "Bootstrap a repo roster (manifest `repos`) from the existing capture config (`source_roots`): classify each by realpath + `.git`, keep the git repos, exclude non-repos (the workspace view, /tmp). Dry-run by default; pass --apply to write (refuses if a roster already exists)",
+    )
+    .option("--apply", "Write the bootstrapped roster to the manifest (default: dry-run preview)")
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (opts: ProjectAdoptOptions) => {
+      await runProjectAdopt(opts);
+    });
 }
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectCheck}. */
@@ -88,6 +123,16 @@ export async function runProjectCheck(
   }
 }
 
+/**
+ * The capture roots a manifest effectively scans. An absent `import.source_roots`
+ * means "the host repository only" (import's documented default), so it resolves
+ * to `["."]` here — NOT the empty set. Comparing the roster against the empty set
+ * would falsely report the host `.` as a capture gap after a solo-repo adoption.
+ */
+function effectiveSourceRoots(manifest: Manifest): string[] {
+  return manifest.import?.source_roots ?? ["."];
+}
+
 /** Pure runner: resolves the workspace, reads the manifest, computes the drift, prints it (or JSON). */
 export async function doRunProjectCheck(
   options: ProjectCheckOptions,
@@ -100,9 +145,7 @@ export async function doRunProjectCheck(
 
   const summary = summarizeRosterDrift({
     ...(manifest.repos !== undefined ? { repos: manifest.repos } : {}),
-    ...(manifest.import?.source_roots !== undefined
-      ? { sourceRoots: manifest.import.source_roots }
-      : {}),
+    sourceRoots: effectiveSourceRoots(manifest),
   });
 
   if (options.json === true) {
@@ -255,6 +298,136 @@ export function renderProjectSync(result: ProjectSyncResult): string {
     for (const p of result.added) lines.push(`- ${p}`);
     lines.push("");
     lines.push("注: 既存の source_roots は保持し、不足分の追記のみ行います(削除はしません)。");
+  }
+  return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectAdopt}. */
+export async function runProjectAdopt(
+  options: ProjectAdoptOptions,
+  ctx: ProjectAdoptContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectAdopt(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Classify a declared source-root path against disk: a git repo root (`repo`),
+ * a resolved-but-non-repo directory such as the workspace view or `/tmp`
+ * (`non-repo`), or a path that does not resolve (`unresolved`). Resolves the
+ * path relative to the repository root, then realpath (which follows the view's
+ * symlink and unifies platform aliases) before probing for `.git`.
+ */
+function classifySourceRoot(repositoryRoot: string, declaredPath: string): AdoptCandidate {
+  const absolute = resolve(repositoryRoot, declaredPath);
+  let real: string;
+  try {
+    real = realpathSync(absolute);
+  } catch {
+    return { path: declaredPath, kind: "unresolved" };
+  }
+  return { path: declaredPath, kind: existsSync(join(real, ".git")) ? "repo" : "non-repo" };
+}
+
+/**
+ * Bootstrap a `repos` roster from the existing `source_roots`. Resolves the
+ * workspace, reads the manifest, classifies each source root on disk, and plans
+ * the roster (git repos kept, non-repos/unresolved excluded). When `--apply` is
+ * set, no roster exists yet, and at least one repo was found, it writes the
+ * roster (and bumps `workspace.updated_at`). Without `--apply` — or when a
+ * roster already exists — it writes nothing and prints the plan.
+ *
+ * `source_roots` absent mirrors import's default (the host repo `.` only), so a
+ * solo repo adopts a `["."]` roster.
+ */
+export async function doRunProjectAdopt(
+  options: ProjectAdoptOptions,
+  ctx: ProjectAdoptContext,
+): Promise<ProjectAdoptResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project adopt");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+
+  const alreadyDeclared = manifest.repos !== undefined && manifest.repos.length > 0;
+  const candidates = effectiveSourceRoots(manifest).map((r) =>
+    classifySourceRoot(repositoryRoot, r),
+  );
+  const plan = planRosterAdoption(candidates);
+
+  const applied = options.apply === true && !alreadyDeclared && plan.repos.length > 0;
+  if (applied) {
+    const now = ctx.now ?? (() => new Date());
+    await writeManifest(
+      paths,
+      {
+        ...manifest,
+        repos: plan.repos,
+        workspace: { ...manifest.workspace, updated_at: now().toISOString() },
+      },
+      { force: true },
+    );
+  }
+
+  const result: ProjectAdoptResult = { ...plan, alreadyDeclared, applied };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectAdopt(result));
+  }
+  return result;
+}
+
+/**
+ * Render the adoption report. Leads with the actionable outcome: a roster
+ * already exists (nothing to bootstrap), nothing found, or the proposed roster
+ * (with the excluded paths and why). The dry-run framing makes clear that
+ * without `--apply` nothing is written, and reminds the operator to set
+ * visibility afterward.
+ */
+export function renderProjectAdopt(result: ProjectAdoptResult): string {
+  const lines: string[] = [];
+  lines.push("# repo ロースターの bootstrap(source_roots → repos)");
+  lines.push("");
+
+  if (result.alreadyDeclared) {
+    lines.push(
+      "ℹ️ repo ロースター(manifest の `repos`)は既に宣言済みです。adopt は一度きりの bootstrap のため何も書き込みません。以後の保守は `project check` / `project sync` を使ってください。",
+    );
+    return lines.join("\n");
+  }
+
+  if (result.repos.length === 0) {
+    lines.push("ℹ️ source_roots に git repo が見つかりませんでした(bootstrap 対象なし)。");
+  } else if (result.applied) {
+    lines.push(`✅ ${result.repos.length} repo を repos ロースターに書き込みました:`);
+    for (const r of result.repos) lines.push(`- ${r.path}`);
+    lines.push("");
+    lines.push(
+      "注: visibility は未設定です。各 repo に public / private / future-public を手動で付与してください。",
+    );
+  } else {
+    lines.push(
+      `${result.repos.length} repo を repos ロースターに宣言予定(dry-run、反映するには --apply):`,
+    );
+    for (const r of result.repos) lines.push(`- ${r.path}`);
+    lines.push("");
+    lines.push("注: visibility は未設定で提案します。反映後に手動で付与してください。");
+  }
+
+  if (result.excluded.length > 0) {
+    lines.push("");
+    lines.push(`## 除外 (${result.excluded.length}) — git repo ではないため repos に含めません`);
+    for (const e of result.excluded) {
+      const reason =
+        e.kind === "non-repo" ? "非 repo(workspace view / tmp 等)" : "解決不能(パスが存在しない)";
+      lines.push(`- ${e.path} — ${reason}`);
+    }
   }
   return lines.join("\n");
 }

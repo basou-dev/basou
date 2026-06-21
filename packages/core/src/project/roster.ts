@@ -123,3 +123,54 @@ export function reconcileSourceRoots(input: {
     unchanged: added.length === 0,
   };
 }
+
+/**
+ * On-disk classification of a source-root candidate during adoption: a git repo
+ * root (→ becomes a roster entry), a resolved-but-non-repo directory (the
+ * generated workspace view, `/tmp`, a scratch dir → excluded), or a path that
+ * could not be resolved on disk (→ excluded).
+ */
+export type AdoptCandidateKind = "repo" | "non-repo" | "unresolved";
+
+export type AdoptCandidate = {
+  /** Source-root path as declared (relative to the manifest root). */
+  path: string;
+  /** On-disk classification; the filesystem probing that produces it is the caller's job. */
+  kind: AdoptCandidateKind;
+};
+
+export type RosterAdoptionPlan = {
+  /** Proposed `repos` entries: the candidates that are git repos (visibility left unset for the operator). */
+  repos: RepoEntry[];
+  /** Candidates excluded from the roster, with why (a non-repo directory, or an unresolvable path). */
+  excluded: { path: string; kind: Exclude<AdoptCandidateKind, "repo"> }[];
+};
+
+/**
+ * Plan a `repos` roster from classified source-root candidates (the actuator
+ * behind `basou project adopt`). Pure: it partitions already-classified
+ * candidates — the realpath / `.git` filesystem probing that produces each
+ * `kind` is the caller's job, so this stays testable without disk I/O.
+ *
+ * A git repo becomes a roster entry (path only; visibility is left unset because
+ * it is a human judgment, kept independent of the other axes). A non-repo
+ * (commonly the generated workspace view) or an unresolvable path is excluded and
+ * reported, so the operator sees what was dropped and why before editing. Repo
+ * paths are deduped by normalized form, preserving the first declared form and
+ * order.
+ */
+export function planRosterAdoption(candidates: AdoptCandidate[]): RosterAdoptionPlan {
+  const repos: RepoEntry[] = [];
+  const excluded: { path: string; kind: Exclude<AdoptCandidateKind, "repo"> }[] = [];
+  const seen = new Set<string>();
+  for (const c of candidates) {
+    // Dedup by normalized path across ALL kinds (a trailing-slash variant of a
+    // path already seen — repo or excluded — is not listed twice).
+    const norm = normalize(c.path);
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    if (c.kind === "repo") repos.push({ path: c.path });
+    else excluded.push({ path: c.path, kind: c.kind });
+  }
+  return { repos, excluded };
+}
