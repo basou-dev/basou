@@ -4,14 +4,22 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
+  basouPaths,
   createManifest,
   ensureBasouDirectory,
   type RepoEntry,
   type RosterDriftSummary,
+  readManifest,
   writeManifest,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { doRunProjectCheck, renderProjectCheck } from "./project.js";
+import {
+  doRunProjectCheck,
+  doRunProjectSync,
+  type ProjectSyncResult,
+  renderProjectCheck,
+  renderProjectSync,
+} from "./project.js";
 
 const execFileAsync = promisify(execFile);
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
@@ -93,6 +101,141 @@ describe("basou project check", () => {
     const parsed = JSON.parse(out.join("\n")) as RosterDriftSummary;
     expect(parsed.ok).toBe(true);
     expect(parsed.matched).toEqual(["../x"]);
+  });
+});
+
+describe("basou project sync", () => {
+  const SYNC_NOW = new Date("2026-06-21T12:00:00.000Z");
+
+  it("dry-run (default) reports the additions but writes nothing", async () => {
+    await setupManifest({
+      repos: [{ path: "." }, { path: "../takuhon" }, { path: "../bio" }],
+      sourceRoots: [".", "../takuhon"], // bio is the gap
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectSync({}, { cwd: repo() });
+    expect(r.applied).toBe(false);
+    expect(r.added).toEqual(["../bio"]);
+    expect(r.next).toEqual([".", "../takuhon", "../bio"]);
+    // manifest is untouched
+    const after = await readManifest(basouPaths(repo()));
+    expect(after.import?.source_roots).toEqual([".", "../takuhon"]);
+  });
+
+  it("--apply writes the reconciled source_roots and bumps updated_at", async () => {
+    await setupManifest({
+      repos: [{ path: "." }, { path: "../takuhon" }, { path: "../bio" }],
+      sourceRoots: [".", "../takuhon"],
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectSync({ apply: true }, { cwd: repo(), now: () => SYNC_NOW });
+    expect(r.applied).toBe(true);
+    const after = await readManifest(basouPaths(repo()));
+    expect(after.import?.source_roots).toEqual([".", "../takuhon", "../bio"]);
+    expect(after.workspace.updated_at).toBe(SYNC_NOW.toISOString());
+  });
+
+  it("--apply preserves an undeclared captured path (the workspace view)", async () => {
+    await setupManifest({
+      repos: [{ path: "../takuhon" }, { path: "../bio" }],
+      sourceRoots: ["../takuhon", "../takuhon-workspace"], // view is not declared
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await doRunProjectSync({ apply: true }, { cwd: repo(), now: () => SYNC_NOW });
+    const after = await readManifest(basouPaths(repo()));
+    expect(after.import?.source_roots).toEqual(["../takuhon", "../takuhon-workspace", "../bio"]);
+  });
+
+  it("--apply is a no-op (no write) when already in sync", async () => {
+    await setupManifest({
+      repos: [{ path: "." }, { path: "../takuhon" }],
+      sourceRoots: [".", "../takuhon"],
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectSync({ apply: true }, { cwd: repo(), now: () => SYNC_NOW });
+    expect(r.applied).toBe(false);
+    expect(r.unchanged).toBe(true);
+    const after = await readManifest(basouPaths(repo()));
+    // updated_at stays at creation time (no write happened)
+    expect(after.workspace.updated_at).toBe(NOW.toISOString());
+  });
+
+  it("derives source_roots from the roster when none is configured yet", async () => {
+    await setupManifest({ repos: [{ path: "." }, { path: "../takuhon" }] });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectSync({ apply: true }, { cwd: repo(), now: () => SYNC_NOW });
+    expect(r.applied).toBe(true);
+    const after = await readManifest(basouPaths(repo()));
+    expect(after.import?.source_roots).toEqual([".", "../takuhon"]);
+  });
+
+  it("does nothing when no roster is declared, even with --apply", async () => {
+    await setupManifest({ sourceRoots: [".", "../takuhon"] });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectSync({ apply: true }, { cwd: repo(), now: () => SYNC_NOW });
+    expect(r.hasRoster).toBe(false);
+    expect(r.applied).toBe(false);
+    const after = await readManifest(basouPaths(repo()));
+    expect(after.import?.source_roots).toEqual([".", "../takuhon"]);
+  });
+
+  it("--json prints the machine-readable result", async () => {
+    await setupManifest({ repos: [{ path: "../x" }, { path: "../y" }], sourceRoots: ["../x"] });
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await doRunProjectSync({ json: true }, { cwd: repo() });
+    const parsed = JSON.parse(out.join("\n")) as ProjectSyncResult;
+    expect(parsed.added).toEqual(["../y"]);
+    expect(parsed.applied).toBe(false);
+    expect(parsed.hasRoster).toBe(true);
+  });
+});
+
+describe("renderProjectSync", () => {
+  const base: ProjectSyncResult = {
+    next: [],
+    added: [],
+    unchanged: true,
+    hasRoster: true,
+    applied: false,
+  };
+
+  it("explains the no-roster case", () => {
+    const out = renderProjectSync({ ...base, hasRoster: false });
+    expect(out).toContain("未宣言");
+  });
+
+  it("reports already-in-sync with a check mark", () => {
+    const out = renderProjectSync({ ...base, unchanged: true });
+    expect(out).toContain("✅");
+    expect(out).toContain("同期不要");
+  });
+
+  it("dry-run lists the additions and states nothing is written", () => {
+    const out = renderProjectSync({
+      ...base,
+      added: ["../bio"],
+      next: ["../bio"],
+      unchanged: false,
+    });
+    expect(out).toContain("../bio");
+    expect(out).toContain("--apply");
+    expect(out).toContain("削除はしません");
+  });
+
+  it("applied lists what was added with a check mark", () => {
+    const out = renderProjectSync({
+      ...base,
+      added: ["../bio"],
+      next: ["../bio"],
+      unchanged: false,
+      applied: true,
+    });
+    expect(out).toContain("✅");
+    expect(out).toContain("追加しました");
+    expect(out).toContain("../bio");
   });
 });
 
