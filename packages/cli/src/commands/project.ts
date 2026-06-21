@@ -1,16 +1,23 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   type AdoptCandidate,
   basouPaths,
+  type InstructionFileFact,
+  isGitNotFound,
   type Manifest,
   planRosterAdoption,
+  type RepoEntry,
+  type RepoWiringFacts,
   type RosterAdoptionPlan,
   type RosterDriftSummary,
   readManifest,
   reconcileSourceRoots,
   type SourceRootsReconcile,
+  safeSimpleGit,
   summarizeRosterDrift,
+  summarizeWiring,
+  type WiringSummary,
   writeManifest,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -58,6 +65,26 @@ export type ProjectAdoptResult = RosterAdoptionPlan & {
   /** Whether the manifest was written (i.e. `--apply` set, no existing roster, AND at least one repo found). */
   applied: boolean;
 };
+
+export type ProjectWiringOptions = {
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type ProjectWiringContext = ImportContext;
+
+/** Result of {@link doRunProjectWiring}: the wiring summary plus whether a roster was declared. */
+export type ProjectWiringResult = WiringSummary & {
+  /** Whether a `repos` roster was declared (else there is nothing to inspect — run adopt first). */
+  hasRoster: boolean;
+};
+
+/**
+ * Agent instruction files inspected per repo. GEMINI.md is intentionally absent
+ * (the Gemini CLI was discontinued for personal use). Each should be a gitignored
+ * symlink to a canonical source, never tracked in a public repo's history.
+ */
+const INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md"] as const;
 
 /**
  * Wire `basou project` (a read-only inspector for the project's declared repo
@@ -107,6 +134,17 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (opts: ProjectAdoptOptions) => {
       await runProjectAdopt(opts);
+    });
+
+  project
+    .command("wiring")
+    .description(
+      "Inspect each declared repo's agent instruction-file wiring (AGENTS.md, CLAUDE.md, copilot-instructions.md): present? tracked by git? Surfaces privacy risks (a public repo tracking an instruction file) and gaps (read-only, advisory)",
+    )
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (opts: ProjectWiringOptions) => {
+      await runProjectWiring(opts);
     });
 }
 
@@ -429,5 +467,164 @@ export function renderProjectAdopt(result: ProjectAdoptResult): string {
       lines.push(`- ${e.path} — ${reason}`);
     }
   }
+  return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectWiring}. */
+export async function runProjectWiring(
+  options: ProjectWiringOptions,
+  ctx: ProjectWiringContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectWiring(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Whether a repo-relative path is tracked by git in `repoRoot`. `git ls-files`
+ * prints the path when it is tracked and nothing when it is not. Any error
+ * (missing git, a corrupt repo) propagates; {@link gatherRepoWiring} decides
+ * whether to surface it (a missing git executable, which is global) or degrade
+ * the single repo to unreachable (a per-repo failure) — never reading the error
+ * as a false "untracked".
+ */
+async function isTrackedByGit(repoRoot: string, relPath: string): Promise<boolean> {
+  const out = await safeSimpleGit(repoRoot).raw(["ls-files", "--", relPath]);
+  return out.trim().length > 0;
+}
+
+/**
+ * Gather the on-disk + git facts for one declared repo. Resolves the repo path
+ * (realpath) and requires a `.git`; an unresolvable or non-repo path is reported
+ * as `reachable: false` rather than crashing the whole report. Presence uses
+ * `lstat` so a symlink (even a broken one) still counts as present.
+ */
+async function gatherRepoWiring(
+  repositoryRoot: string,
+  entry: RepoEntry,
+): Promise<RepoWiringFacts> {
+  const base = {
+    path: entry.path,
+    ...(entry.visibility !== undefined ? { visibility: entry.visibility } : {}),
+  };
+  let real: string;
+  try {
+    real = realpathSync(resolve(repositoryRoot, entry.path));
+  } catch {
+    return { ...base, reachable: false, instructionFiles: [] };
+  }
+  if (!existsSync(join(real, ".git"))) {
+    return { ...base, reachable: false, instructionFiles: [] };
+  }
+
+  try {
+    const instructionFiles: InstructionFileFact[] = [];
+    for (const name of INSTRUCTION_FILES) {
+      let present = true;
+      try {
+        lstatSync(join(real, name));
+      } catch {
+        present = false;
+      }
+      instructionFiles.push({ name, present, tracked: await isTrackedByGit(real, name) });
+    }
+    return { ...base, reachable: true, instructionFiles };
+  } catch (error: unknown) {
+    // A missing git executable is a global, actionable failure — surface it so
+    // the whole report does not silently read every repo as "untracked".
+    if (isGitNotFound(error)) throw error;
+    // A per-repo git failure (a corrupt repo, a stale worktree pointer) degrades
+    // only THIS repo to unreachable, so one bad repo cannot blank the report.
+    return { ...base, reachable: false, instructionFiles: [] };
+  }
+}
+
+/**
+ * Inspect each declared repo's instruction-file wiring. Resolves the workspace,
+ * reads the manifest, gathers per-repo facts (presence + git-tracked status),
+ * and summarizes the privacy-relevant drift. Read-only — it generates nothing.
+ */
+export async function doRunProjectWiring(
+  options: ProjectWiringOptions,
+  ctx: ProjectWiringContext,
+): Promise<ProjectWiringResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project wiring");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+
+  const roster = manifest.repos ?? [];
+  const facts: RepoWiringFacts[] = [];
+  for (const entry of roster) facts.push(await gatherRepoWiring(repositoryRoot, entry));
+
+  const summary = summarizeWiring(facts);
+  const result: ProjectWiringResult = { ...summary, hasRoster: roster.length > 0 };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectWiring(result));
+  }
+  return result;
+}
+
+/**
+ * Render the wiring report. Leads with the actionable outcome: no roster (run
+ * adopt first), the privacy risks (a public repo tracking an instruction file),
+ * the unjudgeable repos (visibility unset), and the wiring gaps (missing files).
+ * States the read-only framing so the verdict is not over-read.
+ */
+export function renderProjectWiring(result: ProjectWiringResult): string {
+  const lines: string[] = [];
+  lines.push("# 指示書 wiring チェック(宣言ロースター × 指示書の存在/git 追跡)");
+  lines.push("");
+
+  if (!result.hasRoster) {
+    lines.push(
+      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。`basou project adopt` で宣言してから実行してください。",
+    );
+    return lines.join("\n");
+  }
+
+  if (result.risks.length === 0) {
+    lines.push("✅ 公開系 repo で git 追跡されている指示書はありません(privacy リスクなし)。");
+  } else {
+    lines.push(
+      `⚠️ 公開系 repo で指示書が git 追跡されています: ${result.risks.length}(canonical の漏洩リスク)`,
+    );
+    for (const r of result.risks) {
+      lines.push(
+        `- ${r.repo} [${r.visibility}] — ${r.file} が tracked(gitignore された symlink である必要があります)`,
+      );
+    }
+  }
+  lines.push("");
+
+  if (result.unknown.length > 0) {
+    lines.push(
+      `## visibility 未設定 (${result.unknown.length}) — privacy 判定不可。manifest の repos に visibility を付与してください`,
+    );
+    for (const p of result.unknown) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  if (result.incomplete.length > 0) {
+    lines.push(`## 指示書の欠落 (${result.incomplete.length}) — 後続の生成スライスで補完予定`);
+    for (const i of result.incomplete) lines.push(`- ${i.repo} — ${i.missing.join(", ")}`);
+    lines.push("");
+  }
+
+  if (result.unreachable.length > 0) {
+    lines.push(`## 到達不能 (${result.unreachable.length}) — パス未解決 / git repo でない`);
+    for (const p of result.unreachable) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  lines.push(
+    "注: read-only の advisory です。指示書の存在と git 追跡状況のみを表示し、生成・enforce はしません(.basou のフットプリントは `basou view --check`)。",
+  );
   return lines.join("\n");
 }

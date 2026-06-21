@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -17,11 +17,14 @@ import {
   doRunProjectAdopt,
   doRunProjectCheck,
   doRunProjectSync,
+  doRunProjectWiring,
   type ProjectAdoptResult,
   type ProjectSyncResult,
+  type ProjectWiringResult,
   renderProjectAdopt,
   renderProjectCheck,
   renderProjectSync,
+  renderProjectWiring,
 } from "./project.js";
 
 const execFileAsync = promisify(execFile);
@@ -437,5 +440,217 @@ describe("renderProjectAdopt", () => {
   it("reports when nothing was found", () => {
     const out = renderProjectAdopt({ ...base, excluded: [{ path: "../view", kind: "non-repo" }] });
     expect(out).toContain("見つかりませんでした");
+  });
+});
+
+describe("basou project wiring", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-wiring-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  async function makeRepo(
+    name: string,
+    files: { name: string; tracked: boolean }[],
+  ): Promise<void> {
+    const dir = join(parent as string, name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+    for (const f of files) {
+      const abs = join(dir, f.name);
+      if (f.name.includes("/")) await mkdir(join(dir, f.name, ".."), { recursive: true });
+      await writeFile(abs, "x\n");
+      if (f.tracked) await execFileAsync("git", ["add", "--", f.name], { cwd: dir, env: ENV });
+    }
+  }
+  async function setupHostManifest(repos: RepoEntry[]): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, { ...base, repos });
+  }
+
+  it("surfaces a public-repo tracked instruction file as a risk; private tracked is fine; flags unknown + unreachable", async () => {
+    // publeak: public, AGENTS.md tracked (others present untracked) -> risk on AGENTS.md only
+    await makeRepo("publeak", [
+      { name: "AGENTS.md", tracked: true },
+      { name: "CLAUDE.md", tracked: false },
+      { name: ".github/copilot-instructions.md", tracked: false },
+    ]);
+    // priv: private, AGENTS.md tracked -> NOT a risk
+    await makeRepo("priv", [
+      { name: "AGENTS.md", tracked: true },
+      { name: "CLAUDE.md", tracked: false },
+      { name: ".github/copilot-instructions.md", tracked: false },
+    ]);
+    // unk: no visibility, AGENTS.md tracked -> unknown (not a risk)
+    await makeRepo("unk", [
+      { name: "AGENTS.md", tracked: true },
+      { name: "CLAUDE.md", tracked: false },
+      { name: ".github/copilot-instructions.md", tracked: false },
+    ]);
+    await setupHostManifest([
+      { path: "../publeak", visibility: "public" },
+      { path: "../priv", visibility: "private" },
+      { path: "../unk" }, // no visibility
+      { path: "../gone" }, // not created -> unreachable
+    ]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectWiring({}, { cwd: host() });
+    expect(r.risks).toEqual([{ repo: "../publeak", visibility: "public", file: "AGENTS.md" }]);
+    expect(r.unknown).toEqual(["../unk"]);
+    expect(r.unreachable).toEqual(["../gone"]);
+    expect(r.incomplete).toHaveLength(0);
+    expect(r.ok).toBe(false);
+  });
+
+  it("is ok when a public repo has all instruction files present and untracked", async () => {
+    await makeRepo("pub", [
+      { name: "AGENTS.md", tracked: false },
+      { name: "CLAUDE.md", tracked: false },
+      { name: ".github/copilot-instructions.md", tracked: false },
+    ]);
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectWiring({}, { cwd: host() });
+    expect(r.ok).toBe(true);
+    expect(r.risks).toHaveLength(0);
+    expect(r.incomplete).toHaveLength(0);
+  });
+
+  it("reports missing instruction files as incomplete", async () => {
+    await makeRepo("pub", [{ name: "AGENTS.md", tracked: false }]); // CLAUDE.md + copilot missing
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectWiring({}, { cwd: host() });
+    expect(r.incomplete).toEqual([
+      { repo: "../pub", missing: ["CLAUDE.md", ".github/copilot-instructions.md"] },
+    ]);
+    expect(r.risks).toHaveLength(0);
+  });
+
+  it("reports hasRoster false when no roster is declared", async () => {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, base);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectWiring({}, { cwd: host() });
+    expect(r.hasRoster).toBe(false);
+    expect(r.repos).toHaveLength(0);
+  });
+
+  it("--json prints the machine-readable result", async () => {
+    await makeRepo("pub", [{ name: "AGENTS.md", tracked: true }]);
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await doRunProjectWiring({ json: true }, { cwd: host() });
+    const parsed = JSON.parse(out.join("\n")) as ProjectWiringResult;
+    expect(parsed.risks).toEqual([{ repo: "../pub", visibility: "public", file: "AGENTS.md" }]);
+    expect(parsed.hasRoster).toBe(true);
+  });
+
+  it("counts a (broken) symlink as a present instruction file (lstat, not exists)", async () => {
+    const dir = join(parent as string, "pub");
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+    // AGENTS.md is a symlink to a non-existent target — present on disk, untracked.
+    await symlink("../nonexistent-canonical/AGENTS.md", join(dir, "AGENTS.md"));
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectWiring({}, { cwd: host() });
+    const agents = r.repos[0]?.instructionFiles.find((f) => f.name === "AGENTS.md");
+    expect(agents).toEqual({ name: "AGENTS.md", present: true, tracked: false });
+    // the broken symlink is present (so not "missing"), and untracked in a public repo is fine
+    expect(r.incomplete.find((i) => i.repo === "../pub")?.missing).not.toContain("AGENTS.md");
+  });
+
+  it("detects a tracked instruction file at the nested .github/copilot-instructions.md path", async () => {
+    await makeRepo("pub", [{ name: ".github/copilot-instructions.md", tracked: true }]);
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectWiring({}, { cwd: host() });
+    expect(r.risks).toEqual([
+      { repo: "../pub", visibility: "public", file: ".github/copilot-instructions.md" },
+    ]);
+  });
+
+  it("degrades a single unusable repo to unreachable without aborting the whole report", async () => {
+    // 'broken' has a .git that is not a valid repo, so git ls-files fails for it only.
+    const broken = join(parent as string, "broken");
+    await mkdir(join(broken, ".git"), { recursive: true });
+    await makeRepo("pub", [{ name: "AGENTS.md", tracked: false }]);
+    await setupHostManifest([
+      { path: "../broken", visibility: "public" },
+      { path: "../pub", visibility: "public" },
+    ]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectWiring({}, { cwd: host() });
+    expect(r.unreachable).toEqual(["../broken"]);
+    // the good repo is still reported (one bad repo did not blank the report)
+    expect(r.repos.find((x) => x.path === "../pub")?.reachable).toBe(true);
+  });
+});
+
+describe("renderProjectWiring", () => {
+  const base: ProjectWiringResult = {
+    repos: [],
+    risks: [],
+    unknown: [],
+    incomplete: [],
+    unreachable: [],
+    ok: true,
+    hasRoster: true,
+  };
+
+  it("explains the no-roster case (points to adopt)", () => {
+    const out = renderProjectWiring({ ...base, hasRoster: false });
+    expect(out).toContain("未宣言");
+    expect(out).toContain("project adopt");
+  });
+
+  it("reports a clean wiring with a check mark", () => {
+    const out = renderProjectWiring(base);
+    expect(out).toContain("✅");
+  });
+
+  it("surfaces each risk with its repo, visibility and file", () => {
+    const out = renderProjectWiring({
+      ...base,
+      risks: [{ repo: "../takuhon", visibility: "public", file: "AGENTS.md" }],
+      ok: false,
+    });
+    expect(out).toContain("⚠️");
+    expect(out).toContain("../takuhon");
+    expect(out).toContain("[public]");
+    expect(out).toContain("AGENTS.md");
+  });
+
+  it("lists unknown-visibility, incomplete and unreachable sections", () => {
+    const out = renderProjectWiring({
+      ...base,
+      unknown: ["../x"],
+      incomplete: [{ repo: "../y", missing: ["CLAUDE.md"] }],
+      unreachable: ["../z"],
+      ok: false,
+    });
+    expect(out).toContain("visibility 未設定");
+    expect(out).toContain("../x");
+    expect(out).toContain("欠落");
+    expect(out).toContain("../y");
+    expect(out).toContain("到達不能");
+    expect(out).toContain("../z");
   });
 });

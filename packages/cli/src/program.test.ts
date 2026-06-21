@@ -56,11 +56,16 @@ describe("buildProgram", () => {
     ]);
   });
 
-  it("registers the project subcommands (adopt + check + sync)", async () => {
+  it("registers the project subcommands (adopt + check + sync + wiring)", async () => {
     const { buildProgram } = await import("./program.js");
     const program = buildProgram();
     const project = program.commands.find((c) => c.name() === "project");
-    expect(project?.commands.map((c) => c.name()).sort()).toEqual(["adopt", "check", "sync"]);
+    expect(project?.commands.map((c) => c.name()).sort()).toEqual([
+      "adopt",
+      "check",
+      "sync",
+      "wiring",
+    ]);
   });
 
   it("exposes the package version constant", async () => {

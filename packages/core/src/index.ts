@@ -56,8 +56,10 @@ export { getDiff } from "./git/diff.js";
 export type { GitSnapshot } from "./git/snapshot.js";
 export {
   getSnapshot,
+  isGitNotFound,
   resolveBasouRepositoryRoot,
   resolveRepositoryRoot,
+  safeSimpleGit,
   tryRemoteUrl,
 } from "./git/snapshot.js";
 export type { HandoffRendererInput, HandoffRendererResult } from "./handoff/index.js";
@@ -93,6 +95,13 @@ export {
   reconcileSourceRoots,
   summarizeRosterDrift,
 } from "./project/roster.js";
+export type {
+  InstructionFileFact,
+  RepoWiringFacts,
+  WiringRisk,
+  WiringSummary,
+} from "./project/wiring.js";
+export { summarizeWiring } from "./project/wiring.js";
 export type {
   ReportApprovalItem,
   ReportData,
