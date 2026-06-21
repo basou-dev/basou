@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reconcileSourceRoots, summarizeRosterDrift } from "./roster.js";
+import { planRosterAdoption, reconcileSourceRoots, summarizeRosterDrift } from "./roster.js";
 
 describe("summarizeRosterDrift", () => {
   it("flags a declared repo missing from source_roots as a gap (the bio class)", () => {
@@ -140,5 +140,64 @@ describe("reconcileSourceRoots", () => {
     expect(r.unchanged).toBe(true);
     expect(r.added).toEqual([]);
     expect(r.next).toEqual([".", "../takuhon"]);
+  });
+});
+
+describe("planRosterAdoption", () => {
+  it("keeps git repos as roster entries (path only, no visibility) and excludes non-repos", () => {
+    const plan = planRosterAdoption([
+      { path: ".", kind: "repo" },
+      { path: "../takuhon", kind: "repo" },
+      { path: "../takuhon-workspace", kind: "non-repo" }, // the view
+      { path: "../basou-site", kind: "repo" },
+    ]);
+    expect(plan.repos).toEqual([{ path: "." }, { path: "../takuhon" }, { path: "../basou-site" }]);
+    expect(plan.excluded).toEqual([{ path: "../takuhon-workspace", kind: "non-repo" }]);
+  });
+
+  it("excludes an unresolvable path with its reason", () => {
+    const plan = planRosterAdoption([
+      { path: ".", kind: "repo" },
+      { path: "../moved-away", kind: "unresolved" },
+    ]);
+    expect(plan.repos).toEqual([{ path: "." }]);
+    expect(plan.excluded).toEqual([{ path: "../moved-away", kind: "unresolved" }]);
+  });
+
+  it("dedupes repo paths by normalized form, preserving the first declared form and order", () => {
+    const plan = planRosterAdoption([
+      { path: "../a", kind: "repo" },
+      { path: "../a/", kind: "repo" }, // same after normalize
+      { path: "../b", kind: "repo" },
+    ]);
+    expect(plan.repos).toEqual([{ path: "../a" }, { path: "../b" }]);
+  });
+
+  it("returns an empty roster when no candidate is a repo", () => {
+    const plan = planRosterAdoption([
+      { path: "../view", kind: "non-repo" },
+      { path: "../gone", kind: "unresolved" },
+    ]);
+    expect(plan.repos).toEqual([]);
+    expect(plan.excluded).toHaveLength(2);
+  });
+
+  it("dedupes excluded paths too (a trailing-slash variant is not listed twice)", () => {
+    const plan = planRosterAdoption([
+      { path: "../view", kind: "non-repo" },
+      { path: "../view/", kind: "non-repo" }, // same after normalize
+      { path: "../gone", kind: "unresolved" },
+      { path: "../gone/", kind: "unresolved" },
+    ]);
+    expect(plan.excluded).toEqual([
+      { path: "../view", kind: "non-repo" },
+      { path: "../gone", kind: "unresolved" },
+    ]);
+  });
+
+  it("handles an empty candidate list", () => {
+    const plan = planRosterAdoption([]);
+    expect(plan.repos).toEqual([]);
+    expect(plan.excluded).toEqual([]);
   });
 });

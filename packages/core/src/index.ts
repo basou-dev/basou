@@ -80,12 +80,19 @@ export type {
 } from "./orientation/index.js";
 export { renderOrientation, summarizeOrientation } from "./orientation/index.js";
 export type {
+  AdoptCandidate,
+  AdoptCandidateKind,
   RepoEntry,
   RepoVisibility,
+  RosterAdoptionPlan,
   RosterDriftSummary,
   SourceRootsReconcile,
 } from "./project/roster.js";
-export { reconcileSourceRoots, summarizeRosterDrift } from "./project/roster.js";
+export {
+  planRosterAdoption,
+  reconcileSourceRoots,
+  summarizeRosterDrift,
+} from "./project/roster.js";
 export type {
   ReportApprovalItem,
   ReportData,

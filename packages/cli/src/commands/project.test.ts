@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -14,9 +14,12 @@ import {
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  doRunProjectAdopt,
   doRunProjectCheck,
   doRunProjectSync,
+  type ProjectAdoptResult,
   type ProjectSyncResult,
+  renderProjectAdopt,
   renderProjectCheck,
   renderProjectSync,
 } from "./project.js";
@@ -277,5 +280,162 @@ describe("renderProjectCheck", () => {
     const out = renderProjectCheck({ ...base, capturedCount: 1, extra: ["../x"] });
     expect(out).toContain("未宣言");
     expect(out).toContain("../x");
+  });
+});
+
+describe("basou project adopt", () => {
+  const ADOPT_NOW = new Date("2026-06-21T12:00:00.000Z");
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    // A workspace parent holding a host repo, a sibling repo, a non-repo "view", and a
+    // declared-but-absent sibling. The host carries the manifest under test.
+    parent = await mkdtemp(join(tmpdir(), "basou-adopt-"));
+    const host = join(parent, "host");
+    const sibling = join(parent, "sibling");
+    const view = join(parent, "view"); // a plain dir (no .git) standing in for the workspace view
+    await mkdir(host, { recursive: true });
+    await mkdir(sibling, { recursive: true });
+    await mkdir(view, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: host, env: ENV });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: sibling,
+      env: ENV,
+    });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  async function setupHostManifest(opts: {
+    repos?: RepoEntry[];
+    sourceRoots?: string[];
+  }): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, {
+      ...base,
+      ...(opts.repos !== undefined ? { repos: opts.repos } : {}),
+      ...(opts.sourceRoots !== undefined ? { import: { source_roots: opts.sourceRoots } } : {}),
+    });
+  }
+
+  it("classifies source_roots: keeps git repos, excludes the view and an absent path (dry-run writes nothing)", async () => {
+    await setupHostManifest({ sourceRoots: [".", "../sibling", "../view", "../gone"] });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectAdopt({}, { cwd: host() });
+    expect(r.applied).toBe(false);
+    expect(r.repos).toEqual([{ path: "." }, { path: "../sibling" }]);
+    expect(r.excluded).toEqual([
+      { path: "../view", kind: "non-repo" },
+      { path: "../gone", kind: "unresolved" },
+    ]);
+    // manifest is untouched (no repos written)
+    const after = await readManifest(basouPaths(host()));
+    expect(after.repos).toBeUndefined();
+  });
+
+  it("--apply writes the bootstrapped roster (path only) and bumps updated_at", async () => {
+    await setupHostManifest({ sourceRoots: [".", "../sibling", "../view"] });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectAdopt({ apply: true }, { cwd: host(), now: () => ADOPT_NOW });
+    expect(r.applied).toBe(true);
+    const after = await readManifest(basouPaths(host()));
+    expect(after.repos).toEqual([{ path: "." }, { path: "../sibling" }]);
+    expect(after.workspace.updated_at).toBe(ADOPT_NOW.toISOString());
+  });
+
+  it("defaults to the host repo '.' when no source_roots are configured", async () => {
+    await setupHostManifest({});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectAdopt({ apply: true }, { cwd: host(), now: () => ADOPT_NOW });
+    expect(r.repos).toEqual([{ path: "." }]);
+    const after = await readManifest(basouPaths(host()));
+    expect(after.repos).toEqual([{ path: "." }]);
+  });
+
+  it("a solo adoption (no source_roots) does not then report '.' as a capture gap in check", async () => {
+    // Regression: check must treat absent source_roots as ["."] (import's host-only
+    // default), else a solo repo adopted as repos:["."] shows a spurious gap.
+    await setupHostManifest({});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await doRunProjectAdopt({ apply: true }, { cwd: host(), now: () => ADOPT_NOW });
+    const s = await doRunProjectCheck({}, { cwd: host() });
+    expect(s.ok).toBe(true);
+    expect(s.gaps).toHaveLength(0);
+  });
+
+  it("--apply refuses (no write) when a roster already exists", async () => {
+    await setupHostManifest({
+      repos: [{ path: ".", visibility: "private" }],
+      sourceRoots: [".", "../sibling"],
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectAdopt({ apply: true }, { cwd: host(), now: () => ADOPT_NOW });
+    expect(r.alreadyDeclared).toBe(true);
+    expect(r.applied).toBe(false);
+    const after = await readManifest(basouPaths(host()));
+    expect(after.repos).toEqual([{ path: ".", visibility: "private" }]); // untouched
+    expect(after.workspace.updated_at).toBe(NOW.toISOString());
+  });
+
+  it("--json prints the machine-readable result", async () => {
+    await setupHostManifest({ sourceRoots: [".", "../view"] });
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await doRunProjectAdopt({ json: true }, { cwd: host() });
+    const parsed = JSON.parse(out.join("\n")) as ProjectAdoptResult;
+    expect(parsed.repos).toEqual([{ path: "." }]);
+    expect(parsed.excluded).toEqual([{ path: "../view", kind: "non-repo" }]);
+    expect(parsed.applied).toBe(false);
+  });
+});
+
+describe("renderProjectAdopt", () => {
+  const base: ProjectAdoptResult = {
+    repos: [],
+    excluded: [],
+    alreadyDeclared: false,
+    applied: false,
+  };
+
+  it("explains the already-declared case (points to check/sync)", () => {
+    const out = renderProjectAdopt({ ...base, alreadyDeclared: true });
+    expect(out).toContain("既に宣言済み");
+    expect(out).toContain("project check");
+  });
+
+  it("dry-run proposes the roster, flags visibility, and lists exclusions with reasons", () => {
+    const out = renderProjectAdopt({
+      ...base,
+      repos: [{ path: "." }, { path: "../sibling" }],
+      excluded: [
+        { path: "../view", kind: "non-repo" },
+        { path: "../gone", kind: "unresolved" },
+      ],
+    });
+    expect(out).toContain("--apply");
+    expect(out).toContain("../sibling");
+    expect(out).toContain("visibility");
+    expect(out).toContain("../view");
+    expect(out).toContain("../gone");
+    expect(out).toContain("解決不能");
+  });
+
+  it("applied confirms the write with a check mark", () => {
+    const out = renderProjectAdopt({ ...base, repos: [{ path: "." }], applied: true });
+    expect(out).toContain("✅");
+    expect(out).toContain("書き込みました");
+  });
+
+  it("reports when nothing was found", () => {
+    const out = renderProjectAdopt({ ...base, excluded: [{ path: "../view", kind: "non-repo" }] });
+    expect(out).toContain("見つかりませんでした");
   });
 });
