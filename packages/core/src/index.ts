@@ -79,8 +79,13 @@ export type {
   OrientationSummary,
 } from "./orientation/index.js";
 export { renderOrientation, summarizeOrientation } from "./orientation/index.js";
-export type { RepoEntry, RepoVisibility, RosterDriftSummary } from "./project/roster.js";
-export { summarizeRosterDrift } from "./project/roster.js";
+export type {
+  RepoEntry,
+  RepoVisibility,
+  RosterDriftSummary,
+  SourceRootsReconcile,
+} from "./project/roster.js";
+export { reconcileSourceRoots, summarizeRosterDrift } from "./project/roster.js";
 export type {
   ReportApprovalItem,
   ReportData,

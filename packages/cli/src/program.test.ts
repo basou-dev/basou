@@ -56,6 +56,13 @@ describe("buildProgram", () => {
     ]);
   });
 
+  it("registers the project subcommands (check + sync)", async () => {
+    const { buildProgram } = await import("./program.js");
+    const program = buildProgram();
+    const project = program.commands.find((c) => c.name() === "project");
+    expect(project?.commands.map((c) => c.name()).sort()).toEqual(["check", "sync"]);
+  });
+
   it("exposes the package version constant", async () => {
     const { BASOU_CLI_VERSION } = await import("./program.js");
     expect(BASOU_CLI_VERSION).toMatch(/^\d+\.\d+\.\d+/);

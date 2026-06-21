@@ -73,3 +73,53 @@ export function summarizeRosterDrift(input: {
     ok: gaps.length === 0,
   };
 }
+
+export type SourceRootsReconcile = {
+  /**
+   * The reconciled `source_roots`: the existing entries verbatim, then every
+   * declared repo path that was missing (normalized, in roster order). Existing
+   * order and form are preserved so the manifest diff is minimal and reversible.
+   */
+  next: string[];
+  /** Declared repo paths (normalized) that were appended because `source_roots` did not cover them. */
+  added: string[];
+  /** True when `source_roots` already covers every declared repo (`next` equals the current list). */
+  unchanged: boolean;
+};
+
+/**
+ * Derive the `source_roots` a project's declared repo roster requires. The
+ * roster (`repos`) is the single source of truth for which repos belong to the
+ * project; this is the actuator behind `basou project sync`, computing the
+ * additive reconciliation so every declared repo is captured.
+ *
+ * ADDITIVE ONLY: it appends declared paths that are missing and never removes
+ * an existing entry. A captured-but-undeclared path (commonly the generated
+ * workspace view — a legitimate capture source that is not itself a project
+ * repo) is preserved; pruning strays is deferred to the slice that generates
+ * the view (so basou knows which extras it owns). Existing entries are kept
+ * byte-identical; only appended paths are normalized.
+ *
+ * Pure: no filesystem or git I/O. Paths are compared in the same normalized
+ * form as {@link summarizeRosterDrift}, so a trailing-slash variant of an
+ * already-captured repo is not re-appended.
+ */
+export function reconcileSourceRoots(input: {
+  repos?: RepoEntry[];
+  sourceRoots?: string[];
+}): SourceRootsReconcile {
+  const current = input.sourceRoots ?? [];
+  const seen = new Set(current.map(normalize));
+  const added: string[] = [];
+  for (const r of input.repos ?? []) {
+    const norm = normalize(r.path);
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    added.push(norm);
+  }
+  return {
+    next: [...current, ...added],
+    added,
+    unchanged: added.length === 0,
+  };
+}

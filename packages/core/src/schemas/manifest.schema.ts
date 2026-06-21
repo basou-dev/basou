@@ -41,9 +41,16 @@ const GitConfigSchema = z.object({
  * into the published JSON Schema's `pattern`, letting cross-language validators
  * enforce the same rule. It rejects: a leading `~` (home), a leading `/` (POSIX
  * absolute), any backslash anywhere (UNC / Windows / stray), a `<drive>:`
- * prefix, and null bytes; `min(1)` rejects the empty string.
+ * prefix, and null bytes; `min(1)` rejects the empty string. It also rejects
+ * leading/trailing whitespace: without the `(?!\s)` and trailing `[^\0\\\s]`
+ * guards a leading space would "shield" a forbidden first char (" ~/x" would
+ * pass), and `basou project sync` normalizes (`.trim()`) before persisting, so
+ * a padded path that passed at read time would fail re-validation on write —
+ * and a padded `source_roots` entry resolves (path.resolve) to a missed repo
+ * while sync wrongly reports it covered. Interior whitespace stays allowed
+ * (`../my dir` is a legitimate directory name).
  */
-const SOURCE_ROOT_PATTERN = /^(?![~/\\])(?![A-Za-z]:)[^\0\\]+$/;
+const SOURCE_ROOT_PATTERN = /^(?![~/\\])(?![A-Za-z]:)(?!\s)[^\0\\]*[^\0\\\s]$/;
 
 const SourceRootSchema = z.string().min(1).regex(SOURCE_ROOT_PATTERN, {
   message:

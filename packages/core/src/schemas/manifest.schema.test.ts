@@ -110,6 +110,40 @@ describe("ManifestSchema", () => {
     expect(ManifestSchema.safeParse(variant).success).toBe(false);
   });
 
+  it("rejects leading/trailing whitespace in a source root (a leading space must not shield a forbidden first char)", () => {
+    // " ~/x" would pass without the guard (the body matched the space); it must not,
+    // because `project sync` trims before persisting and a padded source root also
+    // resolves to a missed repo while sync wrongly reports it covered.
+    for (const bad of [
+      " ~/secrets",
+      " /etc",
+      " C:foo",
+      " ../bio",
+      "../bio ",
+      " ../bio ",
+      "../bio\t",
+    ]) {
+      const variant = { ...VALID_MANIFEST, import: { source_roots: [bad] } };
+      expect(ManifestSchema.safeParse(variant).success, bad).toBe(false);
+    }
+  });
+
+  it("rejects leading/trailing whitespace in a repos entry path", () => {
+    for (const bad of [" ../bio", "../bio ", " ~/x"]) {
+      const variant = { ...VALID_MANIFEST, repos: [{ path: bad }] };
+      expect(ManifestSchema.safeParse(variant).success, bad).toBe(false);
+    }
+  });
+
+  it("still accepts interior whitespace in a path (a legitimate directory name)", () => {
+    const variant = {
+      ...VALID_MANIFEST,
+      import: { source_roots: ["../my dir", "."] },
+      repos: [{ path: "../my dir" }],
+    };
+    expect(ManifestSchema.safeParse(variant).success).toBe(true);
+  });
+
   it("rejects an empty import.source_roots array", () => {
     const variant = { ...VALID_MANIFEST, import: { source_roots: [] } };
     expect(ManifestSchema.safeParse(variant).success).toBe(false);
