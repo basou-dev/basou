@@ -1,13 +1,17 @@
-import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   type AdoptCandidate,
   basouPaths,
+  type GitignorePlanSummary,
   type InstructionFileFact,
   isGitNotFound,
   type Manifest,
+  planGitignore,
   planRosterAdoption,
   type RepoEntry,
+  type RepoGitignoreFacts,
+  type RepoGitignorePlan,
   type RepoWiringFacts,
   type RosterAdoptionPlan,
   type RosterDriftSummary,
@@ -79,6 +83,22 @@ export type ProjectWiringResult = WiringSummary & {
   hasRoster: boolean;
 };
 
+export type ProjectGitignoreOptions = {
+  apply?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type ProjectGitignoreContext = ImportContext;
+
+/** Result of {@link doRunProjectGitignore}: the plan plus whether a roster exists and whether it was applied. */
+export type ProjectGitignoreResult = GitignorePlanSummary & {
+  /** Whether a `repos` roster was declared (else there is nothing to generate — run adopt first). */
+  hasRoster: boolean;
+  /** Whether `.gitignore` files were written (i.e. `--apply` was set AND there was something to add). */
+  applied: boolean;
+};
+
 /**
  * Agent instruction files inspected per repo. GEMINI.md is intentionally absent
  * (the Gemini CLI was discontinued for personal use). Each should be a gitignored
@@ -145,6 +165,21 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (opts: ProjectWiringOptions) => {
       await runProjectWiring(opts);
+    });
+
+  project
+    .command("gitignore")
+    .description(
+      "Reconcile each public-facing repo's .gitignore to exclude the agent instruction files (so the gitignored symlinks never enter public history). Dry-run by default; pass --apply to write. Additive only — it never removes a line; private repos and unset-visibility repos are left untouched",
+    )
+    .option(
+      "--apply",
+      "Append the missing patterns to each repo's .gitignore (default: dry-run preview)",
+    )
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (opts: ProjectGitignoreOptions) => {
+      await runProjectGitignore(opts);
     });
 }
 
@@ -631,6 +666,175 @@ export function renderProjectWiring(result: ProjectWiringResult): string {
 
   lines.push(
     "注: read-only の advisory です。指示書の存在と git 追跡状況のみを表示し、生成・enforce はしません(.basou のフットプリントは `basou view --check`)。",
+  );
+  return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectGitignore}. */
+export async function runProjectGitignore(
+  options: ProjectGitignoreOptions,
+  ctx: ProjectGitignoreContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectGitignore(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Gather one declared repo's `.gitignore` facts. Resolves the repo path
+ * (realpath) and requires a `.git`; an unresolvable / non-repo path is reported
+ * as `reachable: false`. Reads the repo's `.gitignore` into trimmed-on-compare
+ * lines (an empty array when there is none). Pure filesystem reads — no writes.
+ */
+function gatherRepoGitignore(repositoryRoot: string, entry: RepoEntry): RepoGitignoreFacts {
+  const base = {
+    path: entry.path,
+    ...(entry.visibility !== undefined ? { visibility: entry.visibility } : {}),
+  };
+  let real: string;
+  try {
+    real = realpathSync(resolve(repositoryRoot, entry.path));
+  } catch {
+    return { ...base, reachable: false, currentLines: [] };
+  }
+  if (!existsSync(join(real, ".git"))) {
+    return { ...base, reachable: false, currentLines: [] };
+  }
+  return { ...base, reachable: true, currentLines: readGitignoreLines(join(real, ".gitignore")) };
+}
+
+/** True when an error carries a string `code` (a Node errno like `ENOENT`). */
+function hasErrorCode(error: unknown): error is Error & { code: string } {
+  return error instanceof Error && typeof (error as { code?: unknown }).code === "string";
+}
+
+/**
+ * Read a `.gitignore` into trimmed-on-compare lines. A genuinely absent file
+ * (`ENOENT`) yields `[]`; any OTHER read error is re-thrown with a pathless
+ * message (so an unreadable file is never mistaken for "no patterns", which on
+ * the apply path would clobber it down to only the generated patterns).
+ */
+function readGitignoreLines(file: string): string[] {
+  try {
+    return readFileSync(file, "utf8").split(/\r?\n/);
+  } catch (error: unknown) {
+    if (hasErrorCode(error) && error.code === "ENOENT") return [];
+    throw new Error("Failed to read .gitignore", { cause: error });
+  }
+}
+
+/** Append the planned patterns to a repo's `.gitignore`, creating it if absent. */
+function applyGitignorePlan(repositoryRoot: string, plan: RepoGitignorePlan): void {
+  const file = join(realpathSync(resolve(repositoryRoot, plan.path)), ".gitignore");
+  let existing = "";
+  try {
+    existing = readFileSync(file, "utf8");
+  } catch (error: unknown) {
+    if (!(hasErrorCode(error) && error.code === "ENOENT")) {
+      // Do NOT clobber an existing-but-unreadable .gitignore with only the patterns.
+      throw new Error("Failed to read .gitignore", { cause: error });
+    }
+  }
+  const sep = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+  try {
+    writeFileSync(file, `${existing}${sep}${plan.toAdd.join("\n")}\n`);
+  } catch (error: unknown) {
+    throw new Error("Failed to write .gitignore", { cause: error });
+  }
+}
+
+/**
+ * Reconcile each public-facing repo's `.gitignore` to exclude the agent
+ * instruction files. Resolves the workspace, reads the manifest, gathers each
+ * declared repo's current `.gitignore`, and plans the missing patterns. When
+ * `--apply` is set and there is something to add, it appends the patterns
+ * (additive — it never removes a line); otherwise it writes nothing and prints
+ * the plan. Private and unset-visibility repos are left untouched.
+ */
+export async function doRunProjectGitignore(
+  options: ProjectGitignoreOptions,
+  ctx: ProjectGitignoreContext,
+): Promise<ProjectGitignoreResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project gitignore");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+
+  const roster = manifest.repos ?? [];
+  const facts = roster.map((entry) => gatherRepoGitignore(repositoryRoot, entry));
+  const summary = planGitignore({ repos: facts, required: [...INSTRUCTION_FILES] });
+
+  const applied = options.apply === true && summary.plans.length > 0;
+  if (applied) {
+    for (const plan of summary.plans) applyGitignorePlan(repositoryRoot, plan);
+  }
+
+  const result: ProjectGitignoreResult = { ...summary, hasRoster: roster.length > 0, applied };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectGitignore(result));
+  }
+  return result;
+}
+
+/**
+ * Render the gitignore report. Leads with the actionable outcome: no roster (run
+ * adopt first), the per-repo patterns that will be / were added, then the
+ * skipped (unset visibility) and unreachable repos. A clean verdict is shown
+ * only when there is genuinely nothing to do AND every repo was judgeable and
+ * reachable (no false-clear).
+ */
+export function renderProjectGitignore(result: ProjectGitignoreResult): string {
+  const lines: string[] = [];
+  lines.push("# .gitignore 生成(公開系 repo の指示書を除外)");
+  lines.push("");
+
+  if (!result.hasRoster) {
+    lines.push(
+      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。`basou project adopt` で宣言してから実行してください。",
+    );
+    return lines.join("\n");
+  }
+
+  if (result.plans.length > 0) {
+    const verb = result.applied ? "追加しました" : "追加予定(dry-run、反映するには --apply)";
+    lines.push(
+      `${result.applied ? "✅ " : ""}${result.plans.length} repo の .gitignore に${verb}:`,
+    );
+    for (const p of result.plans) lines.push(`- ${p.path} — ${p.toAdd.join(", ")}`);
+  } else if (result.ok) {
+    lines.push("✅ 公開系 repo の .gitignore は指示書をすべて除外済みです(追加不要)。");
+  } else {
+    lines.push(
+      "ℹ️ 追加が必要な公開系 repo はありませんが、判定できない/到達できない repo があります(下記参照)。",
+    );
+  }
+  lines.push("");
+
+  if (result.unknown.length > 0) {
+    lines.push(
+      `## visibility 未設定 (${result.unknown.length}) — 対象外。manifest の repos に visibility を付与してください`,
+    );
+    for (const p of result.unknown) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  if (result.unreachable.length > 0) {
+    lines.push(`## 到達不能 (${result.unreachable.length}) — パス未解決 / git repo でない`);
+    for (const p of result.unreachable) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  lines.push(
+    "注: 既存の .gitignore 行は保持し、不足パターンの追記のみ行います(削除はしません)。private / visibility 未設定の repo は対象外です。",
+  );
+  lines.push(
+    "注: .gitignore への追記は、既に git 追跡済みのファイルを untrack しません。追跡済みの指示書は `basou project wiring` で検出し、`git rm --cached <file>` で外してください。",
   );
   return lines.join("\n");
 }

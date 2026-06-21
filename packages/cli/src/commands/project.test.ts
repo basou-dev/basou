@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -16,13 +16,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   doRunProjectAdopt,
   doRunProjectCheck,
+  doRunProjectGitignore,
   doRunProjectSync,
   doRunProjectWiring,
   type ProjectAdoptResult,
+  type ProjectGitignoreResult,
   type ProjectSyncResult,
   type ProjectWiringResult,
   renderProjectAdopt,
   renderProjectCheck,
+  renderProjectGitignore,
   renderProjectSync,
   renderProjectWiring,
 } from "./project.js";
@@ -664,5 +667,182 @@ describe("renderProjectWiring", () => {
     expect(out).toContain("../y");
     expect(out).toContain("到達不能");
     expect(out).toContain("../z");
+  });
+});
+
+describe("basou project gitignore", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-gi-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  async function makeRepo(name: string, gitignore?: string): Promise<void> {
+    const dir = join(parent as string, name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+    if (gitignore !== undefined) await writeFile(join(dir, ".gitignore"), gitignore);
+  }
+  async function setupHostManifest(repos: RepoEntry[]): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, { ...base, repos });
+  }
+  async function gitignoreOf(name: string): Promise<string> {
+    return await readFile(join(parent as string, name, ".gitignore"), "utf8");
+  }
+
+  it("dry-run plans the missing patterns for a public repo but writes nothing", async () => {
+    await makeRepo("pub", "node_modules\nAGENTS.md\n");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectGitignore({}, { cwd: host() });
+    expect(r.applied).toBe(false);
+    expect(r.plans).toEqual([
+      { path: "../pub", toAdd: ["CLAUDE.md", ".github/copilot-instructions.md"] },
+    ]);
+    // .gitignore unchanged
+    expect(await gitignoreOf("pub")).toBe("node_modules\nAGENTS.md\n");
+  });
+
+  it("--apply appends the missing patterns, preserving existing lines and not duplicating", async () => {
+    await makeRepo("pub", "node_modules\nAGENTS.md\n");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectGitignore({ apply: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    expect(await gitignoreOf("pub")).toBe(
+      "node_modules\nAGENTS.md\nCLAUDE.md\n.github/copilot-instructions.md\n",
+    );
+  });
+
+  it("--apply creates a .gitignore when the public repo has none", async () => {
+    await makeRepo("pub"); // no .gitignore
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await doRunProjectGitignore({ apply: true }, { cwd: host() });
+    expect(await gitignoreOf("pub")).toBe(
+      "AGENTS.md\nCLAUDE.md\n.github/copilot-instructions.md\n",
+    );
+  });
+
+  it("--apply is idempotent (a second run adds nothing)", async () => {
+    await makeRepo("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await doRunProjectGitignore({ apply: true }, { cwd: host() });
+    const after1 = await gitignoreOf("pub");
+    const r2 = await doRunProjectGitignore({ apply: true }, { cwd: host() });
+    expect(r2.applied).toBe(false);
+    expect(r2.ok).toBe(true);
+    expect(await gitignoreOf("pub")).toBe(after1);
+  });
+
+  it("leaves a private repo untouched and reports unset visibility / unreachable", async () => {
+    await makeRepo("priv", "node_modules\n");
+    await makeRepo("unk");
+    await setupHostManifest([
+      { path: "../priv", visibility: "private" },
+      { path: "../unk" }, // unset visibility
+      { path: "../gone" }, // unreachable
+    ]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectGitignore({ apply: true }, { cwd: host() });
+    expect(r.plans).toHaveLength(0);
+    expect(r.unknown).toEqual(["../unk"]);
+    expect(r.unreachable).toEqual(["../gone"]);
+    expect(r.applied).toBe(false);
+    expect(await gitignoreOf("priv")).toBe("node_modules\n"); // untouched
+  });
+
+  it("reports hasRoster false when no roster is declared", async () => {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, base);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectGitignore({}, { cwd: host() });
+    expect(r.hasRoster).toBe(false);
+  });
+
+  it("--json prints the machine-readable result", async () => {
+    await makeRepo("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await doRunProjectGitignore({ json: true }, { cwd: host() });
+    const parsed = JSON.parse(out.join("\n")) as ProjectGitignoreResult;
+    expect(parsed.plans[0]?.path).toBe("../pub");
+    expect(parsed.applied).toBe(false);
+  });
+});
+
+describe("renderProjectGitignore", () => {
+  const base: ProjectGitignoreResult = {
+    plans: [],
+    unknown: [],
+    unreachable: [],
+    ok: true,
+    hasRoster: true,
+    applied: false,
+  };
+
+  it("explains the no-roster case (points to adopt)", () => {
+    const out = renderProjectGitignore({ ...base, hasRoster: false });
+    expect(out).toContain("未宣言");
+    expect(out).toContain("project adopt");
+  });
+
+  it("reports a clean state with a check mark", () => {
+    const out = renderProjectGitignore(base);
+    expect(out).toContain("✅");
+    expect(out).toContain("追加不要");
+  });
+
+  it("does NOT lead with a clean verdict when there are skipped/unreachable repos and nothing to add", () => {
+    const out = renderProjectGitignore({ ...base, unknown: ["../x"], ok: false });
+    expect(out).not.toContain("追加不要");
+    expect(out).toContain("判定できない");
+  });
+
+  it("dry-run lists the additions and says nothing is written", () => {
+    const out = renderProjectGitignore({
+      ...base,
+      plans: [{ path: "../pub", toAdd: ["CLAUDE.md"] }],
+      ok: false,
+    });
+    expect(out).toContain("--apply");
+    expect(out).toContain("../pub");
+    expect(out).toContain("CLAUDE.md");
+    expect(out).toContain("削除はしません");
+  });
+
+  it("applied lists what was added with a check mark", () => {
+    const out = renderProjectGitignore({
+      ...base,
+      plans: [{ path: "../pub", toAdd: ["CLAUDE.md"] }],
+      ok: false,
+      applied: true,
+    });
+    expect(out).toContain("✅");
+    expect(out).toContain("追加しました");
+  });
+
+  it("always caveats that .gitignore does not untrack already-tracked files (points to wiring)", () => {
+    const out = renderProjectGitignore(base);
+    expect(out).toContain("untrack しません");
+    expect(out).toContain("project wiring");
+    expect(out).toContain("git rm --cached");
   });
 });
