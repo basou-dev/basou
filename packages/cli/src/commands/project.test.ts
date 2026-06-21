@@ -20,17 +20,20 @@ import {
   doRunProjectSymlinks,
   doRunProjectSync,
   doRunProjectWiring,
+  doRunProjectWorkspace,
   type ProjectAdoptResult,
   type ProjectGitignoreResult,
   type ProjectSymlinksResult,
   type ProjectSyncResult,
   type ProjectWiringResult,
+  type ProjectWorkspaceResult,
   renderProjectAdopt,
   renderProjectCheck,
   renderProjectGitignore,
   renderProjectSymlinks,
   renderProjectSync,
   renderProjectWiring,
+  renderProjectWorkspace,
 } from "./project.js";
 
 const execFileAsync = promisify(execFile);
@@ -1215,5 +1218,226 @@ describe("renderProjectSymlinks", () => {
     });
     expect(out).toContain("作成できませんでした");
     expect(out).not.toContain("dry-run");
+  });
+});
+
+describe("basou project workspace", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-ws-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  function p(name: string): string {
+    return join(parent as string, name);
+  }
+  async function makeRepo(name: string): Promise<void> {
+    const dir = p(name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+  }
+  async function setup(opts: { repos: RepoEntry[]; view?: string }): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, {
+      ...base,
+      repos: opts.repos,
+      ...(opts.view !== undefined ? { workspace: { ...base.workspace, view: opts.view } } : {}),
+    });
+  }
+  function mute(): void {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  }
+
+  it("plans a link per roster repo, anchor included (dry-run creates nothing)", async () => {
+    await makeRepo("r1");
+    await setup({ repos: [{ path: "." }, { path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({}, { cwd: host() });
+    expect(r.hasView).toBe(true);
+    expect(r.applied).toBe(false);
+    expect(r.toCreate).toEqual([
+      { name: "host", target: "../host" }, // the anchor is aggregated too
+      { name: "r1", target: "../r1" },
+    ]);
+    await expect(readlink(join(p("wsview"), "r1"))).rejects.toThrow();
+  });
+
+  it("--apply creates the view directory and the symlinks with correct targets", async () => {
+    await makeRepo("r1");
+    await setup({ repos: [{ path: "." }, { path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ apply: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    expect(await readlink(join(p("wsview"), "host"))).toBe("../host");
+    expect(await readlink(join(p("wsview"), "r1"))).toBe("../r1");
+    expect(r.failures).toEqual([]);
+  });
+
+  it("is idempotent: a fully aggregated view reports ok and --apply changes nothing", async () => {
+    await makeRepo("r1");
+    await setup({ repos: [{ path: "." }, { path: "../r1" }], view: "../wsview" });
+    mute();
+    await doRunProjectWorkspace({ apply: true }, { cwd: host() });
+    const r = await doRunProjectWorkspace({ apply: true }, { cwd: host() });
+    expect(r.ok).toBe(true);
+    expect(r.toCreate).toEqual([]);
+    expect(r.applied).toBe(false);
+    expect(r.correctCount).toBe(2);
+  });
+
+  it("reports a view entry pointing elsewhere as a mismatch and never repoints it", async () => {
+    await makeRepo("r1");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../elsewhere", join(p("wsview"), "r1"));
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ apply: true }, { cwd: host() });
+    expect(r.conflicts).toEqual([{ name: "r1", reason: "mismatch", actualTarget: "../elsewhere" }]);
+    expect(await readlink(join(p("wsview"), "r1"))).toBe("../elsewhere");
+  });
+
+  it("degrades an unresolvable repo to unreachable", async () => {
+    await makeRepo("r1");
+    await setup({ repos: [{ path: "../r1" }, { path: "../gone" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({}, { cwd: host() });
+    expect(r.unreachable).toEqual(["../gone"]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("surfaces two repos sharing a basename as a collision and wires neither", async () => {
+    await makeRepo("x/pub");
+    await makeRepo("y/pub");
+    await setup({ repos: [{ path: "../x/pub" }, { path: "../y/pub" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({}, { cwd: host() });
+    expect(r.collisions).toEqual([{ linkName: "pub", repos: ["../x/pub", "../y/pub"] }]);
+    expect(r.toCreate).toEqual([]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("reports hasView false when no view is declared", async () => {
+    await makeRepo("r1");
+    await setup({ repos: [{ path: "../r1" }] });
+    mute();
+    const r = await doRunProjectWorkspace({}, { cwd: host() });
+    expect(r.hasView).toBe(false);
+    expect(r.toCreate).toEqual([]);
+  });
+
+  it("--json prints the machine-readable result", async () => {
+    await makeRepo("r1");
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await doRunProjectWorkspace({ json: true }, { cwd: host() });
+    const parsed = JSON.parse(out.join("\n")) as ProjectWorkspaceResult;
+    expect(parsed.hasView).toBe(true);
+    expect(parsed.toCreate[0]?.name).toBe("r1");
+  });
+
+  it("treats a repo that resolves to the view itself as unreachable (no empty-target self-link)", async () => {
+    await mkdir(p("wsview"), { recursive: true });
+    await makeRepo("r1");
+    await setup({ repos: [{ path: "../r1" }, { path: "../wsview" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ apply: true }, { cwd: host() });
+    expect(r.unreachable).toContain("../wsview");
+    expect(r.ok).toBe(false);
+    // No broken empty-target self-link was created for the view itself.
+    await expect(readlink(join(p("wsview"), "wsview"))).rejects.toThrow();
+    // The real repo was still aggregated.
+    expect(await readlink(join(p("wsview"), "r1"))).toBe("../r1");
+  });
+
+  it("aggregates exactly the declared roster (the anchor is not injected when its '.' entry is absent)", async () => {
+    await makeRepo("r1");
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" }); // no "." entry
+    mute();
+    const r = await doRunProjectWorkspace({}, { cwd: host() });
+    expect(r.toCreate).toEqual([{ name: "r1", target: "../r1" }]);
+    expect(r.toCreate.map((c) => c.name)).not.toContain("host");
+  });
+});
+
+describe("renderProjectWorkspace", () => {
+  const base: ProjectWorkspaceResult = {
+    toCreate: [],
+    conflicts: [],
+    collisions: [],
+    unreachable: [],
+    correctCount: 0,
+    ok: true,
+    hasView: true,
+    applied: false,
+    failures: [],
+  };
+
+  it("guides to declare a view when none is set", () => {
+    const out = renderProjectWorkspace({ ...base, hasView: false });
+    expect(out).toContain("workspace.view");
+  });
+
+  it("shows a clean verdict when the view aggregates the whole roster", () => {
+    const out = renderProjectWorkspace({ ...base, correctCount: 3 });
+    expect(out).toContain("集約しています");
+    expect(out).toContain("3 links");
+  });
+
+  it("lists planned links with dry-run framing", () => {
+    const out = renderProjectWorkspace({
+      ...base,
+      ok: false,
+      toCreate: [{ name: "basou", target: "../basou" }],
+    });
+    expect(out).toContain("--apply");
+    expect(out).toContain("basou -> ../basou");
+  });
+
+  it("renders a collision and a blocked conflict accurately", () => {
+    const out = renderProjectWorkspace({
+      ...base,
+      ok: false,
+      conflicts: [{ name: "x", reason: "blocked" }],
+      collisions: [{ linkName: "pub", repos: ["../a/pub", "../b/pub"] }],
+    });
+    expect(out).toContain("検査できないパス");
+    expect(out).toContain("basename 衝突");
+    expect(out).toContain("pub ← ../a/pub, ../b/pub");
+  });
+
+  it("on partial --apply failure, lists only created links and shows the failure", () => {
+    const out = renderProjectWorkspace({
+      ...base,
+      ok: false,
+      applied: true,
+      toCreate: [
+        { name: "basou", target: "../basou" },
+        { name: "site", target: "../site" },
+      ],
+      failures: [{ name: "site", message: "EACCES" }],
+    });
+    expect(out).toContain("一部失敗");
+    expect(out).toContain("basou -> ../basou");
+    expect(out).not.toContain("site -> ../site");
+    expect(out).toContain("site: EACCES");
+  });
+
+  it("notes that strays are not pruned", () => {
+    const out = renderProjectWorkspace(base);
+    expect(out).toContain("stray");
   });
 });

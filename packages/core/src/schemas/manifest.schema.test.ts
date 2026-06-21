@@ -182,4 +182,22 @@ describe("ManifestSchema", () => {
     const variant = { ...VALID_MANIFEST, repos: [] };
     expect(ManifestSchema.safeParse(variant).success).toBe(false);
   });
+
+  it("accepts a relative workspace.view path", () => {
+    const variant = {
+      ...VALID_MANIFEST,
+      workspace: { ...VALID_MANIFEST.workspace, view: "../basou-workspace" },
+    };
+    expect(ManifestSchema.safeParse(variant).success).toBe(true);
+  });
+
+  it("rejects an absolute or '~' workspace.view path", () => {
+    for (const bad of ["/abs/view", "~/view"]) {
+      const variant = {
+        ...VALID_MANIFEST,
+        workspace: { ...VALID_MANIFEST.workspace, view: bad },
+      };
+      expect(ManifestSchema.safeParse(variant).success).toBe(false);
+    }
+  });
 });

@@ -119,6 +119,14 @@ export type {
 } from "./project/wiring.js";
 export { summarizeWiring } from "./project/wiring.js";
 export type {
+  ViewCollision,
+  ViewConflict,
+  ViewLinkState,
+  ViewRepoFact,
+  WorkspaceViewPlan,
+} from "./project/workspace-view.js";
+export { planWorkspaceView } from "./project/workspace-view.js";
+export type {
   ReportApprovalItem,
   ReportData,
   ReportDecisionItem,
