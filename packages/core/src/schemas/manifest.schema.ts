@@ -75,15 +75,39 @@ const ImportConfigSchema = z.object({
  * `basou project check` reports drift between the two (e.g. a companion repo
  * wired into the workspace but never added to `source_roots`). Each `path` is
  * relative to the manifest repo root, reusing the machine-portable source-root
- * constraint. `visibility` is the repo's git visibility; richer per-repo fields
- * (language, published surfaces) are deferred to later slices and not modeled
- * here yet.
+ * constraint. `visibility` is the repo's git visibility, `language` its source
+ * (commit/comment/code) language, and `publishes` the surfaces it deploys, each
+ * independent of the others. `visibility`, `language`, and `publishes` are all
+ * optional so a roster can be adopted first and enriched incrementally.
  */
 const RepoVisibilitySchema = z.enum(["public", "private", "future-public"]);
+
+/**
+ * The audience-driven language axis, independent of visibility:
+ * `en` / `ja` for a single audience, `en+ja` when both are served.
+ */
+const RepoLanguageSchema = z.enum(["en", "ja", "en+ja"]);
+
+/** A published surface kind: a deployed website or a package registry. */
+const PublishKindSchema = z.enum(["web", "npm"]);
+
+/**
+ * One published surface. Its `visibility` and `language` are independent of the
+ * source repo's (a private repo commonly publishes a public site) and both are
+ * optional so a surface can be declared before those facts are pinned down.
+ * `kind` is required: a surface with no kind is meaningless.
+ */
+const PublishTargetSchema = z.object({
+  kind: PublishKindSchema,
+  visibility: RepoVisibilitySchema.optional(),
+  language: RepoLanguageSchema.optional(),
+});
 
 const RepoEntrySchema = z.object({
   path: SourceRootSchema,
   visibility: RepoVisibilitySchema.optional(),
+  language: RepoLanguageSchema.optional(),
+  publishes: z.array(PublishTargetSchema).optional(),
 });
 
 const WorkspaceMetaSchema = z.object({

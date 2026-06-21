@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +8,12 @@ import {
   basouPaths,
   createManifest,
   ensureBasouDirectory,
+  GENERATED_END,
+  GENERATED_START,
   type RepoEntry,
   type RosterDriftSummary,
   readManifest,
+  renderPresetBlock,
   writeManifest,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,12 +21,14 @@ import {
   doRunProjectAdopt,
   doRunProjectCheck,
   doRunProjectGitignore,
+  doRunProjectPreset,
   doRunProjectSymlinks,
   doRunProjectSync,
   doRunProjectWiring,
   doRunProjectWorkspace,
   type ProjectAdoptResult,
   type ProjectGitignoreResult,
+  type ProjectPresetResult,
   type ProjectSymlinksResult,
   type ProjectSyncResult,
   type ProjectWiringResult,
@@ -30,6 +36,7 @@ import {
   renderProjectAdopt,
   renderProjectCheck,
   renderProjectGitignore,
+  renderProjectPreset,
   renderProjectSymlinks,
   renderProjectSync,
   renderProjectWiring,
@@ -1439,5 +1446,275 @@ describe("renderProjectWorkspace", () => {
   it("notes that strays are not pruned", () => {
     const out = renderProjectWorkspace(base);
     expect(out).toContain("stray");
+  });
+});
+
+describe("basou project preset", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-preset-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  function sibling(name: string): string {
+    return join(parent as string, name);
+  }
+  async function makeRepo(name: string): Promise<void> {
+    const dir = sibling(name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+  }
+  /** Path of the anchor's canonical for a repo: host/agents/<name>/AGENTS.md. */
+  function canonicalPath(name: string): string {
+    return join(host(), "agents", name, "AGENTS.md");
+  }
+  /** Write an existing canonical with the given body (e.g. with or without markers). */
+  async function writeCanonical(name: string, body: string): Promise<void> {
+    await mkdir(join(host(), "agents", name), { recursive: true });
+    await writeFile(canonicalPath(name), body);
+  }
+  async function setupHostManifest(repos: RepoEntry[]): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, { ...base, repos });
+  }
+  function mute(): void {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  }
+
+  it("informs when no roster is declared", () => {
+    const out = renderProjectPreset({
+      plans: [],
+      inSync: [],
+      undeclared: [],
+      markerConflicts: [],
+      unreadable: [],
+      collisions: [],
+      anchors: [],
+      unreachable: [],
+      ok: true,
+      hasRoster: false,
+      applied: false,
+      failures: [],
+    } satisfies ProjectPresetResult);
+    expect(out).toContain("ロースターが未宣言");
+  });
+
+  it("plans a create for a renderable repo with no canonical (dry-run writes nothing)", async () => {
+    await makeRepo("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public", language: "en" }]);
+    mute();
+    const r = await doRunProjectPreset({}, { cwd: host() });
+    expect(r.applied).toBe(false);
+    expect(r.plans).toHaveLength(1);
+    expect(r.plans[0]?.action).toBe("create");
+    expect(r.plans[0]?.path).toBe("../pub");
+    expect(existsSync(canonicalPath("pub"))).toBe(false);
+  });
+
+  it("--apply creates an absent canonical seeded with the marker-delimited block", async () => {
+    await makeRepo("pub");
+    await setupHostManifest([
+      {
+        path: "../pub",
+        visibility: "private",
+        language: "en",
+        publishes: [{ kind: "web", visibility: "public", language: "en+ja" }],
+      },
+    ]);
+    mute();
+    const r = await doRunProjectPreset({ apply: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    const body = await readFile(canonicalPath("pub"), "utf8");
+    expect(body).toContain(GENERATED_START);
+    expect(body).toContain(GENERATED_END);
+    expect(body).toContain("ソース可視性: private");
+    expect(body).toContain("web(デプロイ) — 公開 / en+ja");
+  });
+
+  it("--apply updates only the marker region, preserving hand-authored content", async () => {
+    await makeRepo("pub");
+    const handBefore = "# pub\n\nhand-written intro\n\n";
+    const handAfter = "\n## 技術選定\n\nhand-written policy\n";
+    await writeCanonical(
+      "pub",
+      `${handBefore}${GENERATED_START}\nstale\n${GENERATED_END}${handAfter}`,
+    );
+    await setupHostManifest([{ path: "../pub", visibility: "public", language: "ja" }]);
+    mute();
+    const r = await doRunProjectPreset({ apply: true }, { cwd: host() });
+    expect(r.plans[0]?.action).toBe("update");
+    const body = await readFile(canonicalPath("pub"), "utf8");
+    expect(body).toContain("hand-written intro");
+    expect(body).toContain("hand-written policy");
+    expect(body).toContain("ソース可視性: public");
+    expect(body).not.toContain("stale");
+  });
+
+  it("is idempotent: a synced canonical reports inSync and --apply changes nothing", async () => {
+    await makeRepo("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public", language: "ja" }]);
+    mute();
+    await doRunProjectPreset({ apply: true }, { cwd: host() });
+    const before = await readFile(canonicalPath("pub"), "utf8");
+    const r = await doRunProjectPreset({ apply: true }, { cwd: host() });
+    expect(r.ok).toBe(true);
+    expect(r.inSync).toEqual(["../pub"]);
+    expect(r.plans).toEqual([]);
+    expect(r.applied).toBe(false);
+    expect(await readFile(canonicalPath("pub"), "utf8")).toBe(before);
+  });
+
+  it("never overwrites a canonical with no markers (surfaces a conflict with a remedy)", async () => {
+    await makeRepo("pub");
+    await writeCanonical("pub", "# pub\n\nhand-written, no markers\n");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectPreset({ apply: true }, { cwd: host() });
+    expect(r.plans).toEqual([]);
+    expect(r.markerConflicts).toEqual([{ repo: "../pub", reason: "no_markers" }]);
+    expect(await readFile(canonicalPath("pub"), "utf8")).toBe(
+      "# pub\n\nhand-written, no markers\n",
+    );
+  });
+
+  it("skips the anchor entry and reports undeclared repos", async () => {
+    await makeRepo("pub");
+    await setupHostManifest([
+      { path: ".", visibility: "private" }, // anchor
+      { path: "../pub" }, // nothing declared
+    ]);
+    mute();
+    const r = await doRunProjectPreset({}, { cwd: host() });
+    expect(r.anchors).toEqual(["."]);
+    expect(r.undeclared).toEqual(["../pub"]);
+    expect(r.plans).toEqual([]);
+  });
+
+  it("reports an unreachable repo (path does not resolve / not a git repo)", async () => {
+    await setupHostManifest([{ path: "../gone", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectPreset({}, { cwd: host() });
+    expect(r.unreachable).toEqual(["../gone"]);
+    expect(r.plans).toEqual([]);
+  });
+
+  it("renders the generated block in the dry-run preview", () => {
+    const expected = renderPresetBlock({ visibility: "public", language: "en" });
+    const out = renderProjectPreset({
+      plans: [{ path: "../pub", canonicalName: "pub", action: "create", desiredBlock: expected }],
+      inSync: [],
+      undeclared: [],
+      markerConflicts: [],
+      unreadable: [],
+      collisions: [],
+      anchors: [],
+      unreachable: [],
+      ok: false,
+      hasRoster: true,
+      applied: false,
+      failures: [],
+    } satisfies ProjectPresetResult);
+    expect(out).toContain("生成予定");
+    expect(out).toContain("ソース可視性: public");
+    expect(out).toContain("agents/pub/AGENTS.md");
+  });
+
+  it("surfaces two distinct repos sharing a canonical name as a collision (generates neither)", async () => {
+    for (const p of ["a", "b"]) {
+      const dir = join(parent as string, p, "pub");
+      await mkdir(dir, { recursive: true });
+      await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+    }
+    await setupHostManifest([
+      { path: "../a/pub", visibility: "public" },
+      { path: "../b/pub", visibility: "public" },
+    ]);
+    mute();
+    const r = await doRunProjectPreset({ apply: true }, { cwd: host() });
+    expect(r.collisions).toEqual([{ canonicalName: "pub", repos: ["../a/pub", "../b/pub"] }]);
+    expect(r.plans).toEqual([]);
+    expect(r.applied).toBe(false);
+    expect(r.ok).toBe(false);
+  });
+
+  it("degrades an unreadable canonical (a directory at the path) without crashing other repos", async () => {
+    await makeRepo("pub");
+    await makeRepo("ok");
+    // A directory where the canonical file should be -> readMarkdownFile throws (EISDIR).
+    await mkdir(canonicalPath("pub"), { recursive: true });
+    await setupHostManifest([
+      { path: "../pub", visibility: "public" },
+      { path: "../ok", visibility: "public" },
+    ]);
+    mute();
+    const r = await doRunProjectPreset({}, { cwd: host() });
+    expect(r.unreadable).toEqual(["../pub"]);
+    // The other repo is still planned — one bad canonical does not blank the report.
+    expect(r.plans.map((p) => p.path)).toEqual(["../ok"]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("surfaces a malformed marker region (missing END) as a conflict and never writes", async () => {
+    await makeRepo("pub");
+    await writeCanonical("pub", `# pub\n\n${GENERATED_START}\norphan start, no end\n`);
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectPreset({ apply: true }, { cwd: host() });
+    expect(r.markerConflicts).toEqual([{ repo: "../pub", reason: "missing_end" }]);
+    expect(r.plans).toEqual([]);
+    expect(r.applied).toBe(false);
+    expect(await readFile(canonicalPath("pub"), "utf8")).toBe(
+      `# pub\n\n${GENERATED_START}\norphan start, no end\n`,
+    );
+  });
+
+  it("refuses to replace a symlinked canonical (collects a failure, leaves the link intact)", async () => {
+    await makeRepo("pub");
+    // A real target with valid markers, and the canonical as a symlink to it.
+    await mkdir(join(host(), "agents", "pub"), { recursive: true });
+    const target = join(host(), "agents", "pub", "_target.md");
+    await writeFile(target, `${GENERATED_START}\nstale\n${GENERATED_END}\n`);
+    await symlink("_target.md", canonicalPath("pub"));
+    await setupHostManifest([{ path: "../pub", visibility: "public", language: "ja" }]);
+    mute();
+    const r = await doRunProjectPreset({ apply: true }, { cwd: host() });
+    expect(r.applied).toBe(false);
+    expect(r.failures).toHaveLength(1);
+    expect(r.failures[0]?.repo).toBe("../pub");
+    expect(r.failures[0]?.message).toContain("symlink");
+    // The link and its target content are untouched.
+    expect(await readlink(canonicalPath("pub"))).toBe("_target.md");
+    expect(await readFile(target, "utf8")).toBe(`${GENERATED_START}\nstale\n${GENERATED_END}\n`);
+    const out = renderProjectPreset(r);
+    expect(out).toContain("書き込みに失敗");
+  });
+
+  it("--json emits a parseable result with the full plan shape", async () => {
+    await makeRepo("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public", language: "en" }]);
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      logs.push(String(m));
+    });
+    await doRunProjectPreset({ json: true }, { cwd: host() });
+    expect(logs).toHaveLength(1);
+    const parsed = JSON.parse(logs[0] as string) as ProjectPresetResult;
+    expect(parsed.hasRoster).toBe(true);
+    expect(parsed.plans[0]?.path).toBe("../pub");
+    expect(parsed.plans[0]?.action).toBe("create");
+    expect(Array.isArray(parsed.inSync)).toBe(true);
+    expect(Array.isArray(parsed.failures)).toBe(true);
+    expect(parsed.ok).toBe(false);
   });
 });
