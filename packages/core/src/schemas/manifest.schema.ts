@@ -91,6 +91,14 @@ const WorkspaceMetaSchema = z.object({
   name: z.string().min(1),
   created_at: IsoTimestampSchema,
   updated_at: IsoTimestampSchema,
+  /**
+   * The generated workspace view: a throwaway directory that aggregates the
+   * roster repos via symlinks (one `<repo-basename>` symlink per repo). A path
+   * relative to the manifest root, reusing the machine-portable source-root
+   * constraint. Absent for a solo project (no view needed); `basou project
+   * workspace` reconciles the view's symlinks to the declared roster.
+   */
+  view: SourceRootSchema.optional(),
 });
 
 /**

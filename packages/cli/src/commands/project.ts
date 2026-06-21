@@ -20,6 +20,7 @@ import {
   type Manifest,
   planGitignore,
   planRosterAdoption,
+  planWorkspaceView,
   type RepoEntry,
   type RepoGitignoreFacts,
   type RepoGitignorePlan,
@@ -36,7 +37,9 @@ import {
   summarizeRosterDrift,
   summarizeSymlinkPlan,
   summarizeWiring,
+  type ViewRepoFact,
   type WiringSummary,
+  type WorkspaceViewPlan,
   writeManifest,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -130,6 +133,24 @@ export type ProjectSymlinksResult = SymlinkPlanSummary & {
   applied: boolean;
   /** Per-file failures encountered during `--apply` (collected, not thrown — kept transparent). */
   failures: { repo: string; file: string; message: string }[];
+};
+
+export type ProjectWorkspaceOptions = {
+  apply?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type ProjectWorkspaceContext = ImportContext;
+
+/** Result of {@link doRunProjectWorkspace}: the view plan plus whether a view is declared and what `--apply` did. */
+export type ProjectWorkspaceResult = WorkspaceViewPlan & {
+  /** Whether `workspace.view` is declared (else there is no view to generate — solo project / not configured). */
+  hasView: boolean;
+  /** Whether any view symlinks were actually created (true only when `--apply` created at least one). */
+  applied: boolean;
+  /** Per-link failures encountered during `--apply` (collected, not thrown — pathless reason). */
+  failures: { name: string; message: string }[];
 };
 
 /**
@@ -232,6 +253,18 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (opts: ProjectSymlinksOptions) => {
       await runProjectSymlinks(opts);
+    });
+
+  project
+    .command("workspace")
+    .description(
+      "Generate the project's workspace view: a directory (manifest `workspace.view`) that aggregates every declared repo via a `<repo-basename>` symlink (the anchor included). Dry-run by default; pass --apply to create. Non-destructive — it only creates missing links, never overwrites an existing entry or repoints a link, and does not prune strays",
+    )
+    .option("--apply", "Create the missing view symlinks (default: dry-run preview)")
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (opts: ProjectWorkspaceOptions) => {
+      await runProjectWorkspace(opts);
     });
 }
 
@@ -1205,6 +1238,245 @@ export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
 
   lines.push(
     "注: 既存ファイル・別の場所を指す symlink は上書きせず、不足分の作成のみ行います(GEMINI.md は廃止のため生成しません)。",
+  );
+  return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectWorkspace}. */
+export async function runProjectWorkspace(
+  options: ProjectWorkspaceOptions,
+  ctx: ProjectWorkspaceContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectWorkspace(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Resolve the view directory to a realpath-stable absolute path. When the view
+ * exists, realpath it; when it does not exist yet, anchor on its (existing)
+ * parent's realpath + basename so the relative targets computed against the
+ * realpath'd repos stay consistent. Falls back to the plain resolved path only
+ * when the parent is also absent (apply's recursive mkdir will create it).
+ */
+function resolveViewDir(repositoryRoot: string, viewPath: string): string {
+  const abs = resolve(repositoryRoot, viewPath);
+  try {
+    return realpathSync(abs);
+  } catch {
+    try {
+      return join(realpathSync(dirname(abs)), basename(abs));
+    } catch {
+      return abs;
+    }
+  }
+}
+
+/**
+ * Gather one roster repo's place in the view. Resolves the repo (realpath); an
+ * unresolvable path is `reachable: false` (cannot be aggregated). The view link
+ * is named by the repo's basename and should point at the repo relative to the
+ * view; its on-disk state is inspected with the same ENOENT-only rule as the
+ * instruction symlinks (a non-ENOENT lstat error is `blocked`, never a creatable
+ * gap). Pure filesystem reads — no writes.
+ */
+function gatherViewRepo(repositoryRoot: string, viewDir: string, entry: RepoEntry): ViewRepoFact {
+  let repoReal: string;
+  try {
+    repoReal = realpathSync(resolve(repositoryRoot, entry.path));
+  } catch {
+    return { path: entry.path, reachable: false };
+  }
+  const expectedTarget = relative(viewDir, repoReal);
+  // A repo that resolves to the view directory ITSELF yields an empty (self-)
+  // target. It cannot be aggregated into the view, and an empty symlink target
+  // would create a broken link that a later run reads back as falsely "correct"
+  // (readlink "" === expectedTarget "") — so surface it as unreachable instead.
+  if (expectedTarget === "" || expectedTarget === ".") {
+    return { path: entry.path, reachable: false };
+  }
+  const linkName = basename(repoReal);
+  const { state, actualTarget } = inspectSymlink(join(viewDir, linkName), expectedTarget);
+  return {
+    path: entry.path,
+    reachable: true,
+    linkName,
+    expectedTarget,
+    state,
+    ...(actualTarget !== undefined ? { actualTarget } : {}),
+  };
+}
+
+/** Create the planned (missing) view symlinks, making the view directory if needed. */
+function applyViewPlan(
+  viewDir: string,
+  toCreate: { name: string; target: string }[],
+): { created: string[]; failed: { name: string; message: string }[] } {
+  const created: string[] = [];
+  const failed: { name: string; message: string }[] = [];
+  for (const { name, target } of toCreate) {
+    const filePath = join(viewDir, name);
+    try {
+      mkdirSync(dirname(filePath), { recursive: true });
+      symlinkSync(target, filePath);
+      created.push(name);
+    } catch (error: unknown) {
+      failed.push({ name, message: failureReason(error) });
+    }
+  }
+  return { created, failed };
+}
+
+/**
+ * Generate the project's workspace view. Resolves the workspace, reads the
+ * manifest, and — when `workspace.view` is declared — gathers each roster repo's
+ * view-link state and plans the missing links. When `--apply` is set and there
+ * is something to create, it creates only the `missing` links (non-destructive;
+ * conflicts/collisions are never touched and strays are not pruned); otherwise it
+ * writes nothing and prints the plan.
+ */
+export async function doRunProjectWorkspace(
+  options: ProjectWorkspaceOptions,
+  ctx: ProjectWorkspaceContext,
+): Promise<ProjectWorkspaceResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project workspace");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+
+  const viewPath = manifest.workspace.view;
+  const roster = manifest.repos ?? [];
+
+  let result: ProjectWorkspaceResult;
+  if (viewPath === undefined) {
+    result = {
+      toCreate: [],
+      conflicts: [],
+      collisions: [],
+      unreachable: [],
+      correctCount: 0,
+      ok: true,
+      hasView: false,
+      applied: false,
+      failures: [],
+    };
+  } else {
+    const viewDir = resolveViewDir(repositoryRoot, viewPath);
+    const facts = roster.map((entry) => gatherViewRepo(repositoryRoot, viewDir, entry));
+    const plan = planWorkspaceView(facts);
+
+    const failures: { name: string; message: string }[] = [];
+    let createdCount = 0;
+    if (options.apply === true && plan.toCreate.length > 0) {
+      const applied = applyViewPlan(viewDir, plan.toCreate);
+      createdCount = applied.created.length;
+      for (const f of applied.failed) failures.push(f);
+    }
+    result = { ...plan, hasView: true, applied: createdCount > 0, failures };
+  }
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectWorkspace(result));
+  }
+  return result;
+}
+
+/**
+ * Render the workspace-view report. Leads with the actionable outcome: no view
+ * declared, the links that will be / were created, then conflicts, basename
+ * collisions, and unreachable repos. A clean "in sync" verdict is shown only when
+ * there is genuinely nothing to do AND every repo was resolvable and unambiguous
+ * (no false-clear). Stray entries are not pruned (out of scope).
+ */
+export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
+  const lines: string[] = [];
+  lines.push("# workspace view 生成(roster repo を集約)");
+  lines.push("");
+
+  if (!result.hasView) {
+    lines.push(
+      "ℹ️ view が未宣言です(manifest の `workspace.view`)。集約先のディレクトリを宣言してから実行してください。",
+    );
+    return lines.join("\n");
+  }
+
+  if (result.toCreate.length > 0) {
+    const attempted = result.applied || result.failures.length > 0;
+    if (!attempted) {
+      lines.push(
+        `${result.toCreate.length} 件の repo symlink を view に作成予定(dry-run、反映するには --apply):`,
+      );
+      for (const c of result.toCreate) lines.push(`    ${c.name} -> ${c.target}`);
+    } else {
+      const failed = new Set(result.failures.map((f) => f.name));
+      const header =
+        result.failures.length === 0
+          ? "✅ view に repo symlink を作成しました:"
+          : result.applied
+            ? "view に repo symlink を作成しました(一部失敗、下記参照):"
+            : "view に repo symlink を作成できませんでした(下記参照):";
+      lines.push(header);
+      for (const c of result.toCreate) {
+        if (failed.has(c.name)) continue;
+        lines.push(`    ${c.name} -> ${c.target}`);
+      }
+    }
+  } else if (result.ok) {
+    lines.push(
+      `✅ view は宣言された roster をすべて集約しています(${result.correctCount} links、生成不要)。`,
+    );
+  } else {
+    lines.push(
+      "ℹ️ 作成が必要な symlink はありませんが、競合 / 衝突 / 到達できない repo があります(下記参照)。",
+    );
+  }
+  lines.push("");
+
+  if (result.failures.length > 0) {
+    lines.push(`## 作成に失敗 (${result.failures.length}) — 一部の symlink を作成できませんでした`);
+    for (const f of result.failures) lines.push(`- ${f.name}: ${f.message}`);
+    lines.push("");
+  }
+
+  if (result.conflicts.length > 0) {
+    lines.push(
+      `## 競合 (${result.conflicts.length}) — 既存を上書きしません。手動で確認してください`,
+    );
+    for (const c of result.conflicts) {
+      const detail =
+        c.reason === "mismatch"
+          ? `別の場所を指す symlink(現在: ${c.actualTarget ?? "?"})`
+          : c.reason === "occupied"
+            ? "symlink でない実ファイル/ディレクトリ"
+            : "検査できないパス(親が非ディレクトリ等)";
+      lines.push(`- ${c.name}: ${detail}`);
+    }
+    lines.push("");
+  }
+
+  if (result.collisions.length > 0) {
+    lines.push(
+      `## basename 衝突 (${result.collisions.length}) — 別 repo が同じ view 名を取り合い(自動配線しません)`,
+    );
+    for (const c of result.collisions) lines.push(`- ${c.linkName} ← ${c.repos.join(", ")}`);
+    lines.push("");
+  }
+
+  if (result.unreachable.length > 0) {
+    lines.push(
+      `## 到達不能 (${result.unreachable.length}) — パス未解決、または view 自身に解決するため集約できません`,
+    );
+    for (const p of result.unreachable) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  lines.push(
+    "注: 既存エントリは上書きせず、不足分の作成のみ行います。view 内の所有外エントリ(stray)の削除は未対応です。",
   );
   return lines.join("\n");
 }
