@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -17,15 +17,18 @@ import {
   doRunProjectAdopt,
   doRunProjectCheck,
   doRunProjectGitignore,
+  doRunProjectSymlinks,
   doRunProjectSync,
   doRunProjectWiring,
   type ProjectAdoptResult,
   type ProjectGitignoreResult,
+  type ProjectSymlinksResult,
   type ProjectSyncResult,
   type ProjectWiringResult,
   renderProjectAdopt,
   renderProjectCheck,
   renderProjectGitignore,
+  renderProjectSymlinks,
   renderProjectSync,
   renderProjectWiring,
 } from "./project.js";
@@ -844,5 +847,373 @@ describe("renderProjectGitignore", () => {
     expect(out).toContain("untrack しません");
     expect(out).toContain("project wiring");
     expect(out).toContain("git rm --cached");
+  });
+});
+
+describe("basou project symlinks", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-symlinks-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  function sibling(name: string): string {
+    return join(parent as string, name);
+  }
+  async function makeRepo(name: string): Promise<void> {
+    const dir = sibling(name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+  }
+  /** Write the anchor's canonical for a repo: host/agents/<name>/AGENTS.md. */
+  async function makeCanonical(name: string): Promise<void> {
+    const dir = join(host(), "agents", name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "AGENTS.md"), "canonical\n");
+  }
+  async function setupHostManifest(repos: RepoEntry[]): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, { ...base, repos });
+  }
+  function mute(): void {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  }
+
+  it("plans all three links for an unwired repo (dry-run creates nothing)", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectSymlinks({}, { cwd: host() });
+    expect(r.applied).toBe(false);
+    expect(r.plans).toEqual([
+      {
+        path: "../pub",
+        toCreate: [
+          { name: "AGENTS.md", target: "../host/agents/pub/AGENTS.md" },
+          { name: "CLAUDE.md", target: "AGENTS.md" },
+          { name: ".github/copilot-instructions.md", target: "../AGENTS.md" },
+        ],
+      },
+    ]);
+    expect(r.ok).toBe(false);
+    await expect(readlink(join(sibling("pub"), "AGENTS.md"))).rejects.toThrow();
+  });
+
+  it("--apply creates the symlinks with correct relative targets, making .github", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    expect(await readlink(join(sibling("pub"), "AGENTS.md"))).toBe("../host/agents/pub/AGENTS.md");
+    expect(await readlink(join(sibling("pub"), "CLAUDE.md"))).toBe("AGENTS.md");
+    expect(await readlink(join(sibling("pub"), ".github/copilot-instructions.md"))).toBe(
+      "../AGENTS.md",
+    );
+    expect(await readFile(join(sibling("pub"), "AGENTS.md"), "utf8")).toBe("canonical\n");
+  });
+
+  it("is idempotent: a fully wired repo reports ok and --apply changes nothing", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.ok).toBe(true);
+    expect(r.plans).toEqual([]);
+    expect(r.applied).toBe(false);
+  });
+
+  it("skips the anchor entry (resolves to the manifest root, never linked to itself)", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await setupHostManifest([
+      { path: ".", visibility: "private" },
+      { path: "../pub", visibility: "public" },
+    ]);
+    mute();
+    const r = await doRunProjectSymlinks({}, { cwd: host() });
+    expect(r.plans.map((p) => p.path)).toEqual(["../pub"]);
+    expect(r.missingCanonical).toEqual([]);
+    expect(r.conflicts).toEqual([]);
+  });
+
+  it("reports a link pointing elsewhere as a mismatch conflict and never repoints it on --apply", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await symlink("../somewhere/else.md", join(sibling("pub"), "AGENTS.md"));
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.conflicts).toEqual([
+      {
+        repo: "../pub",
+        file: "AGENTS.md",
+        reason: "mismatch",
+        actualTarget: "../somewhere/else.md",
+      },
+    ]);
+    expect(await readlink(join(sibling("pub"), "AGENTS.md"))).toBe("../somewhere/else.md");
+  });
+
+  it("reports a real file occupying the path as an occupied conflict and never overwrites it", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await writeFile(join(sibling("pub"), "AGENTS.md"), "hand-written\n");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.conflicts).toEqual([{ repo: "../pub", file: "AGENTS.md", reason: "occupied" }]);
+    expect(await readFile(join(sibling("pub"), "AGENTS.md"), "utf8")).toBe("hand-written\n");
+  });
+
+  it("still creates the missing links while reporting a conflict on the same repo", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await writeFile(join(sibling("pub"), "AGENTS.md"), "hand-written\n");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.conflicts).toHaveLength(1);
+    expect(await readlink(join(sibling("pub"), "CLAUDE.md"))).toBe("AGENTS.md");
+    expect(await readlink(join(sibling("pub"), ".github/copilot-instructions.md"))).toBe(
+      "../AGENTS.md",
+    );
+  });
+
+  it("reports a repo whose anchor canonical is absent as missingCanonical (plans nothing)", async () => {
+    await makeRepo("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectSymlinks({}, { cwd: host() });
+    expect(r.missingCanonical).toEqual(["../pub"]);
+    expect(r.plans).toEqual([]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("degrades an unresolvable repo to unreachable", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await setupHostManifest([
+      { path: "../pub", visibility: "public" },
+      { path: "../gone", visibility: "public" },
+    ]);
+    mute();
+    const r = await doRunProjectSymlinks({}, { cwd: host() });
+    expect(r.unreachable).toEqual(["../gone"]);
+  });
+
+  it("reports hasRoster false when no roster is declared", async () => {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, base);
+    mute();
+    const r = await doRunProjectSymlinks({}, { cwd: host() });
+    expect(r.hasRoster).toBe(false);
+    expect(r.plans).toEqual([]);
+  });
+
+  it("--json prints the machine-readable result", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await doRunProjectSymlinks({ json: true }, { cwd: host() });
+    const parsed = JSON.parse(out.join("\n")) as ProjectSymlinksResult;
+    expect(parsed.hasRoster).toBe(true);
+    expect(parsed.plans[0]?.path).toBe("../pub");
+  });
+
+  it("classifies a path whose parent is a regular file as blocked, not missing, and does not crash --apply", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    // .github is a regular FILE, so lstat(.github/copilot-instructions.md) throws
+    // ENOTDIR — must be 'blocked' (a conflict), never 'missing' (which would crash apply).
+    await writeFile(join(sibling("pub"), ".github"), "not a dir\n");
+    await setupHostManifest([{ path: "../pub", visibility: "public" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.conflicts).toContainEqual({
+      repo: "../pub",
+      file: ".github/copilot-instructions.md",
+      reason: "blocked",
+    });
+    // The two creatable links were still created; .github (the file) is untouched.
+    expect(await readlink(join(sibling("pub"), "AGENTS.md"))).toBe("../host/agents/pub/AGENTS.md");
+    expect(await readlink(join(sibling("pub"), "CLAUDE.md"))).toBe("AGENTS.md");
+    expect(await readFile(join(sibling("pub"), ".github"), "utf8")).toBe("not a dir\n");
+    expect(r.failures).toEqual([]);
+    expect(r.applied).toBe(true);
+  });
+
+  it("dedupes a repo declared twice (one plan, no EEXIST on --apply)", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    await setupHostManifest([{ path: "../pub" }, { path: "../pub" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.plans).toHaveLength(1);
+    expect(r.failures).toEqual([]);
+    expect(await readlink(join(sibling("pub"), "AGENTS.md"))).toBe("../host/agents/pub/AGENTS.md");
+  });
+
+  it("surfaces two distinct repos sharing a canonical name as a collision and wires neither", async () => {
+    await makeRepo("x/pub");
+    await makeRepo("y/pub");
+    await makeCanonical("pub"); // both resolve to agents/pub/AGENTS.md
+    await setupHostManifest([
+      { path: "../x/pub", visibility: "public" },
+      { path: "../y/pub", visibility: "public" },
+    ]);
+    mute();
+    const r = await doRunProjectSymlinks({}, { cwd: host() });
+    expect(r.collisions).toEqual([{ canonicalName: "pub", repos: ["../x/pub", "../y/pub"] }]);
+    expect(r.plans).toEqual([]);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("renderProjectSymlinks", () => {
+  const base: ProjectSymlinksResult = {
+    plans: [],
+    conflicts: [],
+    missingCanonical: [],
+    unreachable: [],
+    collisions: [],
+    ok: true,
+    hasRoster: true,
+    applied: false,
+    failures: [],
+  };
+
+  it("guides to adopt when no roster is declared", () => {
+    const out = renderProjectSymlinks({ ...base, hasRoster: false, ok: false });
+    expect(out).toContain("project adopt");
+  });
+
+  it("shows a clean verdict when everything is wired", () => {
+    const out = renderProjectSymlinks(base);
+    expect(out).toContain("正しく張られています");
+  });
+
+  it("lists planned links with dry-run framing", () => {
+    const out = renderProjectSymlinks({
+      ...base,
+      ok: false,
+      plans: [
+        {
+          path: "../pub",
+          toCreate: [{ name: "AGENTS.md", target: "../host/agents/pub/AGENTS.md" }],
+        },
+      ],
+    });
+    expect(out).toContain("--apply");
+    expect(out).toContain("../pub");
+    expect(out).toContain("AGENTS.md -> ../host/agents/pub/AGENTS.md");
+  });
+
+  it("does not show a clean verdict when only conflicts / missing canonicals exist (no false-clear)", () => {
+    const out = renderProjectSymlinks({
+      ...base,
+      ok: false,
+      conflicts: [{ repo: "../pub", file: "AGENTS.md", reason: "occupied" }],
+      missingCanonical: ["../newrepo"],
+    });
+    expect(out).not.toContain("正しく張られています");
+    expect(out).toContain("競合");
+    expect(out).toContain("canonical 不在");
+  });
+
+  it("applied shows a check mark and created wording", () => {
+    const out = renderProjectSymlinks({
+      ...base,
+      ok: false,
+      applied: true,
+      plans: [{ path: "../pub", toCreate: [{ name: "CLAUDE.md", target: "AGENTS.md" }] }],
+    });
+    expect(out).toContain("✅");
+    expect(out).toContain("作成しました");
+  });
+
+  it("renders a canonical collision", () => {
+    const out = renderProjectSymlinks({
+      ...base,
+      ok: false,
+      collisions: [{ canonicalName: "pub", repos: ["../x/pub", "../y/pub"] }],
+    });
+    expect(out).toContain("canonical 衝突");
+    expect(out).toContain("agents/pub/AGENTS.md");
+    expect(out).toContain("../x/pub");
+  });
+
+  it("renders a blocked conflict with an accurate (not 'real file') description", () => {
+    const out = renderProjectSymlinks({
+      ...base,
+      ok: false,
+      conflicts: [{ repo: "../pub", file: ".github/copilot-instructions.md", reason: "blocked" }],
+    });
+    expect(out).toContain("検査できないパス");
+    expect(out).not.toContain("symlink でない実ファイル/ディレクトリ");
+  });
+
+  it("renders --apply failures", () => {
+    const out = renderProjectSymlinks({
+      ...base,
+      ok: false,
+      failures: [{ repo: "../pub", file: "AGENTS.md", message: "EACCES" }],
+    });
+    expect(out).toContain("作成に失敗");
+    expect(out).toContain("EACCES");
+  });
+
+  it("on partial --apply failure, lists only created links and shows the failure separately", () => {
+    const out = renderProjectSymlinks({
+      ...base,
+      ok: false,
+      applied: true,
+      plans: [
+        {
+          path: "../pub",
+          toCreate: [
+            { name: "AGENTS.md", target: "../host/agents/pub/AGENTS.md" },
+            { name: "CLAUDE.md", target: "AGENTS.md" },
+          ],
+        },
+      ],
+      failures: [{ repo: "../pub", file: "CLAUDE.md", message: "EEXIST" }],
+    });
+    expect(out).toContain("一部失敗");
+    expect(out).toContain("AGENTS.md -> ../host/agents/pub/AGENTS.md"); // created, listed
+    expect(out).not.toContain("CLAUDE.md -> AGENTS.md"); // failed, NOT listed as created
+    expect(out).toContain("CLAUDE.md: EEXIST"); // shown in the failures section
+  });
+
+  it("on a fully failed --apply, does not mislabel it as a dry-run", () => {
+    const out = renderProjectSymlinks({
+      ...base,
+      ok: false,
+      applied: false,
+      plans: [{ path: "../pub", toCreate: [{ name: "AGENTS.md", target: "x" }] }],
+      failures: [{ repo: "../pub", file: "AGENTS.md", message: "EACCES" }],
+    });
+    expect(out).toContain("作成できませんでした");
+    expect(out).not.toContain("dry-run");
   });
 });

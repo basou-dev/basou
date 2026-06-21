@@ -1,0 +1,243 @@
+/**
+ * Plan the agent instruction-file symlinks a declared repo needs (the
+ * generation step that follows `basou project gitignore` in the "saddle"
+ * model). Each repo's agent instruction files are GITIGNORED symlinks that
+ * resolve to a single canonical source kept in the project's private anchor —
+ * so the canonical (which may carry private planning content) is edited once
+ * and every CLI reads it through a symlink, never committed to a public repo's
+ * history.
+ *
+ * The on-disk topology (verified against the operator's live environment) is a
+ * hub-and-spoke:
+ *
+ *   <repo>/AGENTS.md                       -> <anchor>/agents/<repo>/AGENTS.md   (the hub → canonical)
+ *   <repo>/CLAUDE.md                       -> AGENTS.md                          (a spoke → the hub)
+ *   <repo>/.github/copilot-instructions.md -> ../AGENTS.md                       (a spoke → the hub)
+ *
+ * Only AGENTS.md points at the anchor's canonical; CLAUDE.md and Copilot point
+ * back at the repo's own AGENTS.md, so there is exactly one link per repo that
+ * depends on the anchor path. GEMINI.md is intentionally not generated (the
+ * Gemini CLI was discontinued for personal use).
+ *
+ * Pure: it judges already-gathered, per-file facts (does the link exist? does
+ * it point where it should?) and reports only what is MISSING. It never
+ * proposes overwriting an existing file or repointing a link that points
+ * elsewhere — those surface as conflicts for the operator to resolve by hand
+ * (non-destructive, like the additive `.gitignore` planner). The realpath /
+ * symlink reading / writing is the caller's job.
+ */
+
+/**
+ * The on-disk state of one instruction file relative to the symlink it should
+ * be. `correct` = the expected link already exists (idempotent skip); `missing`
+ * = nothing there (ENOENT), so it can be created; `mismatch` = a symlink
+ * pointing somewhere else; `occupied` = a real file or directory; `blocked` =
+ * the path could not be inspected (e.g. a parent component is a file → ENOTDIR,
+ * or permission denied). Only `missing` is actionable; the rest are left
+ * untouched. `blocked` is distinct from `missing` so a non-ENOENT lstat error
+ * is never mistaken for a creatable gap (which would crash `--apply`).
+ */
+export type InstructionSymlinkState = "correct" | "missing" | "mismatch" | "occupied" | "blocked";
+
+/** The gathered facts for one instruction file in one declared repo. */
+export type InstructionSymlinkFact = {
+  /** Repo-relative file name, e.g. "AGENTS.md", ".github/copilot-instructions.md". */
+  name: string;
+  /** The relative symlink target this file should have (computed by the caller). */
+  expectedTarget: string;
+  /** On-disk state of the path. */
+  state: InstructionSymlinkState;
+  /** The link's current target, present only when `state` is `mismatch`. */
+  actualTarget?: string;
+};
+
+/** The gathered symlink facts for one declared repo. */
+export type RepoSymlinkFacts = {
+  /** Roster repo path (relative to the manifest root). */
+  path: string;
+  /**
+   * True when this repo IS the project anchor (it owns the canonical sources, so
+   * it never links to itself). An anchor entry is skipped entirely.
+   */
+  isAnchor: boolean;
+  /** False when the repo path could not be resolved / is not a usable git repo. */
+  reachable: boolean;
+  /**
+   * Whether the anchor's canonical source for this repo
+   * (`<anchor>/agents/<repo>/AGENTS.md`) exists. Without it the hub link would
+   * dangle, so no links are planned (reported as a missing canonical instead).
+   */
+  canonicalPresent: boolean;
+  /**
+   * The canonical's repo name (the `<repo>` in `agents/<repo>/AGENTS.md`) this
+   * repo wires to. Two DISTINCT repos sharing one canonical name would silently
+   * collide on a single canonical, so it is used to detect that. Set by the
+   * caller for reachable, canonical-present repos; undefined otherwise.
+   */
+  canonicalName?: string;
+  /** Per instruction-file facts (empty when anchor / unreachable / canonical absent). */
+  files: InstructionSymlinkFact[];
+};
+
+/** The instruction-file symlinks to CREATE in one repo (only the `missing` ones). */
+export type RepoSymlinkPlan = {
+  path: string;
+  toCreate: { name: string; target: string }[];
+};
+
+/**
+ * A symlink that already exists but is not what we would generate: a symlink
+ * pointing elsewhere (`mismatch`), a real file/directory (`occupied`), or a path
+ * that could not be inspected (`blocked`, e.g. a parent is a file). Surfaced,
+ * never overwritten.
+ */
+export type SymlinkConflict = {
+  repo: string;
+  file: string;
+  reason: "mismatch" | "occupied" | "blocked";
+  /** The conflicting link's current target, present only when `reason` is `mismatch`. */
+  actualTarget?: string;
+};
+
+/**
+ * Two or more DISTINCT declared repos whose canonical resolves to the same
+ * `agents/<canonicalName>/AGENTS.md`. They would silently share one canonical,
+ * so neither is auto-wired; the operator must disambiguate.
+ */
+export type SymlinkCollision = {
+  canonicalName: string;
+  repos: string[];
+};
+
+export type SymlinkPlanSummary = {
+  /** Repos with at least one link to create (those with nothing to create are omitted). */
+  plans: RepoSymlinkPlan[];
+  /** Existing files/links that block generation and are left untouched for the operator. */
+  conflicts: SymlinkConflict[];
+  /** Repo paths whose anchor canonical (`agents/<repo>/AGENTS.md`) is absent, so nothing can be wired. */
+  missingCanonical: string[];
+  /** Repo paths that could not be resolved / are not usable git repos. */
+  unreachable: string[];
+  /** Groups of distinct repos that resolve to the same canonical (ambiguous; not auto-wired). */
+  collisions: SymlinkCollision[];
+  /**
+   * True only when nothing needs creating AND there are no conflicts, no missing
+   * canonicals, no unreachable repos, and no collisions — so a clean "all wired"
+   * verdict is never claimed while some repo was blocked, ambiguous, or could not
+   * be inspected.
+   */
+  ok: boolean;
+};
+
+/** Normalize a relative roster path for comparison: trim, drop trailing slashes, empty => ".". */
+function normalize(p: string): string {
+  const s = p.trim().replace(/\/+$/, "");
+  return s.length === 0 ? "." : s;
+}
+
+/**
+ * Compute the {@link SymlinkPlanSummary} from per-repo facts. For each declared,
+ * non-anchor, reachable repo whose canonical exists: a `missing` link becomes a
+ * create, a `mismatch`/`occupied`/`blocked` link becomes a {@link SymlinkConflict}
+ * (never a create — we do not overwrite), and a `correct` link is a no-op. The
+ * anchor is skipped (it owns the canonical), an absent canonical is reported as
+ * `missingCanonical` (no links planned, since the hub would dangle), and an
+ * unresolvable repo as `unreachable`.
+ *
+ * Robustness:
+ * - Facts are deduped by normalized path (first wins), so a repo listed twice in
+ *   the manifest never yields duplicate plans (which would make `--apply` create
+ *   the same link twice → EEXIST) or duplicate report entries.
+ * - Two DISTINCT repos resolving to the same canonical name are reported as a
+ *   {@link SymlinkCollision} and neither is auto-wired (silent sharing of one
+ *   canonical is surfaced, not actioned).
+ *
+ * `ok` is true only when there is genuinely nothing to do and every repo was
+ * judgeable, reachable, and unambiguous.
+ */
+export function summarizeSymlinkPlan(facts: RepoSymlinkFacts[]): SymlinkPlanSummary {
+  // Dedup by normalized path (first declaration wins).
+  const deduped: RepoSymlinkFacts[] = [];
+  const seenPath = new Set<string>();
+  for (const f of facts) {
+    const key = normalize(f.path);
+    if (seenPath.has(key)) continue;
+    seenPath.add(key);
+    deduped.push(f);
+  }
+
+  // Detect canonical-name collisions among the repos that would actually wire
+  // (reachable, canonical present). Distinct repo paths sharing a canonical name
+  // are ambiguous: surface them and wire neither.
+  const byCanonical = new Map<string, string[]>();
+  for (const f of deduped) {
+    if (f.isAnchor || !f.reachable || !f.canonicalPresent || f.canonicalName === undefined) {
+      continue;
+    }
+    const repos = byCanonical.get(f.canonicalName) ?? [];
+    repos.push(f.path);
+    byCanonical.set(f.canonicalName, repos);
+  }
+  const collisions: SymlinkCollision[] = [];
+  const collidingPaths = new Set<string>();
+  for (const [canonicalName, repos] of byCanonical) {
+    if (repos.length > 1) {
+      collisions.push({ canonicalName, repos });
+      for (const r of repos) collidingPaths.add(r);
+    }
+  }
+
+  const plans: RepoSymlinkPlan[] = [];
+  const conflicts: SymlinkConflict[] = [];
+  const missingCanonical: string[] = [];
+  const unreachable: string[] = [];
+
+  for (const f of deduped) {
+    if (f.isAnchor) continue;
+    if (!f.reachable) {
+      unreachable.push(f.path);
+      continue;
+    }
+    if (!f.canonicalPresent) {
+      missingCanonical.push(f.path);
+      continue;
+    }
+    // A repo sharing a canonical name with another is surfaced as a collision and
+    // never auto-wired (avoids silently pointing two repos at one canonical).
+    if (collidingPaths.has(f.path)) continue;
+
+    const toCreate: { name: string; target: string }[] = [];
+    for (const file of f.files) {
+      if (file.state === "missing") {
+        toCreate.push({ name: file.name, target: file.expectedTarget });
+      } else if (file.state === "mismatch") {
+        conflicts.push({
+          repo: f.path,
+          file: file.name,
+          reason: "mismatch",
+          ...(file.actualTarget !== undefined ? { actualTarget: file.actualTarget } : {}),
+        });
+      } else if (file.state === "occupied") {
+        conflicts.push({ repo: f.path, file: file.name, reason: "occupied" });
+      } else if (file.state === "blocked") {
+        conflicts.push({ repo: f.path, file: file.name, reason: "blocked" });
+      }
+      // "correct" → already wired, nothing to do.
+    }
+    if (toCreate.length > 0) plans.push({ path: f.path, toCreate });
+  }
+
+  return {
+    plans,
+    conflicts,
+    missingCanonical,
+    unreachable,
+    collisions,
+    ok:
+      plans.length === 0 &&
+      conflicts.length === 0 &&
+      missingCanonical.length === 0 &&
+      unreachable.length === 0 &&
+      collisions.length === 0,
+  };
+}
