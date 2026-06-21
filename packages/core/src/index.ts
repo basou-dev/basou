@@ -102,6 +102,16 @@ export {
   summarizeRosterDrift,
 } from "./project/roster.js";
 export type {
+  InstructionSymlinkFact,
+  InstructionSymlinkState,
+  RepoSymlinkFacts,
+  RepoSymlinkPlan,
+  SymlinkCollision,
+  SymlinkConflict,
+  SymlinkPlanSummary,
+} from "./project/symlinks.js";
+export { summarizeSymlinkPlan } from "./project/symlinks.js";
+export type {
   InstructionFileFact,
   RepoWiringFacts,
   WiringRisk,

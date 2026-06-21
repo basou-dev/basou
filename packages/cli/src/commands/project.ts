@@ -1,10 +1,21 @@
-import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   type AdoptCandidate,
   basouPaths,
   type GitignorePlanSummary,
   type InstructionFileFact,
+  type InstructionSymlinkFact,
+  type InstructionSymlinkState,
   isGitNotFound,
   type Manifest,
   planGitignore,
@@ -12,14 +23,18 @@ import {
   type RepoEntry,
   type RepoGitignoreFacts,
   type RepoGitignorePlan,
+  type RepoSymlinkFacts,
+  type RepoSymlinkPlan,
   type RepoWiringFacts,
   type RosterAdoptionPlan,
   type RosterDriftSummary,
   readManifest,
   reconcileSourceRoots,
   type SourceRootsReconcile,
+  type SymlinkPlanSummary,
   safeSimpleGit,
   summarizeRosterDrift,
+  summarizeSymlinkPlan,
   summarizeWiring,
   type WiringSummary,
   writeManifest,
@@ -99,12 +114,37 @@ export type ProjectGitignoreResult = GitignorePlanSummary & {
   applied: boolean;
 };
 
+export type ProjectSymlinksOptions = {
+  apply?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type ProjectSymlinksContext = ImportContext;
+
+/** Result of {@link doRunProjectSymlinks}: the plan plus whether a roster exists and what `--apply` did. */
+export type ProjectSymlinksResult = SymlinkPlanSummary & {
+  /** Whether a `repos` roster was declared (else there is nothing to generate — run adopt first). */
+  hasRoster: boolean;
+  /** Whether any symlinks were actually created (true only when `--apply` created at least one link). */
+  applied: boolean;
+  /** Per-file failures encountered during `--apply` (collected, not thrown — kept transparent). */
+  failures: { repo: string; file: string; message: string }[];
+};
+
 /**
  * Agent instruction files inspected per repo. GEMINI.md is intentionally absent
  * (the Gemini CLI was discontinued for personal use). Each should be a gitignored
  * symlink to a canonical source, never tracked in a public repo's history.
  */
 const INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md"] as const;
+
+/**
+ * The canonical instruction file name. It lives in the anchor at
+ * `agents/<repo>/AGENTS.md` and is the hub each repo's own AGENTS.md symlink
+ * resolves to; CLAUDE.md and Copilot are spokes pointing back at it.
+ */
+const CANONICAL_FILE = "AGENTS.md";
 
 /**
  * Wire `basou project` (a read-only inspector for the project's declared repo
@@ -180,6 +220,18 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (opts: ProjectGitignoreOptions) => {
       await runProjectGitignore(opts);
+    });
+
+  project
+    .command("symlinks")
+    .description(
+      "Generate each declared repo's agent instruction-file symlinks (AGENTS.md, CLAUDE.md, copilot-instructions.md) pointing at the project anchor's canonical (agents/<repo>/AGENTS.md). Dry-run by default; pass --apply to create. Non-destructive — it only creates missing links and never overwrites an existing file or repoints a link",
+    )
+    .option("--apply", "Create the missing instruction-file symlinks (default: dry-run preview)")
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (opts: ProjectSymlinksOptions) => {
+      await runProjectSymlinks(opts);
     });
 }
 
@@ -835,6 +887,324 @@ export function renderProjectGitignore(result: ProjectGitignoreResult): string {
   );
   lines.push(
     "注: .gitignore への追記は、既に git 追跡済みのファイルを untrack しません。追跡済みの指示書は `basou project wiring` で検出し、`git rm --cached <file>` で外してください。",
+  );
+  return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectSymlinks}. */
+export async function runProjectSymlinks(
+  options: ProjectSymlinksOptions,
+  ctx: ProjectSymlinksContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectSymlinks(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * The instruction files and their expected symlink targets for one repo, in the
+ * hub-and-spoke topology: AGENTS.md is the hub (a relative link to the anchor's
+ * canonical), while CLAUDE.md and Copilot are spokes pointing back at the repo's
+ * own AGENTS.md. `repoDirReal` and `canonicalFile` are both realpath-resolved so
+ * the computed relative target matches a hand-wired link byte-for-byte.
+ */
+function expectedSymlinkTargets(
+  repoDirReal: string,
+  canonicalFile: string,
+): { name: string; target: string }[] {
+  return [
+    { name: "AGENTS.md", target: relative(repoDirReal, canonicalFile) },
+    { name: "CLAUDE.md", target: CANONICAL_FILE },
+    { name: ".github/copilot-instructions.md", target: `../${CANONICAL_FILE}` },
+  ];
+}
+
+/**
+ * Inspect one instruction file's on-disk state against the link it should be.
+ * `lstat` examines a symlink as a link (even a broken one), never following it.
+ * Only a genuinely absent path (ENOENT) is `missing` (a creatable gap); any other
+ * lstat error (ENOTDIR when a parent component is a regular file, EACCES) is
+ * `blocked` — NOT `missing` — so a non-ENOENT error is never mistaken for a gap
+ * and planned, which would crash `--apply` (e.g. `mkdirSync` over a `.github`
+ * file). A symlink is `correct` when it points at `expectedTarget` and `mismatch`
+ * (carrying its current target) otherwise; a real file or directory is `occupied`.
+ */
+function inspectSymlink(
+  filePath: string,
+  expectedTarget: string,
+): { state: InstructionSymlinkState; actualTarget?: string } {
+  let isLink: boolean;
+  try {
+    isLink = lstatSync(filePath).isSymbolicLink();
+  } catch (error: unknown) {
+    if (hasErrorCode(error) && error.code === "ENOENT") return { state: "missing" };
+    return { state: "blocked" };
+  }
+  if (!isLink) return { state: "occupied" };
+  const actual = readlinkSync(filePath);
+  return actual === expectedTarget
+    ? { state: "correct" }
+    : { state: "mismatch", actualTarget: actual };
+}
+
+/**
+ * Gather the symlink facts for one declared repo. Resolves the repo path
+ * (realpath); the entry that resolves to the manifest root IS the anchor (it
+ * owns the canonical, so it is flagged `isAnchor` and never linked to itself). A
+ * path that does not resolve or has no `.git` is `reachable: false`. Otherwise it
+ * checks whether the anchor's canonical (`agents/<repo>/AGENTS.md`) exists and,
+ * if so, inspects each instruction file's current state. Pure filesystem reads —
+ * no writes.
+ */
+function gatherRepoSymlinks(
+  repositoryRoot: string,
+  anchorReal: string,
+  entry: RepoEntry,
+): RepoSymlinkFacts {
+  const base = { path: entry.path };
+  let real: string;
+  try {
+    real = realpathSync(resolve(repositoryRoot, entry.path));
+  } catch {
+    return { ...base, isAnchor: false, reachable: false, canonicalPresent: false, files: [] };
+  }
+  if (real === anchorReal) {
+    return { ...base, isAnchor: true, reachable: true, canonicalPresent: false, files: [] };
+  }
+  if (!existsSync(join(real, ".git"))) {
+    return { ...base, isAnchor: false, reachable: false, canonicalPresent: false, files: [] };
+  }
+
+  const canonicalFile = join(anchorReal, "agents", basename(real), CANONICAL_FILE);
+  if (!existsSync(canonicalFile)) {
+    return { ...base, isAnchor: false, reachable: true, canonicalPresent: false, files: [] };
+  }
+
+  const files: InstructionSymlinkFact[] = expectedSymlinkTargets(real, canonicalFile).map(
+    (spec) => {
+      const { state, actualTarget } = inspectSymlink(join(real, spec.name), spec.target);
+      return {
+        name: spec.name,
+        expectedTarget: spec.target,
+        state,
+        ...(actualTarget !== undefined ? { actualTarget } : {}),
+      };
+    },
+  );
+  return {
+    ...base,
+    isAnchor: false,
+    reachable: true,
+    canonicalPresent: true,
+    canonicalName: basename(real),
+    files,
+  };
+}
+
+/**
+ * Create the planned (missing) symlinks for one repo, making `.github` if needed.
+ * Defensive: a per-file failure (a path made unwritable, a parent that is not a
+ * directory, or a race that created the file first) is collected, not thrown — so
+ * one bad path neither aborts the remaining repos nor leaves the run silent about
+ * what was actually created (upholding the non-destructive contract transparently).
+ */
+function applySymlinkPlan(
+  repositoryRoot: string,
+  plan: RepoSymlinkPlan,
+): { created: string[]; failed: { file: string; message: string }[] } {
+  let real: string;
+  try {
+    real = realpathSync(resolve(repositoryRoot, plan.path));
+  } catch (error: unknown) {
+    const message = failureReason(error);
+    return { created: [], failed: plan.toCreate.map((c) => ({ file: c.name, message })) };
+  }
+  const created: string[] = [];
+  const failed: { file: string; message: string }[] = [];
+  for (const { name, target } of plan.toCreate) {
+    const filePath = join(real, name);
+    try {
+      mkdirSync(dirname(filePath), { recursive: true });
+      symlinkSync(target, filePath);
+      created.push(name);
+    } catch (error: unknown) {
+      failed.push({ file: name, message: failureReason(error) });
+    }
+  }
+  return { created, failed };
+}
+
+/**
+ * A pathless failure reason for `--apply` errors: the errno code (EEXIST,
+ * ENOTDIR, EACCES, …) when present, else a generic label. Never the raw Node
+ * `error.message`, which embeds the absolute filesystem path and would leak it
+ * into the report / `--json` output (the repo + repo-relative file already
+ * identify the failure).
+ */
+function failureReason(error: unknown): string {
+  return hasErrorCode(error) ? error.code : "unknown error";
+}
+
+/**
+ * Generate each declared repo's instruction-file symlinks. Resolves the
+ * workspace, reads the manifest, gathers each repo's current symlink state, and
+ * plans the missing links. When `--apply` is set and there is something to
+ * create, it creates only the `missing` links (non-destructive — conflicts and
+ * occupied paths are never touched); otherwise it writes nothing and prints the
+ * plan.
+ */
+export async function doRunProjectSymlinks(
+  options: ProjectSymlinksOptions,
+  ctx: ProjectSymlinksContext,
+): Promise<ProjectSymlinksResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project symlinks");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+
+  const roster = manifest.repos ?? [];
+  const anchorReal = realpathSync(repositoryRoot);
+  const facts = roster.map((entry) => gatherRepoSymlinks(repositoryRoot, anchorReal, entry));
+  const summary = summarizeSymlinkPlan(facts);
+
+  const wantApply = options.apply === true && summary.plans.length > 0;
+  const failures: { repo: string; file: string; message: string }[] = [];
+  let createdCount = 0;
+  if (wantApply) {
+    for (const plan of summary.plans) {
+      const { created, failed } = applySymlinkPlan(repositoryRoot, plan);
+      createdCount += created.length;
+      for (const f of failed) failures.push({ repo: plan.path, file: f.file, message: f.message });
+    }
+  }
+
+  const result: ProjectSymlinksResult = {
+    ...summary,
+    hasRoster: roster.length > 0,
+    applied: createdCount > 0,
+    failures,
+  };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectSymlinks(result));
+  }
+  return result;
+}
+
+/**
+ * Render the symlink-generation report. Leads with the actionable outcome: no
+ * roster (run adopt first), the per-repo links that will be / were created, then
+ * the conflicts (existing files / links pointing elsewhere — left untouched),
+ * repos whose anchor canonical is absent, and unreachable repos. A clean "all
+ * wired" verdict is shown only when there is genuinely nothing to do AND every
+ * repo was judgeable and reachable (no false-clear).
+ */
+export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
+  const lines: string[] = [];
+  lines.push("# 指示書 symlink 生成(各 repo → anchor の canonical)");
+  lines.push("");
+
+  if (!result.hasRoster) {
+    lines.push(
+      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。`basou project adopt` で宣言してから実行してください。",
+    );
+    return lines.join("\n");
+  }
+
+  if (result.plans.length > 0) {
+    // `--apply` was attempted when something was created OR something failed; a
+    // dry-run has neither (its plan is just intentions, written nowhere).
+    const attempted = result.applied || result.failures.length > 0;
+    if (!attempted) {
+      lines.push(
+        `${result.plans.length} repo に指示書 symlink を作成予定(dry-run、反映するには --apply):`,
+      );
+      for (const p of result.plans) {
+        lines.push(`- ${p.path}`);
+        for (const c of p.toCreate) lines.push(`    ${c.name} -> ${c.target}`);
+      }
+    } else {
+      // List only what was ACTUALLY created — a planned file that failed appears
+      // in the failures section, never here (no false "created" claim).
+      const header =
+        result.failures.length === 0
+          ? "✅ 指示書 symlink を作成しました:"
+          : result.applied
+            ? "指示書 symlink を作成しました(一部失敗、下記参照):"
+            : "指示書 symlink を作成できませんでした(下記参照):";
+      lines.push(header);
+      for (const p of result.plans) {
+        const failedFiles = new Set(
+          result.failures.filter((f) => f.repo === p.path).map((f) => f.file),
+        );
+        const created = p.toCreate.filter((c) => !failedFiles.has(c.name));
+        if (created.length === 0) continue;
+        lines.push(`- ${p.path}`);
+        for (const c of created) lines.push(`    ${c.name} -> ${c.target}`);
+      }
+    }
+  } else if (result.ok) {
+    lines.push("✅ 宣言された全 repo の指示書 symlink は正しく張られています(生成不要)。");
+  } else {
+    lines.push(
+      "ℹ️ 生成が必要な symlink はありませんが、競合 / 衝突 / canonical 不在 / 到達できない repo があります(下記参照)。",
+    );
+  }
+  lines.push("");
+
+  if (result.failures.length > 0) {
+    lines.push(`## 作成に失敗 (${result.failures.length}) — 一部の symlink を作成できませんでした`);
+    for (const f of result.failures) lines.push(`- ${f.repo} — ${f.file}: ${f.message}`);
+    lines.push("");
+  }
+
+  if (result.conflicts.length > 0) {
+    lines.push(
+      `## 競合 (${result.conflicts.length}) — 既存を上書きしません。手動で確認してください`,
+    );
+    for (const c of result.conflicts) {
+      const detail =
+        c.reason === "mismatch"
+          ? `別の場所を指す symlink(現在: ${c.actualTarget ?? "?"})`
+          : c.reason === "occupied"
+            ? "symlink でない実ファイル/ディレクトリ"
+            : "検査できないパス(親が非ディレクトリ等)";
+      lines.push(`- ${c.repo} — ${c.file}: ${detail}`);
+    }
+    lines.push("");
+  }
+
+  if (result.collisions.length > 0) {
+    lines.push(
+      `## canonical 衝突 (${result.collisions.length}) — 別 repo が同名 canonical を共有(自動配線しません)`,
+    );
+    for (const c of result.collisions) {
+      lines.push(`- agents/${c.canonicalName}/AGENTS.md ← ${c.repos.join(", ")}`);
+    }
+    lines.push("");
+  }
+
+  if (result.missingCanonical.length > 0) {
+    lines.push(
+      `## canonical 不在 (${result.missingCanonical.length}) — anchor に agents/<repo>/AGENTS.md が無いため生成できません`,
+    );
+    for (const p of result.missingCanonical) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  if (result.unreachable.length > 0) {
+    lines.push(`## 到達不能 (${result.unreachable.length}) — パス未解決 / git repo でない`);
+    for (const p of result.unreachable) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  lines.push(
+    "注: 既存ファイル・別の場所を指す symlink は上書きせず、不足分の作成のみ行います(GEMINI.md は廃止のため生成しません)。",
   );
   return lines.join("\n");
 }
