@@ -183,6 +183,52 @@ describe("ManifestSchema", () => {
     expect(ManifestSchema.safeParse(variant).success).toBe(false);
   });
 
+  it("accepts a repos roster with language and publishes", () => {
+    const variant = {
+      ...VALID_MANIFEST,
+      repos: [
+        {
+          path: "../takuhon-site",
+          visibility: "private",
+          language: "en",
+          publishes: [{ kind: "web", visibility: "public", language: "en+ja" }],
+        },
+        { path: "../takuhon", visibility: "public", language: "en" }, // publishes optional
+        { path: "../takuhon-planning", visibility: "private", language: "ja" }, // no publishes
+      ],
+    };
+    expect(ManifestSchema.safeParse(variant).success).toBe(true);
+  });
+
+  it("accepts a publish target with only kind (visibility/language optional)", () => {
+    const variant = {
+      ...VALID_MANIFEST,
+      repos: [{ path: "../x", visibility: "private", publishes: [{ kind: "npm" }] }],
+    };
+    expect(ManifestSchema.safeParse(variant).success).toBe(true);
+  });
+
+  it("rejects an unknown repo language", () => {
+    const variant = { ...VALID_MANIFEST, repos: [{ path: "../x", language: "fr" }] };
+    expect(ManifestSchema.safeParse(variant).success).toBe(false);
+  });
+
+  it("rejects an unknown publish kind", () => {
+    const variant = {
+      ...VALID_MANIFEST,
+      repos: [{ path: "../x", publishes: [{ kind: "mobile" }] }],
+    };
+    expect(ManifestSchema.safeParse(variant).success).toBe(false);
+  });
+
+  it("rejects a publish target missing kind", () => {
+    const variant = {
+      ...VALID_MANIFEST,
+      repos: [{ path: "../x", publishes: [{ visibility: "public" }] }],
+    };
+    expect(ManifestSchema.safeParse(variant).success).toBe(false);
+  });
+
   it("accepts a relative workspace.view path", () => {
     const variant = {
       ...VALID_MANIFEST,

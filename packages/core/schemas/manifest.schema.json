@@ -173,6 +173,48 @@
               "private",
               "future-public"
             ]
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "en",
+              "ja",
+              "en+ja"
+            ]
+          },
+          "publishes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "web",
+                    "npm"
+                  ]
+                },
+                "visibility": {
+                  "type": "string",
+                  "enum": [
+                    "public",
+                    "private",
+                    "future-public"
+                  ]
+                },
+                "language": {
+                  "type": "string",
+                  "enum": [
+                    "en",
+                    "ja",
+                    "en+ja"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
           }
         },
         "required": [

@@ -13,12 +13,39 @@
 
 export type RepoVisibility = "public" | "private" | "future-public";
 
+/**
+ * The audience-driven language axis. Independent of visibility: a private repo
+ * can publish English content, a public repo can carry bilingual docs. `en` /
+ * `ja` for a single audience, `en+ja` when both are served.
+ */
+export type RepoLanguage = "en" | "ja" | "en+ja";
+
+/** A published surface a repo emits: a deployed website or a package registry. */
+export type PublishKind = "web" | "npm";
+
+/**
+ * One published surface. Its visibility and language are INDEPENDENT of the
+ * source repo's: a private repo commonly publishes a public website. Both are
+ * optional so a surface can be declared
+ * before those facts are pinned down (mirroring how `adopt` leaves repo
+ * visibility unset for the operator to fill in).
+ */
+export type PublishTarget = {
+  kind: PublishKind;
+  visibility?: RepoVisibility | undefined;
+  language?: RepoLanguage | undefined;
+};
+
 export type RepoEntry = {
   /** Path relative to the manifest repo root (e.g. ".", "../takuhon"). */
   path: string;
   // `| undefined` so a zod-inferred manifest entry (visibility?: X | undefined,
   // under exactOptionalPropertyTypes) is assignable without remapping.
   visibility?: RepoVisibility | undefined;
+  /** Source language (commits/comments/code, read by contributors). Independent of visibility. */
+  language?: RepoLanguage | undefined;
+  /** Published surfaces this repo emits (opt-in; absent for a repo that publishes nothing). */
+  publishes?: PublishTarget[] | undefined;
 };
 
 export type RosterDriftSummary = {

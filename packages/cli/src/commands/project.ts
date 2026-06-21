@@ -12,28 +12,37 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   type AdoptCandidate,
   basouPaths,
+  GENERATED_END,
+  GENERATED_START,
   type GitignorePlanSummary,
   type InstructionFileFact,
   type InstructionSymlinkFact,
   type InstructionSymlinkState,
   isGitNotFound,
   type Manifest,
+  type PresetPlanSummary,
+  parseMarkers,
   planGitignore,
   planRosterAdoption,
   planWorkspaceView,
   type RepoEntry,
   type RepoGitignoreFacts,
   type RepoGitignorePlan,
+  type RepoPresetFacts,
+  type RepoPresetPlan,
   type RepoSymlinkFacts,
   type RepoSymlinkPlan,
   type RepoWiringFacts,
   type RosterAdoptionPlan,
   type RosterDriftSummary,
   readManifest,
+  readMarkdownFile,
   reconcileSourceRoots,
+  renderWithMarkers,
   type SourceRootsReconcile,
   type SymlinkPlanSummary,
   safeSimpleGit,
+  summarizePresetPlan,
   summarizeRosterDrift,
   summarizeSymlinkPlan,
   summarizeWiring,
@@ -41,6 +50,7 @@ import {
   type WiringSummary,
   type WorkspaceViewPlan,
   writeManifest,
+  writeMarkdownFile,
 } from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
@@ -151,6 +161,24 @@ export type ProjectWorkspaceResult = WorkspaceViewPlan & {
   applied: boolean;
   /** Per-link failures encountered during `--apply` (collected, not thrown — pathless reason). */
   failures: { name: string; message: string }[];
+};
+
+export type ProjectPresetOptions = {
+  apply?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type ProjectPresetContext = ImportContext;
+
+/** Result of {@link doRunProjectPreset}: the plan plus whether a roster exists and what `--apply` did. */
+export type ProjectPresetResult = PresetPlanSummary & {
+  /** Whether a `repos` roster was declared (else there is nothing to generate — run adopt first). */
+  hasRoster: boolean;
+  /** Whether any canonical was actually written (true only when `--apply` wrote at least one). */
+  applied: boolean;
+  /** Per-repo write failures encountered during `--apply` (collected, not thrown — pathless reason). */
+  failures: { repo: string; message: string }[];
 };
 
 /**
@@ -265,6 +293,21 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (opts: ProjectWorkspaceOptions) => {
       await runProjectWorkspace(opts);
+    });
+
+  project
+    .command("preset")
+    .description(
+      "Generate the stable-preset block (source visibility, source language, published surfaces) of each declared repo's canonical instruction file (agents/<repo>/AGENTS.md) from the manifest. Dry-run by default; pass --apply to write. Non-destructive — it only writes the marker-delimited region (creating an absent canonical, updating an out-of-date one) and never touches hand-authored content or a canonical whose markers are missing/malformed",
+    )
+    .option(
+      "--apply",
+      "Write the generated preset block to each canonical (default: dry-run preview)",
+    )
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (opts: ProjectPresetOptions) => {
+      await runProjectPreset(opts);
     });
 }
 
@@ -1477,6 +1520,343 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
 
   lines.push(
     "注: 既存エントリは上書きせず、不足分の作成のみ行います。view 内の所有外エントリ(stray)の削除は未対応です。",
+  );
+  return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectPreset}. */
+export async function runProjectPreset(
+  options: ProjectPresetOptions,
+  ctx: ProjectPresetContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectPreset(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/** The anchor's canonical file for a repo: `<anchor>/agents/<name>/AGENTS.md`. */
+function canonicalFileFor(anchorReal: string, canonicalName: string): string {
+  return join(anchorReal, "agents", canonicalName, CANONICAL_FILE);
+}
+
+/** The repo-relative label for a canonical (used in marker errors — never an absolute path). */
+function canonicalLabelFor(canonicalName: string): string {
+  return join("agents", canonicalName, CANONICAL_FILE);
+}
+
+/**
+ * Gather one declared repo's preset facts. Resolves the repo (realpath); the
+ * entry that resolves to the manifest root IS the anchor (its own AGENTS.md is
+ * hand-maintained, so it is flagged and skipped). A path that does not resolve
+ * or has no `.git` is `reachable: false`. Otherwise it reads the anchor's
+ * canonical (`agents/<repo>/AGENTS.md`): absent => to be created; present =>
+ * parsed for its marker region so the summarizer can detect drift. A present
+ * canonical that cannot be read (a non-ENOENT failure) degrades only this repo
+ * (`canonicalReadable: false`) instead of crashing the whole report.
+ */
+async function gatherRepoPreset(
+  repositoryRoot: string,
+  anchorReal: string,
+  entry: RepoEntry,
+): Promise<RepoPresetFacts> {
+  const declared = {
+    path: entry.path,
+    ...(entry.visibility !== undefined ? { visibility: entry.visibility } : {}),
+    ...(entry.language !== undefined ? { language: entry.language } : {}),
+    ...(entry.publishes !== undefined ? { publishes: entry.publishes } : {}),
+  };
+  let real: string;
+  try {
+    real = realpathSync(resolve(repositoryRoot, entry.path));
+  } catch {
+    return { ...declared, isAnchor: false, reachable: false, canonicalPresent: false };
+  }
+  if (real === anchorReal) {
+    return { ...declared, isAnchor: true, reachable: true, canonicalPresent: false };
+  }
+  if (!existsSync(join(real, ".git"))) {
+    return { ...declared, isAnchor: false, reachable: false, canonicalPresent: false };
+  }
+
+  const canonicalName = basename(real);
+  let content: string | null;
+  try {
+    content = await readMarkdownFile(canonicalFileFor(anchorReal, canonicalName));
+  } catch {
+    // Present but unreadable (e.g. a directory at that path, or permission denied).
+    return {
+      ...declared,
+      isAnchor: false,
+      reachable: true,
+      canonicalName,
+      canonicalPresent: true,
+      canonicalReadable: false,
+    };
+  }
+  if (content === null) {
+    return {
+      ...declared,
+      isAnchor: false,
+      reachable: true,
+      canonicalName,
+      canonicalPresent: false,
+    };
+  }
+  const section = parseMarkers(content);
+  return {
+    ...declared,
+    isAnchor: false,
+    reachable: true,
+    canonicalName,
+    canonicalPresent: true,
+    canonicalReadable: true,
+    markerKind: section.kind,
+    ...(section.kind === "ok" ? { currentBlock: section.generated } : {}),
+  };
+}
+
+/**
+ * Write one planned canonical, always replacing ONLY the marker region via
+ * {@link renderWithMarkers} so hand-authored content around it is preserved.
+ *
+ * Both `create` and `update` re-read the file at write time and render against
+ * the CURRENT content (null => fresh). This closes the create-race: if a
+ * canonical appeared between gather (which saw it absent) and the write, its
+ * hand-authored content around well-formed markers is preserved, and a
+ * markerless / malformed file makes {@link renderWithMarkers} throw — collected
+ * by the caller as a failure — rather than being clobbered by a blind null-based
+ * write. A symlinked canonical is refused: `atomicReplace` would swap the link
+ * for a regular file, silently breaking deliberate wiring. The only on-disk
+ * mutations are the recursive `mkdir` for a create and the marker-region write.
+ */
+async function applyPresetPlan(anchorReal: string, plan: RepoPresetPlan): Promise<void> {
+  const file = canonicalFileFor(anchorReal, plan.canonicalName);
+  const label = canonicalLabelFor(plan.canonicalName);
+  // Refuse to replace a symlinked canonical. `lstat` examines the link itself; an
+  // absent path (ENOENT) or any uninspectable path is not a symlink to guard —
+  // the create branch / the write itself handles those.
+  let isLink = false;
+  try {
+    isLink = lstatSync(file).isSymbolicLink();
+  } catch {
+    isLink = false;
+  }
+  if (isLink) throw new Error(`Canonical is a symlink in ${label}`);
+
+  if (plan.action === "create") mkdirSync(dirname(file), { recursive: true });
+  const existing = await readMarkdownFile(file);
+  await writeMarkdownFile(file, renderWithMarkers(existing, plan.desiredBlock, label));
+}
+
+/**
+ * A pathless failure reason for an `--apply` write error. A marker mismatch
+ * thrown by {@link renderWithMarkers} (`Markers …`) or the symlink guard above
+ * (`Canonical …`) carries an already-safe message (it embeds only the
+ * repo-relative label); any other error is reduced to its errno code (from the
+ * wrapped cause when present), never the raw message (which would leak an
+ * absolute filesystem path into the report / `--json`).
+ */
+function presetFailureReason(error: unknown): string {
+  if (
+    error instanceof Error &&
+    (error.message.startsWith("Markers") || error.message.startsWith("Canonical"))
+  ) {
+    return error.message;
+  }
+  const cause = error instanceof Error ? (error as { cause?: unknown }).cause : undefined;
+  if (hasErrorCode(cause)) return cause.code;
+  if (hasErrorCode(error)) return error.code;
+  return "unknown error";
+}
+
+/**
+ * Generate each declared repo's canonical instruction-file preset block.
+ * Resolves the workspace, reads the manifest, gathers each repo's canonical
+ * state, and plans the create/update work. When `--apply` is set and there is
+ * something to write, it writes only the marker-delimited region (creating an
+ * absent canonical, updating an out-of-date one); a per-repo write failure is
+ * collected, not thrown. Without `--apply` it writes nothing and prints the plan.
+ */
+export async function doRunProjectPreset(
+  options: ProjectPresetOptions,
+  ctx: ProjectPresetContext,
+): Promise<ProjectPresetResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project preset");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+
+  const roster = manifest.repos ?? [];
+  const anchorReal = realpathSync(repositoryRoot);
+  const facts: RepoPresetFacts[] = [];
+  for (const entry of roster) facts.push(await gatherRepoPreset(repositoryRoot, anchorReal, entry));
+  const summary = summarizePresetPlan(facts);
+
+  const failures: { repo: string; message: string }[] = [];
+  let writtenCount = 0;
+  if (options.apply === true && summary.plans.length > 0) {
+    for (const plan of summary.plans) {
+      try {
+        await applyPresetPlan(anchorReal, plan);
+        writtenCount += 1;
+      } catch (error: unknown) {
+        failures.push({ repo: plan.path, message: presetFailureReason(error) });
+      }
+    }
+  }
+
+  const result: ProjectPresetResult = {
+    ...summary,
+    hasRoster: roster.length > 0,
+    applied: writtenCount > 0,
+    failures,
+  };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectPreset(result));
+  }
+  return result;
+}
+
+/** A compact one-line summary of what a plan's generated block declares. */
+function presetActionLabel(action: RepoPresetPlan["action"]): string {
+  return action === "create" ? "新規作成" : "更新";
+}
+
+/**
+ * Render the preset-generation report. Leads with the actionable outcome: no
+ * roster (run adopt first), the per-repo canonical blocks that will be / were
+ * written (with the generated block shown in dry-run), then the marker conflicts
+ * (canonical present but unmarked/malformed — left untouched, with the remedy),
+ * unreadable canonicals, basename collisions, undeclared repos, the skipped
+ * anchor, and unreachable repos. A clean "all in sync" verdict is shown only when
+ * there is genuinely nothing to do AND every repo was judgeable (no false-clear).
+ */
+export function renderProjectPreset(result: ProjectPresetResult): string {
+  const lines: string[] = [];
+  lines.push("# 指示書 A プリセット生成(宣言 → canonical の生成領域)");
+  lines.push("");
+
+  if (!result.hasRoster) {
+    lines.push(
+      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。`basou project adopt` で宣言してから実行してください。",
+    );
+    return lines.join("\n");
+  }
+
+  if (result.plans.length > 0) {
+    // `--apply` was attempted when something was written OR something failed.
+    const attempted = result.applied || result.failures.length > 0;
+    if (!attempted) {
+      lines.push(
+        `${result.plans.length} repo の canonical に A プリセットを生成予定(dry-run、反映するには --apply):`,
+      );
+      for (const p of result.plans) {
+        lines.push(
+          `- ${p.path} [${presetActionLabel(p.action)}] → ${canonicalLabelFor(p.canonicalName)}`,
+        );
+        for (const bl of p.desiredBlock.split("\n")) lines.push(`    ${bl}`);
+      }
+    } else {
+      const failed = new Set(result.failures.map((f) => f.repo));
+      const header =
+        result.failures.length === 0
+          ? "✅ canonical に A プリセットを生成しました:"
+          : result.applied
+            ? "A プリセットを生成しました(一部失敗、下記参照):"
+            : "A プリセットを生成できませんでした(下記参照):";
+      lines.push(header);
+      for (const p of result.plans) {
+        if (failed.has(p.path)) continue;
+        lines.push(
+          `- ${p.path} [${presetActionLabel(p.action)}] → ${canonicalLabelFor(p.canonicalName)}`,
+        );
+      }
+    }
+  } else if (result.ok) {
+    lines.push("✅ 宣言された全 repo の A プリセットは canonical と同期済みです(生成不要)。");
+  } else {
+    lines.push(
+      "ℹ️ 生成が必要な repo はありませんが、マーカー競合 / 衝突 / 未宣言 / 到達できない repo があります(下記参照)。",
+    );
+  }
+  lines.push("");
+
+  if (result.inSync.length > 0) {
+    lines.push(`同期済み (${result.inSync.length}): ${result.inSync.join(", ")}`);
+    lines.push("");
+  }
+
+  if (result.failures.length > 0) {
+    lines.push(
+      `## 書き込みに失敗 (${result.failures.length}) — 一部の canonical を書けませんでした`,
+    );
+    for (const f of result.failures) lines.push(`- ${f.repo}: ${f.message}`);
+    lines.push("");
+  }
+
+  if (result.markerConflicts.length > 0) {
+    lines.push(
+      `## マーカー競合 (${result.markerConflicts.length}) — canonical のマーカーが無い/壊れているため上書きしません`,
+    );
+    for (const c of result.markerConflicts) {
+      const detail =
+        c.reason === "no_markers" ? "マーカー領域が無い" : `マーカー不整合(${c.reason})`;
+      lines.push(`- ${c.repo}: ${detail}`);
+    }
+    lines.push(
+      `  対処: A プリセットを入れたい位置に次の2行を追加してください — \`${GENERATED_START}\` と \`${GENERATED_END}\`(無ければ basou が新規 canonical を作ります)。`,
+    );
+    lines.push("");
+  }
+
+  if (result.unreadable.length > 0) {
+    lines.push(
+      `## canonical 読み取り不能 (${result.unreadable.length}) — ディレクトリ/権限等で読めません`,
+    );
+    for (const p of result.unreadable) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  if (result.collisions.length > 0) {
+    lines.push(
+      `## canonical 衝突 (${result.collisions.length}) — 別 repo が同名 canonical を共有(自動生成しません)`,
+    );
+    for (const c of result.collisions) {
+      lines.push(`- agents/${c.canonicalName}/AGENTS.md ← ${c.repos.join(", ")}`);
+    }
+    lines.push("");
+  }
+
+  if (result.undeclared.length > 0) {
+    lines.push(
+      `## 宣言なし (${result.undeclared.length}) — visibility / language / publishes が未設定のため生成しません`,
+    );
+    for (const p of result.undeclared) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  if (result.anchors.length > 0) {
+    lines.push(
+      `## anchor (${result.anchors.length}) — 自身の AGENTS.md は手で維持するためスキップ`,
+    );
+    for (const p of result.anchors) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  if (result.unreachable.length > 0) {
+    lines.push(`## 到達不能 (${result.unreachable.length}) — パス未解決 / git repo でない`);
+    for (const p of result.unreachable) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  lines.push(
+    "注: マーカー領域のみを生成し、canonical の手書き部分(マーカー外)は保持します。生成内容は manifest の宣言から導出されます。",
   );
   return lines.join("\n");
 }

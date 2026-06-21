@@ -88,9 +88,23 @@ export type {
 } from "./project/gitignore-plan.js";
 export { planGitignore } from "./project/gitignore-plan.js";
 export type {
+  PresetAction,
+  PresetCollision,
+  PresetMarkerConflict,
+  PresetMarkerKind,
+  PresetPlanSummary,
+  PresetRepo,
+  RepoPresetFacts,
+  RepoPresetPlan,
+} from "./project/preset.js";
+export { isRenderable, renderPresetBlock, summarizePresetPlan } from "./project/preset.js";
+export type {
   AdoptCandidate,
   AdoptCandidateKind,
+  PublishKind,
+  PublishTarget,
   RepoEntry,
+  RepoLanguage,
   RepoVisibility,
   RosterAdoptionPlan,
   RosterDriftSummary,
