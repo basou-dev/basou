@@ -589,9 +589,7 @@ export function renderProjectWiring(result: ProjectWiringResult): string {
     return lines.join("\n");
   }
 
-  if (result.risks.length === 0) {
-    lines.push("✅ 公開系 repo で git 追跡されている指示書はありません(privacy リスクなし)。");
-  } else {
+  if (result.risks.length > 0) {
     lines.push(
       `⚠️ 公開系 repo で指示書が git 追跡されています: ${result.risks.length}(canonical の漏洩リスク)`,
     );
@@ -600,6 +598,14 @@ export function renderProjectWiring(result: ProjectWiringResult): string {
         `- ${r.repo} [${r.visibility}] — ${r.file} が tracked(gitignore された symlink である必要があります)`,
       );
     }
+  } else if (result.ok) {
+    lines.push("✅ 公開系 repo で git 追跡されている指示書はありません(privacy リスクなし)。");
+  } else {
+    // No confirmed risks, but unjudgeable / unreachable repos exist below — do NOT
+    // lead with a clean "no risk" verdict (that would be a false-clear).
+    lines.push(
+      "ℹ️ 確定した privacy リスクはありませんが、判定できない/到達できない repo があります(下記参照)。",
+    );
   }
   lines.push("");
 

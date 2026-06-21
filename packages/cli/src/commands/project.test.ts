@@ -626,6 +626,18 @@ describe("renderProjectWiring", () => {
     expect(out).toContain("✅");
   });
 
+  it("does NOT lead with a clean privacy verdict when there are no risks but unjudgeable/unreachable repos", () => {
+    const out = renderProjectWiring({
+      ...base,
+      unknown: ["../x"],
+      unreachable: ["../z"],
+      ok: false,
+    });
+    expect(out).not.toContain("✅");
+    expect(out).not.toContain("privacy リスクなし");
+    expect(out).toContain("確定した privacy リスクはありません");
+  });
+
   it("surfaces each risk with its repo, visibility and file", () => {
     const out = renderProjectWiring({
       ...base,
