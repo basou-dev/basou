@@ -82,6 +82,12 @@ export type {
 } from "./orientation/index.js";
 export { renderOrientation, summarizeOrientation } from "./orientation/index.js";
 export type {
+  GitignorePlanSummary,
+  RepoGitignoreFacts,
+  RepoGitignorePlan,
+} from "./project/gitignore-plan.js";
+export { planGitignore } from "./project/gitignore-plan.js";
+export type {
   AdoptCandidate,
   AdoptCandidateKind,
   RepoEntry,
