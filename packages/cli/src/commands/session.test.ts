@@ -488,6 +488,23 @@ describe("doRunSessionList", () => {
 });
 
 describe("doRunSessionShow", () => {
+  it("resolves via a git-untracked workspace view (redirect), like session list", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("Y09");
+    await createSession(repo, { id });
+    const view = await mkdtemp(join(tmpdir(), "basou-session-show-view-"));
+    try {
+      await symlink(repo, join(view, basename(repo)));
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunSessionShow(id, {}, { cwd: view });
+      expect(joinCalls(out)).toContain(`Session: ${id}`); // found via the view redirect
+      expect(joinCalls(err)).toContain("Resolved workspace view");
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+
   it("case 11: full ID hit prints metadata + event count + last events", async () => {
     const repo = await setupInitedRepo();
     const id = SES("Y01");
