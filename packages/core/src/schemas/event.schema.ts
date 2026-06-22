@@ -203,6 +203,11 @@ const TaskArchivedEventSchema = BaseEventSchema.extend({
 const NoteAddedEventSchema = BaseEventSchema.extend({
   type: z.literal("note_added"),
   body: z.string(),
+  // `next_step` marks a note authored by `basou note` as the operator's resume
+  // hint, which orientation surfaces as the next starting point. Absent (the
+  // `basou session note` default) is a plain annotation orientation does not
+  // surface. Optional so pre-existing note_added events remain valid.
+  kind: z.enum(["note", "next_step"]).optional(),
 });
 
 // --- Adapter output (`.strict()` rejects raw bodies) ---

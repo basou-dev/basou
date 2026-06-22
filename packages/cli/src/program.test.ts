@@ -41,6 +41,7 @@ describe("buildProgram", () => {
       "handoff",
       "import",
       "init",
+      "note",
       "orient",
       "project",
       "refresh",

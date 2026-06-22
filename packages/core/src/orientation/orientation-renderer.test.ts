@@ -115,6 +115,26 @@ function decisionLine(
   })}\n`;
 }
 
+function noteLine(
+  id: string,
+  evt: string,
+  body: string,
+  occurredAt: string,
+  kind?: "note" | "next_step",
+): string {
+  return `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "note_added",
+    id: EVT(evt),
+    session_id: id,
+    occurred_at: occurredAt,
+    // `basou note` / `basou session note` both write source: local-cli.
+    source: "local-cli",
+    body,
+    ...(kind !== undefined ? { kind } : {}),
+  })}\n`;
+}
+
 async function placeTaskFile(
   paths: BasouPaths,
   fixture: {
@@ -549,6 +569,7 @@ describe("summarizeOrientation", () => {
     expect(summary.latestSession).toBeNull();
     expect(summary.latestDecision).toBeNull();
     expect(summary.decisionCount).toBe(0);
+    expect(summary.latestNote).toBeNull();
     expect(summary.relatedFiles).toEqual({ displayed: [], overflow: 0 });
     expect(summary.inFlightTasks).toEqual([]);
     expect(summary.plannedTasks).toEqual([]);
@@ -729,6 +750,138 @@ describe("summarizeOrientation", () => {
     expect(result.body).toContain(
       "注: これは最後に「記録された」判断です。最終活動 (14時間前) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません)。",
     );
+  });
+
+  it("surfaces the latest note as the recorded next step in the forward section", async () => {
+    const paths = await setupPaths();
+    const id = SES("S01");
+    await placeSession(
+      paths,
+      {
+        id,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T11:00:00+09:00",
+        endedAt: "2026-05-08T12:00:00+09:00",
+      },
+      noteLine(id, "E01", "earlier note", "2026-05-08T11:30:00+09:00", "next_step") +
+        // 2026-05-08T12:00+09 = 2026-05-08T03:00Z, exactly 24h before FIXED_NOW.
+        noteLine(
+          id,
+          "E02",
+          "resume from: ship v0.24.0 (steps 1-6)",
+          "2026-05-08T12:00:00+09:00",
+          "next_step",
+        ),
+    );
+
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    // The newest note (by occurred_at) wins.
+    expect(summary.latestNote).toEqual({
+      body: "resume from: ship v0.24.0 (steps 1-6)",
+      sessionId: id,
+      occurredAt: "2026-05-08T12:00:00+09:00",
+    });
+
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(
+      `- 次の起点 (記録済み, 1日前): resume from: ship v0.24.0 (steps 1-6) [session ${id.slice(0, 14)}]`,
+    );
+    // With a recorded next step present, the empty-direction fallback is gone.
+    expect(result.body).not.toContain("(no planned tasks");
+  });
+
+  it("collapses a multi-line note body to a single bounded line", async () => {
+    const paths = await setupPaths();
+    const id = SES("S01");
+    await placeSession(
+      paths,
+      { id, status: "completed", source: "claude-code-import" },
+      noteLine(
+        id,
+        "E01",
+        "line one\n  line two\n\nline three",
+        "2026-05-08T12:00:00+09:00",
+        "next_step",
+      ),
+    );
+
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    // Newlines/indents collapse to single spaces so the note stays one bullet.
+    expect(result.body).toContain("次の起点 (記録済み, ");
+    expect(result.body).toContain("line one line two line three");
+  });
+
+  it("ignores notes on archived sessions for the forward next step", async () => {
+    const paths = await setupPaths();
+    const archived = SES("S01");
+    await placeSession(
+      paths,
+      { id: archived, status: "archived", source: "claude-code-import" },
+      noteLine(archived, "E01", "stale archived note", "2026-05-08T12:00:00+09:00", "next_step"),
+    );
+
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.latestNote).toBeNull();
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).not.toContain("次の起点");
+    expect(result.body).not.toContain("stale archived note");
+  });
+
+  it("does not surface a plain note (no next_step kind) as the next step", async () => {
+    const paths = await setupPaths();
+    const id = SES("S01");
+    await placeSession(
+      paths,
+      { id, status: "completed", source: "claude-code-import" },
+      // A `basou session note` annotation carries no kind — not a resume hint.
+      noteLine(id, "E01", "started exploring auth.ts", "2026-05-08T12:00:00+09:00"),
+    );
+
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.latestNote).toBeNull();
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).not.toContain("次の起点");
+    expect(result.body).not.toContain("started exploring auth.ts");
+  });
+
+  it("flags a next-step note that trails real activity", async () => {
+    const paths = await setupPaths();
+    const id = SES("S01");
+    await placeSession(
+      paths,
+      {
+        id,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T10:00:00+09:00",
+        endedAt: "2026-05-08T20:00:00+09:00",
+      },
+      // Note at 11:00+09; activity continues to 20:00+09 (>1h later).
+      noteLine(id, "E01", "resume from X", "2026-05-08T11:00:00+09:00", "next_step"),
+    );
+
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("次の起点 (記録済み,");
+    expect(result.body).toContain(
+      "注: この起点の記録後 (最終活動 16時間前) も作業が続いています。再開点が古い可能性があります。",
+    );
+  });
+
+  it("truncates a very long next-step note body with an ellipsis", async () => {
+    const paths = await setupPaths();
+    const id = SES("S01");
+    const longBody = "x".repeat(250);
+    await placeSession(
+      paths,
+      { id, status: "completed", source: "claude-code-import" },
+      noteLine(id, "E01", longBody, "2026-05-08T12:00:00+09:00", "next_step"),
+    );
+
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    // Body is capped (199 chars + ellipsis) so a verbose handoff cannot dominate.
+    expect(result.body).toContain(`${"x".repeat(199)}…`);
+    expect(result.body).not.toContain("x".repeat(201));
   });
 
   it("carries no work-stats / surveillance fields (positioning guard)", async () => {
