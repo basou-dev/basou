@@ -264,6 +264,17 @@ describe("renderProjectSync", () => {
     expect(out).toContain("未宣言");
   });
 
+  it("surfaces the preserved-unknown advisory even in an early-return (no-roster) branch", () => {
+    const out = renderProjectSync({
+      ...base,
+      hasRoster: false,
+      preservedUnknownFields: ["signing", "zeta"],
+    });
+    expect(out).toContain("未宣言"); // still the no-roster verdict
+    expect(out).toContain("signing, zeta"); // advisory appears before the early return
+    expect(out).toContain("保持しています");
+  });
+
   it("reports already-in-sync with a check mark", () => {
     const out = renderProjectSync({ ...base, unchanged: true });
     expect(out).toContain("✅");
@@ -368,6 +379,7 @@ describe("basou project adopt", () => {
   async function setupHostManifest(opts: {
     repos?: RepoEntry[];
     sourceRoots?: string[];
+    extra?: Record<string, unknown>;
   }): Promise<void> {
     const paths = await ensureBasouDirectory(host());
     const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
@@ -375,8 +387,28 @@ describe("basou project adopt", () => {
       ...base,
       ...(opts.repos !== undefined ? { repos: opts.repos } : {}),
       ...(opts.sourceRoots !== undefined ? { import: { source_roots: opts.sourceRoots } } : {}),
+      ...(opts.extra ?? {}),
     });
   }
+
+  it("--apply preserves an unknown manifest field and surfaces it (sorted), while bootstrapping the roster", async () => {
+    await setupHostManifest({
+      sourceRoots: [".", "../sibling"],
+      extra: { zeta: 1, signing: { key_id: "abc" } },
+    });
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    const r = await doRunProjectAdopt({ apply: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    expect(r.preservedUnknownFields).toEqual(["signing", "zeta"]); // sorted
+    expect(out.join("\n")).toContain("signing");
+    const after = await readManifest(basouPaths(host()));
+    expect((after as Record<string, unknown>).signing).toEqual({ key_id: "abc" });
+    expect((after as Record<string, unknown>).zeta).toBe(1);
+    expect(after.repos?.map((x) => x.path)).toEqual([".", "../sibling"]); // roster bootstrapped
+  });
 
   it("classifies source_roots: keeps git repos, excludes the view and an absent path (dry-run writes nothing)", async () => {
     await setupHostManifest({ sourceRoots: [".", "../sibling", "../view", "../gone"] });
@@ -2148,6 +2180,7 @@ describe("basou project archive", () => {
     repos: RepoEntry[];
     sourceRoots?: string[];
     view?: string;
+    extra?: Record<string, unknown>;
   }): Promise<void> {
     const paths = await ensureBasouDirectory(host());
     const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
@@ -2156,6 +2189,7 @@ describe("basou project archive", () => {
       repos: opts.repos,
       ...(opts.sourceRoots !== undefined ? { import: { source_roots: opts.sourceRoots } } : {}),
       ...(opts.view !== undefined ? { workspace: { ...base.workspace, view: opts.view } } : {}),
+      ...(opts.extra ?? {}),
     });
   }
   async function manifestOf(): Promise<Awaited<ReturnType<typeof readManifest>>> {
@@ -2164,6 +2198,26 @@ describe("basou project archive", () => {
   function mute(): void {
     vi.spyOn(console, "log").mockImplementation(() => {});
   }
+
+  it("--apply preserves an unknown manifest field and surfaces it while pruning the target", async () => {
+    await makeRepo("pub");
+    await setup({
+      repos: [{ path: "." }, { path: "../pub" }],
+      sourceRoots: [".", "../pub"],
+      extra: { signing: { key_id: "abc" } },
+    });
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    const r = await doRunProjectArchive("../pub", { apply: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    expect(r.preservedUnknownFields).toEqual(["signing"]);
+    expect(out.join("\n")).toContain("signing");
+    const after = await manifestOf();
+    expect((after as Record<string, unknown>).signing).toEqual({ key_id: "abc" });
+    expect(after.repos?.map((e) => e.path)).toEqual(["."]); // ../pub pruned
+  });
 
   it("dry-run reports the plan and writes nothing", async () => {
     await makeRepo("pub");
@@ -2339,6 +2393,7 @@ describe("basou project rename", () => {
     repos: RepoEntry[];
     sourceRoots?: string[];
     view?: string;
+    extra?: Record<string, unknown>;
   }): Promise<void> {
     const paths = await ensureBasouDirectory(host());
     const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
@@ -2347,6 +2402,7 @@ describe("basou project rename", () => {
       repos: opts.repos,
       ...(opts.sourceRoots !== undefined ? { import: { source_roots: opts.sourceRoots } } : {}),
       ...(opts.view !== undefined ? { workspace: { ...base.workspace, view: opts.view } } : {}),
+      ...(opts.extra ?? {}),
     });
   }
   async function manifestOf(): Promise<Awaited<ReturnType<typeof readManifest>>> {
@@ -2367,6 +2423,46 @@ describe("basou project rename", () => {
     expect(r.applied).toBe(false);
     expect(r.nextRepos.map((e) => e.path)).toEqual([".", "../takuhon-cli"]);
     expect((await manifestOf()).repos?.map((e) => e.path)).toEqual([".", "../takuhon"]);
+  });
+
+  it("--apply preserves an unknown manifest field and surfaces it while re-pathing", async () => {
+    await setup({
+      repos: [{ path: "." }, { path: "../takuhon" }],
+      sourceRoots: [".", "../takuhon"],
+      extra: { signing: { key_id: "abc" } },
+    });
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    const r = await doRunProjectRename(
+      "../takuhon",
+      "../takuhon-cli",
+      { apply: true },
+      { cwd: host() },
+    );
+    expect(r.applied).toBe(true);
+    expect(r.preservedUnknownFields).toEqual(["signing"]);
+    expect(out.join("\n")).toContain("signing");
+    const after = await manifestOf();
+    expect((after as Record<string, unknown>).signing).toEqual({ key_id: "abc" });
+    expect(after.repos?.map((e) => e.path)).toEqual([".", "../takuhon-cli"]); // re-pathed
+  });
+
+  it("surfaces the preserved-unknown advisory even on a dry-run (preservation is not gated by --apply)", async () => {
+    await setup({
+      repos: [{ path: "." }, { path: "../takuhon" }],
+      sourceRoots: [".", "../takuhon"],
+      extra: { signing: { key_id: "abc" } },
+    });
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    const r = await doRunProjectRename("../takuhon", "../takuhon-cli", {}, { cwd: host() }); // no --apply
+    expect(r.applied).toBe(false);
+    expect(r.preservedUnknownFields).toEqual(["signing"]);
+    expect(out.join("\n")).toContain("signing"); // advisory shows in dry-run too
   });
 
   it("--apply re-paths the roster entry and source_roots, preserving other fields", async () => {

@@ -2363,10 +2363,10 @@ function omitKey<T extends object>(obj: T, key: keyof T): T {
 
 /**
  * Build the manifest to write after archiving. Spreads the original so every
- * KNOWN manifest field not handled here is preserved (preservation of any
- * unknown/future field is bounded by `readManifest`, which strips unknown keys
- * at parse time — the separate strict-vs-passthrough decision). It bumps
- * `updated_at`, removes the target from `repos` (dropping the key entirely when
+ * other manifest field is preserved — both KNOWN fields not handled here and any
+ * unknown/future field, which `readManifest`'s loose schema now carries through
+ * (at the top level and nested) and surfaces via {@link unknownManifestKeys}. It
+ * bumps `updated_at`, removes the target from `repos` (dropping the key entirely when
  * the roster empties, since `repos: []` is not a valid roster), and prunes the
  * target's `source_roots` entry (dropping `source_roots` — and an emptied
  * `import` block — rather than writing an invalid empty list).
