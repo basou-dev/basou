@@ -10,6 +10,7 @@ import {
   ensureBasouDirectory,
   GENERATED_END,
   GENERATED_START,
+  ManifestSchema,
   type RepoEntry,
   type RosterDriftSummary,
   readManifest,
@@ -19,6 +20,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   doRunProjectAdopt,
+  doRunProjectArchive,
   doRunProjectCheck,
   doRunProjectGitignore,
   doRunProjectPreset,
@@ -27,6 +29,7 @@ import {
   doRunProjectWiring,
   doRunProjectWorkspace,
   type ProjectAdoptResult,
+  type ProjectArchiveResult,
   type ProjectGitignoreResult,
   type ProjectPresetResult,
   type ProjectSymlinksResult,
@@ -34,6 +37,7 @@ import {
   type ProjectWiringResult,
   type ProjectWorkspaceResult,
   renderProjectAdopt,
+  renderProjectArchive,
   renderProjectCheck,
   renderProjectGitignore,
   renderProjectPreset,
@@ -1716,5 +1720,204 @@ describe("basou project preset", () => {
     expect(Array.isArray(parsed.inSync)).toBe(true);
     expect(Array.isArray(parsed.failures)).toBe(true);
     expect(parsed.ok).toBe(false);
+  });
+});
+
+describe("basou project archive", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-archive-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  function sibling(name: string): string {
+    return join(parent as string, name);
+  }
+  async function makeRepo(name: string): Promise<void> {
+    const dir = sibling(name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+  }
+  async function setup(opts: {
+    repos: RepoEntry[];
+    sourceRoots?: string[];
+    view?: string;
+  }): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, {
+      ...base,
+      repos: opts.repos,
+      ...(opts.sourceRoots !== undefined ? { import: { source_roots: opts.sourceRoots } } : {}),
+      ...(opts.view !== undefined ? { workspace: { ...base.workspace, view: opts.view } } : {}),
+    });
+  }
+  async function manifestOf(): Promise<Awaited<ReturnType<typeof readManifest>>> {
+    return readManifest(basouPaths(host()));
+  }
+  function mute(): void {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  }
+
+  it("dry-run reports the plan and writes nothing", async () => {
+    await makeRepo("pub");
+    await setup({
+      repos: [{ path: "." }, { path: "../pub", visibility: "public" }],
+      sourceRoots: [".", "../pub"],
+    });
+    mute();
+    const r = await doRunProjectArchive("../pub", {}, { cwd: host() });
+    expect(r.found).toBe(true);
+    expect(r.applied).toBe(false);
+    expect(r.nextRepos.map((e) => e.path)).toEqual(["."]);
+    expect(r.sourceRootRemoval).toBe("../pub");
+    // Manifest unchanged on dry-run.
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual([".", "../pub"]);
+  });
+
+  it("--apply removes the target from repos and prunes its source_roots entry", async () => {
+    await makeRepo("pub");
+    await makeRepo("site");
+    await setup({
+      repos: [{ path: "." }, { path: "../pub", visibility: "public" }, { path: "../site" }],
+      sourceRoots: [".", "../pub", "../site", "../view"],
+    });
+    mute();
+    const r = await doRunProjectArchive("../pub", { apply: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    const m = await manifestOf();
+    // The written manifest is schema-valid (no repos:[] / empty source_roots corruption).
+    expect(() => ManifestSchema.parse(m)).not.toThrow();
+    expect(m.repos?.map((e) => e.path)).toEqual([".", "../site"]);
+    // The view source-root and the host `.` are preserved — only the target is pruned.
+    expect(m.import?.source_roots).toEqual([".", "../site", "../view"]);
+  });
+
+  it("refuses to archive the anchor (.) and writes nothing", async () => {
+    await makeRepo("pub");
+    await setup({ repos: [{ path: "." }, { path: "../pub" }], sourceRoots: [".", "../pub"] });
+    mute();
+    const r = await doRunProjectArchive(".", { apply: true }, { cwd: host() });
+    expect(r.isAnchor).toBe(true);
+    expect(r.applied).toBe(false);
+    const m = await manifestOf();
+    expect(m.repos?.map((e) => e.path)).toEqual([".", "../pub"]);
+    expect(m.import?.source_roots).toEqual([".", "../pub"]);
+  });
+
+  it("refuses a non-'.' roster path that resolves to the anchor (realpath detection)", async () => {
+    // `../host` resolves back to the host (anchor) — the realpath compare must catch it.
+    await setup({ repos: [{ path: "." }, { path: "../host", visibility: "private" }] });
+    mute();
+    const r = await doRunProjectArchive("../host", { apply: true }, { cwd: host() });
+    expect(r.isAnchor).toBe(true);
+    expect(r.applied).toBe(false);
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual([".", "../host"]);
+  });
+
+  it("reports found:false for a target not in the roster (manifest unchanged)", async () => {
+    await setup({ repos: [{ path: "." }], sourceRoots: ["."] });
+    mute();
+    const r = await doRunProjectArchive("../ghost", { apply: true }, { cwd: host() });
+    expect(r.found).toBe(false);
+    expect(r.applied).toBe(false);
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual(["."]);
+    const out = renderProjectArchive(r);
+    expect(out).toContain("roster に宣言されていません");
+  });
+
+  it("reports the repo-side teardown checklist and never touches it on --apply", async () => {
+    await makeRepo("pub");
+    // Repo-side wiring: instruction file, gitignore pattern, canonical, view symlink.
+    await writeFile(join(sibling("pub"), "AGENTS.md"), "x\n");
+    await writeFile(join(sibling("pub"), ".gitignore"), "AGENTS.md\n");
+    await mkdir(join(host(), "agents", "pub"), { recursive: true });
+    await writeFile(join(host(), "agents", "pub", "AGENTS.md"), "canonical\n");
+    await mkdir(sibling("view"), { recursive: true });
+    await symlink("../pub", join(sibling("view"), "pub"));
+    await setup({
+      repos: [{ path: "." }, { path: "../pub", visibility: "public" }],
+      sourceRoots: [".", "../pub"],
+      view: "../view",
+    });
+    mute();
+    const r = await doRunProjectArchive("../pub", { apply: true }, { cwd: host() });
+    expect(r.teardown.inspected).toBe(true);
+    expect(r.teardown.viewLink).toBe(true);
+    expect(r.teardown.instructionFiles).toContain("AGENTS.md");
+    expect(r.teardown.gitignorePatterns).toContain("AGENTS.md");
+    expect(r.teardown.canonical).toBe(true);
+    // Manifest pruned, but every repo-side artifact is left untouched.
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual(["."]);
+    expect(existsSync(join(sibling("pub"), "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(host(), "agents", "pub", "AGENTS.md"))).toBe(true);
+    expect(await readlink(join(sibling("view"), "pub"))).toBe("../pub");
+  });
+
+  it("archives a repo already deleted from disk (teardown not inspected)", async () => {
+    await setup({
+      repos: [{ path: "." }, { path: "../gone", visibility: "public" }],
+      sourceRoots: [".", "../gone"],
+    });
+    mute();
+    const r = await doRunProjectArchive("../gone", { apply: true }, { cwd: host() });
+    expect(r.found).toBe(true);
+    expect(r.applied).toBe(true);
+    expect(r.teardown.inspected).toBe(false);
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual(["."]);
+  });
+
+  it("drops the repos (and emptied import) keys when the last member is archived", async () => {
+    await makeRepo("solo");
+    await setup({ repos: [{ path: "../solo", visibility: "public" }], sourceRoots: ["../solo"] });
+    mute();
+    const r = await doRunProjectArchive("../solo", { apply: true }, { cwd: host() });
+    expect(r.reposEmptied).toBe(true);
+    const m = await manifestOf();
+    expect(() => ManifestSchema.parse(m)).not.toThrow();
+    expect(m.repos).toBeUndefined();
+    expect(m.import).toBeUndefined();
+  });
+
+  it("leaves an absent import block absent (never writes an empty import)", async () => {
+    await makeRepo("x");
+    // No source_roots declared => no import block.
+    await setup({ repos: [{ path: "." }, { path: "../x", visibility: "public" }] });
+    mute();
+    const r = await doRunProjectArchive("../x", { apply: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    expect(r.sourceRootRemoval).toBeUndefined();
+    const m = await manifestOf();
+    expect(m.repos?.map((e) => e.path)).toEqual(["."]);
+    expect(m.import).toBeUndefined();
+  });
+
+  it("--json emits a parseable result with the plan and teardown", async () => {
+    await makeRepo("pub");
+    await setup({
+      repos: [{ path: "." }, { path: "../pub", visibility: "public" }],
+      sourceRoots: [".", "../pub"],
+    });
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      logs.push(String(m));
+    });
+    await doRunProjectArchive("../pub", { json: true }, { cwd: host() });
+    expect(logs).toHaveLength(1);
+    const parsed = JSON.parse(logs[0] as string) as ProjectArchiveResult;
+    expect(parsed.found).toBe(true);
+    expect(parsed.target).toBe("../pub");
+    expect(parsed.nextRepos.map((e) => e.path)).toEqual(["."]);
+    expect(parsed.teardown.inspected).toBe(true);
   });
 });
