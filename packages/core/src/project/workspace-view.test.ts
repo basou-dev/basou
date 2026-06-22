@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planWorkspaceView, type ViewRepoFact } from "./workspace-view.js";
+import { type ExistingViewLink, planWorkspaceView, type ViewRepoFact } from "./workspace-view.js";
 
 function fact(over: Partial<ViewRepoFact> & Pick<ViewRepoFact, "path" | "linkName">): ViewRepoFact {
   return {
@@ -110,5 +110,68 @@ describe("planWorkspaceView", () => {
     const p = planWorkspaceView([]);
     expect(p.ok).toBe(true);
     expect(p.toCreate).toEqual([]);
+  });
+
+  it("defaults to no strays when the view contents are not supplied (create-only plan)", () => {
+    const p = planWorkspaceView([fact({ path: "../basou", linkName: "basou" })]);
+    expect(p.toPrune).toEqual([]);
+    expect(p.strayUnknown).toEqual([]);
+    expect(p.ok).toBe(true);
+  });
+
+  it("flags a repo-shaped view link the roster no longer backs as prunable (and not ok)", () => {
+    const existing: ExistingViewLink[] = [
+      { name: "basou", target: "../basou", kind: "repo" }, // current roster link
+      { name: "old", target: "../old", kind: "repo" }, // de-rostered, still on disk
+    ];
+    const p = planWorkspaceView([fact({ path: "../basou", linkName: "basou" })], existing);
+    expect(p.toPrune).toEqual([{ name: "old", target: "../old" }]);
+    expect(p.strayUnknown).toEqual([]);
+    expect(p.ok).toBe(false);
+  });
+
+  it("never prunes the link of a declared-but-unreachable repo (rosterNames protects it by name)", () => {
+    // The repo is in the roster but its path did not resolve at scan time
+    // (reachable:false, so it contributes no linkName via facts). Its basename is
+    // still supplied in rosterNames, so its live on-disk link must not be a stray.
+    const existing: ExistingViewLink[] = [{ name: "old", target: "../old", kind: "repo" }];
+    const p = planWorkspaceView(
+      [fact({ path: "../mount/old", linkName: "old", reachable: false })],
+      existing,
+      ["old"],
+    );
+    expect(p.toPrune).toEqual([]);
+    expect(p.strayUnknown).toEqual([]);
+  });
+
+  it("never prunes a link a reachable roster repo owns, even a colliding one", () => {
+    const existing: ExistingViewLink[] = [{ name: "pub", target: "../x/pub", kind: "repo" }];
+    // Two repos collide on "pub"; neither is auto-wired, but "pub" is still owned
+    // by the roster and must not be pruned.
+    const p = planWorkspaceView(
+      [
+        fact({ path: "../x/pub", linkName: "pub", state: "missing" }),
+        fact({ path: "../y/pub", linkName: "pub", state: "missing" }),
+      ],
+      existing,
+    );
+    expect(p.toPrune).toEqual([]);
+    expect(p.strayUnknown).toEqual([]);
+  });
+
+  it("routes broken / non-repo / absolute strays to strayUnknown, never to toPrune", () => {
+    const existing: ExistingViewLink[] = [
+      { name: "dead", target: "../dead", kind: "broken" },
+      { name: "plain", target: "../plain", kind: "non-repo" },
+      { name: "abs", target: "/elsewhere", kind: "absolute" },
+    ];
+    const p = planWorkspaceView([], existing);
+    expect(p.toPrune).toEqual([]);
+    expect(p.strayUnknown).toEqual([
+      { name: "dead", target: "../dead", reason: "broken" },
+      { name: "plain", target: "../plain", reason: "non-repo" },
+      { name: "abs", target: "/elsewhere", reason: "absolute" },
+    ]);
+    expect(p.ok).toBe(false);
   });
 });
