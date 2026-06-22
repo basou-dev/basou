@@ -438,14 +438,14 @@ function formatOrientationBody(
         DECISION_TRAILING_ACTIVITY_GAP_MS
     ) {
       lines.push(
-        `  - 注: これは最後に「記録された」判断です。最終活動 (${relativeAgeJa(activityAt, now)}) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません)。`,
+        `  - 注: これは最後に「記録された」判断です。最終活動 (${relativeAgeJa(activityAt, now)}) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません。\`basou decision capture\` でこの session の判断を記録できます)。`,
       );
     }
     if (summary.decisionCount > 1) {
       lines.push(`  - ${summary.decisionCount} decisions total — see decisions.md`);
     }
   } else {
-    lines.push("- 直近の判断: (no decisions recorded yet)");
+    lines.push("- 直近の判断: (no decisions recorded yet; capture with `basou decision capture`)");
   }
   if (summary.relatedFiles.displayed.length > 0) {
     const shown = summary.relatedFiles.displayed.join(", ");

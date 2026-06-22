@@ -446,7 +446,7 @@ describe("orientation-renderer", () => {
         "## 今どこにいる",
         "",
         "- 最終 session: (no live sessions)",
-        "- 直近の判断: (no decisions recorded yet)",
+        "- 直近の判断: (no decisions recorded yet; capture with `basou decision capture`)",
         "- 直近の変更ファイル: (none recorded)",
         "",
         "## 何が動く",
@@ -683,7 +683,7 @@ describe("summarizeOrientation", () => {
     // 2026-05-08T20:00+09 = 11:00Z; now 2026-05-09T03:00Z → 16時間前), so the
     // stale decision does not masquerade as the current direction.
     expect(result.body).toContain(
-      "注: これは最後に「記録された」判断です。最終活動 (16時間前) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません)。",
+      "注: これは最後に「記録された」判断です。最終活動 (16時間前) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません。`basou decision capture` でこの session の判断を記録できます)。",
     );
   });
 
@@ -748,7 +748,7 @@ describe("summarizeOrientation", () => {
     // Firing across sessions is intentional: the recorded decision predates the
     // most recent captured work regardless of which session that work lives in.
     expect(result.body).toContain(
-      "注: これは最後に「記録された」判断です。最終活動 (14時間前) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません)。",
+      "注: これは最後に「記録された」判断です。最終活動 (14時間前) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません。`basou decision capture` でこの session の判断を記録できます)。",
     );
   });
 
