@@ -14,6 +14,7 @@
  * caller's job.
  */
 
+import { normalizeRelativePath as normalizePath } from "./relative-path.js";
 import type { PublishTarget, RepoLanguage, RepoVisibility } from "./roster.js";
 
 /** The declared fields the preset block is rendered from. */
@@ -226,12 +227,6 @@ export type PresetPlanSummary = {
    */
   ok: boolean;
 };
-
-/** Normalize a relative roster path for comparison: trim, drop trailing slashes, empty => ".". */
-function normalizePath(p: string): string {
-  const s = p.trim().replace(/\/+$/, "");
-  return s.length === 0 ? "." : s;
-}
 
 /** Normalize a block for in-sync comparison: LF line endings, no trailing blank lines. */
 function normalizeBlock(s: string): string {

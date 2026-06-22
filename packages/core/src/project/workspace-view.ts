@@ -24,6 +24,8 @@
  * here. Still NOT in scope: generating the view's own instruction files.
  */
 
+import { normalizeRelativePath as normalize } from "./relative-path.js";
+
 /**
  * The on-disk state of one repo's view symlink. `correct` = the expected link
  * exists (idempotent skip); `missing` = nothing there (ENOENT) so it can be
@@ -144,12 +146,6 @@ export type WorkspaceViewPlan = {
    */
   ok: boolean;
 };
-
-/** Normalize a relative roster path for comparison: trim, drop trailing slashes, empty => ".". */
-function normalize(p: string): string {
-  const s = p.trim().replace(/\/+$/, "");
-  return s.length === 0 ? "." : s;
-}
 
 /**
  * Compute the {@link WorkspaceViewPlan} from per-repo facts. For each declared,

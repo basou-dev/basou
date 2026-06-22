@@ -11,6 +11,8 @@
  * use the same machine-portable relative-path form), not resolved on disk.
  */
 
+import { normalizeRelativePath as normalize } from "./relative-path.js";
+
 export type RepoVisibility = "public" | "private" | "future-public";
 
 /**
@@ -60,12 +62,6 @@ export type RosterDriftSummary = {
   /** True when there is no capture gap (every declared repo is covered). */
   ok: boolean;
 };
-
-/** Normalize a relative roster path for comparison: trim, drop trailing slashes, empty => ".". */
-function normalize(p: string): string {
-  const s = p.trim().replace(/\/+$/, "");
-  return s.length === 0 ? "." : s;
-}
 
 /**
  * Compute the {@link RosterDriftSummary} for a project. A declared repo missing

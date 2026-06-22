@@ -13,6 +13,7 @@
  * concern; this only re-paths the declaration.
  */
 
+import { normalizeRelativePath as normalize } from "./relative-path.js";
 import type { RepoEntry } from "./roster.js";
 
 export type RenamePlan = {
@@ -44,19 +45,6 @@ export type RenamePlan = {
   /** True when the basename changes (old/new last segment differ) — the repo-side canonical/view names need renaming too. */
   basenameChanged: boolean;
 };
-
-/**
- * Normalize a relative roster path for comparison: trim, drop trailing slashes,
- * empty => ".". This matches the normalizer every other `project` command uses;
- * it intentionally does NOT collapse interior dot-segments (`../b/.` is not
- * reduced to `../b`), so a hand-typed dot-segment variant could read as distinct.
- * Reducing dot-segments belongs in a single shared lexical normalizer applied
- * across all commands at once, not re-implemented here in isolation.
- */
-function normalize(p: string): string {
-  const s = p.trim().replace(/\/+$/, "");
-  return s.length === 0 ? "." : s;
-}
 
 /** The last path segment of a normalized relative path (e.g. "../a/x" => "x", "." => "."). */
 export function pathBasename(p: string): string {
