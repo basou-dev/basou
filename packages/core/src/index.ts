@@ -237,6 +237,7 @@ export {
   TaskIdSchema,
   TaskSchema,
   TaskStatusSchema,
+  unknownManifestKeys,
   WorkspaceIdSchema,
 } from "./schemas/index.js";
 export type {

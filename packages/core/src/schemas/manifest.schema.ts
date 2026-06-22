@@ -1,31 +1,31 @@
 import { z } from "zod";
 import { IsoTimestampSchema, SchemaVersionSchema, WorkspaceIdSchema } from "./shared.schema.js";
 
-const ProjectSchema = z.object({
+const ProjectSchema = z.looseObject({
   name: z.string().optional(),
   description: z.string().optional(),
   repository_url: z.string().nullable().optional(),
 });
 
-const CapabilitiesSchema = z.object({
+const CapabilitiesSchema = z.looseObject({
   enabled: z.array(z.string()),
 });
 
-const ApprovalConfigSchema = z.object({
+const ApprovalConfigSchema = z.looseObject({
   required_for: z.array(z.string()).optional(),
   default_risk_level: z.enum(["low", "medium", "high", "critical"]),
 });
 
-const ClaudeCodeAdapterConfigSchema = z.object({
+const ClaudeCodeAdapterConfigSchema = z.looseObject({
   enabled: z.boolean(),
   config_path: z.string().optional(),
 });
 
-const AdaptersSchema = z.object({
+const AdaptersSchema = z.looseObject({
   "claude-code": ClaudeCodeAdapterConfigSchema,
 });
 
-const GitConfigSchema = z.object({
+const GitConfigSchema = z.looseObject({
   events_log: z.enum(["ignore", "commit"]).default("ignore"),
 });
 
@@ -64,7 +64,7 @@ const SourceRootSchema = z.string().min(1).regex(SOURCE_ROOT_PATTERN, {
  * scan every listed root; the list is the complete set, so include `"."` to
  * keep the host repository itself. Absent => the host repository root only.
  */
-const ImportConfigSchema = z.object({
+const ImportConfigSchema = z.looseObject({
   source_roots: z.array(SourceRootSchema).min(1).optional(),
 });
 
@@ -97,20 +97,20 @@ const PublishKindSchema = z.enum(["web", "npm"]);
  * optional so a surface can be declared before those facts are pinned down.
  * `kind` is required: a surface with no kind is meaningless.
  */
-const PublishTargetSchema = z.object({
+const PublishTargetSchema = z.looseObject({
   kind: PublishKindSchema,
   visibility: RepoVisibilitySchema.optional(),
   language: RepoLanguageSchema.optional(),
 });
 
-const RepoEntrySchema = z.object({
+const RepoEntrySchema = z.looseObject({
   path: SourceRootSchema,
   visibility: RepoVisibilitySchema.optional(),
   language: RepoLanguageSchema.optional(),
   publishes: z.array(PublishTargetSchema).optional(),
 });
 
-const WorkspaceMetaSchema = z.object({
+const WorkspaceMetaSchema = z.looseObject({
   id: WorkspaceIdSchema,
   name: z.string().min(1),
   created_at: IsoTimestampSchema,
@@ -131,8 +131,18 @@ const WorkspaceMetaSchema = z.object({
  * capabilities, approval policy, adapter config, and git policy. The
  * `adapters."claude-code"` key uses a hyphen; downstream code accesses it
  * via bracket notation.
+ *
+ * Every object here is `looseObject` (NOT the default strip), so unknown keys
+ * at every level survive parse. The manifest is the declarative source of truth
+ * and is git-tracked and read-modify-written by `basou project` commands; with
+ * the default strip, a field this basou does not recognize — a newer version's
+ * additive field, a future adapter under `adapters`, a hand-added key — would be
+ * silently dropped on the next write. Preserving them keeps basou from destroying
+ * config it does not understand (forward-compatible), while known fields are still
+ * fully type-checked and validated. {@link unknownManifestKeys} surfaces the
+ * unrecognized top-level keys so preservation is not silent.
  */
-export const ManifestSchema = z.object({
+export const ManifestSchema = z.looseObject({
   schema_version: SchemaVersionSchema,
   basou_version: z.literal("0.1.0"),
   workspace: WorkspaceMetaSchema,
@@ -147,3 +157,20 @@ export const ManifestSchema = z.object({
 
 /** Inferred runtime type for {@link ManifestSchema}. */
 export type Manifest = z.infer<typeof ManifestSchema>;
+
+/** The declared top-level manifest keys, derived from the schema (no hardcoded drift). */
+const KNOWN_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(Object.keys(ManifestSchema.shape));
+
+/**
+ * The unrecognized TOP-LEVEL keys a parsed manifest carries — fields preserved by
+ * the loose schema that this basou does not know. Returned sorted, for surfacing as
+ * an advisory by the read-modify-write commands so preservation is not silent (a
+ * newer version's section, or a hand-added/typo'd key, is flagged rather than
+ * dropped). Nested unknown keys are preserved too but not enumerated here; this is
+ * the high-signal top-level case. Read-only — never mutates.
+ */
+export function unknownManifestKeys(manifest: Manifest): string[] {
+  return Object.keys(manifest)
+    .filter((k) => !KNOWN_TOP_LEVEL_KEYS.has(k))
+    .sort();
+}

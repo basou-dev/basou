@@ -73,13 +73,18 @@ function repo(): string {
   return tmpRepo;
 }
 
-async function setupManifest(opts: { repos?: RepoEntry[]; sourceRoots?: string[] }): Promise<void> {
+async function setupManifest(opts: {
+  repos?: RepoEntry[];
+  sourceRoots?: string[];
+  extra?: Record<string, unknown>;
+}): Promise<void> {
   const paths = await ensureBasouDirectory(repo());
   const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
   await writeManifest(paths, {
     ...base,
     ...(opts.repos !== undefined ? { repos: opts.repos } : {}),
     ...(opts.sourceRoots !== undefined ? { import: { source_roots: opts.sourceRoots } } : {}),
+    ...(opts.extra ?? {}),
   });
 }
 
@@ -166,6 +171,26 @@ describe("basou project sync", () => {
     expect(after.workspace.updated_at).toBe(SYNC_NOW.toISOString());
   });
 
+  it("--apply preserves an unknown top-level manifest field and surfaces it (no silent drop)", async () => {
+    await setupManifest({
+      repos: [{ path: "." }, { path: "../takuhon" }, { path: "../bio" }],
+      sourceRoots: [".", "../takuhon"], // bio is the gap to sync
+      extra: { signing: { key_id: "abc" } }, // a field this basou does not recognize
+    });
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    const r = await doRunProjectSync({ apply: true }, { cwd: repo(), now: () => SYNC_NOW });
+    expect(r.applied).toBe(true);
+    expect(r.preservedUnknownFields).toEqual(["signing"]);
+    expect(out.join("\n")).toContain("signing"); // the advisory names it
+    // the unknown field SURVIVED the read-modify-write that previously stripped it
+    const after = await readManifest(basouPaths(repo()));
+    expect((after as Record<string, unknown>).signing).toEqual({ key_id: "abc" });
+    expect(after.import?.source_roots).toEqual([".", "../takuhon", "../bio"]); // and the sync still happened
+  });
+
   it("--apply preserves an undeclared captured path (the workspace view)", async () => {
     await setupManifest({
       repos: [{ path: "../takuhon" }, { path: "../bio" }],
@@ -231,6 +256,7 @@ describe("renderProjectSync", () => {
     unchanged: true,
     hasRoster: true,
     applied: false,
+    preservedUnknownFields: [],
   };
 
   it("explains the no-roster case", () => {
@@ -431,6 +457,7 @@ describe("renderProjectAdopt", () => {
     excluded: [],
     alreadyDeclared: false,
     applied: false,
+    preservedUnknownFields: [],
   };
 
   it("explains the already-declared case (points to check/sync)", () => {
