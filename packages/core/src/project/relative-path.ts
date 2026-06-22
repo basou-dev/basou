@@ -17,8 +17,8 @@
  *   with spaces — `../my repo` stays `../my repo`), never collapsing it; and
  * - yields `.` for an empty / all-dot result.
  *
- * So `../b`, `../b/`, `../b/.`, `./../b`, `a/../../b`, and `x/..` (where it lands
- * on `..`) all canonicalize to a single comparison key. Absolute input (which
+ * So `../b`, `../b/`, `../b/.`, `./../b`, and `a/../../b` all canonicalize to
+ * `../b`, while `x/..` and `a/b/../..` canonicalize to `.`. Absolute input (which
  * declared paths never are) is normalized defensively, `..` above the root being
  * dropped.
  */
