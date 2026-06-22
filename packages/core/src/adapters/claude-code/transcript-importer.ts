@@ -8,6 +8,7 @@ import {
   ENGAGED_TURNS_METHOD,
   intervalsMsToIso,
 } from "../../stats/active-time.js";
+import { sessionLabelDateSpan } from "../session-label.js";
 
 /**
  * The `source` string stamped on every event derived from a Claude Code
@@ -219,8 +220,7 @@ export function claudeTranscriptToImportPayload(
   // raw file path here would leak an operator-private prefix.
   const commandCount = derived.reduce((n, e) => (e.type === "command_executed" ? n + 1 : n), 0);
   const fileCount = relatedFiles.size;
-  const date = minTs.slice(0, 10);
-  const label = `claude-code ${date}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}, ${fileCount} ${fileCount === 1 ? "file" : "files"}`;
+  const label = `claude-code ${sessionLabelDateSpan(minTs, maxTs)}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}, ${fileCount} ${fileCount === 1 ? "file" : "files"}`;
 
   // Engaged-active time from the genuine engagement series (needs >= 2 points
   // to bound any gap); omitted when too sparse so stats falls back to the

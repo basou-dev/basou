@@ -187,6 +187,22 @@ describe("codexRolloutToImportPayload", () => {
     expect(payload.session.label).toMatch(/^codex \d{4}-\d{2}-\d{2}: \d+ command/);
   });
 
+  it("labels a day-spanning session with a start..end date range", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T22:00:00.000Z"),
+      execCall("2026-05-10T22:30:00.000Z", "call_1", "ls"),
+      // Work continues past midnight; ended_at lands on the next day.
+      execOutput("2026-05-11T01:00:00.000Z", "call_1", "Process exited with code 0\nOutput:\nok"),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.started_at).toBe("2026-05-10T22:00:00.000Z");
+    expect(payload.session.ended_at).toBe("2026-05-11T01:00:00.000Z");
+    // The label surfaces the most recent day instead of burying it under the start.
+    expect(payload.session.label).toBe("codex 2026-05-10..2026-05-11: 1 command");
+  });
+
   it("returns null when no exec_command exists", () => {
     const records: CodexRolloutRecord[] = [
       sessionMeta("2026-05-10T00:00:00.000Z"),
