@@ -1,6 +1,6 @@
 {
   "name": "@basou/core",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Core primitives for Basou: sessions, events, approvals, git capability",
