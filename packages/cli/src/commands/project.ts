@@ -11,6 +11,7 @@ import {
 import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   type AdoptCandidate,
+  type ArchivePlan,
   basouPaths,
   GENERATED_END,
   GENERATED_START,
@@ -22,6 +23,7 @@ import {
   type Manifest,
   type PresetPlanSummary,
   parseMarkers,
+  planArchive,
   planGitignore,
   planRosterAdoption,
   planWorkspaceView,
@@ -181,6 +183,39 @@ export type ProjectPresetResult = PresetPlanSummary & {
   failures: { repo: string; message: string }[];
 };
 
+export type ProjectArchiveOptions = {
+  apply?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+/** `now` is injectable so the `updated_at` bump on `--apply` is deterministic in tests. */
+export type ProjectArchiveContext = ImportContext & { now?: () => Date };
+
+/** Repo-side wiring still present for the archived repo — a manual-teardown checklist (report-only). */
+export type ArchiveTeardown = {
+  /** False when the repo could not be resolved on disk (e.g. already deleted) — wiring not inspected. */
+  inspected: boolean;
+  /** The workspace view still has a `<basename>` entry for this repo. */
+  viewLink: boolean;
+  /** Instruction files still present in the repo (AGENTS.md / CLAUDE.md / copilot). */
+  instructionFiles: string[];
+  /** Instruction patterns still listed in the repo's `.gitignore`. */
+  gitignorePatterns: string[];
+  /** The anchor's canonical (`agents/<repo>/AGENTS.md`) still exists. */
+  canonical: boolean;
+};
+
+/** Result of {@link doRunProjectArchive}: the plan plus whether a roster exists, the teardown checklist, and what `--apply` did. */
+export type ProjectArchiveResult = ArchivePlan & {
+  /** Whether a `repos` roster was declared (else there is nothing to archive — run adopt first). */
+  hasRoster: boolean;
+  /** Whether the manifest was written (i.e. `--apply` set, target found, and not the anchor). */
+  applied: boolean;
+  /** Repo-side wiring still present (report-only; `--apply` never touches it). */
+  teardown: ArchiveTeardown;
+};
+
 /**
  * Agent instruction files inspected per repo. GEMINI.md is intentionally absent
  * (the Gemini CLI was discontinued for personal use). Each should be a gitignored
@@ -308,6 +343,22 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (opts: ProjectPresetOptions) => {
       await runProjectPreset(opts);
+    });
+
+  project
+    .command("archive")
+    .argument("<repo>", "The roster repo path to archive (as declared, e.g. ../takuhon)")
+    .description(
+      "Fold a repo out of the project: remove it from the declared roster (manifest `repos`) and prune its capture entry (`source_roots`). Dry-run by default; pass --apply to write. Manifest-only and reversible (the manifest is git-tracked); it never deletes the repo, its captured history, or its on-disk wiring (view symlink / instruction symlinks / .gitignore / canonical) — those are reported as a manual teardown checklist. Archiving the anchor (`.`) is refused",
+    )
+    .option(
+      "--apply",
+      "Write the pruned roster / source_roots to the manifest (default: dry-run preview)",
+    )
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (repo: string, opts: ProjectArchiveOptions) => {
+      await runProjectArchive(repo, opts);
     });
 }
 
@@ -1857,6 +1908,280 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
 
   lines.push(
     "注: マーカー領域のみを生成し、canonical の手書き部分(マーカー外)は保持します。生成内容は manifest の宣言から導出されます。",
+  );
+  return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectArchive}. */
+export async function runProjectArchive(
+  target: string,
+  options: ProjectArchiveOptions,
+  ctx: ProjectArchiveContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectArchive(target, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Inspect the repo-side wiring still present for an archived repo — the manual
+ * teardown checklist `--apply` does NOT touch (it only mutates the manifest).
+ * Best-effort: an unresolvable repo (already deleted from disk) yields
+ * `inspected: false` and empty facts, so archiving a removed repo still works.
+ */
+function gatherArchiveTeardown(
+  repositoryRoot: string,
+  manifest: Manifest,
+  target: string,
+): ArchiveTeardown {
+  const empty: ArchiveTeardown = {
+    inspected: false,
+    viewLink: false,
+    instructionFiles: [],
+    gitignorePatterns: [],
+    canonical: false,
+  };
+  let real: string;
+  try {
+    real = realpathSync(resolve(repositoryRoot, target));
+  } catch {
+    return empty;
+  }
+  const anchorReal = realpathSync(repositoryRoot);
+  const canonicalName = basename(real);
+
+  const instructionFiles: string[] = [];
+  for (const name of INSTRUCTION_FILES) {
+    try {
+      lstatSync(join(real, name));
+      instructionFiles.push(name);
+    } catch {
+      // not present — nothing to tear down
+    }
+  }
+
+  // An unreadable .gitignore (EACCES / I/O error) must NOT throw out of this
+  // advisory, read-only inspection — that would block the authoritative,
+  // manifest-only archive write it has no say over. Degrade to "no patterns".
+  let ignored: Set<string>;
+  try {
+    ignored = new Set(readGitignoreLines(join(real, ".gitignore")).map((l) => l.trim()));
+  } catch {
+    ignored = new Set();
+  }
+  const gitignorePatterns = INSTRUCTION_FILES.filter((p) => ignored.has(p) || ignored.has(`/${p}`));
+
+  const canonical = existsSync(join(anchorReal, "agents", canonicalName, CANONICAL_FILE));
+
+  let viewLink = false;
+  const viewPath = manifest.workspace.view;
+  if (viewPath !== undefined) {
+    try {
+      lstatSync(join(resolveViewDir(repositoryRoot, viewPath), canonicalName));
+      viewLink = true;
+    } catch {
+      // no view entry for this repo
+    }
+  }
+
+  return {
+    inspected: true,
+    viewLink,
+    instructionFiles,
+    gitignorePatterns: [...gitignorePatterns],
+    canonical,
+  };
+}
+
+/** Shallow clone of an object with one optional key removed (preserves every other own field). */
+function omitKey<T extends object>(obj: T, key: keyof T): T {
+  const clone = { ...obj };
+  delete clone[key];
+  return clone;
+}
+
+/**
+ * Build the manifest to write after archiving. Spreads the original so every
+ * KNOWN manifest field not handled here is preserved (preservation of any
+ * unknown/future field is bounded by `readManifest`, which strips unknown keys
+ * at parse time — the separate strict-vs-passthrough decision). It bumps
+ * `updated_at`, removes the target from `repos` (dropping the key entirely when
+ * the roster empties, since `repos: []` is not a valid roster), and prunes the
+ * target's `source_roots` entry (dropping `source_roots` — and an emptied
+ * `import` block — rather than writing an invalid empty list).
+ */
+function buildArchivedManifest(manifest: Manifest, plan: ArchivePlan, updatedAt: string): Manifest {
+  let next: Manifest = { ...manifest, workspace: { ...manifest.workspace, updated_at: updatedAt } };
+
+  next = plan.reposEmptied ? omitKey(next, "repos") : { ...next, repos: plan.nextRepos };
+
+  if (plan.nextSourceRoots !== undefined) {
+    if (plan.nextSourceRoots.length === 0) {
+      const prunedImport =
+        manifest.import !== undefined ? omitKey(manifest.import, "source_roots") : {};
+      next =
+        Object.keys(prunedImport).length === 0
+          ? omitKey(next, "import")
+          : { ...next, import: prunedImport };
+    } else {
+      next = {
+        ...next,
+        import: { ...(manifest.import ?? {}), source_roots: plan.nextSourceRoots },
+      };
+    }
+  }
+
+  return next;
+}
+
+/**
+ * Archive (fold) a repo out of the project. Resolves the workspace, reads the
+ * manifest, plans the manifest mutation (roster removal + source_roots prune),
+ * and inspects the repo-side wiring for the teardown checklist. When `--apply`
+ * is set and the target is a real, non-anchor roster member, it writes the
+ * pruned manifest (bumping `updated_at`); otherwise it writes nothing and prints
+ * the plan. The repo, its captured history, and its on-disk wiring are never
+ * touched.
+ */
+export async function doRunProjectArchive(
+  target: string,
+  options: ProjectArchiveOptions,
+  ctx: ProjectArchiveContext,
+): Promise<ProjectArchiveResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project archive");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+  const roster = manifest.repos ?? [];
+
+  let targetIsAnchor = false;
+  try {
+    targetIsAnchor = realpathSync(resolve(repositoryRoot, target)) === realpathSync(repositoryRoot);
+  } catch {
+    targetIsAnchor = false;
+  }
+
+  const plan = planArchive({
+    ...(manifest.repos !== undefined ? { repos: manifest.repos } : {}),
+    ...(manifest.import?.source_roots !== undefined
+      ? { sourceRoots: manifest.import.source_roots }
+      : {}),
+    target,
+    targetIsAnchor,
+  });
+
+  const teardown =
+    plan.found && !plan.isAnchor
+      ? gatherArchiveTeardown(repositoryRoot, manifest, target)
+      : {
+          inspected: false,
+          viewLink: false,
+          instructionFiles: [],
+          gitignorePatterns: [],
+          canonical: false,
+        };
+
+  const applied = options.apply === true && plan.found && !plan.isAnchor;
+  if (applied) {
+    const now = ctx.now ?? (() => new Date());
+    await writeManifest(paths, buildArchivedManifest(manifest, plan, now().toISOString()), {
+      force: true,
+    });
+  }
+
+  const result: ProjectArchiveResult = { ...plan, hasRoster: roster.length > 0, applied, teardown };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectArchive(result));
+  }
+  return result;
+}
+
+/**
+ * Render the archive report. Leads with the actionable outcome: no roster (run
+ * adopt first), anchor refusal, target not found (with the declared paths), or
+ * the manifest mutation that will be / was applied. Then the repo-side teardown
+ * checklist (what `--apply` did NOT touch), and a note when the project becomes
+ * solo or closes. Dry-run framing makes clear that without `--apply` nothing is
+ * written.
+ */
+export function renderProjectArchive(result: ProjectArchiveResult): string {
+  const lines: string[] = [];
+  lines.push("# repo の archive(roster から畳む)");
+  lines.push("");
+
+  if (!result.hasRoster) {
+    lines.push("ℹ️ repo ロースターが未宣言です(manifest の `repos`)。archive 対象がありません。");
+    return lines.join("\n");
+  }
+
+  if (result.isAnchor) {
+    lines.push(
+      `⚠️ \`${result.target}\` は anchor(プロジェクトの root)です。anchor は archive できません(manifest の家のため)。`,
+    );
+    return lines.join("\n");
+  }
+
+  if (!result.found) {
+    lines.push(`ℹ️ \`${result.target}\` は roster に宣言されていません(archive 対象なし)。`);
+    return lines.join("\n");
+  }
+
+  // Manifest mutation summary.
+  if (result.applied) {
+    lines.push(`✅ \`${result.target}\` を roster から削除しました。`);
+  } else {
+    lines.push(`\`${result.target}\` を roster から削除予定(dry-run、反映するには --apply):`);
+  }
+  if (result.sourceRootRemoval !== undefined) {
+    lines.push(
+      `- source_roots から ${result.sourceRootRemoval} を prune${result.applied ? "しました" : "します"}(以後 refresh の対象外)。`,
+    );
+  } else {
+    lines.push("- source_roots に該当エントリはありません(prune 不要)。");
+  }
+  if (result.reposEmptied) {
+    lines.push(
+      "- これが最後のメンバーです → roster は空になり `repos` 宣言は除去されます(プロジェクトを畳む)。",
+    );
+  } else if (result.becomesSolo) {
+    lines.push(
+      "- 残り 1 repo(solo)になります → workspace view は不要です(view 宣言/ディレクトリの撤去を検討)。",
+    );
+  }
+  lines.push("");
+
+  // Teardown checklist (report-only).
+  const t = result.teardown;
+  const items: string[] = [];
+  if (t.viewLink) items.push("workspace view の symlink エントリ");
+  if (t.instructionFiles.length > 0) items.push(`指示書(${t.instructionFiles.join(", ")})`);
+  if (t.gitignorePatterns.length > 0)
+    items.push(`.gitignore の指示書パターン(${t.gitignorePatterns.join(", ")})`);
+  if (t.canonical) items.push(`anchor の canonical(agents/${basename(result.target)}/AGENTS.md)`);
+
+  if (!t.inspected) {
+    lines.push("## 手動 teardown(repo がディスク上に解決できないため未検査)");
+    lines.push(
+      "- repo は既に削除済みの可能性があります。view symlink / 指示書 symlink / .gitignore / canonical が残っていないか手動で確認してください。",
+    );
+    lines.push("");
+  } else if (items.length > 0) {
+    lines.push("## 手動 teardown(--apply は触れません。残っている wiring を手で撤去してください)");
+    for (const i of items) lines.push(`- ${i}`);
+    lines.push("");
+  } else {
+    lines.push("repo 側の wiring(view/指示書/.gitignore/canonical)は残っていません。");
+    lines.push("");
+  }
+
+  lines.push(
+    "注: archive は manifest(.basou、git 追跡=可逆)のみを変更します。repo・捕捉履歴・on-disk の wiring は削除しません。",
   );
   return lines.join("\n");
 }
