@@ -3,6 +3,24 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- Resume coherence: orientation and handoff no longer present a *stale* recorded
+  decision as the current direction. When captured activity continued well past
+  the latest decision, the forward section asks you to confirm the continuation
+  point and demotes the decision to a labelled reference instead of inferring
+  direction from it; `handoff.md` now carries the same staleness caveat on its
+  `直近の判断` (it previously had none). This closes a resume failure where an
+  agent treated an already-resolved "open question" as the next task.
+- `最終 session` now represents the most recent *substantive* session (one that
+  touched files) rather than a bare resume/refresh session (e.g. 1 command, 0
+  files) that merely happens to be newest, in both orientation and handoff.
+- Orientation and handoff now flag when the latest recorded decision comes from a
+  different session than `最終 session`, so the "latest" pointers do not silently
+  disagree.
+
 ## 0.14.0 — 2026-06-22
 
 ### Added

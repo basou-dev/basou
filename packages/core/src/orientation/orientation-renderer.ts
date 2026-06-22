@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { formatDurationMs } from "../lib/format-duration.js";
+import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { readManifest } from "../storage/manifest.js";
 import {
@@ -51,19 +52,12 @@ export type OrientationRendererResult = {
   decisionCount: number;
 };
 
-/**
- * A latest-recorded decision is "trailing" when captured activity continued for
- * more than this gap after it. Decisions are recorded only from AskUserQuestion
- * tool calls or an explicit `basou decision record` — conversational approvals
- * are not auto-captured — so a long trailing gap means the operator's current
- * direction may simply be unrecorded. Orientation surfaces that rather than
- * letting a mid-session decision pose as the current direction. 1h ≈ "a
- * meaningful stretch of work happened since"; a deliberately conservative
- * threshold so a decision made near a session's end does not trigger the note.
- */
-const DECISION_TRAILING_ACTIVITY_GAP_MS = 60 * 60 * 1000;
-
-type DecisionRecord = { decisionId: string; title: string; occurredAt: string };
+type DecisionRecord = {
+  decisionId: string;
+  title: string;
+  occurredAt: string;
+  sessionId: string;
+};
 
 type NoteRecord = { body: string; sessionId: string; occurredAt: string };
 
@@ -200,6 +194,7 @@ export async function summarizeOrientation(
             decisionId: ev.decision_id,
             title: ev.title,
             occurredAt: ev.occurred_at,
+            sessionId: entry.sessionId,
           });
         }
         // Only `next_step`-kind notes (from `basou note`) are resume hints; a
@@ -276,9 +271,12 @@ export async function summarizeOrientation(
   const liveEntries = entries.filter(
     (e) => e.session.session.status !== "archived" && e.session.session.source.kind !== "import",
   );
-  const latestEntry = [...liveEntries].sort(
-    (a, b) => Date.parse(b.session.session.started_at) - Date.parse(a.session.session.started_at),
-  )[0];
+  // Represent "最終 session" with the most recent SUBSTANTIVE session, not a bare
+  // resume/refresh session (e.g. 1 command, 0 files) that merely happens to be
+  // newest — the latter hides the real-work session and makes 最終 session and
+  // 直近の判断 disagree. Freshness ("newest captured session", below) still uses
+  // pure recency, so the staleness signal stays honest.
+  const latestEntry = pickLatestSubstantiveEntry(liveEntries);
   // `label` is `z.string().optional()` in the session schema — a parsed session
   // is `string | undefined`, never `null`. So `?? null` only maps `undefined`,
   // and the formatter's `label !== null && label !== ""` is byte-identical to
@@ -419,10 +417,9 @@ function formatOrientationBody(
     lines.push("- 最終 session: (no live sessions)");
   }
   if (summary.latestDecision !== null) {
-    const decAge = relativeAgeJa(summary.latestDecision.occurredAt, now);
-    lines.push(
-      `- 直近の判断: ${summary.latestDecision.title} [${shortId(summary.latestDecision.decisionId)}] (${decAge})`,
-    );
+    const dec = summary.latestDecision;
+    const decAge = relativeAgeJa(dec.occurredAt, now);
+    lines.push(`- 直近の判断: ${dec.title} [${shortId(dec.decisionId)}] (${decAge})`);
     // Honesty over recency theater: this is the latest *recorded* decision, not
     // necessarily the latest decision. When captured activity continued well
     // past it, the operator's current direction may simply be unrecorded
@@ -432,13 +429,18 @@ function formatOrientationBody(
     // and does not assert that decisions were made in between, so it stays
     // honest whether the later activity is in the same session or another.
     const activityAt = summary.freshness.latestActivityAt;
-    if (
-      activityAt !== null &&
-      Date.parse(activityAt) - Date.parse(summary.latestDecision.occurredAt) >
-        DECISION_TRAILING_ACTIVITY_GAP_MS
-    ) {
+    if (activityAt !== null && isTrailingStale(activityAt, dec.occurredAt)) {
       lines.push(
         `  - 注: これは最後に「記録された」判断です。最終活動 (${relativeAgeJa(activityAt, now)}) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません。\`basou decision capture\` でこの session の判断を記録できます)。`,
+      );
+    }
+    // When the latest recorded decision comes from a DIFFERENT session than the
+    // representative latest session, the two "latest" pointers disagree. Say so,
+    // so a resume reader does not treat an older thread's decision as this
+    // session's direction (a linear-timeline cue, not a stale claim).
+    if (summary.latestSession !== null && dec.sessionId !== summary.latestSession.sessionId) {
+      lines.push(
+        `  - 注: この判断は最終 session とは別の session [${shortId(dec.sessionId)}] のものです。`,
       );
     }
     if (summary.decisionCount > 1) {
@@ -507,11 +509,7 @@ function formatOrientationBody(
     // well past when this resume hint was recorded, the work may have moved on,
     // so flag it rather than presenting a stale starting point as current.
     const activityAt = summary.freshness.latestActivityAt;
-    if (
-      activityAt !== null &&
-      Date.parse(activityAt) - Date.parse(summary.latestNote.occurredAt) >
-        DECISION_TRAILING_ACTIVITY_GAP_MS
-    ) {
+    if (activityAt !== null && isTrailingStale(activityAt, summary.latestNote.occurredAt)) {
       lines.push(
         `  - 注: この起点の記録後 (最終活動 ${relativeAgeJa(activityAt, now)}) も作業が続いています。再開点が古い可能性があります。`,
       );
@@ -523,9 +521,23 @@ function formatOrientationBody(
   // Fall back to the decision hint only when there is neither a recorded next
   // step nor a planned task — otherwise the section already says where to go.
   if (summary.latestNote === null && summary.plannedTasks.length === 0) {
-    lines.push("- (no planned tasks — direction is inferred from recent decisions)");
-    if (summary.latestDecision !== null) {
-      lines.push(`  - 直近の判断: ${summary.latestDecision.title}`);
+    const dec = summary.latestDecision;
+    if (dec === null) {
+      lines.push("- (no planned tasks or recorded next step yet)");
+    } else if (isTrailingStale(summary.freshness.latestActivityAt, dec.occurredAt)) {
+      // The misfire guard: do NOT present a STALE decision as direction. Activity
+      // continued well after it, so it may already be resolved/executed; an agent
+      // that treats it as the next task can re-attempt completed work. Ask for the
+      // continuation point instead, and demote the decision to a labelled
+      // reference rather than an instruction (aligns the forward section with the
+      // staleness warning already shown on the 直近の判断 line above).
+      lines.push(
+        "- (no planned tasks or recorded next step — 最終活動は直近の判断より後です。継続点をユーザに確認してください)",
+      );
+      lines.push(`  - 参考 (古い可能性・方針ではない): ${dec.title}`);
+    } else {
+      lines.push("- (no planned tasks — direction is inferred from recent decisions)");
+      lines.push(`  - 直近の判断: ${dec.title}`);
     }
   }
   lines.push("");
