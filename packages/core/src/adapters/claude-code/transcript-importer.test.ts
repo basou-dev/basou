@@ -184,6 +184,33 @@ describe("claudeTranscriptToImportPayload", () => {
     expect(payload.session.label).toMatch(/^claude-code \d{4}-\d{2}-\d{2}: \d+ command/);
   });
 
+  it("labels a day-spanning session with a start..end date range", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "user",
+        timestamp: "2026-05-10T22:00:00.000Z",
+        cwd: CWD,
+        sessionId: "abc-123",
+        message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      },
+      // Work continues past midnight; the last record dates the next day.
+      {
+        type: "assistant",
+        timestamp: "2026-05-11T01:00:00.000Z",
+        cwd: CWD,
+        message: {
+          content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }],
+        },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.session.started_at).toBe("2026-05-10T22:00:00.000Z");
+    expect(payload.session.ended_at).toBe("2026-05-11T01:00:00.000Z");
+    expect(payload.session.label).toBe("claude-code 2026-05-10..2026-05-11: 1 command, 0 files");
+  });
+
   it("returns null when no observable command / file action exists", () => {
     const records: ClaudeTranscriptRecord[] = [
       {

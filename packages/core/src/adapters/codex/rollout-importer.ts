@@ -11,6 +11,7 @@ import {
   TURN_INTERVALS_METHOD,
   unionDurationMs,
 } from "../../stats/active-time.js";
+import { sessionLabelDateSpan } from "../session-label.js";
 
 /**
  * The `source` string stamped on every event derived from an OpenAI Codex
@@ -221,8 +222,7 @@ export function codexRolloutToImportPayload(
   // deliberately excluded — the label is NOT path-sanitized downstream, so a
   // raw file path here would leak an operator-private prefix.
   const commandCount = derived.length;
-  const date = minTs.slice(0, 10);
-  const label = `codex ${date}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}`;
+  const label = `codex ${sessionLabelDateSpan(minTs, maxTs)}: ${commandCount} ${commandCount === 1 ? "command" : "commands"}`;
 
   // Resolve per-turn intervals + machine compute now that `minTs` is known.
   // A turn whose `task_started` is absent has its start reconstructed as
