@@ -6,15 +6,28 @@ export const GENERATED_START = "<!-- BASOU:GENERATED:START -->";
 /** Marker line that ends the auto-generated region. */
 export const GENERATED_END = "<!-- BASOU:GENERATED:END -->";
 
+/** Marker line that begins a managed protocol block in a foreign instruction file. */
+export const PROTOCOL_START = "<!-- BASOU:PROTOCOLS:START -->";
+/** Marker line that ends a managed protocol block. */
+export const PROTOCOL_END = "<!-- BASOU:PROTOCOLS:END -->";
+
+/** A start/end marker pair. Both lines are matched whole-line, exact. */
+export type Markers = { start: string; end: string };
+
+/** Default marker pair: the BASOU:GENERATED region used by handoff/decisions/orient. */
+const DEFAULT_MARKERS: Markers = { start: GENERATED_START, end: GENERATED_END };
+
 /**
  * Result of parsing a markdown body for the BASOU:GENERATED marker region.
  *
  * The spec mandates strict line-level matching (see
  * `docs/spec/generated-markdown.md#102-marker-convention`): a marker is
  * only recognized when an entire line is exactly the marker string.
- * Leading/trailing whitespace, comment compression, and BOM are treated as
- * legacy formats (`no_markers`) so that re-generation refuses to silently
- * overwrite a mismatched manual edit.
+ * Leading/trailing whitespace and comment compression are treated as legacy
+ * formats (`no_markers`) so that re-generation refuses to silently overwrite a
+ * mismatched manual edit. A leading UTF-8 BOM is the one exception: it is
+ * tolerated (stripped for matching, re-prepended on render) so a BOM-prefixed
+ * file round-trips instead of duplicating the block.
  */
 export type MarkerSection =
   | { kind: "ok"; before: string; generated: string; after: string }
@@ -68,21 +81,30 @@ export async function writeMarkdownFile(filePath: string, body: string): Promise
  * - `multiple_pairs`: more than one START or END line.
  * - `wrong_order`: END appears before START.
  *
- * Matching is strict: leading/trailing whitespace, BOM, and comment
- * compression (`<!--BASOU:...-->`) all bypass the marker and are treated
- * as legacy content.
+ * Matching is strict: leading/trailing whitespace and comment compression
+ * (`<!--BASOU:...-->`) bypass the marker and are treated as legacy content. A
+ * leading UTF-8 BOM is the exception: it is stripped before matching and
+ * re-prepended to `before`, so a marker on the first line of a BOM-prefixed
+ * file still matches and the file round-trips.
  */
-export function parseMarkers(content: string): MarkerSection {
+export function parseMarkers(content: string, markers: Markers = DEFAULT_MARKERS): MarkerSection {
+  // Tolerate a leading UTF-8 BOM: strip it for line matching and offset math,
+  // then re-prepend it to `before` so a BOM-prefixed file round-trips. Without
+  // this, a marker on line 0 of a BOM file would fail the exact-line compare
+  // and the block would be duplicated on the next render.
+  const bom = content.charCodeAt(0) === 0xfeff ? "\uFEFF" : "";
+  const body = bom === "" ? content : content.slice(1);
+
   // Split on either CRLF or LF so the line count is consistent regardless of
   // the file's line ending. The reconstruction step below slices the original
   // string by character offsets to preserve the actual line endings outside
   // the generated region.
-  const lines = content.split(/\r?\n/);
+  const lines = body.split(/\r?\n/);
   const startLines: number[] = [];
   const endLines: number[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i] === GENERATED_START) startLines.push(i);
-    else if (lines[i] === GENERATED_END) endLines.push(i);
+    if (lines[i] === markers.start) startLines.push(i);
+    else if (lines[i] === markers.end) endLines.push(i);
   }
   if (startLines.length === 0 && endLines.length === 0) return { kind: "no_markers" };
   if (startLines.length === 0) return { kind: "missing_start" };
@@ -92,23 +114,23 @@ export function parseMarkers(content: string): MarkerSection {
   const endLineIdx = endLines[0] as number;
   if (endLineIdx < startLineIdx) return { kind: "wrong_order" };
 
-  // Walk the original string to find byte offsets of the marker lines. This
-  // preserves CRLF vs LF in the surrounding text — splitting and re-joining
-  // would normalize the line endings.
-  const startOffset = lineStartOffset(content, startLineIdx);
-  const endLineStart = lineStartOffset(content, endLineIdx);
-  const startLineEnd = startOffset + GENERATED_START.length;
-  const endLineEnd = endLineStart + GENERATED_END.length;
+  // Walk the (BOM-stripped) string to find byte offsets of the marker lines.
+  // This preserves CRLF vs LF in the surrounding text — splitting and
+  // re-joining would normalize the line endings.
+  const startOffset = lineStartOffset(body, startLineIdx);
+  const endLineStart = lineStartOffset(body, endLineIdx);
+  const startLineEnd = startOffset + markers.start.length;
+  const endLineEnd = endLineStart + markers.end.length;
 
-  const before = content.slice(0, startOffset);
+  const before = bom + body.slice(0, startOffset);
   // The generated region is everything between the two marker lines,
-  // exclusive of the marker line themselves but including the newline after
+  // exclusive of the marker lines themselves but including the newline after
   // START and excluding the newline before END (so re-render can plug in
   // its own body without doubling separators).
-  const afterStartNewline = skipOneNewline(content, startLineEnd);
-  const beforeEndNewline = trimOneNewline(content, endLineStart);
-  const generated = content.slice(afterStartNewline, beforeEndNewline);
-  const after = content.slice(endLineEnd);
+  const afterStartNewline = skipOneNewline(body, startLineEnd);
+  const beforeEndNewline = trimOneNewline(body, endLineStart);
+  const generated = body.slice(afterStartNewline, beforeEndNewline);
+  const after = body.slice(endLineEnd);
   return { kind: "ok", before, generated, after };
 }
 
@@ -127,17 +149,49 @@ export function renderWithMarkers(
   existing: string | null,
   generated: string,
   fileLabel: string,
+  markers: Markers = DEFAULT_MARKERS,
 ): string {
   const normalized = generated.endsWith("\n") ? generated : `${generated}\n`;
   if (existing === null) {
-    return `${GENERATED_START}\n${normalized}${GENERATED_END}\n`;
+    return `${markers.start}\n${normalized}${markers.end}\n`;
   }
-  const section = parseMarkers(existing);
+  const section = parseMarkers(existing, markers);
   switch (section.kind) {
     case "ok":
-      return `${section.before}${GENERATED_START}\n${normalized}${GENERATED_END}${section.after}`;
+      return `${section.before}${markers.start}\n${normalized}${markers.end}${section.after}`;
     case "no_markers":
       throw new Error(`Markers missing in ${fileLabel}`);
+    case "missing_start":
+    case "missing_end":
+    case "multiple_pairs":
+    case "wrong_order":
+      throw new Error(`Markers mismatched in ${fileLabel}`);
+  }
+}
+
+/**
+ * Remove a marker region from `existing`, returning the body without the block.
+ *
+ * - `no_markers`: returns `existing` unchanged (nothing to remove).
+ * - `ok`: drops both marker lines and the generated region, collapsing the
+ *   single newline that terminated the END marker line so no stray blank line
+ *   is left behind.
+ * - any other parse result: throws a pathless error referencing `fileLabel`
+ *   (mismatched markers must not be silently rewritten).
+ */
+export function removeMarkerSection(
+  existing: string,
+  fileLabel: string,
+  markers: Markers = DEFAULT_MARKERS,
+): string {
+  const section = parseMarkers(existing, markers);
+  switch (section.kind) {
+    case "no_markers":
+      return existing;
+    case "ok": {
+      const after = section.after.replace(/^\r?\n/, "");
+      return section.before + after;
+    }
     case "missing_start":
     case "missing_end":
     case "multiple_pairs":
