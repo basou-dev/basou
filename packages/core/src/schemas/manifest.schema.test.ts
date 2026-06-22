@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ManifestSchema } from "./manifest.schema.js";
+import { ManifestSchema, unknownManifestKeys } from "./manifest.schema.js";
 
 const VALID_MANIFEST = {
   schema_version: "0.1.0",
@@ -245,5 +245,51 @@ describe("ManifestSchema", () => {
       };
       expect(ManifestSchema.safeParse(variant).success).toBe(false);
     }
+  });
+
+  it("preserves unknown fields at every level (loose, not strip) so they are not silently dropped", () => {
+    const withUnknown = {
+      ...VALID_MANIFEST,
+      signing: { key_id: "abc" }, // unknown top-level section (e.g. a newer version's)
+      workspace: { ...VALID_MANIFEST.workspace, future_meta: "keep-me" }, // unknown nested
+      adapters: { ...VALID_MANIFEST.adapters, codex: { enabled: false } }, // a future adapter
+    };
+    const parsed = ManifestSchema.parse(withUnknown);
+    expect((parsed as Record<string, unknown>).signing).toEqual({ key_id: "abc" });
+    expect((parsed.workspace as Record<string, unknown>).future_meta).toBe("keep-me");
+    expect((parsed.adapters as Record<string, unknown>).codex).toEqual({ enabled: false });
+    expect(parsed.workspace.name).toBe(VALID_MANIFEST.workspace.name); // known fields still typed/validated
+  });
+
+  it("still rejects known fields that violate their schema (loose does not weaken known-field validation)", () => {
+    // wrong literal value for a pinned field
+    expect(ManifestSchema.safeParse({ ...VALID_MANIFEST, basou_version: "9.9.9" }).success).toBe(
+      false,
+    );
+    // structurally wrong type: capabilities.enabled must be an array of strings, not a string
+    expect(
+      ManifestSchema.safeParse({ ...VALID_MANIFEST, capabilities: { enabled: "not-an-array" } })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe("unknownManifestKeys", () => {
+  it("lists the unrecognized top-level keys, sorted; empty when all are known", () => {
+    expect(unknownManifestKeys(ManifestSchema.parse(VALID_MANIFEST))).toEqual([]);
+    const withUnknown = ManifestSchema.parse({
+      ...VALID_MANIFEST,
+      zeta: 1,
+      signing: { key_id: "abc" },
+    });
+    expect(unknownManifestKeys(withUnknown)).toEqual(["signing", "zeta"]);
+  });
+
+  it("does not report a preserved nested unknown as a top-level key", () => {
+    const withNested = ManifestSchema.parse({
+      ...VALID_MANIFEST,
+      workspace: { ...VALID_MANIFEST.workspace, future_meta: "x" },
+    });
+    expect(unknownManifestKeys(withNested)).toEqual([]); // nested unknowns are preserved but not top-level
   });
 });

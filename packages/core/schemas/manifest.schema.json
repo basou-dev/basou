@@ -46,7 +46,8 @@
         "name",
         "created_at",
         "updated_at"
-      ]
+      ],
+      "additionalProperties": {}
     },
     "project": {
       "type": "object",
@@ -67,7 +68,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": {}
     },
     "capabilities": {
       "type": "object",
@@ -81,7 +83,8 @@
       },
       "required": [
         "enabled"
-      ]
+      ],
+      "additionalProperties": {}
     },
     "approval": {
       "type": "object",
@@ -104,7 +107,8 @@
       },
       "required": [
         "default_risk_level"
-      ]
+      ],
+      "additionalProperties": {}
     },
     "adapters": {
       "type": "object",
@@ -121,12 +125,14 @@
           },
           "required": [
             "enabled"
-          ]
+          ],
+          "additionalProperties": {}
         }
       },
       "required": [
         "claude-code"
-      ]
+      ],
+      "additionalProperties": {}
     },
     "git": {
       "type": "object",
@@ -139,7 +145,8 @@
             "commit"
           ]
         }
-      }
+      },
+      "additionalProperties": {}
     },
     "import": {
       "type": "object",
@@ -153,7 +160,8 @@
             "pattern": "^(?![~/\\\\])(?![A-Za-z]:)(?!\\s)[^\\0\\\\]*[^\\0\\\\\\s]$"
           }
         }
-      }
+      },
+      "additionalProperties": {}
     },
     "repos": {
       "minItems": 1,
@@ -213,13 +221,15 @@
               },
               "required": [
                 "kind"
-              ]
+              ],
+              "additionalProperties": {}
             }
           }
         },
         "required": [
           "path"
-        ]
+        ],
+        "additionalProperties": {}
       }
     }
   },
@@ -232,5 +242,6 @@
     "approval",
     "adapters",
     "git"
-  ]
+  ],
+  "additionalProperties": {}
 }

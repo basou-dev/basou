@@ -55,6 +55,7 @@ import {
   summarizeRosterDrift,
   summarizeSymlinkPlan,
   summarizeWiring,
+  unknownManifestKeys,
   type ViewRepoFact,
   type WiringSummary,
   type WorkspaceViewPlan,
@@ -88,6 +89,8 @@ export type ProjectSyncResult = SourceRootsReconcile & {
   hasRoster: boolean;
   /** Whether the manifest was written (i.e. `--apply` was set AND there was drift to reconcile). */
   applied: boolean;
+  /** Unknown top-level manifest fields the loose schema preserved (surfaced, never dropped). */
+  preservedUnknownFields: string[];
 };
 
 export type ProjectAdoptOptions = {
@@ -105,6 +108,8 @@ export type ProjectAdoptResult = RosterAdoptionPlan & {
   alreadyDeclared: boolean;
   /** Whether the manifest was written (i.e. `--apply` set, no existing roster, AND at least one repo found). */
   applied: boolean;
+  /** Unknown top-level manifest fields the loose schema preserved (surfaced, never dropped). */
+  preservedUnknownFields: string[];
 };
 
 export type ProjectWiringOptions = {
@@ -232,6 +237,8 @@ export type ProjectArchiveResult = ArchivePlan & {
   applied: boolean;
   /** Repo-side wiring still present (report-only; `--apply` never touches it). */
   teardown: ArchiveTeardown;
+  /** Unknown top-level manifest fields the loose schema preserved (surfaced, never dropped). */
+  preservedUnknownFields: string[];
 };
 
 export type ProjectRenameOptions = {
@@ -259,6 +266,8 @@ export type ProjectRenameResult = RenamePlan & {
   applied: boolean;
   /** Repo-side wiring still at the old basename (report-only; `--apply` never touches it). */
   wiring: RenameWiring;
+  /** Unknown top-level manifest fields the loose schema preserved (surfaced, never dropped). */
+  preservedUnknownFields: string[];
 };
 
 /**
@@ -451,6 +460,21 @@ function effectiveSourceRoots(manifest: Manifest): string[] {
   return manifest.import?.source_roots ?? ["."];
 }
 
+/**
+ * Header advisory lines naming the unknown top-level manifest fields the loose
+ * schema preserved (empty array => no lines). Surfaced by the read-modify-write
+ * commands so preservation is not silent: basou keeps a field it does not
+ * recognize (a newer version's section, a future adapter, a hand-added/typo'd
+ * key) rather than dropping it on write, and says so.
+ */
+function preservedUnknownLines(fields: string[]): string[] {
+  if (fields.length === 0) return [];
+  return [
+    `ℹ️ basou が認識しない manifest のトップレベルフィールドを ${fields.length} 件保持しています(write 時も削除しません): ${fields.join(", ")}`,
+    "",
+  ];
+}
+
 /** Pure runner: resolves the workspace, reads the manifest, computes the drift, prints it (or JSON). */
 export async function doRunProjectCheck(
   options: ProjectCheckOptions,
@@ -574,7 +598,12 @@ export async function doRunProjectSync(
     );
   }
 
-  const result: ProjectSyncResult = { ...reconcile, hasRoster, applied };
+  const result: ProjectSyncResult = {
+    ...reconcile,
+    hasRoster,
+    applied,
+    preservedUnknownFields: unknownManifestKeys(manifest),
+  };
 
   if (options.json === true) {
     console.log(JSON.stringify(result));
@@ -593,6 +622,7 @@ export function renderProjectSync(result: ProjectSyncResult): string {
   const lines: string[] = [];
   lines.push("# source_roots 同期(宣言ロースター → 捕捉設定)");
   lines.push("");
+  lines.push(...preservedUnknownLines(result.preservedUnknownFields));
 
   if (!result.hasRoster) {
     lines.push(
@@ -691,7 +721,12 @@ export async function doRunProjectAdopt(
     );
   }
 
-  const result: ProjectAdoptResult = { ...plan, alreadyDeclared, applied };
+  const result: ProjectAdoptResult = {
+    ...plan,
+    alreadyDeclared,
+    applied,
+    preservedUnknownFields: unknownManifestKeys(manifest),
+  };
 
   if (options.json === true) {
     console.log(JSON.stringify(result));
@@ -712,6 +747,7 @@ export function renderProjectAdopt(result: ProjectAdoptResult): string {
   const lines: string[] = [];
   lines.push("# repo ロースターの bootstrap(source_roots → repos)");
   lines.push("");
+  lines.push(...preservedUnknownLines(result.preservedUnknownFields));
 
   if (result.alreadyDeclared) {
     lines.push(
@@ -2327,10 +2363,10 @@ function omitKey<T extends object>(obj: T, key: keyof T): T {
 
 /**
  * Build the manifest to write after archiving. Spreads the original so every
- * KNOWN manifest field not handled here is preserved (preservation of any
- * unknown/future field is bounded by `readManifest`, which strips unknown keys
- * at parse time — the separate strict-vs-passthrough decision). It bumps
- * `updated_at`, removes the target from `repos` (dropping the key entirely when
+ * other manifest field is preserved — both KNOWN fields not handled here and any
+ * unknown/future field, which `readManifest`'s loose schema now carries through
+ * (at the top level and nested) and surfaces via {@link unknownManifestKeys}. It
+ * bumps `updated_at`, removes the target from `repos` (dropping the key entirely when
  * the roster empties, since `repos: []` is not a valid roster), and prunes the
  * target's `source_roots` entry (dropping `source_roots` — and an emptied
  * `import` block — rather than writing an invalid empty list).
@@ -2414,7 +2450,13 @@ export async function doRunProjectArchive(
     });
   }
 
-  const result: ProjectArchiveResult = { ...plan, hasRoster: roster.length > 0, applied, teardown };
+  const result: ProjectArchiveResult = {
+    ...plan,
+    hasRoster: roster.length > 0,
+    applied,
+    teardown,
+    preservedUnknownFields: unknownManifestKeys(manifest),
+  };
 
   if (options.json === true) {
     console.log(JSON.stringify(result));
@@ -2436,6 +2478,7 @@ export function renderProjectArchive(result: ProjectArchiveResult): string {
   const lines: string[] = [];
   lines.push("# repo の archive(roster から畳む)");
   lines.push("");
+  lines.push(...preservedUnknownLines(result.preservedUnknownFields));
 
   if (!result.hasRoster) {
     lines.push("ℹ️ repo ロースターが未宣言です(manifest の `repos`)。archive 対象がありません。");
@@ -2628,7 +2671,13 @@ export async function doRunProjectRename(
     });
   }
 
-  const result: ProjectRenameResult = { ...plan, hasRoster: roster.length > 0, applied, wiring };
+  const result: ProjectRenameResult = {
+    ...plan,
+    hasRoster: roster.length > 0,
+    applied,
+    wiring,
+    preservedUnknownFields: unknownManifestKeys(manifest),
+  };
 
   if (options.json === true) {
     console.log(JSON.stringify(result));
@@ -2648,6 +2697,7 @@ export function renderProjectRename(result: ProjectRenameResult): string {
   const lines: string[] = [];
   lines.push("# repo の rename(roster のパス更新)");
   lines.push("");
+  lines.push(...preservedUnknownLines(result.preservedUnknownFields));
 
   if (!result.hasRoster) {
     lines.push("ℹ️ repo ロースターが未宣言です(manifest の `repos`)。rename 対象がありません。");
