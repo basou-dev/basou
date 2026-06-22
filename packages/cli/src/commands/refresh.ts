@@ -298,7 +298,7 @@ function describeImport(outcome: ImportOutcome): string {
   return `${outcome.adapter}: ${verb} ${parts.join(", ")}`;
 }
 
-function printRefreshSummary(result: RefreshResult): void {
+export function printRefreshSummary(result: RefreshResult): void {
   console.log(describeImport(result.claudeCode));
   console.log(describeImport(result.codex));
   if (result.handoff.status === "generated") {
@@ -309,7 +309,21 @@ function printRefreshSummary(result: RefreshResult): void {
     console.log(`handoff: skipped (${result.handoff.reason})`);
   }
   if (result.decisions.status === "generated") {
-    console.log(`decisions: regenerated (${result.decisions.decisionCount})`);
+    if (result.decisions.decisionCount === 0) {
+      // "regenerated (0)" read as success while the decision provenance was in
+      // fact empty. State the count plainly, and when there IS captured work but
+      // no decisions, point at the manual path: decisions come from a structured
+      // signal (a Claude Code approval question) that codex sessions do not carry,
+      // so a commands-only capture leaves decisions at 0 unless recorded by hand.
+      const hasWork = result.handoff.status === "generated" && result.handoff.sessionCount > 0;
+      console.log(
+        hasWork
+          ? "decisions: 0 件(意思決定は自動取得されていません。`basou decision` で手で記録できます)"
+          : "decisions: 0 件",
+      );
+    } else {
+      console.log(`decisions: regenerated (${result.decisions.decisionCount})`);
+    }
   } else {
     console.log(`decisions: skipped (${result.decisions.reason})`);
   }
