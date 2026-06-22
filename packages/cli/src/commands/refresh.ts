@@ -298,7 +298,7 @@ function describeImport(outcome: ImportOutcome): string {
   return `${outcome.adapter}: ${verb} ${parts.join(", ")}`;
 }
 
-function printRefreshSummary(result: RefreshResult): void {
+export function printRefreshSummary(result: RefreshResult): void {
   console.log(describeImport(result.claudeCode));
   console.log(describeImport(result.codex));
   if (result.handoff.status === "generated") {
@@ -309,7 +309,22 @@ function printRefreshSummary(result: RefreshResult): void {
     console.log(`handoff: skipped (${result.handoff.reason})`);
   }
   if (result.decisions.status === "generated") {
-    console.log(`decisions: regenerated (${result.decisions.decisionCount})`);
+    if (result.decisions.decisionCount === 0) {
+      // "regenerated (0)" read as success while the decision provenance was in
+      // fact empty. State the count plainly, and when there are captured sessions
+      // but no decisions, point at the manual path. Wording is cause-neutral and
+      // adapter-blind on purpose (we only know the aggregate session count here):
+      // "none auto-recorded" is true whether codex carries no approval-question
+      // signal to derive from, or a Claude Code run simply made no decisions.
+      const hasSessions = result.handoff.status === "generated" && result.handoff.sessionCount > 0;
+      console.log(
+        hasSessions
+          ? "decisions: 0 (none auto-recorded from these sessions; record any made with 'basou decision record')"
+          : "decisions: 0",
+      );
+    } else {
+      console.log(`decisions: regenerated (${result.decisions.decisionCount})`);
+    }
   } else {
     console.log(`decisions: skipped (${result.decisions.reason})`);
   }

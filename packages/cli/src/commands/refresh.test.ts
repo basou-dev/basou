@@ -14,11 +14,13 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RefreshResult } from "../lib/provenance-actions.js";
 import {
   doRunRefresh,
   doRunRefreshPortfolio,
   doRunRefreshWatch,
   parseInterval,
+  printRefreshSummary,
   runRefresh,
 } from "./refresh.js";
 
@@ -409,5 +411,72 @@ describe("basou refresh (workspace view)", () => {
     } finally {
       await rm(view, { recursive: true, force: true });
     }
+  });
+});
+
+describe("printRefreshSummary (decisions line)", () => {
+  const baseResult = (over: Partial<RefreshResult>): RefreshResult => ({
+    claudeCode: { adapter: "claude-code", status: "skipped", reason: "no source logs" },
+    codex: { adapter: "codex", status: "skipped", reason: "no source logs" },
+    handoff: {
+      status: "generated",
+      sessionCount: 5,
+      taskCount: 0,
+      decisionCount: 0,
+      pendingApprovalsCount: 0,
+    },
+    decisions: { status: "generated", decisionCount: 0 },
+    orientation: {
+      status: "generated",
+      sessionCount: 5,
+      inFlightTaskCount: 0,
+      pendingApprovalsCount: 0,
+      suspectCount: 0,
+    },
+    dryRun: false,
+    ...over,
+  });
+
+  function capture(result: RefreshResult): string {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      lines.push(String(m));
+    });
+    try {
+      printRefreshSummary(result);
+    } finally {
+      spy.mockRestore();
+    }
+    return lines.join("\n");
+  }
+
+  it("0 decisions WITH captured sessions: states the count and nudges the runnable command (not 'regenerated (0)')", () => {
+    const out = capture(baseResult({ decisions: { status: "generated", decisionCount: 0 } }));
+    expect(out).toContain("decisions: 0");
+    expect(out).toContain("basou decision record"); // the actual runnable command, not the bare group
+    expect(out).not.toContain("regenerated (0)"); // the misleading success-looking wording is gone
+  });
+
+  it("0 decisions with NO captured sessions (empty workspace): states the count without nagging", () => {
+    const out = capture(
+      baseResult({
+        handoff: {
+          status: "generated",
+          sessionCount: 0,
+          taskCount: 0,
+          decisionCount: 0,
+          pendingApprovalsCount: 0,
+        },
+        decisions: { status: "generated", decisionCount: 0 },
+      }),
+    );
+    expect(out).toContain("decisions: 0");
+    expect(out).not.toContain("basou decision");
+  });
+
+  it("non-zero decisions: reports the regenerated count as before", () => {
+    const out = capture(baseResult({ decisions: { status: "generated", decisionCount: 3 } }));
+    expect(out).toContain("decisions: regenerated (3)");
+    expect(out).not.toContain("basou decision");
   });
 });
