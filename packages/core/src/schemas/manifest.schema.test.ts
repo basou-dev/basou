@@ -261,9 +261,16 @@ describe("ManifestSchema", () => {
     expect(parsed.workspace.name).toBe(VALID_MANIFEST.workspace.name); // known fields still typed/validated
   });
 
-  it("still rejects a known field of the wrong type (loose does not weaken known-field validation)", () => {
-    const bad = { ...VALID_MANIFEST, basou_version: "9.9.9" };
-    expect(ManifestSchema.safeParse(bad).success).toBe(false);
+  it("still rejects known fields that violate their schema (loose does not weaken known-field validation)", () => {
+    // wrong literal value for a pinned field
+    expect(ManifestSchema.safeParse({ ...VALID_MANIFEST, basou_version: "9.9.9" }).success).toBe(
+      false,
+    );
+    // structurally wrong type: capabilities.enabled must be an array of strings, not a string
+    expect(
+      ManifestSchema.safeParse({ ...VALID_MANIFEST, capabilities: { enabled: "not-an-array" } })
+        .success,
+    ).toBe(false);
   });
 });
 
