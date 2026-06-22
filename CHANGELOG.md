@@ -3,6 +3,64 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.13.0 — 2026-06-22
+
+### Added
+
+- `basou review-gaps` — a read-only check that surfaces commits with no bound
+  cross-model review, so a declared "review before commit" protocol can be seen
+  to hold rather than silently eroding. Review-gap repos are bound by `realpath`
+  (not a workspace-view directory name) and require a git repo root, so a
+  worktree / view does not mis-bind or false-clear.
+- `basou project` — a declarative workspace toolkit. The project is a list of
+  repos and each repo's `source` (visibility / language); symlinks, source
+  roots, views, and `.gitignore` lines are derived from that manifest rather
+  than hand-maintained. Subcommands (read-only inspectors first, generators
+  behind `--apply` with a dry-run default): `check` (declared roster vs
+  `source_roots` drift), `sync` (reconcile `source_roots` to the roster),
+  `adopt` (bootstrap the roster from existing `source_roots`), `wiring`
+  (inspect agent instruction-file wiring), `gitignore` (exclude instruction
+  files in public repos), `symlinks` (generate instruction-file symlinks),
+  `workspace` (generate the workspace view; `--prune` removes stray view
+  symlinks), `preset` (generate the canonical instruction-file preset block),
+  `archive` (fold a repo out of the roster), and `rename` (re-path a repo).
+- `basou note "<text>"` — record a free-text next step. It creates an ad-hoc
+  session by default (so it works even though imported sessions are not
+  attachable); `--session` attaches to an existing attachable session. The
+  `note_added` event gains an optional `kind`; `basou note` sets
+  `kind: "next_step"` to mark a deliberate resume hint, and orientation surfaces
+  only the latest such note as the recorded starting point — a plain
+  `basou session note` annotation is never mislabeled as the next step.
+
+### Changed
+
+- `basou orient` now anchors the latest decision to captured activity: the
+  decision line carries its relative age, and a note is appended when captured
+  activity continued past the latest recorded decision, so a mid-session
+  decision is not presented as the current direction. The forward section
+  surfaces the latest recorded next-step note ahead of planned tasks (with the
+  same staleness caveat). `OrientationSummary.freshness` gains `latestActivityAt`.
+- Session labels for a session that spans a day boundary render as a
+  `start..end` date range instead of only the start day, so late-finishing work
+  is not buried under the older date.
+- `basou session` commands resolve the repository with the workspace-view
+  fallback (matching `orient` / `refresh`), so they no longer fail with "Not a
+  git repository" when run from a git-untracked view directory.
+- `basou refresh` surfaces a decisions=0 gap when there is captured work and
+  nudges recording decisions manually, instead of printing a success-looking
+  `regenerated (0)`.
+- The manifest parser preserves unknown top-level fields (a loose schema) and
+  surfaces them on read/write commands, so a field written by a newer basou is
+  not silently dropped.
+- Project commands share one lexical relative-path normalizer.
+
+### Fixed
+
+- `basou orient`'s freshness verdict no longer over-claims completeness: it
+  states exactly what it checks (uncaptured native sessions + suspect sessions)
+  and notes what it does not detect (plan/impl drift, unrecorded decisions),
+  rather than implying a clean bill of health.
+
 ## 0.12.0 — 2026-06-20
 
 ### Added
