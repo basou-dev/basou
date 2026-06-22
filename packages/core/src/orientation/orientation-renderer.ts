@@ -51,6 +51,18 @@ export type OrientationRendererResult = {
   decisionCount: number;
 };
 
+/**
+ * A latest-recorded decision is "trailing" when captured activity continued for
+ * more than this gap after it. Decisions are recorded only from AskUserQuestion
+ * tool calls or an explicit `basou decision record` — conversational approvals
+ * are not auto-captured — so a long trailing gap means the operator's current
+ * direction may simply be unrecorded. Orientation surfaces that rather than
+ * letting a mid-session decision pose as the current direction. 1h ≈ "a
+ * meaningful stretch of work happened since"; a deliberately conservative
+ * threshold so a decision made near a session's end does not trigger the note.
+ */
+const DECISION_TRAILING_ACTIVITY_GAP_MS = 60 * 60 * 1000;
+
 type DecisionRecord = { decisionId: string; title: string; occurredAt: string };
 
 type PendingApproval = {
@@ -105,6 +117,14 @@ export type OrientationSummary = {
     newestStartedAt: string | null;
     /** source.kind of the newest non-archived session, or null when none captured. */
     newestSource: string | null;
+    /**
+     * Tail of captured activity over non-archived sessions = max of each
+     * session's boundary (`ended_at` ?? `started_at`) and every captured event's
+     * `occurred_at`. Folding event times covers a live session whose `ended_at`
+     * is not yet written. Used to flag a latest-recorded decision that trails
+     * real activity; null when no non-archived sessions exist.
+     */
+    latestActivityAt: string | null;
     /** Session counts per source kind, sorted by kind. Counts only — never volume/time. */
     bySource: SourceCount[];
     /** manifest `import.source_roots`, or null when single-root / unreadable. */
@@ -133,10 +153,32 @@ export async function summarizeOrientation(
   if (input.onWarning !== undefined) loadOpts.onWarning = input.onWarning;
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
-  // Decisions: replay `decision_recorded` across every session (chronological).
+  // One replay pass per session yields two facts:
+  //  - `decisions`: chronological `decision_recorded` across ALL sessions.
+  //  - `latestActivityAt`: the tail of captured activity over NON-archived
+  //    sessions = max of the session boundary (ended_at ?? started_at) AND every
+  //    event's occurred_at. Folding event times (not just ended_at) is what makes
+  //    the trailing-decision note fire for a LIVE session: a running session has
+  //    no ended_at yet, but its post-decision events (more commands, notes, task
+  //    attaches via `decision record --session`) are already captured. Without
+  //    this, a mid-session decision in an ongoing long session — the exact case
+  //    the note targets — would be silently treated as current (a false-clear).
+  //    The population is intentionally asymmetric: decisions span archived
+  //    sessions (a past decision still answers "what did I last decide"), while
+  //    the activity tail is non-archived only (it answers "is there newer work").
   const decisions: DecisionRecord[] = [];
+  let latestActivityAt: string | null = null;
+  const noteActivity = (iso: string): void => {
+    if (latestActivityAt === null || Date.parse(iso) > Date.parse(latestActivityAt)) {
+      latestActivityAt = iso;
+    }
+  };
   for (const entry of entries) {
     const sessionDir = join(input.paths.sessions, entry.sessionId);
+    const counted = entry.session.session.status !== "archived";
+    // Seed with the session boundary so a session whose events are empty or
+    // unreadable still contributes its known activity window.
+    if (counted) noteActivity(entry.session.session.ended_at ?? entry.session.session.started_at);
     try {
       for await (const ev of replayEvents(sessionDir, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
@@ -148,6 +190,7 @@ export async function summarizeOrientation(
             occurredAt: ev.occurred_at,
           });
         }
+        if (counted) noteActivity(ev.occurred_at);
       }
     } catch {
       input.onSessionSkip?.(entry.sessionId, "events_jsonl_unreadable");
@@ -274,6 +317,7 @@ export async function summarizeOrientation(
     freshness: {
       newestStartedAt: newest?.session.session.started_at ?? null,
       newestSource: newest?.session.session.source.kind ?? null,
+      latestActivityAt,
       bySource,
       sourceRoots,
     },
@@ -352,9 +396,28 @@ function formatOrientationBody(
     lines.push("- 最終 session: (no live sessions)");
   }
   if (summary.latestDecision !== null) {
+    const decAge = relativeAgeJa(summary.latestDecision.occurredAt, now);
     lines.push(
-      `- 直近の判断: ${summary.latestDecision.title} [${shortId(summary.latestDecision.decisionId)}]`,
+      `- 直近の判断: ${summary.latestDecision.title} [${shortId(summary.latestDecision.decisionId)}] (${decAge})`,
     );
+    // Honesty over recency theater: this is the latest *recorded* decision, not
+    // necessarily the latest decision. When captured activity continued well
+    // past it, the operator's current direction may simply be unrecorded
+    // (conversational decisions are not auto-captured), so note the gap rather
+    // than presenting a stale decision as the current direction. The wording
+    // states only what is certain — the decision predates the latest activity —
+    // and does not assert that decisions were made in between, so it stays
+    // honest whether the later activity is in the same session or another.
+    const activityAt = summary.freshness.latestActivityAt;
+    if (
+      activityAt !== null &&
+      Date.parse(activityAt) - Date.parse(summary.latestDecision.occurredAt) >
+        DECISION_TRAILING_ACTIVITY_GAP_MS
+    ) {
+      lines.push(
+        `  - 注: これは最後に「記録された」判断です。最終活動 (${relativeAgeJa(activityAt, now)}) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません)。`,
+      );
+    }
     if (summary.decisionCount > 1) {
       lines.push(`  - ${summary.decisionCount} decisions total — see decisions.md`);
     }
@@ -436,6 +499,11 @@ function formatOrientationBody(
       lines.push(`- newest captured session: ${summary.freshness.newestStartedAt} (${newestRel})`);
     } else {
       lines.push("- newest captured session: (no sessions captured yet)");
+    }
+    if (summary.freshness.latestActivityAt !== null) {
+      lines.push(
+        `- latest activity: ${summary.freshness.latestActivityAt} (${relativeAge(summary.freshness.latestActivityAt, now)})`,
+      );
     }
     const sourceBreakdown = summary.freshness.bySource
       .map(({ kind, count }) => `${kind} ${count}`)

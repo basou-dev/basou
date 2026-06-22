@@ -44,6 +44,7 @@ async function placeSession(
     id: string;
     status?: string;
     startedAt?: string;
+    endedAt?: string;
     source?: string;
     label?: string;
     relatedFiles?: string[];
@@ -61,6 +62,7 @@ async function placeSession(
       workspace_id: FIXED_WS_ID,
       source: { kind: fixture.source ?? "terminal", version: "0.1.0" },
       started_at: fixture.startedAt ?? "2026-05-08T11:00:00+09:00",
+      ...(fixture.endedAt !== undefined ? { ended_at: fixture.endedAt } : {}),
       status: fixture.status ?? "completed",
       working_directory: "/tmp/fixture",
       invocation: { command: "echo", args: [], exit_code: 0 },
@@ -465,10 +467,11 @@ describe("orientation-renderer", () => {
         status: "completed",
         source: "claude-code-import",
         startedAt: FIXED_NOW_ISO,
+        endedAt: FIXED_NOW_ISO,
         relatedFiles: ["src/d.ts", "src/c.ts", "src/b.ts", "src/a.ts"],
       },
       decisionLine(live, "E01", DEC("D01"), "earlier decision", "2026-05-08T12:00:00+09:00") +
-        decisionLine(live, "E02", DEC("D02"), "wire portfolio API", "2026-05-08T13:00:00+09:00"),
+        decisionLine(live, "E02", DEC("D02"), "wire portfolio API", "2026-05-09T11:30:00+09:00"),
     );
     await placeSession(paths, {
       id: SES("S02"),
@@ -508,7 +511,7 @@ describe("orientation-renderer", () => {
         "## 今どこにいる",
         "",
         "- 最終 session: fixture S01 (completed) [ses_01HXABCDEF]",
-        "- 直近の判断: wire portfolio API [decision_01HXABCDEF]",
+        "- 直近の判断: wire portfolio API [decision_01HXABCDEF] (30分前)",
         "  - 2 decisions total — see decisions.md",
         "- 直近の変更ファイル: src/a.ts, src/b.ts (... +2 more)",
         "",
@@ -554,6 +557,7 @@ describe("summarizeOrientation", () => {
     expect(summary.freshness).toEqual({
       newestStartedAt: null,
       newestSource: null,
+      latestActivityAt: null,
       bySource: [],
       sourceRoots: null,
     });
@@ -627,6 +631,104 @@ describe("summarizeOrientation", () => {
     expect(summary.freshness.newestStartedAt).toBe("2026-05-08T11:00:00+09:00");
     expect(summary.freshness.newestSource).toBe("claude-code-import");
     expect(summary.freshness.bySource).toEqual([{ kind: "claude-code-import", count: 1 }]);
+    // No ended_at; the activity tail folds in the decision event's occurred_at
+    // (12:00) which is later than started_at (11:00).
+    expect(summary.freshness.latestActivityAt).toBe("2026-05-08T12:00:00+09:00");
+  });
+
+  it("flags a latest decision that trails real activity (recency honesty)", async () => {
+    const paths = await setupPaths();
+    const id = SES("S01");
+    // 10h session: lone decision near the start, activity continues for hours.
+    await placeSession(
+      paths,
+      {
+        id,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T10:00:00+09:00",
+        endedAt: "2026-05-08T20:00:00+09:00",
+      },
+      decisionLine(id, "E01", DEC("D01"), "push wordpress-v0.1.1 tag", "2026-05-08T11:00:00+09:00"),
+    );
+
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.freshness.latestActivityAt).toBe("2026-05-08T20:00:00+09:00");
+
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    // The decision still shows, now carrying its (stale) age...
+    expect(result.body).toContain("直近の判断: push wordpress-v0.1.1 tag");
+    // ...and the full note, including the interpolated activity age (ended
+    // 2026-05-08T20:00+09 = 11:00Z; now 2026-05-09T03:00Z → 16時間前), so the
+    // stale decision does not masquerade as the current direction.
+    expect(result.body).toContain(
+      "注: これは最後に「記録された」判断です。最終活動 (16時間前) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません)。",
+    );
+  });
+
+  it("does not flag a decision made near the end of activity (no false note)", async () => {
+    const paths = await setupPaths();
+    const id = SES("S01");
+    // Decision 30m before the session's last activity → within the gap.
+    await placeSession(
+      paths,
+      {
+        id,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T10:00:00+09:00",
+        endedAt: "2026-05-08T20:00:00+09:00",
+      },
+      decisionLine(id, "E01", DEC("D01"), "adopt lockstep release", "2026-05-08T19:30:00+09:00"),
+    );
+
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("直近の判断: adopt lockstep release");
+    expect(result.body).not.toContain("注: これは最後に「記録された」判断です。");
+  });
+
+  it("flags a trailing decision when the later activity is in another session", async () => {
+    const paths = await setupPaths();
+    const a = SES("S01");
+    // Session A: a single mid-morning decision, then it ends.
+    await placeSession(
+      paths,
+      {
+        id: a,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T10:00:00+09:00",
+        endedAt: "2026-05-08T11:00:00+09:00",
+      },
+      decisionLine(
+        a,
+        "E01",
+        DEC("D01"),
+        "adopt orientation re-centering",
+        "2026-05-08T10:30:00+09:00",
+      ),
+    );
+    // Session B: later work, no decision recorded — its end is the activity tail.
+    await placeSession(paths, {
+      id: SES("S02"),
+      status: "completed",
+      source: "codex-import",
+      startedAt: "2026-05-08T18:00:00+09:00",
+      endedAt: "2026-05-08T22:00:00+09:00",
+    });
+
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    // The activity tail is session B's end, not the decision's own session —
+    // latestActivityAt is the max over all non-archived sessions.
+    expect(summary.freshness.latestActivityAt).toBe("2026-05-08T22:00:00+09:00");
+
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("直近の判断: adopt orientation re-centering");
+    // Firing across sessions is intentional: the recorded decision predates the
+    // most recent captured work regardless of which session that work lives in.
+    expect(result.body).toContain(
+      "注: これは最後に「記録された」判断です。最終活動 (14時間前) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません)。",
+    );
   });
 
   it("carries no work-stats / surveillance fields (positioning guard)", async () => {
