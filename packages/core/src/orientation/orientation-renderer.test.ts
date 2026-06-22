@@ -462,7 +462,7 @@ describe("orientation-renderer", () => {
         "",
         "## どこへ向かう",
         "",
-        "- (no planned tasks — direction is inferred from recent decisions)",
+        "- (no planned tasks or recorded next step yet)",
         "",
         "## これは最新か",
         "",
@@ -632,6 +632,7 @@ describe("summarizeOrientation", () => {
       decisionId: DEC("D01"),
       title: "adopt orientation re-centering",
       occurredAt: "2026-05-08T12:00:00+09:00",
+      sessionId: live,
     });
     expect(summary.decisionCount).toBe(1);
     expect(summary.relatedFiles).toEqual({ displayed: ["src/a.ts", "src/b.ts"], overflow: 0 });
@@ -901,5 +902,125 @@ describe("summarizeOrientation", () => {
     ]) {
       expect(serialized).not.toContain(banned);
     }
+  });
+});
+
+// Resume coherence (HypArt triage): orient must not present a stale decision as
+// direction (F-A), must represent 最終 session with a substantive session (F-B),
+// and must flag when the latest decision is from a different session (F-C).
+// NOTE: SES/EVT/DEC suffixes must be exactly 3 Crockford chars (no I/L/O/U) so
+// the synthesized ids pass ULID validation.
+describe("renderOrientation (resume coherence)", () => {
+  it("F-A: a stale latest decision is NOT presented as direction in the forward section", async () => {
+    const paths = await setupPaths();
+    const s = SES("FA1");
+    // decision at 12:00, activity continues to 14:00 (2h later) -> stale
+    await placeSession(
+      paths,
+      {
+        id: s,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T11:00:00Z",
+        endedAt: "2026-05-08T14:00:00Z",
+        relatedFiles: ["src/x.ts"],
+      },
+      decisionLine(s, "FA1", DEC("FA1"), "apply migration 0014-0018?", "2026-05-08T12:00:00Z"),
+    );
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("継続点をユーザに確認してください");
+    expect(body).toContain("参考 (古い可能性");
+    expect(body).not.toContain("direction is inferred from recent decisions");
+  });
+
+  it("F-A: a fresh latest decision IS shown as inferred direction", async () => {
+    const paths = await setupPaths();
+    const s = SES("FA2");
+    // decision at 12:00, activity ends 12:30 (within 1h) -> not stale
+    await placeSession(
+      paths,
+      {
+        id: s,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T11:00:00Z",
+        endedAt: "2026-05-08T12:30:00Z",
+        relatedFiles: ["src/x.ts"],
+      },
+      decisionLine(s, "FA2", DEC("FA2"), "use pnpm", "2026-05-08T12:00:00Z"),
+    );
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("direction is inferred from recent decisions");
+    expect(body).toContain("直近の判断: use pnpm");
+    expect(body).not.toContain("継続点をユーザに確認してください");
+  });
+
+  it("F-B: 最終 session is the substantive session, not a newer empty resume session", async () => {
+    const paths = await setupPaths();
+    const work = SES("WRK");
+    const resume = SES("RSM");
+    await placeSession(paths, {
+      id: work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T09:00:00Z",
+      relatedFiles: ["src/a.ts", "src/b.ts"],
+      label: "real work",
+    });
+    // newer, but a bare resume (0 files) — must NOT win
+    await placeSession(paths, {
+      id: resume,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T11:00:00Z",
+      relatedFiles: [],
+      label: "resume",
+    });
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.latestSession?.sessionId).toBe(work);
+  });
+
+  it("F-C: flags when the latest decision is from a different session than 最終 session", async () => {
+    const paths = await setupPaths();
+    const work = SES("WK2"); // substantive + newest -> 最終 session
+    const older = SES("PR2"); // prior session that holds the decision
+    await placeSession(paths, {
+      id: work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T13:00:00Z",
+      relatedFiles: ["src/a.ts"],
+    });
+    await placeSession(
+      paths,
+      {
+        id: older,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T09:00:00Z",
+        relatedFiles: [],
+      },
+      decisionLine(older, "PE2", DEC("DC2"), "an older decision", "2026-05-08T09:30:00Z"),
+    );
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("この判断は最終 session とは別の session");
+  });
+
+  it("F-C: does NOT flag when the latest decision is in 最終 session", async () => {
+    const paths = await setupPaths();
+    const s = SES("SAM");
+    await placeSession(
+      paths,
+      {
+        id: s,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T13:00:00Z",
+        relatedFiles: ["src/a.ts"],
+      },
+      decisionLine(s, "SE3", DEC("DC3"), "same-session decision", "2026-05-08T13:10:00Z"),
+    );
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).not.toContain("別の session");
   });
 });

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { enumerateApprovals } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
+import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import {
   loadSessionEntries,
@@ -112,12 +113,25 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   const decisions: DecisionRecord[] = [];
   const tasksCreated: TaskCreatedRecord[] = [];
   const tasksStatusChanged: TaskStatusChangedRecord[] = [];
+  // Activity tail over NON-archived sessions = max of the session boundary
+  // (ended_at ?? started_at) AND every event's occurred_at. Mirrors the
+  // orientation renderer so the 直近の判断 staleness note fires identically (a
+  // decision that real work continued past is not presented as current).
+  let latestActivityAt: string | null = null;
+  const noteActivity = (iso: string): void => {
+    if (latestActivityAt === null || Date.parse(iso) > Date.parse(latestActivityAt)) {
+      latestActivityAt = iso;
+    }
+  };
   for (const entry of entries) {
     const sessionDir = join(input.paths.sessions, entry.sessionId);
+    const counted = entry.session.session.status !== "archived";
+    if (counted) noteActivity(entry.session.session.ended_at ?? entry.session.session.started_at);
     try {
       for await (const ev of replayEvents(sessionDir, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
+        if (counted) noteActivity(ev.occurred_at);
         if (ev.type === "decision_recorded") {
           decisions.push({
             decisionId: ev.decision_id,
@@ -198,16 +212,19 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   const liveEntries = entries.filter(
     (e) => e.session.session.status !== "archived" && e.session.session.source.kind !== "import",
   );
-  const latestSession = [...liveEntries].sort(
-    (a, b) => Date.parse(b.session.session.started_at) - Date.parse(a.session.session.started_at),
-  )[0];
+  // Represent 最終 session with the most recent SUBSTANTIVE session, not a bare
+  // resume/refresh session (e.g. 1 command, 0 files) that merely happens to be
+  // newest — the latter hides the real-work session and disagrees with 直近の判断.
+  const latestSession = pickLatestSubstantiveEntry(liveEntries);
 
-  // 「直近の変更ファイル」 shows the files touched by the single most recent
+  // 「直近の変更ファイル」 shows the files touched by the most recent SUBSTANTIVE
   // session — the same session surfaced as 最終 session above — so the section
-  // reflects the latest activity rather than the whole history. Unioning every
-  // session's related_files turned this into a whole-history dump once
-  // transcript imports became the primary source, since each import carries a
-  // full day of file changes.
+  // reflects the latest real activity rather than the whole history. (A bare
+  // resume session has no related_files anyway, so following 最終 session here
+  // shows the substantive work's files instead of an empty list.) Unioning every
+  // session's related_files turned this into a whole-history dump once transcript
+  // imports became the primary source, since each import carries a full day of
+  // file changes.
   const latestFiles = latestSession?.session.session.related_files ?? [];
   const sortedFiles = [...new Set(latestFiles)].sort();
   const displayedFiles = sortedFiles.slice(0, limit);
@@ -227,6 +244,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     sessionRange,
     sessionCount: entries.length,
     latestSession,
+    latestActivityAt,
     decisions,
     pendingApprovalsCount,
     suspectCount,
@@ -255,6 +273,7 @@ function formatHandoffBody(args: {
   sessionRange: string;
   sessionCount: number;
   latestSession: SessionEntry | undefined;
+  latestActivityAt: string | null;
   decisions: ReadonlyArray<DecisionRecord>;
   pendingApprovalsCount: number;
   suspectCount: number;
@@ -342,6 +361,22 @@ function formatHandoffBody(args: {
     // Lead with the decision title; the raw id is demoted to a trailing
     // [short id].
     lines.push(`- ${last.title} [${shortIdWithPrefix(last.decisionId)}]`);
+    // Staleness caveat (mirrors orientation): when real work continued well past
+    // this decision, it may already be resolved/executed — do not let a resume
+    // treat it as the current next step. handoff had no such note before, so a
+    // stale recorded decision posed unguarded as "直近の判断".
+    if (args.latestActivityAt !== null && isTrailingStale(args.latestActivityAt, last.occurredAt)) {
+      lines.push(
+        "  - 注: 最終活動はこの判断より後です。会話で既に解決済みの可能性があるため、再開前に継続点を確認してください(会話での意思決定は自動記録されません。`basou decision capture` で記録できます)。",
+      );
+    }
+    // When the latest decision is from a DIFFERENT session than 最終 session, the
+    // two "latest" pointers disagree; surface it so the timeline is unambiguous.
+    if (args.latestSession !== undefined && last.sessionId !== args.latestSession.sessionId) {
+      lines.push(
+        `  - 注: この判断は最終 session とは別の session [${shortIdWithPrefix(last.sessionId)}] のものです。`,
+      );
+    }
     lines.push("");
     lines.push(`(${args.decisions.length} decisions total — see decisions.md)`);
   }

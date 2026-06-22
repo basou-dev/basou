@@ -64,7 +64,13 @@ type SessionFixture = {
     | "archived";
   startedAt?: string;
   endedAt?: string;
-  source?: "claude-code-adapter" | "human" | "import" | "terminal";
+  source?:
+    | "claude-code-adapter"
+    | "claude-code-import"
+    | "codex-import"
+    | "human"
+    | "import"
+    | "terminal";
   label?: string;
   /** Omit the `label` field entirely, to exercise the no-label fallback. */
   omitLabel?: boolean;
@@ -720,5 +726,111 @@ describe("handoff-renderer", () => {
     const liveSection = sliceSection(result.body, "## セッション一覧", "### Imported sessions");
     expect(liveSection).toContain("live work");
     expect(liveSection).not.toContain("from-external");
+  });
+});
+
+// Resume coherence (HypArt triage): handoff must carry a staleness caveat on a
+// trailing decision (F-A, which handoff previously lacked entirely), represent
+// 最終 session with a substantive session (F-B), and flag a cross-session
+// decision (F-C). SES/EVT/DEC suffixes must be 3 Crockford chars (no I/L/O/U).
+describe("renderHandoff (resume coherence)", () => {
+  it("F-A: a trailing (stale) latest decision carries a staleness caveat", async () => {
+    const paths = await setupPaths();
+    const s = SES("HA1");
+    // decision at 12:00, activity continues to 14:00 (2h later) -> stale
+    await placeSession(
+      paths,
+      {
+        id: s,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T11:00:00Z",
+        endedAt: "2026-05-08T14:00:00Z",
+        relatedFiles: ["src/x.ts"],
+      },
+      decisionRecordedLine(s, "HA1", DEC("HA1"), "apply migration?", "2026-05-08T12:00:00Z"),
+    );
+    const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("最終活動はこの判断より後です");
+    expect(body).toContain("継続点を確認してください");
+  });
+
+  it("F-A: a fresh latest decision carries no staleness caveat", async () => {
+    const paths = await setupPaths();
+    const s = SES("HA2");
+    // decision at 12:00, activity ends 12:30 (within 1h) -> not stale
+    await placeSession(
+      paths,
+      {
+        id: s,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T11:00:00Z",
+        endedAt: "2026-05-08T12:30:00Z",
+        relatedFiles: ["src/x.ts"],
+      },
+      decisionRecordedLine(s, "HA2", DEC("HA2"), "use pnpm", "2026-05-08T12:00:00Z"),
+    );
+    const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("use pnpm");
+    expect(body).not.toContain("最終活動はこの判断より後です");
+  });
+
+  it("F-B: 最終 session is the substantive session, not a newer empty resume session", async () => {
+    const paths = await setupPaths();
+    const work = SES("HWK");
+    const resume = SES("HRS");
+    await placeSession(paths, {
+      id: work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T09:00:00Z",
+      relatedFiles: ["src/a.ts"],
+      label: "real work",
+    });
+    await placeSession(paths, {
+      id: resume,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T11:00:00Z",
+      relatedFiles: [],
+      label: "bare resume",
+    });
+    const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    // The 現在の状態 section's 最終 session line should name the substantive session.
+    const stateSection = body.slice(body.indexOf("## 現在の状態"));
+    expect(stateSection).toContain("最終 session: real work");
+    expect(stateSection).not.toContain("最終 session: bare resume");
+    // 直近の変更ファイル is coupled to 最終 session, so it shows the substantive
+    // session's files (not the bare resume's empty list).
+    const filesSection = sliceSection(body, "## 直近の変更ファイル", "## ");
+    expect(filesSection).toContain("src/a.ts");
+    expect(filesSection).not.toContain("(no related files recorded)");
+  });
+
+  it("F-C: flags when the latest decision is from a different session than 最終 session", async () => {
+    const paths = await setupPaths();
+    const work = SES("HC2"); // substantive + newest -> 最終 session
+    const older = SES("HP2"); // prior session that holds the decision
+    await placeSession(paths, {
+      id: work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T13:00:00Z",
+      relatedFiles: ["src/a.ts"],
+    });
+    await placeSession(
+      paths,
+      {
+        id: older,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T09:00:00Z",
+        relatedFiles: [],
+      },
+      decisionRecordedLine(older, "HE2", DEC("HD2"), "an older decision", "2026-05-08T09:30:00Z"),
+    );
+    const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("この判断は最終 session とは別の session");
   });
 });
