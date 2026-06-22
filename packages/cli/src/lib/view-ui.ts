@@ -189,7 +189,9 @@ export const VIEW_HTML = `<!doctype html>
     if (!data) return 'ok';
     if (data.claudeCode || data.codex) {
       return 'claude-code ' + imp(data.claudeCode) + ', codex ' + imp(data.codex)
-        + (data.handoff && data.handoff.status === 'generated' ? '; handoff+decisions regenerated' : '');
+        + (data.handoff && data.handoff.status === 'generated'
+           ? '; handoff regenerated, decisions: ' + (data.decisions ? data.decisions.decisionCount : 0)
+           : '');
     }
     if (data.status === 'ran') return imp(data);
     if (data.status === 'skipped') return 'skipped (' + data.reason + ')';

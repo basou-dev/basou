@@ -311,15 +311,16 @@ export function printRefreshSummary(result: RefreshResult): void {
   if (result.decisions.status === "generated") {
     if (result.decisions.decisionCount === 0) {
       // "regenerated (0)" read as success while the decision provenance was in
-      // fact empty. State the count plainly, and when there IS captured work but
-      // no decisions, point at the manual path: decisions come from a structured
-      // signal (a Claude Code approval question) that codex sessions do not carry,
-      // so a commands-only capture leaves decisions at 0 unless recorded by hand.
-      const hasWork = result.handoff.status === "generated" && result.handoff.sessionCount > 0;
+      // fact empty. State the count plainly, and when there are captured sessions
+      // but no decisions, point at the manual path. Wording is cause-neutral and
+      // adapter-blind on purpose (we only know the aggregate session count here):
+      // "none auto-recorded" is true whether codex carries no approval-question
+      // signal to derive from, or a Claude Code run simply made no decisions.
+      const hasSessions = result.handoff.status === "generated" && result.handoff.sessionCount > 0;
       console.log(
-        hasWork
-          ? "decisions: 0 件(意思決定は自動取得されていません。`basou decision` で手で記録できます)"
-          : "decisions: 0 件",
+        hasSessions
+          ? "decisions: 0 (none auto-recorded from these sessions; record any made with 'basou decision record')"
+          : "decisions: 0",
       );
     } else {
       console.log(`decisions: regenerated (${result.decisions.decisionCount})`);
