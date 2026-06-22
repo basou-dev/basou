@@ -29,6 +29,7 @@ import {
   doRunProjectSync,
   doRunProjectWiring,
   doRunProjectWorkspace,
+  gatherExistingViewLinks,
   type ProjectAdoptResult,
   type ProjectArchiveResult,
   type ProjectGitignoreResult,
@@ -38,6 +39,7 @@ import {
   type ProjectSyncResult,
   type ProjectWiringResult,
   type ProjectWorkspaceResult,
+  pruneViewLinks,
   renderProjectAdopt,
   renderProjectArchive,
   renderProjectCheck,
@@ -1385,6 +1387,307 @@ describe("basou project workspace", () => {
     expect(r.toCreate).toEqual([{ name: "r1", target: "../r1" }]);
     expect(r.toCreate.map((c) => c.name)).not.toContain("host");
   });
+
+  it("reports a stray repo link (a de-rostered repo's view symlink) but prunes nothing in dry-run", async () => {
+    await makeRepo("r1");
+    await makeRepo("old"); // an on-disk git repo no longer in the roster
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../old", join(p("wsview"), "old")); // a stray basou-shaped repo link
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({}, { cwd: host() });
+    expect(r.toPrune).toEqual([{ name: "old", target: "../old" }]);
+    expect(r.pruned).toBe(false);
+    expect(r.ok).toBe(false); // a view carrying a stray is not "in sync"
+    await expect(readlink(join(p("wsview"), "old"))).resolves.toBe("../old"); // untouched
+  });
+
+  it("--prune removes the stray repo link but never the linked repo", async () => {
+    await makeRepo("r1");
+    await makeRepo("old");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../old", join(p("wsview"), "old"));
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.pruned).toBe(true);
+    expect(r.pruneFailures).toEqual([]);
+    await expect(readlink(join(p("wsview"), "old"))).rejects.toThrow(); // link gone
+    expect(existsSync(p("old"))).toBe(true); // the repo it pointed at is intact
+  });
+
+  it("--prune leaves a current roster repo's link and the view's own instruction file untouched", async () => {
+    await makeRepo("r1");
+    await makeRepo("old");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../r1", join(p("wsview"), "r1")); // a CURRENT roster link
+    await symlink("../old", join(p("wsview"), "old")); // a stray
+    await writeFile(p("planning-AGENTS.md"), "# canonical\n");
+    await symlink("../planning-AGENTS.md", join(p("wsview"), "AGENTS.md")); // the view's own instruction file
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([{ name: "old", target: "../old" }]);
+    expect(r.strayUnknown).toEqual([]); // AGENTS.md is filtered out, never reported
+    await expect(readlink(join(p("wsview"), "r1"))).resolves.toBe("../r1"); // roster link kept
+    await expect(readlink(join(p("wsview"), "AGENTS.md"))).resolves.toBe("../planning-AGENTS.md");
+    await expect(readlink(join(p("wsview"), "old"))).rejects.toThrow(); // only the stray went
+  });
+
+  it("reports a broken stray symlink as unknown and never prunes it", async () => {
+    await makeRepo("r1");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../vanished", join(p("wsview"), "vanished")); // target does not exist
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]);
+    expect(r.strayUnknown).toEqual([{ name: "vanished", target: "../vanished", reason: "broken" }]);
+    await expect(readlink(join(p("wsview"), "vanished"))).resolves.toBe("../vanished"); // untouched
+  });
+
+  it("reports a symlink to a non-repo directory as unknown and never prunes it", async () => {
+    await makeRepo("r1");
+    await mkdir(p("plain"), { recursive: true }); // a directory without .git
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../plain", join(p("wsview"), "plain"));
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]);
+    expect(r.strayUnknown).toEqual([{ name: "plain", target: "../plain", reason: "non-repo" }]);
+    await expect(readlink(join(p("wsview"), "plain"))).resolves.toBe("../plain");
+  });
+
+  it("never treats a real (non-symlink) view entry as a stray", async () => {
+    await makeRepo("r1");
+    await mkdir(p("wsview"), { recursive: true });
+    await writeFile(join(p("wsview"), "README.md"), "local notes\n");
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]);
+    expect(r.strayUnknown).toEqual([]);
+    expect(existsSync(join(p("wsview"), "README.md"))).toBe(true);
+  });
+
+  it("--apply and --prune together: creates the missing link and removes the stray in one run", async () => {
+    await makeRepo("r1");
+    await makeRepo("old");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../old", join(p("wsview"), "old")); // stray
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" }); // r1 link is missing
+    mute();
+    const r = await doRunProjectWorkspace({ apply: true, prune: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    expect(r.pruned).toBe(true);
+    expect(await readlink(join(p("wsview"), "r1"))).toBe("../r1"); // created
+    await expect(readlink(join(p("wsview"), "old"))).rejects.toThrow(); // pruned
+    const after = await doRunProjectWorkspace({}, { cwd: host() });
+    expect(after.ok).toBe(true); // fully reconciled
+  });
+
+  it("reports ok=true on the prune run itself once the only stray is removed (no false 'attention')", async () => {
+    await makeRepo("r1");
+    await makeRepo("old");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../r1", join(p("wsview"), "r1")); // current roster link, already correct
+    await symlink("../old", join(p("wsview"), "old")); // the only stray
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.pruned).toBe(true);
+    expect(r.ok).toBe(true); // residual is recomputed post-prune — not the stale pre-prune false
+  });
+
+  it("--prune on an already-clean view is a no-op (pruned:false, ok:true)", async () => {
+    await makeRepo("r1");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../r1", join(p("wsview"), "r1"));
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]);
+    expect(r.pruned).toBe(false);
+    expect(r.pruneFailures).toEqual([]);
+    expect(r.ok).toBe(true);
+    await expect(readlink(join(p("wsview"), "r1"))).resolves.toBe("../r1");
+  });
+
+  it("withholds pruning entirely while a declared repo is unreachable (no false-delete of an indistinguishable link)", async () => {
+    await makeRepo("r1");
+    await makeRepo("old");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../old", join(p("wsview"), "old")); // a genuine de-rostered stray
+    await setup({ repos: [{ path: "../r1" }, { path: "../gone" }], view: "../wsview" }); // ../gone does not resolve
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.unreachable).toEqual(["../gone"]);
+    expect(r.toPrune).toEqual([{ name: "old", target: "../old" }]);
+    expect(r.pruneWithheld).toBe(true);
+    expect(r.pruned).toBe(false);
+    await expect(readlink(join(p("wsview"), "old"))).resolves.toBe("../old"); // not pruned
+  });
+
+  it("never prunes a link that resolves to a CURRENT roster repo under a different name (alias / case)", async () => {
+    await makeRepo("r1");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../r1", join(p("wsview"), "r1")); // canonical link
+    await symlink("../r1", join(p("wsview"), "alias")); // a SECOND link to the same in-roster repo
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]); // alias resolves to a rostered repo → owned, never a stray
+    expect(r.strayUnknown).toEqual([]);
+    await expect(readlink(join(p("wsview"), "alias"))).resolves.toBe("../r1"); // untouched
+  });
+
+  it("prunes a stray whose target is a worktree/submodule (a `.git` FILE, not a directory)", async () => {
+    await makeRepo("r1");
+    await mkdir(p("wt"), { recursive: true });
+    await writeFile(join(p("wt"), ".git"), "gitdir: /somewhere/.git/worktrees/wt\n"); // worktree gitdir-pointer FILE
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../wt", join(p("wsview"), "wt")); // a de-rostered stray pointing at a worktree
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([{ name: "wt", target: "../wt" }]); // classified repo via existsSync(.git)
+    expect(r.pruned).toBe(true);
+    await expect(readlink(join(p("wsview"), "wt"))).rejects.toThrow();
+    expect(existsSync(p("wt"))).toBe(true); // the worktree dir itself is untouched
+  });
+
+  it("classifies an absolute-target stray as unknown (never pruned) via the live scanner", async () => {
+    await makeRepo("r1");
+    await makeRepo("absrepo");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink(p("absrepo"), join(p("wsview"), "absrepo")); // ABSOLUTE target to a real git repo
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]);
+    expect(r.strayUnknown).toEqual([{ name: "absrepo", target: p("absrepo"), reason: "absolute" }]);
+    await expect(readlink(join(p("wsview"), "absrepo"))).resolves.toBe(p("absrepo"));
+  });
+
+  it("treats an ABSOLUTE-target link resolving to a current roster repo as owned (not a stray)", async () => {
+    await makeRepo("r1");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../r1", join(p("wsview"), "r1")); // canonical relative link
+    await symlink(p("r1"), join(p("wsview"), "abs")); // ABSOLUTE link to the SAME rostered repo
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]);
+    expect(r.strayUnknown).toEqual([]); // owned by realpath before the absolute branch — no false-dirty
+    expect(r.ok).toBe(true);
+    await expect(readlink(join(p("wsview"), "abs"))).resolves.toBe(p("r1")); // untouched
+  });
+
+  it("classifies a symlink to a loose FILE as a non-repo unknown stray (never pruned)", async () => {
+    await makeRepo("r1");
+    await writeFile(p("loose.txt"), "x\n");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../loose.txt", join(p("wsview"), "loose"));
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]);
+    expect(r.strayUnknown).toEqual([{ name: "loose", target: "../loose.txt", reason: "non-repo" }]);
+  });
+
+  it("surfaces an error (does not report a clean view) when the view path is a file, not a directory", async () => {
+    await makeRepo("r1");
+    await writeFile(p("wsview"), "not a directory\n"); // workspace.view points at a regular file
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    await expect(doRunProjectWorkspace({ prune: true }, { cwd: host() })).rejects.toThrow(
+      /走査できません/,
+    );
+  });
+
+  it("filters the view's own instruction file case-insensitively (no noise on agents.md)", async () => {
+    await makeRepo("r1");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../r1", join(p("wsview"), "r1"));
+    await writeFile(p("canonical.md"), "# canonical\n");
+    await symlink("../canonical.md", join(p("wsview"), "agents.md")); // lowercase variant
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]);
+    expect(r.strayUnknown).toEqual([]); // agents.md filtered, not reported as an unknown stray
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe("gatherExistingViewLinks", () => {
+  let parent: string | undefined;
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-gevl-"));
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function p(name: string): string {
+    return join(parent as string, name);
+  }
+
+  it("returns [] for an absent view directory (ENOENT — not yet generated)", () => {
+    expect(gatherExistingViewLinks(p("missing"), new Set())).toEqual([]);
+  });
+
+  it("throws (no silent clean) when the view path is a regular file (ENOTDIR)", async () => {
+    await writeFile(p("view"), "x\n");
+    expect(() => gatherExistingViewLinks(p("view"), new Set())).toThrow(/走査できません/);
+  });
+});
+
+describe("pruneViewLinks (pre-unlink re-verification)", () => {
+  let parent: string | undefined;
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-pvl-"));
+    await mkdir(join(parent, "view"), { recursive: true });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function view(): string {
+    return join(parent as string, "view");
+  }
+  function p(name: string): string {
+    return join(parent as string, name);
+  }
+
+  it("skips (collects a failure for) a planned name that is no longer a symlink", async () => {
+    await writeFile(join(view(), "old"), "became a real file\n"); // not a symlink anymore
+    const r = pruneViewLinks(view(), [{ name: "old", target: "../old" }], new Set());
+    expect(r.pruned).toEqual([]);
+    expect(r.failed).toHaveLength(1);
+    expect(r.failed[0]?.name).toBe("old");
+    expect(existsSync(join(view(), "old"))).toBe(true); // the real file is left intact
+  });
+
+  it("skips a planned name that now resolves to a current roster repo (re-verified ownership)", async () => {
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: p("."),
+      env: ENV,
+    }).catch(() => {});
+    await mkdir(p("repo"), { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: p("repo"),
+      env: ENV,
+    });
+    await symlink("../repo", join(view(), "repo"));
+    const realRepo = await import("node:fs").then((m) => m.realpathSync(p("repo")));
+    // The plan said prune "repo", but a re-check sees its target is now a rostered repo.
+    const r = pruneViewLinks(view(), [{ name: "repo", target: "../repo" }], new Set([realRepo]));
+    expect(r.pruned).toEqual([]);
+    expect(r.failed).toHaveLength(1);
+    await expect(readlink(join(view(), "repo"))).resolves.toBe("../repo"); // not unlinked
+  });
 });
 
 describe("renderProjectWorkspace", () => {
@@ -1393,11 +1696,16 @@ describe("renderProjectWorkspace", () => {
     conflicts: [],
     collisions: [],
     unreachable: [],
+    toPrune: [],
+    strayUnknown: [],
     correctCount: 0,
     ok: true,
     hasView: true,
     applied: false,
+    pruned: false,
+    pruneWithheld: false,
     failures: [],
+    pruneFailures: [],
   };
 
   it("guides to declare a view when none is set", () => {
@@ -1450,9 +1758,67 @@ describe("renderProjectWorkspace", () => {
     expect(out).toContain("site: EACCES");
   });
 
-  it("notes that strays are not pruned", () => {
+  it("notes the --prune semantics in the trailing guidance", () => {
     const out = renderProjectWorkspace(base);
-    expect(out).toContain("stray");
+    expect(out).toContain("--prune");
+    expect(out).toContain("参照先 repo は削除しません");
+  });
+
+  it("lists prunable strays with dry-run framing", () => {
+    const out = renderProjectWorkspace({
+      ...base,
+      ok: false,
+      toPrune: [{ name: "old", target: "../old" }],
+    });
+    expect(out).toContain("--prune");
+    expect(out).toContain("撤去予定");
+    expect(out).toContain("old -> ../old");
+  });
+
+  it("on partial --prune failure, lists only removed strays and shows the failure", () => {
+    const out = renderProjectWorkspace({
+      ...base,
+      ok: false,
+      pruned: true,
+      toPrune: [
+        { name: "a", target: "../a" },
+        { name: "b", target: "../b" },
+      ],
+      pruneFailures: [{ name: "b", message: "EACCES" }],
+    });
+    expect(out).toContain("一部失敗");
+    expect(out).toContain("a -> ../a");
+    expect(out).not.toContain("b -> ../b");
+    expect(out).toContain("b: EACCES");
+  });
+
+  it("frames withheld pruning (unreachable repos present) as withheld, not as a dry-run", () => {
+    const out = renderProjectWorkspace({
+      ...base,
+      ok: false,
+      unreachable: ["../gone"],
+      toPrune: [{ name: "old", target: "../old" }],
+      pruneWithheld: true,
+    });
+    expect(out).toContain("撤去を保留");
+    expect(out).toContain("old -> ../old");
+    expect(out).not.toContain("撤去するには --prune"); // not the dry-run framing
+  });
+
+  it("reports unrecognized strays (broken / non-repo / absolute) as left untouched", () => {
+    const out = renderProjectWorkspace({
+      ...base,
+      ok: false,
+      strayUnknown: [
+        { name: "dead", target: "../dead", reason: "broken" },
+        { name: "notrepo", target: "../notrepo", reason: "non-repo" },
+        { name: "abs", target: "/somewhere", reason: "absolute" },
+      ],
+    });
+    expect(out).toContain("未撤去の stray");
+    expect(out).toContain("リンク切れ");
+    expect(out).toContain("git repo でない");
+    expect(out).toContain("絶対パス");
   });
 });
 

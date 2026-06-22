@@ -137,10 +137,12 @@ export type {
 } from "./project/wiring.js";
 export { summarizeWiring } from "./project/wiring.js";
 export type {
+  ExistingViewLink,
   ViewCollision,
   ViewConflict,
   ViewLinkState,
   ViewRepoFact,
+  ViewStrayUnknown,
   WorkspaceViewPlan,
 } from "./project/workspace-view.js";
 export { planWorkspaceView } from "./project/workspace-view.js";

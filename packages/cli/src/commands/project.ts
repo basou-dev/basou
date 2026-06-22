@@ -2,17 +2,21 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
+  statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   type AdoptCandidate,
   type ArchivePlan,
   basouPaths,
+  type ExistingViewLink,
   GENERATED_END,
   GENERATED_START,
   type GitignorePlanSummary,
@@ -152,20 +156,31 @@ export type ProjectSymlinksResult = SymlinkPlanSummary & {
 
 export type ProjectWorkspaceOptions = {
   apply?: boolean;
+  prune?: boolean;
   json?: boolean;
   verbose?: boolean;
 };
 
 export type ProjectWorkspaceContext = ImportContext;
 
-/** Result of {@link doRunProjectWorkspace}: the view plan plus whether a view is declared and what `--apply` did. */
+/** Result of {@link doRunProjectWorkspace}: the view plan plus whether a view is declared and what `--apply` / `--prune` did. */
 export type ProjectWorkspaceResult = WorkspaceViewPlan & {
   /** Whether `workspace.view` is declared (else there is no view to generate — solo project / not configured). */
   hasView: boolean;
   /** Whether any view symlinks were actually created (true only when `--apply` created at least one). */
   applied: boolean;
-  /** Per-link failures encountered during `--apply` (collected, not thrown — pathless reason). */
+  /** Whether any stray view symlinks were actually removed (true only when `--prune` removed at least one). */
+  pruned: boolean;
+  /**
+   * Whether `--prune` was requested with strays to remove but withheld because one
+   * or more declared repos are unreachable (an unreachable repo's link can be
+   * indistinguishable from a stray, so pruning is refused until the roster resolves).
+   */
+  pruneWithheld: boolean;
+  /** Per-link create failures encountered during `--apply` (collected, not thrown — pathless reason). */
   failures: { name: string; message: string }[];
+  /** Per-link prune failures encountered during `--prune` (collected, not thrown — pathless reason). */
+  pruneFailures: { name: string; message: string }[];
 };
 
 export type ProjectPresetOptions = {
@@ -351,9 +366,13 @@ export function registerProjectCommand(program: Command): void {
   project
     .command("workspace")
     .description(
-      "Generate the project's workspace view: a directory (manifest `workspace.view`) that aggregates every declared repo via a `<repo-basename>` symlink (the anchor included). Dry-run by default; pass --apply to create. Non-destructive — it only creates missing links, never overwrites an existing entry or repoints a link, and does not prune strays",
+      "Generate the project's workspace view: a directory (manifest `workspace.view`) that aggregates every declared repo via a `<repo-basename>` symlink (the anchor included). Dry-run by default; pass --apply to create missing links. Creation is non-destructive — it never overwrites an existing entry or repoints a link. Stray repo links (a view symlink whose repo is no longer in the roster) are reported always and removed only with --prune; pruning removes ONLY a symlink whose relative target resolves to a git repository (never a real file/dir, the view's own instruction files, a broken link, or a non-repo target), and never the linked repo itself",
     )
     .option("--apply", "Create the missing view symlinks (default: dry-run preview)")
+    .option(
+      "--prune",
+      "Remove stray repo symlinks (links the roster no longer backs); default: dry-run preview. Independent of --apply",
+    )
     .option("--json", "Output the result as JSON")
     .option("-v, --verbose", "Show error causes")
     .action(async (opts: ProjectWorkspaceOptions) => {
@@ -1471,13 +1490,155 @@ function applyViewPlan(
   return { created, failed };
 }
 
+/** Top-level instruction-file names the view may hold for itself — never treated as strays (case-insensitive). */
+const TOP_LEVEL_INSTRUCTION_FILES_LOWER: ReadonlySet<string> = new Set(
+  INSTRUCTION_FILES.filter((f) => !f.includes("/")).map((f) => f.toLowerCase()),
+);
+
 /**
- * Generate the project's workspace view. Resolves the workspace, reads the
- * manifest, and — when `workspace.view` is declared — gathers each roster repo's
- * view-link state and plans the missing links. When `--apply` is set and there
- * is something to create, it creates only the `missing` links (non-destructive;
- * conflicts/collisions are never touched and strays are not pruned); otherwise it
- * writes nothing and prints the plan.
+ * Classify one view entry by name for stray detection. Returns `null` when the
+ * entry is NOT a removable stray candidate — it is not a symlink (a real file/dir
+ * is never ours to remove), it vanished, or its target resolves to a CURRENT
+ * roster repo (owned by the roster under whatever name — an aliased/symlinked
+ * roster path, or a different-case link on a case-insensitive filesystem — so it
+ * must never be pruned). Otherwise returns the link's target and `kind`: `repo`
+ * (a relative target following to a git repository — a dir holding a `.git` entry,
+ * matching the project family's `existsSync(<dir>/.git)` repo test, so worktrees /
+ * submodules count); `absolute` (basou never writes absolute view links); `broken`
+ * (a relative target that does not resolve); or `non-repo` (resolves to a file or a
+ * non-repository directory). Pure filesystem reads — the single source of truth for
+ * both the scan and the pre-unlink re-verification.
+ */
+function classifyViewLink(
+  viewDir: string,
+  name: string,
+  rosterRealpaths: ReadonlySet<string>,
+): { target: string; kind: ExistingViewLink["kind"] } | null {
+  const filePath = join(viewDir, name);
+  let isLink: boolean;
+  try {
+    isLink = lstatSync(filePath).isSymbolicLink();
+  } catch {
+    return null; // vanished between readdir and lstat, or not inspectable
+  }
+  if (!isLink) return null; // a real file/dir is never ours to prune
+  let target: string;
+  try {
+    target = readlinkSync(filePath);
+  } catch {
+    return null;
+  }
+  // A link pointing at a CURRENT roster repo (by resolved identity, not name) is
+  // the repo's own link, never a stray — even under an aliased name, a case-folded
+  // spelling, OR an absolute target. realpath canonicalizes all three. This
+  // ownership check precedes the absolute/relative classification so an absolute
+  // link to a rostered repo is treated as owned (not surfaced as a stray).
+  const resolved = isAbsolute(target) ? target : resolve(viewDir, target);
+  try {
+    if (rosterRealpaths.has(realpathSync(resolved))) return null;
+  } catch {
+    // unresolvable target → not a roster repo; fall through to classify
+  }
+  if (isAbsolute(target)) return { target, kind: "absolute" }; // basou writes only relative links
+  let isDir = false;
+  try {
+    isDir = statSync(resolved).isDirectory(); // follows the link
+  } catch {
+    isDir = false; // ENOENT / unreadable → broken
+  }
+  if (!isDir) {
+    // Resolves to a file (e.g. an instruction symlink) or not at all — not a repo.
+    return { target, kind: existsSync(resolved) ? "non-repo" : "broken" };
+  }
+  return { target, kind: existsSync(join(resolved, ".git")) ? "repo" : "non-repo" };
+}
+
+/**
+ * Scan the view directory for stray-detection candidates: its top-level SYMLINK
+ * entries, classified by {@link classifyViewLink}. The view's own top-level
+ * instruction-file symlinks (`AGENTS.md`/`CLAUDE.md`, matched case-insensitively)
+ * and links resolving to a current roster repo are skipped. An ABSENT view
+ * directory (ENOENT — nothing generated yet) yields `[]`; any other readdir error
+ * (the view path is a file, or is unreadable) is surfaced, never read as "no
+ * strays" (no false-clear). Pure reads.
+ */
+export function gatherExistingViewLinks(
+  viewDir: string,
+  rosterRealpaths: ReadonlySet<string>,
+): ExistingViewLink[] {
+  let names: string[];
+  try {
+    names = readdirSync(viewDir);
+  } catch (error: unknown) {
+    if (hasErrorCode(error) && error.code === "ENOENT") return []; // not generated yet
+    // The view path exists but could not be scanned (a regular file, EACCES, …) —
+    // surface it rather than silently reporting a clean, stray-free view. The
+    // message is path-less (matching the file's other thrown errors); the absolute
+    // path stays in `cause`, shown only under --verbose.
+    throw new Error("workspace view を走査できません(パス/種別を確認してください)", {
+      cause: error,
+    });
+  }
+  const links: ExistingViewLink[] = [];
+  for (const name of names) {
+    if (TOP_LEVEL_INSTRUCTION_FILES_LOWER.has(name.toLowerCase())) continue; // the view's own instruction file
+    const c = classifyViewLink(viewDir, name, rosterRealpaths);
+    if (c === null) continue;
+    links.push({ name, target: c.target, kind: c.kind });
+  }
+  return links;
+}
+
+/**
+ * Remove the planned stray view symlinks. Immediately before each `unlinkSync` it
+ * RE-DERIVES the full prune predicate via {@link classifyViewLink} (still a symlink,
+ * still a relative target following to a git repo the roster does not back) and
+ * skips with a collected failure if anything changed since the scan — closing the
+ * scan-to-unlink window for this first file-removing operation. It only ever
+ * unlinks the link, never its target. Failures are collected, not thrown.
+ */
+export function pruneViewLinks(
+  viewDir: string,
+  toPrune: { name: string; target: string }[],
+  rosterRealpaths: ReadonlySet<string>,
+): { pruned: string[]; failed: { name: string; message: string }[] } {
+  const pruned: string[] = [];
+  const failed: { name: string; message: string }[] = [];
+  for (const { name } of toPrune) {
+    const filePath = join(viewDir, name);
+    const c = classifyViewLink(viewDir, name, rosterRealpaths);
+    if (c === null || c.kind !== "repo") {
+      failed.push({
+        name,
+        message:
+          "撤去対象が scan 時と変わりました(basou 生成の stray repo link ではなくなった/再実行してください)",
+      });
+      continue;
+    }
+    try {
+      unlinkSync(filePath);
+      pruned.push(name);
+    } catch (error: unknown) {
+      failed.push({ name, message: failureReason(error) });
+    }
+  }
+  return { pruned, failed };
+}
+
+/**
+ * Generate the project's workspace view and reconcile its strays. Resolves the
+ * workspace, reads the manifest, and — when `workspace.view` is declared — gathers
+ * each roster repo's view-link state plus the view's existing symlink entries, and
+ * plans the missing links to create and the stray repo links to prune. When
+ * `--apply` is set it creates only the `missing` links (non-destructive — conflicts
+ * and collisions are never touched). When `--prune` is set it removes only the
+ * confirmed stray repo links (a symlink whose relative target follows to a git
+ * repository the roster no longer backs); unrecognized strays are reported, never
+ * removed, and pruning is WITHHELD entirely while any declared repo is unreachable
+ * (its live link could be indistinguishable from a stray). The two writes are
+ * independent opt-ins; with neither flag it writes nothing and prints the plan.
+ * After the writes the verdict (`ok`) is recomputed from the residual state so a
+ * fully successful run is not reported as still needing attention.
  */
 export async function doRunProjectWorkspace(
   options: ProjectWorkspaceOptions,
@@ -1498,16 +1659,36 @@ export async function doRunProjectWorkspace(
       conflicts: [],
       collisions: [],
       unreachable: [],
+      toPrune: [],
+      strayUnknown: [],
       correctCount: 0,
       ok: true,
       hasView: false,
       applied: false,
+      pruned: false,
+      pruneWithheld: false,
       failures: [],
+      pruneFailures: [],
     };
   } else {
     const viewDir = resolveViewDir(repositoryRoot, viewPath);
     const facts = roster.map((entry) => gatherViewRepo(repositoryRoot, viewDir, entry));
-    const plan = planWorkspaceView(facts);
+    // Ownership inputs for stray detection, computed once and shared by the scan
+    // and the pre-unlink re-verification: the basename every declared entry would
+    // own (reachability-INDEPENDENT, so a transiently-unreachable repo still owns
+    // its link name), and the resolved identity of every repo that DOES resolve
+    // (so a link reaching a roster repo under any name/case is never a stray).
+    const rosterNames = roster.map((entry) => basename(resolve(repositoryRoot, entry.path)));
+    const rosterRealpaths = new Set<string>();
+    for (const entry of roster) {
+      try {
+        rosterRealpaths.add(realpathSync(resolve(repositoryRoot, entry.path)));
+      } catch {
+        // unreachable repo — protected by name via rosterNames + the prune withhold
+      }
+    }
+    const existing = gatherExistingViewLinks(viewDir, rosterRealpaths);
+    const plan = planWorkspaceView(facts, existing, rosterNames);
 
     const failures: { name: string; message: string }[] = [];
     let createdCount = 0;
@@ -1516,7 +1697,47 @@ export async function doRunProjectWorkspace(
       createdCount = applied.created.length;
       for (const f of applied.failed) failures.push(f);
     }
-    result = { ...plan, hasView: true, applied: createdCount > 0, failures };
+
+    // Refuse to prune while any declared repo is unreachable: such a repo's live
+    // link can be indistinguishable from a stray, and a false delete is the worst
+    // outcome for the family's first file-removing operation. The operator resolves
+    // reachability (clone/mount the repo, or `archive` it) and re-runs.
+    const pruneWithheld =
+      options.prune === true && plan.toPrune.length > 0 && plan.unreachable.length > 0;
+    const pruneFailures: { name: string; message: string }[] = [];
+    let prunedCount = 0;
+    if (options.prune === true && plan.toPrune.length > 0 && plan.unreachable.length === 0) {
+      const removed = pruneViewLinks(viewDir, plan.toPrune, rosterRealpaths);
+      prunedCount = removed.pruned.length;
+      for (const f of removed.failed) pruneFailures.push(f);
+    }
+
+    // The plan's `ok` was computed BEFORE the writes; recompute the residual so a
+    // create/prune that fully succeeded no longer counts as outstanding work (no
+    // false "items need attention" after a successful run).
+    const createsOutstanding =
+      plan.toCreate.length > 0 && !(options.apply === true && failures.length === 0);
+    const prunesOutstanding =
+      plan.toPrune.length > 0 &&
+      !(options.prune === true && !pruneWithheld && pruneFailures.length === 0);
+    const ok =
+      plan.conflicts.length === 0 &&
+      plan.collisions.length === 0 &&
+      plan.unreachable.length === 0 &&
+      plan.strayUnknown.length === 0 &&
+      !createsOutstanding &&
+      !prunesOutstanding;
+
+    result = {
+      ...plan,
+      ok,
+      hasView: true,
+      applied: createdCount > 0,
+      pruned: prunedCount > 0,
+      pruneWithheld,
+      failures,
+      pruneFailures,
+    };
   }
 
   if (options.json === true) {
@@ -1529,10 +1750,11 @@ export async function doRunProjectWorkspace(
 
 /**
  * Render the workspace-view report. Leads with the actionable outcome: no view
- * declared, the links that will be / were created, then conflicts, basename
- * collisions, and unreachable repos. A clean "in sync" verdict is shown only when
- * there is genuinely nothing to do AND every repo was resolvable and unambiguous
- * (no false-clear). Stray entries are not pruned (out of scope).
+ * declared, the links that will be / were created, the stray repo links that will
+ * be / were pruned, then conflicts, basename collisions, unreachable repos, and
+ * the unrecognized strays left untouched. A clean "in sync" verdict is shown only
+ * when there is genuinely nothing to do, every repo was resolvable and unambiguous,
+ * and the view carries no stray (no false-clear).
  */
 export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
   const lines: string[] = [];
@@ -1573,7 +1795,7 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
     );
   } else {
     lines.push(
-      "ℹ️ 作成が必要な symlink はありませんが、競合 / 衝突 / 到達できない repo があります(下記参照)。",
+      "ℹ️ 作成が必要な symlink はありませんが、対応の必要な項目があります(stray / 競合 / 衝突 / 到達できない repo、下記参照)。",
     );
   }
   lines.push("");
@@ -1581,6 +1803,43 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
   if (result.failures.length > 0) {
     lines.push(`## 作成に失敗 (${result.failures.length}) — 一部の symlink を作成できませんでした`);
     for (const f of result.failures) lines.push(`- ${f.name}: ${f.message}`);
+    lines.push("");
+  }
+
+  if (result.toPrune.length > 0) {
+    const attempted = result.pruned || result.pruneFailures.length > 0;
+    if (result.pruneWithheld) {
+      lines.push(
+        `${result.toPrune.length} 件の stray repo symlink を撤去予定でしたが、到達できない repo があるため撤去を保留しました(到達できない repo の link と stray を区別できないため。下記の repo を解決するか archive してから再実行してください):`,
+      );
+      for (const p of result.toPrune) lines.push(`    ${p.name} -> ${p.target}`);
+    } else if (!attempted) {
+      lines.push(
+        `${result.toPrune.length} 件の stray repo symlink を撤去予定(dry-run、撤去するには --prune):`,
+      );
+      for (const p of result.toPrune) lines.push(`    ${p.name} -> ${p.target}`);
+    } else {
+      const failed = new Set(result.pruneFailures.map((f) => f.name));
+      const header =
+        result.pruneFailures.length === 0
+          ? "🧹 stray repo symlink を撤去しました:"
+          : result.pruned
+            ? "stray repo symlink を撤去しました(一部失敗、下記参照):"
+            : "stray repo symlink を撤去できませんでした(下記参照):";
+      lines.push(header);
+      for (const p of result.toPrune) {
+        if (failed.has(p.name)) continue;
+        lines.push(`    ${p.name} -> ${p.target}`);
+      }
+    }
+    lines.push("");
+  }
+
+  if (result.pruneFailures.length > 0) {
+    lines.push(
+      `## 撤去に失敗 (${result.pruneFailures.length}) — 一部の stray symlink を撤去できませんでした`,
+    );
+    for (const f of result.pruneFailures) lines.push(`- ${f.name}: ${f.message}`);
     lines.push("");
   }
 
@@ -1616,8 +1875,24 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
     lines.push("");
   }
 
+  if (result.strayUnknown.length > 0) {
+    lines.push(
+      `## 未撤去の stray (${result.strayUnknown.length}) — basou 生成の repo link と確認できないため撤去しません。手動で確認してください`,
+    );
+    for (const s of result.strayUnknown) {
+      const detail =
+        s.reason === "broken"
+          ? "リンク切れ(ターゲットが解決できません)"
+          : s.reason === "non-repo"
+            ? "git repo でないターゲット(ファイル、または .git の無いディレクトリ)"
+            : "絶対パスのターゲット(basou は相対リンクのみ生成します)";
+      lines.push(`- ${s.name} -> ${s.target}: ${detail}`);
+    }
+    lines.push("");
+  }
+
   lines.push(
-    "注: 既存エントリは上書きせず、不足分の作成のみ行います。view 内の所有外エントリ(stray)の削除は未対応です。",
+    "注: 作成(--apply)は既存エントリを上書きしません。stray repo link の撤去は --prune で行います(symlink のみ削除し、参照先 repo は削除しません)。basou 生成と確認できない stray(リンク切れ / 非 repo / 絶対パス)は撤去しません。",
   );
   return lines.join("\n");
 }
