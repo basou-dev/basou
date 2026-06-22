@@ -23,9 +23,11 @@ const DEFAULT_MARKERS: Markers = { start: GENERATED_START, end: GENERATED_END };
  * The spec mandates strict line-level matching (see
  * `docs/spec/generated-markdown.md#102-marker-convention`): a marker is
  * only recognized when an entire line is exactly the marker string.
- * Leading/trailing whitespace, comment compression, and BOM are treated as
- * legacy formats (`no_markers`) so that re-generation refuses to silently
- * overwrite a mismatched manual edit.
+ * Leading/trailing whitespace and comment compression are treated as legacy
+ * formats (`no_markers`) so that re-generation refuses to silently overwrite a
+ * mismatched manual edit. A leading UTF-8 BOM is the one exception: it is
+ * tolerated (stripped for matching, re-prepended on render) so a BOM-prefixed
+ * file round-trips instead of duplicating the block.
  */
 export type MarkerSection =
   | { kind: "ok"; before: string; generated: string; after: string }
@@ -79,9 +81,11 @@ export async function writeMarkdownFile(filePath: string, body: string): Promise
  * - `multiple_pairs`: more than one START or END line.
  * - `wrong_order`: END appears before START.
  *
- * Matching is strict: leading/trailing whitespace, BOM, and comment
- * compression (`<!--BASOU:...-->`) all bypass the marker and are treated
- * as legacy content.
+ * Matching is strict: leading/trailing whitespace and comment compression
+ * (`<!--BASOU:...-->`) bypass the marker and are treated as legacy content. A
+ * leading UTF-8 BOM is the exception: it is stripped before matching and
+ * re-prepended to `before`, so a marker on the first line of a BOM-prefixed
+ * file still matches and the file round-trips.
  */
 export function parseMarkers(content: string, markers: Markers = DEFAULT_MARKERS): MarkerSection {
   // Tolerate a leading UTF-8 BOM: strip it for line matching and offset math,
