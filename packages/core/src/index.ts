@@ -100,6 +100,8 @@ export type {
   RepoPresetPlan,
 } from "./project/preset.js";
 export { isRenderable, renderPresetBlock, summarizePresetPlan } from "./project/preset.js";
+export type { RenamePlan } from "./project/rename.js";
+export { pathBasename, planRename } from "./project/rename.js";
 export type {
   AdoptCandidate,
   AdoptCandidateKind,

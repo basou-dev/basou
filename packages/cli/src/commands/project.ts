@@ -23,10 +23,13 @@ import {
   type Manifest,
   type PresetPlanSummary,
   parseMarkers,
+  pathBasename,
   planArchive,
   planGitignore,
+  planRename,
   planRosterAdoption,
   planWorkspaceView,
+  type RenamePlan,
   type RepoEntry,
   type RepoGitignoreFacts,
   type RepoGitignorePlan,
@@ -216,6 +219,33 @@ export type ProjectArchiveResult = ArchivePlan & {
   teardown: ArchiveTeardown;
 };
 
+export type ProjectRenameOptions = {
+  apply?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+/** `now` is injectable so the `updated_at` bump on `--apply` is deterministic in tests. */
+export type ProjectRenameContext = ImportContext & { now?: () => Date };
+
+/** Repo-side wiring at the OLD basename that a basename-changing rename leaves stale — a manual checklist (report-only). */
+export type RenameWiring = {
+  /** The anchor canonical dir `agents/<oldBasename>` still exists (rename to the new basename). */
+  canonicalDirOld: boolean;
+  /** The workspace view still has a `<oldBasename>` entry (rename to the new basename). */
+  viewLinkOld: boolean;
+};
+
+/** Result of {@link doRunProjectRename}: the plan plus whether a roster exists, the repo-side checklist, and what `--apply` did. */
+export type ProjectRenameResult = RenamePlan & {
+  /** Whether a `repos` roster was declared (else there is nothing to rename — run adopt first). */
+  hasRoster: boolean;
+  /** Whether the manifest was written (i.e. `--apply` set and the rename was actionable). */
+  applied: boolean;
+  /** Repo-side wiring still at the old basename (report-only; `--apply` never touches it). */
+  wiring: RenameWiring;
+};
+
 /**
  * Agent instruction files inspected per repo. GEMINI.md is intentionally absent
  * (the Gemini CLI was discontinued for personal use). Each should be a gitignored
@@ -359,6 +389,23 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (repo: string, opts: ProjectArchiveOptions) => {
       await runProjectArchive(repo, opts);
+    });
+
+  project
+    .command("rename")
+    .argument("<old>", "The current roster repo path (as declared, e.g. ../takuhon)")
+    .argument("<new>", "The new roster repo path (e.g. ../takuhon-cli)")
+    .description(
+      "Re-path a repo in the project: update its declared roster path (manifest `repos`) and its capture entry (`source_roots`). Dry-run by default; pass --apply to write. Manifest-only and reversible (the manifest is git-tracked); it does not move the repo on disk or rewire it — when the basename changes, the anchor canonical dir and view symlink that still use the old name are reported as a manual checklist (re-run `basou project symlinks` / `workspace` after). Renaming the anchor (`.`) or onto an existing entry is refused",
+    )
+    .option(
+      "--apply",
+      "Write the re-pathed roster / source_roots to the manifest (default: dry-run preview)",
+    )
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (oldPath: string, newPath: string, opts: ProjectRenameOptions) => {
+      await runProjectRename(oldPath, newPath, opts);
     });
 }
 
@@ -2182,6 +2229,222 @@ export function renderProjectArchive(result: ProjectArchiveResult): string {
 
   lines.push(
     "注: archive は manifest(.basou、git 追跡=可逆)のみを変更します。repo・捕捉履歴・on-disk の wiring は削除しません。",
+  );
+  return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectRename}. */
+export async function runProjectRename(
+  oldPath: string,
+  newPath: string,
+  options: ProjectRenameOptions,
+  ctx: ProjectRenameContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectRename(oldPath, newPath, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Inspect the anchor-side wiring still at the OLD basename after a
+ * basename-changing rename — the manual checklist `--apply` does NOT touch.
+ * Read-only existence checks; an uninspectable path is reported as absent.
+ */
+function gatherRenameWiring(
+  repositoryRoot: string,
+  manifest: Manifest,
+  oldBasename: string,
+): RenameWiring {
+  // An uninspectable anchor (a TOCTOU deletion since the manifest was read) must
+  // not throw out of this advisory inspection — that would block the
+  // authoritative manifest write that runs after it. Degrade to "nothing found".
+  let anchorReal: string;
+  try {
+    anchorReal = realpathSync(repositoryRoot);
+  } catch {
+    return { canonicalDirOld: false, viewLinkOld: false };
+  }
+  const canonicalDirOld = existsSync(join(anchorReal, "agents", oldBasename));
+
+  let viewLinkOld = false;
+  const viewPath = manifest.workspace.view;
+  if (viewPath !== undefined) {
+    try {
+      lstatSync(join(resolveViewDir(repositoryRoot, viewPath), oldBasename));
+      viewLinkOld = true;
+    } catch {
+      // no view entry at the old basename
+    }
+  }
+  return { canonicalDirOld, viewLinkOld };
+}
+
+/**
+ * Build the manifest to write after a rename. Spreads the original (preserving
+ * every known field), bumps `updated_at`, and replaces `repos` with the
+ * re-pathed roster; when the source root was captured, replaces
+ * `import.source_roots` with the re-pathed list. A rename never empties either
+ * list, so no key is dropped.
+ */
+function buildRenamedManifest(manifest: Manifest, plan: RenamePlan, updatedAt: string): Manifest {
+  const next: Manifest = {
+    ...manifest,
+    workspace: { ...manifest.workspace, updated_at: updatedAt },
+    repos: plan.nextRepos,
+  };
+  if (plan.nextSourceRoots !== undefined) {
+    return { ...next, import: { ...(manifest.import ?? {}), source_roots: plan.nextSourceRoots } };
+  }
+  return next;
+}
+
+/**
+ * Re-path a repo in the project. Resolves the workspace, reads the manifest,
+ * plans the manifest mutation (roster + source_roots path update), and inspects
+ * the anchor-side wiring still at the old basename. When `--apply` is set and the
+ * rename is actionable (the source is a real, non-anchor roster member, the
+ * destination is free, and old != new), it writes the re-pathed manifest;
+ * otherwise it writes nothing and prints the plan. The repo is never moved or
+ * rewired on disk.
+ */
+export async function doRunProjectRename(
+  oldPath: string,
+  newPath: string,
+  options: ProjectRenameOptions,
+  ctx: ProjectRenameContext,
+): Promise<ProjectRenameResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project rename");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+  const roster = manifest.repos ?? [];
+
+  let oldIsAnchor = false;
+  try {
+    oldIsAnchor = realpathSync(resolve(repositoryRoot, oldPath)) === realpathSync(repositoryRoot);
+  } catch {
+    oldIsAnchor = false;
+  }
+
+  const plan = planRename({
+    ...(manifest.repos !== undefined ? { repos: manifest.repos } : {}),
+    ...(manifest.import?.source_roots !== undefined
+      ? { sourceRoots: manifest.import.source_roots }
+      : {}),
+    oldPath,
+    newPath,
+    oldIsAnchor,
+  });
+
+  const actionable = plan.found && !plan.isAnchor && !plan.collision && !plan.noop;
+  const wiring =
+    actionable && plan.basenameChanged
+      ? gatherRenameWiring(repositoryRoot, manifest, pathBasename(plan.oldTarget))
+      : { canonicalDirOld: false, viewLinkOld: false };
+
+  const applied = options.apply === true && actionable;
+  if (applied) {
+    const now = ctx.now ?? (() => new Date());
+    await writeManifest(paths, buildRenamedManifest(manifest, plan, now().toISOString()), {
+      force: true,
+    });
+  }
+
+  const result: ProjectRenameResult = { ...plan, hasRoster: roster.length > 0, applied, wiring };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectRename(result));
+  }
+  return result;
+}
+
+/**
+ * Render the rename report. Leads with the actionable outcome: no roster, no-op,
+ * anchor refusal, collision refusal, source not found, or the manifest mutation
+ * that will be / was applied. Then the anchor-side rename checklist (when the
+ * basename changed) and a note to re-run the wiring generators.
+ */
+export function renderProjectRename(result: ProjectRenameResult): string {
+  const lines: string[] = [];
+  lines.push("# repo の rename(roster のパス更新)");
+  lines.push("");
+
+  if (!result.hasRoster) {
+    lines.push("ℹ️ repo ロースターが未宣言です(manifest の `repos`)。rename 対象がありません。");
+    return lines.join("\n");
+  }
+  if (result.noop) {
+    lines.push(`ℹ️ \`${result.oldTarget}\` と \`${result.newTarget}\` は同一です(変更なし)。`);
+    return lines.join("\n");
+  }
+  if (result.isAnchor) {
+    lines.push(
+      `⚠️ \`${result.oldTarget}\` は anchor(プロジェクトの root)です。anchor は rename できません。`,
+    );
+    return lines.join("\n");
+  }
+  if (!result.found) {
+    lines.push(`ℹ️ \`${result.oldTarget}\` は roster に宣言されていません(rename 対象なし)。`);
+    return lines.join("\n");
+  }
+  if (result.collision) {
+    lines.push(
+      `⚠️ \`${result.newTarget}\` は既に roster に宣言されています。重複を避けるため rename しません。`,
+    );
+    return lines.join("\n");
+  }
+
+  if (result.applied) {
+    lines.push(`✅ \`${result.oldTarget}\` を \`${result.newTarget}\` に rename しました。`);
+  } else {
+    lines.push(
+      `\`${result.oldTarget}\` を \`${result.newTarget}\` に rename 予定(dry-run、反映するには --apply):`,
+    );
+  }
+  if (result.sourceRootRenamed !== undefined) {
+    lines.push(
+      `- source_roots の ${result.sourceRootRenamed} を ${result.newTarget} に更新${result.applied ? "しました" : "します"}。`,
+    );
+  } else {
+    lines.push("- source_roots に該当エントリはありません(更新不要)。");
+  }
+  lines.push("");
+
+  // Anchor-side checklist (report-only) — only relevant when the basename changes.
+  if (result.basenameChanged) {
+    const oldName = pathBasename(result.oldTarget);
+    const newName = pathBasename(result.newTarget);
+    const items: string[] = [];
+    if (result.wiring.canonicalDirOld)
+      items.push(`anchor canonical: agents/${oldName}/ → agents/${newName}/`);
+    if (result.wiring.viewLinkOld) items.push(`workspace view の symlink: ${oldName} → ${newName}`);
+    if (items.length > 0) {
+      lines.push(
+        "## 手動リネーム(--apply は触れません。basename が変わるため手で更新してください)",
+      );
+      for (const i of items) lines.push(`- ${i}`);
+    } else {
+      lines.push(
+        `basename が ${oldName} → ${newName} に変わりますが、anchor canonical / view symlink は見つかりませんでした。`,
+      );
+    }
+    lines.push(
+      "  反映後は `basou project symlinks` / `basou project workspace` で指示書 symlink と view を再生成してください。",
+    );
+  } else {
+    lines.push(
+      "注: basename は不変です。repo を別の場所へ移動した場合は `basou project symlinks` / `basou project workspace` で相対ターゲットを再生成してください。",
+    );
+  }
+  lines.push("");
+
+  lines.push(
+    "注: rename は manifest(.basou、git 追跡=可逆)のみを変更します。repo の移動・on-disk の wiring 更新は行いません。",
   );
   return lines.join("\n");
 }
