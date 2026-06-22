@@ -299,8 +299,12 @@ describe("orientation-renderer", () => {
       staleness: { newSessions: 0, updatedSessions: 0 },
     });
     expect(result.body).toContain(
-      "✅ 最新です。最後の作業は たった今(Codex)。取りこぼし・要注意なし。",
+      "✅ 取り込みは最新です。最後の作業は たった今(Codex)。未取り込みの native セッションはありません。",
     );
+    // The verdict scopes its claim: it must NOT imply provenance is comprehensive,
+    // and it explicitly states what it does not detect (drift / unrecorded decisions).
+    expect(result.body).not.toContain("取りこぼし・要注意なし");
+    expect(result.body).toContain("計画↔実装のドリフトや未記録の意思決定までは検知しません");
     // The default verdict translates the tool and hides the internal source enum.
     expect(result.body).not.toContain("codex-import");
   });
@@ -335,7 +339,7 @@ describe("orientation-renderer", () => {
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain("ℹ️ 取り込み済みの状態を表示しています。");
     expect(result.body).toContain("最新か確認するには `basou refresh`");
-    expect(result.body).not.toContain("✅ 最新です。");
+    expect(result.body).not.toContain("✅ 取り込みは最新です。");
   });
 
   it("これは最新か: a fresh capture with suspect sessions still cautions in the verdict", async () => {
@@ -352,8 +356,8 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 0 },
     });
-    expect(result.body).toContain("✅ 最新です。");
-    expect(result.body).toContain("要注意セッションが 1 件あります。");
+    expect(result.body).toContain("✅ 取り込みは最新です。");
+    expect(result.body).toContain("ただし要注意セッションが 1 件あります");
   });
 
   it("これは最新か: unverifiable grown sessions block ✅ and point at verify/--force (no false-clear)", async () => {
@@ -376,7 +380,7 @@ describe("orientation-renderer", () => {
     expect(result.body).toContain("2 件");
     expect(result.body).toContain("`basou verify`");
     expect(result.body).toContain("`basou refresh --force`");
-    expect(result.body).not.toContain("✅ 最新です。");
+    expect(result.body).not.toContain("✅ 取り込みは最新です。");
   });
 
   it("--verbose appends the raw freshness telemetry under the verdict", async () => {
@@ -525,7 +529,8 @@ describe("orientation-renderer", () => {
         "",
         "## これは最新か",
         "",
-        "✅ 最新です。最後の作業は たった今(Claude Code)。取りこぼし・要注意なし。",
+        "✅ 取り込みは最新です。最後の作業は たった今(Claude Code)。未取り込みの native セッションはありません。",
+        "注: この判定は取り込み済み native セッションの鮮度と suspect の有無だけを見ます。計画↔実装のドリフトや未記録の意思決定までは検知しません。",
       ].join("\n"),
     );
   });
