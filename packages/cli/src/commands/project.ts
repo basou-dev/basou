@@ -1528,16 +1528,18 @@ function classifyViewLink(
   } catch {
     return null;
   }
-  if (isAbsolute(target)) return { target, kind: "absolute" }; // basou writes only relative links
-  const resolved = resolve(viewDir, target);
   // A link pointing at a CURRENT roster repo (by resolved identity, not name) is
-  // the repo's own link, never a stray — even under an aliased name or a case-
-  // folded spelling. realpath canonicalizes both.
+  // the repo's own link, never a stray — even under an aliased name, a case-folded
+  // spelling, OR an absolute target. realpath canonicalizes all three. This
+  // ownership check precedes the absolute/relative classification so an absolute
+  // link to a rostered repo is treated as owned (not surfaced as a stray).
+  const resolved = isAbsolute(target) ? target : resolve(viewDir, target);
   try {
     if (rosterRealpaths.has(realpathSync(resolved))) return null;
   } catch {
-    // unresolvable target → not a roster repo; fall through to classify as broken
+    // unresolvable target → not a roster repo; fall through to classify
   }
+  if (isAbsolute(target)) return { target, kind: "absolute" }; // basou writes only relative links
   let isDir = false;
   try {
     isDir = statSync(resolved).isDirectory(); // follows the link
@@ -1570,8 +1572,12 @@ export function gatherExistingViewLinks(
   } catch (error: unknown) {
     if (hasErrorCode(error) && error.code === "ENOENT") return []; // not generated yet
     // The view path exists but could not be scanned (a regular file, EACCES, …) —
-    // surface it rather than silently reporting a clean, stray-free view.
-    throw new Error(`workspace view を走査できません: ${viewDir}`, { cause: error });
+    // surface it rather than silently reporting a clean, stray-free view. The
+    // message is path-less (matching the file's other thrown errors); the absolute
+    // path stays in `cause`, shown only under --verbose.
+    throw new Error("workspace view を走査できません(パス/種別を確認してください)", {
+      cause: error,
+    });
   }
   const links: ExistingViewLink[] = [];
   for (const name of names) {

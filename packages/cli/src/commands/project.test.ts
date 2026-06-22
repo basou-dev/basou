@@ -1570,6 +1570,20 @@ describe("basou project workspace", () => {
     await expect(readlink(join(p("wsview"), "absrepo"))).resolves.toBe(p("absrepo"));
   });
 
+  it("treats an ABSOLUTE-target link resolving to a current roster repo as owned (not a stray)", async () => {
+    await makeRepo("r1");
+    await mkdir(p("wsview"), { recursive: true });
+    await symlink("../r1", join(p("wsview"), "r1")); // canonical relative link
+    await symlink(p("r1"), join(p("wsview"), "abs")); // ABSOLUTE link to the SAME rostered repo
+    await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
+    mute();
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: host() });
+    expect(r.toPrune).toEqual([]);
+    expect(r.strayUnknown).toEqual([]); // owned by realpath before the absolute branch — no false-dirty
+    expect(r.ok).toBe(true);
+    await expect(readlink(join(p("wsview"), "abs"))).resolves.toBe(p("r1")); // untouched
+  });
+
   it("classifies a symlink to a loose FILE as a non-repo unknown stray (never pruned)", async () => {
     await makeRepo("r1");
     await writeFile(p("loose.txt"), "x\n");
