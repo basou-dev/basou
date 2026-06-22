@@ -453,7 +453,7 @@ describe("printRefreshSummary (decisions line)", () => {
   it("0 decisions WITH captured sessions: states the count and nudges the runnable command (not 'regenerated (0)')", () => {
     const out = capture(baseResult({ decisions: { status: "generated", decisionCount: 0 } }));
     expect(out).toContain("decisions: 0");
-    expect(out).toContain("basou decision record"); // the actual runnable command, not the bare group
+    expect(out).toContain("basou decision capture"); // the batch capture command, not the bare group
     expect(out).not.toContain("regenerated (0)"); // the misleading success-looking wording is gone
   });
 

@@ -3,6 +3,35 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou decision capture` — record a batch of decisions from a JSON array on
+  stdin (or `--file`). The auto-derived decision signal is narrow (Claude Code
+  derives one only from `AskUserQuestion`; Codex derives none), so a session's
+  real conversational decisions — and their rationale, alternatives, and
+  rejected reasons — are otherwise lost. This command lets the in-loop agent,
+  which still has the conversation in context, extract those decisions and pipe
+  them in; basou writes them deterministically (it runs no LLM itself) into one
+  ad-hoc session timestamped now, so orientation surfaces them as the latest
+  decisions. Validation errors name the offending array index and field
+  (e.g. `decision[2].title must be a non-empty string`) so the agent can
+  self-correct. `--dry-run` previews without writing; `--json` emits a
+  structured summary. Like `orient` / `refresh` / `note`, it is view-aware and
+  resolves a workspace-view directory to its planning repo.
+
+### Changed
+
+- Orientation and `basou refresh` now point at `basou decision capture` when a
+  decision is stale or none were auto-recorded, so the surface that detects the
+  why-capture gap also names the way to close it.
+- `basou decision record` now rejects a whitespace-only `--title` / `--rationale`
+  / `--rejected-reason` / `--alternative` / `--linked-file` and a malformed
+  `--linked-event` id up front (previously a malformed id was accepted here and
+  only failed later inside the event-schema write with a generic error). This
+  hardening is shared with the new `basou decision capture`.
+
 ## 0.13.1 — 2026-06-22
 
 ### Fixed

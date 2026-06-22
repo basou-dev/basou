@@ -13,7 +13,13 @@ import {
 } from "@basou/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { doRunDecisionRecord, registerDecisionCommand, runDecisionRecord } from "./decision.js";
+import {
+  doRunDecisionCapture,
+  doRunDecisionRecord,
+  registerDecisionCommand,
+  runDecisionCapture,
+  runDecisionRecord,
+} from "./decision.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -394,6 +400,18 @@ describe("registerDecisionCommand (CLI option converters)", () => {
     expect(stderr).toContain("Title must not be empty");
   });
 
+  it("dec-18b: a whitespace-only --title is rejected by the converter", async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerDecisionCommand(program);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await expect(
+      program.parseAsync(["node", "basou", "decision", "record", "--title", "   "]),
+    ).rejects.toBeDefined();
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("Title must not be empty");
+  });
+
   it("dec-19: --rationale '' is rejected by the converter", async () => {
     const program = new Command();
     program.exitOverride();
@@ -488,6 +506,29 @@ describe("doRunDecisionRecord (rich fields)", () => {
         "x",
         "--linked-event",
         "ses_01HXABCDEF1234567890ABCDEF",
+      ]),
+    ).rejects.toBeDefined();
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).toContain("Linked event id must match evt_<ULID>");
+  });
+
+  it("dec-rich-4b: --linked-event with a malformed (too short) evt id is rejected by the converter", async () => {
+    // The converter now validates the full ULID shape, not a bare regex, so a
+    // value like `evt_X` is rejected up front rather than at write time.
+    const program = new Command();
+    program.exitOverride();
+    registerDecisionCommand(program);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await expect(
+      program.parseAsync([
+        "node",
+        "basou",
+        "decision",
+        "record",
+        "--title",
+        "x",
+        "--linked-event",
+        "evt_X",
       ]),
     ).rejects.toBeDefined();
     const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("");
@@ -608,5 +649,325 @@ describe("doRunDecisionRecord (label cap)", () => {
     await doRunDecisionRecord({ title: "short title" }, { cwd: repo, ...FIXED_CTX });
     const label = await readAdHocSessionLabel(repo);
     expect(label).toBe("Ad-hoc decision: short title");
+  });
+});
+
+describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
+  async function readAdHocEvents(repo: string): Promise<Record<string, unknown>[]> {
+    const sid = await findAdHocSessionId(repo);
+    return (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+
+  const captureCtx = (repo: string, input: string) => ({
+    cwd: repo,
+    nowProvider: () => FIXED_NOW,
+    readInput: async () => input,
+  });
+
+  it("cap-1: a 2-decision batch lands in ONE ad-hoc session (4 lifecycle + 2 decisions)", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const input = JSON.stringify([{ title: "first" }, { title: "second" }]);
+    await doRunDecisionCapture({}, captureCtx(repo, input));
+
+    const events = await readAdHocEvents(repo);
+    expect(events.map((e) => e.type)).toEqual([
+      "session_started",
+      "session_status_changed",
+      "decision_recorded",
+      "decision_recorded",
+      "session_status_changed",
+      "session_ended",
+    ]);
+    const titles = events.filter((e) => e.type === "decision_recorded").map((e) => e.title);
+    expect(titles).toEqual(["first", "second"]);
+    // exactly one ad-hoc session directory exists
+    const dirs = (await readdir(basouPaths(repo).sessions)).filter((d) => d.startsWith("ses_"));
+    expect(dirs).toHaveLength(1);
+  });
+
+  it("cap-2: text output lists each decision id + title and the ad-hoc session", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title: "ship it" }])));
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("Captured 1 decision in ad-hoc session");
+    expect(stdout).toMatch(/- decision_[0-9A-Z]+: ship it/);
+  });
+
+  it("cap-3: rich fields on every item are persisted into the decision events", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const input = JSON.stringify([
+      {
+        title: "adopt pnpm",
+        rationale: "workspace protocol",
+        alternatives: ["npm", "yarn"],
+        rejected_reason: "hoisting bugs",
+        linked_events: ["evt_01HXABCDEF1234567890ABCDC1"],
+        linked_files: ["pnpm-workspace.yaml"],
+      },
+    ]);
+    await doRunDecisionCapture({}, captureCtx(repo, input));
+    const decision = (await readAdHocEvents(repo)).find(
+      (e) => e.type === "decision_recorded",
+    ) as Record<string, unknown>;
+    expect(decision.title).toBe("adopt pnpm");
+    expect(decision.rationale).toBe("workspace protocol");
+    expect(decision.alternatives).toEqual(["npm", "yarn"]);
+    expect(decision.rejected_reason).toBe("hoisting bugs");
+    expect(decision.linked_events).toEqual(["evt_01HXABCDEF1234567890ABCDC1"]);
+    expect(decision.linked_files).toEqual(["pnpm-workspace.yaml"]);
+  });
+
+  it("cap-4: --json emits mode=ad-hoc, count, and a decisions array with ids + fields", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    const input = JSON.stringify([
+      { title: "a", rationale: "ra" },
+      { title: "b", alternatives: ["x"] },
+    ]);
+    await doRunDecisionCapture({ json: true }, captureCtx(repo, input));
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(payload.mode).toBe("ad-hoc");
+    expect(payload.session_status).toBe("completed");
+    expect(payload.count).toBe(2);
+    const decisions = payload.decisions as Record<string, unknown>[];
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]?.title).toBe("a");
+    expect(decisions[0]?.rationale).toBe("ra");
+    expect(typeof decisions[0]?.decision_id).toBe("string");
+    expect(typeof decisions[0]?.event_id).toBe("string");
+    expect(decisions[1]?.alternatives).toEqual(["x"]);
+  });
+
+  it("cap-5: --file reads the JSON array from disk instead of stdin", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const file = join(repo, "decisions.json");
+    await writeFile(file, JSON.stringify([{ title: "from-file" }]), "utf8");
+    await doRunDecisionCapture(
+      { file },
+      // no readInput: prove --file is the source
+      { cwd: repo, nowProvider: () => FIXED_NOW },
+    );
+    const titles = (await readAdHocEvents(repo))
+      .filter((e) => e.type === "decision_recorded")
+      .map((e) => e.title);
+    expect(titles).toEqual(["from-file"]);
+  });
+
+  it("cap-6: --dry-run writes nothing and previews the decisions", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    const input = JSON.stringify([{ title: "preview-me" }, { title: "and-me" }]);
+    await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("Would capture 2 decisions (dry run; nothing written):");
+    expect(stdout).toContain("- preview-me");
+    expect(stdout).toContain("- and-me");
+    const dirs = (await readdir(basouPaths(repo).sessions)).filter((d) => d.startsWith("ses_"));
+    expect(dirs).toHaveLength(0);
+  });
+
+  it("cap-7: --dry-run --json emits dry_run:true with the parsed decisions and no ids", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    const input = JSON.stringify([{ title: "x", rationale: "y" }]);
+    await doRunDecisionCapture({ dryRun: true, json: true }, captureCtx(repo, input));
+    const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
+    expect(payload.dry_run).toBe(true);
+    expect(payload.count).toBe(1);
+    const decisions = payload.decisions as Record<string, unknown>[];
+    expect(decisions[0]?.title).toBe("x");
+    expect("decision_id" in (decisions[0] ?? {})).toBe(false);
+  });
+
+  it("cap-8: the ad-hoc label states the decision count", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunDecisionCapture(
+      {},
+      captureCtx(repo, JSON.stringify([{ title: "a" }, { title: "b" }, { title: "c" }])),
+    );
+    const parsed = (await readYamlFile(
+      join(basouPaths(repo).sessions, await findAdHocSessionId(repo), "session.yaml"),
+    )) as { session: { label: string } };
+    expect(parsed.session.label).toBe("Ad-hoc capture: 3 decisions");
+  });
+
+  it("cap-9: input order is preserved (decision ids increase with input order)", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunDecisionCapture(
+      {},
+      captureCtx(repo, JSON.stringify([{ title: "earliest" }, { title: "latest" }])),
+    );
+    const decisions = (await readAdHocEvents(repo)).filter((e) => e.type === "decision_recorded");
+    const [a, b] = decisions as Record<string, unknown>[];
+    expect(a?.title).toBe("earliest");
+    expect(b?.title).toBe("latest");
+    // same capture instant, monotonic ids => last input sorts last (= latest)
+    expect(a?.occurred_at).toBe(b?.occurred_at);
+    expect(String(a?.decision_id) < String(b?.decision_id)).toBe(true);
+  });
+
+  it("cap-10: the --file path is sanitized (repo-relative) in session.yaml, not leaked absolute", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const sub = join(repo, "notes");
+    await mkdir(sub, { recursive: true });
+    const file = join(sub, "decisions.json");
+    await writeFile(file, JSON.stringify([{ title: "from-file" }]), "utf8");
+    await doRunDecisionCapture({ file }, { cwd: repo, nowProvider: () => FIXED_NOW });
+    const yaml = await readFile(
+      join(basouPaths(repo).sessions, await findAdHocSessionId(repo), "session.yaml"),
+      "utf8",
+    );
+    // recorded in repo-relative form...
+    expect(yaml).toContain("notes/decisions.json");
+    // ...and the operator's absolute path never lands in persisted state.
+    expect(yaml).not.toContain(file);
+  });
+});
+
+describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
+  const errCtx = (repo: string, input: string) => ({
+    cwd: repo,
+    nowProvider: () => FIXED_NOW,
+    readInput: async () => input,
+  });
+
+  it("cap-err-1: an empty array is rejected", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture({}, errCtx(repo, "[]"));
+    expect(joinCalls(err)).toContain("Input array must contain at least one decision.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-2: malformed JSON is rejected with a JSON hint", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture({}, errCtx(repo, "[{ not json"));
+    expect(joinCalls(err)).toContain("Input is not valid JSON:");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-3: whitespace-only input is rejected with the no-input hint", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture({}, errCtx(repo, "   \n  "));
+    expect(joinCalls(err)).toContain("No input: pipe a JSON array of decisions to stdin");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-4: a non-array (object) input is rejected", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture({}, errCtx(repo, JSON.stringify({ title: "x" })));
+    expect(joinCalls(err)).toContain("Input must be a JSON array of decision objects.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-5: an empty title names the offending index", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture({}, errCtx(repo, JSON.stringify([{ title: "ok" }, { title: "" }])));
+    expect(joinCalls(err)).toContain("decision[1].title must be a non-empty string.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-6: an unknown field is rejected (strict) and named", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture({}, errCtx(repo, JSON.stringify([{ title: "x", rationals: "typo" }])));
+    expect(joinCalls(err)).toContain("decision[0]: unknown field 'rationals'.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-7: a bad linked_events id names the index path", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture(
+      {},
+      errCtx(
+        repo,
+        JSON.stringify([
+          { title: "x", linked_events: ["evt_01HXABCDEF1234567890ABCDC1", "ses_wrong"] },
+        ]),
+      ),
+    );
+    expect(joinCalls(err)).toContain("decision[0].linked_events[1] must match evt_<ULID>");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-8: alternatives that is not an array is rejected", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture(
+      {},
+      errCtx(repo, JSON.stringify([{ title: "x", alternatives: "not-an-array" }])),
+    );
+    expect(joinCalls(err)).toContain("decision[0].alternatives must be an array of strings.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-9: --file that does not exist is rejected without hanging", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture(
+      { file: join(repo, "missing.json") },
+      { cwd: repo, nowProvider: () => FIXED_NOW },
+    );
+    expect(joinCalls(err)).toContain("Input file not found:");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-10: a non-initialized workspace is reported with the init hint", async () => {
+    const repo = await realpath(getTmpRepo());
+    const err = captureStderr();
+    await runDecisionCapture({}, errCtx(repo, JSON.stringify([{ title: "x" }])));
+    expect(joinCalls(err)).toContain("Workspace not initialized. Run 'basou init' first.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-11: a malformed evt id (too short) is rejected up front, not at write time", async () => {
+    // `evt_X` passes a bare `evt_[A-Z0-9]+` regex but fails EventIdSchema, so a
+    // loose validator would let it through here only for the chained-append
+    // EventSchema.parse to reject it later with a generic error. The canonical
+    // check rejects it now with an index-named message.
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture(
+      {},
+      errCtx(repo, JSON.stringify([{ title: "x", linked_events: ["evt_X"] }])),
+    );
+    expect(joinCalls(err)).toContain("decision[0].linked_events[0] must match evt_<ULID>");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-12: --dry-run rejects a malformed evt id (no false-clear preview)", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture(
+      { dryRun: true },
+      errCtx(repo, JSON.stringify([{ title: "x", linked_events: ["evt_X"] }])),
+    );
+    expect(joinCalls(err)).toContain("decision[0].linked_events[0] must match evt_<ULID>");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-13: a whitespace-only title is rejected (not persisted as a blank entry)", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture({}, errCtx(repo, JSON.stringify([{ title: "   " }])));
+    expect(joinCalls(err)).toContain("decision[0].title must be a non-empty string.");
+    expect(process.exitCode).toBe(1);
+    const dirs = (await readdir(basouPaths(repo).sessions)).filter((d) => d.startsWith("ses_"));
+    expect(dirs).toHaveLength(0);
   });
 });

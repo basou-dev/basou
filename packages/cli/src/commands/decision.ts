@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import {
   acquireLock,
   appendEventToExistingSession,
@@ -6,12 +9,14 @@ import {
   createAdHocSessionWithEvent,
   type Event,
   findErrorCode,
+  isValidPrefixedId,
   type PrefixedId,
   prefixedUlid,
   readManifest,
   resolveRepositoryRoot,
   resolveSessionId,
   type SessionStatus,
+  sanitizePath,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 import {
@@ -20,6 +25,7 @@ import {
   renderCliError,
   shortSessionId,
 } from "../lib/error-render.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 // Raised from the original 40-char cap to 80 chars so a long decision
 // title (= the most common ad-hoc trigger) retains its core information
@@ -95,7 +101,47 @@ export function registerDecisionCommand(program: Command): void {
     .action(async (options: DecisionRecordOptions) => {
       await runDecisionRecord(options);
     });
+
+  decision
+    .command("capture")
+    .description(
+      "Capture a batch of decisions from a JSON array (stdin or --file). The " +
+        "in-loop agent extracts a session's conversational decisions -- with " +
+        "rationale, alternatives, and rejected reasons -- and pipes them in; " +
+        "basou writes them deterministically into one ad-hoc session.",
+    )
+    .option("--file <path>", "Read the JSON array from a file instead of stdin")
+    .option("--dry-run", "Validate and preview the decisions without writing them")
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .addHelpText("after", CAPTURE_HELP)
+    .action(async (options: DecisionCaptureOptions) => {
+      await runDecisionCapture(options);
+    });
 }
+
+const CAPTURE_HELP = `
+Input format (a JSON array; one object per decision):
+  [
+    {
+      "title": "Adopt pnpm for the monorepo",
+      "rationale": "Workspace protocol and a content-addressed store fit our layout.",
+      "alternatives": ["npm workspaces", "yarn"],
+      "rejected_reason": "npm hoisting caused phantom-dependency bugs",
+      "linked_files": ["pnpm-workspace.yaml"]
+    }
+  ]
+
+Only "title" is required; every other field is optional. All decisions are
+written into one ad-hoc session timestamped now, so orientation surfaces them
+as the latest decisions. Run from a workspace-view directory and it resolves to
+the planning repo, like 'basou orient' / 'basou refresh' / 'basou note'.
+
+Example (heredoc on stdin):
+  basou decision capture <<'JSON'
+  [{ "title": "Ship the capture command", "rationale": "Close the why-capture gap" }]
+  JSON
+`;
 
 /**
  * Programmatic entry for `basou decision record`. Owns process exit state.
@@ -206,6 +252,364 @@ export async function doRunDecisionRecord(
   });
 }
 
+export type DecisionCaptureOptions = {
+  /** Read the JSON array from this file instead of stdin. */
+  file?: string;
+  /** Validate + preview without writing anything. */
+  dryRun?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type DecisionCaptureContext = {
+  /** Defaults to `process.cwd()`. Injectable for tests. */
+  cwd?: string;
+  /** Defaults to `() => new Date()`. Injectable for tests. */
+  nowProvider?: () => Date;
+  /**
+   * Defaults to reading process.stdin to EOF. Injectable for tests so they do
+   * not depend on a real stdin stream. Ignored when `--file` is given.
+   */
+  readInput?: () => Promise<string>;
+};
+
+/** One decision in the capture input: a title plus the optional rich fields. */
+type CaptureDecisionInput = { title: string } & RichDecisionFields;
+
+/**
+ * Programmatic entry for `basou decision capture`. Owns process exit state.
+ * Tests targeting the success path or the thrown error should prefer
+ * {@link doRunDecisionCapture}.
+ */
+export async function runDecisionCapture(
+  options: DecisionCaptureOptions,
+  ctx: DecisionCaptureContext = {},
+): Promise<void> {
+  try {
+    await doRunDecisionCapture(options, ctx);
+  } catch (error: unknown) {
+    // The ad-hoc path writes the decision events before finalizing
+    // session.yaml; on a finalize failure the classifier surfaces "do not
+    // rerun" so the agent does not re-pipe and duplicate the batch (mirrors
+    // `basou decision record`).
+    renderCliError(error, {
+      verbose: isVerbose(options),
+      classifiers: [failedToFinalizeClassifier],
+    });
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunDecisionCapture(
+  options: DecisionCaptureOptions,
+  ctx: DecisionCaptureContext,
+): Promise<void> {
+  const cwd = ctx.cwd ?? process.cwd();
+  // View-aware resolution (like orient / refresh / note) so capture works from
+  // a workspace-view dir, redirecting to the planning repo where decisions.md
+  // and orient live. `basou decision record` predates this and uses a plain
+  // git-root resolver; aligning record is a separate, behavior-changing
+  // follow-up, not in scope for the capture slice.
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "decision capture");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+
+  const raw = await readCaptureInput(options, ctx);
+  const decisions = parseCaptureInput(raw);
+
+  if (options.dryRun === true) {
+    printCapturePreview(options, decisions);
+    return;
+  }
+
+  const now = ctx.nowProvider !== undefined ? ctx.nowProvider() : new Date();
+  const occurredAt = now.toISOString();
+  // Mint the decision ids up front, in input order. prefixedUlid is monotonic,
+  // so even though every event shares `occurredAt` the ids increase with input
+  // order; decisions.md and orient (which sort by occurred_at then decision id)
+  // therefore preserve the agent's ordering and treat the last item as latest.
+  const decisionIds = decisions.map(() => prefixedUlid("decision"));
+
+  const manifest = await readManifest(paths);
+  // Sanitize the --file path before it lands in session.yaml invocation.args:
+  // an absolute path would otherwise leak the operator's machine layout into
+  // persisted `.basou/` state, the same reason `working_directory` is
+  // sanitized. Resolve against cwd first so a relative --file is rewritten the
+  // same way readFile resolved it.
+  const invocationArgs =
+    options.file !== undefined
+      ? [
+          "--file",
+          sanitizePath(resolve(cwd, options.file), {
+            workingDirectory: repositoryRoot,
+            homedir: homedir(),
+          }),
+        ]
+      : [];
+  const adHoc = await createAdHocSessionWithEvent({
+    paths,
+    manifest,
+    label: buildCaptureLabel(decisions.length),
+    occurredAt,
+    sessionSource: "human",
+    workingDirectory: repositoryRoot,
+    invocation: {
+      command: "basou decision capture",
+      args: invocationArgs,
+    },
+    targetEventBuilders: decisions.map(
+      (decision, index) =>
+        (sessionId: PrefixedId<"ses">, eventId: PrefixedId<"evt">): Event =>
+          buildDecisionEvent({
+            eventId,
+            sessionId,
+            decisionId: decisionIds[index] as PrefixedId<"decision">,
+            title: decision.title,
+            occurredAt,
+            rich: toRichFields(decision),
+          }),
+    ),
+  });
+
+  printCaptureResult(options, {
+    sessionId: adHoc.sessionId,
+    items: decisions.map((decision, index) => ({
+      decisionId: decisionIds[index] as string,
+      eventId: adHoc.targetEventIds[index] as string,
+      input: decision,
+    })),
+  });
+}
+
+async function readCaptureInput(
+  options: DecisionCaptureOptions,
+  ctx: DecisionCaptureContext,
+): Promise<string> {
+  if (options.file !== undefined) {
+    try {
+      return await readFile(options.file, "utf8");
+    } catch (error: unknown) {
+      if (findErrorCode(error, "ENOENT")) {
+        throw new Error(`Input file not found: ${options.file}`);
+      }
+      throw error;
+    }
+  }
+  if (ctx.readInput !== undefined) {
+    return await ctx.readInput();
+  }
+  // A bare invocation with no piped stdin would otherwise block forever; fail
+  // fast with the same actionable hint the empty-input guard uses.
+  if (process.stdin.isTTY === true) {
+    throw new Error(NO_INPUT_HINT);
+  }
+  return await readStdinToEnd();
+}
+
+async function readStdinToEnd(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+const NO_INPUT_HINT = "No input: pipe a JSON array of decisions to stdin or pass --file <path>.";
+
+const CAPTURE_ALLOWED_KEYS: ReadonlySet<string> = new Set([
+  "title",
+  "rationale",
+  "rejected_reason",
+  "alternatives",
+  "linked_events",
+  "linked_files",
+]);
+
+/**
+ * Parse + validate the capture input. Errors name the offending array index and
+ * field (e.g. `decision[2].title must be a non-empty string`) so the in-loop
+ * agent can self-correct its extraction without guessing.
+ */
+function parseCaptureInput(raw: string): CaptureDecisionInput[] {
+  if (raw.trim().length === 0) {
+    throw new Error(NO_INPUT_HINT);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Input is not valid JSON: ${detail}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("Input must be a JSON array of decision objects.");
+  }
+  if (parsed.length === 0) {
+    throw new Error("Input array must contain at least one decision.");
+  }
+  return parsed.map((item, index) => validateCaptureItem(item, index));
+}
+
+function validateCaptureItem(item: unknown, index: number): CaptureDecisionInput {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    throw new Error(`decision[${index}] must be a JSON object.`);
+  }
+  const obj = item as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (!CAPTURE_ALLOWED_KEYS.has(key)) {
+      throw new Error(
+        `decision[${index}]: unknown field '${key}'. Allowed: title, rationale, rejected_reason, alternatives, linked_events, linked_files.`,
+      );
+    }
+  }
+  if (typeof obj.title !== "string" || isBlank(obj.title)) {
+    throw new Error(`decision[${index}].title must be a non-empty string.`);
+  }
+  const out: CaptureDecisionInput = { title: obj.title };
+  if (obj.rationale !== undefined) {
+    out.rationale = requireNonEmptyString(obj.rationale, index, "rationale");
+  }
+  if (obj.rejected_reason !== undefined) {
+    out.rejected_reason = requireNonEmptyString(obj.rejected_reason, index, "rejected_reason");
+  }
+  if (obj.alternatives !== undefined) {
+    out.alternatives = validateStringArray(obj.alternatives, index, "alternatives", (value, i) => {
+      if (isBlank(value)) {
+        throw new Error(`decision[${index}].alternatives[${i}] must not be empty.`);
+      }
+    });
+  }
+  if (obj.linked_events !== undefined) {
+    out.linked_events = validateStringArray(
+      obj.linked_events,
+      index,
+      "linked_events",
+      (value, i) => {
+        if (!isValidEventId(value)) {
+          throw new Error(
+            `decision[${index}].linked_events[${i}] must match evt_<ULID>, got '${value}'.`,
+          );
+        }
+      },
+    );
+  }
+  if (obj.linked_files !== undefined) {
+    out.linked_files = validateStringArray(obj.linked_files, index, "linked_files", (value, i) => {
+      if (isBlank(value)) {
+        throw new Error(`decision[${index}].linked_files[${i}] must not be empty.`);
+      }
+      if (value.length > 4096) {
+        throw new Error(`decision[${index}].linked_files[${i}] exceeds 4096 chars.`);
+      }
+    });
+  }
+  return out;
+}
+
+function requireNonEmptyString(value: unknown, index: number, field: string): string {
+  if (typeof value !== "string" || isBlank(value)) {
+    throw new Error(`decision[${index}].${field} must be a non-empty string.`);
+  }
+  return value;
+}
+
+// Treat whitespace-only as empty: a blank title / rationale persists into
+// decisions.md and orientation as an unreadable entry. `basou note` already
+// guards this way; `decision record` / `decision capture` now match.
+function isBlank(value: string): boolean {
+  return value.trim().length === 0;
+}
+
+function validateStringArray(
+  value: unknown,
+  index: number,
+  field: string,
+  checkEach: (value: string, i: number) => void,
+): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`decision[${index}].${field} must be an array of strings.`);
+  }
+  return value.map((entry, i) => {
+    if (typeof entry !== "string") {
+      throw new Error(`decision[${index}].${field}[${i}] must be a string.`);
+    }
+    checkEach(entry, i);
+    return entry;
+  });
+}
+
+function toRichFields(decision: CaptureDecisionInput): RichDecisionFields {
+  const out: RichDecisionFields = {};
+  if (decision.rationale !== undefined) out.rationale = decision.rationale;
+  if (decision.rejected_reason !== undefined) out.rejected_reason = decision.rejected_reason;
+  if (decision.alternatives !== undefined) out.alternatives = [...decision.alternatives];
+  if (decision.linked_events !== undefined) out.linked_events = [...decision.linked_events];
+  if (decision.linked_files !== undefined) out.linked_files = [...decision.linked_files];
+  return out;
+}
+
+function buildCaptureLabel(count: number): string {
+  return `Ad-hoc capture: ${count} decision${count === 1 ? "" : "s"}`;
+}
+
+type CaptureResultItem = { decisionId: string; eventId: string; input: CaptureDecisionInput };
+
+function captureItemToPayload(item: CaptureResultItem): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    decision_id: item.decisionId,
+    event_id: item.eventId,
+    title: item.input.title,
+  };
+  if (item.input.rationale !== undefined) payload.rationale = item.input.rationale;
+  if (item.input.alternatives !== undefined) payload.alternatives = item.input.alternatives;
+  if (item.input.rejected_reason !== undefined)
+    payload.rejected_reason = item.input.rejected_reason;
+  if (item.input.linked_events !== undefined) payload.linked_events = item.input.linked_events;
+  if (item.input.linked_files !== undefined) payload.linked_files = item.input.linked_files;
+  return payload;
+}
+
+function printCapturePreview(
+  options: DecisionCaptureOptions,
+  decisions: CaptureDecisionInput[],
+): void {
+  if (options.json === true) {
+    console.log(JSON.stringify({ dry_run: true, count: decisions.length, decisions }));
+    return;
+  }
+  console.log(
+    `Would capture ${decisions.length} decision${decisions.length === 1 ? "" : "s"} (dry run; nothing written):`,
+  );
+  for (const decision of decisions) {
+    console.log(`- ${decision.title}`);
+  }
+}
+
+function printCaptureResult(
+  options: DecisionCaptureOptions,
+  result: { sessionId: string; items: CaptureResultItem[] },
+): void {
+  const sid = shortSessionId(result.sessionId);
+  if (options.json === true) {
+    console.log(
+      JSON.stringify({
+        mode: "ad-hoc",
+        session_id: result.sessionId,
+        session_status: "completed",
+        count: result.items.length,
+        decisions: result.items.map(captureItemToPayload),
+      }),
+    );
+    return;
+  }
+  console.log(
+    `Captured ${result.items.length} decision${result.items.length === 1 ? "" : "s"} in ad-hoc session ${sid}:`,
+  );
+  for (const item of result.items) {
+    console.log(`- ${item.decisionId}: ${item.input.title}`);
+  }
+}
+
 type RichDecisionFields = {
   rationale?: string;
   rejected_reason?: string;
@@ -266,44 +670,53 @@ function buildAdHocLabel(title: string): string {
 }
 
 function parseTitle(raw: string): string {
-  if (raw.length === 0) {
+  if (isBlank(raw)) {
     throw new InvalidArgumentError("Title must not be empty");
   }
   return raw;
 }
 
 function parseRationale(raw: string): string {
-  if (raw.length === 0) {
+  if (isBlank(raw)) {
     throw new InvalidArgumentError("Rationale must not be empty");
   }
   return raw;
 }
 
 function parseRejectedReason(raw: string): string {
-  if (raw.length === 0) {
+  if (isBlank(raw)) {
     throw new InvalidArgumentError("Rejected reason must not be empty");
   }
   return raw;
 }
 
 function collectAlternative(value: string, prev: string[]): string[] {
-  if (value.length === 0) {
+  if (isBlank(value)) {
     throw new InvalidArgumentError("Alternative must not be empty");
   }
   return prev.concat(value);
 }
 
-const EVENT_ID_RE = /^evt_[A-Z0-9]+$/;
+// Validate against the canonical event-id shape (`evt_<26-char Crockford ULID>`),
+// exactly what `EventIdSchema` enforces at write time. A looser check (e.g. a
+// bare `evt_[A-Z0-9]+` regex) would accept ids like `evt_X` here only for the
+// chained-append `EventSchema.parse` to reject them later with a generic
+// "Invalid Basou event payload" error -- and would let `decision capture
+// --dry-run` falsely report success. Shared by `decision record` and
+// `decision capture` so both reject the same set up front.
+function isValidEventId(value: string): boolean {
+  return isValidPrefixedId(value) && value.startsWith("evt_");
+}
 
 function collectLinkedEvent(value: string, prev: string[]): string[] {
-  if (!EVENT_ID_RE.test(value)) {
+  if (!isValidEventId(value)) {
     throw new InvalidArgumentError(`Linked event id must match evt_<ULID>, got '${value}'`);
   }
   return prev.concat(value);
 }
 
 function collectLinkedFile(value: string, prev: string[]): string[] {
-  if (value.length === 0) {
+  if (isBlank(value)) {
     throw new InvalidArgumentError("Linked file path must not be empty");
   }
   if (value.length > 4096) {
