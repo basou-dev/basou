@@ -3,6 +3,20 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.13.1 — 2026-06-22
+
+### Fixed
+
+- `basou import claude-code` / `basou refresh` now locate Claude Code
+  transcripts using Claude's full per-project directory encoding — every
+  non-alphanumeric path character maps to `-`, not just `/`. A workspace whose
+  path contains `_` (or `.` / space), e.g. `.../spectrum_chisel-workspace`, was
+  looked up under an underscore-preserving directory name, missed, and silently
+  skipped as "no source logs"; its sessions are now discovered. Each transcript
+  is additionally attributed by its own recorded `cwd` and skipped when it does
+  not belong to a requested project, so the lossy directory encoding cannot
+  import a colliding sibling project's transcripts under the wrong project.
+
 ## 0.13.0 — 2026-06-22
 
 ### Added
