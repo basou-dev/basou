@@ -1166,6 +1166,13 @@
         },
         "body": {
           "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "note",
+            "next_step"
+          ]
         }
       },
       "required": [

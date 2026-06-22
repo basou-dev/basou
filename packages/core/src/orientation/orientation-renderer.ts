@@ -65,6 +65,8 @@ const DECISION_TRAILING_ACTIVITY_GAP_MS = 60 * 60 * 1000;
 
 type DecisionRecord = { decisionId: string; title: string; occurredAt: string };
 
+type NoteRecord = { body: string; sessionId: string; occurredAt: string };
+
 type PendingApproval = {
   id: string;
   risk: string;
@@ -104,6 +106,11 @@ export type OrientationSummary = {
   /** Most recent `decision_recorded` across all sessions; null when none. */
   latestDecision: DecisionRecord | null;
   decisionCount: number;
+  /**
+   * Most recent `note_added` over non-archived sessions — the recorded next
+   * step / handoff ("次の起点") surfaced in the forward section; null when none.
+   */
+  latestNote: NoteRecord | null;
   /** related_files of the latest session, deduped + sorted + capped at the display limit. */
   relatedFiles: { displayed: string[]; overflow: number };
   /** Tasks whose status is `planned` or `in_progress`. */
@@ -153,8 +160,11 @@ export async function summarizeOrientation(
   if (input.onWarning !== undefined) loadOpts.onWarning = input.onWarning;
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
-  // One replay pass per session yields two facts:
+  // One replay pass per session yields three facts:
   //  - `decisions`: chronological `decision_recorded` across ALL sessions.
+  //  - `latestNote`: the most recent `note_added` over NON-archived sessions —
+  //    the operator's recorded next step / handoff ("次の起点"), surfaced in the
+  //    forward section so a free-text resume hint survives into the next session.
   //  - `latestActivityAt`: the tail of captured activity over NON-archived
   //    sessions = max of the session boundary (ended_at ?? started_at) AND every
   //    event's occurred_at. Folding event times (not just ended_at) is what makes
@@ -165,9 +175,11 @@ export async function summarizeOrientation(
   //    the note targets — would be silently treated as current (a false-clear).
   //    The population is intentionally asymmetric: decisions span archived
   //    sessions (a past decision still answers "what did I last decide"), while
-  //    the activity tail is non-archived only (it answers "is there newer work").
+  //    the activity tail and latest note are non-archived only (they answer "is
+  //    there newer work" / "where do I resume").
   const decisions: DecisionRecord[] = [];
   let latestActivityAt: string | null = null;
+  let latestNote: NoteRecord | null = null;
   const noteActivity = (iso: string): void => {
     if (latestActivityAt === null || Date.parse(iso) > Date.parse(latestActivityAt)) {
       latestActivityAt = iso;
@@ -189,6 +201,16 @@ export async function summarizeOrientation(
             title: ev.title,
             occurredAt: ev.occurred_at,
           });
+        }
+        // Only `next_step`-kind notes (from `basou note`) are resume hints; a
+        // plain `basou session note` annotation (kind absent) is not surfaced.
+        if (counted && ev.type === "note_added" && ev.kind === "next_step") {
+          if (
+            latestNote === null ||
+            Date.parse(ev.occurred_at) > Date.parse(latestNote.occurredAt)
+          ) {
+            latestNote = { body: ev.body, sessionId: entry.sessionId, occurredAt: ev.occurred_at };
+          }
         }
         if (counted) noteActivity(ev.occurred_at);
       }
@@ -309,6 +331,7 @@ export async function summarizeOrientation(
     latestSession,
     latestDecision: latestDecision ?? null,
     decisionCount: decisions.length,
+    latestNote,
     relatedFiles: { displayed, overflow },
     inFlightTasks,
     plannedTasks,
@@ -472,14 +495,37 @@ function formatOrientationBody(
   // "where am I heading"
   lines.push("## どこへ向かう");
   lines.push("");
-  if (summary.plannedTasks.length === 0) {
+  // The recorded next step (a `basou note`) is the operator's explicit resume
+  // hint; surface it first so a free-text handoff survives into the next session
+  // rather than living only in a decision title or an external memory file.
+  if (summary.latestNote !== null) {
+    const noteAge = relativeAgeJa(summary.latestNote.occurredAt, now);
+    lines.push(
+      `- 次の起点 (記録済み, ${noteAge}): ${noteSummary(summary.latestNote.body)} [session ${shortId(summary.latestNote.sessionId)}]`,
+    );
+    // Same honesty guard as the latest decision: if captured activity continued
+    // well past when this resume hint was recorded, the work may have moved on,
+    // so flag it rather than presenting a stale starting point as current.
+    const activityAt = summary.freshness.latestActivityAt;
+    if (
+      activityAt !== null &&
+      Date.parse(activityAt) - Date.parse(summary.latestNote.occurredAt) >
+        DECISION_TRAILING_ACTIVITY_GAP_MS
+    ) {
+      lines.push(
+        `  - 注: この起点の記録後 (最終活動 ${relativeAgeJa(activityAt, now)}) も作業が続いています。再開点が古い可能性があります。`,
+      );
+    }
+  }
+  for (const t of summary.plannedTasks) {
+    lines.push(`- ${t.title} [${shortId(t.id)}]`);
+  }
+  // Fall back to the decision hint only when there is neither a recorded next
+  // step nor a planned task — otherwise the section already says where to go.
+  if (summary.latestNote === null && summary.plannedTasks.length === 0) {
     lines.push("- (no planned tasks — direction is inferred from recent decisions)");
     if (summary.latestDecision !== null) {
       lines.push(`  - 直近の判断: ${summary.latestDecision.title}`);
-    }
-  } else {
-    for (const t of summary.plannedTasks) {
-      lines.push(`- ${t.title} [${shortId(t.id)}]`);
     }
   }
   lines.push("");
@@ -645,6 +691,15 @@ function relativeAge(startedAt: string | undefined, now: Date): string {
   if (ms < 0) return "just now";
   if (ms < 1000) return "just now";
   return `${formatDurationMs(ms)} ago`;
+}
+
+// A recorded note can be multi-line and arbitrarily long; collapse whitespace
+// to keep it on one orientation bullet and cap it so a verbose handoff does not
+// dominate the view. The full body is preserved in the event (see session show).
+const NOTE_SUMMARY_MAX = 200;
+function noteSummary(body: string): string {
+  const oneLine = body.replace(/\s+/g, " ").trim();
+  return oneLine.length > NOTE_SUMMARY_MAX ? `${oneLine.slice(0, NOTE_SUMMARY_MAX - 1)}…` : oneLine;
 }
 
 function suspectText(reason: SuspectReason | null): string {
