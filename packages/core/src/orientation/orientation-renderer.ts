@@ -528,10 +528,6 @@ function freshnessVerdict(
   const rel = relativeAgeJa(summary.freshness.newestStartedAt, now);
   const tool = toolDisplayName(summary.freshness.newestSource);
   const suspectCount = summary.suspects.length;
-  const suspectClause =
-    suspectCount > 0
-      ? `要注意セッションが ${suspectCount} 件あります。`
-      : "取りこぼし・要注意なし。";
 
   if (staleness === null) {
     return [
@@ -540,7 +536,22 @@ function freshnessVerdict(
     ];
   }
 
-  return [`✅ 最新です。最後の作業は ${rel}(${tool})。${suspectClause}`];
+  // The probe ran and found no uncaptured/grown native sessions, so the IMPORT is
+  // current. Scope the claim to exactly that — the old "取りこぼし・要注意なし"
+  // (no omissions / nothing to worry about) overclaimed: this verdict only checks
+  // that captured native sessions are imported and none are suspect. It does NOT
+  // (and from telemetry alone cannot) detect planning/implementation drift or
+  // unrecorded decisions, so it must not imply provenance is comprehensive.
+  const lines = [
+    `✅ 取り込みは最新です。最後の作業は ${rel}(${tool})。未取り込みの native セッションはありません。`,
+  ];
+  if (suspectCount > 0) {
+    lines.push(`ただし要注意セッションが ${suspectCount} 件あります(上記「要注意 session」参照)。`);
+  }
+  lines.push(
+    "注: この判定は取り込み済み native セッションの鮮度と suspect の有無だけを見ます。計画↔実装のドリフトや未記録の意思決定までは検知しません。",
+  );
+  return lines;
 }
 
 /** Japanese relative age, e.g. "7時間26分前" / "3日前" / "たった今", for the verdict line. */

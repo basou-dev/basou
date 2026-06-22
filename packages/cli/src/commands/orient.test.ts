@@ -248,7 +248,7 @@ describe("basou orient", () => {
     await placeSession(repo, { id: SES("S01"), source: "claude-code-import" });
     const out = captureStdout();
     await doRunOrient({}, ctxFor(repo));
-    expect(joinCalls(out)).toContain("✅ 最新です。");
+    expect(joinCalls(out)).toContain("✅ 取り込みは最新です。");
   });
 
   it("これは最新か: an uncaptured native session flips the verdict to ⚠️ stale → run refresh", async () => {
