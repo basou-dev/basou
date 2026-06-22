@@ -24,6 +24,11 @@
  */
 export function normalizeRelativePath(p: string): string {
   const trimmed = p.trim();
+  // Absolute detection is on the trimmed string, so a malformed leading-
+  // whitespace-then-slash input (`   /a`) canonicalizes as absolute rather than
+  // mis-resolving. This is defensive only: a declared/validated path is always
+  // relative (SOURCE_ROOT_PATTERN forbids both leading whitespace and a leading
+  // slash), so this branch is unreachable from any manifest value.
   const absolute = trimmed.startsWith("/");
   const out: string[] = [];
   for (const seg of trimmed.split("/")) {
