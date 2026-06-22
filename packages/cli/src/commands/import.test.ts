@@ -81,7 +81,10 @@ async function writeTranscript(
   sessionId: string,
   records: Array<Record<string, unknown>>,
 ): Promise<void> {
-  const encoded = repo.replaceAll("/", "-");
+  // Mirror Claude Code's real per-project dir encoding (every non-alphanumeric
+  // char -> "-", e.g. "_" and "."), independently of the production encoder so
+  // this fixture stays an oracle that catches an encoder regression.
+  const encoded = repo.replace(/[^a-zA-Z0-9]/g, "-");
   const dir = join(getProjectsRoot(), encoded);
   await mkdir(dir, { recursive: true });
   const body = records.map((r) => JSON.stringify(r)).join("\n");
@@ -149,6 +152,67 @@ describe("basou import claude-code", () => {
     expect(types).toContain("file_changed");
     expect(types[0]).toBe("session_started");
     expect(types[types.length - 1]).toBe("session_ended");
+  });
+
+  it("discovers transcripts for a project path containing an underscore", async () => {
+    // Claude Code encodes a project dir by replacing every non-alphanumeric
+    // char with "-", so a project at .../spectrum_chisel-workspace stores its
+    // logs under ...-spectrum-chisel-workspace. The old "/"-only encoder looked
+    // for an underscore-preserving dir and silently skipped the whole project.
+    const base = await realpath(tmpRepo as string);
+    const repo = join(base, "spectrum_chisel-workspace");
+    await mkdir(repo, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: repo, env: ENV });
+    await execFileAsync("git", ["config", "user.email", "test@example.com"], {
+      cwd: repo,
+      env: ENV,
+    });
+    await execFileAsync("git", ["config", "user.name", "test"], { cwd: repo, env: ENV });
+    const paths = await ensureBasouDirectory(repo);
+    await writeManifest(
+      paths,
+      createManifest({ workspaceName: "fixture-ws", now: FIXED_DATE, workspaceId: FIXED_WS_ID }),
+    );
+
+    await writeTranscript(repo, "sess-1", actionTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    // The underscore in the path must not cause a silent "no source logs" skip.
+    expect(await listSessionDirs(repo)).toHaveLength(1);
+  });
+
+  it("skips a colliding sibling project's transcript by its recorded cwd", async () => {
+    // "foo_x" and "foo-x" are distinct paths that encode to the SAME Claude
+    // project dir (lossy "_"->"-"), so Claude colocates their transcripts. The
+    // import must attribute each by its recorded cwd and import only this one.
+    const base = await realpath(tmpRepo as string);
+    const repo = join(base, "foo_x");
+    const sibling = join(base, "foo-x");
+    await mkdir(repo, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: repo, env: ENV });
+    await execFileAsync("git", ["config", "user.email", "test@example.com"], {
+      cwd: repo,
+      env: ENV,
+    });
+    await execFileAsync("git", ["config", "user.name", "test"], { cwd: repo, env: ENV });
+    const paths = await ensureBasouDirectory(repo);
+    await writeManifest(
+      paths,
+      createManifest({ workspaceName: "fixture-ws", now: FIXED_DATE, workspaceId: FIXED_WS_ID }),
+    );
+
+    // Both land in the one shared encoded dir; only the cwd distinguishes them.
+    await writeTranscript(repo, "mine", actionTranscript(repo));
+    await writeTranscript(sibling, "theirs", actionTranscript(sibling));
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    const dirs = await listSessionDirs(repo);
+    expect(dirs).toHaveLength(1);
+    const ext = SessionSchema.parse(
+      await readYamlFile(join(basouPaths(repo).sessions, dirs[0] as string, "session.yaml")),
+    ).session.source.external_id;
+    expect(ext).toBe("mine");
   });
 
   it("is idempotent: re-import skips an already-imported session", async () => {
@@ -558,7 +622,7 @@ async function writeTranscriptFor(
   sessionId: string,
   records: Array<Record<string, unknown>>,
 ): Promise<void> {
-  const dir = join(getProjectsRoot(), sourcePath.replaceAll("/", "-"));
+  const dir = join(getProjectsRoot(), sourcePath.replace(/[^a-zA-Z0-9]/g, "-"));
   await mkdir(dir, { recursive: true });
   await writeFile(
     join(dir, `${sessionId}.jsonl`),
@@ -798,7 +862,7 @@ describe("basou import claude-code — scoped re-import of a grown source", () =
 
     const sid = (await listSessionDirs(repo))[0] as string;
     const session = await readSession(repo, sid);
-    const encoded = repo.replaceAll("/", "-");
+    const encoded = repo.replace(/[^a-zA-Z0-9]/g, "-");
     const size = (await readFile(join(getProjectsRoot(), encoded, "sess-1.jsonl"))).length;
     expect(session.session.source.source_size_bytes).toBe(size);
   });

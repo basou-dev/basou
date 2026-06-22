@@ -84,7 +84,7 @@ async function setupInitedRepo(): Promise<string> {
 }
 
 async function writeClaudeTranscript(repo: string): Promise<void> {
-  const encoded = repo.replaceAll("/", "-");
+  const encoded = repo.replace(/[^a-zA-Z0-9]/g, "-");
   const dir = join(getClaudeRoot(), encoded);
   await mkdir(dir, { recursive: true });
   const records = [

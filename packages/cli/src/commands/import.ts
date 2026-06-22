@@ -217,6 +217,14 @@ export async function doRunImportClaudeCode(
   const projectsRoot = ctx.claudeProjectsDir ?? join(homedir(), ".claude", "projects");
 
   const files = await selectTranscriptFiles(projectsRoot, projectPaths, options);
+  // Claude Code's per-project directory name is lossy (every non-alphanumeric
+  // char -> "-"), so distinct project paths can collide into one directory.
+  // Attribute each transcript by its OWN recorded cwd and skip any that does not
+  // belong to a requested project — mirroring the Codex adapter's cwd guard —
+  // so a colliding sibling project's transcripts are not imported under this one.
+  // (Equality matches the Codex adapter: the recorded cwd must equal a resolved
+  // source root verbatim.)
+  const projectSet = new Set(projectPaths);
   const candidates: ImportCandidate[] = files.map((file) => {
     // The transcript filename is the Claude session id; it is both the dedup
     // key and the source external_id.
@@ -226,6 +234,8 @@ export async function doRunImportClaudeCode(
       sourcePath: file,
       toPayload: async () => {
         const { records, sizeBytes } = await readJsonlRecords(file);
+        const cwd = firstTranscriptCwd(records);
+        if (cwd === undefined || !projectSet.has(cwd)) return null;
         return claudeTranscriptToImportPayload(records, {
           workspaceId: manifest.workspace.id,
           externalId,
@@ -508,13 +518,29 @@ async function classifyReimport(
 
 /**
  * Encode an absolute project path into Claude Code's per-project directory
- * name. Claude Code replaces path separators with `-`, so
- * `/Users/x/projects/foo` becomes `-Users-x-projects-foo`. Best-effort for
- * the common case; paths with characters the vendor encodes differently may
- * need an explicit `--project`-derived directory in a later revision.
+ * name. Claude Code replaces every NON-alphanumeric character with `-`, not
+ * just the path separator, so `/Users/x/projects/foo_bar` becomes
+ * `-Users-x-projects-foo-bar` (note `_` -> `-`, `.` -> `-`, etc.). Encoding
+ * only `/` missed any project whose path contained `_`/`.`/space — its
+ * transcripts were under a `-`-encoded directory while we looked for an
+ * underscore-preserving one, so the whole project was silently skipped as
+ * "no source logs". Matching the full rule keeps those projects discoverable.
  */
 function encodeProjectDir(projectPath: string): string {
-  return projectPath.replaceAll("/", "-");
+  return projectPath.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+/**
+ * The cwd a Claude transcript was recorded in — the first record that carries
+ * one. Used to attribute a transcript to the project it belongs to when a lossy
+ * directory-name collision colocates more than one project's transcripts.
+ */
+function firstTranscriptCwd(records: ReadonlyArray<ClaudeTranscriptRecord>): string | undefined {
+  for (const record of records) {
+    const cwd = record.cwd;
+    if (typeof cwd === "string" && cwd.length > 0) return cwd;
+  }
+  return undefined;
 }
 
 /**
