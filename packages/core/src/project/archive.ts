@@ -15,6 +15,7 @@
  * higher-blast-radius concern; this only mutates the manifest's declaration.
  */
 
+import { normalizeRelativePath as normalize } from "./relative-path.js";
 import type { RepoEntry } from "./roster.js";
 
 export type ArchivePlan = {
@@ -43,12 +44,6 @@ export type ArchivePlan = {
   /** True when exactly one repo remains: the project becomes solo and the workspace view is no longer needed. */
   becomesSolo: boolean;
 };
-
-/** Normalize a relative roster path for comparison: trim, drop trailing slashes, empty => ".". */
-function normalize(p: string): string {
-  const s = p.trim().replace(/\/+$/, "");
-  return s.length === 0 ? "." : s;
-}
 
 /**
  * Compute the {@link ArchivePlan} for folding `target` out of the project. Pure:

@@ -8,6 +8,12 @@ describe("pathBasename", () => {
     expect(pathBasename("../takuhon/")).toBe("takuhon");
     expect(pathBasename(".")).toBe(".");
   });
+
+  it("collapses a trailing dot-segment so the basename is the real leaf, not '.'", () => {
+    expect(pathBasename("../a/x/.")).toBe("x"); // was wrongly "." before the shared normalizer
+    expect(pathBasename("../b/.")).toBe("b");
+    expect(pathBasename("a/../..")).toBe(".."); // collapses to "..", whose leaf is ".."
+  });
 });
 
 describe("planRename", () => {
@@ -122,5 +128,28 @@ describe("planRename", () => {
     expect(p.nextRepos).toEqual([{ path: "../z", visibility: "private" }]);
     // The echoed rosterEntry is the SAME (first) entry — no report/manifest mismatch.
     expect(p.rosterEntry).toEqual({ path: "../x", visibility: "private" });
+  });
+
+  it("persists the CANONICAL form of a non-canonical destination (the one write-back site)", () => {
+    const p = planRename({
+      repos: [{ path: "../a" }],
+      sourceRoots: ["../a"],
+      oldPath: "../a",
+      newPath: "../x/./y/..", // non-canonical spelling of ../x
+    });
+    expect(p.newTarget).toBe("../x"); // collapsed before being stored
+    expect(p.nextRepos.map((r) => r.path)).toEqual(["../x"]);
+    expect(p.nextSourceRoots).toEqual(["../x"]);
+    expect(p.basenameChanged).toBe(true); // ../a -> ../x
+  });
+
+  it("refuses a collision when the destination is a dot-segment spelling of a declared entry", () => {
+    const p = planRename({
+      repos: [{ path: "../a" }, { path: "../b" }],
+      oldPath: "../a",
+      newPath: "../b/.", // dot-spelling of the already-declared ../b
+    });
+    expect(p.collision).toBe(true);
+    expect(p.reposChanged).toBe(false);
   });
 });

@@ -27,6 +27,8 @@
  * symlink reading / writing is the caller's job.
  */
 
+import { normalizeRelativePath as normalize } from "./relative-path.js";
+
 /**
  * The on-disk state of one instruction file relative to the symlink it should
  * be. `correct` = the expected link already exists (idempotent skip); `missing`
@@ -128,12 +130,6 @@ export type SymlinkPlanSummary = {
    */
   ok: boolean;
 };
-
-/** Normalize a relative roster path for comparison: trim, drop trailing slashes, empty => ".". */
-function normalize(p: string): string {
-  const s = p.trim().replace(/\/+$/, "");
-  return s.length === 0 ? "." : s;
-}
 
 /**
  * Compute the {@link SymlinkPlanSummary} from per-repo facts. For each declared,

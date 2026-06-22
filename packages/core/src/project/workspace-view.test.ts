@@ -96,6 +96,14 @@ describe("planWorkspaceView", () => {
     expect(p.toCreate).toEqual([{ name: "basou", target: "../basou" }]);
   });
 
+  it("dedupes dot-segment spellings of the same repo to one link (shared normalizer)", () => {
+    const p = planWorkspaceView([
+      fact({ path: "../basou", linkName: "basou", state: "missing" }),
+      fact({ path: "./../basou/.", linkName: "basou", state: "missing" }), // same location, dot-spelled
+    ]);
+    expect(p.toCreate).toEqual([{ name: "basou", target: "../basou" }]);
+  });
+
   it("counts correct links while still flagging a sibling conflict (no false-clear)", () => {
     const p = planWorkspaceView([
       fact({ path: "../basou", linkName: "basou" }),

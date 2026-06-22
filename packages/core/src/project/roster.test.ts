@@ -38,6 +38,26 @@ describe("summarizeRosterDrift", () => {
     expect(s.matched).toEqual([".", "../x"]);
   });
 
+  it("normalizes dot-segments so a declared repo and its dot-spelled source-root compare equal", () => {
+    const s = summarizeRosterDrift({
+      repos: [{ path: "../x/." }],
+      sourceRoots: ["./../x"], // a dot-segment spelling of ../x
+    });
+    expect(s.ok).toBe(true);
+    expect(s.gaps).toHaveLength(0);
+    expect(s.matched).toEqual(["../x"]);
+  });
+
+  it("preserves an interior-space directory name so space-distinct repos do NOT falsely match", () => {
+    const s = summarizeRosterDrift({
+      repos: [{ path: "../my repo" }, { path: "../my  repo" }], // single vs double space
+      sourceRoots: ["../my repo"],
+    });
+    expect(s.declaredCount).toBe(2);
+    expect(s.gaps).toEqual([{ path: "../my  repo" }]); // only the double-space repo is uncaptured
+    expect(s.matched).toEqual(["../my repo"]);
+  });
+
   it("with no declared roster: no gaps, every captured path is extra", () => {
     const s = summarizeRosterDrift({ sourceRoots: [".", "../takuhon"] });
     expect(s.declaredCount).toBe(0);

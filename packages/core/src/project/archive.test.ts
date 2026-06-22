@@ -110,4 +110,16 @@ describe("planArchive", () => {
     expect(p.target).toBe("../takuhon");
     expect(p.nextRepos.map((r) => r.path)).toEqual([".", "../takuhon-site"]);
   });
+
+  it("matches a dot-segment spelling of a declared target and prunes its dot-spelled source-root", () => {
+    const p = planArchive({
+      repos: roster,
+      sourceRoots: ["../takuhon/."], // dot-segment spelling of ../takuhon
+      target: "./../takuhon/.", // dot-segment spelling of the same target
+    });
+    expect(p.found).toBe(true);
+    expect(p.target).toBe("../takuhon"); // canonicalized
+    expect(p.nextRepos.map((r) => r.path)).toEqual([".", "../takuhon-site"]);
+    expect(p.nextSourceRoots).toEqual([]); // the dot-spelled source-root was pruned
+  });
 });
