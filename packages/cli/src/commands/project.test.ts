@@ -24,6 +24,7 @@ import {
   doRunProjectCheck,
   doRunProjectGitignore,
   doRunProjectPreset,
+  doRunProjectRename,
   doRunProjectSymlinks,
   doRunProjectSync,
   doRunProjectWiring,
@@ -32,6 +33,7 @@ import {
   type ProjectArchiveResult,
   type ProjectGitignoreResult,
   type ProjectPresetResult,
+  type ProjectRenameResult,
   type ProjectSymlinksResult,
   type ProjectSyncResult,
   type ProjectWiringResult,
@@ -41,6 +43,7 @@ import {
   renderProjectCheck,
   renderProjectGitignore,
   renderProjectPreset,
+  renderProjectRename,
   renderProjectSymlinks,
   renderProjectSync,
   renderProjectWiring,
@@ -1919,5 +1922,166 @@ describe("basou project archive", () => {
     expect(parsed.target).toBe("../pub");
     expect(parsed.nextRepos.map((e) => e.path)).toEqual(["."]);
     expect(parsed.teardown.inspected).toBe(true);
+  });
+});
+
+describe("basou project rename", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-rename-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  async function setup(opts: {
+    repos: RepoEntry[];
+    sourceRoots?: string[];
+    view?: string;
+  }): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, {
+      ...base,
+      repos: opts.repos,
+      ...(opts.sourceRoots !== undefined ? { import: { source_roots: opts.sourceRoots } } : {}),
+      ...(opts.view !== undefined ? { workspace: { ...base.workspace, view: opts.view } } : {}),
+    });
+  }
+  async function manifestOf(): Promise<Awaited<ReturnType<typeof readManifest>>> {
+    return readManifest(basouPaths(host()));
+  }
+  function mute(): void {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  }
+
+  it("dry-run reports the plan and writes nothing", async () => {
+    await setup({
+      repos: [{ path: "." }, { path: "../takuhon", visibility: "public", language: "en" }],
+      sourceRoots: [".", "../takuhon"],
+    });
+    mute();
+    const r = await doRunProjectRename("../takuhon", "../takuhon-cli", {}, { cwd: host() });
+    expect(r.found).toBe(true);
+    expect(r.applied).toBe(false);
+    expect(r.nextRepos.map((e) => e.path)).toEqual([".", "../takuhon-cli"]);
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual([".", "../takuhon"]);
+  });
+
+  it("--apply re-paths the roster entry and source_roots, preserving other fields", async () => {
+    await setup({
+      repos: [{ path: "." }, { path: "../takuhon", visibility: "public", language: "en" }],
+      sourceRoots: [".", "../takuhon", "../view"],
+    });
+    mute();
+    const r = await doRunProjectRename(
+      "../takuhon",
+      "../takuhon-cli",
+      { apply: true },
+      { cwd: host() },
+    );
+    expect(r.applied).toBe(true);
+    const m = await manifestOf();
+    expect(() => ManifestSchema.parse(m)).not.toThrow();
+    expect(m.repos).toEqual([
+      { path: "." },
+      { path: "../takuhon-cli", visibility: "public", language: "en" },
+    ]);
+    // The view source-root and host `.` keep their position; only the target is re-pathed.
+    expect(m.import?.source_roots).toEqual([".", "../takuhon-cli", "../view"]);
+  });
+
+  it("refuses to rename onto an existing entry (collision)", async () => {
+    await setup({
+      repos: [{ path: "." }, { path: "../a" }, { path: "../b" }],
+    });
+    mute();
+    const r = await doRunProjectRename("../a", "../b", { apply: true }, { cwd: host() });
+    expect(r.collision).toBe(true);
+    expect(r.applied).toBe(false);
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual([".", "../a", "../b"]);
+  });
+
+  it("refuses to rename the anchor (.)", async () => {
+    await setup({ repos: [{ path: "." }, { path: "../x" }] });
+    mute();
+    const r = await doRunProjectRename(".", "../root", { apply: true }, { cwd: host() });
+    expect(r.isAnchor).toBe(true);
+    expect(r.applied).toBe(false);
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual([".", "../x"]);
+  });
+
+  it("is a no-op when old and new normalize to the same path", async () => {
+    await setup({ repos: [{ path: "." }, { path: "../x" }] });
+    mute();
+    const r = await doRunProjectRename("../x", "../x/", { apply: true }, { cwd: host() });
+    expect(r.noop).toBe(true);
+    expect(r.applied).toBe(false);
+    const out = renderProjectRename(r);
+    expect(out).toContain("同一です");
+  });
+
+  it("reports found:false for a source not in the roster (manifest unchanged)", async () => {
+    await setup({ repos: [{ path: "." }] });
+    mute();
+    const r = await doRunProjectRename("../ghost", "../x", { apply: true }, { cwd: host() });
+    expect(r.found).toBe(false);
+    expect(r.applied).toBe(false);
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual(["."]);
+  });
+
+  it("reports the anchor-side rename checklist when the basename changes", async () => {
+    // canonical dir + view link at the OLD basename.
+    await mkdir(join(host(), "agents", "takuhon"), { recursive: true });
+    await writeFile(join(host(), "agents", "takuhon", "AGENTS.md"), "canonical\n");
+    await mkdir(join(parent as string, "view"), { recursive: true });
+    await symlink("../takuhon", join(parent as string, "view", "takuhon"));
+    await setup({
+      repos: [{ path: "." }, { path: "../takuhon", visibility: "public" }],
+      sourceRoots: [".", "../takuhon"],
+      view: "../view",
+    });
+    mute();
+    const r = await doRunProjectRename(
+      "../takuhon",
+      "../takuhon-cli",
+      { apply: true },
+      { cwd: host() },
+    );
+    expect(r.basenameChanged).toBe(true);
+    expect(r.wiring.canonicalDirOld).toBe(true);
+    expect(r.wiring.viewLinkOld).toBe(true);
+    // Manifest re-pathed, but the old-named on-disk artifacts are left untouched.
+    expect((await manifestOf()).repos?.map((e) => e.path)).toEqual([".", "../takuhon-cli"]);
+    expect(existsSync(join(host(), "agents", "takuhon", "AGENTS.md"))).toBe(true);
+    expect(await readlink(join(parent as string, "view", "takuhon"))).toBe("../takuhon");
+    const out = renderProjectRename(r);
+    expect(out).toContain("agents/takuhon/ → agents/takuhon-cli/");
+  });
+
+  it("--json emits a parseable result", async () => {
+    await setup({
+      repos: [{ path: "." }, { path: "../takuhon", visibility: "public" }],
+      sourceRoots: [".", "../takuhon"],
+    });
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      logs.push(String(m));
+    });
+    await doRunProjectRename("../takuhon", "../takuhon-cli", { json: true }, { cwd: host() });
+    expect(logs).toHaveLength(1);
+    const parsed = JSON.parse(logs[0] as string) as ProjectRenameResult;
+    expect(parsed.found).toBe(true);
+    expect(parsed.oldTarget).toBe("../takuhon");
+    expect(parsed.newTarget).toBe("../takuhon-cli");
+    expect(parsed.nextRepos.map((e) => e.path)).toEqual([".", "../takuhon-cli"]);
   });
 });
