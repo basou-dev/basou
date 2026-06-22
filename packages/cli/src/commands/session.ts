@@ -17,7 +17,6 @@ import {
   readManifest,
   readYamlFile,
   rechainSessionInPlace,
-  resolveRepositoryRoot,
   resolveSessionId,
   resolveTaskId,
   type Session,
@@ -35,6 +34,7 @@ import {
   renderCliError,
 } from "../lib/error-render.js";
 import { formatDurationMs } from "../lib/format-duration.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 const SES_PREFIX = "ses_";
 const TASK_PREFIX = "task_";
@@ -595,21 +595,20 @@ function maxLen(values: readonly string[], floor: number): number {
   return max;
 }
 
+/**
+ * Resolve the repository root that owns the `.basou/` store for a session
+ * subcommand, sharing the workspace-view fallback used by `orient` / `refresh`
+ * (and the `project` commands): a git-untracked view dir that symlinks its
+ * planning repo redirects to that repo (with a note on stderr) instead of failing
+ * with "Not a git repository". Session commands previously resolved with the
+ * git-only `resolveRepositoryRoot`, so `basou session list` died in a view; this
+ * unifies them with the rest of the CLI.
+ */
 async function resolveRepositoryRootForSession(
   cwd: string,
   subcmd: "list" | "show" | "import" | "note" | "rechain",
 ): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error(
-        `Not a git repository. Run 'git init' first, then re-run 'basou session ${subcmd}'.`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
+  return resolveBasouRootForCommand(cwd, `session ${subcmd}`);
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

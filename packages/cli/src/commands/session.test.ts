@@ -1,7 +1,16 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
@@ -396,6 +405,24 @@ describe("doRunSessionList", () => {
     }
   });
 
+  it("case 10: a git-untracked workspace view that symlinks the repo lists its sessions (view redirect)", async () => {
+    const repo = await setupInitedRepo();
+    await createSession(repo, { id: SES("V01") });
+    // A view dir OUTSIDE git that aggregates the repo via a symlink, as the saddle
+    // model generates. session list used to die here with "Not a git repository".
+    const view = await mkdtemp(join(tmpdir(), "basou-session-view-"));
+    try {
+      await symlink(repo, join(view, basename(repo)));
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunSessionList({}, { cwd: view });
+      expect(joinCalls(out)).toContain("V01"); // the repo's session, via the view redirect
+      expect(joinCalls(err)).toContain("Resolved workspace view"); // redirect noted on stderr
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+
   it("case 10: partial trailing line in events.jsonl yields a stderr warning but list succeeds", async () => {
     const repo = await setupInitedRepo();
     const id = SES("X13");
@@ -461,6 +488,23 @@ describe("doRunSessionList", () => {
 });
 
 describe("doRunSessionShow", () => {
+  it("resolves via a git-untracked workspace view (redirect), like session list", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("Y09");
+    await createSession(repo, { id });
+    const view = await mkdtemp(join(tmpdir(), "basou-session-show-view-"));
+    try {
+      await symlink(repo, join(view, basename(repo)));
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunSessionShow(id, {}, { cwd: view });
+      expect(joinCalls(out)).toContain(`Session: ${id}`); // found via the view redirect
+      expect(joinCalls(err)).toContain("Resolved workspace view");
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+
   it("case 11: full ID hit prints metadata + event count + last events", async () => {
     const repo = await setupInitedRepo();
     const id = SES("Y01");
