@@ -834,3 +834,56 @@ describe("renderHandoff (resume coherence)", () => {
     expect(body).toContain("この判断は最終 session とは別の session");
   });
 });
+
+function decisionVoidedLine(
+  id: string,
+  evt: string,
+  decisionId: string,
+  occurredAt: string,
+  reason?: string,
+): string {
+  return `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "decision_voided",
+    id: EVT(evt),
+    session_id: id,
+    occurred_at: occurredAt,
+    source: "local-cli",
+    decision_id: decisionId,
+    ...(reason !== undefined ? { reason } : {}),
+  })}\n`;
+}
+
+describe("renderHandoff (voided decisions)", () => {
+  it("skips a voided decision when surfacing 直近の判断", async () => {
+    const paths = await setupPaths();
+    const id = SES("VH1");
+    const kept = DEC("HK1");
+    const voided = DEC("HV1");
+    const events =
+      decisionRecordedLine(id, "HE1", kept, "keep this direction", "2026-05-08T10:00:00.000Z") +
+      decisionRecordedLine(
+        id,
+        "HE2",
+        voided,
+        "wrong project decision",
+        "2026-05-08T11:00:00.000Z",
+      ) +
+      decisionVoidedLine(id, "HE3", voided, "2026-05-08T12:00:00.000Z", "belongs to blog");
+    await placeSession(
+      paths,
+      {
+        id,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T09:00:00+09:00",
+      },
+      events,
+    );
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("keep this direction");
+    expect(result.body).not.toContain("wrong project decision");
+    // Both decisions still counted in the total.
+    expect(result.body).toContain("2 decisions total");
+  });
+});

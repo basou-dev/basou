@@ -111,6 +111,10 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
   const decisions: DecisionRecord[] = [];
+  // decision_ids marked no longer in force; the 直近の判断 pointer skips them so
+  // a voided decision is never surfaced as current (mirrors the orientation
+  // renderer, keeping the two outputs in agreement).
+  const voidedDecisionIds = new Set<string>();
   const tasksCreated: TaskCreatedRecord[] = [];
   const tasksStatusChanged: TaskStatusChangedRecord[] = [];
   // Activity tail over NON-archived sessions = max of the session boundary
@@ -139,6 +143,8 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
             occurredAt: ev.occurred_at,
             sessionId: entry.sessionId,
           });
+        } else if (ev.type === "decision_voided") {
+          voidedDecisionIds.add(ev.decision_id);
         } else if (ev.type === "task_created") {
           tasksCreated.push({
             taskId: ev.task_id,
@@ -169,6 +175,16 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
     return c !== 0 ? c : a.decisionId.localeCompare(b.decisionId);
   });
+  // Newest decision NOT voided — the 直近の判断 pointer. A voided decision stays
+  // in decisions.md (struck) but must not pose as the current direction.
+  let latestDecision: DecisionRecord | undefined;
+  for (let i = decisions.length - 1; i >= 0; i -= 1) {
+    const d = decisions[i];
+    if (d !== undefined && !voidedDecisionIds.has(d.decisionId)) {
+      latestDecision = d;
+      break;
+    }
+  }
   tasksCreated.sort((a, b) => {
     const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
     return c !== 0 ? c : a.taskId.localeCompare(b.taskId);
@@ -246,6 +262,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     latestSession,
     latestActivityAt,
     decisions,
+    latestDecision,
     pendingApprovalsCount,
     suspectCount,
     displayedFiles,
@@ -275,6 +292,7 @@ function formatHandoffBody(args: {
   latestSession: SessionEntry | undefined;
   latestActivityAt: string | null;
   decisions: ReadonlyArray<DecisionRecord>;
+  latestDecision: DecisionRecord | undefined;
   pendingApprovalsCount: number;
   suspectCount: number;
   displayedFiles: ReadonlyArray<string>;
@@ -354,10 +372,12 @@ function formatHandoffBody(args: {
   // 直近の判断
   lines.push("## 直近の判断");
   lines.push("");
-  if (args.decisions.length === 0) {
+  if (args.latestDecision === undefined) {
+    // Either no decisions, or every recorded decision has been voided — in
+    // both cases there is no current recorded direction to surface.
     lines.push("(no decisions recorded yet)");
   } else {
-    const last = args.decisions[args.decisions.length - 1] as DecisionRecord;
+    const last = args.latestDecision;
     // Lead with the decision title; the raw id is demoted to a trailing
     // [short id].
     lines.push(`- ${last.title} [${shortIdWithPrefix(last.decisionId)}]`);
