@@ -517,6 +517,11 @@ function eventVariantSummary(ev: Event): string {
       return `approval=${ev.approval_id}`;
     case "decision_recorded":
       return ev.title;
+    case "decision_voided": {
+      const sup = ev.superseded_by !== undefined ? ` superseded by ${ev.superseded_by}` : "";
+      const reason = typeof ev.reason === "string" && ev.reason.length > 0 ? `: ${ev.reason}` : "";
+      return `voided ${ev.decision_id}${reason}${sup}`;
+    }
     case "task_created":
       return ev.title;
     case "task_status_changed":

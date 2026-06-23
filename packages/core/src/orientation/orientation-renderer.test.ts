@@ -1299,6 +1299,53 @@ describe("renderOrientation (cross-project out-of-root files)", () => {
     expect(warnLine).toContain("~/zzz-not-a-project/blog.md");
   });
 
+  it("skips a voided decision when picking the latest direction", async () => {
+    const paths = await setupPaths();
+    const sid = SES("V10");
+    const kept = DEC("VK1");
+    const voided = DEC("VV1");
+    const mk = (o: Record<string, unknown>): string => `${JSON.stringify(o)}\n`;
+    const events =
+      mk({
+        schema_version: "0.1.0",
+        type: "decision_recorded",
+        id: EVT("VE1"),
+        session_id: sid,
+        occurred_at: "2026-05-08T10:00:00.000Z",
+        source: "human",
+        decision_id: kept,
+        title: "keep this direction",
+      }) +
+      mk({
+        schema_version: "0.1.0",
+        type: "decision_recorded",
+        id: EVT("VE2"),
+        session_id: sid,
+        occurred_at: "2026-05-08T11:00:00.000Z",
+        source: "human",
+        decision_id: voided,
+        title: "wrong project decision",
+      }) +
+      mk({
+        schema_version: "0.1.0",
+        type: "decision_voided",
+        id: EVT("VE3"),
+        session_id: sid,
+        occurred_at: "2026-05-08T12:00:00.000Z",
+        source: "local-cli",
+        decision_id: voided,
+        reason: "belongs to blog",
+      });
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      events,
+    );
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("keep this direction");
+    expect(body).not.toContain("wrong project decision");
+  });
+
   it("does not flag anything when source_roots is undeclared (solo project)", async () => {
     const paths = await setupPaths();
     const repoRoot = getWorkDir();
