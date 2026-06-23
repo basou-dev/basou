@@ -3,6 +3,38 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.15.0 — 2026-06-23
+
+### Added
+
+- `basou protocol` (sync / list / unsync) — a managed standing-protocol channel.
+  It renders operator-declared protocols from `~/.basou/protocols.yaml` into a
+  marker-delimited block (`BASOU:PROTOCOLS`) inside the user-global
+  `~/.claude/CLAUDE.md`, which Claude Code auto-loads every session. Only the
+  bytes between the markers are ever touched; the rest of the file is preserved
+  (durable temp+rename write, symlink guard, optimistic compare-and-set
+  recheck). This is the standing-protocol foundation for systematically
+  reminding the in-loop agent to capture conversational decisions and next-steps
+  at session end — declaring the protocol that a later enforcement hook can
+  build on.
+
+### Fixed
+
+- A portfolio *member* repo — itself a git repo but holding no `.basou` store
+  because its trail aggregates into a separate planning master (declared via the
+  master's `import.source_roots`) — no longer fails with "Workspace not
+  initialized" when running `orient` / `refresh` / `note` / `decision capture` /
+  `project*` / `review-gaps` / `session` (or the SessionStart orient hook) from
+  inside it. When a resolved git repo owns no store, command resolution now
+  reverse-looks-up the portfolio registry (`~/.basou/portfolio.yaml`): a single
+  master whose realpath-resolved `source_roots` claim the repo redirects to it
+  (mirroring the view-symlink fallback), two or more distinct masters raise an
+  ambiguity error, and none preserves the original message. Claimants are
+  de-duped by canonical root so a master registered under an alias spelling does
+  not become a false ambiguity, and a present-but-malformed registry is surfaced
+  on stderr rather than silently swallowed. Normal repos and view directories
+  short-circuit on the store probe and pay nothing.
+
 ## 0.14.1 — 2026-06-23
 
 ### Changed
