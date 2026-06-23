@@ -45,6 +45,8 @@ export {
   reimportPreservingId,
 } from "./session-import.js";
 export type {
+  FederatedRoot,
+  LoadFederatedOptions,
   LoadSessionEntriesOptions,
   SessionEntry,
   SessionSkipReason,
@@ -54,6 +56,7 @@ export {
   classifySuspect,
   enumerateSessionDirs,
   finalizeSessionYaml,
+  loadFederatedSessionEntries,
   loadSessionEntries,
   readSessionYaml,
   STUCK_THRESHOLD_MS,

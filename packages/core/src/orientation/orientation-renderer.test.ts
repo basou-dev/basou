@@ -627,12 +627,14 @@ describe("summarizeOrientation", () => {
       sessionId: live,
       label: `fixture ${live.slice(-3)}`,
       status: "completed",
+      host: null,
     });
     expect(summary.latestDecision).toEqual({
       decisionId: DEC("D01"),
       title: "adopt orientation re-centering",
       occurredAt: "2026-05-08T12:00:00+09:00",
       sessionId: live,
+      host: null,
     });
     expect(summary.decisionCount).toBe(1);
     expect(summary.relatedFiles).toEqual({ displayed: ["src/a.ts", "src/b.ts"], overflow: 0 });
@@ -782,6 +784,7 @@ describe("summarizeOrientation", () => {
       body: "resume from: ship v0.24.0 (steps 1-6)",
       sessionId: id,
       occurredAt: "2026-05-08T12:00:00+09:00",
+      host: null,
     });
 
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
@@ -1022,5 +1025,168 @@ describe("renderOrientation (resume coherence)", () => {
     );
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(body).not.toContain("別の session");
+  });
+});
+
+describe("renderOrientation (federation / multi-host)", () => {
+  // Federated host stores live in their own temp dirs (mirrors of another
+  // host's `.basou`, reachable here as local paths). Track + clean them
+  // separately from the module-level `workDir`.
+  let hostDirs: string[] = [];
+  afterEach(async () => {
+    for (const d of hostDirs) await rm(d, { recursive: true, force: true });
+    hostDirs = [];
+  });
+  async function setupHostStore(): Promise<BasouPaths> {
+    const d = await mkdtemp(join(tmpdir(), "basou-orient-host-"));
+    hostDirs.push(d);
+    return ensureBasouDirectory(d);
+  }
+
+  it("merges a remote host's sessions, attributing latest session + decision to the host", async () => {
+    const local = await setupPaths();
+    await placeSession(
+      local,
+      { id: SES("A01"), status: "completed", startedAt: "2026-05-08T10:00:00Z" },
+      startedLine(SES("A01"), "E01", "2026-05-08T10:00:00Z") +
+        decisionLine(SES("A01"), "E02", DEC("D01"), "local decision", "2026-05-08T10:05:00Z"),
+    );
+
+    const laptop = await setupHostStore();
+    await placeSession(
+      laptop,
+      {
+        id: SES("R01"),
+        status: "completed",
+        startedAt: "2026-05-08T12:00:00Z",
+        label: "laptop work",
+        relatedFiles: ["remote.ts"],
+      },
+      startedLine(SES("R01"), "E03", "2026-05-08T12:00:00Z") +
+        decisionLine(SES("R01"), "E04", DEC("D02"), "remote decision", "2026-05-08T12:30:00Z"),
+    );
+
+    const federatedRoots = [{ paths: laptop, host: "laptop" }];
+    const summary = await summarizeOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      federatedRoots,
+    });
+
+    expect(summary.sessionCount).toBe(2);
+    expect(summary.hosts).toEqual(["laptop"]);
+    expect(summary.latestSession?.sessionId).toBe(SES("R01"));
+    expect(summary.latestSession?.host).toBe("laptop");
+    // The remote decision can only be the latest if its events were replayed
+    // from the LAPTOP store (entry.sourceRoot.sessions). If the renderer still
+    // read events from the local store, R01's events would be unreadable there
+    // and "remote decision" would never surface — so this pins the seam.
+    expect(summary.latestDecision?.title).toBe("remote decision");
+    expect(summary.latestDecision?.host).toBe("laptop");
+
+    const { body } = await renderOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      federatedRoots,
+    });
+    expect(body).toContain("@laptop");
+    expect(body).toContain("> hosts: local, laptop");
+    expect(body).toContain("他ホストの取りこぼしは判定できません");
+  });
+
+  it("de-duplicates a session id present in both stores, local winning", async () => {
+    const local = await setupPaths();
+    await placeSession(
+      local,
+      { id: SES("C01"), status: "completed", startedAt: "2026-05-08T10:00:00Z" },
+      startedLine(SES("C01"), "E01", "2026-05-08T10:00:00Z"),
+    );
+    const laptop = await setupHostStore();
+    await placeSession(
+      laptop,
+      { id: SES("C01"), status: "completed", startedAt: "2026-05-08T10:00:00Z" },
+      startedLine(SES("C01"), "E02", "2026-05-08T10:00:00Z"),
+    );
+
+    const summary = await summarizeOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      federatedRoots: [{ paths: laptop, host: "laptop" }],
+    });
+    expect(summary.sessionCount).toBe(1);
+    // Local-first: the survivor is the local copy (host null), so no host banner.
+    expect(summary.hosts).toEqual([]);
+  });
+
+  it("skips an unreadable host mirror via onHostUnavailable; local still renders", async () => {
+    const local = await setupPaths();
+    await placeSession(
+      local,
+      { id: SES("A01"), status: "completed", startedAt: "2026-05-08T10:00:00Z" },
+      startedLine(SES("A01"), "E01", "2026-05-08T10:00:00Z"),
+    );
+    const laptop = await setupHostStore();
+    // Replace the sessions dir with a file so enumerateSessionDirs throws ENOTDIR
+    // (present-but-unreadable, not ENOENT) — the onRootUnavailable path.
+    await rm(laptop.sessions, { recursive: true, force: true });
+    await writeFile(laptop.sessions, "not a dir");
+
+    const unavailable: string[] = [];
+    const summary = await summarizeOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      federatedRoots: [{ paths: laptop, host: "laptop" }],
+      onHostUnavailable: (host) => unavailable.push(host),
+    });
+    expect(unavailable).toEqual(["laptop"]);
+    expect(summary.sessionCount).toBe(1);
+    expect(summary.latestSession?.sessionId).toBe(SES("A01"));
+  });
+
+  it("an absent host path contributes nothing, silently (no onHostUnavailable)", async () => {
+    const local = await setupPaths();
+    await placeSession(
+      local,
+      { id: SES("A01"), status: "completed", startedAt: "2026-05-08T10:00:00Z" },
+      startedLine(SES("A01"), "E01", "2026-05-08T10:00:00Z"),
+    );
+    const unavailable: string[] = [];
+    const summary = await summarizeOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      // A store whose sessions dir does not exist (ENOENT) → silently empty.
+      federatedRoots: [{ paths: await missingStorePaths(), host: "ghost" }],
+      onHostUnavailable: (host) => unavailable.push(host),
+    });
+    expect(unavailable).toEqual([]);
+    expect(summary.sessionCount).toBe(1);
+    expect(summary.hosts).toEqual([]);
+  });
+
+  async function missingStorePaths(): Promise<BasouPaths> {
+    // A real BasouPaths whose store dirs do not exist (parent temp dir is empty).
+    const d = await mkdtemp(join(tmpdir(), "basou-orient-ghost-"));
+    hostDirs.push(d);
+    const paths = await ensureBasouDirectory(d);
+    await rm(paths.sessions, { recursive: true, force: true });
+    return paths;
+  }
+
+  it("is byte-identical to local-only when no federated roots are given", async () => {
+    const local = await setupPaths();
+    await placeSession(
+      local,
+      { id: SES("A01"), status: "completed", startedAt: "2026-05-08T10:00:00Z" },
+      startedLine(SES("A01"), "E01", "2026-05-08T10:00:00Z"),
+    );
+    const withEmpty = await renderOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      federatedRoots: [],
+    });
+    const without = await renderOrientation({ paths: local, nowIso: FIXED_NOW_ISO });
+    expect(withEmpty.body).toBe(without.body);
+    expect(without.body).not.toContain("> hosts: local");
+    expect(without.body).not.toContain("@laptop");
   });
 });

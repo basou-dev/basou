@@ -1,6 +1,7 @@
 import {
   assertBasouRootSafe,
   basouPaths,
+  type FederatedRoot,
   findErrorCode,
   renderOrientation,
   writeMarkdownFile,
@@ -13,6 +14,7 @@ import {
   printTaskSkip,
   renderCliError,
 } from "../lib/error-render.js";
+import { loadHostsConfig } from "../lib/hosts-config.js";
 import { probeStaleness } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import type { ImportContext } from "./import.js";
@@ -22,6 +24,8 @@ export type OrientOptions = { verbose?: boolean; quiet?: boolean };
 export type OrientContext = ImportContext & {
   /** Defaults to `() => new Date()`. Injectable for tests. */
   nowProvider?: () => Date;
+  /** Override path to the hosts registry (`~/.basou/hosts.yaml`). Injectable for tests. */
+  hostsConfigPath?: string;
 };
 
 /**
@@ -75,14 +79,37 @@ export async function doRunOrient(options: OrientOptions, ctx: OrientContext): P
   if (ctx.codexSessionsDir !== undefined) probeCtx.codexSessionsDir = ctx.codexSessionsDir;
   const staleness = await probeStaleness({ ctx: probeCtx, paths, nowIso });
 
+  // Federation (zero-network): merge other hosts' trails listed in
+  // ~/.basou/hosts.yaml, each a LOCAL path the operator's own tooling (an SSHFS
+  // mount / rsync over their existing SSH) keeps in sync. Best-effort and
+  // non-fatal: an absent registry is silent (local-only); a malformed one warns
+  // and falls back to local-only so `orient` — the default command — never
+  // hard-fails on it.
+  let federatedRoots: FederatedRoot[] = [];
+  try {
+    const hosts = await loadHostsConfig(ctx.hostsConfigPath);
+    if (hosts !== null) {
+      federatedRoots = hosts.map((h) => ({ paths: basouPaths(h.path), host: h.label }));
+    }
+  } catch (error: unknown) {
+    console.error(
+      `basou: ignoring ~/.basou/hosts.yaml (${error instanceof Error ? error.message : String(error)}); showing local sessions only.`,
+    );
+  }
+
   const result = await renderOrientation({
     paths,
     nowIso,
     staleness,
     verbose: options.verbose === true,
+    federatedRoots,
     onWarning: (w, sid) => printReplayWarning(w, sid),
     onSessionSkip: (sid, reason) => printSessionSkip(sid, reason),
     onTaskSkip: (taskId, reason) => printTaskSkip(taskId, reason),
+    onHostUnavailable: (host, error) =>
+      console.error(
+        `basou: host '${host}' mirror unreadable (${error instanceof Error ? error.message : String(error)}); skipping it.`,
+      ),
   });
 
   // orientation.md is a transient, gitignored snapshot: overwrite the whole

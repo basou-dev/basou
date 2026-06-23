@@ -6,6 +6,8 @@ import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { readManifest } from "../storage/manifest.js";
 import {
+  type FederatedRoot,
+  loadFederatedSessionEntries,
   loadSessionEntries,
   type SessionSkipReason,
   type SuspectReason,
@@ -39,6 +41,19 @@ export type OrientationRendererInput = {
    * reads as a verdict for a supervisor, not developer diagnostics.
    */
   verbose?: boolean;
+  /**
+   * Additional trail stores to MERGE into this orientation, each a local path
+   * (an SSHFS mount / rsync mirror of another host's `.basou`) tagged with a
+   * host label. Absent / empty = local-only (byte-identical to before). basou
+   * performs no network I/O; the operator's existing tooling places these paths.
+   */
+  federatedRoots?: FederatedRoot[];
+  /**
+   * Called when a federated (non-local) host root is present but cannot be
+   * enumerated (e.g. an unreadable mount). That host is skipped; the local
+   * store and other hosts still render. An absent root path is silently empty.
+   */
+  onHostUnavailable?: (host: string, error: unknown) => void;
 };
 
 export type OrientationRendererResult = {
@@ -57,9 +72,10 @@ type DecisionRecord = {
   title: string;
   occurredAt: string;
   sessionId: string;
+  host: string | null;
 };
 
-type NoteRecord = { body: string; sessionId: string; occurredAt: string };
+type NoteRecord = { body: string; sessionId: string; occurredAt: string; host: string | null };
 
 type PendingApproval = {
   id: string;
@@ -74,7 +90,12 @@ type PendingApproval = {
 type InFlightTask = { id: string; title: string; status: string; linkedSessions: number };
 type PlannedTask = { id: string; title: string };
 type SuspectSession = { sessionId: string; status: string; reason: SuspectReason | null };
-type LatestSession = { sessionId: string; label: string | null; status: string };
+type LatestSession = {
+  sessionId: string;
+  label: string | null;
+  status: string;
+  host: string | null;
+};
 type SourceCount = { kind: string; count: number };
 
 /**
@@ -113,6 +134,12 @@ export type OrientationSummary = {
   plannedTasks: PlannedTask[];
   pendingApprovals: PendingApproval[];
   suspects: SuspectSession[];
+  /**
+   * Distinct non-local host labels present in the merged set (sorted). Empty
+   * for a local-only orientation. Lets a consumer render the multi-host banner
+   * and the local-only-freshness caveat without re-deriving from sessions.
+   */
+  hosts: string[];
   freshness: {
     /** started_at of the newest non-archived session, or null when none captured. */
     newestStartedAt: string | null;
@@ -152,7 +179,18 @@ export async function summarizeOrientation(
   const loadOpts: Parameters<typeof loadSessionEntries>[1] = { now };
   if (input.onSessionSkip !== undefined) loadOpts.onSkip = input.onSessionSkip;
   if (input.onWarning !== undefined) loadOpts.onWarning = input.onWarning;
-  const entries = await loadSessionEntries(input.paths, loadOpts);
+  const entries =
+    input.federatedRoots !== undefined && input.federatedRoots.length > 0
+      ? await loadFederatedSessionEntries(
+          [{ paths: input.paths, host: null }, ...input.federatedRoots],
+          {
+            ...loadOpts,
+            ...(input.onHostUnavailable !== undefined
+              ? { onRootUnavailable: input.onHostUnavailable }
+              : {}),
+          },
+        )
+      : await loadSessionEntries(input.paths, loadOpts);
 
   // One replay pass per session yields three facts:
   //  - `decisions`: chronological `decision_recorded` across ALL sessions.
@@ -180,7 +218,7 @@ export async function summarizeOrientation(
     }
   };
   for (const entry of entries) {
-    const sessionDir = join(input.paths.sessions, entry.sessionId);
+    const sessionDir = join(entry.sourceRoot.sessions, entry.sessionId);
     const counted = entry.session.session.status !== "archived";
     // Seed with the session boundary so a session whose events are empty or
     // unreadable still contributes its known activity window.
@@ -195,6 +233,7 @@ export async function summarizeOrientation(
             title: ev.title,
             occurredAt: ev.occurred_at,
             sessionId: entry.sessionId,
+            host: entry.host,
           });
         }
         // Only `next_step`-kind notes (from `basou note`) are resume hints; a
@@ -204,7 +243,12 @@ export async function summarizeOrientation(
             latestNote === null ||
             Date.parse(ev.occurred_at) > Date.parse(latestNote.occurredAt)
           ) {
-            latestNote = { body: ev.body, sessionId: entry.sessionId, occurredAt: ev.occurred_at };
+            latestNote = {
+              body: ev.body,
+              sessionId: entry.sessionId,
+              occurredAt: ev.occurred_at,
+              host: entry.host,
+            };
           }
         }
         if (counted) noteActivity(ev.occurred_at);
@@ -287,6 +331,7 @@ export async function summarizeOrientation(
           sessionId: latestEntry.sessionId,
           label: latestEntry.session.session.label ?? null,
           status: latestEntry.session.session.status,
+          host: latestEntry.host,
         }
       : null;
 
@@ -323,6 +368,10 @@ export async function summarizeOrientation(
   const displayed = [...uniqueFiles].sort().slice(0, limit);
   const overflow = Math.max(0, uniqueFiles.size - limit);
 
+  const hosts = [
+    ...new Set(entries.map((e) => e.host).filter((h): h is string => h !== null)),
+  ].sort();
+
   return {
     generatedAt: input.nowIso,
     sessionCount: entries.length,
@@ -335,6 +384,7 @@ export async function summarizeOrientation(
     plannedTasks,
     pendingApprovals,
     suspects,
+    hosts,
     freshness: {
       newestStartedAt: newest?.session.session.started_at ?? null,
       newestSource: newest?.session.session.source.kind ?? null,
@@ -394,12 +444,18 @@ function formatOrientationBody(
   const lines: string[] = [];
   const now = new Date(summary.generatedAt);
   const newestRel = relativeAge(summary.freshness.newestStartedAt ?? undefined, now);
+  // Multi-host attribution suffix: only non-local rows carry it, so a
+  // single-host (local-only) orientation is byte-identical to before.
+  const hostSuffix = (h: string | null): string => (h !== null ? ` @${h}` : "");
 
   lines.push("# Orientation");
   lines.push("");
   lines.push(
     `> Generated at ${summary.generatedAt} · sessions ${summary.sessionCount} · newest ${newestRel} · pending ${summary.pendingApprovals.length} · suspect ${summary.suspects.length}`,
   );
+  if (summary.hosts.length > 0) {
+    lines.push(`> hosts: local, ${summary.hosts.join(", ")}`);
+  }
   lines.push("");
 
   // "where am I now"
@@ -409,9 +465,9 @@ function formatOrientationBody(
     const s = summary.latestSession;
     const sid = shortId(s.sessionId);
     if (s.label !== null && s.label !== "") {
-      lines.push(`- 最終 session: ${s.label} (${s.status}) [${sid}]`);
+      lines.push(`- 最終 session: ${s.label} (${s.status}) [${sid}]${hostSuffix(s.host)}`);
     } else {
-      lines.push(`- 最終 session: ${sid} (${s.status})`);
+      lines.push(`- 最終 session: ${sid} (${s.status})${hostSuffix(s.host)}`);
     }
   } else {
     lines.push("- 最終 session: (no live sessions)");
@@ -419,7 +475,9 @@ function formatOrientationBody(
   if (summary.latestDecision !== null) {
     const dec = summary.latestDecision;
     const decAge = relativeAgeJa(dec.occurredAt, now);
-    lines.push(`- 直近の判断: ${dec.title} [${shortId(dec.decisionId)}] (${decAge})`);
+    lines.push(
+      `- 直近の判断: ${dec.title} [${shortId(dec.decisionId)}] (${decAge})${hostSuffix(dec.host)}`,
+    );
     // Honesty over recency theater: this is the latest *recorded* decision, not
     // necessarily the latest decision. When captured activity continued well
     // past it, the operator's current direction may simply be unrecorded
@@ -503,7 +561,7 @@ function formatOrientationBody(
   if (summary.latestNote !== null) {
     const noteAge = relativeAgeJa(summary.latestNote.occurredAt, now);
     lines.push(
-      `- 次の起点 (記録済み, ${noteAge}): ${noteSummary(summary.latestNote.body)} [session ${shortId(summary.latestNote.sessionId)}]`,
+      `- 次の起点 (記録済み, ${noteAge}): ${noteSummary(summary.latestNote.body)} [session ${shortId(summary.latestNote.sessionId)}]${hostSuffix(summary.latestNote.host)}`,
     );
     // Same honesty guard as the latest decision: if captured activity continued
     // well past when this resume hint was recorded, the work may have moved on,
@@ -549,6 +607,16 @@ function formatOrientationBody(
   lines.push("## これは最新か");
   lines.push("");
   for (const line of freshnessVerdict(summary, opts.staleness, now)) lines.push(line);
+  // The verdict above reflects the LOCAL store only (the dry-run probe reads
+  // this machine's native logs). With federated hosts merged in, do not let it
+  // imply the whole multi-host view is current — the other hosts' freshness is
+  // unknowable here (their native logs are not on this machine).
+  if (summary.hosts.length > 0) {
+    lines.push("");
+    lines.push(
+      "注: 鮮度判定はこのマシンのローカルストアのみが対象です。他ホストの取りこぼしは判定できません(各ホストで basou refresh を実行し同期してください)。",
+    );
+  }
 
   if (opts.verbose) {
     lines.push("");

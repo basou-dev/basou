@@ -25,6 +25,19 @@ export type SessionEntry = {
   session: Session;
   suspect: boolean;
   suspectReason: SuspectReason | null;
+  /**
+   * The trail store this entry was read from. Its `sessions` directory locates
+   * the session's `events.jsonl`, so a federated caller can replay events from
+   * the store the session actually lives in (not the local store). For a plain
+   * local load this is the `paths` passed to {@link loadSessionEntries}.
+   */
+  sourceRoot: BasouPaths;
+  /**
+   * Federation host label from the registry (`~/.basou/hosts.yaml`), or `null`
+   * for the local store. Surfaced by orientation so a merged, multi-host view
+   * can attribute the latest session / decision / next-step to its host.
+   */
+  host: string | null;
 };
 
 /**
@@ -51,6 +64,27 @@ export type LoadSessionEntriesOptions = {
   now: Date;
   onWarning?: (warning: ReplayWarning, sessionId: string) => void;
   onSkip?: (sessionId: string, reason: SessionSkipReason) => void;
+};
+
+/**
+ * A trail store to read in a federated load, tagged with its host label.
+ * `host: null` denotes the local store; a non-null label comes from the host
+ * registry (`~/.basou/hosts.yaml`). `paths` is where that store is reachable
+ * as a local path on this machine (an SSHFS mount, an rsync mirror, etc.) —
+ * basou itself never performs any network I/O to obtain it.
+ */
+export type FederatedRoot = { paths: BasouPaths; host: string | null };
+
+export type LoadFederatedOptions = LoadSessionEntriesOptions & {
+  /**
+   * Called when a NON-local root cannot be enumerated (present-but-unreadable
+   * mount, permission error). That root is skipped best-effort so the local
+   * store and other roots still load. The local root (`host: null`) is never
+   * degraded here — its errors propagate, preserving single-store behaviour.
+   * (An absent root path is not an error: {@link enumerateSessionDirs} returns
+   * `[]` on ENOENT, so a dropped mount is simply an empty host.)
+   */
+  onRootUnavailable?: (host: string, error: unknown) => void;
 };
 
 /**
@@ -213,10 +247,11 @@ export async function classifySuspect(
  * `options.now` is taken once and threaded into every {@link classifySuspect}
  * call so age comparisons are consistent across sessions.
  */
-export async function loadSessionEntries(
-  paths: BasouPaths,
+async function loadEntriesFromRoot(
+  root: FederatedRoot,
   options: LoadSessionEntriesOptions,
 ): Promise<SessionEntry[]> {
+  const { paths } = root;
   const sessionIds = await enumerateSessionDirs(paths);
   const entries: SessionEntry[] = [];
   for (const sid of sessionIds) {
@@ -246,7 +281,64 @@ export async function loadSessionEntries(
       // broken events.jsonl from a broken session.yaml.
       options.onSkip?.(sid, "events_jsonl_unreadable");
     }
-    entries.push({ sessionId: sid, session, suspect, suspectReason });
+    entries.push({
+      sessionId: sid,
+      session,
+      suspect,
+      suspectReason,
+      sourceRoot: paths,
+      host: root.host,
+    });
   }
   return entries;
+}
+
+export async function loadSessionEntries(
+  paths: BasouPaths,
+  options: LoadSessionEntriesOptions,
+): Promise<SessionEntry[]> {
+  return loadEntriesFromRoot({ paths, host: null }, options);
+}
+
+/**
+ * Federated load across multiple trail stores. Each root's sessions are tagged
+ * with that root's host label and `sourceRoot`, so a caller replays events from
+ * the store the session lives in. De-duped by `sessionId` (a per-host random
+ * ULID), then by `source.external_id` when present — first occurrence wins, so
+ * pass the local root FIRST to keep it authoritative (e.g. over a re-imported
+ * copy of the same vendor session on another host). A non-local root that
+ * cannot be enumerated is reported via `onRootUnavailable` and skipped; the
+ * local root's errors propagate, matching {@link loadSessionEntries}.
+ */
+export async function loadFederatedSessionEntries(
+  roots: ReadonlyArray<FederatedRoot>,
+  options: LoadFederatedOptions,
+): Promise<SessionEntry[]> {
+  const out: SessionEntry[] = [];
+  const seenIds = new Set<string>();
+  const seenExternal = new Set<string>();
+  for (const root of roots) {
+    let entries: SessionEntry[];
+    if (root.host === null) {
+      entries = await loadEntriesFromRoot(root, options);
+    } else {
+      try {
+        entries = await loadEntriesFromRoot(root, options);
+      } catch (error: unknown) {
+        options.onRootUnavailable?.(root.host, error);
+        continue;
+      }
+    }
+    for (const entry of entries) {
+      if (seenIds.has(entry.sessionId)) continue;
+      const ext = entry.session.session.source.external_id;
+      if (typeof ext === "string" && ext.length > 0) {
+        if (seenExternal.has(ext)) continue;
+        seenExternal.add(ext);
+      }
+      seenIds.add(entry.sessionId);
+      out.push(entry);
+    }
+  }
+  return out;
 }
