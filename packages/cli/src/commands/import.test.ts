@@ -1241,3 +1241,113 @@ describe("basou import codex — scoped re-import of a grown source", () => {
     expect(cmdAfter.duration_ms).toBe(500);
   });
 });
+
+describe("basou import claude-code (cross-project boundary warning)", () => {
+  it("warns when a session edited files outside the declared source_roots", async () => {
+    const repo = await realpath(tmpRepo as string);
+    const paths = await ensureBasouDirectory(repo);
+    // Declare source_roots = the repo itself; a sibling repo is out-of-bounds.
+    await writeManifest(
+      paths,
+      createManifest({
+        workspaceName: "fixture-ws",
+        now: FIXED_DATE,
+        workspaceId: FIXED_WS_ID,
+        sourceRoots: ["."],
+      }),
+    );
+    const outside = await mkdtemp(join(tmpdir(), "basou-import-outside-"));
+    try {
+      await writeTranscript(repo, "sess-x", [
+        {
+          type: "assistant",
+          timestamp: "2026-05-10T00:00:01.000Z",
+          cwd: repo,
+          message: {
+            content: [{ type: "tool_use", name: "Edit", input: { file_path: `${repo}/in.ts` } }],
+          },
+        },
+        {
+          type: "assistant",
+          timestamp: "2026-05-10T00:00:02.000Z",
+          cwd: repo,
+          message: {
+            content: [
+              { type: "tool_use", name: "Edit", input: { file_path: `${outside}/blog.ts` } },
+            ],
+          },
+        },
+      ]);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await doRunImportClaudeCode(
+        { all: true },
+        { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+      );
+      const warnings = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(warnings).toContain("outside this project's source_roots");
+      expect(warnings).toContain(`${outside}/blog.ts`);
+      expect(warnings).not.toContain(`${repo}/in.ts`);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("does not warn for a solo project (no declared source_roots)", async () => {
+    const repo = await setupInitedRepo();
+    const outside = await mkdtemp(join(tmpdir(), "basou-import-outside-"));
+    try {
+      await writeTranscript(repo, "sess-y", [
+        {
+          type: "assistant",
+          timestamp: "2026-05-10T00:00:02.000Z",
+          cwd: repo,
+          message: {
+            content: [
+              { type: "tool_use", name: "Edit", input: { file_path: `${outside}/blog.ts` } },
+            ],
+          },
+        },
+      ]);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await doRunImportClaudeCode(
+        { all: true },
+        { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+      );
+      const warnings = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(warnings).not.toContain("outside this project's source_roots");
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when an explicit --project flag declares the boundary (no manifest source_roots)", async () => {
+    // The boundary can be declared by --project even with no manifest
+    // source_roots; the warning must still fire in that case.
+    const repo = await setupInitedRepo();
+    const outside = await mkdtemp(join(tmpdir(), "basou-import-outside-"));
+    try {
+      await writeTranscript(repo, "sess-z", [
+        {
+          type: "assistant",
+          timestamp: "2026-05-10T00:00:02.000Z",
+          cwd: repo,
+          message: {
+            content: [
+              { type: "tool_use", name: "Edit", input: { file_path: `${outside}/blog.ts` } },
+            ],
+          },
+        },
+      ]);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await doRunImportClaudeCode(
+        { all: true, project: ["."] },
+        { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+      );
+      const warnings = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(warnings).toContain("outside this project's source_roots");
+      expect(warnings).toContain(`${outside}/blog.ts`);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+});
