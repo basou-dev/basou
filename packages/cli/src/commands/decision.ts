@@ -47,6 +47,12 @@ export type DecisionRecordOptions = {
   alternative?: string[];
   linkedEvent?: string[];
   linkedFile?: string[];
+  /**
+   * Record this decision as a strategic TRACK (an unfinished direction +
+   * why) rather than a point-in-time decision. orientation/handoff resurface
+   * open tracks every session until they are closed with `decision void`.
+   */
+  track?: boolean;
   session?: string;
   json?: boolean;
   verbose?: boolean;
@@ -96,6 +102,10 @@ export function registerDecisionCommand(program: Command): void {
       "Related file path (repeatable). Path is opaque; existence is verified at render time.",
       collectLinkedFile,
       [] as string[],
+    )
+    .option(
+      "--track",
+      "Record as a strategic track (an unfinished direction + why). orientation/handoff keep resurfacing open tracks until you close one with 'basou decision void'.",
     )
     .option(
       "--session <session_id>",
@@ -157,13 +167,22 @@ Input format (a JSON array; one object per decision):
       "alternatives": ["npm workspaces", "yarn"],
       "rejected_reason": "npm hoisting caused phantom-dependency bugs",
       "linked_files": ["pnpm-workspace.yaml"]
+    },
+    {
+      "title": "Form-based admin editing is the next track (only 6/19 sections done)",
+      "rationale": "Raw-JSON editing is a stopgap, not the final shape; cover the rest.",
+      "kind": "track"
     }
   ]
 
-Only "title" is required; every other field is optional. All decisions are
-written into one ad-hoc session timestamped now, so orientation surfaces them
-as the latest decisions. Run from a workspace-view directory and it resolves to
-the planning repo, like 'basou orient' / 'basou refresh' / 'basou note'.
+Only "title" is required; every other field is optional. Set "kind": "track" to
+record a strategic, UNFINISHED direction (+ why): orientation/handoff resurface
+open tracks every session until you close one with 'basou decision void <id>'.
+Absent / "decision" is a point-in-time decision (surfaced only as the latest).
+All decisions are written into one ad-hoc session timestamped now, so
+orientation surfaces them as the latest decisions. Run from a workspace-view
+directory and it resolves to the planning repo, like 'basou orient' /
+'basou refresh' / 'basou note'.
 
 Example (heredoc on stdin):
   basou decision capture <<'JSON'
@@ -310,7 +329,8 @@ export async function doRunDecisionRecord(
     workingDirectory: repositoryRoot,
     invocation: {
       command: "basou decision record",
-      args: ["--title", options.title],
+      args:
+        options.track === true ? ["--title", options.title, "--track"] : ["--title", options.title],
     },
     targetEventBuilders: [
       (sessionId, eventId) =>
@@ -731,6 +751,7 @@ const CAPTURE_ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "alternatives",
   "linked_events",
   "linked_files",
+  "kind",
 ]);
 
 /**
@@ -766,7 +787,7 @@ function validateCaptureItem(item: unknown, index: number): CaptureDecisionInput
   for (const key of Object.keys(obj)) {
     if (!CAPTURE_ALLOWED_KEYS.has(key)) {
       throw new Error(
-        `decision[${index}]: unknown field '${key}'. Allowed: title, rationale, rejected_reason, alternatives, linked_events, linked_files.`,
+        `decision[${index}]: unknown field '${key}'. Allowed: title, rationale, rejected_reason, alternatives, linked_events, linked_files, kind.`,
       );
     }
   }
@@ -774,6 +795,14 @@ function validateCaptureItem(item: unknown, index: number): CaptureDecisionInput
     throw new Error(`decision[${index}].title must be a non-empty string.`);
   }
   const out: CaptureDecisionInput = { title: obj.title };
+  if (obj.kind !== undefined) {
+    if (obj.kind !== "decision" && obj.kind !== "track") {
+      throw new Error(`decision[${index}].kind must be "decision" or "track", got '${obj.kind}'.`);
+    }
+    // Only the non-default `track` is carried forward; an explicit "decision"
+    // is accepted but normalized to omission so the event omits `kind`.
+    if (obj.kind === "track") out.kind = "track";
+  }
   if (obj.rationale !== undefined) {
     out.rationale = requireNonEmptyString(obj.rationale, index, "rationale");
   }
@@ -853,6 +882,7 @@ function toRichFields(decision: CaptureDecisionInput): RichDecisionFields {
   if (decision.alternatives !== undefined) out.alternatives = [...decision.alternatives];
   if (decision.linked_events !== undefined) out.linked_events = [...decision.linked_events];
   if (decision.linked_files !== undefined) out.linked_files = [...decision.linked_files];
+  if (decision.kind !== undefined) out.kind = decision.kind;
   return out;
 }
 
@@ -874,6 +904,7 @@ function captureItemToPayload(item: CaptureResultItem): Record<string, unknown> 
     payload.rejected_reason = item.input.rejected_reason;
   if (item.input.linked_events !== undefined) payload.linked_events = item.input.linked_events;
   if (item.input.linked_files !== undefined) payload.linked_files = item.input.linked_files;
+  if (item.input.kind !== undefined) payload.kind = item.input.kind;
   return payload;
 }
 
@@ -889,7 +920,7 @@ function printCapturePreview(
     `Would capture ${decisions.length} decision${decisions.length === 1 ? "" : "s"} (dry run; nothing written):`,
   );
   for (const decision of decisions) {
-    console.log(`- ${decision.title}`);
+    console.log(`- ${decision.title}${decision.kind === "track" ? " [TRACK]" : ""}`);
   }
 }
 
@@ -914,7 +945,9 @@ function printCaptureResult(
     `Captured ${result.items.length} decision${result.items.length === 1 ? "" : "s"} in ad-hoc session ${sid}:`,
   );
   for (const item of result.items) {
-    console.log(`- ${item.decisionId}: ${item.input.title}`);
+    console.log(
+      `- ${item.decisionId}: ${item.input.title}${item.input.kind === "track" ? " [TRACK]" : ""}`,
+    );
   }
 }
 
@@ -924,6 +957,9 @@ type RichDecisionFields = {
   alternatives?: string[];
   linked_events?: string[];
   linked_files?: string[];
+  // Only the non-default `track` is carried; a plain `decision` leaves this
+  // undefined so the event omits `kind` entirely and round-trips byte-identically.
+  kind?: "track";
 };
 
 function pickRichFields(options: DecisionRecordOptions): RichDecisionFields {
@@ -939,6 +975,7 @@ function pickRichFields(options: DecisionRecordOptions): RichDecisionFields {
   if (options.linkedFile !== undefined && options.linkedFile.length > 0) {
     out.linked_files = [...options.linkedFile];
   }
+  if (options.track === true) out.kind = "track";
   return out;
 }
 
@@ -968,6 +1005,7 @@ function buildDecisionEvent(input: {
       ? { linked_events: input.rich.linked_events as Array<`evt_${string}`> }
       : {}),
     ...(input.rich.linked_files !== undefined ? { linked_files: input.rich.linked_files } : {}),
+    ...(input.rich.kind !== undefined ? { kind: input.rich.kind } : {}),
   };
 }
 
@@ -1064,16 +1102,20 @@ function printDecisionResult(options: DecisionRecordOptions, result: DecisionPri
     }
     if (result.rich.linked_events !== undefined) payload.linked_events = result.rich.linked_events;
     if (result.rich.linked_files !== undefined) payload.linked_files = result.rich.linked_files;
+    if (result.rich.kind !== undefined) payload.kind = result.rich.kind;
     console.log(JSON.stringify(payload));
     return;
   }
+  const trackPrefix = result.rich.kind === "track" ? "track " : "";
   const rationaleSuffix =
     result.rich.rationale !== undefined ? ` (rationale: ${result.rich.rationale})` : "";
   if (result.mode === "ad-hoc") {
-    console.log(`Recorded ${result.decisionId} in ad-hoc session ${sid}${rationaleSuffix}`);
+    console.log(
+      `Recorded ${trackPrefix}${result.decisionId} in ad-hoc session ${sid}${rationaleSuffix}`,
+    );
   } else {
     console.log(
-      `Recorded ${result.decisionId} in session ${sid} (${result.sessionStatus})${rationaleSuffix}`,
+      `Recorded ${trackPrefix}${result.decisionId} in session ${sid} (${result.sessionStatus})${rationaleSuffix}`,
     );
   }
 }

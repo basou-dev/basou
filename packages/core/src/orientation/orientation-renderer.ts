@@ -66,11 +66,29 @@ export type OrientationRendererResult = {
   /** Tasks whose status is `planned` or `in_progress`. */
   inFlightTaskCount: number;
   decisionCount: number;
+  /** Open (non-voided) `kind: "track"` decisions surfaced as strategic continuation. */
+  openTrackCount: number;
 };
 
 type DecisionRecord = {
   decisionId: string;
   title: string;
+  occurredAt: string;
+  sessionId: string;
+  host: string | null;
+};
+
+/**
+ * An open (non-voided) decision recorded with `kind: "track"` — a strategic,
+ * unfinished direction the forward section resurfaces every session until it is
+ * closed via `decision void` / supersede. Carries the rationale (the WHY) so the
+ * surfaced track answers not just "what to build next" but "and why", which is
+ * exactly the intent that otherwise lives only in the conversation.
+ */
+type TrackRecord = {
+  decisionId: string;
+  title: string;
+  rationale: string | null;
   occurredAt: string;
   sessionId: string;
   host: string | null;
@@ -127,6 +145,16 @@ export type OrientationSummary = {
   /** Most recent `decision_recorded` across all sessions; null when none. */
   latestDecision: DecisionRecord | null;
   decisionCount: number;
+  /**
+   * Open (non-voided) `kind: "track"` decisions — strategic, unfinished
+   * directions that the forward section ("どこへ向かう") resurfaces every session
+   * until they are closed with `decision void` / supersede. Newest first. This
+   * is the intent-continuity layer: distinct from the single latest decision
+   * (point-in-time) and the recorded next step (`note`), an open track keeps
+   * carrying "the next essential thing to build, and why" across sessions so it
+   * does not sink into the flat decision list. Empty when none are open.
+   */
+  openTracks: TrackRecord[];
   /**
    * Most recent `note_added` over non-archived sessions — the recorded next
    * step / handoff ("次の起点") surfaced in the forward section; null when none.
@@ -224,6 +252,10 @@ export async function summarizeOrientation(
   //    the activity tail and latest note are non-archived only (they answer "is
   //    there newer work" / "where do I resume").
   const decisions: DecisionRecord[] = [];
+  // Decisions recorded with `kind: "track"` (a strategic, unfinished direction).
+  // Collected across the same pass; the open subset (minus voided) is surfaced
+  // in the forward section and resurfaces until closed.
+  const tracks: TrackRecord[] = [];
   // decision_ids marked no longer in force by a `decision_voided` event; the
   // "latest decision" pointer skips them so a voided decision is never
   // surfaced as the current direction.
@@ -253,6 +285,21 @@ export async function summarizeOrientation(
             sessionId: entry.sessionId,
             host: entry.host,
           });
+          // Tracks (kind === "track") are an unfinished direction; collect them
+          // separately with their rationale so the forward section can resurface
+          // them until closed. A void recorded later removes the id from the open
+          // set (resolved below, after the full scan, so a void seen before its
+          // target decision still applies).
+          if (ev.kind === "track") {
+            tracks.push({
+              decisionId: ev.decision_id,
+              title: ev.title,
+              rationale: ev.rationale ?? null,
+              occurredAt: ev.occurred_at,
+              sessionId: entry.sessionId,
+              host: entry.host,
+            });
+          }
         } else if (ev.type === "decision_voided") {
           voidedDecisionIds.add(ev.decision_id);
         }
@@ -292,6 +339,16 @@ export async function summarizeOrientation(
       break;
     }
   }
+
+  // Open tracks: every `kind: "track"` decision not yet voided/superseded, newest
+  // first (most recent strategic direction leads). These resurface in the forward
+  // section every session until explicitly closed — the durable intent layer.
+  const openTracks: TrackRecord[] = tracks
+    .filter((t) => !voidedDecisionIds.has(t.decisionId))
+    .sort((a, b) => {
+      const c = Date.parse(b.occurredAt) - Date.parse(a.occurredAt);
+      return c !== 0 ? c : b.decisionId.localeCompare(a.decisionId);
+    });
 
   // Tasks: in-flight (planned / in_progress) carry the cross-session linkage
   // that a flat transcript scan cannot reconstruct.
@@ -444,6 +501,7 @@ export async function summarizeOrientation(
     latestSession,
     latestDecision: latestDecision ?? null,
     decisionCount: decisions.length,
+    openTracks,
     latestNote,
     relatedFiles: { displayed, overflow, outOfRoot },
     inFlightTasks,
@@ -493,6 +551,7 @@ export async function renderOrientation(
     suspectCount: summary.suspects.length,
     inFlightTaskCount: summary.inFlightTasks.length,
     decisionCount: summary.decisionCount,
+    openTrackCount: summary.openTracks.length,
   };
 }
 
@@ -638,6 +697,35 @@ function formatOrientationBody(
   // "where am I heading"
   lines.push("## どこへ向かう");
   lines.push("");
+  // Open tracks lead the forward section: a strategic, unfinished direction
+  // ("the next essential thing to build, and why") is the most important thing to
+  // carry across a session boundary, and it resurfaces here every time until
+  // explicitly closed. Distinct from the recorded next step (a terminal `note`)
+  // and from in-flight tasks (mechanical). This is the intent-continuity layer —
+  // without it an agreed direction sinks into the flat decision list and the next
+  // session never sees it (the failure this section exists to prevent).
+  if (summary.openTracks.length > 0) {
+    const TRACK_DISPLAY_LIMIT = 10;
+    const shownTracks = summary.openTracks.slice(0, TRACK_DISPLAY_LIMIT);
+    const trackOverflow = summary.openTracks.length - shownTracks.length;
+    lines.push(`### 未完トラック (close まで継続表示) (${summary.openTracks.length})`);
+    for (const t of shownTracks) {
+      const trackAge = relativeAgeJa(t.occurredAt, now);
+      lines.push(`- ${t.title} [${shortId(t.decisionId)}] (${trackAge})${hostSuffix(t.host)}`);
+      if (t.rationale !== null && t.rationale.trim() !== "") {
+        lines.push(`  - 理由: ${trackRationale(t.rationale)}`);
+      }
+    }
+    if (trackOverflow > 0) {
+      lines.push(`- ... +${trackOverflow} more (see decisions.md)`);
+    }
+    // Section-scoped close instruction: a top-level line (not an indented sub-
+    // bullet) so it reads as guidance for the whole list, mirroring handoff.
+    lines.push(
+      "完了したら `basou decision void <decision_id>` で閉じてください。閉じるまで毎回ここに表示されます。",
+    );
+    lines.push("");
+  }
   // The recorded next step (a `basou note`) is the operator's explicit resume
   // hint; surface it first so a free-text handoff survives into the next session
   // rather than living only in a decision title or an external memory file.
@@ -659,9 +747,14 @@ function formatOrientationBody(
   for (const t of summary.plannedTasks) {
     lines.push(`- ${t.title} [${shortId(t.id)}]`);
   }
-  // Fall back to the decision hint only when there is neither a recorded next
-  // step nor a planned task — otherwise the section already says where to go.
-  if (summary.latestNote === null && summary.plannedTasks.length === 0) {
+  // Fall back to the decision hint only when there is no open track, no recorded
+  // next step, and no planned task — otherwise the section already says where to
+  // go (an open track is the strongest such signal).
+  if (
+    summary.openTracks.length === 0 &&
+    summary.latestNote === null &&
+    summary.plannedTasks.length === 0
+  ) {
     const dec = summary.latestDecision;
     if (dec === null) {
       lines.push("- (no planned tasks or recorded next step yet)");
@@ -679,6 +772,18 @@ function formatOrientationBody(
     } else {
       lines.push("- (no planned tasks — direction is inferred from recent decisions)");
       lines.push(`  - 直近の判断: ${dec.title}`);
+    }
+    // Discoverability nudge: fires when there ARE recorded decisions but none give
+    // a durable forward direction (latest is stale, or just point-in-time) — the
+    // moment a strategic direction is most likely sitting only in conversation.
+    // Point the agent at tracks so the next agreed direction is captured durably
+    // instead of leaking again. Suppressed for a pristine workspace (no decisions
+    // yet) so it is a hint at the right time, not noise, and never shown when an
+    // open track / note / planned task already gives direction.
+    if (dec !== null) {
+      lines.push(
+        '  - 次に作るべき本質的な方向性が定まったら `basou decision capture` (`"kind":"track"`) / `basou decision record --track` で track 化すると、close まで毎 session ここに継続表示されます。',
+      );
     }
   }
   lines.push("");
@@ -869,6 +974,17 @@ const NOTE_SUMMARY_MAX = 200;
 function noteSummary(body: string): string {
   const oneLine = body.replace(/\s+/g, " ").trim();
   return oneLine.length > NOTE_SUMMARY_MAX ? `${oneLine.slice(0, NOTE_SUMMARY_MAX - 1)}…` : oneLine;
+}
+
+// A track's rationale is the WHY behind the direction; like a note it can be
+// multi-line and long, so collapse whitespace to one line and cap it. The full
+// text is preserved in the decision_recorded event (see decisions.md).
+const TRACK_RATIONALE_MAX = 240;
+function trackRationale(rationale: string): string {
+  const oneLine = rationale.replace(/\s+/g, " ").trim();
+  return oneLine.length > TRACK_RATIONALE_MAX
+    ? `${oneLine.slice(0, TRACK_RATIONALE_MAX - 1)}…`
+    : oneLine;
 }
 
 function suspectText(reason: SuspectReason | null): string {
