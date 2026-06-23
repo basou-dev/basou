@@ -337,3 +337,44 @@ describe("report-renderer", () => {
     expect(data.period.to).toBe("2026-05-05T10:00:00.000Z"); // clamped, not reversed
   });
 });
+
+function voidedLine(
+  sessionId: string,
+  evt: string,
+  decisionId: string,
+  occurredAt: string,
+): string {
+  return `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "decision_voided",
+    id: EVT(evt),
+    session_id: sessionId,
+    occurred_at: occurredAt,
+    source: "local-cli",
+    decision_id: decisionId,
+    reason: "belongs to blog",
+  })}\n`;
+}
+
+describe("renderReport (voided decisions)", () => {
+  it("annotates a voided decision and leaves others clean", async () => {
+    const paths = await setupPaths();
+    const sid = SES("R01");
+    const kept = DEC("RK1");
+    const voided = DEC("RV1");
+    await placeSession(paths, {
+      id: sid,
+      startedAt: "2026-05-08T09:00:00.000Z",
+      events:
+        decisionLine(sid, "RE1", kept, "kept direction", "2026-05-08T10:00:00.000Z") +
+        decisionLine(sid, "RE2", voided, "retracted direction", "2026-05-08T11:00:00.000Z") +
+        voidedLine(sid, "RE3", voided, "2026-05-08T12:00:00.000Z"),
+    });
+    const { body, data } = await renderReport({ paths, nowIso: NOW_ISO, timeZone: TZ });
+    expect(body).toContain("retracted direction (voided)");
+    expect(body).toContain("kept direction");
+    expect(body).not.toContain("kept direction (voided)");
+    expect(data.decisions.items.find((d) => d.id === voided)?.voided).toBe(true);
+    expect(data.decisions.items.find((d) => d.id === kept)?.voided).toBeUndefined();
+  });
+});

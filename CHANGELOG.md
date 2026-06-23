@@ -10,11 +10,13 @@ All notable changes to **basou** are recorded here. The project follows
 - `basou decision void <decision_id> [--reason <text>] [--superseded-by <id>]`
   marks a recorded decision no longer in force. Append-only: a new
   `decision_voided` event is recorded; the original `decision_recorded` line is
-  never mutated. `decisions.md` then renders the decision struck-through with
-  its reason (and the superseding decision, if any), and `basou orient` skips it
-  when choosing the latest direction — so a decision that was wrong or recorded
-  against the wrong project is structurally correctable instead of needing a
-  free-text correction note. The target must exist (a typo'd id fails loudly).
+  never mutated. The void is then reflected everywhere a decision surfaces:
+  `decisions.md` renders it struck-through with its reason (and the superseding
+  decision, if any); `basou orient` and `basou handoff` skip it when choosing
+  the latest direction; and `basou report` annotates it `(voided)`. So a
+  decision that was wrong or recorded against the wrong project is structurally
+  correctable instead of needing a free-text correction note. The target must
+  exist (a typo'd id fails loudly).
 - `basou decision capture` / `basou decision record` now warn (read-only,
   advisory) when a decision's `linked_files` resolve OUTSIDE the project's
   declared `import.source_roots` — the write-side companion to the v0.17.0

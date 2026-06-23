@@ -77,7 +77,13 @@ export type ReportSessionItem = {
   outputTokens: number;
 };
 
-export type ReportDecisionItem = { id: string; title: string; occurredAt: string };
+export type ReportDecisionItem = {
+  id: string;
+  title: string;
+  occurredAt: string;
+  /** True when a later `decision_voided` event retracted this decision. */
+  voided?: boolean;
+};
 export type ReportTaskItem = { id: string; title: string; status: TaskStatus };
 export type ReportApprovalItem = {
   id: string;
@@ -182,6 +188,10 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
   // Decisions: replicate decisions-renderer's full collection — the
   // unreadable-skip wrapper AND the (occurred_at, id) sort, not just the loop.
   const decisions: ReportDecisionItem[] = [];
+  // decision_ids retracted by a later `decision_voided` event; marked on the
+  // items below so the report annotates them instead of presenting a retracted
+  // decision as if it still stands (mirrors decisions.md / orient / handoff).
+  const voidedDecisionIds = new Set<string>();
   for (const entry of entries) {
     const sessionDir = join(input.paths.sessions, entry.sessionId);
     try {
@@ -190,6 +200,8 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
       })) {
         if (ev.type === "decision_recorded") {
           decisions.push({ id: ev.decision_id, title: ev.title, occurredAt: ev.occurred_at });
+        } else if (ev.type === "decision_voided") {
+          voidedDecisionIds.add(ev.decision_id);
         }
       }
     } catch {
@@ -197,6 +209,9 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
         wrappedSkip(entry.sessionId, "events_jsonl_unreadable");
       }
     }
+  }
+  for (const d of decisions) {
+    if (voidedDecisionIds.has(d.id)) d.voided = true;
   }
   decisions.sort((a, b) => {
     const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
@@ -415,7 +430,8 @@ function formatReportBody(data: ReportData): string {
       lines.push("");
     }
     for (const d of shown) {
-      lines.push(`- ${d.occurredAt.slice(0, 10)} · ${d.title}`);
+      const voidedTag = d.voided === true ? " (voided)" : "";
+      lines.push(`- ${d.occurredAt.slice(0, 10)} · ${d.title}${voidedTag}`);
     }
   }
   lines.push("");

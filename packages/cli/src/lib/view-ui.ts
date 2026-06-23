@@ -543,6 +543,10 @@ export const VIEW_HTML = `<!doctype html>
     }
     if (ev.type === 'file_changed') return ev.path + ' [' + ev.change_type + ']';
     if (ev.type === 'decision_recorded') return ev.title || '';
+    if (ev.type === 'decision_voided') {
+      var vs = ev.superseded_by ? ' superseded by ' + ev.superseded_by : '';
+      return 'voided ' + ev.decision_id + (ev.reason ? ': ' + ev.reason : '') + vs;
+    }
     return '';
   }
 
