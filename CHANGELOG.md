@@ -3,6 +3,20 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou decision capture` / `basou decision record` now warn (read-only,
+  advisory) when a decision's `linked_files` resolve OUTSIDE the project's
+  declared `import.source_roots` — the write-side companion to the v0.17.0
+  cross-project surfacing, so a decision captured from a session that wandered
+  into another repo is flagged before it is recorded against the wrong
+  project's master. Gated to a declared `source_roots` list (a multi-repo
+  workspace); warn-only (capture is agent-facing and must not be blocked).
+  Relative links resolve against the invocation cwd; the agent's own tooling
+  dirs are exempt. `basou note` is not covered — it carries no `linked_files`.
+
 ## 0.17.0 — 2026-06-23
 
 ### Added
