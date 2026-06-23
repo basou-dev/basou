@@ -5,6 +5,12 @@ export {
   summarizeAdapterOutput,
 } from "./claude-code-adapter.js";
 export type {
+  StopHookEvaluation,
+  StopHookEvaluationInput,
+  StopHookSilentReason,
+} from "./stop-hook.js";
+export { DEFAULT_STOP_HOOK_MIN_ACTIONS, evaluateStopHook } from "./stop-hook.js";
+export type {
   ClaudeTranscriptRecord,
   ClaudeTranscriptToPayloadOptions,
 } from "./transcript-importer.js";

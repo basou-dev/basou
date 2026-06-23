@@ -5,6 +5,7 @@ import { registerDecisionCommand } from "./commands/decision.js";
 import { registerDecisionsCommand } from "./commands/decisions.js";
 import { registerExecCommand } from "./commands/exec.js";
 import { registerHandoffCommand } from "./commands/handoff.js";
+import { registerHookCommand } from "./commands/hook.js";
 import { registerImportCommand } from "./commands/import.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerNoteCommand } from "./commands/note.js";
@@ -72,6 +73,7 @@ export function buildProgram(): Command {
   registerReviewGapsCommand(program);
   registerProjectCommand(program);
   registerProtocolCommand(program);
+  registerHookCommand(program);
 
   return program;
 }

@@ -3,6 +3,27 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou hook stop` — a Claude Code **Stop-hook** that nudges the agent to
+  capture a session's intent before the turn ends. It reads the Stop hook JSON
+  payload on stdin and, when a session did substantive work (≥ 5 commands +
+  file edits by default, tunable with `--min-actions`) but ran no capture verb
+  (`basou decision capture` / `decision record` / `note`), emits a non-blocking
+  `hookSpecificOutput.additionalContext` reminder pointing at the capture
+  commands. It is **advisory, not coercive**: the reminder lets the model act or
+  stop and never blocks; the `stop_hook_active` flag is honored so it can never
+  loop; and it is **fail-open** — any error (missing/unreadable transcript,
+  malformed stdin) results in no output and a clean exit, so a hook failure can
+  never disrupt a session. Install by adding `basou hook stop` as a `Stop` hook
+  in `~/.claude/settings.json` (see `basou hook stop --help`). This is the
+  write-side companion to the v0.19.0 track-level decisions: where tracks make a
+  captured intent resurface, the Stop-hook makes the capture itself more likely
+  to happen, closing the "capture never fired" gap that buried intent between
+  sessions.
+
 ## 0.19.0 — 2026-06-24
 
 ### Added
