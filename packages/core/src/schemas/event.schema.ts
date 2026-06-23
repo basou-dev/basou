@@ -141,6 +141,20 @@ const DecisionRecordedEventSchema = BaseEventSchema.extend({
   linked_files: z.array(z.string().min(1).max(4096)).optional(),
 });
 
+// Voids (or supersedes) a previously recorded decision. Append-only: the
+// original `decision_recorded` line is never mutated; this event marks it no
+// longer in force so decisions.md / orientation can strike it and skip it as
+// the "latest" direction. `superseded_by` optionally points at the replacement
+// decision (a supersede); absent it is a plain void. Like `linked_events`, the
+// referenced ids are prefix-checked only — existence is a render-time concern,
+// so an import/export round-trip across workspaces never rejects on a stale id.
+const DecisionVoidedEventSchema = BaseEventSchema.extend({
+  type: z.literal("decision_voided"),
+  decision_id: DecisionIdSchema,
+  reason: z.string().nullable().optional(),
+  superseded_by: DecisionIdSchema.optional(),
+});
+
 const TaskCreatedEventSchema = BaseEventSchema.extend({
   type: z.literal("task_created"),
   task_id: TaskIdSchema,
@@ -242,6 +256,7 @@ export const EventSchema = z.discriminatedUnion("type", [
   GitSnapshotEventSchema,
   FileChangedEventSchema,
   DecisionRecordedEventSchema,
+  DecisionVoidedEventSchema,
   TaskCreatedEventSchema,
   TaskStatusChangedEventSchema,
   TaskReconciledEventSchema,
@@ -277,6 +292,8 @@ export type GitSnapshotEvent = z.infer<typeof GitSnapshotEventSchema>;
 export type FileChangedEvent = z.infer<typeof FileChangedEventSchema>;
 /** Narrowed runtime type for the `decision_recorded` event variant. */
 export type DecisionRecordedEvent = z.infer<typeof DecisionRecordedEventSchema>;
+/** Narrowed runtime type for the `decision_voided` event variant. */
+export type DecisionVoidedEvent = z.infer<typeof DecisionVoidedEventSchema>;
 /** Narrowed runtime type for the `task_created` event variant. */
 export type TaskCreatedEvent = z.infer<typeof TaskCreatedEventSchema>;
 /** Narrowed runtime type for the `task_status_changed` event variant. */

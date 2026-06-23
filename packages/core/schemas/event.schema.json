@@ -784,6 +784,70 @@
         },
         "type": {
           "type": "string",
+          "const": "decision_voided"
+        },
+        "decision_id": {
+          "type": "string",
+          "pattern": "^decision_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou decision id: `decision_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "superseded_by": {
+          "type": "string",
+          "pattern": "^decision_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou decision id: `decision_` followed by a 26-character Crockford Base32 ULID."
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "session_id",
+        "occurred_at",
+        "source",
+        "type",
+        "decision_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "0.1.0"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^evt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou evt id: `evt_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "description": "Basou ses id: `ses_` followed by a 26-character Crockford Base32 ULID."
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prev_hash": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
           "const": "task_created"
         },
         "task_id": {

@@ -224,6 +224,10 @@ export async function summarizeOrientation(
   //    the activity tail and latest note are non-archived only (they answer "is
   //    there newer work" / "where do I resume").
   const decisions: DecisionRecord[] = [];
+  // decision_ids marked no longer in force by a `decision_voided` event; the
+  // "latest decision" pointer skips them so a voided decision is never
+  // surfaced as the current direction.
+  const voidedDecisionIds = new Set<string>();
   let latestActivityAt: string | null = null;
   let latestNote: NoteRecord | null = null;
   const noteActivity = (iso: string): void => {
@@ -249,6 +253,8 @@ export async function summarizeOrientation(
             sessionId: entry.sessionId,
             host: entry.host,
           });
+        } else if (ev.type === "decision_voided") {
+          voidedDecisionIds.add(ev.decision_id);
         }
         // Only `next_step`-kind notes (from `basou note`) are resume hints; a
         // plain `basou session note` annotation (kind absent) is not surfaced.
@@ -275,7 +281,17 @@ export async function summarizeOrientation(
     const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
     return c !== 0 ? c : a.decisionId.localeCompare(b.decisionId);
   });
-  const latestDecision = decisions[decisions.length - 1];
+  // The latest-decision pointer is the newest decision NOT voided — a voided
+  // decision must not be presented as the current direction. decisions.md still
+  // lists it (struck) for the audit trail.
+  let latestDecision: DecisionRecord | undefined;
+  for (let i = decisions.length - 1; i >= 0; i -= 1) {
+    const d = decisions[i];
+    if (d !== undefined && !voidedDecisionIds.has(d.decisionId)) {
+      latestDecision = d;
+      break;
+    }
+  }
 
   // Tasks: in-flight (planned / in_progress) carry the cross-session linkage
   // that a flat transcript scan cannot reconstruct.

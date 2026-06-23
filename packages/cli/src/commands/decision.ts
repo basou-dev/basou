@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   AGENT_INFRA_DIRS,
   acquireLock,
@@ -13,9 +13,11 @@ import {
   type Event,
   findErrorCode,
   isValidPrefixedId,
+  loadSessionEntries,
   type PrefixedId,
   prefixedUlid,
   readManifest,
+  replayEvents,
   resolveRepositoryRoot,
   resolveSessionId,
   type SessionStatus,
@@ -120,6 +122,29 @@ export function registerDecisionCommand(program: Command): void {
     .addHelpText("after", CAPTURE_HELP)
     .action(async (options: DecisionCaptureOptions) => {
       await runDecisionCapture(options);
+    });
+
+  decision
+    .command("void")
+    .description(
+      "Void (or supersede) a recorded decision. Append-only: the original is " +
+        "kept but struck in decisions.md and skipped as orientation's latest " +
+        "direction. Use when a decision was wrong or recorded in the wrong project.",
+    )
+    .argument("<decision_id>", "The decision to void (its decision_ ULID)")
+    .option("--reason <text>", "Why the decision is voided", parseReason)
+    .option(
+      "--superseded-by <decision_id>",
+      "The decision that replaces this one (records a supersede rather than a plain void)",
+    )
+    .option(
+      "--session <session_id>",
+      "Attach to an existing session; otherwise an ad-hoc session is created",
+    )
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (decisionId: string, options: DecisionVoidOptions) => {
+      await runDecisionVoid(decisionId, options);
     });
 }
 
@@ -448,6 +473,220 @@ export async function doRunDecisionCapture(
       input: decision,
     })),
   });
+}
+
+export type DecisionVoidOptions = {
+  reason?: string;
+  supersededBy?: string;
+  session?: string;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+/**
+ * Programmatic entry for `basou decision void`. Owns process exit state; tests
+ * should prefer {@link doRunDecisionVoid}.
+ */
+export async function runDecisionVoid(
+  decisionId: string,
+  options: DecisionVoidOptions,
+  ctx: DecisionContext = {},
+): Promise<void> {
+  try {
+    await doRunDecisionVoid(decisionId, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, {
+      verbose: isVerbose(options),
+      classifiers: [failedToFinalizeClassifier],
+    });
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunDecisionVoid(
+  decisionId: string,
+  options: DecisionVoidOptions,
+  ctx: DecisionContext,
+): Promise<void> {
+  if (!isDecisionId(decisionId)) {
+    throw new Error(`Invalid decision id: ${decisionId} (expected a decision_<ULID>).`);
+  }
+  if (options.supersededBy !== undefined && !isDecisionId(options.supersededBy)) {
+    throw new Error(
+      `Invalid --superseded-by id: ${options.supersededBy} (expected a decision_<ULID>).`,
+    );
+  }
+  if (options.supersededBy === decisionId) {
+    throw new Error("A decision cannot supersede itself.");
+  }
+
+  const cwd = ctx.cwd ?? process.cwd();
+  // View-aware resolution (like capture / orient / refresh) so void works from
+  // a workspace-view dir and targets the same master where the decision lives.
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "decision void");
+  const paths = basouPaths(repositoryRoot);
+  await assertWorkspaceInitialized(paths.root);
+
+  // Existence check: a void is a correction action, so a typo'd target should
+  // fail loudly rather than record an event that strikes nothing.
+  if (!(await decisionExists(paths, decisionId))) {
+    throw new Error(
+      `Decision ${decisionId} not found in this workspace. Run 'basou decisions generate' or check the id.`,
+    );
+  }
+
+  const now = ctx.nowProvider !== undefined ? ctx.nowProvider() : new Date();
+  const occurredAt = now.toISOString();
+  const reason = options.reason;
+  const supersededBy = options.supersededBy as PrefixedId<"decision"> | undefined;
+
+  if (options.session !== undefined) {
+    const sessionId = (await resolveSessionId(paths, options.session)) as PrefixedId<"ses">;
+    const sessionLock = await acquireLock(paths, "session", sessionId);
+    let result: Awaited<ReturnType<typeof appendEventToExistingSession>>;
+    try {
+      result = await appendEventToExistingSession({
+        paths,
+        sessionId,
+        eventBuilder: (eventId) =>
+          buildDecisionVoidedEvent({
+            eventId,
+            sessionId,
+            decisionId: decisionId as PrefixedId<"decision">,
+            occurredAt,
+            reason,
+            supersededBy,
+          }),
+      });
+    } finally {
+      await sessionLock.release();
+    }
+    printVoidResult(options, {
+      mode: "attached",
+      sessionId,
+      decisionId,
+      eventId: result.eventId,
+      sessionStatus: result.sessionStatus,
+      reason,
+      supersededBy,
+    });
+    return;
+  }
+
+  const manifest = await readManifest(paths);
+  const adHoc = await createAdHocSessionWithEvent({
+    paths,
+    manifest,
+    label: `Ad-hoc decision void: ${decisionId}`,
+    occurredAt,
+    sessionSource: "human",
+    workingDirectory: repositoryRoot,
+    invocation: { command: "basou decision void", args: [decisionId] },
+    targetEventBuilders: [
+      (sessionId, eventId) =>
+        buildDecisionVoidedEvent({
+          eventId,
+          sessionId,
+          decisionId: decisionId as PrefixedId<"decision">,
+          occurredAt,
+          reason,
+          supersededBy,
+        }),
+    ],
+  });
+  printVoidResult(options, {
+    mode: "ad-hoc",
+    sessionId: adHoc.sessionId,
+    decisionId,
+    eventId: adHoc.targetEventIds[0] as string,
+    sessionStatus: "completed",
+    reason,
+    supersededBy,
+  });
+}
+
+/** A well-formed `decision_<ULID>` id (prefix + ULID shape). */
+function isDecisionId(value: string): boolean {
+  return value.startsWith("decision_") && isValidPrefixedId(value);
+}
+
+/** Scan the workspace's sessions for a `decision_recorded` with `decisionId`. */
+async function decisionExists(paths: BasouPaths, decisionId: string): Promise<boolean> {
+  const entries = await loadSessionEntries(paths, { now: new Date() });
+  for (const entry of entries) {
+    const sessionDir = join(paths.sessions, entry.sessionId);
+    try {
+      for await (const ev of replayEvents(sessionDir, {})) {
+        if (ev.type === "decision_recorded" && ev.decision_id === decisionId) return true;
+      }
+    } catch {
+      // Unreadable session: skip; a void should not fail because an unrelated
+      // session's log is corrupt.
+    }
+  }
+  return false;
+}
+
+function buildDecisionVoidedEvent(input: {
+  eventId: PrefixedId<"evt">;
+  sessionId: PrefixedId<"ses">;
+  decisionId: PrefixedId<"decision">;
+  occurredAt: string;
+  reason: string | undefined;
+  supersededBy: PrefixedId<"decision"> | undefined;
+}): Event {
+  return {
+    schema_version: "0.1.0",
+    id: input.eventId,
+    session_id: input.sessionId,
+    occurred_at: input.occurredAt,
+    source: "local-cli",
+    type: "decision_voided",
+    decision_id: input.decisionId,
+    ...(input.reason !== undefined ? { reason: input.reason } : {}),
+    ...(input.supersededBy !== undefined ? { superseded_by: input.supersededBy } : {}),
+  };
+}
+
+type VoidPrintInput = {
+  mode: "ad-hoc" | "attached";
+  sessionId: string;
+  decisionId: string;
+  eventId: string;
+  sessionStatus: SessionStatus;
+  reason: string | undefined;
+  supersededBy: string | undefined;
+};
+
+function printVoidResult(options: DecisionVoidOptions, result: VoidPrintInput): void {
+  if (options.json === true) {
+    console.log(
+      JSON.stringify({
+        event_id: result.eventId,
+        session_id: result.sessionId,
+        decision_id: result.decisionId,
+        session_status: result.sessionStatus,
+        mode: result.mode,
+        ...(result.reason !== undefined ? { reason: result.reason } : {}),
+        ...(result.supersededBy !== undefined ? { superseded_by: result.supersededBy } : {}),
+      }),
+    );
+    return;
+  }
+  const sid = shortSessionId(result.sessionId);
+  const tail = result.supersededBy !== undefined ? ` (superseded by ${result.supersededBy})` : "";
+  if (result.mode === "ad-hoc") {
+    console.log(`Voided ${result.decisionId} in ad-hoc session ${sid}${tail}`);
+  } else {
+    console.log(`Voided ${result.decisionId} in session ${sid} (${result.sessionStatus})${tail}`);
+  }
+}
+
+function parseReason(raw: string): string {
+  if (raw.trim().length === 0) {
+    throw new InvalidArgumentError("--reason must not be empty");
+  }
+  return raw;
 }
 
 async function readCaptureInput(

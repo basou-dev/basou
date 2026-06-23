@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   doRunDecisionCapture,
   doRunDecisionRecord,
+  doRunDecisionVoid,
   registerDecisionCommand,
   runDecisionCapture,
   runDecisionRecord,
@@ -1056,5 +1057,76 @@ describe("decision cross-project linked_files guardrail (warn-only)", () => {
       .split("\n")
       .filter((l) => l.length > 0);
     expect(events).toHaveLength(1);
+  });
+});
+
+describe("basou decision void", () => {
+  /** Read every event across all sessions in the workspace. */
+  async function readAllEvents(repo: string): Promise<Record<string, unknown>[]> {
+    const sessionsRoot = basouPaths(repo).sessions;
+    const dirs = (await readdir(sessionsRoot)).filter((d) => d.startsWith("ses_"));
+    const out: Record<string, unknown>[] = [];
+    for (const d of dirs) {
+      try {
+        const body = await readFile(join(sessionsRoot, d, "events.jsonl"), "utf8");
+        for (const l of body.split("\n").filter((x) => x.length > 0)) {
+          out.push(JSON.parse(l) as Record<string, unknown>);
+        }
+      } catch {
+        // skip
+      }
+    }
+    return out;
+  }
+
+  async function recordDecision(repo: string): Promise<string> {
+    const out = captureStdout();
+    await doRunDecisionRecord({ title: "wrong project", json: true }, { cwd: repo, ...FIXED_CTX });
+    const did = (JSON.parse(joinCalls(out)) as { decision_id: string }).decision_id;
+    vi.restoreAllMocks();
+    return did;
+  }
+
+  it("voids a recorded decision, emitting a decision_voided event", async () => {
+    const repo = await setupInitedRepo();
+    const did = await recordDecision(repo);
+    const out = captureStdout();
+    await doRunDecisionVoid(did, { reason: "belongs to blog" }, { cwd: repo, ...FIXED_CTX });
+    expect(joinCalls(out)).toContain(`Voided ${did}`);
+    const voided = (await readAllEvents(repo)).find((e) => e.type === "decision_voided");
+    expect(voided?.decision_id).toBe(did);
+    expect(voided?.reason).toBe("belongs to blog");
+  });
+
+  it("records a supersede when --superseded-by is given", async () => {
+    const repo = await setupInitedRepo();
+    const did = await recordDecision(repo);
+    const replacement = "decision_01HXABCDEF1234567890ABCDEF";
+    captureStdout();
+    await doRunDecisionVoid(did, { supersededBy: replacement }, { cwd: repo, ...FIXED_CTX });
+    const voided = (await readAllEvents(repo)).find((e) => e.type === "decision_voided");
+    expect(voided?.superseded_by).toBe(replacement);
+  });
+
+  it("fails when the target decision does not exist", async () => {
+    const repo = await setupInitedRepo();
+    await expect(
+      doRunDecisionVoid("decision_01HXABCDEF1234567890ABCDEF", {}, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toThrow(/not found/);
+  });
+
+  it("rejects a malformed decision id", async () => {
+    const repo = await setupInitedRepo();
+    await expect(
+      doRunDecisionVoid("not-a-decision", {}, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toThrow(/Invalid decision id/);
+  });
+
+  it("rejects a decision superseding itself", async () => {
+    const repo = await setupInitedRepo();
+    const did = await recordDecision(repo);
+    await expect(
+      doRunDecisionVoid(did, { supersededBy: did }, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toThrow(/cannot supersede itself/);
   });
 });

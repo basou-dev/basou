@@ -332,3 +332,56 @@ describe("decisions-renderer", () => {
     expect(result.body).not.toContain("linked_files:");
   });
 });
+
+function voidLine(
+  sessionId: string,
+  evt: string,
+  decisionId: string,
+  occurredAt: string,
+  extra?: { reason?: string; superseded_by?: string },
+): string {
+  return `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "decision_voided",
+    id: EVT(evt),
+    session_id: sessionId,
+    occurred_at: occurredAt,
+    source: "local-cli",
+    decision_id: decisionId,
+    ...extra,
+  })}\n`;
+}
+
+describe("decisions-renderer (voided decisions)", () => {
+  it("strikes a voided decision and renders its reason / superseded_by", async () => {
+    const paths = await setupPaths();
+    const sid = SES("V01");
+    const did = DEC("V01");
+    const events =
+      decisionLine(sid, "E01", did, "blog runbook", "2026-05-08T10:00:00.000Z") +
+      voidLine(sid, "E02", did, "2026-05-08T11:00:00.000Z", {
+        reason: "belongs to the blog repo",
+        superseded_by: DEC("V02"),
+      });
+    await placeSession(paths, sid, "2026-05-08T09:00:00+09:00", events);
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`## ~~${did}: blog runbook~~ [VOIDED]`);
+    expect(result.body).toContain("VOIDED: belongs to the blog repo");
+    expect(result.body).toContain(`superseded by ${DEC("V02")}`);
+  });
+
+  it("leaves an un-voided decision unstruck", async () => {
+    const paths = await setupPaths();
+    const sid = SES("V03");
+    const did = DEC("V03");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T09:00:00+09:00",
+      decisionLine(sid, "E03", did, "keep me", "2026-05-08T10:00:00.000Z"),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`## ${did}: keep me`);
+    expect(result.body).not.toContain("[VOIDED]");
+  });
+});

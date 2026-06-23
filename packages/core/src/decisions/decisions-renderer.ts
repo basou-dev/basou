@@ -29,6 +29,10 @@ type DecisionRecord = {
   rejectedReason: string | null | undefined;
   linkedEvents: readonly string[] | undefined;
   linkedFiles: readonly string[] | undefined;
+  // Set when a later `decision_voided` event targets this decision. The
+  // decision is kept (append-only) but rendered struck-through; orientation
+  // skips it as the "latest" direction.
+  voided: { reason: string | null | undefined; supersededBy: string | undefined } | undefined;
 };
 
 /**
@@ -69,6 +73,12 @@ export async function renderDecisions(
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
   const decisions: DecisionRecord[] = [];
+  // decision_id -> void record (last void wins). Collected in the same scan so
+  // a void recorded in any session marks the target decision wherever it lives.
+  const voids = new Map<
+    string,
+    { reason: string | null | undefined; supersededBy: string | undefined }
+  >();
   // Workspace-wide event id index, populated during the same scan that
   // collects decisions, so `linked_events` membership can be resolved
   // without a second pass over events.jsonl.
@@ -91,7 +101,10 @@ export async function renderDecisions(
             rejectedReason: ev.rejected_reason,
             linkedEvents: ev.linked_events,
             linkedFiles: ev.linked_files,
+            voided: undefined,
           });
+        } else if (ev.type === "decision_voided") {
+          voids.set(ev.decision_id, { reason: ev.reason, supersededBy: ev.superseded_by });
         }
       }
     } catch {
@@ -99,6 +112,10 @@ export async function renderDecisions(
         wrappedSkip(entry.sessionId, "events_jsonl_unreadable");
       }
     }
+  }
+  for (const d of decisions) {
+    const v = voids.get(d.decisionId);
+    if (v !== undefined) d.voided = v;
   }
   decisions.sort((a, b) => {
     const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
@@ -151,8 +168,22 @@ async function formatDecisionsBody(args: {
     return lines.join("\n");
   }
   for (const d of args.decisions) {
-    lines.push(`## ${d.decisionId}: ${d.title}`);
-    lines.push("");
+    if (d.voided !== undefined) {
+      // Struck heading + a void line; the decision body is kept for the audit
+      // trail but visibly marked no longer in force.
+      lines.push(`## ~~${d.decisionId}: ${d.title}~~ [VOIDED]`);
+      lines.push("");
+      const supersededBy =
+        d.voided.supersededBy !== undefined ? `, superseded by ${d.voided.supersededBy}` : "";
+      const reason =
+        typeof d.voided.reason === "string" && d.voided.reason.length > 0
+          ? `: ${d.voided.reason}`
+          : "";
+      lines.push(`- ⚠ VOIDED${reason}${supersededBy}`);
+    } else {
+      lines.push(`## ${d.decisionId}: ${d.title}`);
+      lines.push("");
+    }
     const occurredDate = d.occurredAt.slice(0, 10); // YYYY-MM-DD
     lines.push(`- 決定日: ${occurredDate}`);
     lines.push(`- session: ${shortDecisionSessionId(d.sessionId)}`);
