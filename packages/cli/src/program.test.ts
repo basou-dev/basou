@@ -39,6 +39,7 @@ describe("buildProgram", () => {
       "decisions",
       "exec",
       "handoff",
+      "hook",
       "import",
       "init",
       "note",

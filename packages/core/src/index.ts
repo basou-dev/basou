@@ -8,11 +8,16 @@ export type {
   ClaudeTranscriptRecord,
   ClaudeTranscriptToPayloadOptions,
   CommandLookup,
+  StopHookEvaluation,
+  StopHookEvaluationInput,
+  StopHookSilentReason,
 } from "./adapters/claude-code/index.js";
 export {
   CLAUDE_IMPORT_SOURCE,
   claudeCodeAdapterMetadata,
   claudeTranscriptToImportPayload,
+  DEFAULT_STOP_HOOK_MIN_ACTIONS,
+  evaluateStopHook,
   resolveClaudeCodeCommand,
   summarizeAdapterOutput,
 } from "./adapters/claude-code/index.js";
