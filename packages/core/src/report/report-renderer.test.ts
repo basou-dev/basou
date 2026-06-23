@@ -92,6 +92,7 @@ function decisionLine(
   decisionId: string,
   title: string,
   occurredAt: string,
+  opts?: { kind?: "decision" | "track" },
 ): string {
   return `${JSON.stringify({
     schema_version: "0.1.0",
@@ -102,6 +103,7 @@ function decisionLine(
     source: "human",
     decision_id: decisionId,
     title,
+    ...(opts?.kind !== undefined ? { kind: opts.kind } : {}),
   })}\n`;
 }
 
@@ -376,5 +378,28 @@ describe("renderReport (voided decisions)", () => {
     expect(body).not.toContain("kept direction (voided)");
     expect(data.decisions.items.find((d) => d.id === voided)?.voided).toBe(true);
     expect(data.decisions.items.find((d) => d.id === kept)?.voided).toBeUndefined();
+  });
+});
+
+describe("renderReport (track decisions)", () => {
+  it("tags a track decision [track]; a plain decision is untagged", async () => {
+    const paths = await setupPaths();
+    const sid = SES("R02");
+    const track = DEC("RT1");
+    const plain = DEC("RP1");
+    await placeSession(paths, {
+      id: sid,
+      startedAt: "2026-05-08T09:00:00.000Z",
+      events:
+        decisionLine(sid, "RT1", track, "admin form coverage", "2026-05-08T10:00:00.000Z", {
+          kind: "track",
+        }) + decisionLine(sid, "RP1", plain, "ordinary call", "2026-05-08T11:00:00.000Z"),
+    });
+    const { body, data } = await renderReport({ paths, nowIso: NOW_ISO, timeZone: TZ });
+    expect(body).toContain("admin form coverage [track]");
+    expect(body).toContain("ordinary call");
+    expect(body).not.toContain("ordinary call [track]");
+    expect(data.decisions.items.find((d) => d.id === track)?.track).toBe(true);
+    expect(data.decisions.items.find((d) => d.id === plain)?.track).toBeUndefined();
   });
 });

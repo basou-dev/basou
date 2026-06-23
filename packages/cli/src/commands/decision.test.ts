@@ -476,6 +476,19 @@ describe("doRunDecisionRecord (rich fields)", () => {
     ]);
   });
 
+  it("dec-rich-track: --track persists kind:track on the event; absent leaves kind undefined", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunDecisionRecord({ title: "the track", track: true }, { cwd: repo, ...FIXED_CTX });
+    const sid = await findAdHocSessionId(repo);
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const decision = events.find((e) => e.type === "decision_recorded") as Record<string, unknown>;
+    expect(decision.kind).toBe("track");
+  });
+
   it("dec-rich-3: --linked-file twice persists both paths", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
@@ -722,6 +735,55 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     expect(decision.rejected_reason).toBe("hoisting bugs");
     expect(decision.linked_events).toEqual(["evt_01HXABCDEF1234567890ABCDC1"]);
     expect(decision.linked_files).toEqual(["pnpm-workspace.yaml"]);
+  });
+
+  it('cap-track-1: kind:"track" is persisted onto the decision event; a plain item omits kind', async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const input = JSON.stringify([
+      { title: "admin form coverage", kind: "track", rationale: "stopgap" },
+      { title: "ordinary decision" },
+    ]);
+    await doRunDecisionCapture({}, captureCtx(repo, input));
+    const decisions = (await readAdHocEvents(repo)).filter((e) => e.type === "decision_recorded");
+    const track = decisions.find((d) => d.title === "admin form coverage") as Record<
+      string,
+      unknown
+    >;
+    const plain = decisions.find((d) => d.title === "ordinary decision") as Record<string, unknown>;
+    expect(track.kind).toBe("track");
+    expect(plain.kind).toBeUndefined();
+  });
+
+  it('cap-track-2: an explicit kind:"decision" is accepted but normalized to omission', async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const input = JSON.stringify([{ title: "plain", kind: "decision" }]);
+    await doRunDecisionCapture({}, captureCtx(repo, input));
+    const decision = (await readAdHocEvents(repo)).find(
+      (e) => e.type === "decision_recorded",
+    ) as Record<string, unknown>;
+    expect(decision.kind).toBeUndefined();
+  });
+
+  it("cap-track-3: an invalid kind is rejected with an agent-facing message", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const input = JSON.stringify([{ title: "x", kind: "roadmap" }]);
+    await expect(doRunDecisionCapture({}, captureCtx(repo, input))).rejects.toThrow(
+      /kind must be "decision" or "track"/,
+    );
+  });
+
+  it("cap-track-4: text + dry-run output flag a track with [TRACK]", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    const input = JSON.stringify([{ title: "the track", kind: "track" }, { title: "plain" }]);
+    await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("- the track [TRACK]");
+    expect(stdout).toContain("- plain");
+    expect(stdout).not.toContain("- plain [TRACK]");
   });
 
   it("cap-4: --json emits mode=ad-hoc, count, and a decisions array with ids + fields", async () => {

@@ -3,6 +3,24 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- Decisions can now be recorded as a **track** — a strategic, unfinished
+  direction (the next essential thing to build, and *why*) — with
+  `basou decision record --track` or a `"kind": "track"` field on a
+  `basou decision capture` item. Unlike a point-in-time decision (only ever
+  surfaced as the single latest one), an open track resurfaces in the
+  "どこへ向かう" / 未完トラック section of `basou orient` and `basou handoff`
+  **every session until it is explicitly closed** with `basou decision void`
+  (or superseded). This is the intent-continuity layer: a direction agreed in
+  conversation no longer sinks into the flat decision list and fails to carry to
+  the next session. `decisions.md` marks tracks `[TRACK]`; the rationale (the
+  why) rides alongside the title wherever a track is surfaced. Additive and
+  backward-compatible — a decision with no `kind` is a plain decision, and all
+  pre-existing `decision_recorded` events round-trip unchanged.
+
 ## 0.18.0 — 2026-06-24
 
 ### Added

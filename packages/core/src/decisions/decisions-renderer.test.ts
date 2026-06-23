@@ -75,6 +75,7 @@ function decisionLine(
     rejected_reason?: string | null;
     linked_events?: string[];
     linked_files?: string[];
+    kind?: "decision" | "track";
   },
 ): string {
   return `${JSON.stringify({
@@ -383,5 +384,58 @@ describe("decisions-renderer (voided decisions)", () => {
     const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain(`## ${did}: keep me`);
     expect(result.body).not.toContain("[VOIDED]");
+  });
+});
+
+describe("decisions-renderer (track decisions)", () => {
+  it("marks an open track with [TRACK] and the 種別 line", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T01");
+    const did = DEC("T01");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T09:00:00+09:00",
+      decisionLine(sid, "ET1", did, "admin form coverage", "2026-05-08T10:00:00.000Z", {
+        rationale: "raw JSON is a stopgap",
+        kind: "track",
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`## ${did}: admin form coverage [TRACK]`);
+    expect(result.body).toContain("- 種別: track (close まで orient/handoff に継続表示)");
+    expect(result.body).toContain("- rationale: raw JSON is a stopgap");
+  });
+
+  it("a plain decision carries neither the [TRACK] marker nor the 種別 line", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T02");
+    const did = DEC("T02");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T09:00:00+09:00",
+      decisionLine(sid, "ET2", did, "use zod", "2026-05-08T10:00:00.000Z"),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`## ${did}: use zod`);
+    expect(result.body).not.toContain("[TRACK]");
+    expect(result.body).not.toContain("- 種別: track");
+  });
+
+  it("a voided track shows both [VOIDED] and [TRACK] and drops the 種別 (still-surfaced) line", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T03");
+    const did = DEC("T03");
+    const events =
+      decisionLine(sid, "ET3", did, "closed track", "2026-05-08T10:00:00.000Z", {
+        kind: "track",
+      }) + voidLine(sid, "ET4", did, "2026-05-08T11:00:00.000Z", { reason: "shipped" });
+    await placeSession(paths, sid, "2026-05-08T09:00:00+09:00", events);
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain(`## ~~${did}: closed track~~ [VOIDED] [TRACK]`);
+    expect(result.body).toContain("VOIDED: shipped");
+    // A closed track is no longer resurfaced, so it must not claim it is.
+    expect(result.body).not.toContain("close まで orient/handoff に継続表示");
   });
 });

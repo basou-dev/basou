@@ -139,6 +139,16 @@ const DecisionRecordedEventSchema = BaseEventSchema.extend({
   rejected_reason: z.string().nullable().optional(),
   linked_events: z.array(EventIdSchema).optional(),
   linked_files: z.array(z.string().min(1).max(4096)).optional(),
+  // `track` promotes a decision to a strategic, unfinished DIRECTION ("the next
+  // essential thing to build, and why") that orientation/handoff resurface every
+  // time until it is explicitly closed with `decision void` / supersede — as
+  // opposed to a point-in-time `decision`, which is only ever surfaced as the
+  // single latest one. This is the intent-continuity layer: a direction agreed
+  // in conversation otherwise sinks into the flat decision list and never carries
+  // to the next session. Absent (the default) is a plain `decision`, so all
+  // pre-existing decision_recorded events round-trip unchanged (additive optional
+  // => no schema_version bump; mirrors `note_added.kind`).
+  kind: z.enum(["decision", "track"]).optional(),
 });
 
 // Voids (or supersedes) a previously recorded decision. Append-only: the

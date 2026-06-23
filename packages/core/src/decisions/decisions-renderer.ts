@@ -29,6 +29,10 @@ type DecisionRecord = {
   rejectedReason: string | null | undefined;
   linkedEvents: readonly string[] | undefined;
   linkedFiles: readonly string[] | undefined;
+  // "track" when the decision was recorded as a strategic, unfinished direction
+  // (resurfaced by orientation/handoff until voided); undefined / "decision" is
+  // a plain point-in-time decision.
+  kind: "decision" | "track" | undefined;
   // Set when a later `decision_voided` event targets this decision. The
   // decision is kept (append-only) but rendered struck-through; orientation
   // skips it as the "latest" direction.
@@ -101,6 +105,7 @@ export async function renderDecisions(
             rejectedReason: ev.rejected_reason,
             linkedEvents: ev.linked_events,
             linkedFiles: ev.linked_files,
+            kind: ev.kind,
             voided: undefined,
           });
         } else if (ev.type === "decision_voided") {
@@ -168,10 +173,13 @@ async function formatDecisionsBody(args: {
     return lines.join("\n");
   }
   for (const d of args.decisions) {
+    // A track marker rides on the heading so the audit shows the decision was a
+    // strategic direction; for an open track it precedes the `- 種別` line below.
+    const trackMark = d.kind === "track" ? " [TRACK]" : "";
     if (d.voided !== undefined) {
       // Struck heading + a void line; the decision body is kept for the audit
       // trail but visibly marked no longer in force.
-      lines.push(`## ~~${d.decisionId}: ${d.title}~~ [VOIDED]`);
+      lines.push(`## ~~${d.decisionId}: ${d.title}~~ [VOIDED]${trackMark}`);
       lines.push("");
       const supersededBy =
         d.voided.supersededBy !== undefined ? `, superseded by ${d.voided.supersededBy}` : "";
@@ -181,11 +189,17 @@ async function formatDecisionsBody(args: {
           : "";
       lines.push(`- ⚠ VOIDED${reason}${supersededBy}`);
     } else {
-      lines.push(`## ${d.decisionId}: ${d.title}`);
+      lines.push(`## ${d.decisionId}: ${d.title}${trackMark}`);
       lines.push("");
     }
     const occurredDate = d.occurredAt.slice(0, 10); // YYYY-MM-DD
     lines.push(`- 決定日: ${occurredDate}`);
+    // An OPEN track keeps resurfacing in orientation/handoff; note that here so
+    // the full record explains why it is still surfaced (a voided track is closed
+    // and carries the VOIDED line instead).
+    if (d.kind === "track" && d.voided === undefined) {
+      lines.push("- 種別: track (close まで orient/handoff に継続表示)");
+    }
     lines.push(`- session: ${shortDecisionSessionId(d.sessionId)}`);
     lines.push(`- 判断: ${d.title}`);
     if (typeof d.rationale === "string" && d.rationale.length > 0) {

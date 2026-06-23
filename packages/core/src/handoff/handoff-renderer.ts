@@ -55,6 +55,17 @@ type DecisionRecord = {
   sessionId: string;
 };
 
+// An open (non-voided) `kind: "track"` decision — a strategic, unfinished
+// direction the handoff resurfaces until it is closed via `decision void`.
+// Mirrors the orientation renderer so the two outputs agree.
+type TrackRecord = {
+  decisionId: string;
+  title: string;
+  rationale: string | null;
+  occurredAt: string;
+  sessionId: string;
+};
+
 type TaskCreatedRecord = {
   taskId: string;
   title: string;
@@ -111,6 +122,9 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
   const decisions: DecisionRecord[] = [];
+  // `kind: "track"` decisions (a strategic, unfinished direction); the open
+  // subset (minus voided) is surfaced as 未完トラック and resurfaces until closed.
+  const tracks: TrackRecord[] = [];
   // decision_ids marked no longer in force; the 直近の判断 pointer skips them so
   // a voided decision is never surfaced as current (mirrors the orientation
   // renderer, keeping the two outputs in agreement).
@@ -143,6 +157,15 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
             occurredAt: ev.occurred_at,
             sessionId: entry.sessionId,
           });
+          if (ev.kind === "track") {
+            tracks.push({
+              decisionId: ev.decision_id,
+              title: ev.title,
+              rationale: ev.rationale ?? null,
+              occurredAt: ev.occurred_at,
+              sessionId: entry.sessionId,
+            });
+          }
         } else if (ev.type === "decision_voided") {
           voidedDecisionIds.add(ev.decision_id);
         } else if (ev.type === "task_created") {
@@ -185,6 +208,15 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
       break;
     }
   }
+  // Open tracks: non-voided `kind: "track"` decisions, newest first. Mirrors the
+  // orientation renderer so handoff and orient surface the same strategic
+  // continuation.
+  const openTracks: TrackRecord[] = tracks
+    .filter((t) => !voidedDecisionIds.has(t.decisionId))
+    .sort((a, b) => {
+      const c = Date.parse(b.occurredAt) - Date.parse(a.occurredAt);
+      return c !== 0 ? c : b.decisionId.localeCompare(a.decisionId);
+    });
   tasksCreated.sort((a, b) => {
     const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
     return c !== 0 ? c : a.taskId.localeCompare(b.taskId);
@@ -263,6 +295,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     latestActivityAt,
     decisions,
     latestDecision,
+    openTracks,
     pendingApprovalsCount,
     suspectCount,
     displayedFiles,
@@ -293,6 +326,7 @@ function formatHandoffBody(args: {
   latestActivityAt: string | null;
   decisions: ReadonlyArray<DecisionRecord>;
   latestDecision: DecisionRecord | undefined;
+  openTracks: ReadonlyArray<TrackRecord>;
   pendingApprovalsCount: number;
   suspectCount: number;
   displayedFiles: ReadonlyArray<string>;
@@ -401,6 +435,29 @@ function formatHandoffBody(args: {
     lines.push(`(${args.decisions.length} decisions total — see decisions.md)`);
   }
   lines.push("");
+
+  // 未完トラック — open strategic directions that resurface until closed. Placed
+  // right after 直近の判断 (both decision-derived) and ahead of the mechanical
+  // task list: an open track is the strongest "where to resume" signal, carrying
+  // the next essential direction + why across the session boundary. Mirrors the
+  // orientation renderer's forward section. Omitted entirely when none are open.
+  if (args.openTracks.length > 0) {
+    const TRACK_DISPLAY_LIMIT = 10;
+    const shown = args.openTracks.slice(0, TRACK_DISPLAY_LIMIT);
+    const overflow = args.openTracks.length - shown.length;
+    lines.push("## 未完トラック (close まで継続表示)");
+    lines.push("");
+    for (const t of shown) {
+      lines.push(`- ${t.title} [${shortIdWithPrefix(t.decisionId)}]`);
+      if (t.rationale !== null && t.rationale.trim() !== "") {
+        lines.push(`  - 理由: ${handoffRationale(t.rationale)}`);
+      }
+    }
+    if (overflow > 0) lines.push(`- ... +${overflow} more (see decisions.md)`);
+    lines.push("");
+    lines.push("完了したら `basou decision void <decision_id>` で閉じてください。");
+    lines.push("");
+  }
 
   // 未決事項
   lines.push("## 未決事項");
@@ -518,6 +575,17 @@ function formatHandoffBody(args: {
   lines.push(sessionsLine);
 
   return lines.join("\n");
+}
+
+// A track's rationale (the WHY) can be multi-line and long; collapse whitespace
+// to one line and cap it so the handoff stays scannable. The full text lives in
+// the decision_recorded event (see decisions.md).
+const HANDOFF_TRACK_RATIONALE_MAX = 240;
+function handoffRationale(rationale: string): string {
+  const oneLine = rationale.replace(/\s+/g, " ").trim();
+  return oneLine.length > HANDOFF_TRACK_RATIONALE_MAX
+    ? `${oneLine.slice(0, HANDOFF_TRACK_RATIONALE_MAX - 1)}…`
+    : oneLine;
 }
 
 function suspectLabel(reason: SuspectReason | null): string {

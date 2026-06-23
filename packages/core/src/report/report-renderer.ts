@@ -83,6 +83,8 @@ export type ReportDecisionItem = {
   occurredAt: string;
   /** True when a later `decision_voided` event retracted this decision. */
   voided?: boolean;
+  /** True when the decision was recorded as a strategic track (`kind: "track"`). */
+  track?: boolean;
 };
 export type ReportTaskItem = { id: string; title: string; status: TaskStatus };
 export type ReportApprovalItem = {
@@ -199,7 +201,12 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
         if (ev.type === "decision_recorded") {
-          decisions.push({ id: ev.decision_id, title: ev.title, occurredAt: ev.occurred_at });
+          decisions.push({
+            id: ev.decision_id,
+            title: ev.title,
+            occurredAt: ev.occurred_at,
+            ...(ev.kind === "track" ? { track: true } : {}),
+          });
         } else if (ev.type === "decision_voided") {
           voidedDecisionIds.add(ev.decision_id);
         }
@@ -430,8 +437,9 @@ function formatReportBody(data: ReportData): string {
       lines.push("");
     }
     for (const d of shown) {
+      const trackTag = d.track === true ? " [track]" : "";
       const voidedTag = d.voided === true ? " (voided)" : "";
-      lines.push(`- ${d.occurredAt.slice(0, 10)} · ${d.title}${voidedTag}`);
+      lines.push(`- ${d.occurredAt.slice(0, 10)} · ${d.title}${trackTag}${voidedTag}`);
     }
   }
   lines.push("");

@@ -104,6 +104,7 @@ function decisionLine(
   decisionId: string,
   title: string,
   occurredAt: string,
+  opts?: { kind?: "decision" | "track"; rationale?: string | null },
 ): string {
   return `${JSON.stringify({
     schema_version: "0.1.0",
@@ -114,6 +115,27 @@ function decisionLine(
     source: "human",
     decision_id: decisionId,
     title,
+    ...(opts?.kind !== undefined ? { kind: opts.kind } : {}),
+    ...(opts?.rationale !== undefined ? { rationale: opts.rationale } : {}),
+  })}\n`;
+}
+
+function voidLine(
+  id: string,
+  evt: string,
+  decisionId: string,
+  occurredAt: string,
+  extra?: { reason?: string; superseded_by?: string },
+): string {
+  return `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "decision_voided",
+    id: EVT(evt),
+    session_id: id,
+    occurred_at: occurredAt,
+    source: "local-cli",
+    decision_id: decisionId,
+    ...extra,
   })}\n`;
 }
 
@@ -1361,5 +1383,179 @@ describe("renderOrientation (cross-project out-of-root files)", () => {
     });
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(body).not.toContain("source_roots 外");
+  });
+});
+
+describe("orientation — open tracks (strategic continuation)", () => {
+  it("surfaces an open track with its rationale in the 未完トラック frame", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T01");
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      decisionLine(
+        sid,
+        "ET1",
+        DEC("TR1"),
+        "Phase 5 admin form coverage (6/19)",
+        "2026-05-08T12:00:00Z",
+        {
+          kind: "track",
+          rationale: "raw-JSON admin editing is a stopgap, not the final shape",
+        },
+      ),
+    );
+    const { body, openTrackCount } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(openTrackCount).toBe(1);
+    expect(body).toContain("## どこへ向かう");
+    expect(body).toContain("### 未完トラック (close まで継続表示) (1)");
+    expect(body).toContain("Phase 5 admin form coverage (6/19)");
+    expect(body).toContain("理由: raw-JSON admin editing is a stopgap, not the final shape");
+    expect(body).toContain("basou decision void");
+  });
+
+  it("does NOT surface a track once it is voided (closed)", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T02");
+    const did = DEC("TR2");
+    const events =
+      decisionLine(sid, "ET2", did, "closed track", "2026-05-08T12:00:00Z", { kind: "track" }) +
+      voidLine(sid, "ET3", did, "2026-05-08T13:00:00Z", { reason: "shipped" });
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      events,
+    );
+    const { body, openTrackCount } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(openTrackCount).toBe(0);
+    expect(body).not.toContain("### 未完トラック");
+    expect(body).not.toContain("closed track");
+  });
+
+  it("orders multiple open tracks newest first", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T03");
+    const events =
+      decisionLine(sid, "ET4", DEC("TR3"), "older track", "2026-05-08T10:00:00Z", {
+        kind: "track",
+      }) +
+      decisionLine(sid, "ET5", DEC("TR4"), "newer track", "2026-05-08T14:00:00Z", {
+        kind: "track",
+      });
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      events,
+    );
+    const { body, openTrackCount } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(openTrackCount).toBe(2);
+    expect(body.indexOf("newer track")).toBeLessThan(body.indexOf("older track"));
+  });
+
+  it("an open track suppresses the no-direction fallback even without a note or planned task", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T04");
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      decisionLine(sid, "ET6", DEC("TR5"), "the track", "2026-05-08T12:00:00Z", { kind: "track" }),
+    );
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("### 未完トラック");
+    expect(body).not.toContain("no planned tasks or recorded next step");
+  });
+
+  it("summarizeOrientation exposes openTracks (with rationale) as structured facts", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T05");
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      decisionLine(sid, "ET7", DEC("TR6"), "structured track", "2026-05-08T12:00:00Z", {
+        kind: "track",
+        rationale: "why it matters",
+      }),
+    );
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.openTracks).toHaveLength(1);
+    expect(summary.openTracks[0]?.title).toBe("structured track");
+    expect(summary.openTracks[0]?.rationale).toBe("why it matters");
+  });
+
+  it("an open track survives a LATER plain decision and coexists with 直近の判断 (the intent-leak regression)", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T07");
+    const events =
+      decisionLine(sid, "ET8", DEC("TR7"), "the strategic track", "2026-05-08T10:00:00Z", {
+        kind: "track",
+      }) +
+      // Newer PLAIN decision: pre-keystone this displaced the track from the
+      // single 直近の判断 pointer and the track was lost. It must still surface.
+      decisionLine(sid, "ET9", DEC("TR8"), "a later tactical call", "2026-05-08T12:00:00Z");
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      events,
+    );
+    const { body, openTrackCount } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(openTrackCount).toBe(1);
+    // The later decision is the latest direction…
+    expect(body).toContain("直近の判断: a later tactical call");
+    // …yet the strategic track still resurfaces in its own frame.
+    expect(body).toContain("### 未完トラック");
+    expect(body).toContain("the strategic track");
+  });
+
+  it("nudges toward --track on the no-direction path (discoverability) but not when a track is open", async () => {
+    const paths = await setupPaths();
+    // No track / note / planned task, and a fresh (non-stale) latest decision.
+    const sid = SES("T08");
+    await placeSession(
+      paths,
+      {
+        id: sid,
+        status: "completed",
+        source: "claude-code-import",
+        endedAt: "2026-05-08T12:00:00Z",
+      },
+      decisionLine(sid, "ETA", DEC("TR9"), "some decision", "2026-05-08T12:00:00Z"),
+    );
+    const withoutTrack = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(withoutTrack.body).toContain("`basou decision record --track`");
+
+    // With an open track, the forward section already has direction → no nudge.
+    const sid2 = SES("T09");
+    await placeSession(
+      paths,
+      { id: sid2, status: "completed", source: "claude-code-import" },
+      decisionLine(sid2, "ETB", DEC("TRA"), "open track", "2026-05-08T13:00:00Z", {
+        kind: "track",
+      }),
+    );
+    const withTrack = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(withTrack.body).not.toContain("`basou decision record --track`");
+  });
+
+  it("caps the displayed tracks at 10 and notes the overflow", async () => {
+    const paths = await setupPaths();
+    const sid = SES("T06");
+    let events = "";
+    // 11 open tracks; the 11th (oldest) should be folded into the overflow note.
+    for (let i = 0; i < 11; i += 1) {
+      const tag = `K${i.toString().padStart(2, "0")}`;
+      const minute = (10 + i).toString().padStart(2, "0");
+      events += decisionLine(sid, tag, DEC(tag), `track ${tag}`, `2026-05-08T12:${minute}:00Z`, {
+        kind: "track",
+      });
+    }
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      events,
+    );
+    const { body, openTrackCount } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(openTrackCount).toBe(11);
+    expect(body).toContain("### 未完トラック (close まで継続表示) (11)");
+    expect(body).toContain("... +1 more (see decisions.md)");
   });
 });

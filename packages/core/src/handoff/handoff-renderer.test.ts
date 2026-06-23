@@ -138,6 +138,7 @@ function decisionRecordedLine(
   decisionId: string,
   title: string,
   occurredAt: string,
+  opts?: { kind?: "decision" | "track"; rationale?: string | null },
 ): string {
   return `${JSON.stringify({
     schema_version: "0.1.0",
@@ -148,6 +149,8 @@ function decisionRecordedLine(
     source: "human",
     decision_id: decisionId,
     title,
+    ...(opts?.kind !== undefined ? { kind: opts.kind } : {}),
+    ...(opts?.rationale !== undefined ? { rationale: opts.rationale } : {}),
   })}\n`;
 }
 
@@ -885,5 +888,117 @@ describe("renderHandoff (voided decisions)", () => {
     expect(result.body).not.toContain("wrong project decision");
     // Both decisions still counted in the total.
     expect(result.body).toContain("2 decisions total");
+  });
+});
+
+describe("renderHandoff (open tracks)", () => {
+  it("surfaces an open track with its rationale in a 未完トラック section", async () => {
+    const paths = await setupPaths();
+    const id = SES("HT1");
+    await placeSession(
+      paths,
+      {
+        id,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T09:00:00+09:00",
+      },
+      decisionRecordedLine(
+        id,
+        "HT1",
+        DEC("HT1"),
+        "admin form coverage",
+        "2026-05-08T10:00:00.000Z",
+        {
+          kind: "track",
+          rationale: "raw JSON is a stopgap",
+        },
+      ),
+    );
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("## 未完トラック (close まで継続表示)");
+    expect(result.body).toContain("admin form coverage");
+    expect(result.body).toContain("理由: raw JSON is a stopgap");
+    expect(result.body).toContain("basou decision void");
+  });
+
+  it("an open track survives a LATER plain decision (the intent-leak regression)", async () => {
+    const paths = await setupPaths();
+    const id = SES("HT5");
+    const events =
+      decisionRecordedLine(
+        id,
+        "HT6",
+        DEC("HT6"),
+        "the strategic track",
+        "2026-05-08T10:00:00.000Z",
+        {
+          kind: "track",
+        },
+      ) +
+      // A newer PLAIN decision: under the old model this became 直近の判断 and the
+      // track sank into the flat list. The track must still surface.
+      decisionRecordedLine(
+        id,
+        "HT7",
+        DEC("HT7"),
+        "a later tactical call",
+        "2026-05-08T12:00:00.000Z",
+      );
+    await placeSession(
+      paths,
+      {
+        id,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T09:00:00+09:00",
+      },
+      events,
+    );
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    // Both coexist: the track in its own section, the later decision as 直近の判断.
+    expect(result.body).toContain("## 未完トラック");
+    expect(result.body).toContain("the strategic track");
+    expect(result.body).toContain("a later tactical call");
+  });
+
+  it("omits the 未完トラック section once the track is voided", async () => {
+    const paths = await setupPaths();
+    const id = SES("HT2");
+    const did = DEC("HT2");
+    const events =
+      decisionRecordedLine(id, "HT2", did, "closed track", "2026-05-08T10:00:00.000Z", {
+        kind: "track",
+      }) + decisionVoidedLine(id, "HT3", did, "2026-05-08T11:00:00.000Z", "shipped");
+    await placeSession(
+      paths,
+      {
+        id,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T09:00:00+09:00",
+      },
+      events,
+    );
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).not.toContain("## 未完トラック");
+    expect(result.body).not.toContain("closed track");
+  });
+
+  it("a plain decision does not produce a 未完トラック section", async () => {
+    const paths = await setupPaths();
+    const id = SES("HT3");
+    await placeSession(
+      paths,
+      {
+        id,
+        status: "completed",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T09:00:00+09:00",
+      },
+      decisionRecordedLine(id, "HT4", DEC("HT4"), "ordinary decision", "2026-05-08T10:00:00.000Z"),
+    );
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).not.toContain("## 未完トラック");
   });
 });

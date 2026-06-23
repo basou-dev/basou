@@ -740,6 +740,13 @@
             "minLength": 1,
             "maxLength": 4096
           }
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "decision",
+            "track"
+          ]
         }
       },
       "required": [

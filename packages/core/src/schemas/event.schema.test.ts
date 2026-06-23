@@ -520,6 +520,29 @@ describe("DecisionRecordedEventSchema (rich fields)", () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts kind: "track" and kind: "decision"', () => {
+    for (const kind of ["track", "decision"] as const) {
+      const result = EventSchema.safeParse({ ...BASE_DECISION, kind });
+      expect(result.success).toBe(true);
+      if (!result.success) continue;
+      if (result.data.type !== "decision_recorded") throw new Error("narrowing failed");
+      expect(result.data.kind).toBe(kind);
+    }
+  });
+
+  it("leaves kind undefined on a payload that omits it (default = plain decision)", () => {
+    const result = EventSchema.safeParse(BASE_DECISION);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "decision_recorded") throw new Error("narrowing failed");
+    expect(result.data.kind).toBeUndefined();
+  });
+
+  it("rejects an unknown kind value", () => {
+    const result = EventSchema.safeParse({ ...BASE_DECISION, kind: "roadmap" });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects an alternatives entry that is an empty string", () => {
     const result = EventSchema.safeParse({
       ...BASE_DECISION,
