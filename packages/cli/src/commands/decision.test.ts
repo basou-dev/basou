@@ -971,3 +971,90 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
     expect(dirs).toHaveLength(0);
   });
 });
+
+describe("decision cross-project linked_files guardrail (warn-only)", () => {
+  async function repoWithSourceRoots(): Promise<string> {
+    const repo = await realpath(getTmpRepo());
+    const paths = await ensureBasouDirectory(repo);
+    await writeManifest(
+      paths,
+      createManifest({
+        workspaceName: "fixture-ws",
+        now: FIXED_DATE,
+        workspaceId: FIXED_WS_ID,
+        sourceRoots: ["."],
+      }),
+    );
+    return repo;
+  }
+
+  it("warns when a captured decision links a file outside source_roots", async () => {
+    const repo = await repoWithSourceRoots();
+    captureStdout();
+    const err = captureStderr();
+    const input = JSON.stringify([{ title: "blog runbook", linked_files: ["/etc/hosts"] }]);
+    await doRunDecisionCapture(
+      {},
+      { cwd: repo, nowProvider: () => FIXED_NOW, readInput: async () => input },
+    );
+    const warnings = joinCalls(err);
+    expect(warnings).toContain("outside this project's source_roots");
+    expect(warnings).toContain("/etc/hosts");
+  });
+
+  it("does not warn for an in-repo linked file", async () => {
+    const repo = await repoWithSourceRoots();
+    captureStdout();
+    const err = captureStderr();
+    const input = JSON.stringify([{ title: "ok", linked_files: ["src/a.ts"] }]);
+    await doRunDecisionCapture(
+      {},
+      { cwd: repo, nowProvider: () => FIXED_NOW, readInput: async () => input },
+    );
+    expect(joinCalls(err)).not.toContain("outside this project's source_roots");
+  });
+
+  it("does not warn for a solo project (no declared source_roots)", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    const input = JSON.stringify([{ title: "x", linked_files: ["/etc/hosts"] }]);
+    await doRunDecisionCapture(
+      {},
+      { cwd: repo, nowProvider: () => FIXED_NOW, readInput: async () => input },
+    );
+    expect(joinCalls(err)).not.toContain("outside this project's source_roots");
+  });
+
+  it("warns on `decision record --linked-file` outside source_roots", async () => {
+    const repo = await repoWithSourceRoots();
+    captureStdout();
+    const err = captureStderr();
+    await doRunDecisionRecord(
+      { title: "blog", linkedFile: ["/etc/hosts"] },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    expect(joinCalls(err)).toContain("outside this project's source_roots");
+  });
+
+  it("never blocks a `--session` write even if the manifest is unreadable", async () => {
+    // The guardrail reads the manifest, but a missing / corrupt manifest must
+    // degrade to silent rather than throw on a path that never needed it.
+    const repo = await repoWithSourceRoots();
+    const sid = SES("DCB");
+    await createSession(repo, { id: sid, status: "running" });
+    await rm(basouPaths(repo).files.manifest, { force: true });
+    const out = captureStdout();
+    captureStderr();
+    await doRunDecisionRecord(
+      { title: "attach", session: sid, linkedFile: ["/etc/hosts"] },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    expect(joinCalls(out)).toContain("Recorded decision_");
+    expect(process.exitCode === 0 || process.exitCode === undefined).toBe(true);
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0);
+    expect(events).toHaveLength(1);
+  });
+});

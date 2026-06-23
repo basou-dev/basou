@@ -2,10 +2,13 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import {
+  AGENT_INFRA_DIRS,
   acquireLock,
   appendEventToExistingSession,
   assertBasouRootSafe,
+  type BasouPaths,
   basouPaths,
+  classifyFilesBySourceRoot,
   createAdHocSessionWithEvent,
   type Event,
   findErrorCode,
@@ -163,6 +166,54 @@ export async function runDecisionRecord(
   }
 }
 
+/**
+ * Advisory cross-project guardrail for the write path: warn (never block) when
+ * a decision's `linked_files` resolve OUTSIDE the project's declared
+ * `source_roots`. A decision captured from a session that wandered into another
+ * repo can otherwise be recorded against the wrong project's master with no
+ * signal. Gated to a declared `source_roots` list (a multi-repo workspace);
+ * solo projects have no boundary to cross. Relative links resolve against the
+ * invocation `cwd` (where the agent passed them); source roots resolve against
+ * the master `repositoryRoot`. Warn-only, consistent with `basou orient` /
+ * `basou import` — capture is agent-facing and must not be blocked. `note` is
+ * not covered: it carries no `linked_files` to check.
+ */
+async function warnLinkedFilesOutsideRoots(input: {
+  linkedFiles: readonly string[];
+  cwd: string;
+  paths: BasouPaths;
+  repositoryRoot: string;
+}): Promise<void> {
+  if (input.linkedFiles.length === 0) return;
+  try {
+    // Read the manifest INSIDE the try so a missing / corrupt manifest degrades
+    // to silent rather than blocking the write — the warning must never throw
+    // into the caller (esp. the `--session` path, which otherwise never reads
+    // the manifest).
+    const manifest = await readManifest(input.paths);
+    if ((manifest.import?.source_roots?.length ?? 0) === 0) return;
+    const scope = await classifyFilesBySourceRoot({
+      files: input.linkedFiles,
+      workingDirectory: input.cwd,
+      sourceRoots: manifest.import?.source_roots,
+      masterRoot: input.repositoryRoot,
+      extraInRoot: AGENT_INFRA_DIRS,
+    });
+    if (scope.outOfRoot.length === 0) return;
+    const PATH_SAMPLE = 5;
+    const sample = scope.outOfRoot.slice(0, PATH_SAMPLE).join(", ");
+    const more =
+      scope.outOfRoot.length > PATH_SAMPLE
+        ? ` (... +${scope.outOfRoot.length - PATH_SAMPLE} more)`
+        : "";
+    console.error(
+      `basou: ${scope.outOfRoot.length} linked file(s) resolve outside this project's source_roots: ${sample}${more} — this decision may belong to another project.`,
+    );
+  } catch {
+    // Advisory only; a classification failure must never block the write.
+  }
+}
+
 export async function doRunDecisionRecord(
   options: DecisionRecordOptions,
   ctx: DecisionContext,
@@ -177,6 +228,13 @@ export async function doRunDecisionRecord(
   const decisionId = prefixedUlid("decision");
 
   const rich = pickRichFields(options);
+
+  await warnLinkedFilesOutsideRoots({
+    linkedFiles: rich.linked_files ?? [],
+    cwd,
+    paths,
+    repositoryRoot,
+  });
 
   if (options.session !== undefined) {
     const sessionId = await resolveSessionId(paths, options.session);
@@ -316,6 +374,17 @@ export async function doRunDecisionCapture(
 
   const raw = await readCaptureInput(options, ctx);
   const decisions = parseCaptureInput(raw);
+
+  // Cross-project guardrail (warn-only): surface linked files that resolve
+  // outside the declared source_roots, before the dry-run early-return so a
+  // preview shows it too. The helper reads the manifest internally and degrades
+  // silently on any failure, so it never blocks the write.
+  await warnLinkedFilesOutsideRoots({
+    linkedFiles: decisions.flatMap((d) => d.linked_files ?? []),
+    cwd,
+    paths,
+    repositoryRoot,
+  });
 
   if (options.dryRun === true) {
     printCapturePreview(options, decisions);
