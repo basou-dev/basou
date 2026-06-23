@@ -55,6 +55,15 @@ describe("loadHostsConfig", () => {
     expect(result).toEqual([{ label: "first", path: a }]);
   });
 
+  it("rejects two distinct paths sharing one label (orientation collapses by label)", async () => {
+    const a = join(getDir(), "a");
+    const b = join(getDir(), "b");
+    const path = await writeConfig(
+      `hosts:\n  - label: dup\n    path: ${a}\n  - label: dup\n    path: ${b}\n`,
+    );
+    await expect(loadHostsConfig(path)).rejects.toThrow(/Duplicate host label 'dup'/);
+  });
+
   it("returns null (silent, no federation) when the file is missing", async () => {
     const result = await loadHostsConfig(join(getDir(), "nope.yaml"));
     expect(result).toBeNull();

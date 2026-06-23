@@ -333,8 +333,12 @@ export async function loadFederatedSessionEntries(
       if (seenIds.has(entry.sessionId)) continue;
       const ext = entry.session.session.source.external_id;
       if (typeof ext === "string" && ext.length > 0) {
-        if (seenExternal.has(ext)) continue;
-        seenExternal.add(ext);
+        // Namespace by source kind: external_id lives in the ORIGINATING tool's
+        // own id space, so the same value under a different tool is a different
+        // session and must not collapse.
+        const extKey = `${entry.session.session.source.kind}:${ext}`;
+        if (seenExternal.has(extKey)) continue;
+        seenExternal.add(extKey);
       }
       seenIds.add(entry.sessionId);
       out.push(entry);

@@ -14,7 +14,7 @@ import { readYamlFile } from "@basou/core";
  * Shape:
  *   version: 1            # optional, reserved for future migrations
  *   hosts:
- *     - label: laptop                  # required, non-empty (the host tag)
+ *     - label: laptop                  # required, non-empty, distinct (the host tag)
  *       path: ~/mirrors/laptop/myrepo  # required, absolute (~ ok) — the repo
  *                                      # root (the parent of its `.basou`)
  */
@@ -42,8 +42,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * `--portfolio`, whose loader throws. A present-but-malformed file THROWS a
  * pathless, user-facing message so the caller can warn and fall back to
  * local-only. Each `path` is `~`-expanded, required absolute, and de-duped by
- * resolved path (first occurrence wins, keeping its label and order). An empty
- * `hosts:` list returns `[]` (benign no-op, not an error).
+ * resolved path (first occurrence wins, keeping its label and order). Labels
+ * must be distinct (orientation collapses hosts by label). An empty `hosts:`
+ * list returns `[]` (benign no-op, not an error).
  */
 export async function loadHostsConfig(
   configPath: string = DEFAULT_HOSTS_CONFIG_PATH,
@@ -65,12 +66,14 @@ export async function loadHostsConfig(
     throw new Error("~/.basou/hosts.yaml must contain a 'hosts:' list.");
   }
 
-  const seen = new Set<string>();
+  const seenPaths = new Set<string>();
+  const seenLabels = new Set<string>();
   const result: HostMirror[] = [];
   for (const entry of raw.hosts) {
     if (!isRecord(entry) || typeof entry.label !== "string" || entry.label.trim().length === 0) {
       throw new Error("Each host needs a non-empty string 'label'.");
     }
+    const label = entry.label.trim();
     if (typeof entry.path !== "string" || entry.path.trim().length === 0) {
       throw new Error("Each host needs a non-empty string 'path'.");
     }
@@ -79,9 +82,15 @@ export async function loadHostsConfig(
       throw new Error("Host paths must be absolute (or start with '~').");
     }
     const abs = resolve(expanded);
-    if (seen.has(abs)) continue;
-    seen.add(abs);
-    result.push({ label: entry.label.trim(), path: abs });
+    if (seenPaths.has(abs)) continue;
+    // Distinct mirrors must have distinct labels: orientation collapses hosts by
+    // label (a Set), so a duplicate would make two stores indistinguishable.
+    if (seenLabels.has(label)) {
+      throw new Error(`Duplicate host label '${label}'; each host needs a distinct label.`);
+    }
+    seenPaths.add(abs);
+    seenLabels.add(label);
+    result.push({ label, path: abs });
   }
 
   return result;

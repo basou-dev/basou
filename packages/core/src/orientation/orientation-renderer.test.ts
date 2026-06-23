@@ -1094,6 +1094,59 @@ describe("renderOrientation (federation / multi-host)", () => {
     expect(body).toContain("他ホストの取りこぼしは判定できません");
   });
 
+  it("scopes the green freshness verdict to THIS host when federated (no global current claim)", async () => {
+    const local = await setupPaths();
+    await placeSession(local, {
+      id: SES("A01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    const laptop = await setupHostStore();
+    await placeSession(laptop, {
+      id: SES("B01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T12:00:00Z",
+    });
+    const { body } = await renderOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 0 },
+      federatedRoots: [{ paths: laptop, host: "laptop" }],
+    });
+    // The probe is local-only, so the green claim must not read as global.
+    expect(body).toContain("✅ このホスト(ローカル)の取り込みは最新です");
+    expect(body).not.toContain("✅ 取り込みは最新です");
+    expect(body).toContain("他ホストの取りこぼしは判定できません");
+  });
+
+  it("attributes a remote suspect session to its host (@host on the 要注意 line)", async () => {
+    const local = await setupPaths();
+    await placeSession(
+      local,
+      { id: SES("A01"), status: "completed", startedAt: "2026-05-08T10:00:00Z" },
+      startedLine(SES("A01"), "E01", "2026-05-08T10:00:00Z"),
+    );
+    const laptop = await setupHostStore();
+    // A `running` session whose last event is > 24h before nowIso => suspect.
+    await placeSession(
+      laptop,
+      { id: SES("B01"), status: "running", startedAt: "2026-05-07T00:00:00Z" },
+      startedLine(SES("B01"), "E02", "2026-05-07T00:00:00Z"),
+    );
+    const { body } = await renderOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      federatedRoots: [{ paths: laptop, host: "laptop" }],
+    });
+    expect(body).toContain("### 要注意 session (1)");
+    const suspectLine = body
+      .split("\n")
+      .find((l) => l.includes("(running)") && l.includes("@laptop"));
+    expect(suspectLine).toBeDefined();
+  });
+
   it("de-duplicates a session id present in both stores, local winning", async () => {
     const local = await setupPaths();
     await placeSession(

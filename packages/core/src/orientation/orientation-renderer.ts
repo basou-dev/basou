@@ -89,7 +89,12 @@ type PendingApproval = {
 
 type InFlightTask = { id: string; title: string; status: string; linkedSessions: number };
 type PlannedTask = { id: string; title: string };
-type SuspectSession = { sessionId: string; status: string; reason: SuspectReason | null };
+type SuspectSession = {
+  sessionId: string;
+  status: string;
+  reason: SuspectReason | null;
+  host: string | null;
+};
 type LatestSession = {
   sessionId: string;
   label: string | null;
@@ -306,6 +311,7 @@ export async function summarizeOrientation(
       sessionId: e.sessionId,
       status: e.session.session.status,
       reason: e.suspectReason,
+      host: e.host,
     }));
 
   // "where am I now" latest session: exclude archived + cross-workspace round-trip
@@ -547,7 +553,9 @@ function formatOrientationBody(
     lines.push("- (none)");
   } else {
     for (const e of summary.suspects) {
-      lines.push(`- ${shortId(e.sessionId)} (${e.status}) — ${suspectText(e.reason)}`);
+      lines.push(
+        `- ${shortId(e.sessionId)} (${e.status}) — ${suspectText(e.reason)}${hostSuffix(e.host)}`,
+      );
     }
   }
   lines.push("");
@@ -736,8 +744,14 @@ function freshnessVerdict(
   // that captured native sessions are imported and none are suspect. It does NOT
   // (and from telemetry alone cannot) detect planning/implementation drift or
   // unrecorded decisions, so it must not imply provenance is comprehensive.
+  // Federated views merge other hosts' sessions, but this verdict is driven by
+  // a LOCAL dry-run probe (the remote hosts' native logs are not on this
+  // machine). Scope the green claim to THIS host so it never reads as "the whole
+  // multi-host view is current" — the local-only-freshness caveat below adds the
+  // per-host sync guidance. Local-only views keep the original wording.
+  const localScope = summary.hosts.length > 0 ? "このホスト(ローカル)の" : "";
   const lines = [
-    `✅ 取り込みは最新です。最後の作業は ${rel}(${tool})。未取り込みの native セッションはありません。`,
+    `✅ ${localScope}取り込みは最新です。最後の作業は ${rel}(${tool})。未取り込みの native セッションはありません。`,
   ];
   if (suspectCount > 0) {
     lines.push(`ただし要注意セッションが ${suspectCount} 件あります(上記「要注意 session」参照)。`);
