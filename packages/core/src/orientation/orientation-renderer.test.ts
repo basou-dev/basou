@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import type { TaskStatus } from "../schemas/task.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
+import { createManifest, writeManifest } from "../storage/manifest.js";
 import { renderOrientation, summarizeOrientation } from "./orientation-renderer.js";
 
 const FIXED_WS_ID = "ws_01HXABCDEF1234567890ABCDEF";
@@ -48,6 +49,7 @@ async function placeSession(
     source?: string;
     label?: string;
     relatedFiles?: string[];
+    workingDirectory?: string;
   },
   events?: string,
 ): Promise<void> {
@@ -64,7 +66,7 @@ async function placeSession(
       started_at: fixture.startedAt ?? "2026-05-08T11:00:00+09:00",
       ...(fixture.endedAt !== undefined ? { ended_at: fixture.endedAt } : {}),
       status: fixture.status ?? "completed",
-      working_directory: "/tmp/fixture",
+      working_directory: fixture.workingDirectory ?? "/tmp/fixture",
       invocation: { command: "echo", args: [], exit_code: 0 },
       related_files: fixture.relatedFiles ?? [],
       events_log: "events.jsonl",
@@ -570,7 +572,7 @@ describe("summarizeOrientation", () => {
     expect(summary.latestDecision).toBeNull();
     expect(summary.decisionCount).toBe(0);
     expect(summary.latestNote).toBeNull();
-    expect(summary.relatedFiles).toEqual({ displayed: [], overflow: 0 });
+    expect(summary.relatedFiles).toEqual({ displayed: [], overflow: 0, outOfRoot: [] });
     expect(summary.inFlightTasks).toEqual([]);
     expect(summary.plannedTasks).toEqual([]);
     expect(summary.pendingApprovals).toEqual([]);
@@ -637,7 +639,11 @@ describe("summarizeOrientation", () => {
       host: null,
     });
     expect(summary.decisionCount).toBe(1);
-    expect(summary.relatedFiles).toEqual({ displayed: ["src/a.ts", "src/b.ts"], overflow: 0 });
+    expect(summary.relatedFiles).toEqual({
+      displayed: ["src/a.ts", "src/b.ts"],
+      overflow: 0,
+      outOfRoot: [],
+    });
     expect(summary.inFlightTasks).toEqual([
       { id: TASK("T01"), title: "ship portfolio MVP", status: "in_progress", linkedSessions: 3 },
     ]);
@@ -1241,5 +1247,72 @@ describe("renderOrientation (federation / multi-host)", () => {
     expect(withEmpty.body).toBe(without.body);
     expect(without.body).not.toContain("> hosts: local");
     expect(without.body).not.toContain("@laptop");
+  });
+});
+
+describe("renderOrientation (cross-project out-of-root files)", () => {
+  it("flags latest-session files outside the declared source_roots, ignoring agent infra", async () => {
+    const paths = await setupPaths();
+    const repoRoot = getWorkDir();
+    // Declare source_roots = the repo root only. A file under the repo is
+    // in-root; an absolute /etc path is out-of-root; a ~/.claude path is agent
+    // infra and must NOT be flagged.
+    await writeManifest(paths, createManifest({ workspaceName: "test-ws", sourceRoots: ["."] }));
+    await placeSession(paths, {
+      id: SES("X01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T12:00:00+09:00",
+      workingDirectory: repoRoot,
+      relatedFiles: ["src/in-repo.ts", "/etc/hosts", "~/.claude/plans/p.md"],
+    });
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("source_roots 外");
+    expect(body).toContain("/etc/hosts");
+    // The advisory line names only the out-of-root file, not the in-repo or
+    // agent-infra ones.
+    const warnLine = body.split("\n").find((l) => l.includes("source_roots 外")) ?? "";
+    expect(warnLine).toContain("/etc/hosts");
+    expect(warnLine).not.toContain("src/in-repo.ts");
+    expect(warnLine).not.toContain(".claude/plans");
+  });
+
+  it("flags an out-of-root file even when it falls past the display cap (overflow)", async () => {
+    const paths = await setupPaths();
+    const repoRoot = getWorkDir();
+    await writeManifest(paths, createManifest({ workspaceName: "test-ws", sourceRoots: ["."] }));
+    // 11 in-repo files sort before the single out-of-root "~/..." entry (ASCII
+    // "~" > "s"), pushing it past the 10-file display cap. The advisory must
+    // still count it because classification runs over the FULL set.
+    const inRepo = Array.from({ length: 11 }, (_, i) => `src/f${String(i).padStart(2, "0")}.ts`);
+    await placeSession(paths, {
+      id: SES("X03"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T12:00:00+09:00",
+      workingDirectory: repoRoot,
+      relatedFiles: [...inRepo, "~/zzz-not-a-project/blog.md"],
+    });
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const warnLine = body.split("\n").find((l) => l.includes("source_roots 外")) ?? "";
+    expect(warnLine).toContain("1 件");
+    expect(warnLine).toContain("~/zzz-not-a-project/blog.md");
+  });
+
+  it("does not flag anything when source_roots is undeclared (solo project)", async () => {
+    const paths = await setupPaths();
+    const repoRoot = getWorkDir();
+    // No source_roots in the manifest ⇒ solo project ⇒ no declared boundary.
+    await writeManifest(paths, createManifest({ workspaceName: "test-ws" }));
+    await placeSession(paths, {
+      id: SES("X02"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T12:00:00+09:00",
+      workingDirectory: repoRoot,
+      relatedFiles: ["/etc/hosts"],
+    });
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).not.toContain("source_roots 外");
   });
 });

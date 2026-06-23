@@ -1,8 +1,9 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { formatDurationMs } from "../lib/format-duration.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
+import { AGENT_INFRA_DIRS, classifyFilesBySourceRoot } from "../lib/source-root-scope.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { readManifest } from "../storage/manifest.js";
 import {
@@ -131,8 +132,16 @@ export type OrientationSummary = {
    * step / handoff ("次の起点") surfaced in the forward section; null when none.
    */
   latestNote: NoteRecord | null;
-  /** related_files of the latest session, deduped + sorted + capped at the display limit. */
-  relatedFiles: { displayed: string[]; overflow: number };
+  /**
+   * related_files of the latest session, deduped + sorted + capped at the
+   * display limit. `outOfRoot` lists the entries (over the FULL deduped set,
+   * not just `displayed`) that resolve OUTSIDE the project's `source_roots` — a
+   * cross-project boundary crossing worth flagging so a resuming agent does not
+   * mistake another repo's edits for this project's work. Empty unless the
+   * latest session is local (a federated host's source_roots are not loaded
+   * here) and confidently has out-of-root edits.
+   */
+  relatedFiles: { displayed: string[]; overflow: number; outOfRoot: string[] };
   /** Tasks whose status is `planned` or `in_progress`. */
   inFlightTasks: InFlightTask[];
   /** Tasks whose status is `planned` ("where am I heading"). */
@@ -371,8 +380,43 @@ export async function summarizeOrientation(
 
   const latestFiles = latestEntry?.session.session.related_files ?? [];
   const uniqueFiles = new Set(latestFiles);
-  const displayed = [...uniqueFiles].sort().slice(0, limit);
+  const sortedFiles = [...uniqueFiles].sort();
+  const displayed = sortedFiles.slice(0, limit);
   const overflow = Math.max(0, uniqueFiles.size - limit);
+
+  // Flag the files that resolve OUTSIDE this project's source_roots (a
+  // cross-project boundary crossing). Classify the FULL file set, not just the
+  // displayed slice, so an out-of-root file past the display cap is still
+  // counted. Gated to projects that DECLARE source_roots (a multi-repo
+  // workspace): a solo project's effective root is the whole repo, so there is
+  // no declared boundary to cross and flagging would be noise. Scoped to a
+  // LOCAL latest session — a federated host's source_roots are not loaded here,
+  // so classifying its files against the local roots would cry wolf. Agent/tool
+  // infra dirs count as in-root so routine plan / memory edits are not mistaken
+  // for another project. dirname(.basou) is the repo root the source_roots
+  // resolve against.
+  let outOfRoot: string[] = [];
+  if (
+    latestEntry !== undefined &&
+    latestEntry.host === null &&
+    sortedFiles.length > 0 &&
+    sourceRoots !== null &&
+    sourceRoots.length > 0
+  ) {
+    try {
+      const scope = await classifyFilesBySourceRoot({
+        files: sortedFiles,
+        workingDirectory: latestEntry.session.session.working_directory,
+        sourceRoots,
+        masterRoot: dirname(input.paths.root),
+        extraInRoot: AGENT_INFRA_DIRS,
+      });
+      outOfRoot = scope.outOfRoot;
+    } catch {
+      // Classification is advisory only; never let it break orientation.
+      outOfRoot = [];
+    }
+  }
 
   const hosts = [
     ...new Set(entries.map((e) => e.host).filter((h): h is string => h !== null)),
@@ -385,7 +429,7 @@ export async function summarizeOrientation(
     latestDecision: latestDecision ?? null,
     decisionCount: decisions.length,
     latestNote,
-    relatedFiles: { displayed, overflow },
+    relatedFiles: { displayed, overflow, outOfRoot },
     inFlightTasks,
     plannedTasks,
     pendingApprovals,
@@ -518,6 +562,21 @@ function formatOrientationBody(
     const more =
       summary.relatedFiles.overflow > 0 ? ` (... +${summary.relatedFiles.overflow} more)` : "";
     lines.push(`- 直近の変更ファイル: ${shown}${more}`);
+    if (summary.relatedFiles.outOfRoot.length > 0) {
+      // Cross-project boundary crossing: the latest session edited files
+      // outside this project's source_roots. Flag it so a resuming agent does
+      // not adopt another repo's work as this project's continuation. The count
+      // reflects ALL out-of-root files; the listed paths are capped like the
+      // line above.
+      const OUT_OF_ROOT_DISPLAY = 10;
+      const out = summary.relatedFiles.outOfRoot;
+      const shownOut = out.slice(0, OUT_OF_ROOT_DISPLAY).join(", ");
+      const outMore =
+        out.length > OUT_OF_ROOT_DISPLAY ? ` (... +${out.length - OUT_OF_ROOT_DISPLAY} more)` : "";
+      lines.push(
+        `  - ⚠ source_roots 外 ${out.length} 件 (別プロジェクトの可能性): ${shownOut}${outMore}`,
+      );
+    }
   } else {
     lines.push("- 直近の変更ファイル: (none recorded)");
   }

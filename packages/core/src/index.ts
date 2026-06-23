@@ -75,6 +75,8 @@ export {
   sanitizeRelatedFiles,
   sanitizeWorkingDirectory,
 } from "./lib/path-sanitizer.js";
+export type { SourceRootScope } from "./lib/source-root-scope.js";
+export { AGENT_INFRA_DIRS, classifyFilesBySourceRoot } from "./lib/source-root-scope.js";
 export type {
   OrientationRendererInput,
   OrientationRendererResult,

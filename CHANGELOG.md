@@ -3,6 +3,27 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- Cross-project boundary surfacing (read-only, advisory). A Claude Code / Codex
+  session is attributed to a project by its recorded cwd, but it can still edit
+  files outside the project's declared `import.source_roots` (e.g. an unrelated
+  sibling repo). Those paths used to surface unmarked in `basou orient`'s recent
+  files and could mislead a resuming agent into continuing another project's
+  work. Now, for a workspace that declares `source_roots`:
+  - `basou orient` flags the latest local session's recent files that resolve
+    outside the source roots with a `⚠ … source_roots 外` advisory line.
+  - `basou import` (and `basou refresh`) warns on stderr when an imported
+    session edited files outside the source roots.
+
+  Classification is realpath-aware (a file reached through a workspace-view
+  symlink is not mis-flagged) and biased against false alarms (an unresolvable
+  path stays in-root); the agent's own tooling dirs (`~/.claude`, `~/.codex`,
+  `~/.basou`) are treated as in-root so routine plan / memory edits are not
+  flagged. No event schema or write-behavior changes — the trail is unchanged.
+
 ## 0.16.0 — 2026-06-23
 
 ### Added

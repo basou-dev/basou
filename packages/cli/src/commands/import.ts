@@ -1,9 +1,10 @@
 import { createReadStream, type Dirent } from "node:fs";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
+  AGENT_INFRA_DIRS,
   assertBasouRootSafe,
   type BasouPaths,
   basouPaths,
@@ -11,6 +12,7 @@ import {
   type ClaudeTranscriptRecord,
   CODEX_IMPORT_SOURCE,
   type CodexRolloutRecord,
+  classifyFilesBySourceRoot,
   claudeTranscriptToImportPayload,
   codexRolloutToImportPayload,
   enumerateSessionDirs,
@@ -245,7 +247,15 @@ export async function doRunImportClaudeCode(
     };
   });
 
-  await importDerivedSessions(paths, manifest, options, CLAUDE_IMPORT_SOURCE, candidates);
+  await importDerivedSessions(
+    paths,
+    manifest,
+    options,
+    CLAUDE_IMPORT_SOURCE,
+    candidates,
+    projectPaths,
+    hasDeclaredBoundary(options, manifest),
+  );
 }
 
 export async function doRunImportCodex(
@@ -277,7 +287,25 @@ export async function doRunImportCodex(
     },
   }));
 
-  await importDerivedSessions(paths, manifest, options, CODEX_IMPORT_SOURCE, candidates);
+  await importDerivedSessions(
+    paths,
+    manifest,
+    options,
+    CODEX_IMPORT_SOURCE,
+    candidates,
+    projectPaths,
+    hasDeclaredBoundary(options, manifest),
+  );
+}
+
+/**
+ * Whether the operator declared a project boundary worth checking edits
+ * against: explicit `--project` flags, or a manifest `import.source_roots`
+ * list. Neither ⇒ a solo project, where every edit under the repo root is
+ * in-bounds and the cross-project warning would be noise.
+ */
+function hasDeclaredBoundary(options: ImportOptions, manifest: Manifest): boolean {
+  return (options.project?.length ?? 0) > 0 || (manifest.import?.source_roots?.length ?? 0) > 0;
 }
 
 function assertSelector(options: ImportOptions): void {
@@ -314,11 +342,41 @@ async function importDerivedSessions(
   options: ImportOptions,
   sourceKind: SessionSourceKind,
   candidates: ReadonlyArray<ImportCandidate>,
+  projectPaths: ReadonlyArray<string>,
+  boundaryDeclared: boolean,
 ): Promise<void> {
   const existingByExternalId = await loadExistingByExternalId(paths, sourceKind);
   // Session ids imported earlier in THIS run, so two source files that map to
   // one session id never double-import within a single invocation.
   const seenThisRun = new Set<string>();
+
+  // Cross-project boundary check: a session attributed to this project (by its
+  // cwd) can still have edited files OUTSIDE the declared source roots. Flag
+  // those so a resuming agent does not mistake another repo's work for this
+  // project's. Gated to a DECLARED boundary — explicit `--project` flags or a
+  // manifest `import.source_roots` list; a solo project (neither) has no
+  // boundary to cross. `projectPaths` are already absolute, so they double as
+  // the resolved source roots.
+  const crossProjectCheck = boundaryDeclared;
+  const crossProject: { externalId: string; outOfRoot: string[] }[] = [];
+  const noteCrossProject = async (
+    externalId: string,
+    payload: SessionImportPayload,
+  ): Promise<void> => {
+    if (!crossProjectCheck) return;
+    try {
+      const scope = await classifyFilesBySourceRoot({
+        files: payload.session.related_files ?? [],
+        workingDirectory: payload.session.working_directory,
+        sourceRoots: projectPaths,
+        masterRoot: dirname(paths.root),
+        extraInRoot: AGENT_INFRA_DIRS,
+      });
+      if (scope.outOfRoot.length > 0) crossProject.push({ externalId, outOfRoot: scope.outOfRoot });
+    } catch {
+      // Advisory only; a classification failure must never abort the import.
+    }
+  };
 
   const results: ImportSessionResult[] = [];
   const counts: ImportCounts = {
@@ -400,6 +458,7 @@ async function importDerivedSessions(
       }
       counts.reimported++;
       seenThisRun.add(externalId);
+      await noteCrossProject(externalId, payload);
       continue;
     }
 
@@ -429,10 +488,23 @@ async function importDerivedSessions(
     sanitizedPaths +=
       result.pathSanitizeReport.relatedFiles +
       (result.pathSanitizeReport.workingDirectoryRewritten ? 1 : 0);
+    await noteCrossProject(externalId, payload);
   }
 
   if (sanitizedPaths > 0) {
     console.error(`Imported sessions: ${sanitizedPaths} path(s) sanitized`);
+  }
+
+  if (crossProject.length > 0) {
+    const PATH_SAMPLE = 5;
+    for (const { externalId, outOfRoot } of crossProject) {
+      const sample = outOfRoot.slice(0, PATH_SAMPLE).join(", ");
+      const more =
+        outOfRoot.length > PATH_SAMPLE ? ` (... +${outOfRoot.length - PATH_SAMPLE} more)` : "";
+      console.error(
+        `basou: session ${externalId} edited ${outOfRoot.length} file(s) outside this project's source_roots: ${sample}${more} — they may belong to another project.`,
+      );
+    }
   }
 
   printImportResult(options, results, counts);
