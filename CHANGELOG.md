@@ -3,6 +3,25 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.16.0 — 2026-06-23
+
+### Added
+
+- `basou orient` can now merge sessions from other hosts' trail stores listed in
+  `~/.basou/hosts.yaml`, giving a unified current-position view across machines
+  (a laptop plus SSH-host / Remote-SSH boxes, where Claude Code runs remotely
+  and its transcripts never reach the laptop). Each registry entry is a LOCAL
+  path — an SSHFS mount or an rsync / Syncthing mirror of another host's
+  `.basou`, kept in sync by your own tooling over the SSH you already use; basou
+  itself performs no network I/O (it owns the merge, not the transport). Merged
+  sessions are attributed to their host (an ` @host` suffix on the latest
+  session / decision / next-step / suspect lines, and a `> hosts:` banner),
+  de-duped by session id then source-namespaced external id; the freshness
+  verdict is scoped to the local host, since a remote host's freshness is only
+  knowable by running `basou refresh` there. With no `~/.basou/hosts.yaml`,
+  behaviour is byte-identical to before. Handoff, decisions, `basou view`, and
+  the `refresh`-written `orientation.md` remain local-only for now.
+
 ## 0.15.0 — 2026-06-23
 
 ### Added
