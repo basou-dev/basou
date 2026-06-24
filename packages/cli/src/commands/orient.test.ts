@@ -258,8 +258,21 @@ describe("basou orient", () => {
     const out = captureStdout();
     await doRunOrient({}, ctxFor(repo));
     const stdout = joinCalls(out);
-    expect(stdout).toContain("⚠️ 古いかもしれません。");
+    expect(stdout).toContain("⚠️ 古いです。");
     expect(stdout).toContain("`basou refresh`");
+  });
+
+  it("--refresh imports first, so the same uncaptured session renders ✅ current (not stale)", async () => {
+    const repo = await setupInitedRepo();
+    // The exact stale scenario above, but --refresh pulls it in before rendering.
+    await writeCodexRolloutAt(repo, "codex-uncaptured");
+    const out = captureStdout();
+    await doRunOrient({ refresh: true }, ctxFor(repo));
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("✅ 取り込みは最新です。");
+    expect(stdout).not.toContain("⚠️ 古いです。");
+    // The session was actually imported (the arc/position reflects 1 session).
+    expect(stdout).toContain("codex");
   });
 
   it("--verbose appends raw freshness telemetry; the default view omits it", async () => {

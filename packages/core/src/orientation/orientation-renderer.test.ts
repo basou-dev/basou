@@ -368,10 +368,10 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 2, updatedSessions: 1 },
     });
-    expect(result.body).toContain("⚠️ 古いかもしれません。");
+    expect(result.body).toContain("⚠️ 古いです。");
     expect(result.body).toContain("新規 2 件");
     expect(result.body).toContain("更新 1 件");
-    expect(result.body).toContain("`basou refresh`");
+    expect(result.body).toContain("着手前に必ず `basou refresh`");
   });
 
   it("これは最新か: an unrun probe (null) says it cannot confirm rather than claiming current", async () => {
@@ -445,7 +445,9 @@ describe("orientation-renderer", () => {
     // The banner is uniquely identified by its trailing pointer to the verdict.
     const bannerMarker = "(詳細は末尾「これは最新か」)";
     expect(result.body).toContain(bannerMarker);
-    expect(result.body).toContain("> ⚠️ **古いかもしれません**");
+    // Confirmed stale: asserted, not hedged, with the uncaptured counts inline.
+    expect(result.body).toContain("> ⚠️ **古いです（未取り込み 新規 2 件・更新 1 件）**");
+    expect(result.body).toContain("着手前に必ず `basou refresh`");
     // It must appear before the position section so a top-down reader meets it
     // before the direction / next-step content.
     expect(result.body.indexOf(bannerMarker)).toBeLessThan(result.body.indexOf("## 今どこにいる"));
