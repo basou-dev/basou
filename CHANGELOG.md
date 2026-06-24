@@ -3,6 +3,20 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou orient` now includes a **「最近の流れ」 (recent direction)** section: the
+  last 5 non-archived sessions, newest first, each condensed to the decision
+  titles and next-step notes it recorded (voided decisions filtered out). This
+  surfaces the *arc* of recent intent rather than only the single latest
+  decision/note — the read-side safety net for the intent-leak gap. When a
+  session recorded neither a decision nor a note, its top changed files stand in
+  as the activity signal, so the recent trajectory stays visible even when
+  explicit capture was missed. Deterministic and read-only (no LLM); ties on
+  session boundary break by session id so the arc never depends on on-disk order.
+
 ## 0.21.0 — 2026-06-24
 
 ### Added

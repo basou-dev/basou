@@ -96,6 +96,32 @@ type TrackRecord = {
 
 type NoteRecord = { body: string; sessionId: string; occurredAt: string; host: string | null };
 
+/**
+ * One recent session condensed to its direction signal, for the "最近の流れ"
+ * (recent direction) section. Across the last N non-archived sessions
+ * (newest first), this surfaces the ARC of recent intent — the decision titles
+ * and next-step notes recorded in EACH session — rather than orientation's
+ * single latest decision/note, which can be stale or missing. When a session
+ * recorded neither a decision nor a note, its top changed files stand in as the
+ * activity signal, so the trajectory stays visible even when explicit capture
+ * was missed (the read-side safety net for the intent-leak gap).
+ */
+type RecentSessionDigest = {
+  sessionId: string;
+  label: string | null;
+  /** Session boundary (ended_at ?? started_at); the basis for its relative age. */
+  occurredAt: string;
+  host: string | null;
+  /** Non-voided decision titles recorded in this session, chronological, capped. */
+  decisions: string[];
+  /** Count of this session's non-voided decisions beyond those in `decisions`. */
+  decisionsOverflow: number;
+  /** next_step note bodies recorded in this session, chronological, capped. */
+  notes: string[];
+  /** Top changed files, populated ONLY when the session has no decision and no note. */
+  files: string[];
+};
+
 type PendingApproval = {
   id: string;
   risk: string;
@@ -160,6 +186,15 @@ export type OrientationSummary = {
    * step / handoff ("次の起点") surfaced in the forward section; null when none.
    */
   latestNote: NoteRecord | null;
+  /**
+   * The last N non-archived sessions (newest first) condensed to their direction
+   * signal — the "最近の流れ" (recent direction) arc. Distinct from the single
+   * latest decision/note: it shows the trajectory of intent across recent
+   * sessions, and falls back to each session's changed files when no decision or
+   * note was captured, so a resuming agent has grounding even when explicit
+   * capture was missed. Empty when no non-archived sessions exist.
+   */
+  recentDirection: RecentSessionDigest[];
   /**
    * related_files of the latest session, deduped + sorted + capped at the
    * display limit. `outOfRoot` lists the entries (over the FULL deduped set,
@@ -260,6 +295,27 @@ export async function summarizeOrientation(
   // "latest decision" pointer skips them so a voided decision is never
   // surfaced as the current direction.
   const voidedDecisionIds = new Set<string>();
+  // Per-session direction signals for the "最近の流れ" arc: each non-archived
+  // session's decision titles (with ids so a later void can be filtered out) and
+  // next_step note bodies, in chronological order. The recent-session slice +
+  // file fallback are assembled after the scan (voids are resolved first).
+  const perSession = new Map<
+    string,
+    { decisions: { decisionId: string; title: string }[]; notes: string[] }
+  >();
+  const recordDirection = (
+    sessionId: string,
+    kind: "decision" | "note",
+    value: { decisionId: string; title: string } | string,
+  ): void => {
+    let bucket = perSession.get(sessionId);
+    if (bucket === undefined) {
+      bucket = { decisions: [], notes: [] };
+      perSession.set(sessionId, bucket);
+    }
+    if (kind === "decision" && typeof value !== "string") bucket.decisions.push(value);
+    else if (kind === "note" && typeof value === "string") bucket.notes.push(value);
+  };
   let latestActivityAt: string | null = null;
   let latestNote: NoteRecord | null = null;
   const noteActivity = (iso: string): void => {
@@ -285,6 +341,13 @@ export async function summarizeOrientation(
             sessionId: entry.sessionId,
             host: entry.host,
           });
+          // Per-session arc (non-archived only); voided ids are filtered later.
+          if (counted) {
+            recordDirection(entry.sessionId, "decision", {
+              decisionId: ev.decision_id,
+              title: ev.title,
+            });
+          }
           // Tracks (kind === "track") are an unfinished direction; collect them
           // separately with their rationale so the forward section can resurface
           // them until closed. A void recorded later removes the id from the open
@@ -306,6 +369,7 @@ export async function summarizeOrientation(
         // Only `next_step`-kind notes (from `basou note`) are resume hints; a
         // plain `basou session note` annotation (kind absent) is not surfaced.
         if (counted && ev.type === "note_added" && ev.kind === "next_step") {
+          recordDirection(entry.sessionId, "note", ev.body);
           if (
             latestNote === null ||
             Date.parse(ev.occurred_at) > Date.parse(latestNote.occurredAt)
@@ -348,6 +412,47 @@ export async function summarizeOrientation(
     .sort((a, b) => {
       const c = Date.parse(b.occurredAt) - Date.parse(a.occurredAt);
       return c !== 0 ? c : b.decisionId.localeCompare(a.decisionId);
+    });
+
+  // "最近の流れ" arc: the last N non-archived sessions, newest first, each
+  // condensed to the decisions/notes it recorded (voided decisions filtered out
+  // so a struck decision is never presented as direction). A session with no
+  // decision and no note falls back to its changed files, so the trajectory is
+  // visible even when explicit capture was missed. Sorted by session boundary so
+  // the arc reads newest-first regardless of on-disk entry order; ties break on
+  // sessionId (ULIDs are time-ordered, so descending keeps it deterministic and
+  // newest-first) so which sessions survive the slice never depends on disk order.
+  const recentDirection: RecentSessionDigest[] = entries
+    .filter((e) => e.session.session.status !== "archived")
+    .map((e) => ({
+      entry: e,
+      boundary: e.session.session.ended_at ?? e.session.session.started_at,
+    }))
+    .sort((a, b) => {
+      const c = Date.parse(b.boundary) - Date.parse(a.boundary);
+      return c !== 0 ? c : b.entry.sessionId.localeCompare(a.entry.sessionId);
+    })
+    .slice(0, RECENT_DIRECTION_SESSIONS)
+    .map(({ entry, boundary }) => {
+      const bucket = perSession.get(entry.sessionId);
+      const decisionTitles = (bucket?.decisions ?? [])
+        .filter((d) => !voidedDecisionIds.has(d.decisionId))
+        .map((d) => d.title);
+      const notes = bucket?.notes ?? [];
+      const hasIntent = decisionTitles.length > 0 || notes.length > 0;
+      const files = hasIntent
+        ? []
+        : [...new Set(entry.session.session.related_files ?? [])].sort().slice(0, FILES_PER_DIGEST);
+      return {
+        sessionId: entry.sessionId,
+        label: entry.session.session.label ?? null,
+        occurredAt: boundary,
+        host: entry.host,
+        decisions: decisionTitles.slice(0, DECISIONS_PER_DIGEST),
+        decisionsOverflow: Math.max(0, decisionTitles.length - DECISIONS_PER_DIGEST),
+        notes: notes.slice(0, NOTES_PER_DIGEST),
+        files,
+      };
     });
 
   // Tasks: in-flight (planned / in_progress) carry the cross-session linkage
@@ -503,6 +608,7 @@ export async function summarizeOrientation(
     decisionCount: decisions.length,
     openTracks,
     latestNote,
+    recentDirection,
     relatedFiles: { displayed, overflow, outOfRoot },
     inFlightTasks,
     plannedTasks,
@@ -665,6 +771,35 @@ function formatOrientationBody(
     }
   } else {
     lines.push("- 直近の変更ファイル: (none recorded)");
+  }
+  lines.push("");
+
+  // "recent direction" — the arc of the last N sessions, the read-side safety
+  // net so a resuming agent sees the recent trajectory of intent (decisions /
+  // next steps), or the activity (changed files) when capture was missed, rather
+  // than only the single latest decision/note above.
+  lines.push(`## 最近の流れ (直近 ${RECENT_DIRECTION_SESSIONS} session)`);
+  lines.push("");
+  if (summary.recentDirection.length === 0) {
+    lines.push("- (まだ記録がありません)");
+  } else {
+    for (const s of summary.recentDirection) {
+      const sid = shortId(s.sessionId);
+      const age = relativeAgeJa(s.occurredAt, now);
+      const head = s.label !== null && s.label !== "" ? s.label : sid;
+      lines.push(`- ${head} (${age})${hostSuffix(s.host)}`);
+      if (s.decisions.length > 0) {
+        const more = s.decisionsOverflow > 0 ? ` (+${s.decisionsOverflow})` : "";
+        lines.push(`  - 判断: ${s.decisions.map(noteSummary).join("; ")}${more}`);
+      }
+      for (const note of s.notes) {
+        lines.push(`  - 次の起点: ${noteSummary(note)}`);
+      }
+      // Files appear only as the fallback (no decision and no note this session).
+      if (s.files.length > 0) {
+        lines.push(`  - 変更: ${s.files.join(", ")}`);
+      }
+    }
   }
   lines.push("");
 
@@ -1006,6 +1141,14 @@ function relativeAge(startedAt: string | undefined, now: Date): string {
   if (ms < 1000) return "just now";
   return `${formatDurationMs(ms)} ago`;
 }
+
+// "最近の流れ" caps: how many recent non-archived sessions to digest, and how
+// many decisions / notes / fallback files to show per session. Kept small so the
+// section stays a compact trajectory, not a full log (that is `basou handoff`).
+const RECENT_DIRECTION_SESSIONS = 5;
+const DECISIONS_PER_DIGEST = 3;
+const NOTES_PER_DIGEST = 2;
+const FILES_PER_DIGEST = 3;
 
 // A recorded note can be multi-line and arbitrarily long; collapse whitespace
 // to keep it on one orientation bullet and cap it so a verbose handoff does not

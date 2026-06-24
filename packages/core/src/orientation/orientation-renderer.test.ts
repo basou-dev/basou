@@ -549,6 +549,10 @@ describe("orientation-renderer", () => {
         "- 直近の判断: (no decisions recorded yet; capture with `basou decision capture`)",
         "- 直近の変更ファイル: (none recorded)",
         "",
+        "## 最近の流れ (直近 5 session)",
+        "",
+        "- (まだ記録がありません)",
+        "",
         "## 何が動く",
         "",
         "### 進行中 task (0)",
@@ -635,6 +639,12 @@ describe("orientation-renderer", () => {
         "  - 2 decisions total — see decisions.md",
         "- 直近の変更ファイル: src/a.ts, src/b.ts (... +2 more)",
         "",
+        "## 最近の流れ (直近 5 session)",
+        "",
+        "- fixture S01 (たった今)",
+        "  - 判断: earlier decision; wire portfolio API",
+        "- fixture S02 (1日2時間前)",
+        "",
         "## 何が動く",
         "",
         "### 進行中 task (1)",
@@ -656,6 +666,155 @@ describe("orientation-renderer", () => {
         "注: この判定は取り込み済み native セッションの鮮度と suspect の有無だけを見ます。計画↔実装のドリフトや未記録の意思決定までは検知しません。",
       ].join("\n"),
     );
+  });
+});
+
+describe("最近の流れ (recent direction arc)", () => {
+  function section(body: string): string {
+    const start = body.indexOf("## 最近の流れ");
+    const end = body.indexOf("## 何が動く");
+    return body.slice(start, end);
+  }
+
+  it("shows the per-session decision arc across recent sessions, not just the latest", async () => {
+    const paths = await setupPaths();
+    await placeSession(
+      paths,
+      { id: SES("A01"), status: "completed", startedAt: "2026-05-09T11:00:00+09:00" },
+      decisionLine(SES("A01"), "E01", DEC("DA1"), "adopt pnpm", "2026-05-09T11:00:00+09:00"),
+    );
+    await placeSession(
+      paths,
+      { id: SES("B02"), status: "completed", startedAt: "2026-05-08T11:00:00+09:00" },
+      decisionLine(SES("B02"), "E01", DEC("DB1"), "pick zod", "2026-05-08T11:00:00+09:00"),
+    );
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const s = section(result.body);
+    // Both sessions' decisions appear (the arc), newest first.
+    expect(s).toContain("判断: adopt pnpm");
+    expect(s).toContain("判断: pick zod");
+    expect(s.indexOf("adopt pnpm")).toBeLessThan(s.indexOf("pick zod"));
+  });
+
+  it("falls back to changed files for a session with no decision or note", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("F01"),
+      status: "completed",
+      startedAt: FIXED_NOW_ISO,
+      relatedFiles: ["src/z.ts", "src/y.ts", "src/x.ts", "src/w.ts"],
+    });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const s = section(result.body);
+    // Sorted + capped to 3 files; no 判断 / 次の起点 line for this session.
+    expect(s).toContain("変更: src/w.ts, src/x.ts, src/y.ts");
+    expect(s).not.toContain("src/z.ts");
+    expect(s).not.toContain("判断:");
+  });
+
+  it("excludes a voided decision from the arc but still lists the session", async () => {
+    const paths = await setupPaths();
+    await placeSession(
+      paths,
+      { id: SES("V01"), status: "completed", startedAt: FIXED_NOW_ISO, label: "voidy" },
+      decisionLine(SES("V01"), "E01", DEC("DV1"), "wrong call", "2026-05-09T11:00:00+09:00") +
+        decisionLine(SES("V01"), "E02", DEC("DV2"), "right call", "2026-05-09T11:30:00+09:00") +
+        voidLine(SES("V01"), "E03", DEC("DV1"), "2026-05-09T11:45:00+09:00"),
+    );
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const s = section(result.body);
+    expect(s).toContain("voidy");
+    expect(s).toContain("right call");
+    expect(s).not.toContain("wrong call");
+  });
+
+  it("surfaces a next_step note as 次の起点 within the arc", async () => {
+    const paths = await setupPaths();
+    await placeSession(
+      paths,
+      { id: SES("N01"), status: "completed", startedAt: FIXED_NOW_ISO },
+      noteLine(SES("N01"), "E01", "resume from the migration", FIXED_NOW_ISO, "next_step"),
+    );
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(section(result.body)).toContain("次の起点: resume from the migration");
+  });
+
+  it("caps the arc at the 5 most recent non-archived sessions", async () => {
+    const paths = await setupPaths();
+    // 7 sessions across distinct days; only the 5 newest should appear.
+    for (let i = 1; i <= 7; i += 1) {
+      const day = String(i).padStart(2, "0");
+      await placeSession(paths, {
+        id: SES(`S${day}`),
+        status: "completed",
+        label: `sess-${day}`,
+        startedAt: `2026-05-${day}T11:00:00+09:00`,
+      });
+    }
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const s = section(result.body);
+    const shown = ["sess-07", "sess-06", "sess-05", "sess-04", "sess-03"];
+    for (const label of shown) expect(s).toContain(label);
+    expect(s).not.toContain("sess-02");
+    expect(s).not.toContain("sess-01");
+  });
+
+  it("caps decisions per session and flags the overflow", async () => {
+    const paths = await setupPaths();
+    const lines = Array.from({ length: 5 }, (_, i) =>
+      decisionLine(
+        SES("M01"),
+        `E0${i + 1}`,
+        DEC(`DM${i + 1}`),
+        `decision ${i + 1}`,
+        `2026-05-09T1${i}:00:00+09:00`,
+      ),
+    ).join("");
+    await placeSession(
+      paths,
+      { id: SES("M01"), status: "completed", startedAt: "2026-05-09T10:00:00+09:00" },
+      lines,
+    );
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const s = section(result.body);
+    // 5 decisions, cap 3 -> "(+2)" overflow marker.
+    expect(s).toContain("(+2)");
+    expect(s).toContain("decision 1");
+    expect(s).toContain("decision 3");
+    expect(s).not.toContain("decision 5");
+  });
+
+  it("breaks boundary ties deterministically by sessionId (no dependence on disk order)", async () => {
+    const paths = await setupPaths();
+    // 6 sessions sharing the exact same boundary; only 5 fit, and which 5 must
+    // be deterministic (the highest sessionIds), not whatever order disk yields.
+    // 3-char tags keep the SES() ids at a valid 26-char ULID length.
+    for (const tag of ["A01", "B02", "C03", "D04", "E05", "F06"]) {
+      await placeSession(paths, {
+        id: SES(tag),
+        status: "completed",
+        label: `tie-${tag}`,
+        startedAt: "2026-05-09T11:00:00+09:00",
+      });
+    }
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const s = section(result.body);
+    // sessionId desc -> F06,E05,D04,C03,B02 kept; A01 dropped.
+    for (const tag of ["F06", "E05", "D04", "C03", "B02"]) expect(s).toContain(`tie-${tag}`);
+    expect(s).not.toContain("tie-A01");
+  });
+
+  it("archived sessions are excluded from the arc", async () => {
+    const paths = await setupPaths();
+    await placeSession(
+      paths,
+      { id: SES("AR1"), status: "archived", label: "archived-one", startedAt: FIXED_NOW_ISO },
+      decisionLine(SES("AR1"), "E01", DEC("DAR"), "archived decision", FIXED_NOW_ISO),
+    );
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const s = section(result.body);
+    expect(s).toContain("(まだ記録がありません)");
+    expect(s).not.toContain("archived-one");
   });
 });
 
