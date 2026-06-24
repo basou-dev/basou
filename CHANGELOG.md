@@ -17,6 +17,17 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Fixed
 
+- `basou task` subcommands now resolve the workspace the same view-aware way as
+  `orient` / `note` / `decision` / `refresh`: from a non-git workspace-view
+  directory they redirect to the linked planning repo (or portfolio master)
+  instead of failing with "Not a git repository". A genuinely non-git, non-view
+  directory still gets the same git-init hint.
+- `basou note` now refuses a body that is exactly a single subcommand-like word
+  (`list`, `ls`, `show`, `add`, …) with a hint, instead of silently recording it
+  as a note. `basou note` takes the note text positionally and has no
+  subcommands, so `basou note list` previously created a note whose body was
+  "list" — which then surfaced as orientation's next step. Multi-word bodies, or
+  those words inside a phrase, are unaffected.
 - `AskUserQuestion` answers are now derived into a `decision_recorded` only when
   the answer is a **confirmed selection of an offered option** (it matches an
   option label the question presented). A free-text "Other" reply — a

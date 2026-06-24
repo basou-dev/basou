@@ -136,6 +136,25 @@ describe("doRunNote (ad-hoc path)", () => {
     );
   });
 
+  it("refuses a body that is exactly a subcommand-like word (note footgun guard)", async () => {
+    const repo = await setupInitedRepo();
+    for (const word of ["list", "ls", "show", "LIST", " list ", "help"]) {
+      await expect(doRunNote(word, {}, { cwd: repo, ...FIXED_CTX })).rejects.toThrow(
+        /has no '.*' subcommand/,
+      );
+    }
+  });
+
+  it("still records a multi-word body that merely contains a reserved word", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunNote("list the open PRs before release", {}, { cwd: repo, ...FIXED_CTX });
+    const sid = await findAdHocSessionId(repo);
+    const events = await readEvents(repo, sid);
+    const note = events.find((e) => e.type === "note_added");
+    expect((note as { body?: unknown }).body).toBe("list the open PRs before release");
+  });
+
   it("truncates a long body in the ad-hoc label", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
