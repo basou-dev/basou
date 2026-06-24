@@ -1024,16 +1024,19 @@ function stalenessBanner(
   if (staleness === null) return [];
   if ((staleness.unverifiableSessions ?? 0) > 0) {
     return [
-      `> ⚠️ **最新ではない可能性** — 変化したが安全に取り込めないセッションが ${staleness.unverifiableSessions} 件あります。着手前に \`basou verify\` / \`basou refresh --force\`(詳細は末尾「これは最新か」)。`,
+      `> ⚠️ **再取り込みが必要** — native ログが変化したが通常の refresh では取り込めないセッションが ${staleness.unverifiableSessions} 件あります。\`basou refresh --force\` で再取り込みしてください(詳細は末尾「これは最新か」)。`,
     ];
   }
-  if (staleness.newSessions > 0 || staleness.updatedSessions > 0) {
-    const parts: string[] = [];
-    if (staleness.newSessions > 0) parts.push(`新規 ${staleness.newSessions} 件`);
+  // Assert ONLY for genuinely uncaptured (never-imported) sessions: those are
+  // real backlog a `basou refresh` WILL pull in. A merely GROWN ("更新") session
+  // is dominated by the live session you are in — its transcript always advances
+  // past the last import, so refreshing re-grows it immediately and a "必ず
+  // refresh" imperative there can never be satisfied (the learned-helplessness
+  // dbp_wp reported). That state is the live session (normal), so it gets no top
+  // banner — only the calm bottom verdict explains it.
+  if (staleness.newSessions > 0) {
+    const parts: string[] = [`新規 ${staleness.newSessions} 件`];
     if (staleness.updatedSessions > 0) parts.push(`更新 ${staleness.updatedSessions} 件`);
-    // Confirmed stale (the probe counted uncaptured work), so assert it rather
-    // than hedge with "かもしれません" — basou KNOWS there is work to pull in, and
-    // an imperative remediation is the high-salience signal the consumer needs.
     return [
       `> ⚠️ **古いです（未取り込み ${parts.join("・")}）** — 着手前に必ず \`basou refresh\` を実行してください(詳細は末尾「これは最新か」)。`,
     ];
@@ -1060,26 +1063,46 @@ function freshnessVerdict(
   // so it is surfaced ahead of every other state, including "no records".
   if (staleness !== null && (staleness.unverifiableSessions ?? 0) > 0) {
     return [
-      `⚠️ 最新か確認できません。変化したが安全に取り込めないセッションが ${staleness.unverifiableSessions} 件あります(ハッシュチェーン破損・非追記変更など)。`,
-      "`basou verify` で確認し、`basou refresh --force` で再取り込みしてください。",
+      `⚠️ native ログが変化しましたが、通常の \`basou refresh\` では安全に再取り込みできないセッションが ${staleness.unverifiableSessions} 件あります(非追記変更・前チェーン不整合など)。`,
+      "`basou refresh --force` で再取り込みしてください。(`basou verify` は別物=取り込み済みデータの改竄/破損検査で、ヘッダの suspect とは別軸です。verify が clean でも未取り込みは残り得ます。)",
     ];
   }
 
-  // Stale wins next: uncaptured/grown native work means there IS work to pull
-  // in, even when the store itself is still empty — so this must be checked
-  // before the "no records" branch.
-  if (staleness !== null && (staleness.newSessions > 0 || staleness.updatedSessions > 0)) {
-    const parts: string[] = [];
-    if (staleness.newSessions > 0) parts.push(`新規 ${staleness.newSessions} 件`);
+  // Genuinely uncaptured (NEVER-imported) sessions are real backlog a refresh
+  // WILL pull in, even when the store is still empty — so assert it, and check it
+  // before the "no records" branch. A merely GROWN ("更新") session is NOT
+  // asserted here: the live session you are in always shows as grown, and a "必ず
+  // refresh" there can never be satisfied (it re-grows immediately). That case is
+  // the calm "updated-only" branch below.
+  if (staleness !== null && staleness.newSessions > 0) {
+    const parts: string[] = [`新規 ${staleness.newSessions} 件`];
     if (staleness.updatedSessions > 0) parts.push(`更新 ${staleness.updatedSessions} 件`);
-    // Confirmed stale: the probe found uncaptured/grown native work, so state it
-    // plainly (not "かもしれません") with an imperative remediation. The hedged
-    // wording is reserved for the genuinely-uncertain branches (unverifiable, or
-    // an unrun probe) below/above.
     return [
       `⚠️ 古いです。最後の取り込み以降に未取り込みの作業があります(${parts.join("・")})。`,
       "着手前に必ず `basou refresh` を実行してください。",
     ];
+  }
+
+  // Grown ("更新") sessions only — no never-imported, no unverifiable. `basou
+  // refresh` CAN import these (e.g. a finished session imported mid-flight that
+  // then gained more events), so it stays an actionable ⚠️ and the action is
+  // offered — NOT softened to a silent ℹ️ that would hide that backlog. But the
+  // imperative is dropped: the LIVE session you are in always shows as grown
+  // (its transcript advances past the last import), so a "必ず refresh" can never
+  // drive the count to zero. Explaining that residual is normal removes the
+  // learned helplessness dbp_wp reported. Placed before the "no records" branch
+  // so an archived-only store with a grown source is not mis-cleared as empty.
+  if (staleness !== null && staleness.updatedSessions > 0) {
+    const lines = [
+      `⚠️ 更新されたセッションが ${staleness.updatedSessions} 件あります。\`basou refresh\` で取り込めます。`,
+      "(進行中のセッションがある場合、それ自身は取り込み後も増え続けるため残ります＝正常です。)",
+    ];
+    if (summary.suspects.length > 0) {
+      lines.push(
+        `また要注意セッションが ${summary.suspects.length} 件あります(上記「要注意 session」参照)。`,
+      );
+    }
+    return lines;
   }
 
   if (summary.freshness.newestStartedAt === null) {
