@@ -58,10 +58,14 @@ export type ClaudeTranscriptToPayloadOptions = {
  * - `command_executed` from each `Bash` tool use, recorded as `bash -c "<cmd>"`
  *   (the transcript carries the shell line, not a parsed argv).
  * - `file_changed` from each `Edit` / `Write` / `NotebookEdit` tool use.
- * - `decision_recorded` from each `AskUserQuestion` tool use: one decision per
- *   question, titled `<question> -> <chosen answer>`. The chosen answer is read
- *   from the paired result record's structured `toolUseResult.answers` map; a
- *   question with no recorded string answer is skipped.
+ * - `decision_recorded` from each `AskUserQuestion` tool use, but ONLY when the
+ *   recorded answer is a confirmed SELECTION — it exactly matches an option the
+ *   question offered (`input.questions[].options[].label`). One decision per
+ *   such question, titled `<question> -> <chosen answer>`. The answer is read
+ *   from the paired result record's `toolUseResult.answers` map; a question with
+ *   no recorded answer, or a free-text "Other" reply that matches no offered
+ *   label, is skipped (it is not a decision, and would otherwise pollute
+ *   decisions.md / orientation's latest-decision surface).
  *
  * Exit codes and per-command durations are not present in the transcript, so
  * `command_executed.exit_code` is `null` and `duration_ms` is `0`.
@@ -170,14 +174,32 @@ export function claudeTranscriptToImportPayload(
         const useId = readString(item.id);
         const answers = useId !== undefined ? askAnswers.get(useId) : undefined;
         if (answers !== undefined) {
-          // One decision per question; preserve the order the questions were
-          // asked (Object.entries keeps insertion order for string keys, and
-          // the stable sort below keeps it among the same-timestamp events).
+          // Only a CONFIRMED selection becomes a decision: derive one only when
+          // the recorded answer matches an option this question OFFERED. A
+          // free-text "Other" reply (a counter-question, guidance, or other
+          // meta answer) matches no offered label and is NOT a decision —
+          // deriving one would pollute decisions.md and, worse, surface a
+          // non-decision as orientation's "直近の判断". A genuine free-text
+          // choice can still be recorded explicitly via `basou decision capture`.
+          // One decision per question; Object.entries keeps insertion order for
+          // string keys, and the stable sort below keeps it among same-ts events.
+          const offeredByQuestion = readOfferedOptions(input);
           for (const [question, answer] of Object.entries(answers)) {
             if (question.length === 0) continue;
             const answerStr = typeof answer === "string" && answer.length > 0 ? answer : undefined;
-            const title = answerStr !== undefined ? `${question} -> ${answerStr}` : question;
-            derived.push(decisionRecordedEvent(ts, placeholderSessionId, title));
+            if (answerStr === undefined) continue;
+            // Only an EXACT match of an offered option label is a confirmed
+            // selection. A free-text "Other" reply (counter-question / guidance /
+            // meta) matches nothing and is dropped. Multi-select answers (whose
+            // serialization is undocumented) are deliberately NOT auto-derived
+            // rather than risk mistaking a meta reply that happens to list
+            // label-like words for a real selection — `basou decision capture`
+            // remains the explicit path for anything not auto-derived.
+            const offered = offeredByQuestion.get(question);
+            if (offered === undefined || !offered.has(answerStr.trim())) continue;
+            derived.push(
+              decisionRecordedEvent(ts, placeholderSessionId, `${question} -> ${answerStr}`),
+            );
           }
         }
         continue;
@@ -430,4 +452,29 @@ function indexAskAnswers(
     }
   }
   return byId;
+}
+
+/**
+ * Map each AskUserQuestion question to the set of option labels it OFFERED. The
+ * labels live on the tool_use input (`input.questions[].options[].label`); the
+ * recorded answer is matched against them to tell a real selection from a
+ * free-text "Other" reply. Returns an empty map for any unexpected shape.
+ */
+function readOfferedOptions(input: Record<string, unknown>): Map<string, Set<string>> {
+  const byQuestion = new Map<string, Set<string>>();
+  const questions = Array.isArray(input.questions) ? input.questions : [];
+  for (const q of questions) {
+    if (!isObject(q)) continue;
+    const text = readString(q.question);
+    if (text === undefined) continue;
+    const labels = new Set<string>();
+    const options = Array.isArray(q.options) ? q.options : [];
+    for (const o of options) {
+      if (!isObject(o)) continue;
+      const label = readString(o.label);
+      if (label !== undefined) labels.add(label.trim());
+    }
+    byQuestion.set(text, labels);
+  }
+  return byQuestion;
 }

@@ -305,6 +305,139 @@ describe("claudeTranscriptToImportPayload", () => {
     }
   });
 
+  it("derives a decision only for the SELECTED option, skipping a free-text 'Other' reply", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: CWD,
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_ask3",
+              name: "AskUserQuestion",
+              input: {
+                questions: [
+                  {
+                    question: "Approach?",
+                    header: "A",
+                    options: [{ label: "Plan A" }, { label: "Plan B" }],
+                  },
+                  {
+                    question: "Defer activity?",
+                    header: "D",
+                    options: [{ label: "Defer" }, { label: "Show now" }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        timestamp: "2026-05-10T00:00:02.000Z",
+        cwd: CWD,
+        // "Approach?" picked a real option; "Defer activity?" got a free-text
+        // counter-question (operator chose "Other" and typed a meta reply).
+        toolUseResult: {
+          questions: [],
+          answers: {
+            "Approach?": "Plan B",
+            "Defer activity?": "Did you actually run basou refresh this session?",
+          },
+        },
+        message: { content: [{ type: "tool_result", tool_use_id: "toolu_ask3", content: "ok" }] },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const titles = payload.events.flatMap((e) => (e.type === "decision_recorded" ? [e.title] : []));
+    // Only the confirmed selection becomes a decision; the meta reply is dropped.
+    expect(titles).toEqual(["Approach? -> Plan B"]);
+  });
+
+  it("does NOT auto-derive a decision from a comma-joined answer that is not an exact label", () => {
+    // Multi-select serialization is undocumented, so only an exact label match
+    // counts. A comma-joined answer (or a meta reply that happens to list
+    // label-like words) is deliberately NOT auto-derived — this prevents a
+    // single-choice "Other" answer like "Auth, Billing" from becoming a false
+    // decision. The agent can still record a real multi-select via capture.
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: CWD,
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_ask4",
+              name: "AskUserQuestion",
+              input: {
+                questions: [
+                  {
+                    question: "Features?",
+                    header: "F",
+                    options: [{ label: "Auth" }, { label: "Billing" }, { label: "Search" }],
+                  },
+                ],
+              },
+            },
+            { type: "tool_use", name: "Bash", input: { command: "ls" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        timestamp: "2026-05-10T00:00:02.000Z",
+        cwd: CWD,
+        toolUseResult: { questions: [], answers: { "Features?": "Auth, Search" } },
+        message: { content: [{ type: "tool_result", tool_use_id: "toolu_ask4", content: "ok" }] },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.events.some((e) => e.type === "decision_recorded")).toBe(false);
+    expect(payload.events.some((e) => e.type === "command_executed")).toBe(true);
+  });
+
+  it("skips an AskUserQuestion answer when the question offered no options", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: CWD,
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_ask5",
+              name: "AskUserQuestion",
+              input: { questions: [{ question: "Free?", header: "F", options: [] }] },
+            },
+            { type: "tool_use", name: "Bash", input: { command: "ls" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        timestamp: "2026-05-10T00:00:02.000Z",
+        cwd: CWD,
+        toolUseResult: { questions: [], answers: { "Free?": "anything typed here" } },
+        message: { content: [{ type: "tool_result", tool_use_id: "toolu_ask5", content: "ok" }] },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(payload.events.some((e) => e.type === "decision_recorded")).toBe(false);
+    expect(payload.events.some((e) => e.type === "command_executed")).toBe(true);
+  });
+
   it("skips AskUserQuestion decisions when no structured answer is recorded", () => {
     const records: ClaudeTranscriptRecord[] = [
       {

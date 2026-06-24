@@ -429,6 +429,82 @@ describe("orientation-renderer", () => {
     expect(result.body).not.toContain("✅ 取り込みは最新です。");
   });
 
+  it("staleness banner: a stale probe surfaces a top banner BEFORE 今どこにいる", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T11:00:00+09:00",
+    });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 2, updatedSessions: 1 },
+    });
+    // The banner is uniquely identified by its trailing pointer to the verdict.
+    const bannerMarker = "(詳細は末尾「これは最新か」)";
+    expect(result.body).toContain(bannerMarker);
+    expect(result.body).toContain("> ⚠️ **古いかもしれません**");
+    // It must appear before the position section so a top-down reader meets it
+    // before the direction / next-step content.
+    expect(result.body.indexOf(bannerMarker)).toBeLessThan(result.body.indexOf("## 今どこにいる"));
+    // The full verdict still renders at the bottom (after the banner).
+    expect(result.body.indexOf("## これは最新か")).toBeGreaterThan(
+      result.body.indexOf(bannerMarker),
+    );
+  });
+
+  it("staleness banner: unverifiable grown sessions surface a top banner too", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 0, unverifiableSessions: 2 },
+    });
+    expect(result.body).toContain("> ⚠️ **最新ではない可能性**");
+    expect(result.body.indexOf("> ⚠️ **最新ではない可能性**")).toBeLessThan(
+      result.body.indexOf("## 今どこにいる"),
+    );
+  });
+
+  it("staleness banner: a current (✅) capture shows NO top banner", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 0 },
+    });
+    expect(result.body).toContain("✅ 取り込みは最新です。");
+    expect(result.body).not.toContain("(詳細は末尾「これは最新か」)");
+    expect(result.body).not.toContain("> ⚠️");
+  });
+
+  it("staleness banner: an unrun probe (null) shows NO top banner", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).not.toContain("(詳細は末尾「これは最新か」)");
+    expect(result.body).not.toContain("> ⚠️");
+  });
+
   it("--verbose appends the raw freshness telemetry under the verdict", async () => {
     const paths = await setupPaths();
     await placeSession(paths, {

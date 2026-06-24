@@ -583,6 +583,17 @@ function formatOrientationBody(
   }
   lines.push("");
 
+  // Staleness banner up top: when there is uncaptured/grown native work, a
+  // reader grounding top-down should meet the warning BEFORE the direction /
+  // "next step" sections, not only in the "これは最新か" verdict at the very
+  // bottom (which is easy to start working before ever reaching). Shown only for
+  // the actionable-stale states; the full verdict still renders at the end.
+  const banner = stalenessBanner(opts.staleness);
+  if (banner.length > 0) {
+    for (const line of banner) lines.push(line);
+    lines.push("");
+  }
+
   // "where am I now"
   lines.push("## 今どこにいる");
   lines.push("");
@@ -861,6 +872,35 @@ function toolDisplayName(kind: string | null): string {
     default:
       return kind ?? "不明";
   }
+}
+
+/**
+ * A concise staleness banner for the TOP of the orientation, shown only when
+ * there is uncaptured/grown native work to pull in (the states the full
+ * "これは最新か" verdict flags with ⚠️). Surfaced near the header so a reader
+ * grounding top-down meets it before the direction / "次の起点" sections, not
+ * only at the very bottom. Returns [] when the capture is current, empty, or
+ * unprobed — nothing actionable to flag up top (the bottom verdict still covers
+ * those neutral states).
+ */
+function stalenessBanner(
+  staleness: { newSessions: number; updatedSessions: number; unverifiableSessions?: number } | null,
+): string[] {
+  if (staleness === null) return [];
+  if ((staleness.unverifiableSessions ?? 0) > 0) {
+    return [
+      `> ⚠️ **最新ではない可能性** — 変化したが安全に取り込めないセッションが ${staleness.unverifiableSessions} 件あります。着手前に \`basou verify\` / \`basou refresh --force\`(詳細は末尾「これは最新か」)。`,
+    ];
+  }
+  if (staleness.newSessions > 0 || staleness.updatedSessions > 0) {
+    const parts: string[] = [];
+    if (staleness.newSessions > 0) parts.push(`新規 ${staleness.newSessions} 件`);
+    if (staleness.updatedSessions > 0) parts.push(`更新 ${staleness.updatedSessions} 件`);
+    return [
+      `> ⚠️ **古いかもしれません** — 未取り込みの作業があります(${parts.join("・")})。着手前に \`basou refresh\` で更新してください(詳細は末尾「これは最新か」)。`,
+    ];
+  }
+  return [];
 }
 
 /**
