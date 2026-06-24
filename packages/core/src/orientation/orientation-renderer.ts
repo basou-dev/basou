@@ -1031,8 +1031,11 @@ function stalenessBanner(
     const parts: string[] = [];
     if (staleness.newSessions > 0) parts.push(`新規 ${staleness.newSessions} 件`);
     if (staleness.updatedSessions > 0) parts.push(`更新 ${staleness.updatedSessions} 件`);
+    // Confirmed stale (the probe counted uncaptured work), so assert it rather
+    // than hedge with "かもしれません" — basou KNOWS there is work to pull in, and
+    // an imperative remediation is the high-salience signal the consumer needs.
     return [
-      `> ⚠️ **古いかもしれません** — 未取り込みの作業があります(${parts.join("・")})。着手前に \`basou refresh\` で更新してください(詳細は末尾「これは最新か」)。`,
+      `> ⚠️ **古いです（未取り込み ${parts.join("・")}）** — 着手前に必ず \`basou refresh\` を実行してください(詳細は末尾「これは最新か」)。`,
     ];
   }
   return [];
@@ -1069,9 +1072,13 @@ function freshnessVerdict(
     const parts: string[] = [];
     if (staleness.newSessions > 0) parts.push(`新規 ${staleness.newSessions} 件`);
     if (staleness.updatedSessions > 0) parts.push(`更新 ${staleness.updatedSessions} 件`);
+    // Confirmed stale: the probe found uncaptured/grown native work, so state it
+    // plainly (not "かもしれません") with an imperative remediation. The hedged
+    // wording is reserved for the genuinely-uncertain branches (unverifiable, or
+    // an unrun probe) below/above.
     return [
-      `⚠️ 古いかもしれません。最後の取り込み以降に未取り込みの作業があります(${parts.join("・")})。`,
-      "`basou refresh` で更新してください。",
+      `⚠️ 古いです。最後の取り込み以降に未取り込みの作業があります(${parts.join("・")})。`,
+      "着手前に必ず `basou refresh` を実行してください。",
     ];
   }
 

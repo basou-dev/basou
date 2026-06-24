@@ -15,11 +15,11 @@ import {
   renderCliError,
 } from "../lib/error-render.js";
 import { loadHostsConfig } from "../lib/hosts-config.js";
-import { probeStaleness } from "../lib/provenance-actions.js";
+import { probeStaleness, refreshAll } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import type { ImportContext } from "./import.js";
 
-export type OrientOptions = { verbose?: boolean; quiet?: boolean };
+export type OrientOptions = { verbose?: boolean; quiet?: boolean; refresh?: boolean };
 
 export type OrientContext = ImportContext & {
   /** Defaults to `() => new Date()`. Injectable for tests. */
@@ -31,16 +31,22 @@ export type OrientContext = ImportContext & {
 /**
  * Wire `basou orient` onto `program`. A read-first "where am I" command: it
  * renders the current position, writes `.basou/orientation.md`, and prints the
- * body to stdout by default. It writes NO provenance — a read-only dry-run probe
- * checks for uncaptured native work so the "これは最新か" verdict is honest (use
- * `basou refresh` to actually re-import). `--verbose` appends raw freshness
- * telemetry under the verdict.
+ * body to stdout by default. By default it writes NO provenance — a read-only
+ * dry-run probe checks for uncaptured native work so the "これは最新か" verdict is
+ * honest (use `basou refresh` to actually re-import). `--refresh` opts into
+ * importing first (so a SessionStart hook can guarantee a fresh position in one
+ * command) while bare `orient` stays read-only. `--verbose` appends raw
+ * freshness telemetry under the verdict.
  */
 export function registerOrientCommand(program: Command): void {
   program
     .command("orient")
     .description("Show the workspace's current position (also writes .basou/orientation.md)")
     .option("-q, --quiet", "Write the file without printing the body")
+    .option(
+      "--refresh",
+      "Import all adapters first (writes provenance), then show a guaranteed-fresh position; bare orient is read-only",
+    )
     .option("-v, --verbose", "Show error causes")
     .action(async (opts: OrientOptions) => {
       await runOrient(opts);
@@ -77,6 +83,14 @@ export async function doRunOrient(options: OrientOptions, ctx: OrientContext): P
   const probeCtx: ImportContext = { cwd: repositoryRoot };
   if (ctx.claudeProjectsDir !== undefined) probeCtx.claudeProjectsDir = ctx.claudeProjectsDir;
   if (ctx.codexSessionsDir !== undefined) probeCtx.codexSessionsDir = ctx.codexSessionsDir;
+
+  // `--refresh` (opt-in) imports every adapter first so the position is
+  // guaranteed current — the moat-safe way for a SessionStart hook to close the
+  // freshness gate without bare `orient` ever becoming a writer. The subsequent
+  // dry-run probe then reports fresh, so the verdict reads "current" honestly.
+  if (options.refresh === true) {
+    await refreshAll({ options: {}, ctx: probeCtx, paths, nowIso });
+  }
   const staleness = await probeStaleness({ ctx: probeCtx, paths, nowIso });
 
   // Federation (zero-network): merge other hosts' trails listed in

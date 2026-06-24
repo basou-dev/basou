@@ -3,6 +3,26 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou orient --refresh` imports every adapter first (writing provenance), then
+  renders a guaranteed-fresh position — a one-command way for a SessionStart hook
+  to close the freshness gate. Bare `basou orient` stays **read-only** (it never
+  imports; the dry-run probe only reports staleness), preserving the invariant
+  that a plain orient never mutates the store.
+
+### Changed
+
+- When `basou orient` has **confirmed** staleness (the probe counted uncaptured /
+  grown native sessions), the warning is now asserted, not hedged: 「古いです（未取り込み N 件）—
+  着手前に必ず `basou refresh`」instead of 「古いかもしれません」. basou knows there is
+  uncaptured work, so it states it plainly with an imperative remediation rather
+  than understating the urgency. The genuinely-uncertain cases keep their hedged
+  wording (an un-re-importable grown session: 「最新か確認できません」; an unrun probe:
+  「最新か確認するには…」).
+
 ## 0.22.0 — 2026-06-24
 
 ### Added
