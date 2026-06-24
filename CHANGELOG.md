@@ -3,7 +3,21 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
-## 0.23.0 — 2026-06-24
+## Unreleased
+
+### Changed
+
+- The `basou hook stop` Stop-hook nudge now uses a **content-aware trigger** instead
+  of a raw command+edit count. A session reads as substantive — and so worth a
+  capture nudge — only when it did decision-worthy work: enough **file edits**
+  (`--min-edits`, default 2) or a **free-form AskUserQuestion answer** (a reply
+  matching no offered option — an uncaptured conversational decision). Read-only
+  Bash (`ls` / `grep` / `git status`) no longer counts, so pure exploration
+  sessions are left alone (the false-fire the old count caused). The `--min-actions`
+  flag is renamed `--min-edits` to reflect that it gates file edits. The reminder
+  stays non-blocking (enforcement strength is unchanged). The AskUserQuestion
+  option-matching rule is now shared with the importer so the set it auto-derives
+  and the set the hook treats as uncaptured stay exact complements.
 
 ### Added
 

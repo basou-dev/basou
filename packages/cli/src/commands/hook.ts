@@ -1,7 +1,7 @@
 import { open, readFile, stat } from "node:fs/promises";
 import {
   type ClaudeTranscriptRecord,
-  DEFAULT_STOP_HOOK_MIN_ACTIONS,
+  DEFAULT_STOP_HOOK_MIN_EDITS,
   evaluateStopHook,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -10,12 +10,12 @@ import type { Command } from "commander";
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 
 export type HookStopOptions = {
-  minActions?: number;
+  minEdits?: number;
 };
 
 /** Raw option shape from commander (values arrive as strings; parsed leniently). */
 type RawHookStopOptions = {
-  minActions?: string;
+  minEdits?: string;
 };
 
 export type HookStopContext = {
@@ -56,17 +56,17 @@ export function registerHookCommand(program: Command): void {
         "JSON payload on stdin; never blocks and never fails the session.",
     )
     .option(
-      "--min-actions <n>",
-      `Minimum commands+edits before nudging (default ${DEFAULT_STOP_HOOK_MIN_ACTIONS})`,
+      "--min-edits <n>",
+      `Minimum file edits before nudging on edits alone (default ${DEFAULT_STOP_HOOK_MIN_EDITS})`,
     )
     .addHelpText("after", HOOK_STOP_HELP)
     .action(async (options: RawHookStopOptions) => {
       // Parse leniently at the boundary rather than with a throwing commander
-      // parser: a bad value in a hook config (e.g. `--min-actions nope`) must
+      // parser: a bad value in a hook config (e.g. `--min-edits nope`) must
       // not exit non-zero and disrupt every Stop event — it falls back to the
       // default instead.
-      const minActions = parseMinActions(options.minActions);
-      await runHookStop(minActions !== undefined ? { minActions } : {});
+      const minEdits = parseMinEdits(options.minEdits);
+      await runHookStop(minEdits !== undefined ? { minEdits } : {});
     });
 }
 
@@ -81,11 +81,13 @@ Install as a Claude Code Stop hook in ~/.claude/settings.json:
   }
 
 On every turn end basou inspects the session transcript. If the session did
-substantive work (>= ${DEFAULT_STOP_HOOK_MIN_ACTIONS} commands + file edits by default) but ran no capture
-verb ('basou decision capture' / 'decision record' / 'note'), it emits a
-non-blocking reminder so the agent can record the why / next step. The reminder
-continues the conversation (Claude may act on it or stop); it never forces.
-The 'stop_hook_active' flag is honored so the nudge cannot loop.
+content-substantive work but ran no capture verb ('basou decision capture' /
+'decision record' / 'note'), it emits a non-blocking reminder so the agent can
+record the why / next step. Substantive = EITHER >= ${DEFAULT_STOP_HOOK_MIN_EDITS} file edits (default)
+OR a free-form AskUserQuestion answer (an uncaptured conversational decision).
+Read-only Bash (ls / grep / git status) does NOT count. The reminder is
+non-blocking: Claude sees it and may act on it or stop; it never forces the turn
+to continue. The 'stop_hook_active' flag is honored so the nudge cannot loop.
 `;
 
 /**
@@ -141,7 +143,7 @@ export async function doRunHookStop(options: HookStopOptions, ctx: HookStopConte
     records,
     // stop_hook_active was already handled by the early return above.
     stopHookActive: false,
-    ...(options.minActions !== undefined ? { minActions: options.minActions } : {}),
+    ...(options.minEdits !== undefined ? { minEdits: options.minEdits } : {}),
   });
   if (evaluation.kind !== "nudge") return;
 
@@ -187,7 +189,7 @@ async function defaultReadStdin(): Promise<string> {
  * Read a transcript, bounded to {@link MAX_TRANSCRIPT_BYTES} so a pathologically
  * large session cannot stall the per-turn hook or exhaust memory. When the file
  * exceeds the cap, only the trailing window is read (and its first partial line
- * dropped): that window still holds far more than `minActions` actions (so the
+ * dropped): that window still holds far more than `minEdits` edits (so the
  * session reads as substantive) and any end-of-session capture verb, so the
  * decision is unchanged for normal usage while the read stays bounded.
  */
@@ -210,11 +212,11 @@ export async function readTranscriptBounded(
 }
 
 /**
- * Lenient parse for `--min-actions`: a valid non-negative integer, otherwise
+ * Lenient parse for `--min-edits`: a valid non-negative integer, otherwise
  * `undefined` (fall back to the default). Never throws — a bad value in a hook
  * config must not exit non-zero and disrupt the session.
  */
-export function parseMinActions(raw: string | undefined): number | undefined {
+export function parseMinEdits(raw: string | undefined): number | undefined {
   // Strictly a run of digits: avoids Number()'s coercions ("" / " " -> 0,
   // "1e3" -> 1000) so only an explicit non-negative integer is honored;
   // anything else falls back to the default.

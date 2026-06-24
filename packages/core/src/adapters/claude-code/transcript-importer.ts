@@ -9,6 +9,7 @@ import {
   intervalsMsToIso,
 } from "../../stats/active-time.js";
 import { sessionLabelDateSpan } from "../session-label.js";
+import { indexAskAnswers, readOfferedOptions } from "./ask-user-question.js";
 
 /**
  * The `source` string stamped on every event derived from a Claude Code
@@ -423,58 +424,4 @@ function toolUses(record: ClaudeTranscriptRecord): Array<Record<string, unknown>
     }
   }
   return result;
-}
-
-/**
- * Index the structured answers of every `AskUserQuestion` tool use by its
- * tool_use id. The chosen answers live on the *result* record's
- * `toolUseResult.answers` — a `{ "<question>": "<chosen answer>" }` map — which
- * is only present on AskUserQuestion results, so its presence is the
- * discriminator. The result record carries the originating tool_use id inside
- * its `message.content[].tool_use_id`.
- */
-function indexAskAnswers(
-  records: ReadonlyArray<ClaudeTranscriptRecord>,
-): Map<string, Record<string, unknown>> {
-  const byId = new Map<string, Record<string, unknown>>();
-  for (const record of records) {
-    const result = record.toolUseResult;
-    if (!isObject(result)) continue;
-    const answers = result.answers;
-    if (!isObject(answers)) continue;
-    const message = isObject(record.message) ? record.message : undefined;
-    const content = message !== undefined && Array.isArray(message.content) ? message.content : [];
-    for (const item of content) {
-      if (isObject(item) && readString(item.type) === "tool_result") {
-        const id = readString(item.tool_use_id);
-        if (id !== undefined) byId.set(id, answers);
-      }
-    }
-  }
-  return byId;
-}
-
-/**
- * Map each AskUserQuestion question to the set of option labels it OFFERED. The
- * labels live on the tool_use input (`input.questions[].options[].label`); the
- * recorded answer is matched against them to tell a real selection from a
- * free-text "Other" reply. Returns an empty map for any unexpected shape.
- */
-function readOfferedOptions(input: Record<string, unknown>): Map<string, Set<string>> {
-  const byQuestion = new Map<string, Set<string>>();
-  const questions = Array.isArray(input.questions) ? input.questions : [];
-  for (const q of questions) {
-    if (!isObject(q)) continue;
-    const text = readString(q.question);
-    if (text === undefined) continue;
-    const labels = new Set<string>();
-    const options = Array.isArray(q.options) ? q.options : [];
-    for (const o of options) {
-      if (!isObject(o)) continue;
-      const label = readString(o.label);
-      if (label !== undefined) labels.add(label.trim());
-    }
-    byQuestion.set(text, labels);
-  }
-  return byQuestion;
 }

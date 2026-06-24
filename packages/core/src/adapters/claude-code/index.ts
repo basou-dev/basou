@@ -9,7 +9,7 @@ export type {
   StopHookEvaluationInput,
   StopHookSilentReason,
 } from "./stop-hook.js";
-export { DEFAULT_STOP_HOOK_MIN_ACTIONS, evaluateStopHook } from "./stop-hook.js";
+export { DEFAULT_STOP_HOOK_MIN_EDITS, evaluateStopHook } from "./stop-hook.js";
 export type {
   ClaudeTranscriptRecord,
   ClaudeTranscriptToPayloadOptions,
