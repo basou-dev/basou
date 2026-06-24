@@ -24,7 +24,6 @@ import {
   reconcileTask,
   refreshTaskLinkedSessions,
   replayEvents,
-  resolveRepositoryRoot,
   resolveSessionId,
   resolveTaskId,
   type SessionEntry,
@@ -47,6 +46,7 @@ import {
   shortSessionId,
   shortTaskId,
 } from "../lib/error-render.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 const STATUS_VALUES = TaskStatusSchema.options;
 
@@ -1524,17 +1524,12 @@ async function resolveRepositoryRootForTask(
     | "delete"
     | "archive",
 ): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error(
-        `Not a git repository. Run 'git init' first, then re-run 'basou task ${subcmd}'.`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
+  // View-aware resolution, matching orient / note / decision / refresh: from a
+  // non-git workspace-view directory this redirects to the linked planning repo
+  // (or a portfolio master), instead of failing with "Not a git repository" as
+  // the old git-only resolver did. A genuinely non-git, non-view directory still
+  // gets the same git-init hint (resolveBasouRootForCommand preserves it).
+  return resolveBasouRootForCommand(cwd, `task ${subcmd}`);
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

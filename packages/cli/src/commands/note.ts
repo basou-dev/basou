@@ -20,6 +20,23 @@ import {
 } from "../lib/error-render.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
+// Single words that are almost certainly a mistyped subcommand rather than a
+// real note body (e.g. `basou note list` expecting a listing). A body that is
+// exactly one of these is refused with a hint; multi-word bodies are unaffected.
+const NOTE_SUBCOMMAND_LOOKALIKES = new Set([
+  "list",
+  "ls",
+  "show",
+  "get",
+  "add",
+  "new",
+  "edit",
+  "rm",
+  "remove",
+  "delete",
+  "help",
+]);
+
 // The note body becomes an ad-hoc session label; truncate long bodies for the
 // label only (the full body is preserved in the note_added event). Mirrors the
 // decision-title cap so labels stay single-column in session list / handoff.
@@ -97,6 +114,19 @@ export async function doRunNote(
   // (mirrors `basou session note`). Whitespace-only is treated as empty.
   if (body.trim().length === 0) {
     throw new Error("Note body must not be empty");
+  }
+  // Footgun guard: `basou note` takes the note text as a positional argument and
+  // has no subcommands, so `basou note list` silently records a note whose body
+  // is the single word "list" (which then surfaces as orientation's next step).
+  // Refuse a body that is exactly one subcommand-like word — no one means to
+  // record that as a note — and point at the right form. A real note with more
+  // than one word, or that word in a phrase, is unaffected.
+  const reserved = body.trim().toLowerCase();
+  if (NOTE_SUBCOMMAND_LOOKALIKES.has(reserved)) {
+    throw new Error(
+      `'basou note' records a free-text note and has no '${body.trim()}' subcommand. ` +
+        'To record a note, pass its full text (e.g. `basou note "<your note>"`).',
+    );
   }
 
   const cwd = ctx.cwd ?? process.cwd();
