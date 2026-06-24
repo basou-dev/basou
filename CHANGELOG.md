@@ -3,6 +3,31 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou orient` now surfaces a concise **staleness banner at the top** of the
+  output (right after the header) whenever there is uncaptured or un-re-importable
+  native work — not only in the "これは最新か" verdict at the very bottom. A reader
+  grounding top-down now meets "⚠️ 古いかもしれません … 着手前に `basou refresh`"
+  before the direction / next-step sections, instead of starting work above the
+  warning. The banner shows only for actionable-stale states; the full verdict
+  still renders at the bottom.
+
+### Fixed
+
+- `AskUserQuestion` answers are now derived into a `decision_recorded` only when
+  the answer is a **confirmed selection of an offered option** (it matches an
+  option label the question presented). A free-text "Other" reply — a
+  counter-question, guidance, or other meta answer — matches no offered option
+  and is no longer recorded as a decision. Previously every answer became a
+  decision, so a meta reply could land in `decisions.md` and even surface as
+  orientation's "直近の判断" (latest decision), misrepresenting the current
+  direction on resume. A genuine free-text choice can still be recorded
+  explicitly with `basou decision capture`. Existing noisy decisions clear on the
+  next `basou refresh --force` re-import.
+
 ## 0.20.0 — 2026-06-24
 
 ### Added
