@@ -374,6 +374,93 @@ describe("orientation-renderer", () => {
     expect(result.body).toContain("着手前に必ず `basou refresh`");
   });
 
+  it("これは最新か: an updated-ONLY probe drops the 必ず imperative but still offers refresh + explains the residual", async () => {
+    // The active session always shows as grown ("更新"), so a "必ず refresh"
+    // imperative there can never be satisfied (dbp_wp's learned helplessness).
+    // But refresh CAN clear a finished grown session, so the action must remain
+    // offered (not softened away) — just without the unsatisfiable imperative.
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "running",
+      source: "claude-code-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 1 },
+    });
+    expect(result.body).toContain("⚠️ 更新されたセッションが 1 件");
+    // Action still offered (finished grown sessions are real, refresh-clearable).
+    expect(result.body).toContain("`basou refresh` で取り込めます");
+    // Residual is explained as normal.
+    expect(result.body).toContain("残ります＝正常");
+    // Crucially NOT the unsatisfiable imperative, and NOT a false ✅.
+    expect(result.body).not.toContain("着手前に必ず `basou refresh`");
+    expect(result.body).not.toContain("✅ 取り込みは最新です。");
+  });
+
+  it("これは最新か: an updated-ONLY probe over a COMPLETED session still surfaces refresh (no over-soft regression)", async () => {
+    // A finished session that grew (imported mid-flight, then ended with more
+    // events) is real refresh-clearable backlog — it must not be hidden.
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T11:00:00+09:00",
+    });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 1 },
+    });
+    expect(result.body).toContain("⚠️ 更新されたセッションが 1 件");
+    expect(result.body).toContain("`basou refresh` で取り込めます");
+    expect(result.body).not.toContain("✅ 取り込みは最新です。");
+  });
+
+  it("これは最新か: an updated probe over an ARCHIVED-only store is NOT mis-cleared as 'no records'", async () => {
+    // newestStartedAt excludes archived sessions, so the store reads as empty for
+    // the position sections — but the probe still counts a grown source. The
+    // updated branch must run BEFORE the 'no records' branch (no false-clear).
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "archived",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T11:00:00+09:00",
+    });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 1 },
+    });
+    expect(result.body).toContain("⚠️ 更新されたセッションが 1 件");
+    expect(result.body).not.toContain("ℹ️ まだ記録がありません。");
+  });
+
+  it("staleness banner: an updated-ONLY probe shows NO top banner (live-session growth is not actionable up top)", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("S01"),
+      status: "running",
+      source: "claude-code-import",
+      startedAt: FIXED_NOW_ISO,
+    });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 0, updatedSessions: 1 },
+    });
+    // No banner is emitted (the marker only appears in banner lines); the verdict
+    // still warns at the bottom.
+    expect(result.body).not.toContain("(詳細は末尾「これは最新か」)");
+    expect(result.body).not.toContain("> ⚠️ **古いです");
+    expect(result.body).toContain("⚠️ 更新されたセッションが 1 件");
+  });
+
   it("これは最新か: an unrun probe (null) says it cannot confirm rather than claiming current", async () => {
     const paths = await setupPaths();
     await placeSession(paths, {
@@ -422,10 +509,12 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 0, unverifiableSessions: 2 },
     });
-    expect(result.body).toContain("⚠️ 最新か確認できません。");
+    expect(result.body).toContain("通常の `basou refresh` では安全に再取り込みできない");
     expect(result.body).toContain("2 件");
-    expect(result.body).toContain("`basou verify`");
+    // The action is refresh --force; verify is named as a SEPARATE integrity axis
+    // (not the action), so a clean verify is not misread as "nothing to import".
     expect(result.body).toContain("`basou refresh --force`");
+    expect(result.body).toContain("`basou verify` は別物");
     expect(result.body).not.toContain("✅ 取り込みは最新です。");
   });
 
@@ -470,8 +559,8 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 0, unverifiableSessions: 2 },
     });
-    expect(result.body).toContain("> ⚠️ **最新ではない可能性**");
-    expect(result.body.indexOf("> ⚠️ **最新ではない可能性**")).toBeLessThan(
+    expect(result.body).toContain("> ⚠️ **再取り込みが必要**");
+    expect(result.body.indexOf("> ⚠️ **再取り込みが必要**")).toBeLessThan(
       result.body.indexOf("## 今どこにいる"),
     );
   });

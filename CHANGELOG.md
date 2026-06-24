@@ -18,6 +18,19 @@ All notable changes to **basou** are recorded here. The project follows
   stays non-blocking (enforcement strength is unchanged). The AskUserQuestion
   option-matching rule is now shared with the importer so the set it auto-derives
   and the set the hook treats as uncaptured stay exact complements.
+- `basou orient`'s freshness gate no longer fires an unsatisfiable 「必ず `basou refresh`」
+  for the **live session you are in**. A merely *grown* (`更新`) session — which the
+  active session always is, since its transcript advances past the last import —
+  now renders a calm 「進行中のこのセッションは…常に残ります(正常)」 verdict with no top
+  banner, instead of the assertive imperative that a refresh could never satisfy
+  (the learned-helplessness dbp_wp reported). The assertive 「古いです…必ず refresh」 is
+  reserved for genuinely **never-imported** (`新規`) sessions, which a refresh will
+  actually clear. Separately, the unverifiable-source wording now points only at
+  `basou refresh --force` and names `basou verify` as a *separate* integrity axis
+  (a clean verify does not mean there is nothing to import), resolving the apparent
+  contradiction with the header's `suspect 0`. (dbp_wp dogfeedback.)
+
+## 0.23.0 — 2026-06-24
 
 ### Added
 
