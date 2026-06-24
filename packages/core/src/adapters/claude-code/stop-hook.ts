@@ -1,12 +1,15 @@
+import { countUncapturedDecisionPoints } from "./ask-user-question.js";
 import type { ClaudeTranscriptRecord } from "./transcript-importer.js";
 
 /**
- * Default minimum number of "action" tool uses (Bash commands + file edits) a
- * session must contain before the Stop-hook nudge treats it as substantive
- * enough to be worth a session-end capture. Below this the session reads as a
- * trivial check / quick question and the hook stays silent rather than nagging.
+ * Default minimum number of FILE EDITS (Edit / Write / NotebookEdit) a session
+ * must contain to read as substantive on edits alone. Read-only Bash does NOT
+ * count toward this: a session that only ran `ls` / `grep` / `git status` did no
+ * decision-worthy work and must stay silent rather than nag (the imprecision the
+ * old raw command+edit count caused). A free-form decision point (see below)
+ * makes a session substantive on its own, independent of this threshold.
  */
-export const DEFAULT_STOP_HOOK_MIN_ACTIONS = 5;
+export const DEFAULT_STOP_HOOK_MIN_EDITS = 2;
 
 /**
  * Commands that constitute capturing the session's intent: the agent ran one of
@@ -20,7 +23,7 @@ export const DEFAULT_STOP_HOOK_MIN_ACTIONS = 5;
  */
 const CAPTURE_COMMAND_PATTERN = /(?:^|[\n;&|(])\s*basou\s+(?:decision\s+(?:capture|record)|note)\b/;
 
-/** Tool-use names that mutate a file; each counts as one substantive action. */
+/** Tool-use names that mutate a file; each counts as one substantive edit. */
 const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 
 export type StopHookEvaluationInput = {
@@ -36,16 +39,25 @@ export type StopHookEvaluationInput = {
    * stays silent so it can never form a continuation loop.
    */
   stopHookActive: boolean;
-  /** Override the substantive-work threshold (defaults to {@link DEFAULT_STOP_HOOK_MIN_ACTIONS}). */
-  minActions?: number;
+  /** Override the file-edit threshold (defaults to {@link DEFAULT_STOP_HOOK_MIN_EDITS}). */
+  minEdits?: number;
 };
 
 /** Why the hook stayed silent (useful for tests and `--json` introspection). */
 export type StopHookSilentReason = "stop_hook_active" | "not_substantive" | "already_captured";
 
+type StopHookCounts = {
+  /** Bash tool uses (informational — does NOT drive the trigger). */
+  commandCount: number;
+  /** File edits (Edit / Write / NotebookEdit) — the primary substantive signal. */
+  fileCount: number;
+  /** Free-form AskUserQuestion answers (uncaptured conversational decisions). */
+  decisionPointCount: number;
+};
+
 export type StopHookEvaluation =
-  | { kind: "silent"; reason: StopHookSilentReason; commandCount: number; fileCount: number }
-  | { kind: "nudge"; additionalContext: string; commandCount: number; fileCount: number };
+  | ({ kind: "silent"; reason: StopHookSilentReason } & StopHookCounts)
+  | ({ kind: "nudge"; additionalContext: string } & StopHookCounts);
 
 /**
  * Decide whether a finished turn warrants a non-blocking capture nudge.
@@ -59,20 +71,29 @@ export type StopHookEvaluation =
  * The nudge fires only when ALL hold:
  *  - not already continuing from a prior nudge (`stopHookActive` is false), so
  *    the hook never loops;
- *  - the session did substantive work (>= `minActions` Bash commands + edits),
- *    so trivial check sessions are left alone;
+ *  - the session did CONTENT-SUBSTANTIVE work, so trivial / read-only check
+ *    sessions are left alone. Substantive = EITHER enough file edits
+ *    (>= `minEdits`) OR a free-form AskUserQuestion answer (an uncaptured
+ *    conversational decision). Raw read-only Bash (ls / grep / git status) does
+ *    NOT count — the old raw command+edit count nagged on pure exploration;
  *  - no capture verb (`basou decision capture` / `decision record` / `note`)
  *    was run this session, so a session that already recorded its intent is
  *    left alone.
  */
 export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvaluation {
-  const minActions = input.minActions ?? DEFAULT_STOP_HOOK_MIN_ACTIONS;
+  const minEdits = input.minEdits ?? DEFAULT_STOP_HOOK_MIN_EDITS;
 
   // Loop guard first: a turn that is already a continuation from a prior nudge
   // can never nudge again, so short-circuit before scanning the transcript at
   // all (the counts are unused on this path).
   if (input.stopHookActive) {
-    return { kind: "silent", reason: "stop_hook_active", commandCount: 0, fileCount: 0 };
+    return {
+      kind: "silent",
+      reason: "stop_hook_active",
+      commandCount: 0,
+      fileCount: 0,
+      decisionPointCount: 0,
+    };
   }
 
   let commandCount = 0;
@@ -86,8 +107,8 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
       if (name === undefined) continue;
       if (name === "Bash") {
         commandCount += 1;
-        const input2 = isObject(tool.input) ? tool.input : undefined;
-        const command = input2 !== undefined ? readString(input2.command) : undefined;
+        const toolInput = isObject(tool.input) ? tool.input : undefined;
+        const command = toolInput !== undefined ? readString(toolInput.command) : undefined;
         if (command !== undefined && CAPTURE_COMMAND_PATTERN.test(command)) captured = true;
       } else if (FILE_EDIT_TOOLS.has(name)) {
         fileCount += 1;
@@ -95,27 +116,44 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
     }
   }
 
+  const decisionPointCount = countUncapturedDecisionPoints(input.records);
+  const counts: StopHookCounts = { commandCount, fileCount, decisionPointCount };
+
   if (captured) {
-    return { kind: "silent", reason: "already_captured", commandCount, fileCount };
+    return { kind: "silent", reason: "already_captured", ...counts };
   }
-  if (commandCount + fileCount < minActions) {
-    return { kind: "silent", reason: "not_substantive", commandCount, fileCount };
+  // Content-aware substantiveness: read-only Bash no longer counts. A session is
+  // substantive when it edited enough files OR hit a free-form decision point —
+  // the precise signals indicating decision-worthy work the next session should
+  // be able to resume from.
+  const substantive = fileCount >= minEdits || decisionPointCount > 0;
+  if (!substantive) {
+    return { kind: "silent", reason: "not_substantive", ...counts };
   }
 
-  return {
-    kind: "nudge",
-    additionalContext: renderNudge(commandCount, fileCount),
-    commandCount,
-    fileCount,
-  };
+  return { kind: "nudge", additionalContext: renderNudge(counts), ...counts };
 }
 
-/** The advisory text fed back to the model (addressed to the agent, not the user). */
-function renderNudge(commandCount: number, fileCount: number): string {
-  const ran = `${commandCount} ${commandCount === 1 ? "command" : "commands"}`;
-  const edited = `${fileCount} ${fileCount === 1 ? "file" : "files"}`;
+/**
+ * The advisory text fed back to the model (addressed to the agent, not the
+ * user). The lead clause names only the signals that actually fired, so a nudge
+ * triggered solely by a decision point does not misreport "edited 0 files".
+ */
+function renderNudge(counts: StopHookCounts): string {
+  const did: string[] = [];
+  if (counts.commandCount > 0) {
+    did.push(`ran ${counts.commandCount} ${counts.commandCount === 1 ? "command" : "commands"}`);
+  }
+  if (counts.fileCount > 0) {
+    did.push(`edited ${counts.fileCount} ${counts.fileCount === 1 ? "file" : "files"}`);
+  }
+  if (counts.decisionPointCount > 0) {
+    const n = counts.decisionPointCount;
+    did.push(`answered ${n} open-ended ${n === 1 ? "question" : "questions"}`);
+  }
+  const summary = did.length > 0 ? did.join(", ") : "did substantive work";
   return [
-    `This session ran ${ran} and edited ${edited} but recorded no decisions or next step.`,
+    `This session ${summary} but recorded no decisions or next step.`,
     "If meaningful decisions were made (the chosen approach, rejected alternatives, and why) or there is a clear next step, capture them now so the next session can resume correctly:",
     '  - Decisions: run `basou decision capture` and pipe a JSON array (one object per decision; "title" required, plus optional rationale/alternatives/rejected_reason/linked_files; set "kind":"track" for an unfinished strategic direction).',
     '  - Next step: run `basou note "<what you would do next>"`.',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_STOP_HOOK_MIN_ACTIONS, evaluateStopHook } from "./stop-hook.js";
+import { DEFAULT_STOP_HOOK_MIN_EDITS, evaluateStopHook } from "./stop-hook.js";
 import type { ClaudeTranscriptRecord } from "./transcript-importer.js";
 
 /** Build an assistant record carrying the given tool_use items. */
@@ -11,27 +11,196 @@ function assistant(tools: Array<Record<string, unknown>>): ClaudeTranscriptRecor
   };
 }
 
-/** N distinct Bash commands as one assistant record. */
+/** N distinct read-only Bash commands as one assistant record. */
 function bashes(n: number): ClaudeTranscriptRecord {
   return assistant(
     Array.from({ length: n }, (_, i) => ({ name: "Bash", input: { command: `echo ${i}` } })),
   );
 }
 
-describe("evaluateStopHook", () => {
-  it("nudges when a substantive session recorded no decisions or next step", () => {
-    const result = evaluateStopHook({ records: [bashes(6)], stopHookActive: false });
+/** N file edits as one assistant record. */
+function edits(n: number): ClaudeTranscriptRecord {
+  return assistant(
+    Array.from({ length: n }, (_, i) => ({ name: "Edit", input: { file_path: `/x/f${i}.ts` } })),
+  );
+}
+
+/** An AskUserQuestion tool_use offering the given option labels for one question. */
+function ask(id: string, question: string, options: string[]): Record<string, unknown> {
+  return {
+    name: "AskUserQuestion",
+    id,
+    input: { questions: [{ question, options: options.map((label) => ({ label })) }] },
+  };
+}
+
+/** The result record carrying the chosen answers, linked back by tool_use_id. */
+function askResult(id: string, answers: Record<string, string>): ClaudeTranscriptRecord {
+  return {
+    type: "user",
+    toolUseResult: { answers },
+    message: { content: [{ type: "tool_result", tool_use_id: id }] },
+  };
+}
+
+describe("evaluateStopHook (content-aware trigger)", () => {
+  it("stays silent for a read-only Bash session (no edits / no strong signal)", () => {
+    // The core precision fix: pure exploration (ls / grep / echo) is NOT
+    // substantive no matter how many commands, so the hook does not nag.
+    const result = evaluateStopHook({ records: [bashes(8)], stopHookActive: false });
+    expect(result.kind).toBe("silent");
+    if (result.kind !== "silent") throw new Error("expected silent");
+    expect(result.reason).toBe("not_substantive");
+    expect(result.commandCount).toBe(8);
+    expect(result.fileCount).toBe(0);
+  });
+
+  it("nudges when the session edited enough files but recorded nothing", () => {
+    const result = evaluateStopHook({ records: [edits(2)], stopHookActive: false });
     expect(result.kind).toBe("nudge");
     if (result.kind !== "nudge") throw new Error("expected nudge");
-    expect(result.commandCount).toBe(6);
-    expect(result.fileCount).toBe(0);
+    expect(result.fileCount).toBe(2);
     expect(result.additionalContext).toContain("basou decision capture");
     expect(result.additionalContext).toContain("basou note");
     // It must give the model an out so it does not fabricate decisions.
     expect(result.additionalContext).toContain("just stop");
   });
 
-  it("counts Bash commands and file edits together against the threshold", () => {
+  it("stays silent for a single trivial edit (below the edit threshold)", () => {
+    const result = evaluateStopHook({ records: [edits(1)], stopHookActive: false });
+    expect(result.kind).toBe("silent");
+    if (result.kind !== "silent") throw new Error("expected silent");
+    expect(result.reason).toBe("not_substantive");
+  });
+
+  it("uses DEFAULT_STOP_HOOK_MIN_EDITS as the inclusive edit boundary", () => {
+    const below = evaluateStopHook({
+      records: [edits(DEFAULT_STOP_HOOK_MIN_EDITS - 1)],
+      stopHookActive: false,
+    });
+    expect(below.kind).toBe("silent");
+    const at = evaluateStopHook({
+      records: [edits(DEFAULT_STOP_HOOK_MIN_EDITS)],
+      stopHookActive: false,
+    });
+    expect(at.kind).toBe("nudge");
+  });
+
+  it("honors a custom minEdits threshold", () => {
+    const result = evaluateStopHook({ records: [edits(1)], stopHookActive: false, minEdits: 1 });
+    expect(result.kind).toBe("nudge");
+  });
+
+  it("treats a free-form AskUserQuestion answer as a decision point (substantive)", () => {
+    // A free-text reply matches no offered option → the importer does NOT
+    // auto-derive it → it is an uncaptured conversational decision worth a nudge.
+    const id = "toolu_freeform";
+    const records = [
+      assistant([ask(id, "Which approach?", ["Approach A", "Approach B"])]),
+      askResult(id, { "Which approach?": "Actually, let's reconsider the whole thing" }),
+    ];
+    const result = evaluateStopHook({ records, stopHookActive: false });
+    expect(result.kind).toBe("nudge");
+    if (result.kind !== "nudge") throw new Error("expected nudge");
+    expect(result.decisionPointCount).toBe(1);
+    expect(result.fileCount).toBe(0);
+    // The lead clause must describe what actually fired, not misreport "edited 0
+    // files" when the trigger was a decision point.
+    expect(result.additionalContext).toContain("open-ended question");
+    expect(result.additionalContext).not.toContain("edited 0 files");
+  });
+
+  it("does NOT treat an exact-option AskUserQuestion answer as a decision point", () => {
+    // A confirmed selection is auto-derived as a decision by the importer, so it
+    // is not uncaptured and must not, alone, make a session substantive.
+    const id = "toolu_exact";
+    const records = [
+      assistant([ask(id, "Which approach?", ["Approach A", "Approach B"])]),
+      askResult(id, { "Which approach?": "Approach A" }),
+    ];
+    const result = evaluateStopHook({ records, stopHookActive: false });
+    expect(result.kind).toBe("silent");
+    if (result.kind !== "silent") throw new Error("expected silent");
+    expect(result.reason).toBe("not_substantive");
+    expect(result.decisionPointCount).toBe(0);
+  });
+
+  it("stays silent once a capture verb ran this session (at a segment boundary)", () => {
+    for (const command of [
+      "basou decision capture <<'JSON'\n[]\nJSON",
+      "basou decision record --title x",
+      'basou note "next step"',
+      'cd /repo && basou note "from a chained command"',
+      'echo prep; basou note "after a semicolon"',
+      "false || basou decision capture --file d.json",
+    ]) {
+      const records = [edits(3), assistant([{ name: "Bash", input: { command } }])];
+      const result = evaluateStopHook({ records, stopHookActive: false });
+      expect(result.kind, command).toBe("silent");
+      if (result.kind !== "silent") throw new Error("expected silent");
+      expect(result.reason).toBe("already_captured");
+    }
+  });
+
+  it("does not treat an unrelated basou command as a capture", () => {
+    const records = [edits(2), assistant([{ name: "Bash", input: { command: "basou orient" } }])];
+    const result = evaluateStopHook({ records, stopHookActive: false });
+    expect(result.kind).toBe("nudge");
+  });
+
+  it("does not treat a capture verb merely MENTIONED in another command as a capture", () => {
+    // A capture verb inside a quoted argument (grep/echo) must not permanently
+    // silence the nudge — it only counts when it starts a command segment.
+    for (const command of [
+      'rg "basou note" packages/',
+      'echo "run basou decision capture later"',
+    ]) {
+      const records = [edits(2), assistant([{ name: "Bash", input: { command } }])];
+      const result = evaluateStopHook({ records, stopHookActive: false });
+      expect(result.kind, command).toBe("nudge");
+    }
+  });
+
+  it("stays silent (loop guard) when stop_hook_active is true, even if substantive + uncaptured", () => {
+    const result = evaluateStopHook({ records: [edits(5)], stopHookActive: true });
+    expect(result.kind).toBe("silent");
+    if (result.kind !== "silent") throw new Error("expected silent");
+    expect(result.reason).toBe("stop_hook_active");
+  });
+
+  it("loop guard takes precedence over the already-captured reason", () => {
+    const records = [edits(3), assistant([{ name: "Bash", input: { command: "basou note x" } }])];
+    const result = evaluateStopHook({ records, stopHookActive: true });
+    expect(result.kind).toBe("silent");
+    if (result.kind !== "silent") throw new Error("expected silent");
+    expect(result.reason).toBe("stop_hook_active");
+  });
+
+  it("ignores non-assistant records and malformed tool shapes defensively", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      { type: "user", message: { content: [{ type: "text", text: "hi" }] } },
+      { type: "assistant", message: { content: "not-an-array" } },
+      { type: "assistant", message: {} },
+      {},
+      // Bash tool_use with no input.command still counts toward commandCount.
+      assistant([{ name: "Bash" }]),
+      edits(2),
+    ];
+    const result = evaluateStopHook({ records, stopHookActive: false });
+    expect(result.kind).toBe("nudge");
+    if (result.kind !== "nudge") throw new Error("expected nudge");
+    expect(result.fileCount).toBe(2);
+    expect(result.commandCount).toBe(1);
+  });
+
+  it("stays silent for an empty transcript", () => {
+    const result = evaluateStopHook({ records: [], stopHookActive: false });
+    expect(result.kind).toBe("silent");
+    if (result.kind !== "silent") throw new Error("expected silent");
+    expect(result.reason).toBe("not_substantive");
+  });
+
+  it("counts edits across multiple records, ignoring read-only Bash for the trigger", () => {
     const records = [
       assistant([
         { name: "Bash", input: { command: "ls" } },
@@ -46,105 +215,5 @@ describe("evaluateStopHook", () => {
     if (result.kind !== "nudge") throw new Error("expected nudge");
     expect(result.commandCount).toBe(2);
     expect(result.fileCount).toBe(3);
-  });
-
-  it("stays silent for a trivial session below the action threshold", () => {
-    const result = evaluateStopHook({ records: [bashes(2)], stopHookActive: false });
-    expect(result.kind).toBe("silent");
-    if (result.kind !== "silent") throw new Error("expected silent");
-    expect(result.reason).toBe("not_substantive");
-  });
-
-  it("uses DEFAULT_STOP_HOOK_MIN_ACTIONS as the default boundary (inclusive)", () => {
-    const below = evaluateStopHook({
-      records: [bashes(DEFAULT_STOP_HOOK_MIN_ACTIONS - 1)],
-      stopHookActive: false,
-    });
-    expect(below.kind).toBe("silent");
-    const at = evaluateStopHook({
-      records: [bashes(DEFAULT_STOP_HOOK_MIN_ACTIONS)],
-      stopHookActive: false,
-    });
-    expect(at.kind).toBe("nudge");
-  });
-
-  it("honors a custom minActions threshold", () => {
-    const result = evaluateStopHook({ records: [bashes(2)], stopHookActive: false, minActions: 2 });
-    expect(result.kind).toBe("nudge");
-  });
-
-  it("stays silent once a capture verb ran this session (at a segment boundary)", () => {
-    for (const command of [
-      "basou decision capture <<'JSON'\n[]\nJSON",
-      "basou decision record --title x",
-      'basou note "next step"',
-      'cd /repo && basou note "from a chained command"',
-      'echo prep; basou note "after a semicolon"',
-      "false || basou decision capture --file d.json",
-    ]) {
-      const records = [bashes(6), assistant([{ name: "Bash", input: { command } }])];
-      const result = evaluateStopHook({ records, stopHookActive: false });
-      expect(result.kind, command).toBe("silent");
-      if (result.kind !== "silent") throw new Error("expected silent");
-      expect(result.reason).toBe("already_captured");
-    }
-  });
-
-  it("does not treat an unrelated basou command as a capture", () => {
-    const records = [bashes(5), assistant([{ name: "Bash", input: { command: "basou orient" } }])];
-    const result = evaluateStopHook({ records, stopHookActive: false });
-    expect(result.kind).toBe("nudge");
-  });
-
-  it("does not treat a capture verb merely MENTIONED in another command as a capture", () => {
-    // A capture verb inside a quoted argument (grep/echo) must not permanently
-    // silence the nudge — it only counts when it starts a command segment.
-    for (const command of [
-      'rg "basou note" packages/',
-      'echo "run basou decision capture later"',
-      "git commit -m 'mention basou note in the message'",
-    ]) {
-      const records = [bashes(5), assistant([{ name: "Bash", input: { command } }])];
-      const result = evaluateStopHook({ records, stopHookActive: false });
-      expect(result.kind, command).toBe("nudge");
-    }
-  });
-
-  it("stays silent (loop guard) when stop_hook_active is true, even if substantive + uncaptured", () => {
-    const result = evaluateStopHook({ records: [bashes(10)], stopHookActive: true });
-    expect(result.kind).toBe("silent");
-    if (result.kind !== "silent") throw new Error("expected silent");
-    expect(result.reason).toBe("stop_hook_active");
-  });
-
-  it("loop guard takes precedence over the already-captured reason", () => {
-    const records = [bashes(6), assistant([{ name: "Bash", input: { command: "basou note x" } }])];
-    const result = evaluateStopHook({ records, stopHookActive: true });
-    expect(result.kind).toBe("silent");
-    if (result.kind !== "silent") throw new Error("expected silent");
-    expect(result.reason).toBe("stop_hook_active");
-  });
-
-  it("ignores non-assistant records and malformed tool shapes defensively", () => {
-    const records: ClaudeTranscriptRecord[] = [
-      { type: "user", message: { content: [{ type: "text", text: "hi" }] } },
-      { type: "assistant", message: { content: "not-an-array" } },
-      { type: "assistant", message: {} },
-      {},
-      // Bash tool_use with no input.command still counts as a command.
-      assistant([{ name: "Bash" }]),
-      bashes(5),
-    ];
-    const result = evaluateStopHook({ records, stopHookActive: false });
-    expect(result.kind).toBe("nudge");
-    if (result.kind !== "nudge") throw new Error("expected nudge");
-    expect(result.commandCount).toBe(6);
-  });
-
-  it("stays silent for an empty transcript", () => {
-    const result = evaluateStopHook({ records: [], stopHookActive: false });
-    expect(result.kind).toBe("silent");
-    if (result.kind !== "silent") throw new Error("expected silent");
-    expect(result.reason).toBe("not_substantive");
   });
 });

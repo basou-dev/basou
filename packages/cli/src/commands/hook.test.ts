@@ -5,11 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   doRunHookStop,
   type HookStopContext,
-  parseMinActions,
+  parseMinEdits,
   readTranscriptBounded,
 } from "./hook.js";
 
-/** A transcript line for one assistant message carrying N Bash commands. */
+/** A transcript line for one assistant message carrying N read-only Bash commands. */
 function bashLine(n: number): string {
   return JSON.stringify({
     type: "assistant",
@@ -24,11 +24,26 @@ function bashLine(n: number): string {
   });
 }
 
+/** A transcript line for one assistant message carrying N file edits. */
+function editLine(n: number): string {
+  return JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-06-24T00:00:00.000Z",
+    message: {
+      content: Array.from({ length: n }, (_, i) => ({
+        type: "tool_use",
+        name: "Edit",
+        input: { file_path: `/x/f${i}.ts` },
+      })),
+    },
+  });
+}
+
 /** Drive doRunHookStop with injected stdin + transcript, returning what it wrote. */
 async function run(
   stdin: unknown,
   transcript: string | { error: true },
-  opts: { minActions?: number } = {},
+  opts: { minEdits?: number } = {},
 ): Promise<string> {
   let out = "";
   const ctx: HookStopContext = {
@@ -58,16 +73,24 @@ describe("doRunHookStop", () => {
   it("emits a Stop additionalContext nudge for a substantive, uncaptured session", async () => {
     const out = await run(
       { transcript_path: "/t.jsonl", stop_hook_active: false },
-      [bashLine(6)].join("\n"),
+      [editLine(2)].join("\n"),
     );
     const context = nudgeContext(out);
     expect(context).toContain("basou decision capture");
     expect(context).toContain("basou note");
   });
 
+  it("stays silent for a read-only Bash session (no edits / no strong signal)", async () => {
+    const out = await run(
+      { transcript_path: "/t.jsonl", stop_hook_active: false },
+      [bashLine(8)].join("\n"),
+    );
+    expect(out).toBe("");
+  });
+
   it("stays silent when the session already captured", async () => {
     const transcript = [
-      bashLine(6),
+      editLine(3),
       JSON.stringify({
         type: "assistant",
         message: {
@@ -82,46 +105,46 @@ describe("doRunHookStop", () => {
   it("stays silent when stop_hook_active is true (loop guard)", async () => {
     const out = await run(
       { transcript_path: "/t.jsonl", stop_hook_active: true },
-      [bashLine(8)].join("\n"),
+      [editLine(5)].join("\n"),
     );
     expect(out).toBe("");
   });
 
-  it("stays silent for a trivial (below-threshold) session", async () => {
+  it("stays silent for a single trivial edit (below the edit threshold)", async () => {
     const out = await run(
       { transcript_path: "/t.jsonl", stop_hook_active: false },
-      [bashLine(2)].join("\n"),
+      [editLine(1)].join("\n"),
     );
     expect(out).toBe("");
   });
 
-  it("respects a custom --min-actions threshold", async () => {
+  it("respects a custom --min-edits threshold", async () => {
     const out = await run(
       { transcript_path: "/t.jsonl", stop_hook_active: false },
-      [bashLine(2)].join("\n"),
-      { minActions: 2 },
+      [editLine(1)].join("\n"),
+      { minEdits: 1 },
     );
     expect(nudgeContext(out)).toContain("basou decision capture");
   });
 
   it("skips blank and malformed transcript lines without failing", async () => {
-    const transcript = ["", "not json", bashLine(6), "  ", "{bad"].join("\n");
+    const transcript = ["", "not json", editLine(2), "  ", "{bad"].join("\n");
     const out = await run({ transcript_path: "/t.jsonl", stop_hook_active: false }, transcript);
     expect(nudgeContext(out)).toContain("basou decision capture");
   });
 
   it("fails open on empty stdin", async () => {
-    const out = await run("", [bashLine(6)].join("\n"));
+    const out = await run("", [editLine(2)].join("\n"));
     expect(out).toBe("");
   });
 
   it("fails open on malformed stdin JSON", async () => {
-    const out = await run("{not json", [bashLine(6)].join("\n"));
+    const out = await run("{not json", [editLine(2)].join("\n"));
     expect(out).toBe("");
   });
 
   it("fails open when transcript_path is missing", async () => {
-    const out = await run({ stop_hook_active: false }, [bashLine(6)].join("\n"));
+    const out = await run({ stop_hook_active: false }, [editLine(2)].join("\n"));
     expect(out).toBe("");
   });
 
@@ -134,20 +157,20 @@ describe("doRunHookStop", () => {
   });
 
   it("treats a missing stop_hook_active as not-active", async () => {
-    const out = await run({ transcript_path: "/t.jsonl" }, [bashLine(6)].join("\n"));
+    const out = await run({ transcript_path: "/t.jsonl" }, [editLine(2)].join("\n"));
     expect(nudgeContext(out)).toContain("basou decision capture");
   });
 });
 
-describe("parseMinActions (lenient, fail-open)", () => {
+describe("parseMinEdits (lenient, fail-open)", () => {
   it("parses a valid non-negative integer", () => {
-    expect(parseMinActions("0")).toBe(0);
-    expect(parseMinActions("3")).toBe(3);
+    expect(parseMinEdits("0")).toBe(0);
+    expect(parseMinEdits("3")).toBe(3);
   });
 
   it("returns undefined (fall back to default) for invalid values, never throwing", () => {
     for (const bad of [undefined, "", "nope", "-1", "2.5", "1e3", " ", "NaN"]) {
-      expect(parseMinActions(bad)).toBeUndefined();
+      expect(parseMinEdits(bad)).toBeUndefined();
     }
   });
 });

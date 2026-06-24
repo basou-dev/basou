@@ -16,7 +16,7 @@ export {
   CLAUDE_IMPORT_SOURCE,
   claudeCodeAdapterMetadata,
   claudeTranscriptToImportPayload,
-  DEFAULT_STOP_HOOK_MIN_ACTIONS,
+  DEFAULT_STOP_HOOK_MIN_EDITS,
   evaluateStopHook,
   resolveClaudeCodeCommand,
   summarizeAdapterOutput,
