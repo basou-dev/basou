@@ -1,6 +1,6 @@
 # Basou
 
-> Provenance layer for AI development.
+> A harness for steering AI coding agents.
 
 **Today:** Basou live-wraps Claude Code only (`basou run claude-code`) and
 imports native logs from both Claude Code and Codex (`basou import ...`).
@@ -9,20 +9,22 @@ same process-wrap model. OpenRouter / Ollama are tracked separately as a
 per-request capture mode, not yet designed.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Version: v0.7.0](https://img.shields.io/badge/version-v0.7.0-blue.svg)]()
+[![npm version](https://img.shields.io/npm/v/@basou/cli.svg)](https://www.npmjs.com/package/@basou/cli)
 [![Status: personal-tool](https://img.shields.io/badge/status-personal--tool-orange.svg)]()
 
-**Status**: personal tool, v0.7.0. Built by one author for their own Claude
-Code sessions and updated occasionally — not a supported product. The CLI
-surface is frozen for the 0.x line; internal `@basou/core` APIs may still
-change between minor releases. Bug reports are welcome; feature requests are
+**Status**: personal tool. Built by one author for their own Claude Code
+sessions and updated occasionally — not a supported product. The CLI surface
+is frozen for the 0.x line; internal `@basou/core` APIs may still change
+between minor releases. Bug reports are welcome; feature requests are
 evaluated against the author's own use case.
 
 ## What is Basou?
 
-Basou records what AI coding agents do — sessions, decisions, approvals, git
-snapshots, and command output — into a structured, replayable trail that lives
-next to your code.
+Basou keeps a human in control of AI coding agents. It rests on two
+foundations — a **declarative workspace** you steer from and an **orientation
+layer** that carries intent across sessions — over a replayable provenance
+trail that records what the agents do (sessions, decisions, approvals, git
+snapshots, command output) and lives next to your code.
 
 - **JSONL as the source of truth.** Every observable event (command run, file
   changed, decision recorded, approval resolved) is appended to
@@ -45,6 +47,14 @@ next to your code.
   handoff and run those actions by clicking. Both are conveniences — the CLI
   and Markdown stay the primary surface, and the viewer binds to 127.0.0.1
   with no authentication (a personal tool, never exposed beyond your machine).
+- **Orientation, not just records.** `basou orient` shows where the work
+  stands and what to do next, drawing on the trail; `basou decision capture`
+  and `basou note` record the *why* and the next step so intent survives the
+  gap between sessions instead of being re-derived each time.
+- **A declarative workspace.** Declare each repo with its visibility and
+  language in one manifest and `basou project` derives the rest — source
+  roots, instruction-file symlinks, `.gitignore` entries, and the combined
+  view. You edit the declaration, not the plumbing.
 
 Recent highlights:
 

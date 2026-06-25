@@ -46,7 +46,7 @@ export function buildProgram(): Command {
   const program = new Command();
   program
     .name("basou")
-    .description("Provenance layer for AI development")
+    .description("A harness for steering AI coding agents")
     .version(BASOU_CLI_VERSION)
     // Required so that `basou exec` (and any other passThroughOptions
     // subcommand) can forward unknown flags to the wrapped child.
