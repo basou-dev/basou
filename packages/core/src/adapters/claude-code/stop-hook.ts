@@ -14,14 +14,36 @@ export const DEFAULT_STOP_HOOK_MIN_EDITS = 2;
 /**
  * Commands that constitute capturing the session's intent: the agent ran one of
  * basou's capture verbs, so the why/next-step is recorded and no nudge is owed.
- * Matched against each Bash tool-use command string. The verb must START a
- * command segment — at the beginning of the line or after a `;` / `&` / `|` /
- * `(` / newline separator (so `cd x && basou note "..."` matches) — so a capture
- * verb merely MENTIONED inside another command's quoted argument (e.g.
- * `rg "basou note"`, `echo "basou decision capture"`) does NOT falsely count as
- * a capture and permanently silence the nudge.
+ * Matched against each Bash tool-use command string.
+ *
+ * The invocation may be either the `basou` binary/alias OR the CLI entry run via
+ * node — `node /abs/.../cli/dist/index.js <verb>` — because in a non-interactive
+ * context (this Stop hook, an agent's Bash) `basou` is often a shell alias that
+ * is not on PATH, so the CLI is invoked by its node path instead. That is the
+ * SAME reason the documented SessionStart hook uses the node path; a capture
+ * done that way must not be missed (which would nudge a session that did record
+ * its intent). The node arm is anchored to `cli/dist/index.js` — the tail shared
+ * by both the source build (`packages/cli/dist/index.js`) and the npm install
+ * (`@basou/cli/dist/index.js`) — so an unrelated `node scripts/index.js note` in
+ * some other project does NOT masquerade as a Basou capture.
+ *
+ * Either invocation must START a command segment — at the beginning of the line
+ * or after a `;` / `&` / `|` / `(` / newline separator (so `cd x && basou note`
+ * matches) — so a capture verb merely MENTIONED inside another command's quoted
+ * argument (e.g. `rg "basou note"`, `echo "node …/cli/dist/index.js note"`) does
+ * NOT falsely count as a capture and permanently silence the nudge.
+ *
+ * This stays a best-effort heuristic, deliberately not a shell parser: a
+ * separator INSIDE a quoted argument can still satisfy the segment-start guard,
+ * and wrapper forms (an env prefix, intervening `node` flags, `pnpm`/`npx`) are
+ * not recognized. Both were already true of the `basou`-only predicate; the
+ * cost of a miss is one redundant nudge, never a blocked turn.
  */
-const CAPTURE_COMMAND_PATTERN = /(?:^|[\n;&|(])\s*basou\s+(?:decision\s+(?:capture|record)|note)\b/;
+const CAPTURE_INVOCATION = /(?:basou|(?:\S*\/)?node\s+\S*cli\/dist\/index\.js)/;
+const CAPTURE_VERB = /(?:decision\s+(?:capture|record)|note)\b/;
+const CAPTURE_COMMAND_PATTERN = new RegExp(
+  `(?:^|[\\n;&|(])\\s*${CAPTURE_INVOCATION.source}\\s+${CAPTURE_VERB.source}`,
+);
 
 /** Tool-use names that mutate a file; each counts as one substantive edit. */
 const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
