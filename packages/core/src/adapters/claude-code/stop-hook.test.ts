@@ -133,6 +133,15 @@ describe("evaluateStopHook (content-aware trigger)", () => {
       'cd /repo && basou note "from a chained command"',
       'echo prep; basou note "after a semicolon"',
       "false || basou decision capture --file d.json",
+      // The CLI invoked via its node path — how a non-interactive context runs
+      // it when `basou` is a shell alias not on PATH (the SessionStart hook does
+      // the same). These must count as a capture, or a session that recorded its
+      // intent this way is falsely nudged.
+      "node /abs/repo/packages/cli/dist/index.js decision capture --file d.json",
+      'node /abs/repo/packages/cli/dist/index.js note "next step"',
+      // npm-install path tail (`@basou/cli/dist/index.js`) is recognized too.
+      "/usr/bin/node /opt/lib/node_modules/@basou/cli/dist/index.js decision record --title x",
+      'cd /repo && node /abs/repo/packages/cli/dist/index.js note "chained node path"',
     ]) {
       const records = [edits(3), assistant([{ name: "Bash", input: { command } }])];
       const result = evaluateStopHook({ records, stopHookActive: false });
@@ -154,6 +163,14 @@ describe("evaluateStopHook (content-aware trigger)", () => {
     for (const command of [
       'rg "basou note" packages/',
       'echo "run basou decision capture later"',
+      // A node-path invocation mentioned inside another command's argument must
+      // also not count — the invocation must start a command segment.
+      'echo "run node /a/cli/dist/index.js note later"',
+      'rg "cli/dist/index.js note" packages/',
+      // An unrelated project's `node …/index.js` is NOT Basou's CLI: the node
+      // arm is anchored to the `cli/dist/index.js` tail, so this still nudges.
+      "node ./scripts/index.js note draft",
+      "node ./dist/index.js decision capture --file d.json",
     ]) {
       const records = [edits(2), assistant([{ name: "Bash", input: { command } }])];
       const result = evaluateStopHook({ records, stopHookActive: false });
