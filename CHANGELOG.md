@@ -3,6 +3,36 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.25.0 — 2026-06-25
+
+### Fixed
+
+- The `basou hook stop` Stop-hook no longer falsely nudges a session that
+  recorded its intent through the CLI's **node path** —
+  `node …/cli/dist/index.js decision capture|record|note` — instead of the
+  `basou` alias. That node-path form is how a non-interactive context (the hook
+  itself, an agent's Bash) invokes the CLI when `basou` is a shell alias not on
+  PATH, the same form the documented SessionStart hook uses; the capture-verb
+  detection missed it and nagged a session that had in fact captured. Detection
+  now recognizes both forms, the node arm anchored to the `cli/dist/index.js`
+  tail (shared by the source build and the `@basou/cli` npm install) so an
+  unrelated `node …/index.js` is not mistaken for a capture.
+
+### Changed
+
+- The CLI's top-line description (`basou --help`) now reads **"A harness for
+  steering AI coding agents"**, replacing the earlier "provenance layer"
+  framing so the declarative-workspace and orientation foundations are visible.
+  The README is updated to match and its version badge is now a dynamic npm
+  badge.
+
+### Internal
+
+- Added a read-side performance budget: a synthetic-store benchmark (opt-in via
+  `BASOU_PERF=1`) plus an always-on scaling-regression guard, establishing that
+  `orient` / `decisions` / `handoff` render near-linearly with store size. No
+  shipped runtime change.
+
 ## 0.24.0 — 2026-06-25
 
 ### Changed
