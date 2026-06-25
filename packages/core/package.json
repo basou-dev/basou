@@ -53,6 +53,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:perf": "BASOU_PERF=1 vitest run perf-budget",
     "clean": "rm -rf dist .tsup *.tsbuildinfo",
     "prepublishOnly": "pnpm -w run build"
   },
