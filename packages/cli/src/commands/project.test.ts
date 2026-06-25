@@ -27,6 +27,7 @@ import {
   doRunProjectRename,
   doRunProjectSymlinks,
   doRunProjectSync,
+  doRunProjectTeardown,
   doRunProjectWiring,
   doRunProjectWorkspace,
   gatherExistingViewLinks,
@@ -2572,5 +2573,207 @@ describe("basou project rename", () => {
     expect(parsed.oldTarget).toBe("../takuhon");
     expect(parsed.newTarget).toBe("../takuhon-cli");
     expect(parsed.nextRepos.map((e) => e.path)).toEqual([".", "../takuhon-cli"]);
+  });
+});
+
+describe("basou project teardown", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-teardown-"));
+    await mkdir(join(parent, "host"), { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: join(parent, "host"),
+      env: ENV,
+    });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+    process.exitCode = 0;
+    vi.restoreAllMocks();
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  function sibling(name: string): string {
+    return join(parent as string, name);
+  }
+  async function makeRepo(name: string): Promise<void> {
+    const dir = sibling(name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+  }
+  function mute(): void {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  }
+  /** Wire a public repo end-to-end via the real generators: canonical preset,
+   * instruction symlinks, .gitignore patterns, and the workspace view symlink. */
+  async function wirePub(): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, {
+      ...base,
+      workspace: { ...base.workspace, view: "../view" },
+      repos: [{ path: "." }, { path: "../pub", visibility: "public", language: "en" }],
+    });
+    mute();
+    await doRunProjectPreset({ apply: true }, { cwd: host() });
+    await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    await doRunProjectGitignore({ apply: true }, { cwd: host() });
+    await doRunProjectWorkspace({ apply: true }, { cwd: host() });
+  }
+
+  it("dry-run classifies every generated artifact as removable and removes nothing", async () => {
+    await makeRepo("pub");
+    await wirePub();
+    const r = await doRunProjectTeardown("../pub", {}, { cwd: host() });
+
+    expect(r.isAnchor).toBe(false);
+    expect(r.applied).toBe(false);
+    // Provably-owned artifacts: 3 instruction symlinks + view link + canonical block.
+    const kinds = r.items
+      .filter((i) => i.state === "removable")
+      .map((i) => i.kind)
+      .sort();
+    expect(kinds).toEqual(
+      [
+        "canonical-block",
+        "instruction-symlink",
+        "instruction-symlink",
+        "instruction-symlink",
+        "view-symlink",
+      ].sort(),
+    );
+    expect(r.removableCount).toBe(5);
+    // .gitignore lines are unprovable (no marker) → reported as manual, never auto-removed.
+    const gi = r.items.filter((i) => i.kind === "gitignore");
+    expect(gi.length).toBe(3);
+    expect(gi.every((i) => i.state === "manual")).toBe(true);
+    // dry-run touches nothing
+    expect(await readlink(join(sibling("pub"), "AGENTS.md"))).toBe("../host/agents/pub/AGENTS.md");
+    expect(existsSync(join(parent as string, "view", "pub"))).toBe(true);
+  });
+
+  it("--apply removes the verified artifacts, strips the canonical block, leaves .gitignore", async () => {
+    await makeRepo("pub");
+    await wirePub();
+    const r = await doRunProjectTeardown("../pub", { apply: true }, { cwd: host() });
+
+    expect(r.applied).toBe(true);
+    expect(r.failed).toEqual([]);
+    expect(r.removed.length).toBe(5);
+    // instruction symlinks gone
+    await expect(readlink(join(sibling("pub"), "AGENTS.md"))).rejects.toThrow();
+    await expect(readlink(join(sibling("pub"), "CLAUDE.md"))).rejects.toThrow();
+    // view symlink gone
+    expect(existsSync(join(parent as string, "view", "pub"))).toBe(false);
+    // canonical generated block stripped (markers gone)
+    const canon = await readFile(join(host(), "agents", "pub", "AGENTS.md"), "utf8");
+    expect(canon).not.toContain("BASOU:GENERATED");
+    // .gitignore is NOT auto-removed (unprovable ownership) — the line stays.
+    const gi = await readFile(join(sibling("pub"), ".gitignore"), "utf8");
+    expect(gi).toContain("AGENTS.md");
+  });
+
+  it("never removes a foreign (real-file) instruction file", async () => {
+    await makeRepo("pub");
+    await wirePub();
+    // Replace the AGENTS.md symlink with a real file — now foreign.
+    await rm(join(sibling("pub"), "AGENTS.md"));
+    await writeFile(join(sibling("pub"), "AGENTS.md"), "hand-written\n");
+
+    const r = await doRunProjectTeardown("../pub", { apply: true }, { cwd: host() });
+    const agents = r.items.find((i) => i.kind === "instruction-symlink" && i.label === "AGENTS.md");
+    expect(agents?.state).toBe("foreign");
+    // the real file survived --apply
+    expect(await readFile(join(sibling("pub"), "AGENTS.md"), "utf8")).toBe("hand-written\n");
+    expect(r.removed).not.toContain("AGENTS.md");
+  });
+
+  it("refuses to tear down the anchor (`.`)", async () => {
+    await makeRepo("pub");
+    await wirePub();
+    const r = await doRunProjectTeardown(".", { apply: true }, { cwd: host() });
+    expect(r.isAnchor).toBe(true);
+    expect(r.removableCount).toBe(0);
+    expect(r.applied).toBe(false);
+    expect(r.removed).toEqual([]);
+  });
+
+  it("blocks the shared canonical when another repo has the same basename", async () => {
+    // Two repos named `pub` under different parents share `agents/pub/AGENTS.md`.
+    for (const p of ["a/pub", "b/pub"]) {
+      await mkdir(sibling(p), { recursive: true });
+      await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+        cwd: sibling(p),
+        env: ENV,
+      });
+    }
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, {
+      ...base,
+      repos: [
+        { path: "." },
+        { path: "../a/pub", visibility: "public" },
+        { path: "../b/pub", visibility: "public" },
+      ],
+    });
+    const canonDir = join(host(), "agents", "pub");
+    await mkdir(canonDir, { recursive: true });
+    await writeFile(
+      join(canonDir, "AGENTS.md"),
+      "intro\n<!-- BASOU:GENERATED:START -->\ngen\n<!-- BASOU:GENERATED:END -->\n",
+    );
+    mute();
+    const r = await doRunProjectTeardown("../a/pub", { apply: true }, { cwd: host() });
+    const canon = r.items.find((i) => i.kind === "canonical-block");
+    expect(canon?.state).toBe("blocked");
+    expect(r.removableCount).toBe(0);
+    // the shared block survived
+    expect(await readFile(join(canonDir, "AGENTS.md"), "utf8")).toContain("BASOU:GENERATED");
+  });
+
+  it("treats a symlinked canonical as foreign and never rewrites it", async () => {
+    await makeRepo("pub");
+    await wirePub();
+    // Swap the canonical for a symlink — must be classified foreign, never followed.
+    const canonFile = join(host(), "agents", "pub", "AGENTS.md");
+    const decoy = join(host(), "agents", "pub", "real.md");
+    await writeFile(
+      decoy,
+      "intro\n<!-- BASOU:GENERATED:START -->\ngen\n<!-- BASOU:GENERATED:END -->\n",
+    );
+    await rm(canonFile);
+    await symlink("real.md", canonFile);
+
+    const r = await doRunProjectTeardown("../pub", { apply: true }, { cwd: host() });
+    const canon = r.items.find((i) => i.kind === "canonical-block");
+    expect(canon?.state).toBe("foreign");
+    // the symlink target's block is untouched
+    expect(await readFile(decoy, "utf8")).toContain("BASOU:GENERATED");
+    expect(r.removed.some((x) => x.includes("agents"))).toBe(false);
+  });
+
+  it("does not auto-remove the canonical when the repo path is unresolvable", async () => {
+    await makeRepo("pub");
+    await wirePub();
+    // A canonical for `ghost` exists but `../ghost` does not resolve and is NOT in
+    // the roster (no basename collision). Ownership of the basename-keyed canonical
+    // cannot be proven without the repo, so it is `manual`, never auto-removed.
+    const ghostDir = join(host(), "agents", "ghost");
+    await mkdir(ghostDir, { recursive: true });
+    await writeFile(
+      join(ghostDir, "AGENTS.md"),
+      "intro\n<!-- BASOU:GENERATED:START -->\ngen\n<!-- BASOU:GENERATED:END -->\n",
+    );
+    const r = await doRunProjectTeardown("../ghost", { apply: true }, { cwd: host() });
+    expect(r.resolved).toBe(false);
+    const canon = r.items.find((i) => i.kind === "canonical-block");
+    expect(canon?.state).toBe("manual");
+    expect(r.removableCount).toBe(0);
+    expect(await readFile(join(ghostDir, "AGENTS.md"), "utf8")).toContain("BASOU:GENERATED");
   });
 });

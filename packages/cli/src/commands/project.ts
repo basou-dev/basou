@@ -1,7 +1,11 @@
 import {
+  closeSync,
   existsSync,
+  constants as fsConstants,
+  ftruncateSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -10,6 +14,7 @@ import {
   symlinkSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
@@ -47,6 +52,7 @@ import {
   readManifest,
   readMarkdownFile,
   reconcileSourceRoots,
+  removeMarkerSection,
   renderWithMarkers,
   type SourceRootsReconcile,
   type SymlinkPlanSummary,
@@ -227,6 +233,72 @@ export type ArchiveTeardown = {
   gitignorePatterns: string[];
   /** The anchor's canonical (`agents/<repo>/AGENTS.md`) still exists. */
   canonical: boolean;
+};
+
+/**
+ * Why one teardown candidate is or is not safe to auto-remove.
+ * - `removable`: verified basou-generated and provably owned — a symlink whose
+ *   target matches what the generator would write, or a well-formed
+ *   `BASOU:GENERATED` block. `--apply` removes these (re-verifying first).
+ * - `manual`: present and plausibly basou's, but NOT provably owned — a bare
+ *   `.gitignore` pattern line, which the generator appends WITHOUT a marker, so
+ *   it is indistinguishable from a hand-added identical line. Reported as a
+ *   manual-cleanup checklist; `--apply` NEVER removes it.
+ * - `foreign`: present but NOT ours (a real file, a symlink pointing elsewhere, a
+ *   canonical with no generated block) — never touched.
+ * - `blocked`: could not be inspected, or is ambiguous (e.g. a basename collision
+ *   with another repo sharing the canonical/view name) — never touched.
+ */
+export type TeardownItemState = "removable" | "manual" | "foreign" | "blocked";
+
+export type TeardownItem = {
+  /** Stable artifact kind for JSON consumers. */
+  kind: "instruction-symlink" | "gitignore" | "view-symlink" | "canonical-block";
+  /** Repo-relative file / pattern / canonical path being considered. */
+  label: string;
+  state: TeardownItemState;
+  /** Why it is manual/foreign/blocked, or a caveat for a removable item (e.g. the canonical empties out). */
+  note?: string;
+};
+
+/** Read-only classification of a single repo's basou-generated wiring for teardown. */
+export type RepoTeardownPlan = {
+  /** The target path as given on the command line. */
+  target: string;
+  /** False when the path could not be resolved on disk (its in-repo wiring is then uninspectable). */
+  resolved: boolean;
+  /** The target's realpath at scan time, or null when unresolvable — `--apply` binds to this so a path swap between scan and apply cannot redirect a destructive write. */
+  repoReal: string | null;
+  /** The basename `--apply` uses for the canonical / view artifacts, bound from scan time (never recomputed under a swapped target). */
+  canonicalName: string;
+  /** True when the target resolves to the anchor itself — refused, never torn down. */
+  isAnchor: boolean;
+  /** Whether the target is still a declared roster member (informational; teardown is path-driven, not roster-driven). */
+  inRoster: boolean;
+  /** Present artifacts, classified. Absent artifacts (nothing to remove) are omitted. */
+  items: TeardownItem[];
+  /** Count of items in state `removable` (excludes `manual`). */
+  removableCount: number;
+};
+
+export type ProjectTeardownOptions = {
+  apply?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type ProjectTeardownContext = {
+  cwd?: string;
+};
+
+/** Result of {@link doRunProjectTeardown}: the plan plus what `--apply` removed. */
+export type ProjectTeardownResult = RepoTeardownPlan & {
+  /** Whether `--apply` ran (target resolvable, not the anchor, and at least one removable item). */
+  applied: boolean;
+  /** Labels actually removed by `--apply`. */
+  removed: string[];
+  /** Per-artifact failures from `--apply` (collected, never thrown). */
+  failed: { label: string; message: string }[];
 };
 
 /** Result of {@link doRunProjectArchive}: the plan plus whether a roster exists, the teardown checklist, and what `--apply` did. */
@@ -434,6 +506,19 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (oldPath: string, newPath: string, opts: ProjectRenameOptions) => {
       await runProjectRename(oldPath, newPath, opts);
+    });
+
+  project
+    .command("teardown")
+    .argument("<repo>", "The repo path whose basou-generated wiring to tear down (e.g. ../takuhon)")
+    .description(
+      "Remove the basou-generated wiring for one repo: its instruction symlinks (AGENTS.md / CLAUDE.md / copilot), its `.gitignore` patterns, its workspace view symlink, and the generated block in the anchor's canonical. Dry-run by default (a classified plan: removable / foreign / blocked); pass --apply to remove ONLY the verified-basou artifacts, re-checking each just before it acts — a real file, a foreign symlink, or hand-authored canonical prose is never touched. This is the destructive counterpart to `archive` (which only drops the manifest declaration): archive first, then teardown to clean the on-disk wiring. The anchor (`.`) is refused. Not reversible — the manifest is git-tracked but the removed symlinks/lines are not",
+    )
+    .option("--apply", "Remove the verified-basou artifacts (default: dry-run classified preview)")
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (repo: string, opts: ProjectTeardownOptions) => {
+      await runProjectTeardown(repo, opts);
     });
 }
 
@@ -2352,6 +2437,550 @@ function gatherArchiveTeardown(
     gitignorePatterns: [...gitignorePatterns],
     canonical,
   };
+}
+
+// --- teardown (the actionable counterpart to archive's read-only checklist) ---
+
+/** The instruction-file symlink targets a repo's wiring would use, computed from
+ * the repo + anchor realpaths — independent of whether the canonical FILE still
+ * exists, so a dangling hub link to an already-removed canonical is still
+ * recognized as ours by its target string. */
+function teardownExpectedTargets(repoReal: string, anchorReal: string, canonicalName: string) {
+  const canonicalFile = join(anchorReal, "agents", canonicalName, CANONICAL_FILE);
+  return expectedSymlinkTargets(repoReal, canonicalFile);
+}
+
+/** Does a `<view>/<name>` symlink point (relatively) at exactly `repoReal`? The
+ * teardown ownership test for the view link — narrower than the stray-based
+ * {@link classifyViewLink} because teardown targets ONE repo, which may still be
+ * in the roster (a stray check would exempt it). */
+function viewLinkPointsAt(viewDir: string, name: string, repoReal: string): boolean {
+  const filePath = join(viewDir, name);
+  try {
+    if (!lstatSync(filePath).isSymbolicLink()) return false;
+    const target = readlinkSync(filePath);
+    if (isAbsolute(target)) return false; // basou writes only relative view links
+    return realpathSync(resolve(viewDir, target)) === repoReal;
+  } catch {
+    return false;
+  }
+}
+
+/** The view-link ownership test when the repo dir is GONE (realpath impossible):
+ * the relative link target must resolve, by path, to exactly the repo's declared
+ * location. Weaker than {@link viewLinkPointsAt} (no realpath identity), but it is
+ * the strongest check available for a dangling orphan link and still refuses an
+ * absolute target or a link pointing anywhere else. */
+function viewLinkPointsAtPath(viewDir: string, name: string, expectedRepoPath: string): boolean {
+  const filePath = join(viewDir, name);
+  try {
+    if (!lstatSync(filePath).isSymbolicLink()) return false;
+    const target = readlinkSync(filePath);
+    if (isAbsolute(target)) return false;
+    return resolve(viewDir, target) === expectedRepoPath;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Classify a single repo's basou-generated wiring for teardown — read-only.
+ * Mirrors the four artifacts the generators create (instruction symlinks,
+ * `.gitignore` lines, the view symlink, the canonical's generated block) and
+ * marks each `removable` (verified ours), `foreign` (present but not ours — never
+ * touched), or `blocked` (uninspectable). Path-driven, NOT roster-driven, so it
+ * works after `archive` has already dropped the repo from the manifest. The
+ * anchor (`.`) is refused. Absent artifacts are omitted (nothing to report).
+ */
+function gatherRepoTeardown(
+  repositoryRoot: string,
+  manifest: Manifest,
+  target: string,
+): RepoTeardownPlan {
+  const anchorReal = realpathSync(repositoryRoot);
+  let repoReal: string | undefined;
+  try {
+    repoReal = realpathSync(resolve(repositoryRoot, target));
+  } catch {
+    repoReal = undefined;
+  }
+  const isAnchor = repoReal !== undefined && repoReal === anchorReal;
+  const targetAbs = resolve(repositoryRoot, target);
+  // `basename` of the resolved path even when realpath failed, so the canonical /
+  // view artifacts (which live OUTSIDE the repo dir and survive its deletion) are
+  // still found by name.
+  const canonicalName = basename(repoReal ?? targetAbs);
+
+  const roster = manifest.repos ?? [];
+  const inRoster = roster.some((r) => {
+    try {
+      return realpathSync(resolve(repositoryRoot, r.path)) === (repoReal ?? "\0");
+    } catch {
+      return resolve(repositoryRoot, r.path) === targetAbs;
+    }
+  });
+
+  // The canonical (`agents/<basename>/AGENTS.md`) and the view link
+  // (`<view>/<basename>`) are keyed by BASENAME and SHARED by any other repo with
+  // the same basename. The generators refuse to wire same-basename repos at all;
+  // teardown must likewise refuse to remove the SHARED artifacts, or tearing down
+  // one repo would strip the block / link another still relies on. Instruction
+  // symlinks live inside the repo dir, so they are never shared and stay safe.
+  // Case-folded compare: on a case-insensitive filesystem (macOS default) `Pub`
+  // and `pub` alias the SAME `agents/<name>` dir / view entry, so they collide
+  // even though the byte strings differ.
+  const cnFold = canonicalName.toLowerCase();
+  const canonicalShared = roster.some((r) => {
+    let rReal: string | null = null;
+    try {
+      rReal = realpathSync(resolve(repositoryRoot, r.path));
+    } catch {
+      rReal = null;
+    }
+    if (rReal !== null) {
+      if (repoReal !== undefined && rReal === repoReal) return false; // the target itself
+      return basename(rReal).toLowerCase() === cnFold;
+    }
+    if (resolve(repositoryRoot, r.path) === targetAbs) return false;
+    return basename(resolve(repositoryRoot, r.path)).toLowerCase() === cnFold;
+  });
+  const collisionNote =
+    "同名 basename の別 repo と共有のため撤去できません (手動で確認してください)";
+
+  const items: TeardownItem[] = [];
+  if (!isAnchor) {
+    // 1. Instruction-file symlinks (live inside the repo dir — never shared).
+    if (repoReal !== undefined) {
+      for (const spec of teardownExpectedTargets(repoReal, anchorReal, canonicalName)) {
+        const { state, actualTarget } = inspectSymlink(join(repoReal, spec.name), spec.target);
+        if (state === "correct")
+          items.push({ kind: "instruction-symlink", label: spec.name, state: "removable" });
+        else if (state === "mismatch")
+          items.push({
+            kind: "instruction-symlink",
+            label: spec.name,
+            state: "foreign",
+            note: `別 target を指しています (${actualTarget ?? "?"})`,
+          });
+        else if (state === "occupied")
+          items.push({
+            kind: "instruction-symlink",
+            label: spec.name,
+            state: "foreign",
+            note: "symlink ではなく実ファイルです",
+          });
+        else if (state === "blocked")
+          items.push({
+            kind: "instruction-symlink",
+            label: spec.name,
+            state: "blocked",
+            note: "検査できませんでした",
+          });
+        // "missing" → 何も無い → 省略
+      }
+
+      // 2. `.gitignore` instruction patterns. The generator appends these WITHOUT
+      // a marker, so a present line is INDISTINGUISHABLE from a hand-added one —
+      // never provably ours. Reported as a `manual` checklist; `--apply` does not
+      // touch `.gitignore` (preferring a false-negative over deleting a line the
+      // operator may have added themselves).
+      let ignored: Set<string>;
+      try {
+        ignored = new Set(readGitignoreLines(join(repoReal, ".gitignore")).map((l) => l.trim()));
+        for (const p of INSTRUCTION_FILES) {
+          if (ignored.has(p) || ignored.has(`/${p}`)) {
+            items.push({
+              kind: "gitignore",
+              label: p,
+              state: "manual",
+              note: "basou 追記か手書きか判別不能 (マーカー無し) — 手動で削除してください",
+            });
+          }
+        }
+      } catch {
+        items.push({
+          kind: "gitignore",
+          label: ".gitignore",
+          state: "blocked",
+          note: "読み取れませんでした",
+        });
+      }
+    }
+
+    // 3. View symlink (in the workspace view dir; survives repo deletion; shared by basename).
+    const viewPath = manifest.workspace.view;
+    if (viewPath !== undefined) {
+      const viewDir = resolveViewDir(repositoryRoot, viewPath);
+      const linkPath = join(viewDir, canonicalName);
+      let isLink = false;
+      try {
+        isLink = lstatSync(linkPath).isSymbolicLink();
+      } catch {
+        isLink = false; // 無し → 省略
+      }
+      if (isLink) {
+        const owned =
+          repoReal !== undefined
+            ? viewLinkPointsAt(viewDir, canonicalName, repoReal)
+            : viewLinkPointsAtPath(viewDir, canonicalName, targetAbs);
+        if (!owned)
+          items.push({
+            kind: "view-symlink",
+            label: canonicalName,
+            state: "foreign",
+            note: "この repo を指していない view link です",
+          });
+        else if (canonicalShared)
+          items.push({
+            kind: "view-symlink",
+            label: canonicalName,
+            state: "blocked",
+            note: collisionNote,
+          });
+        else items.push({ kind: "view-symlink", label: canonicalName, state: "removable" });
+      }
+    }
+
+    // 4. Canonical's generated block (in the anchor; survives repo deletion; shared by basename).
+    const canonicalFile = join(anchorReal, "agents", canonicalName, CANONICAL_FILE);
+    const canonicalLabel = join("agents", canonicalName, CANONICAL_FILE);
+    let canonicalIsLink = false;
+    try {
+      canonicalIsLink = lstatSync(canonicalFile).isSymbolicLink();
+    } catch {
+      canonicalIsLink = false;
+    }
+    if (canonicalIsLink) {
+      items.push({
+        kind: "canonical-block",
+        label: canonicalLabel,
+        state: "foreign",
+        note: "canonical が symlink です (生成物ではない)",
+      });
+    } else if (existsSync(canonicalFile)) {
+      let content: string | undefined;
+      try {
+        content = readFileSync(canonicalFile, "utf8");
+      } catch {
+        items.push({
+          kind: "canonical-block",
+          label: canonicalLabel,
+          state: "blocked",
+          note: "読み取れませんでした",
+        });
+      }
+      if (content !== undefined && content !== "") {
+        const section = parseMarkers(content);
+        if (section.kind === "ok" && canonicalShared) {
+          items.push({
+            kind: "canonical-block",
+            label: canonicalLabel,
+            state: "blocked",
+            note: collisionNote,
+          });
+        } else if (section.kind === "ok" && repoReal === undefined) {
+          // Repo dir is gone, so the canonical — keyed only by basename — cannot
+          // be proven to have belonged to THIS path (any path with this basename
+          // maps here). Report, never auto-remove.
+          items.push({
+            kind: "canonical-block",
+            label: canonicalLabel,
+            state: "manual",
+            note: "repo を解決できず所有を検証できません (手動で確認してください)",
+          });
+        } else if (section.kind === "ok") {
+          const emptyAfter = removeMarkerSection(content, canonicalLabel).trim().length === 0;
+          items.push({
+            kind: "canonical-block",
+            label: canonicalLabel,
+            state: "removable",
+            ...(emptyAfter
+              ? { note: "生成ブロック除去後は空になります (ファイルは手動削除候補)" }
+              : {}),
+          });
+        } else if (section.kind === "no_markers") {
+          items.push({
+            kind: "canonical-block",
+            label: canonicalLabel,
+            state: "foreign",
+            note: "生成ブロックがありません (手書きのみ — 触りません)",
+          });
+        } else {
+          items.push({
+            kind: "canonical-block",
+            label: canonicalLabel,
+            state: "blocked",
+            note: "マーカーが不整合です (手動で修正してください)",
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    target,
+    resolved: repoReal !== undefined,
+    repoReal: repoReal ?? null,
+    canonicalName,
+    isAnchor,
+    inRoster,
+    items,
+    removableCount: items.filter((i) => i.state === "removable").length,
+  };
+}
+
+/**
+ * Remove the `removable` artifacts, RE-VERIFYING each one's ownership predicate
+ * immediately before the destructive op (closing the scan-to-apply window, like
+ * {@link pruneViewLinks}). A candidate that changed since the scan is skipped with
+ * a collected failure rather than removed blindly; every failure is collected,
+ * never thrown, so one bad artifact neither aborts the rest nor hides what
+ * happened. Only ever removes the link / line / generated block — never a real
+ * file, a foreign link, or hand-authored canonical prose.
+ */
+function applyRepoTeardown(
+  repositoryRoot: string,
+  manifest: Manifest,
+  plan: RepoTeardownPlan,
+): { removed: string[]; failed: { label: string; message: string }[] } {
+  const removed: string[] = [];
+  const failed: { label: string; message: string }[] = [];
+  const changed = (label: string) =>
+    failed.push({ label, message: "scan 後に状態が変わりました (再実行してください)" });
+
+  // Bind to the SCANNED identity: re-resolve the target now and require it to be
+  // the SAME real path classified at scan. If the repo was resolvable at scan but
+  // resolves elsewhere (or nowhere) now, a path swap could redirect a destructive
+  // write to a different repo's canonical/view — so abort every removal. The
+  // canonical/view basename is taken from the plan, never recomputed from a
+  // possibly-swapped current target.
+  let currentRepoReal: string | null = null;
+  try {
+    currentRepoReal = realpathSync(resolve(repositoryRoot, plan.target));
+  } catch {
+    currentRepoReal = null;
+  }
+  const identityOk = plan.repoReal === null ? true : currentRepoReal === plan.repoReal;
+  const removable = plan.items.filter((i) => i.state === "removable");
+  if (!identityOk) {
+    for (const item of removable) changed(item.label);
+    return { removed, failed };
+  }
+
+  const anchorReal = realpathSync(repositoryRoot);
+  const { canonicalName, repoReal } = plan;
+
+  // 1. Instruction symlinks (only when the repo dir is present), re-verified per link.
+  const expectedByName = new Map(
+    repoReal !== null
+      ? teardownExpectedTargets(repoReal, anchorReal, canonicalName).map((s) => [s.name, s.target])
+      : [],
+  );
+  for (const item of removable.filter((i) => i.kind === "instruction-symlink")) {
+    const expected = expectedByName.get(item.label);
+    if (
+      repoReal === null ||
+      expected === undefined ||
+      inspectSymlink(join(repoReal, item.label), expected).state !== "correct"
+    ) {
+      changed(item.label);
+      continue;
+    }
+    try {
+      unlinkSync(join(repoReal, item.label));
+      removed.push(item.label);
+    } catch (error: unknown) {
+      failed.push({ label: item.label, message: failureReason(error) });
+    }
+  }
+
+  // 3. View symlink — re-verify ownership (realpath when present, else path match).
+  const viewPath = manifest.workspace.view;
+  for (const item of removable.filter((i) => i.kind === "view-symlink")) {
+    if (viewPath === undefined) {
+      changed(item.label);
+      continue;
+    }
+    const viewDir = resolveViewDir(repositoryRoot, viewPath);
+    const owned =
+      repoReal !== null
+        ? viewLinkPointsAt(viewDir, item.label, repoReal)
+        : viewLinkPointsAtPath(viewDir, item.label, resolve(repositoryRoot, plan.target));
+    if (!owned) {
+      changed(item.label);
+      continue;
+    }
+    try {
+      unlinkSync(join(viewDir, item.label));
+      removed.push(`view/${item.label}`);
+    } catch (error: unknown) {
+      failed.push({ label: `view/${item.label}`, message: failureReason(error) });
+    }
+  }
+
+  // 4. Canonical generated block — the only read-MODIFY-write that FOLLOWS a path,
+  // so it is the one place a symlink swapped in after the scan could be followed
+  // and an arbitrary target corrupted. Open with `O_NOFOLLOW` so the open itself
+  // ATOMICALLY fails (ELOOP) on a symlink — no check-then-use gap — and operate on
+  // that single fd (never re-resolving the path). `O_NOFOLLOW` is POSIX; where it
+  // is unavailable (Windows) it is 0 and we fall back to the lstat pre-check.
+  const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+  for (const item of removable.filter((i) => i.kind === "canonical-block")) {
+    const canonicalFile = join(anchorReal, "agents", canonicalName, CANONICAL_FILE);
+    try {
+      if (lstatSync(canonicalFile).isSymbolicLink()) {
+        changed(item.label);
+        continue;
+      }
+    } catch (error: unknown) {
+      failed.push({ label: item.label, message: failureReason(error) });
+      continue;
+    }
+    let fd: number;
+    try {
+      fd = openSync(canonicalFile, fsConstants.O_RDWR | NOFOLLOW);
+    } catch (error: unknown) {
+      // ELOOP here = a symlink was swapped in after the lstat: refuse, never follow.
+      changed(item.label);
+      void error;
+      continue;
+    }
+    try {
+      const content = readFileSync(fd, "utf8");
+      if (parseMarkers(content).kind !== "ok") {
+        changed(item.label);
+        continue;
+      }
+      const next = Buffer.from(removeMarkerSection(content, item.label), "utf8");
+      ftruncateSync(fd, 0);
+      writeSync(fd, next, 0, next.length, 0);
+      removed.push(item.label);
+    } catch (error: unknown) {
+      failed.push({ label: item.label, message: failureReason(error) });
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  // `.gitignore` is intentionally NOT auto-removed (state `manual`): bare appended
+  // lines are indistinguishable from hand-added ones, so removal is left to the
+  // operator (reported in the plan).
+
+  return { removed, failed };
+}
+
+/** Render the teardown plan (dry-run) or outcome (`--apply`) as readable text. */
+function renderProjectTeardown(result: ProjectTeardownResult): string {
+  const lines: string[] = [];
+  lines.push(`# teardown: ${result.target}`);
+  lines.push("");
+  if (result.isAnchor) {
+    lines.push("anchor (`.`) は teardown できません(プロジェクトの家です)。");
+    return lines.join("\n");
+  }
+  if (!result.resolved) {
+    lines.push(
+      "注: repo パスを解決できませんでした(既に削除済み?)。repo 内の配線は検査できないため、view link / canonical のみ対象です。",
+    );
+    lines.push("");
+  }
+  lines.push(
+    result.inRoster
+      ? "状態: まだ roster に在籍しています(宣言は manifest に残ります)。"
+      : "状態: roster には在籍していません(archive 済み)。",
+  );
+  lines.push("");
+
+  const removable = result.items.filter((i) => i.state === "removable");
+  const manual = result.items.filter((i) => i.state === "manual");
+  const foreign = result.items.filter((i) => i.state === "foreign");
+  const blocked = result.items.filter((i) => i.state === "blocked");
+
+  if (removable.length === 0) {
+    lines.push("撤去対象の basou 生成物はありません。");
+  } else {
+    lines.push(`撤去対象 (${removable.length} 件):`);
+    for (const i of removable)
+      lines.push(`  - [${i.kind}] ${i.label}${i.note !== undefined ? ` — ${i.note}` : ""}`);
+  }
+  if (manual.length > 0) {
+    lines.push("");
+    lines.push("手動で確認(自動撤去しません):");
+    for (const i of manual)
+      lines.push(`  - [${i.kind}] ${i.label}${i.note !== undefined ? ` — ${i.note}` : ""}`);
+  }
+  if (foreign.length > 0) {
+    lines.push("");
+    lines.push("触らないもの(basou 生成物ではない):");
+    for (const i of foreign)
+      lines.push(`  - [${i.kind}] ${i.label}${i.note !== undefined ? ` — ${i.note}` : ""}`);
+  }
+  if (blocked.length > 0) {
+    lines.push("");
+    lines.push("検査できなかったもの:");
+    for (const i of blocked)
+      lines.push(`  - [${i.kind}] ${i.label}${i.note !== undefined ? ` — ${i.note}` : ""}`);
+  }
+
+  lines.push("");
+  if (result.applied) {
+    lines.push(`--apply: ${result.removed.length} 件を撤去しました。`);
+    for (const r of result.removed) lines.push(`  ✓ ${r}`);
+    if (result.failed.length > 0) {
+      lines.push("失敗:");
+      for (const f of result.failed) lines.push(`  ✗ ${f.label} — ${f.message}`);
+    }
+  } else if (removable.length > 0) {
+    lines.push(
+      "これは dry-run です。撤去するには --apply を付けてください(可逆ではない破壊操作です)。",
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Tear down (remove) the basou-generated wiring for one repo: its instruction
+ * symlinks, `.gitignore` patterns, view symlink, and the canonical's generated
+ * block. Read-only by default (a classified plan); `--apply` removes only the
+ * verified-ours artifacts, re-checking each just before it acts. Complements
+ * `archive` (which removes the manifest declaration); run that first to fold the
+ * repo out, then this to clean its on-disk wiring.
+ */
+export async function doRunProjectTeardown(
+  target: string,
+  options: ProjectTeardownOptions,
+  ctx: ProjectTeardownContext = {},
+): Promise<ProjectTeardownResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project teardown");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+
+  const plan = gatherRepoTeardown(repositoryRoot, manifest, target);
+
+  const willApply = options.apply === true && !plan.isAnchor && plan.removableCount > 0;
+  const { removed, failed } = willApply
+    ? applyRepoTeardown(repositoryRoot, manifest, plan)
+    : { removed: [], failed: [] };
+
+  const result: ProjectTeardownResult = { ...plan, applied: willApply, removed, failed };
+  if (options.json === true) console.log(JSON.stringify(result));
+  else console.log(renderProjectTeardown(result));
+  return result;
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectTeardown}. */
+export async function runProjectTeardown(
+  target: string,
+  options: ProjectTeardownOptions,
+  ctx: ProjectTeardownContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectTeardown(target, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
 }
 
 /** Shallow clone of an object with one optional key removed (preserves every other own field). */
