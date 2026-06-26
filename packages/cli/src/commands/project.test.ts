@@ -3172,6 +3172,23 @@ describe("basou project retrofit", () => {
     );
   });
 
+  it("refuses when the destination canonical is a dangling symlink (lstat-detected, never clobbered)", async () => {
+    const dir = await makeRepo("foo");
+    await writeFile(join(dir, "AGENTS.md"), "repo-side\n");
+    await mkdir(join(host(), "agents", "foo"), { recursive: true });
+    // A dangling symlink occupies the canonical path; existsSync would call it
+    // absent, but lstat-based detection must treat it as present and refuse.
+    await symlink("nowhere-target", join(host(), "agents", "foo", "AGENTS.md"));
+    await setupHostManifest([{ path: "../foo", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    expect(r.action).toBe("refuse");
+    expect(r.reason).toBe("canonical-exists");
+    expect(r.applied).toBe(false);
+    expect(await readlink(join(host(), "agents", "foo", "AGENTS.md"))).toBe("nowhere-target");
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("repo-side\n");
+  });
+
   it("skips when the repo has no AGENTS.md to relocate", async () => {
     await makeRepo("foo");
     await setupHostManifest([{ path: "../foo", visibility: "private" }]);

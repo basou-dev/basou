@@ -11,7 +11,6 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
-  renameSync,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -190,6 +189,8 @@ export type ProjectRetrofitResult = RetrofitPlan & {
   applied: boolean;
   /** A pathless failure label when an `--apply` move/symlink step failed (collected, not thrown). */
   failure?: string;
+  /** True when the failure left on-disk state changed (the canonical was written before a later step failed). */
+  partial?: boolean;
 };
 
 export type ProjectWorkspaceOptions = {
@@ -3924,27 +3925,40 @@ function regularFileSpokes(repoReal: string): string[] {
 }
 
 /**
- * Gather the retrofit facts for one repo. Resolves the arg (realpath); a roster
- * entry that resolves to the same path (or, when neither resolves, the same plain
- * absolute path) is `declared`. The anchor is the entry resolving to the manifest
- * root; reachability is a `.git` under the resolved path. The repo's own AGENTS.md
- * state, whether the destination canonical already exists, and any regular-file
- * spokes are read off disk. Pure filesystem reads — no writes.
+ * Whether ANY entry exists at the path, as seen by `lstat` — a regular file, a
+ * directory, or a symlink (even a dangling one). Distinct from `existsSync`,
+ * which follows the link and reports a dangling symlink as absent; the canonical
+ * "would be clobbered" check must treat a dangling symlink as present.
+ */
+function pathPresent(p: string): boolean {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Gather the retrofit facts for one repo. The caller resolves the arg ONCE
+ * (`argAbs` = the plain resolved path, `argReal` = its realpath or undefined) and
+ * threads the result here AND into the apply step, so classification and the move
+ * act on the same resolved repo (no second realpath that could resolve elsewhere
+ * after a concurrent change). A roster entry that resolves to the same path (or,
+ * when neither resolves, the same plain absolute path) is `declared`. The anchor
+ * is the entry resolving to the manifest root; reachability is a `.git` under the
+ * resolved path. The repo's own AGENTS.md state, whether the destination canonical
+ * already exists (lstat — a dangling symlink counts), and any regular-file spokes
+ * are read off disk. Pure filesystem reads — no writes.
  */
 function gatherRetrofit(
   repositoryRoot: string,
   anchorReal: string,
   roster: RepoEntry[],
   argPath: string,
+  argAbs: string,
+  argReal: string | undefined,
 ): RetrofitFacts {
-  const argAbs = resolve(repositoryRoot, argPath);
-  let argReal: string | undefined;
-  try {
-    argReal = realpathSync(argAbs);
-  } catch {
-    argReal = undefined;
-  }
-
   const declared = roster.some((entry) => {
     const entryAbs = resolve(repositoryRoot, entry.path);
     if (argReal !== undefined) {
@@ -3988,44 +4002,56 @@ function gatherRetrofit(
     reachable,
     canonicalName,
     agentsState: inspectAgentsState(join(argReal, CANONICAL_FILE)),
-    canonicalExists: existsSync(canonicalFile),
+    canonicalExists: pathPresent(canonicalFile),
     regularSpokes: regularFileSpokes(argReal),
   };
 }
 
 /**
- * Relocate the repo's regular-file `AGENTS.md` to the anchor canonical and leave a
- * symlink in its place. Re-checks the destination just before moving (a canonical
- * that appeared since the facts were gathered is never clobbered — `renameSync`
- * would otherwise overwrite it). `renameSync` is atomic within a filesystem; a
- * cross-device move (EXDEV) falls back to copy + unlink. A failure is returned as
- * a pathless label, never thrown — so the report explains what did not happen.
- * If the symlink step fails after a successful move, the repo's AGENTS.md is
- * absent (recoverable by `basou project symlinks` / `derive`, which create the
- * now-missing link); the failure label makes that visible.
+ * Outcome of {@link relocateAgentsFile}. `partial` is true only when the canonical
+ * was already written (the copy succeeded) before a later step failed — so on-disk
+ * state changed and the report must NOT claim "nothing changed".
  */
-function relocateAgentsFile(
-  repoReal: string,
-  canonicalFile: string,
-): { ok: true } | { ok: false; message: string } {
+type RelocateResult = { ok: true } | { ok: false; message: string; partial: boolean };
+
+/**
+ * Relocate the repo's regular-file `AGENTS.md` to the anchor canonical and leave a
+ * symlink in its place. The canonical is created with `copyFileSync(...,
+ * COPYFILE_EXCL)`, which fails atomically with EEXIST if ANYTHING already occupies
+ * the path (a file, or a symlink — even a dangling one) — so the "never clobber an
+ * existing canonical" contract is enforced by the move primitive itself, with no
+ * TOCTOU window between a separate check and the write. Copy (not rename) also
+ * works across devices, so no EXDEV special-case is needed. Only after the
+ * canonical holds the content is the source unlinked and replaced by the symlink;
+ * a failure there is reported as `partial` (the canonical exists, the repo's
+ * AGENTS.md may be absent — recoverable by `basou project symlinks` / `derive`,
+ * which create the now-missing link). Failures are returned as pathless labels,
+ * never thrown.
+ */
+function relocateAgentsFile(repoReal: string, canonicalFile: string): RelocateResult {
   const agentsFile = join(repoReal, CANONICAL_FILE);
-  if (existsSync(canonicalFile)) return { ok: false, message: "canonical-exists" };
   try {
     mkdirSync(dirname(canonicalFile), { recursive: true });
-    try {
-      renameSync(agentsFile, canonicalFile);
-    } catch (error: unknown) {
-      if (hasErrorCode(error) && error.code === "EXDEV") {
-        copyFileSync(agentsFile, canonicalFile);
-        unlinkSync(agentsFile);
-      } else {
-        throw error;
-      }
-    }
+  } catch (error: unknown) {
+    return { ok: false, message: failureReason(error), partial: false };
+  }
+  // Atomic no-clobber create of the canonical. EEXIST is surfaced as the same
+  // "canonical-exists" reason the classifier uses, so a destination that appeared
+  // after the facts were gathered is refused, not overwritten.
+  try {
+    copyFileSync(agentsFile, canonicalFile, fsConstants.COPYFILE_EXCL);
+  } catch (error: unknown) {
+    const message =
+      hasErrorCode(error) && error.code === "EEXIST" ? "canonical-exists" : failureReason(error);
+    return { ok: false, message, partial: false };
+  }
+  // The canonical now holds the content; from here a failure leaves a partial state.
+  try {
+    unlinkSync(agentsFile);
     symlinkSync(relative(repoReal, canonicalFile), agentsFile);
     return { ok: true };
   } catch (error: unknown) {
-    return { ok: false, message: failureReason(error) };
+    return { ok: false, message: failureReason(error), partial: true };
   }
 }
 
@@ -4049,18 +4075,35 @@ export async function doRunProjectRetrofit(
   const roster = manifest.repos ?? [];
   const anchorReal = realpathSync(repositoryRoot);
 
-  const facts = gatherRetrofit(repositoryRoot, anchorReal, roster, repo);
+  // Resolve the arg ONCE and thread it into both classification and the move, so
+  // `--apply` acts on exactly the repo that was classified (no second realpath
+  // that could resolve elsewhere after a concurrent change, and no uncaught
+  // realpath error leaking an absolute path through the generic error path).
+  const argAbs = resolve(repositoryRoot, repo);
+  let argReal: string | undefined;
+  try {
+    argReal = realpathSync(argAbs);
+  } catch {
+    argReal = undefined;
+  }
+
+  const facts = gatherRetrofit(repositoryRoot, anchorReal, roster, repo, argAbs, argReal);
   const plan = classifyRetrofit(facts);
 
   let applied = false;
   let failure: string | undefined;
-  if (options.apply === true && plan.action === "relocate") {
-    // gatherRetrofit already validated the realpath resolves; re-resolve for the move.
-    const repoReal = realpathSync(resolve(repositoryRoot, repo));
+  let partial = false;
+  // A `relocate` plan implies the repo was reachable, which implies `argReal` is
+  // defined; the guard keeps the type sound without a second realpath.
+  if (options.apply === true && plan.action === "relocate" && argReal !== undefined) {
     const canonicalFile = join(anchorReal, "agents", plan.canonicalName, CANONICAL_FILE);
-    const res = relocateAgentsFile(repoReal, canonicalFile);
-    if (res.ok) applied = true;
-    else failure = res.message;
+    const res = relocateAgentsFile(argReal, canonicalFile);
+    if (res.ok) {
+      applied = true;
+    } else {
+      failure = res.message;
+      partial = res.partial;
+    }
   }
 
   const result: ProjectRetrofitResult = {
@@ -4068,6 +4111,7 @@ export async function doRunProjectRetrofit(
     hasRoster: roster.length > 0,
     applied,
     ...(failure !== undefined ? { failure } : {}),
+    ...(partial ? { partial } : {}),
   };
 
   if (options.json === true) {
@@ -4160,7 +4204,15 @@ export function renderProjectRetrofit(result: ProjectRetrofitResult): string {
     lines.push(
       `Could not relocate \`${result.path}/${CANONICAL_FILE}\` to \`${canonical}\`: ${result.failure}.`,
     );
-    lines.push("Nothing was changed. Resolve the cause and re-run.");
+    if (result.partial === true) {
+      // The canonical was already written before a later step failed: do not claim
+      // a clean no-op. The repo's AGENTS.md may be absent; derive/symlinks recover.
+      lines.push(
+        `The canonical \`${canonical}\` was written, but \`${result.path}/${CANONICAL_FILE}\` may be absent. Run \`basou project symlinks --apply\` (or \`basou project derive --apply\`) to recreate the missing link, then verify.`,
+      );
+    } else {
+      lines.push("Nothing was changed. Resolve the cause and re-run.");
+    }
     return lines.join("\n");
   }
 
