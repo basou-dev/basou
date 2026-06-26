@@ -1,5 +1,6 @@
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   constants as fsConstants,
   ftruncateSync,
@@ -22,6 +23,7 @@ import {
   type ArchivePlan,
   appendBasouGitignore,
   basouPaths,
+  classifyRetrofit,
   createManifest,
   type ExistingViewLink,
   ensureBasouDirectory,
@@ -50,6 +52,8 @@ import {
   type RepoSymlinkFacts,
   type RepoSymlinkPlan,
   type RepoWiringFacts,
+  type RetrofitFacts,
+  type RetrofitPlan,
   type RosterAdoptionPlan,
   type RosterDriftSummary,
   readManifest,
@@ -167,6 +171,26 @@ export type ProjectSymlinksResult = SymlinkPlanSummary & {
   applied: boolean;
   /** Per-file failures encountered during `--apply` (collected, not thrown — kept transparent). */
   failures: { repo: string; file: string; message: string }[];
+};
+
+export type ProjectRetrofitOptions = {
+  apply?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+export type ProjectRetrofitContext = ImportContext;
+
+/** Result of {@link doRunProjectRetrofit}: the classified plan plus what `--apply` did. */
+export type ProjectRetrofitResult = RetrofitPlan & {
+  /** Whether a `repos` roster was declared at all. */
+  hasRoster: boolean;
+  /** True only when `--apply` actually relocated the file and recreated the symlink. */
+  applied: boolean;
+  /** A pathless failure label when an `--apply` move/symlink step failed (collected, not thrown). */
+  failure?: string;
+  /** True when the failure left on-disk state changed (the canonical was written before a later step failed). */
+  partial?: boolean;
 };
 
 export type ProjectWorkspaceOptions = {
@@ -604,6 +628,25 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (opts: ProjectDeriveOptions) => {
       await runProjectDerive(opts);
+    });
+
+  project
+    .command("retrofit")
+    .argument(
+      "<repo>",
+      "The declared roster repo whose hand-authored AGENTS.md to relocate (e.g. ../foo)",
+    )
+    .description(
+      "Fold an existing repo's hand-authored AGENTS.md into the project topology: move the repo's regular-file `AGENTS.md` to the anchor canonical (`agents/<repo>/AGENTS.md`) and replace it with a symlink, so the prose lives at the single source of truth. Dry-run by default; pass --apply to relocate. The onboarding counterpart to `new` for a repo that already carries its own AGENTS.md — run it before `basou project derive`, which then adds the preset block, the CLAUDE.md / Copilot spokes, and the .gitignore. Non-destructive: it refuses when the destination canonical already exists (it never clobbers it), and skips a repo whose AGENTS.md is already a symlink or absent. The anchor (`.`) is refused",
+    )
+    .option(
+      "--apply",
+      "Relocate the AGENTS.md to the canonical and recreate the symlink (default: dry-run preview)",
+    )
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (repo: string, opts: ProjectRetrofitOptions) => {
+      await runProjectRetrofit(repo, opts);
     });
 }
 
@@ -3826,4 +3869,370 @@ export async function doRunProjectDerive(
       ? "✅ Ran every step (each is idempotent, so a partial apply recovers on re-run)."
       : "ℹ️ Dry-run preview. Pass --apply to write the changes, then re-run.",
   );
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectRetrofit}. */
+export async function runProjectRetrofit(
+  repo: string,
+  options: ProjectRetrofitOptions,
+  ctx: ProjectRetrofitContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectRetrofit(repo, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Inspect the repo's own `AGENTS.md` with `lstat` (never following the link).
+ * `regular-file` is the only relocatable state; a `symlink` is already wired,
+ * `absent` (ENOENT) has nothing to move, and anything else — a non-ENOENT lstat
+ * error, or a path that is neither a regular file nor a symlink (a directory) —
+ * is `blocked`, so it is never mistaken for relocatable and fed to `--apply`.
+ */
+function inspectAgentsState(filePath: string): RetrofitFacts["agentsState"] {
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(filePath);
+  } catch (error: unknown) {
+    if (hasErrorCode(error) && error.code === "ENOENT") return "absent";
+    return "blocked";
+  }
+  if (st.isSymbolicLink()) return "symlink";
+  return st.isFile() ? "regular-file" : "blocked";
+}
+
+/**
+ * The repo's spoke instruction files (`CLAUDE.md`, Copilot) that are REGULAR
+ * files — they would block clean wiring (`project symlinks` skips an occupied
+ * path), so they are surfaced as a manual checklist. A symlink or an absent path
+ * is fine and not reported; an uninspectable path is treated as "not a blocker"
+ * (the symlink generator will surface it later).
+ */
+function regularFileSpokes(repoReal: string): string[] {
+  const out: string[] = [];
+  for (const spoke of ["CLAUDE.md", ".github/copilot-instructions.md"]) {
+    try {
+      const st = lstatSync(join(repoReal, spoke));
+      if (!st.isSymbolicLink() && st.isFile()) out.push(spoke);
+    } catch {
+      // absent / uninspectable — not a regular-file blocker.
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether ANY entry exists at the path, as seen by `lstat` — a regular file, a
+ * directory, or a symlink (even a dangling one). Distinct from `existsSync`,
+ * which follows the link and reports a dangling symlink as absent; the canonical
+ * "would be clobbered" check must treat a dangling symlink as present.
+ */
+function pathPresent(p: string): boolean {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Gather the retrofit facts for one repo. The caller resolves the arg ONCE
+ * (`argAbs` = the plain resolved path, `argReal` = its realpath or undefined) and
+ * threads the result here AND into the apply step, so classification and the move
+ * act on the same resolved repo (no second realpath that could resolve elsewhere
+ * after a concurrent change). A roster entry that resolves to the same path (or,
+ * when neither resolves, the same plain absolute path) is `declared`. The anchor
+ * is the entry resolving to the manifest root; reachability is a `.git` under the
+ * resolved path. The repo's own AGENTS.md state, whether the destination canonical
+ * already exists (lstat — a dangling symlink counts), and any regular-file spokes
+ * are read off disk. Pure filesystem reads — no writes.
+ */
+function gatherRetrofit(
+  repositoryRoot: string,
+  anchorReal: string,
+  roster: RepoEntry[],
+  argPath: string,
+  argAbs: string,
+  argReal: string | undefined,
+): RetrofitFacts {
+  const declared = roster.some((entry) => {
+    const entryAbs = resolve(repositoryRoot, entry.path);
+    if (argReal !== undefined) {
+      try {
+        if (realpathSync(entryAbs) === argReal) return true;
+      } catch {
+        // entry path no longer resolves; fall through to the plain-path compare.
+      }
+    }
+    return entryAbs === argAbs;
+  });
+
+  // Display the path anchor-relative. Use realpaths on both sides when the arg
+  // resolves (so a symlinked tmp/cwd cannot skew it into a "../../private/var/…"
+  // form); fall back to the plain resolved path only when it does not resolve.
+  const displayRel =
+    argReal !== undefined ? relative(anchorReal, argReal) : relative(repositoryRoot, argAbs);
+  const path = displayRel === "" ? "." : displayRel;
+  const canonicalName = basename(argReal ?? argAbs);
+
+  if (argReal === undefined) {
+    return {
+      path,
+      declared,
+      isAnchor: false,
+      reachable: false,
+      canonicalName,
+      agentsState: "absent",
+      canonicalExists: false,
+      regularSpokes: [],
+    };
+  }
+
+  const isAnchor = argReal === anchorReal;
+  const reachable = existsSync(join(argReal, ".git"));
+  const canonicalFile = join(anchorReal, "agents", canonicalName, CANONICAL_FILE);
+  return {
+    path,
+    declared,
+    isAnchor,
+    reachable,
+    canonicalName,
+    agentsState: inspectAgentsState(join(argReal, CANONICAL_FILE)),
+    canonicalExists: pathPresent(canonicalFile),
+    regularSpokes: regularFileSpokes(argReal),
+  };
+}
+
+/**
+ * Outcome of {@link relocateAgentsFile}. `partial` is true only when the canonical
+ * was already written (the copy succeeded) before a later step failed — so on-disk
+ * state changed and the report must NOT claim "nothing changed".
+ */
+type RelocateResult = { ok: true } | { ok: false; message: string; partial: boolean };
+
+/**
+ * Relocate the repo's regular-file `AGENTS.md` to the anchor canonical and leave a
+ * symlink in its place. The canonical is created with `copyFileSync(...,
+ * COPYFILE_EXCL)`, which fails atomically with EEXIST if ANYTHING already occupies
+ * the path (a file, or a symlink — even a dangling one) — so the "never clobber an
+ * existing canonical" contract is enforced by the move primitive itself, with no
+ * TOCTOU window between a separate check and the write. Copy (not rename) also
+ * works across devices, so no EXDEV special-case is needed. Only after the
+ * canonical holds the content is the source unlinked and replaced by the symlink;
+ * a failure there is reported as `partial` (the canonical exists, the repo's
+ * AGENTS.md may be absent — recoverable by `basou project symlinks` / `derive`,
+ * which create the now-missing link). Failures are returned as pathless labels,
+ * never thrown.
+ */
+function relocateAgentsFile(repoReal: string, canonicalFile: string): RelocateResult {
+  const agentsFile = join(repoReal, CANONICAL_FILE);
+  try {
+    mkdirSync(dirname(canonicalFile), { recursive: true });
+  } catch (error: unknown) {
+    return { ok: false, message: failureReason(error), partial: false };
+  }
+  // Atomic no-clobber create of the canonical. EEXIST is surfaced as the same
+  // "canonical-exists" reason the classifier uses, so a destination that appeared
+  // after the facts were gathered is refused, not overwritten.
+  try {
+    copyFileSync(agentsFile, canonicalFile, fsConstants.COPYFILE_EXCL);
+  } catch (error: unknown) {
+    const message =
+      hasErrorCode(error) && error.code === "EEXIST" ? "canonical-exists" : failureReason(error);
+    return { ok: false, message, partial: false };
+  }
+  // The canonical now holds the content; from here a failure leaves a partial state.
+  try {
+    unlinkSync(agentsFile);
+    symlinkSync(relative(repoReal, canonicalFile), agentsFile);
+    return { ok: true };
+  } catch (error: unknown) {
+    return { ok: false, message: failureReason(error), partial: true };
+  }
+}
+
+/**
+ * Retrofit an existing repo's hand-authored `AGENTS.md` into the project
+ * topology. Resolves the workspace, reads the manifest, gathers the repo's facts,
+ * and classifies the one action. When `--apply` is set and the action is
+ * `relocate`, it moves the file to the anchor canonical and recreates the symlink
+ * (non-destructive — a present canonical, an already-wired symlink, an absent
+ * file, the anchor, or an unreachable/undeclared repo all change nothing).
+ */
+export async function doRunProjectRetrofit(
+  repo: string,
+  options: ProjectRetrofitOptions,
+  ctx: ProjectRetrofitContext,
+): Promise<ProjectRetrofitResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project retrofit");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+  const roster = manifest.repos ?? [];
+  const anchorReal = realpathSync(repositoryRoot);
+
+  // Resolve the arg ONCE and thread it into both classification and the move, so
+  // `--apply` acts on exactly the repo that was classified (no second realpath
+  // that could resolve elsewhere after a concurrent change, and no uncaught
+  // realpath error leaking an absolute path through the generic error path).
+  const argAbs = resolve(repositoryRoot, repo);
+  let argReal: string | undefined;
+  try {
+    argReal = realpathSync(argAbs);
+  } catch {
+    argReal = undefined;
+  }
+
+  const facts = gatherRetrofit(repositoryRoot, anchorReal, roster, repo, argAbs, argReal);
+  const plan = classifyRetrofit(facts);
+
+  let applied = false;
+  let failure: string | undefined;
+  let partial = false;
+  // A `relocate` plan implies the repo was reachable, which implies `argReal` is
+  // defined; the guard keeps the type sound without a second realpath.
+  if (options.apply === true && plan.action === "relocate" && argReal !== undefined) {
+    const canonicalFile = join(anchorReal, "agents", plan.canonicalName, CANONICAL_FILE);
+    const res = relocateAgentsFile(argReal, canonicalFile);
+    if (res.ok) {
+      applied = true;
+    } else {
+      failure = res.message;
+      partial = res.partial;
+    }
+  }
+
+  const result: ProjectRetrofitResult = {
+    ...plan,
+    hasRoster: roster.length > 0,
+    applied,
+    ...(failure !== undefined ? { failure } : {}),
+    ...(partial ? { partial } : {}),
+  };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectRetrofit(result));
+  }
+  return result;
+}
+
+/** Append the regular-file spoke checklist (the manual tidy-up `--apply` leaves alone). */
+function appendSpokeChecklist(lines: string[], spokes: string[]): void {
+  if (spokes.length === 0) return;
+  lines.push(
+    `## Spoke files to reconcile (${spokes.length}) — regular files that would block clean wiring`,
+  );
+  for (const s of spokes) {
+    lines.push(
+      `- ${s}: a regular file. If it duplicates AGENTS.md, remove it; if it carries unique content, merge it into AGENTS.md. Then run \`basou project symlinks\`.`,
+    );
+  }
+  lines.push("");
+}
+
+/**
+ * Render the retrofit report. Leads with the actionable outcome: no roster, a
+ * refusal (undeclared / anchor / unreachable / uninspectable / a canonical that
+ * would be clobbered), an idempotent skip (already a symlink / nothing to move),
+ * an apply failure, or the relocation that will be / was performed. Then the
+ * spoke checklist and the next step (`basou project derive`).
+ */
+export function renderProjectRetrofit(result: ProjectRetrofitResult): string {
+  const lines: string[] = [];
+  lines.push(
+    "# Retrofit an existing AGENTS.md into the project (relocate to the anchor canonical)",
+  );
+  lines.push("");
+
+  if (!result.hasRoster) {
+    lines.push(
+      "ℹ️ No repo roster declared (manifest `repos`). Declare the repo first with `basou project new` (or `basou project adopt`), then re-run.",
+    );
+    return lines.join("\n");
+  }
+
+  const canonical = `agents/${result.canonicalName}/${CANONICAL_FILE}`;
+
+  if (result.action === "refuse") {
+    if (result.reason === "not-declared") {
+      lines.push(
+        `ℹ️ \`${result.path}\` is not declared in the roster (manifest \`repos\`). Add it first with \`basou project new\` / \`basou project adopt\`, then re-run.`,
+      );
+    } else if (result.reason === "anchor") {
+      lines.push(
+        `⚠️ \`${result.path}\` is the anchor (the project root). It owns its canonical directly — there is nothing to relocate.`,
+      );
+    } else if (result.reason === "unreachable") {
+      lines.push(
+        `⚠️ \`${result.path}\` does not resolve to a git repository. There is nothing to retrofit.`,
+      );
+    } else if (result.reason === "blocked") {
+      lines.push(
+        `⚠️ \`${result.path}/${CANONICAL_FILE}\` could not be inspected (a parent component is not a directory, a permission error, or the path is neither a regular file nor a symlink). Resolve it by hand, then re-run.`,
+      );
+    } else if (result.reason === "canonical-exists") {
+      lines.push(
+        `⚠️ The destination canonical \`${canonical}\` already exists. Not relocating, to avoid clobbering it. If the canonical is the source of truth, the repo's AGENTS.md is redundant (remove it, then run \`basou project symlinks\`); otherwise reconcile the two by hand.`,
+      );
+    }
+    return lines.join("\n");
+  }
+
+  if (result.action === "skip") {
+    if (result.reason === "already-symlink") {
+      lines.push(
+        `✅ \`${result.path}/${CANONICAL_FILE}\` is already a symlink (already wired). Nothing to retrofit.`,
+      );
+    } else {
+      lines.push(
+        `ℹ️ \`${result.path}\` has no regular-file \`${CANONICAL_FILE}\` to relocate. If it should have a canonical, run \`basou project derive\` to generate one from the manifest.`,
+      );
+    }
+    lines.push("");
+    appendSpokeChecklist(lines, result.regularSpokes);
+    return lines.join("\n").trimEnd();
+  }
+
+  // action === "relocate"
+  if (result.failure !== undefined) {
+    lines.push(
+      `Could not relocate \`${result.path}/${CANONICAL_FILE}\` to \`${canonical}\`: ${result.failure}.`,
+    );
+    if (result.partial === true) {
+      // The canonical was already written before a later step failed: do not claim
+      // a clean no-op. The repo's AGENTS.md may be absent; derive/symlinks recover.
+      lines.push(
+        `The canonical \`${canonical}\` was written, but \`${result.path}/${CANONICAL_FILE}\` may be absent. Run \`basou project symlinks --apply\` (or \`basou project derive --apply\`) to recreate the missing link, then verify.`,
+      );
+    } else {
+      lines.push("Nothing was changed. Resolve the cause and re-run.");
+    }
+    return lines.join("\n");
+  }
+
+  if (result.applied) {
+    lines.push(
+      `✅ Relocated \`${result.path}/${CANONICAL_FILE}\` to \`${canonical}\` and left a symlink in its place.`,
+    );
+  } else {
+    lines.push(
+      `To relocate \`${result.path}/${CANONICAL_FILE}\` and replace it with a symlink (dry-run; pass --apply to write):`,
+    );
+    lines.push(`    move    ${result.path}/${CANONICAL_FILE} -> ${canonical}`);
+    lines.push(`    symlink ${result.path}/${CANONICAL_FILE} -> the canonical`);
+  }
+  lines.push("");
+  appendSpokeChecklist(lines, result.regularSpokes);
+  lines.push(
+    result.applied
+      ? "Next: run `basou project derive --apply` to add the preset block, the CLAUDE.md / Copilot spokes, and the .gitignore."
+      : "After applying, run `basou project derive --apply` to finish the wiring (preset block, CLAUDE.md / Copilot spokes, .gitignore).",
+  );
+  return lines.join("\n");
 }

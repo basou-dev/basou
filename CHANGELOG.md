@@ -3,6 +3,21 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou project retrofit <repo>` — fold an existing repo's hand-authored
+  `AGENTS.md` into the project topology. It moves the repo's regular-file
+  `AGENTS.md` to the anchor canonical (`agents/<repo>/AGENTS.md`) and replaces it
+  with a symlink, so the prose lives at the single source of truth. Dry-run by
+  default; `--apply` relocates. The onboarding counterpart to `new` for a repo
+  that already carries its own `AGENTS.md` — run it before `basou project
+  derive`, which then adds the preset block, the `CLAUDE.md` / Copilot spokes,
+  and the `.gitignore`. Non-destructive: it refuses when the destination
+  canonical already exists (never clobbering it) and skips a repo whose
+  `AGENTS.md` is already a symlink or absent; the anchor is refused.
+
 ## 0.26.0 — 2026-06-26
 
 ### Added

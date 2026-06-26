@@ -27,6 +27,7 @@ import {
   doRunProjectNew,
   doRunProjectPreset,
   doRunProjectRename,
+  doRunProjectRetrofit,
   doRunProjectSymlinks,
   doRunProjectSync,
   doRunProjectTeardown,
@@ -39,6 +40,7 @@ import {
   type ProjectNewResult,
   type ProjectPresetResult,
   type ProjectRenameResult,
+  type ProjectRetrofitResult,
   type ProjectSymlinksResult,
   type ProjectSyncResult,
   type ProjectWiringResult,
@@ -51,6 +53,7 @@ import {
   renderProjectNew,
   renderProjectPreset,
   renderProjectRename,
+  renderProjectRetrofit,
   renderProjectSymlinks,
   renderProjectSync,
   renderProjectWiring,
@@ -3072,5 +3075,198 @@ describe("basou project derive", () => {
     // gitignore: the public sibling now ignores the instruction files.
     const gi = await readFile(join(parent ?? "", "sibling", ".gitignore"), "utf8");
     expect(gi).toContain("AGENTS.md");
+  });
+});
+
+describe("basou project retrofit", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-retrofit-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  function sibling(name: string): string {
+    return join(parent as string, name);
+  }
+  async function makeRepo(name: string): Promise<string> {
+    const dir = sibling(name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+    return dir;
+  }
+  async function setupHostManifest(repos: RepoEntry[]): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, { ...base, repos });
+  }
+  function mute(): void {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  }
+
+  it("dry-run plans a relocate for a regular-file AGENTS.md and writes nothing", async () => {
+    const dir = await makeRepo("foo");
+    await writeFile(join(dir, "AGENTS.md"), "hand-authored\n");
+    await setupHostManifest([{ path: "../foo", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectRetrofit("../foo", {}, { cwd: host() });
+    expect(r.action).toBe("relocate");
+    expect(r.applied).toBe(false);
+    expect(r.canonicalPath).toBe("agents/foo/AGENTS.md");
+    // nothing moved: the regular file is intact and no canonical exists yet.
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("hand-authored\n");
+    expect(existsSync(join(host(), "agents", "foo", "AGENTS.md"))).toBe(false);
+  });
+
+  it("--apply moves the file to the canonical and leaves a symlink in its place", async () => {
+    const dir = await makeRepo("foo");
+    await writeFile(join(dir, "AGENTS.md"), "hand-authored\n");
+    await setupHostManifest([{ path: "../foo", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    expect(r.applied).toBe(true);
+    // the canonical now holds the original content.
+    expect(await readFile(join(host(), "agents", "foo", "AGENTS.md"), "utf8")).toBe(
+      "hand-authored\n",
+    );
+    // the repo's AGENTS.md is now a symlink that resolves back to that content.
+    expect(await readlink(join(dir, "AGENTS.md"))).toContain("agents/foo/AGENTS.md");
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("hand-authored\n");
+  });
+
+  it("is idempotent: a second --apply skips (already a symlink)", async () => {
+    const dir = await makeRepo("foo");
+    await writeFile(join(dir, "AGENTS.md"), "hand-authored\n");
+    await setupHostManifest([{ path: "../foo", visibility: "private" }]);
+    mute();
+    await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toBe("already-symlink");
+    expect(r.applied).toBe(false);
+  });
+
+  it("refuses when the destination canonical already exists (never clobbers either side)", async () => {
+    const dir = await makeRepo("foo");
+    await writeFile(join(dir, "AGENTS.md"), "repo-side\n");
+    await mkdir(join(host(), "agents", "foo"), { recursive: true });
+    await writeFile(join(host(), "agents", "foo", "AGENTS.md"), "canonical-side\n");
+    await setupHostManifest([{ path: "../foo", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    expect(r.action).toBe("refuse");
+    expect(r.reason).toBe("canonical-exists");
+    expect(r.applied).toBe(false);
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("repo-side\n");
+    expect(await readFile(join(host(), "agents", "foo", "AGENTS.md"), "utf8")).toBe(
+      "canonical-side\n",
+    );
+  });
+
+  it("refuses when the destination canonical is a dangling symlink (lstat-detected, never clobbered)", async () => {
+    const dir = await makeRepo("foo");
+    await writeFile(join(dir, "AGENTS.md"), "repo-side\n");
+    await mkdir(join(host(), "agents", "foo"), { recursive: true });
+    // A dangling symlink occupies the canonical path; existsSync would call it
+    // absent, but lstat-based detection must treat it as present and refuse.
+    await symlink("nowhere-target", join(host(), "agents", "foo", "AGENTS.md"));
+    await setupHostManifest([{ path: "../foo", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    expect(r.action).toBe("refuse");
+    expect(r.reason).toBe("canonical-exists");
+    expect(r.applied).toBe(false);
+    expect(await readlink(join(host(), "agents", "foo", "AGENTS.md"))).toBe("nowhere-target");
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("repo-side\n");
+  });
+
+  it("skips when the repo has no AGENTS.md to relocate", async () => {
+    await makeRepo("foo");
+    await setupHostManifest([{ path: "../foo", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toBe("absent");
+    expect(r.applied).toBe(false);
+  });
+
+  it("refuses an undeclared repo and leaves its AGENTS.md untouched", async () => {
+    const dir = await makeRepo("foo");
+    await writeFile(join(dir, "AGENTS.md"), "x\n");
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    expect(r.action).toBe("refuse");
+    expect(r.reason).toBe("not-declared");
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("x\n");
+  });
+
+  it("refuses the anchor (it owns the canonical directly)", async () => {
+    await writeFile(join(host(), "AGENTS.md"), "anchor own\n");
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectRetrofit(".", { apply: true }, { cwd: host() });
+    expect(r.action).toBe("refuse");
+    expect(r.reason).toBe("anchor");
+    expect(await readFile(join(host(), "AGENTS.md"), "utf8")).toBe("anchor own\n");
+  });
+
+  it("surfaces a regular-file spoke (CLAUDE.md) as a manual checklist", async () => {
+    const dir = await makeRepo("foo");
+    await writeFile(join(dir, "AGENTS.md"), "a\n");
+    await writeFile(join(dir, "CLAUDE.md"), "dup\n");
+    await setupHostManifest([{ path: "../foo", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectRetrofit("../foo", {}, { cwd: host() });
+    expect(r.action).toBe("relocate");
+    expect(r.regularSpokes).toContain("CLAUDE.md");
+  });
+});
+
+describe("renderProjectRetrofit", () => {
+  function base(over: Partial<ProjectRetrofitResult> = {}): ProjectRetrofitResult {
+    return {
+      path: "../foo",
+      action: "relocate",
+      reason: "ok",
+      canonicalName: "foo",
+      canonicalPath: "agents/foo/AGENTS.md",
+      regularSpokes: [],
+      hasRoster: true,
+      applied: false,
+      ...over,
+    };
+  }
+  it("dry-run relocate shows the move/symlink plan and the derive next-step", () => {
+    const out = renderProjectRetrofit(base());
+    expect(out).toContain("dry-run");
+    expect(out).toContain("agents/foo/AGENTS.md");
+    expect(out).toContain("basou project derive");
+  });
+  it("applied relocate confirms and lists the spoke checklist", () => {
+    const out = renderProjectRetrofit(base({ applied: true, regularSpokes: ["CLAUDE.md"] }));
+    expect(out).toContain("Relocated");
+    expect(out).toContain("Spoke files to reconcile");
+    expect(out).toContain("CLAUDE.md");
+  });
+  it("canonical-exists refusal warns about clobbering", () => {
+    // The canonical-exists branch derives the path from canonicalName, so the
+    // default canonicalPath is harmless here (and omitting the override keeps it
+    // valid under exactOptionalPropertyTypes — an explicit `undefined` is not).
+    const out = renderProjectRetrofit(base({ action: "refuse", reason: "canonical-exists" }));
+    expect(out).toContain("already exists");
+  });
+  it("no roster points at new/adopt", () => {
+    const out = renderProjectRetrofit(base({ hasRoster: false }));
+    expect(out).toContain("No repo roster");
   });
 });
