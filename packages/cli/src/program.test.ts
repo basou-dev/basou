@@ -59,7 +59,7 @@ describe("buildProgram", () => {
     ]);
   });
 
-  it("registers the project subcommands (adopt + archive + check + gitignore + preset + rename + symlinks + sync + teardown + wiring + workspace)", async () => {
+  it("registers the project subcommands (adopt + archive + check + derive + gitignore + new + preset + rename + symlinks + sync + teardown + wiring + workspace)", async () => {
     const { buildProgram } = await import("./program.js");
     const program = buildProgram();
     const project = program.commands.find((c) => c.name() === "project");
@@ -67,7 +67,9 @@ describe("buildProgram", () => {
       "adopt",
       "archive",
       "check",
+      "derive",
       "gitignore",
+      "new",
       "preset",
       "rename",
       "symlinks",
