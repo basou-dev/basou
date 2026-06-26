@@ -110,6 +110,14 @@ export { isRenderable, renderPresetBlock, summarizePresetPlan } from "./project/
 export type { RenamePlan } from "./project/rename.js";
 export { pathBasename, planRename } from "./project/rename.js";
 export type {
+  RetrofitAction,
+  RetrofitAgentsState,
+  RetrofitFacts,
+  RetrofitPlan,
+  RetrofitReason,
+} from "./project/retrofit.js";
+export { classifyRetrofit } from "./project/retrofit.js";
+export type {
   AdoptCandidate,
   AdoptCandidateKind,
   PublishKind,
