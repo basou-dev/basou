@@ -20,8 +20,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import {
   type AdoptCandidate,
   type ArchivePlan,
+  appendBasouGitignore,
   basouPaths,
+  createManifest,
   type ExistingViewLink,
+  ensureBasouDirectory,
   GENERATED_END,
   GENERATED_START,
   type GitignorePlanSummary,
@@ -54,6 +57,7 @@ import {
   reconcileSourceRoots,
   removeMarkerSection,
   renderWithMarkers,
+  resolveRepositoryRoot,
   type SourceRootsReconcile,
   type SymlinkPlanSummary,
   safeSimpleGit,
@@ -69,7 +73,7 @@ import {
   writeMarkdownFile,
 } from "@basou/core";
 import type { Command } from "commander";
-import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { extractCauseLabel, isVerbose, renderCliError } from "../lib/error-render.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import type { ImportContext } from "./import.js";
 
@@ -342,6 +346,53 @@ export type ProjectRenameResult = RenamePlan & {
   preservedUnknownFields: string[];
 };
 
+export type ProjectNewOptions = {
+  apply?: boolean;
+  /**
+   * The workspace view. Commander folds `--view <path>` and `--no-view` onto the
+   * same `view` property: a string is the override path, `false` is `--no-view`
+   * (solo project), and `undefined` is the default (`<name>-workspace` sibling).
+   */
+  view?: string | false;
+  /** Write a `.basou/` full-exclude .gitignore block instead of the default ignore+commit block. */
+  localOnly?: boolean;
+  force?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
+/** `now` is injectable so the `updated_at` bump on `--apply` is deterministic in tests. */
+export type ProjectNewContext = {
+  /** Defaults to `process.cwd()`. Injectable for tests. */
+  cwd?: string;
+};
+
+/** Flat result of {@link doRunProjectNew}: the scaffolded declaration plus what was done. */
+export type ProjectNewResult = {
+  /** The workspace name, derived from the anchor repo's directory name. */
+  workspaceName: string;
+  /** The seeded `repos` roster (anchor `.` first, then the deduped declared repos). */
+  repos: RepoEntry[];
+  /** The seeded `workspace.view` path, or null when `--no-view` (solo project). */
+  view: string | null;
+  /** The derived `import.source_roots` (the roster paths plus the view when present). */
+  sourceRoots: string[];
+  /** Declared repo paths that are not git repositories (rejected — basou never creates repos). */
+  invalidRepos: string[];
+  /** Whether a `.basou/manifest.yaml` already existed at the anchor (then `--force` is required). */
+  existed: boolean;
+  /** Whether the manifest was written (i.e. `--apply` was set). */
+  applied: boolean;
+};
+
+export type ProjectDeriveOptions = {
+  apply?: boolean;
+  verbose?: boolean;
+};
+
+/** `now` is injectable so each delegated step's `updated_at` bump is deterministic in tests. */
+export type ProjectDeriveContext = ImportContext & { now?: () => Date };
+
 /**
  * Agent instruction files inspected per repo. GEMINI.md is intentionally absent
  * (the Gemini CLI was discontinued for personal use). Each should be a gitignored
@@ -519,6 +570,40 @@ export function registerProjectCommand(program: Command): void {
     .option("-v, --verbose", "Show error causes")
     .action(async (repo: string, opts: ProjectTeardownOptions) => {
       await runProjectTeardown(repo, opts);
+    });
+
+  project
+    .command("new")
+    .argument("[repos...]", "Extra repo paths (besides the anchor) to seed into the roster")
+    .description(
+      "Scaffold a new project from scratch at the current Git repository (the anchor): create `.basou/` and seed the manifest with a candidate `repos` roster (the anchor plus any given repos, which must already be git repositories) and a `workspace.view` placeholder. Dry-run by default; pass --apply to write. Pass --no-view for a solo project. The greenfield entry point — declare visibility/language per repo afterward, then run `basou project derive --apply` to materialize the wiring",
+    )
+    .option("--apply", "Create `.basou/` and write the seeded manifest (default: dry-run preview)")
+    .option(
+      "--view <path>",
+      "Override the workspace view path (default: a <name>-workspace sibling)",
+    )
+    .option("--no-view", "Solo project: declare no workspace view")
+    .option(
+      "--local-only",
+      "Write a .basou/ full-exclude .gitignore block (keep the trail out of version control) instead of the default ignore+commit block",
+    )
+    .option("-f, --force", "Overwrite an existing manifest")
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (repos: string[], opts: ProjectNewOptions) => {
+      await runProjectNew(repos, opts);
+    });
+
+  project
+    .command("derive")
+    .description(
+      "Materialize a project's full wiring from the declared manifest: sync `source_roots` to the roster, generate each repo's canonical preset block, its instruction-file symlinks, the workspace view, and each public repo's .gitignore — in dependency order. Dry-run by default; pass --apply to write. The greenfield counterpart to `new` (run after declaring visibility/language) and a one-shot maintenance pass. Re-runnable: each step is idempotent, so a partial apply recovers on a second run",
+    )
+    .option("--apply", "Run every step in apply mode (default: dry-run preview)")
+    .option("-v, --verbose", "Show error causes")
+    .action(async (opts: ProjectDeriveOptions) => {
+      await runProjectDerive(opts);
     });
 }
 
@@ -3439,4 +3524,306 @@ export function renderProjectRename(result: ProjectRenameResult): string {
     "Note: rename only changes the manifest (.basou, git-tracked, reversible). It does not move the repo or update the on-disk wiring.",
   );
   return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectNew}. */
+export async function runProjectNew(
+  repos: string[],
+  options: ProjectNewOptions,
+  ctx: ProjectNewContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectNew(repos, options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Wrap the core git capability so the CLI surfaces the command-specific
+ * "Run 'git init' first, then re-run 'basou project new'." suffix while the
+ * capability layer remains command-agnostic. The anchor must already be a git
+ * repository: greenfield scaffolds the project declaration, never the repos.
+ * `resolveBasouRootForCommand` is deliberately NOT used — there is no `.basou`
+ * yet, so the workspace-resolution fallback would have nothing to resolve.
+ */
+async function resolveRepositoryRootForNew(cwd: string): Promise<string> {
+  try {
+    return await resolveRepositoryRoot(cwd);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "Not a git repository") {
+      throw new Error(
+        "Not a git repository. Run 'git init' first, then re-run 'basou project new'.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Scaffold a new project: resolve the anchor (the current git repository),
+ * normalize the given repo paths to repo-root-relative form and require each to
+ * be a git repository (basou declares the project, it never creates a repo), then
+ * seed a candidate `repos` roster (anchor `.` first, deduped), a `workspace.view`
+ * placeholder (unless `--no-view`), and the derived `import.source_roots` (the
+ * roster paths plus the view, since work happens with the view as cwd). When
+ * `--apply` is set it creates `.basou/`, writes the manifest, and appends the
+ * `.gitignore` block (best-effort — scaffolding succeeds even if that step
+ * fails). Without `--apply` it writes nothing and prints the plan. Visibility /
+ * language are intentionally left unset — the operator fills them in, then runs
+ * `basou project derive --apply` to materialize the wiring.
+ */
+export async function doRunProjectNew(
+  repos: string[],
+  options: ProjectNewOptions,
+  ctx: ProjectNewContext,
+): Promise<ProjectNewResult> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveRepositoryRootForNew(cwd);
+  const workspaceName = basename(repositoryRoot);
+
+  // Normalize each given repo to a repo-root-relative path (the anchor itself
+  // becomes "."), then classify it on disk. A path that is not a git repository
+  // is collected as invalid — basou scaffolds the declaration, never the repo,
+  // so every declared member must already exist. The relative path is computed
+  // from realpaths (the repository root git returned IS realpath-resolved), so a
+  // symlinked cwd or tmp dir cannot skew it into a long `../../var/...` form; an
+  // unresolvable path falls back to the plain relative form for the error label.
+  const declared = repos.map((p) => {
+    const abs = resolve(cwd, p);
+    let real: string;
+    try {
+      real = realpathSync(abs);
+    } catch {
+      real = abs;
+    }
+    const rel = relative(repositoryRoot, real);
+    return rel === "" ? "." : rel;
+  });
+  const invalidRepos = declared.filter(
+    (rel) => classifySourceRoot(repositoryRoot, rel).kind !== "repo",
+  );
+  if (invalidRepos.length > 0) {
+    throw new Error(
+      `These declared repos are not git repositories (create them with 'git init' first): ${invalidRepos.join(", ")}`,
+    );
+  }
+
+  // The roster always leads with the anchor ("."); a given repo that resolves to
+  // the anchor is deduped out (it must not appear twice).
+  const rosterPaths = ["."];
+  for (const rel of declared) {
+    if (rel !== "." && !rosterPaths.includes(rel)) rosterPaths.push(rel);
+  }
+  const roster: RepoEntry[] = rosterPaths.map((path) => ({ path }));
+
+  // `--no-view` (commander stores it as `view === false`) drops the view; a
+  // string overrides the default `<name>-workspace` sibling.
+  const viewPath =
+    options.view === false ? null : (options.view ?? `../${workspaceName}-workspace`);
+
+  // Work happens with the view as cwd, so the view stays in `source_roots`; the
+  // roster excludes it (a view is not a declared repo). Mirrors the existing
+  // sync/adopt split between source_roots and repos.
+  const sourceRoots = [...rosterPaths, ...(viewPath !== null ? [viewPath] : [])];
+
+  const paths = basouPaths(repositoryRoot);
+  const existed = existsSync(paths.files.manifest);
+
+  // Build the manifest from the declaration. `createManifest` knows source_roots
+  // but not repos/view, so attach those after.
+  const manifest: Manifest = createManifest({ workspaceName, sourceRoots });
+  manifest.repos = roster;
+  if (viewPath !== null) manifest.workspace.view = viewPath;
+
+  let applied = false;
+  if (options.apply === true) {
+    await ensureBasouDirectory(repositoryRoot);
+    // Refuses (throws "Already initialized. Use --force to overwrite.") when a
+    // manifest already exists without --force — the existing contract.
+    await writeManifest(paths, manifest, { force: options.force === true });
+    applied = true;
+    // .gitignore is best-effort: scaffolding succeeds even if this step fails.
+    try {
+      await appendBasouGitignore(repositoryRoot, { localOnly: options.localOnly === true });
+    } catch (error: unknown) {
+      renderGitignoreWarningForNew(error, isVerbose(options));
+    }
+  }
+
+  const result: ProjectNewResult = {
+    workspaceName,
+    repos: roster,
+    view: viewPath,
+    sourceRoots,
+    invalidRepos: [],
+    existed,
+    applied,
+  };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectNew(result));
+  }
+  return result;
+}
+
+/**
+ * Render a non-fatal warning when `.gitignore` cannot be updated during scaffold.
+ * Pathless (it never prints `error.cause.message`, which embeds the absolute
+ * path); the cause label is shown only under --verbose.
+ */
+function renderGitignoreWarningForNew(error: unknown, verbose: boolean): void {
+  const baseMessage = error instanceof Error ? error.message : String(error);
+  console.error(
+    `Warning: Could not update .gitignore (${baseMessage}). Add Basou's default .gitignore block manually.`,
+  );
+  if (verbose && error instanceof Error) {
+    const label = extractCauseLabel(error);
+    if (label !== undefined) console.error(`Caused by: ${label}`);
+  }
+}
+
+/**
+ * Render the scaffold report. Leads with the actionable outcome: an existing
+ * manifest that `--force` is needed to overwrite, then the seeded roster, view,
+ * and source_roots. The dry-run framing makes clear that without `--apply`
+ * nothing is written, and the next-step guidance points at declaring visibility /
+ * language and running `basou project derive`.
+ */
+export function renderProjectNew(result: ProjectNewResult): string {
+  const lines: string[] = [];
+  lines.push("# Scaffold a new project (build from a declaration)");
+  lines.push("");
+
+  if (result.existed && !result.applied) {
+    lines.push(
+      "⚠️ This anchor already has a `.basou/manifest.yaml`. Overwriting it requires --force (nothing is written by default, so an existing declaration is not lost).",
+    );
+    lines.push("");
+  }
+
+  if (result.applied) {
+    lines.push(`✅ Created \`.basou/\` for \`${result.workspaceName}\` and seeded the manifest:`);
+  } else {
+    lines.push(
+      `Will create \`.basou/\` for \`${result.workspaceName}\` and seed the manifest (dry-run; pass --apply to write):`,
+    );
+  }
+  lines.push("");
+
+  lines.push(`repos roster (${result.repos.length}):`);
+  for (const r of result.repos) {
+    lines.push(`- ${r.path}${r.path === "." ? " (anchor)" : ""}`);
+  }
+  lines.push("");
+
+  lines.push(
+    result.view !== null ? `workspace view: ${result.view}` : "workspace view: none (solo project)",
+  );
+  lines.push("");
+
+  lines.push(`source_roots (${result.sourceRoots.length}):`);
+  for (const s of result.sourceRoots) lines.push(`- ${s}`);
+  lines.push("");
+
+  lines.push(
+    "Note: visibility / language are unset. Assign them to each repo manually. Basou does not create git repos; a declared repo must already be `git init`-ed.",
+  );
+  if (result.applied) {
+    lines.push(
+      "Next: fill in visibility / language for each repo in `.basou/manifest.yaml`, then run `basou project derive --apply` to generate the wiring in one pass.",
+    );
+  } else {
+    lines.push(
+      "After applying, fill in visibility / language in the manifest, then run `basou project derive`.",
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectDerive}. */
+export async function runProjectDerive(
+  options: ProjectDeriveOptions,
+  ctx: ProjectDeriveContext = {},
+): Promise<void> {
+  try {
+    await doRunProjectDerive(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Materialize the full project wiring from the declared manifest by running the
+ * fine-grained `project` commands in dependency order. Resolves the workspace,
+ * reads the manifest; with no declared roster it prints a no-op hint and returns
+ * (not an error — the operator just has nothing to derive yet). Otherwise it runs,
+ * in order: sync (`source_roots` ← roster) → preset (canonical blocks) → symlinks
+ * (instruction links, after the canonicals they point at exist) → workspace (the
+ * view) → gitignore (public repos' `.gitignore`, after the links). Each step reads
+ * the manifest itself, so sync's `source_roots` write is visible to the later
+ * steps. A throwing step propagates (fail-fast); because every `--apply` step is
+ * idempotent, re-running recovers from a partial apply.
+ */
+export async function doRunProjectDerive(
+  options: ProjectDeriveOptions,
+  ctx: ProjectDeriveContext,
+): Promise<void> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project derive");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+
+  if (manifest.repos === undefined || manifest.repos.length === 0) {
+    console.log(
+      "# Generate project wiring in one pass (declaration → wiring)\n\nℹ️ No repo roster declared (manifest `repos`). Declare one first with `basou project new` (new project) or `basou project adopt` (bootstrap from existing source_roots).",
+    );
+    return;
+  }
+
+  const apply = options.apply === true;
+  // Shared ctx for every delegated step so the `now` clock (and cwd) stay
+  // consistent across the run.
+  const stepCtx: ProjectSyncContext = {
+    cwd: repositoryRoot,
+    ...(ctx.now !== undefined ? { now: ctx.now } : {}),
+  };
+  const stepOpts = { apply };
+
+  console.log("# Generate project wiring in one pass (declaration → wiring)");
+  console.log("");
+
+  // Each step reads the manifest itself, so sync's source_roots write is visible
+  // downstream; order matters (preset before symlinks so link targets exist;
+  // symlinks before gitignore so the files to ignore exist).
+  console.log("## 1/5 sync source_roots (roster → capture config)");
+  await doRunProjectSync(stepOpts, stepCtx);
+  console.log("");
+
+  console.log("## 2/5 generate instruction-file A preset (declaration → canonical)");
+  await doRunProjectPreset(stepOpts, stepCtx);
+  console.log("");
+
+  console.log("## 3/5 generate instruction-file symlinks (each repo → canonical)");
+  await doRunProjectSymlinks(stepOpts, stepCtx);
+  console.log("");
+
+  console.log("## 4/5 generate workspace view (aggregate the roster repos)");
+  await doRunProjectWorkspace(stepOpts, stepCtx);
+  console.log("");
+
+  console.log("## 5/5 generate .gitignore (exclude public repos' instruction files)");
+  await doRunProjectGitignore(stepOpts, stepCtx);
+  console.log("");
+
+  console.log(
+    apply
+      ? "✅ Ran every step (each is idempotent, so a partial apply recovers on re-run)."
+      : "ℹ️ Dry-run preview. Pass --apply to write the changes, then re-run.",
+  );
 }

@@ -22,7 +22,9 @@ import {
   doRunProjectAdopt,
   doRunProjectArchive,
   doRunProjectCheck,
+  doRunProjectDerive,
   doRunProjectGitignore,
+  doRunProjectNew,
   doRunProjectPreset,
   doRunProjectRename,
   doRunProjectSymlinks,
@@ -34,6 +36,7 @@ import {
   type ProjectAdoptResult,
   type ProjectArchiveResult,
   type ProjectGitignoreResult,
+  type ProjectNewResult,
   type ProjectPresetResult,
   type ProjectRenameResult,
   type ProjectSymlinksResult,
@@ -45,6 +48,7 @@ import {
   renderProjectArchive,
   renderProjectCheck,
   renderProjectGitignore,
+  renderProjectNew,
   renderProjectPreset,
   renderProjectRename,
   renderProjectSymlinks,
@@ -2777,5 +2781,296 @@ describe("basou project teardown", () => {
     expect(canon?.state).toBe("manual");
     expect(r.removableCount).toBe(0);
     expect(await readFile(join(ghostDir, "AGENTS.md"), "utf8")).toContain("BASOU:GENERATED");
+  });
+});
+
+describe("basou project new", () => {
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    // A workspace parent holding the anchor (the current git repo), a git sibling
+    // (a valid roster member), and a non-git sibling (an invalid one).
+    parent = await mkdtemp(join(tmpdir(), "basou-new-"));
+    const anchor = join(parent, "anchor");
+    const sibling = join(parent, "sibling");
+    const notrepo = join(parent, "notrepo");
+    await mkdir(anchor, { recursive: true });
+    await mkdir(sibling, { recursive: true });
+    await mkdir(notrepo, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: anchor,
+      env: ENV,
+    });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: sibling,
+      env: ENV,
+    });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function anchor(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "anchor");
+  }
+
+  it("dry-run writes nothing and plans the anchor-only roster with a default view", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectNew([], {}, { cwd: anchor() });
+    expect(r.applied).toBe(false);
+    expect(r.repos).toEqual([{ path: "." }]);
+    expect(r.view).toBe("../anchor-workspace");
+    expect(r.sourceRoots).toEqual([".", "../anchor-workspace"]);
+    // Nothing on disk.
+    expect(existsSync(basouPaths(anchor()).files.manifest)).toBe(false);
+  });
+
+  it("--apply creates .basou + manifest (anchor + given repos, view in source_roots)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectNew(["../sibling"], { apply: true }, { cwd: anchor() });
+    expect(r.applied).toBe(true);
+    const after = await readManifest(basouPaths(anchor()));
+    expect(after.repos).toEqual([{ path: "." }, { path: "../sibling" }]);
+    expect(after.workspace.view).toBe("../anchor-workspace");
+    expect(after.import?.source_roots).toEqual([".", "../sibling", "../anchor-workspace"]);
+    // The .gitignore block was appended (best-effort step ran).
+    expect(await readFile(join(anchor(), ".gitignore"), "utf8")).toContain(".basou");
+  });
+
+  it("throws (pathless) when a declared repo is not a git repository", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await expect(
+      doRunProjectNew(["../notrepo"], { apply: true }, { cwd: anchor() }),
+    ).rejects.toThrow(/not git repositories/);
+    // The error message names the path relatively, never absolutely.
+    await expect(
+      doRunProjectNew(["../notrepo"], { apply: true }, { cwd: anchor() }),
+    ).rejects.toThrow(/\.\.\/notrepo/);
+    expect(existsSync(basouPaths(anchor()).files.manifest)).toBe(false);
+  });
+
+  it("--no-view (commander view:false) seeds no workspace.view and keeps it out of source_roots", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectNew([], { apply: true, view: false }, { cwd: anchor() });
+    expect(r.view).toBeNull();
+    expect(r.sourceRoots).toEqual(["."]);
+    const after = await readManifest(basouPaths(anchor()));
+    expect(after.workspace.view).toBeUndefined();
+    expect(after.import?.source_roots).toEqual(["."]);
+  });
+
+  it("--view overrides the default view path", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectNew([], { apply: true, view: "../custom-view" }, { cwd: anchor() });
+    expect(r.view).toBe("../custom-view");
+    const after = await readManifest(basouPaths(anchor()));
+    expect(after.workspace.view).toBe("../custom-view");
+    expect(after.import?.source_roots).toEqual([".", "../custom-view"]);
+  });
+
+  it("dedupes a given repo that resolves to the anchor itself", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectNew(["."], { apply: true }, { cwd: anchor() });
+    expect(r.repos).toEqual([{ path: "." }]); // not [".", "."]
+  });
+
+  it("--apply refuses (throws) when a manifest already exists without --force", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await doRunProjectNew([], { apply: true }, { cwd: anchor() });
+    await expect(doRunProjectNew([], { apply: true }, { cwd: anchor() })).rejects.toThrow(
+      /Already initialized/,
+    );
+  });
+
+  it("dry-run flags an existing manifest as needing --force", async () => {
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await doRunProjectNew([], { apply: true }, { cwd: anchor() });
+    const r = await doRunProjectNew([], {}, { cwd: anchor() });
+    expect(r.existed).toBe(true);
+    expect(r.applied).toBe(false);
+    expect(out.join("\n")).toContain("--force");
+  });
+
+  it("--force overwrites an existing manifest", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await doRunProjectNew([], { apply: true }, { cwd: anchor() });
+    const r = await doRunProjectNew(
+      ["../sibling"],
+      { apply: true, force: true },
+      { cwd: anchor() },
+    );
+    expect(r.applied).toBe(true);
+    const after = await readManifest(basouPaths(anchor()));
+    expect(after.repos).toEqual([{ path: "." }, { path: "../sibling" }]);
+  });
+
+  it("throws a 'git init' hint when the cwd is not a git repository", async () => {
+    if (parent === undefined) throw new Error("parent not initialized");
+    const bare = join(parent, "notrepo");
+    await expect(doRunProjectNew([], {}, { cwd: bare })).rejects.toThrow(/Run 'git init' first/);
+  });
+
+  it("--json prints the machine-readable result", async () => {
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await doRunProjectNew(["../sibling"], { json: true }, { cwd: anchor() });
+    const parsed = JSON.parse(out.join("\n")) as ProjectNewResult;
+    expect(parsed.repos).toEqual([{ path: "." }, { path: "../sibling" }]);
+    expect(parsed.view).toBe("../anchor-workspace");
+  });
+
+  it("renderProjectNew shows the roster, view, and next-step guidance", () => {
+    const text = renderProjectNew({
+      workspaceName: "anchor",
+      repos: [{ path: "." }, { path: "../sibling" }],
+      view: "../anchor-workspace",
+      sourceRoots: [".", "../sibling", "../anchor-workspace"],
+      invalidRepos: [],
+      existed: false,
+      applied: true,
+    });
+    expect(text).toContain("../sibling");
+    expect(text).toContain("../anchor-workspace");
+    expect(text).toContain("basou project derive");
+  });
+
+  it("--apply --verbose .gitignore failure does not leak absolute paths", async () => {
+    // A `.gitignore` directory makes appendBasouGitignore fail (EISDIR). The
+    // best-effort try/catch must keep --apply succeeding, and the verbose
+    // warning must surface only the pathless cause label — never the absolute
+    // repo path that the native fs error embeds.
+    await mkdir(join(anchor(), ".gitignore"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const r = await doRunProjectNew([], { apply: true, verbose: true }, { cwd: anchor() });
+    expect(r.applied).toBe(true);
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toContain("Warning: Could not update .gitignore");
+    expect(stderr).toContain("Caused by:");
+    expect(stderr).not.toContain(anchor());
+  });
+});
+
+describe("basou project derive", () => {
+  const DERIVE_NOW = new Date("2026-06-26T12:00:00.000Z");
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    // Anchor (manifest host) + one public git sibling. The view is a sibling dir.
+    parent = await mkdtemp(join(tmpdir(), "basou-derive-"));
+    const anchor = join(parent, "anchor");
+    const sibling = join(parent, "sibling");
+    await mkdir(anchor, { recursive: true });
+    await mkdir(sibling, { recursive: true });
+    await mkdir(join(parent, "anchor-workspace"), { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: anchor,
+      env: ENV,
+    });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: sibling,
+      env: ENV,
+    });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function anchor(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "anchor");
+  }
+  async function setupAnchorManifest(opts: {
+    repos?: RepoEntry[];
+    sourceRoots?: string[];
+    view?: string;
+  }): Promise<void> {
+    const paths = await ensureBasouDirectory(anchor());
+    const base = createManifest({
+      workspaceName: "anchor",
+      now: NOW,
+      workspaceId: WS,
+      ...(opts.sourceRoots !== undefined ? { sourceRoots: opts.sourceRoots } : {}),
+    });
+    await writeManifest(paths, {
+      ...base,
+      ...(opts.repos !== undefined ? { repos: opts.repos } : {}),
+      ...(opts.view !== undefined ? { workspace: { ...base.workspace, view: opts.view } } : {}),
+    });
+  }
+
+  it("no-op (not an error) when no roster is declared", async () => {
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await setupAnchorManifest({}); // no repos
+    await doRunProjectDerive({}, { cwd: anchor() });
+    expect(out.join("\n")).toContain("No repo roster declared");
+    expect(process.exitCode === 1).toBe(false);
+  });
+
+  it("dry-run runs all five sections and writes nothing", async () => {
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    await setupAnchorManifest({
+      repos: [
+        { path: ".", visibility: "private" },
+        { path: "../sibling", visibility: "public", language: "en" },
+      ],
+      sourceRoots: ["."],
+      view: "../anchor-workspace",
+    });
+    await doRunProjectDerive({}, { cwd: anchor() });
+    const text = out.join("\n");
+    expect(text).toContain("1/5");
+    expect(text).toContain("2/5");
+    expect(text).toContain("3/5");
+    expect(text).toContain("4/5");
+    expect(text).toContain("5/5");
+    // source_roots NOT written (dry-run): still just ["."].
+    const after = await readManifest(basouPaths(anchor()));
+    expect(after.import?.source_roots).toEqual(["."]);
+    // No canonical, no view symlink generated.
+    expect(existsSync(join(anchor(), "agents", "sibling", "AGENTS.md"))).toBe(false);
+  });
+
+  it("--apply runs sync -> preset -> symlinks -> workspace -> gitignore in order", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await setupAnchorManifest({
+      repos: [
+        { path: ".", visibility: "private" },
+        { path: "../sibling", visibility: "public", language: "en" },
+      ],
+      sourceRoots: ["."],
+      view: "../anchor-workspace",
+    });
+    await doRunProjectDerive({ apply: true }, { cwd: anchor(), now: () => DERIVE_NOW });
+
+    const after = await readManifest(basouPaths(anchor()));
+    // sync: source_roots now cover the declared sibling (additive over ".").
+    expect(after.import?.source_roots).toContain("../sibling");
+
+    // preset: the sibling's canonical was created at the anchor.
+    expect(existsSync(join(anchor(), "agents", "sibling", "AGENTS.md"))).toBe(true);
+
+    // symlinks: the sibling's AGENTS.md is a symlink at the canonical.
+    const link = await readlink(join(parent ?? "", "sibling", "AGENTS.md"));
+    expect(link).toContain("agents/sibling/AGENTS.md");
+
+    // workspace: the view aggregates the sibling via a basename symlink.
+    expect(existsSync(join(parent ?? "", "anchor-workspace", "sibling"))).toBe(true);
+
+    // gitignore: the public sibling now ignores the instruction files.
+    const gi = await readFile(join(parent ?? "", "sibling", ".gitignore"), "utf8");
+    expect(gi).toContain("AGENTS.md");
   });
 });
