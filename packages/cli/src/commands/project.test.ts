@@ -3259,9 +3259,10 @@ describe("renderProjectRetrofit", () => {
     expect(out).toContain("CLAUDE.md");
   });
   it("canonical-exists refusal warns about clobbering", () => {
-    const out = renderProjectRetrofit(
-      base({ action: "refuse", reason: "canonical-exists", canonicalPath: undefined }),
-    );
+    // The canonical-exists branch derives the path from canonicalName, so the
+    // default canonicalPath is harmless here (and omitting the override keeps it
+    // valid under exactOptionalPropertyTypes — an explicit `undefined` is not).
+    const out = renderProjectRetrofit(base({ action: "refuse", reason: "canonical-exists" }));
     expect(out).toContain("already exists");
   });
   it("no roster points at new/adopt", () => {
