@@ -2,10 +2,10 @@
  * Shared "resume coherence" helpers for the orientation and handoff renderers,
  * so both judge staleness and pick the representative session identically.
  *
- * These exist because a resume ("basou refresh して続きを再開") must not present
- * a stale recorded decision as the current direction, nor represent the latest
- * work with an essentially empty session — the two failure modes that let an
- * agent re-attempt already-completed work on resume.
+ * These exist because a resume (re-import, then pick up where you left off) must
+ * not present a stale recorded decision as the current direction, nor represent
+ * the latest work with an essentially empty session — the two failure modes that
+ * let an agent re-attempt already-completed work on resume.
  */
 
 /**
@@ -37,7 +37,7 @@ type RankableSessionEntry = {
 };
 
 /**
- * Pick the session that should represent "最終 session" / latest work.
+ * Pick the session that should represent the latest / most informative work.
  *
  * A bare resume/refresh session (e.g. 1 command, 0 files) is the most RECENT
  * session but the least informative; selecting it hides the real-work session

@@ -32,7 +32,7 @@ export type OrientContext = ImportContext & {
  * Wire `basou orient` onto `program`. A read-first "where am I" command: it
  * renders the current position, writes `.basou/orientation.md`, and prints the
  * body to stdout by default. By default it writes NO provenance — a read-only
- * dry-run probe checks for uncaptured native work so the "これは最新か" verdict is
+ * dry-run probe checks for uncaptured native work so the freshness verdict is
  * honest (use `basou refresh` to actually re-import). `--refresh` opts into
  * importing first (so a SessionStart hook can guarantee a fresh position in one
  * command) while bare `orient` stays read-only. `--verbose` appends raw

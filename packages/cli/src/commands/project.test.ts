@@ -262,7 +262,7 @@ describe("renderProjectSync", () => {
 
   it("explains the no-roster case", () => {
     const out = renderProjectSync({ ...base, hasRoster: false });
-    expect(out).toContain("未宣言");
+    expect(out).toContain("No repo roster declared");
   });
 
   it("surfaces the preserved-unknown advisory even in an early-return (no-roster) branch", () => {
@@ -271,15 +271,15 @@ describe("renderProjectSync", () => {
       hasRoster: false,
       preservedUnknownFields: ["signing", "zeta"],
     });
-    expect(out).toContain("未宣言"); // still the no-roster verdict
+    expect(out).toContain("No repo roster declared"); // still the no-roster verdict
     expect(out).toContain("signing, zeta"); // advisory appears before the early return
-    expect(out).toContain("保持しています");
+    expect(out).toContain("Preserving");
   });
 
   it("reports already-in-sync with a check mark", () => {
     const out = renderProjectSync({ ...base, unchanged: true });
     expect(out).toContain("✅");
-    expect(out).toContain("同期不要");
+    expect(out).toContain("nothing to sync");
   });
 
   it("dry-run lists the additions and states nothing is written", () => {
@@ -291,7 +291,7 @@ describe("renderProjectSync", () => {
     });
     expect(out).toContain("../bio");
     expect(out).toContain("--apply");
-    expect(out).toContain("削除はしません");
+    expect(out).toContain("nothing is removed");
   });
 
   it("applied lists what was added with a check mark", () => {
@@ -303,7 +303,7 @@ describe("renderProjectSync", () => {
       applied: true,
     });
     expect(out).toContain("✅");
-    expect(out).toContain("追加しました");
+    expect(out).toContain("Added");
     expect(out).toContain("../bio");
   });
 });
@@ -339,12 +339,12 @@ describe("renderProjectCheck", () => {
       ok: true,
     });
     expect(out).toContain("✅");
-    expect(out).toContain("3 repo");
+    expect(out).toContain("3 declared repos");
   });
 
   it("explains the undeclared-roster case", () => {
     const out = renderProjectCheck({ ...base, capturedCount: 1, extra: ["../x"] });
-    expect(out).toContain("未宣言");
+    expect(out).toContain("No repo roster declared");
     expect(out).toContain("../x");
   });
 });
@@ -495,7 +495,7 @@ describe("renderProjectAdopt", () => {
 
   it("explains the already-declared case (points to check/sync)", () => {
     const out = renderProjectAdopt({ ...base, alreadyDeclared: true });
-    expect(out).toContain("既に宣言済み");
+    expect(out).toContain("already declared");
     expect(out).toContain("project check");
   });
 
@@ -513,18 +513,18 @@ describe("renderProjectAdopt", () => {
     expect(out).toContain("visibility");
     expect(out).toContain("../view");
     expect(out).toContain("../gone");
-    expect(out).toContain("解決不能");
+    expect(out).toContain("unresolvable");
   });
 
   it("applied confirms the write with a check mark", () => {
     const out = renderProjectAdopt({ ...base, repos: [{ path: "." }], applied: true });
     expect(out).toContain("✅");
-    expect(out).toContain("書き込みました");
+    expect(out).toContain("Wrote");
   });
 
   it("reports when nothing was found", () => {
     const out = renderProjectAdopt({ ...base, excluded: [{ path: "../view", kind: "non-repo" }] });
-    expect(out).toContain("見つかりませんでした");
+    expect(out).toContain("nothing to bootstrap");
   });
 });
 
@@ -702,7 +702,7 @@ describe("renderProjectWiring", () => {
 
   it("explains the no-roster case (points to adopt)", () => {
     const out = renderProjectWiring({ ...base, hasRoster: false });
-    expect(out).toContain("未宣言");
+    expect(out).toContain("No repo roster declared");
     expect(out).toContain("project adopt");
   });
 
@@ -719,8 +719,8 @@ describe("renderProjectWiring", () => {
       ok: false,
     });
     expect(out).not.toContain("✅");
-    expect(out).not.toContain("privacy リスクなし");
-    expect(out).toContain("確定した privacy リスクはありません");
+    expect(out).not.toContain("no privacy risk");
+    expect(out).toContain("No confirmed privacy risk");
   });
 
   it("surfaces each risk with its repo, visibility and file", () => {
@@ -743,11 +743,11 @@ describe("renderProjectWiring", () => {
       unreachable: ["../z"],
       ok: false,
     });
-    expect(out).toContain("visibility 未設定");
+    expect(out).toContain("Visibility unset");
     expect(out).toContain("../x");
-    expect(out).toContain("欠落");
+    expect(out).toContain("Missing instruction files");
     expect(out).toContain("../y");
-    expect(out).toContain("到達不能");
+    expect(out).toContain("Unreachable");
     expect(out).toContain("../z");
   });
 });
@@ -882,20 +882,20 @@ describe("renderProjectGitignore", () => {
 
   it("explains the no-roster case (points to adopt)", () => {
     const out = renderProjectGitignore({ ...base, hasRoster: false });
-    expect(out).toContain("未宣言");
+    expect(out).toContain("No repo roster declared");
     expect(out).toContain("project adopt");
   });
 
   it("reports a clean state with a check mark", () => {
     const out = renderProjectGitignore(base);
     expect(out).toContain("✅");
-    expect(out).toContain("追加不要");
+    expect(out).toContain("nothing to add");
   });
 
   it("does NOT lead with a clean verdict when there are skipped/unreachable repos and nothing to add", () => {
     const out = renderProjectGitignore({ ...base, unknown: ["../x"], ok: false });
-    expect(out).not.toContain("追加不要");
-    expect(out).toContain("判定できない");
+    expect(out).not.toContain("nothing to add");
+    expect(out).toContain("unjudgeable / unreachable");
   });
 
   it("dry-run lists the additions and says nothing is written", () => {
@@ -907,7 +907,7 @@ describe("renderProjectGitignore", () => {
     expect(out).toContain("--apply");
     expect(out).toContain("../pub");
     expect(out).toContain("CLAUDE.md");
-    expect(out).toContain("削除はしません");
+    expect(out).toContain("nothing is removed");
   });
 
   it("applied lists what was added with a check mark", () => {
@@ -918,12 +918,12 @@ describe("renderProjectGitignore", () => {
       applied: true,
     });
     expect(out).toContain("✅");
-    expect(out).toContain("追加しました");
+    expect(out).toContain("Added to");
   });
 
   it("always caveats that .gitignore does not untrack already-tracked files (points to wiring)", () => {
     const out = renderProjectGitignore(base);
-    expect(out).toContain("untrack しません");
+    expect(out).toContain("does not untrack");
     expect(out).toContain("project wiring");
     expect(out).toContain("git rm --cached");
   });
@@ -1189,7 +1189,7 @@ describe("renderProjectSymlinks", () => {
 
   it("shows a clean verdict when everything is wired", () => {
     const out = renderProjectSymlinks(base);
-    expect(out).toContain("正しく張られています");
+    expect(out).toContain("correctly wired");
   });
 
   it("lists planned links with dry-run framing", () => {
@@ -1215,9 +1215,9 @@ describe("renderProjectSymlinks", () => {
       conflicts: [{ repo: "../pub", file: "AGENTS.md", reason: "occupied" }],
       missingCanonical: ["../newrepo"],
     });
-    expect(out).not.toContain("正しく張られています");
-    expect(out).toContain("競合");
-    expect(out).toContain("canonical 不在");
+    expect(out).not.toContain("correctly wired");
+    expect(out).toContain("Conflicts");
+    expect(out).toContain("Canonical missing");
   });
 
   it("applied shows a check mark and created wording", () => {
@@ -1228,7 +1228,7 @@ describe("renderProjectSymlinks", () => {
       plans: [{ path: "../pub", toCreate: [{ name: "CLAUDE.md", target: "AGENTS.md" }] }],
     });
     expect(out).toContain("✅");
-    expect(out).toContain("作成しました");
+    expect(out).toContain("Created instruction-file symlinks");
   });
 
   it("renders a canonical collision", () => {
@@ -1237,7 +1237,7 @@ describe("renderProjectSymlinks", () => {
       ok: false,
       collisions: [{ canonicalName: "pub", repos: ["../x/pub", "../y/pub"] }],
     });
-    expect(out).toContain("canonical 衝突");
+    expect(out).toContain("Canonical collisions");
     expect(out).toContain("agents/pub/AGENTS.md");
     expect(out).toContain("../x/pub");
   });
@@ -1248,8 +1248,8 @@ describe("renderProjectSymlinks", () => {
       ok: false,
       conflicts: [{ repo: "../pub", file: ".github/copilot-instructions.md", reason: "blocked" }],
     });
-    expect(out).toContain("検査できないパス");
-    expect(out).not.toContain("symlink でない実ファイル/ディレクトリ");
+    expect(out).toContain("uninspectable path");
+    expect(out).not.toContain("a real file/directory, not a symlink");
   });
 
   it("renders --apply failures", () => {
@@ -1258,7 +1258,7 @@ describe("renderProjectSymlinks", () => {
       ok: false,
       failures: [{ repo: "../pub", file: "AGENTS.md", message: "EACCES" }],
     });
-    expect(out).toContain("作成に失敗");
+    expect(out).toContain("Creation failed");
     expect(out).toContain("EACCES");
   });
 
@@ -1278,7 +1278,7 @@ describe("renderProjectSymlinks", () => {
       ],
       failures: [{ repo: "../pub", file: "CLAUDE.md", message: "EEXIST" }],
     });
-    expect(out).toContain("一部失敗");
+    expect(out).toContain("some failed");
     expect(out).toContain("AGENTS.md -> ../host/agents/pub/AGENTS.md"); // created, listed
     expect(out).not.toContain("CLAUDE.md -> AGENTS.md"); // failed, NOT listed as created
     expect(out).toContain("CLAUDE.md: EEXIST"); // shown in the failures section
@@ -1292,7 +1292,7 @@ describe("renderProjectSymlinks", () => {
       plans: [{ path: "../pub", toCreate: [{ name: "AGENTS.md", target: "x" }] }],
       failures: [{ repo: "../pub", file: "AGENTS.md", message: "EACCES" }],
     });
-    expect(out).toContain("作成できませんでした");
+    expect(out).toContain("Could not create");
     expect(out).not.toContain("dry-run");
   });
 });
@@ -1662,7 +1662,7 @@ describe("basou project workspace", () => {
     await setup({ repos: [{ path: "../r1" }], view: "../wsview" });
     mute();
     await expect(doRunProjectWorkspace({ prune: true }, { cwd: host() })).rejects.toThrow(
-      /走査できません/,
+      /Cannot scan the workspace view/,
     );
   });
 
@@ -1700,7 +1700,9 @@ describe("gatherExistingViewLinks", () => {
 
   it("throws (no silent clean) when the view path is a regular file (ENOTDIR)", async () => {
     await writeFile(p("view"), "x\n");
-    expect(() => gatherExistingViewLinks(p("view"), new Set())).toThrow(/走査できません/);
+    expect(() => gatherExistingViewLinks(p("view"), new Set())).toThrow(
+      /Cannot scan the workspace view/,
+    );
   });
 });
 
@@ -1775,7 +1777,7 @@ describe("renderProjectWorkspace", () => {
 
   it("shows a clean verdict when the view aggregates the whole roster", () => {
     const out = renderProjectWorkspace({ ...base, correctCount: 3 });
-    expect(out).toContain("集約しています");
+    expect(out).toContain("aggregates the entire declared roster");
     expect(out).toContain("3 links");
   });
 
@@ -1796,8 +1798,8 @@ describe("renderProjectWorkspace", () => {
       conflicts: [{ name: "x", reason: "blocked" }],
       collisions: [{ linkName: "pub", repos: ["../a/pub", "../b/pub"] }],
     });
-    expect(out).toContain("検査できないパス");
-    expect(out).toContain("basename 衝突");
+    expect(out).toContain("uninspectable path");
+    expect(out).toContain("Basename collisions");
     expect(out).toContain("pub ← ../a/pub, ../b/pub");
   });
 
@@ -1812,7 +1814,7 @@ describe("renderProjectWorkspace", () => {
       ],
       failures: [{ name: "site", message: "EACCES" }],
     });
-    expect(out).toContain("一部失敗");
+    expect(out).toContain("some failed");
     expect(out).toContain("basou -> ../basou");
     expect(out).not.toContain("site -> ../site");
     expect(out).toContain("site: EACCES");
@@ -1821,7 +1823,7 @@ describe("renderProjectWorkspace", () => {
   it("notes the --prune semantics in the trailing guidance", () => {
     const out = renderProjectWorkspace(base);
     expect(out).toContain("--prune");
-    expect(out).toContain("参照先 repo は削除しません");
+    expect(out).toContain("never the referenced repo");
   });
 
   it("lists prunable strays with dry-run framing", () => {
@@ -1831,7 +1833,7 @@ describe("renderProjectWorkspace", () => {
       toPrune: [{ name: "old", target: "../old" }],
     });
     expect(out).toContain("--prune");
-    expect(out).toContain("撤去予定");
+    expect(out).toContain("to prune");
     expect(out).toContain("old -> ../old");
   });
 
@@ -1846,7 +1848,7 @@ describe("renderProjectWorkspace", () => {
       ],
       pruneFailures: [{ name: "b", message: "EACCES" }],
     });
-    expect(out).toContain("一部失敗");
+    expect(out).toContain("some failed");
     expect(out).toContain("a -> ../a");
     expect(out).not.toContain("b -> ../b");
     expect(out).toContain("b: EACCES");
@@ -1860,9 +1862,9 @@ describe("renderProjectWorkspace", () => {
       toPrune: [{ name: "old", target: "../old" }],
       pruneWithheld: true,
     });
-    expect(out).toContain("撤去を保留");
+    expect(out).toContain("pruning was withheld");
     expect(out).toContain("old -> ../old");
-    expect(out).not.toContain("撤去するには --prune"); // not the dry-run framing
+    expect(out).not.toContain("pass --prune to remove"); // not the dry-run framing
   });
 
   it("reports unrecognized strays (broken / non-repo / absolute) as left untouched", () => {
@@ -1875,10 +1877,10 @@ describe("renderProjectWorkspace", () => {
         { name: "abs", target: "/somewhere", reason: "absolute" },
       ],
     });
-    expect(out).toContain("未撤去の stray");
-    expect(out).toContain("リンク切れ");
-    expect(out).toContain("git repo でない");
-    expect(out).toContain("絶対パス");
+    expect(out).toContain("Strays left in place");
+    expect(out).toContain("broken link");
+    expect(out).toContain("non-git-repo target");
+    expect(out).toContain("absolute-path target");
   });
 });
 
@@ -1940,7 +1942,7 @@ describe("basou project preset", () => {
       applied: false,
       failures: [],
     } satisfies ProjectPresetResult);
-    expect(out).toContain("ロースターが未宣言");
+    expect(out).toContain("No repo roster declared");
   });
 
   it("plans a create for a renderable repo with no canonical (dry-run writes nothing)", async () => {
@@ -2058,7 +2060,7 @@ describe("basou project preset", () => {
       applied: false,
       failures: [],
     } satisfies ProjectPresetResult);
-    expect(out).toContain("生成予定");
+    expect(out).toContain("Preset blocks to generate");
     expect(out).toContain("ソース可視性: public");
     expect(out).toContain("agents/pub/AGENTS.md");
   });
@@ -2130,7 +2132,7 @@ describe("basou project preset", () => {
     expect(await readlink(canonicalPath("pub"))).toBe("_target.md");
     expect(await readFile(target, "utf8")).toBe(`${GENERATED_START}\nstale\n${GENERATED_END}\n`);
     const out = renderProjectPreset(r);
-    expect(out).toContain("書き込みに失敗");
+    expect(out).toContain("Write failed");
   });
 
   it("--json emits a parseable result with the full plan shape", async () => {
@@ -2284,7 +2286,7 @@ describe("basou project archive", () => {
     expect(r.applied).toBe(false);
     expect((await manifestOf()).repos?.map((e) => e.path)).toEqual(["."]);
     const out = renderProjectArchive(r);
-    expect(out).toContain("roster に宣言されていません");
+    expect(out).toContain("not declared in the roster");
   });
 
   it("reports the repo-side teardown checklist and never touches it on --apply", async () => {
@@ -2516,7 +2518,7 @@ describe("basou project rename", () => {
     expect(r.noop).toBe(true);
     expect(r.applied).toBe(false);
     const out = renderProjectRename(r);
-    expect(out).toContain("同一です");
+    expect(out).toContain("are identical");
   });
 
   it("reports found:false for a source not in the roster (manifest unchanged)", async () => {

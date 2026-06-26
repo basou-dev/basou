@@ -555,7 +555,7 @@ function effectiveSourceRoots(manifest: Manifest): string[] {
 function preservedUnknownLines(fields: string[]): string[] {
   if (fields.length === 0) return [];
   return [
-    `ℹ️ basou が認識しない manifest のトップレベルフィールドを ${fields.length} 件保持しています(write 時も削除しません): ${fields.join(", ")}`,
+    `ℹ️ Preserving ${fields.length} unrecognized top-level manifest field${fields.length === 1 ? "" : "s"} (kept on write, never dropped): ${fields.join(", ")}`,
     "",
   ];
 }
@@ -591,16 +591,16 @@ export async function doRunProjectCheck(
  */
 export function renderProjectCheck(summary: RosterDriftSummary): string {
   const lines: string[] = [];
-  lines.push("# プロジェクト構成チェック(宣言 vs 捕捉)");
+  lines.push("# Project composition check (declared vs captured)");
   lines.push("");
 
   if (summary.declaredCount === 0) {
     lines.push(
-      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。`source_roots` のみで運用中のため、宣言との照合はできません。",
+      "ℹ️ No repo roster declared (manifest `repos`). Running on `source_roots` alone, so there is nothing to compare the declaration against.",
     );
     if (summary.extra.length > 0) {
       lines.push("");
-      lines.push(`捕捉中の source_roots (${summary.extra.length}):`);
+      lines.push(`Captured source_roots (${summary.extra.length}):`);
       for (const p of summary.extra) lines.push(`- ${p}`);
     }
     return lines.join("\n");
@@ -608,26 +608,28 @@ export function renderProjectCheck(summary: RosterDriftSummary): string {
 
   if (summary.gaps.length === 0) {
     lines.push(
-      `✅ 宣言された ${summary.declaredCount} repo はすべて捕捉対象(source_roots)に含まれています。`,
+      `✅ All ${summary.declaredCount} declared repo${summary.declaredCount === 1 ? " is" : "s are"} covered by the capture config (source_roots).`,
     );
   } else {
-    lines.push(`⚠️ 宣言されているのに捕捉対象に無い repo: ${summary.gaps.length}(取りこぼし)`);
+    lines.push(
+      `⚠️ Declared but not captured: ${summary.gaps.length} repo${summary.gaps.length === 1 ? "" : "s"}`,
+    );
     for (const g of summary.gaps) {
-      lines.push(`- ${g.path}${g.visibility ? ` [${g.visibility}]` : ""} — source_roots に未登録`);
+      lines.push(`- ${g.path}${g.visibility ? ` [${g.visibility}]` : ""} — not in source_roots`);
     }
   }
   lines.push("");
 
   if (summary.extra.length > 0) {
     lines.push(
-      `## 宣言外の捕捉対象 (${summary.extra.length}) — workspace view か、宣言漏れの可能性`,
+      `## Captured but undeclared (${summary.extra.length}) — the workspace view, or a missing declaration`,
     );
     for (const p of summary.extra) lines.push(`- ${p}`);
     lines.push("");
   }
 
   lines.push(
-    "注: read-only の advisory です。宣言(repos)と捕捉設定(source_roots)の差分のみを表示し、enforce はしません。",
+    "Note: read-only advisory. It only shows the difference between the declaration (repos) and the capture config (source_roots); it does not enforce.",
   );
   return lines.join("\n");
 }
@@ -705,32 +707,36 @@ export async function doRunProjectSync(
  */
 export function renderProjectSync(result: ProjectSyncResult): string {
   const lines: string[] = [];
-  lines.push("# source_roots 同期(宣言ロースター → 捕捉設定)");
+  lines.push("# source_roots sync (declared roster → capture config)");
   lines.push("");
   lines.push(...preservedUnknownLines(result.preservedUnknownFields));
 
   if (!result.hasRoster) {
     lines.push(
-      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。同期の元になる宣言が無いため、変更はありません。",
+      "ℹ️ No repo roster declared (manifest `repos`). There is no declaration to sync from, so nothing changes.",
     );
     return lines.join("\n");
   }
 
   if (result.unchanged) {
-    lines.push("✅ source_roots は宣言ロースターをすべて覆っています(同期不要)。");
+    lines.push("✅ source_roots already covers the entire declared roster (nothing to sync).");
     return lines.join("\n");
   }
 
   if (result.applied) {
-    lines.push(`✅ source_roots に ${result.added.length} 件追加しました:`);
+    lines.push(
+      `✅ Added ${result.added.length} entr${result.added.length === 1 ? "y" : "ies"} to source_roots:`,
+    );
     for (const p of result.added) lines.push(`- ${p}`);
   } else {
     lines.push(
-      `${result.added.length} 件の repo が source_roots に未登録です。追加予定(dry-run、反映するには --apply):`,
+      `${result.added.length} repo${result.added.length === 1 ? " is" : "s are"} not in source_roots. To add (dry-run; pass --apply to write):`,
     );
     for (const p of result.added) lines.push(`- ${p}`);
     lines.push("");
-    lines.push("注: 既存の source_roots は保持し、不足分の追記のみ行います(削除はしません)。");
+    lines.push(
+      "Note: existing source_roots are kept; only the missing entries are appended (nothing is removed).",
+    );
   }
   return lines.join("\n");
 }
@@ -830,41 +836,47 @@ export async function doRunProjectAdopt(
  */
 export function renderProjectAdopt(result: ProjectAdoptResult): string {
   const lines: string[] = [];
-  lines.push("# repo ロースターの bootstrap(source_roots → repos)");
+  lines.push("# Bootstrap repo roster (source_roots → repos)");
   lines.push("");
   lines.push(...preservedUnknownLines(result.preservedUnknownFields));
 
   if (result.alreadyDeclared) {
     lines.push(
-      "ℹ️ repo ロースター(manifest の `repos`)は既に宣言済みです。adopt は一度きりの bootstrap のため何も書き込みません。以後の保守は `project check` / `project sync` を使ってください。",
+      "ℹ️ A repo roster (manifest `repos`) is already declared. adopt is a one-time bootstrap, so it writes nothing. Use `project check` / `project sync` for ongoing maintenance.",
     );
     return lines.join("\n");
   }
 
   if (result.repos.length === 0) {
-    lines.push("ℹ️ source_roots に git repo が見つかりませんでした(bootstrap 対象なし)。");
+    lines.push("ℹ️ No git repo found in source_roots (nothing to bootstrap).");
   } else if (result.applied) {
-    lines.push(`✅ ${result.repos.length} repo を repos ロースターに書き込みました:`);
+    lines.push(
+      `✅ Wrote ${result.repos.length} repo${result.repos.length === 1 ? "" : "s"} to the repos roster:`,
+    );
     for (const r of result.repos) lines.push(`- ${r.path}`);
     lines.push("");
     lines.push(
-      "注: visibility は未設定です。各 repo に public / private / future-public を手動で付与してください。",
+      "Note: visibility is unset. Assign public / private / future-public to each repo manually.",
     );
   } else {
     lines.push(
-      `${result.repos.length} repo を repos ロースターに宣言予定(dry-run、反映するには --apply):`,
+      `${result.repos.length} repo${result.repos.length === 1 ? "" : "s"} to declare in the repos roster (dry-run; pass --apply to write):`,
     );
     for (const r of result.repos) lines.push(`- ${r.path}`);
     lines.push("");
-    lines.push("注: visibility は未設定で提案します。反映後に手動で付与してください。");
+    lines.push("Note: visibility is proposed unset; assign it manually after applying.");
   }
 
   if (result.excluded.length > 0) {
     lines.push("");
-    lines.push(`## 除外 (${result.excluded.length}) — git repo ではないため repos に含めません`);
+    lines.push(
+      `## Excluded (${result.excluded.length}) — not a git repo, so not included in repos`,
+    );
     for (const e of result.excluded) {
       const reason =
-        e.kind === "non-repo" ? "非 repo(workspace view / tmp 等)" : "解決不能(パスが存在しない)";
+        e.kind === "non-repo"
+          ? "not a repo (workspace view / tmp, etc.)"
+          : "unresolvable (path does not exist)";
       lines.push(`- ${e.path} — ${reason}`);
     }
   }
@@ -980,58 +992,64 @@ export async function doRunProjectWiring(
  */
 export function renderProjectWiring(result: ProjectWiringResult): string {
   const lines: string[] = [];
-  lines.push("# 指示書 wiring チェック(宣言ロースター × 指示書の存在/git 追跡)");
+  lines.push(
+    "# Instruction-file wiring check (declared roster × instruction-file presence / git tracking)",
+  );
   lines.push("");
 
   if (!result.hasRoster) {
     lines.push(
-      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。`basou project adopt` で宣言してから実行してください。",
+      "ℹ️ No repo roster declared (manifest `repos`). Declare one with `basou project adopt`, then re-run.",
     );
     return lines.join("\n");
   }
 
   if (result.risks.length > 0) {
     lines.push(
-      `⚠️ 公開系 repo で指示書が git 追跡されています: ${result.risks.length}(canonical の漏洩リスク)`,
+      `⚠️ Instruction files tracked by git in public-facing repos: ${result.risks.length} (canonical leak risk)`,
     );
     for (const r of result.risks) {
       lines.push(
-        `- ${r.repo} [${r.visibility}] — ${r.file} が tracked(gitignore された symlink である必要があります)`,
+        `- ${r.repo} [${r.visibility}] — ${r.file} is tracked (it should be a gitignored symlink)`,
       );
     }
   } else if (result.ok) {
-    lines.push("✅ 公開系 repo で git 追跡されている指示書はありません(privacy リスクなし)。");
+    lines.push(
+      "✅ No instruction file is tracked by git in a public-facing repo (no privacy risk).",
+    );
   } else {
     // No confirmed risks, but unjudgeable / unreachable repos exist below — do NOT
     // lead with a clean "no risk" verdict (that would be a false-clear).
     lines.push(
-      "ℹ️ 確定した privacy リスクはありませんが、判定できない/到達できない repo があります(下記参照)。",
+      "ℹ️ No confirmed privacy risk, but some repos are unjudgeable / unreachable (see below).",
     );
   }
   lines.push("");
 
   if (result.unknown.length > 0) {
     lines.push(
-      `## visibility 未設定 (${result.unknown.length}) — privacy 判定不可。manifest の repos に visibility を付与してください`,
+      `## Visibility unset (${result.unknown.length}) — privacy cannot be judged. Assign visibility in the manifest repos`,
     );
     for (const p of result.unknown) lines.push(`- ${p}`);
     lines.push("");
   }
 
   if (result.incomplete.length > 0) {
-    lines.push(`## 指示書の欠落 (${result.incomplete.length}) — 後続の生成スライスで補完予定`);
+    lines.push(
+      `## Missing instruction files (${result.incomplete.length}) — to be filled by a later generation slice`,
+    );
     for (const i of result.incomplete) lines.push(`- ${i.repo} — ${i.missing.join(", ")}`);
     lines.push("");
   }
 
   if (result.unreachable.length > 0) {
-    lines.push(`## 到達不能 (${result.unreachable.length}) — パス未解決 / git repo でない`);
+    lines.push(`## Unreachable (${result.unreachable.length}) — path unresolved / not a git repo`);
     for (const p of result.unreachable) lines.push(`- ${p}`);
     lines.push("");
   }
 
   lines.push(
-    "注: read-only の advisory です。指示書の存在と git 追跡状況のみを表示し、生成・enforce はしません(.basou のフットプリントは `basou view --check`)。",
+    "Note: read-only advisory. It only shows instruction-file presence and git-tracking status; it neither generates nor enforces (for the .basou footprint, use `basou view --check`).",
   );
   return lines.join("\n");
 }
@@ -1157,50 +1175,52 @@ export async function doRunProjectGitignore(
  */
 export function renderProjectGitignore(result: ProjectGitignoreResult): string {
   const lines: string[] = [];
-  lines.push("# .gitignore 生成(公開系 repo の指示書を除外)");
+  lines.push("# .gitignore generation (exclude instruction files in public-facing repos)");
   lines.push("");
 
   if (!result.hasRoster) {
     lines.push(
-      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。`basou project adopt` で宣言してから実行してください。",
+      "ℹ️ No repo roster declared (manifest `repos`). Declare one with `basou project adopt`, then re-run.",
     );
     return lines.join("\n");
   }
 
   if (result.plans.length > 0) {
-    const verb = result.applied ? "追加しました" : "追加予定(dry-run、反映するには --apply)";
+    const verb = result.applied ? "Added to" : "To add to (dry-run; pass --apply to write)";
     lines.push(
-      `${result.applied ? "✅ " : ""}${result.plans.length} repo の .gitignore に${verb}:`,
+      `${result.applied ? "✅ " : ""}${verb} the .gitignore of ${result.plans.length} repo${result.plans.length === 1 ? "" : "s"}:`,
     );
     for (const p of result.plans) lines.push(`- ${p.path} — ${p.toAdd.join(", ")}`);
   } else if (result.ok) {
-    lines.push("✅ 公開系 repo の .gitignore は指示書をすべて除外済みです(追加不要)。");
+    lines.push(
+      "✅ Public-facing repos already exclude every instruction file in .gitignore (nothing to add).",
+    );
   } else {
     lines.push(
-      "ℹ️ 追加が必要な公開系 repo はありませんが、判定できない/到達できない repo があります(下記参照)。",
+      "ℹ️ No public-facing repo needs an addition, but some repos are unjudgeable / unreachable (see below).",
     );
   }
   lines.push("");
 
   if (result.unknown.length > 0) {
     lines.push(
-      `## visibility 未設定 (${result.unknown.length}) — 対象外。manifest の repos に visibility を付与してください`,
+      `## Visibility unset (${result.unknown.length}) — skipped. Assign visibility in the manifest repos`,
     );
     for (const p of result.unknown) lines.push(`- ${p}`);
     lines.push("");
   }
 
   if (result.unreachable.length > 0) {
-    lines.push(`## 到達不能 (${result.unreachable.length}) — パス未解決 / git repo でない`);
+    lines.push(`## Unreachable (${result.unreachable.length}) — path unresolved / not a git repo`);
     for (const p of result.unreachable) lines.push(`- ${p}`);
     lines.push("");
   }
 
   lines.push(
-    "注: 既存の .gitignore 行は保持し、不足パターンの追記のみ行います(削除はしません)。private / visibility 未設定の repo は対象外です。",
+    "Note: existing .gitignore lines are kept; only the missing patterns are appended (nothing is removed). private / visibility-unset repos are skipped.",
   );
   lines.push(
-    "注: .gitignore への追記は、既に git 追跡済みのファイルを untrack しません。追跡済みの指示書は `basou project wiring` で検出し、`git rm --cached <file>` で外してください。",
+    "Note: appending to .gitignore does not untrack files already tracked by git. Detect tracked instruction files with `basou project wiring` and remove them with `git rm --cached <file>`.",
   );
   return lines.join("\n");
 }
@@ -1420,12 +1440,12 @@ export async function doRunProjectSymlinks(
  */
 export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
   const lines: string[] = [];
-  lines.push("# 指示書 symlink 生成(各 repo → anchor の canonical)");
+  lines.push("# Instruction-file symlink generation (each repo → the anchor's canonical)");
   lines.push("");
 
   if (!result.hasRoster) {
     lines.push(
-      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。`basou project adopt` で宣言してから実行してください。",
+      "ℹ️ No repo roster declared (manifest `repos`). Declare one with `basou project adopt`, then re-run.",
     );
     return lines.join("\n");
   }
@@ -1436,7 +1456,7 @@ export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
     const attempted = result.applied || result.failures.length > 0;
     if (!attempted) {
       lines.push(
-        `${result.plans.length} repo に指示書 symlink を作成予定(dry-run、反映するには --apply):`,
+        `Instruction-file symlinks to create in ${result.plans.length} repo${result.plans.length === 1 ? "" : "s"} (dry-run; pass --apply to write):`,
       );
       for (const p of result.plans) {
         lines.push(`- ${p.path}`);
@@ -1447,10 +1467,10 @@ export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
       // in the failures section, never here (no false "created" claim).
       const header =
         result.failures.length === 0
-          ? "✅ 指示書 symlink を作成しました:"
+          ? "✅ Created instruction-file symlinks:"
           : result.applied
-            ? "指示書 symlink を作成しました(一部失敗、下記参照):"
-            : "指示書 symlink を作成できませんでした(下記参照):";
+            ? "Created instruction-file symlinks (some failed, see below):"
+            : "Could not create instruction-file symlinks (see below):";
       lines.push(header);
       for (const p of result.plans) {
         const failedFiles = new Set(
@@ -1463,31 +1483,35 @@ export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
       }
     }
   } else if (result.ok) {
-    lines.push("✅ 宣言された全 repo の指示書 symlink は正しく張られています(生成不要)。");
+    lines.push(
+      "✅ Every declared repo's instruction-file symlinks are correctly wired (nothing to generate).",
+    );
   } else {
     lines.push(
-      "ℹ️ 生成が必要な symlink はありませんが、競合 / 衝突 / canonical 不在 / 到達できない repo があります(下記参照)。",
+      "ℹ️ No symlink needs generating, but there are conflicts / collisions / a missing canonical / unreachable repos (see below).",
     );
   }
   lines.push("");
 
   if (result.failures.length > 0) {
-    lines.push(`## 作成に失敗 (${result.failures.length}) — 一部の symlink を作成できませんでした`);
+    lines.push(
+      `## Creation failed (${result.failures.length}) — some symlinks could not be created`,
+    );
     for (const f of result.failures) lines.push(`- ${f.repo} — ${f.file}: ${f.message}`);
     lines.push("");
   }
 
   if (result.conflicts.length > 0) {
     lines.push(
-      `## 競合 (${result.conflicts.length}) — 既存を上書きしません。手動で確認してください`,
+      `## Conflicts (${result.conflicts.length}) — existing entries are not overwritten. Check them manually`,
     );
     for (const c of result.conflicts) {
       const detail =
         c.reason === "mismatch"
-          ? `別の場所を指す symlink(現在: ${c.actualTarget ?? "?"})`
+          ? `a symlink pointing elsewhere (currently: ${c.actualTarget ?? "?"})`
           : c.reason === "occupied"
-            ? "symlink でない実ファイル/ディレクトリ"
-            : "検査できないパス(親が非ディレクトリ等)";
+            ? "a real file/directory, not a symlink"
+            : "an uninspectable path (a parent component is not a directory, etc.)";
       lines.push(`- ${c.repo} — ${c.file}: ${detail}`);
     }
     lines.push("");
@@ -1495,7 +1519,7 @@ export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
 
   if (result.collisions.length > 0) {
     lines.push(
-      `## canonical 衝突 (${result.collisions.length}) — 別 repo が同名 canonical を共有(自動配線しません)`,
+      `## Canonical collisions (${result.collisions.length}) — another repo shares the same-named canonical (not auto-wired)`,
     );
     for (const c of result.collisions) {
       lines.push(`- agents/${c.canonicalName}/AGENTS.md ← ${c.repos.join(", ")}`);
@@ -1505,20 +1529,20 @@ export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
 
   if (result.missingCanonical.length > 0) {
     lines.push(
-      `## canonical 不在 (${result.missingCanonical.length}) — anchor に agents/<repo>/AGENTS.md が無いため生成できません`,
+      `## Canonical missing (${result.missingCanonical.length}) — the anchor has no agents/<repo>/AGENTS.md, so nothing can be generated`,
     );
     for (const p of result.missingCanonical) lines.push(`- ${p}`);
     lines.push("");
   }
 
   if (result.unreachable.length > 0) {
-    lines.push(`## 到達不能 (${result.unreachable.length}) — パス未解決 / git repo でない`);
+    lines.push(`## Unreachable (${result.unreachable.length}) — path unresolved / not a git repo`);
     for (const p of result.unreachable) lines.push(`- ${p}`);
     lines.push("");
   }
 
   lines.push(
-    "注: 既存ファイル・別の場所を指す symlink は上書きせず、不足分の作成のみ行います(GEMINI.md は廃止のため生成しません)。",
+    "Note: an existing file or a symlink pointing elsewhere is never overwritten; only the missing links are created (GEMINI.md is discontinued and not generated).",
   );
   return lines.join("\n");
 }
@@ -1696,7 +1720,7 @@ export function gatherExistingViewLinks(
     // surface it rather than silently reporting a clean, stray-free view. The
     // message is path-less (matching the file's other thrown errors); the absolute
     // path stays in `cause`, shown only under --verbose.
-    throw new Error("workspace view を走査できません(パス/種別を確認してください)", {
+    throw new Error("Cannot scan the workspace view (check the path / its type)", {
       cause: error,
     });
   }
@@ -1732,7 +1756,7 @@ export function pruneViewLinks(
       failed.push({
         name,
         message:
-          "撤去対象が scan 時と変わりました(basou 生成の stray repo link ではなくなった/再実行してください)",
+          "the target changed since the scan (no longer a basou-generated stray repo link; re-run)",
       });
       continue;
     }
@@ -1879,12 +1903,12 @@ export async function doRunProjectWorkspace(
  */
 export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
   const lines: string[] = [];
-  lines.push("# workspace view 生成(roster repo を集約)");
+  lines.push("# workspace view generation (aggregate the roster repos)");
   lines.push("");
 
   if (!result.hasView) {
     lines.push(
-      "ℹ️ view が未宣言です(manifest の `workspace.view`)。集約先のディレクトリを宣言してから実行してください。",
+      "ℹ️ No view declared (manifest `workspace.view`). Declare the aggregation directory, then re-run.",
     );
     return lines.join("\n");
   }
@@ -1893,17 +1917,17 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
     const attempted = result.applied || result.failures.length > 0;
     if (!attempted) {
       lines.push(
-        `${result.toCreate.length} 件の repo symlink を view に作成予定(dry-run、反映するには --apply):`,
+        `Repo symlinks to create in the view: ${result.toCreate.length} (dry-run; pass --apply to write):`,
       );
       for (const c of result.toCreate) lines.push(`    ${c.name} -> ${c.target}`);
     } else {
       const failed = new Set(result.failures.map((f) => f.name));
       const header =
         result.failures.length === 0
-          ? "✅ view に repo symlink を作成しました:"
+          ? "✅ Created repo symlinks in the view:"
           : result.applied
-            ? "view に repo symlink を作成しました(一部失敗、下記参照):"
-            : "view に repo symlink を作成できませんでした(下記参照):";
+            ? "Created repo symlinks in the view (some failed, see below):"
+            : "Could not create repo symlinks in the view (see below):";
       lines.push(header);
       for (const c of result.toCreate) {
         if (failed.has(c.name)) continue;
@@ -1912,17 +1936,19 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
     }
   } else if (result.ok) {
     lines.push(
-      `✅ view は宣言された roster をすべて集約しています(${result.correctCount} links、生成不要)。`,
+      `✅ The view aggregates the entire declared roster (${result.correctCount} links; nothing to generate).`,
     );
   } else {
     lines.push(
-      "ℹ️ 作成が必要な symlink はありませんが、対応の必要な項目があります(stray / 競合 / 衝突 / 到達できない repo、下記参照)。",
+      "ℹ️ No symlink needs creating, but there are items needing attention (stray / conflict / collision / unreachable repo, see below).",
     );
   }
   lines.push("");
 
   if (result.failures.length > 0) {
-    lines.push(`## 作成に失敗 (${result.failures.length}) — 一部の symlink を作成できませんでした`);
+    lines.push(
+      `## Creation failed (${result.failures.length}) — some symlinks could not be created`,
+    );
     for (const f of result.failures) lines.push(`- ${f.name}: ${f.message}`);
     lines.push("");
   }
@@ -1931,22 +1957,22 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
     const attempted = result.pruned || result.pruneFailures.length > 0;
     if (result.pruneWithheld) {
       lines.push(
-        `${result.toPrune.length} 件の stray repo symlink を撤去予定でしたが、到達できない repo があるため撤去を保留しました(到達できない repo の link と stray を区別できないため。下記の repo を解決するか archive してから再実行してください):`,
+        `${result.toPrune.length} stray repo symlink${result.toPrune.length === 1 ? "" : "s"} were due to be pruned, but pruning was withheld because some repos are unreachable (an unreachable repo's link cannot be told apart from a stray; resolve or archive the repos below, then re-run):`,
       );
       for (const p of result.toPrune) lines.push(`    ${p.name} -> ${p.target}`);
     } else if (!attempted) {
       lines.push(
-        `${result.toPrune.length} 件の stray repo symlink を撤去予定(dry-run、撤去するには --prune):`,
+        `Stray repo symlinks to prune: ${result.toPrune.length} (dry-run; pass --prune to remove):`,
       );
       for (const p of result.toPrune) lines.push(`    ${p.name} -> ${p.target}`);
     } else {
       const failed = new Set(result.pruneFailures.map((f) => f.name));
       const header =
         result.pruneFailures.length === 0
-          ? "🧹 stray repo symlink を撤去しました:"
+          ? "🧹 Pruned stray repo symlinks:"
           : result.pruned
-            ? "stray repo symlink を撤去しました(一部失敗、下記参照):"
-            : "stray repo symlink を撤去できませんでした(下記参照):";
+            ? "Pruned stray repo symlinks (some failed, see below):"
+            : "Could not prune stray repo symlinks (see below):";
       lines.push(header);
       for (const p of result.toPrune) {
         if (failed.has(p.name)) continue;
@@ -1958,7 +1984,7 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
 
   if (result.pruneFailures.length > 0) {
     lines.push(
-      `## 撤去に失敗 (${result.pruneFailures.length}) — 一部の stray symlink を撤去できませんでした`,
+      `## Pruning failed (${result.pruneFailures.length}) — some stray symlinks could not be pruned`,
     );
     for (const f of result.pruneFailures) lines.push(`- ${f.name}: ${f.message}`);
     lines.push("");
@@ -1966,15 +1992,15 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
 
   if (result.conflicts.length > 0) {
     lines.push(
-      `## 競合 (${result.conflicts.length}) — 既存を上書きしません。手動で確認してください`,
+      `## Conflicts (${result.conflicts.length}) — existing entries are not overwritten. Check them manually`,
     );
     for (const c of result.conflicts) {
       const detail =
         c.reason === "mismatch"
-          ? `別の場所を指す symlink(現在: ${c.actualTarget ?? "?"})`
+          ? `a symlink pointing elsewhere (currently: ${c.actualTarget ?? "?"})`
           : c.reason === "occupied"
-            ? "symlink でない実ファイル/ディレクトリ"
-            : "検査できないパス(親が非ディレクトリ等)";
+            ? "a real file/directory, not a symlink"
+            : "an uninspectable path (a parent component is not a directory, etc.)";
       lines.push(`- ${c.name}: ${detail}`);
     }
     lines.push("");
@@ -1982,7 +2008,7 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
 
   if (result.collisions.length > 0) {
     lines.push(
-      `## basename 衝突 (${result.collisions.length}) — 別 repo が同じ view 名を取り合い(自動配線しません)`,
+      `## Basename collisions (${result.collisions.length}) — another repo claims the same view name (not auto-wired)`,
     );
     for (const c of result.collisions) lines.push(`- ${c.linkName} ← ${c.repos.join(", ")}`);
     lines.push("");
@@ -1990,7 +2016,7 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
 
   if (result.unreachable.length > 0) {
     lines.push(
-      `## 到達不能 (${result.unreachable.length}) — パス未解決、または view 自身に解決するため集約できません`,
+      `## Unreachable (${result.unreachable.length}) — path unresolved, or it resolves to the view itself, so it cannot be aggregated`,
     );
     for (const p of result.unreachable) lines.push(`- ${p}`);
     lines.push("");
@@ -1998,22 +2024,22 @@ export function renderProjectWorkspace(result: ProjectWorkspaceResult): string {
 
   if (result.strayUnknown.length > 0) {
     lines.push(
-      `## 未撤去の stray (${result.strayUnknown.length}) — basou 生成の repo link と確認できないため撤去しません。手動で確認してください`,
+      `## Strays left in place (${result.strayUnknown.length}) — not confirmed to be a basou-generated repo link, so not pruned. Check them manually`,
     );
     for (const s of result.strayUnknown) {
       const detail =
         s.reason === "broken"
-          ? "リンク切れ(ターゲットが解決できません)"
+          ? "broken link (target does not resolve)"
           : s.reason === "non-repo"
-            ? "git repo でないターゲット(ファイル、または .git の無いディレクトリ)"
-            : "絶対パスのターゲット(basou は相対リンクのみ生成します)";
+            ? "non-git-repo target (a file, or a directory without .git)"
+            : "absolute-path target (basou generates relative links only)";
       lines.push(`- ${s.name} -> ${s.target}: ${detail}`);
     }
     lines.push("");
   }
 
   lines.push(
-    "注: 作成(--apply)は既存エントリを上書きしません。stray repo link の撤去は --prune で行います(symlink のみ削除し、参照先 repo は削除しません)。basou 生成と確認できない stray(リンク切れ / 非 repo / 絶対パス)は撤去しません。",
+    "Note: creation (--apply) never overwrites an existing entry. Stray repo links are pruned with --prune (only the symlink is removed, never the referenced repo). A stray not confirmed to be basou-generated (broken / non-repo / absolute path) is left in place.",
   );
   return lines.join("\n");
 }
@@ -2219,7 +2245,7 @@ export async function doRunProjectPreset(
 
 /** A compact one-line summary of what a plan's generated block declares. */
 function presetActionLabel(action: RepoPresetPlan["action"]): string {
-  return action === "create" ? "新規作成" : "更新";
+  return action === "create" ? "create" : "update";
 }
 
 /**
@@ -2233,12 +2259,14 @@ function presetActionLabel(action: RepoPresetPlan["action"]): string {
  */
 export function renderProjectPreset(result: ProjectPresetResult): string {
   const lines: string[] = [];
-  lines.push("# 指示書 A プリセット生成(宣言 → canonical の生成領域)");
+  lines.push(
+    "# Instruction-file preset generation (declaration → the canonical's generated region)",
+  );
   lines.push("");
 
   if (!result.hasRoster) {
     lines.push(
-      "ℹ️ repo ロースターが未宣言です(manifest の `repos`)。`basou project adopt` で宣言してから実行してください。",
+      "ℹ️ No repo roster declared (manifest `repos`). Declare one with `basou project adopt`, then re-run.",
     );
     return lines.join("\n");
   }
@@ -2248,7 +2276,7 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
     const attempted = result.applied || result.failures.length > 0;
     if (!attempted) {
       lines.push(
-        `${result.plans.length} repo の canonical に A プリセットを生成予定(dry-run、反映するには --apply):`,
+        `Preset blocks to generate in the canonical of ${result.plans.length} repo${result.plans.length === 1 ? "" : "s"} (dry-run; pass --apply to write):`,
       );
       for (const p of result.plans) {
         lines.push(
@@ -2260,10 +2288,10 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
       const failed = new Set(result.failures.map((f) => f.repo));
       const header =
         result.failures.length === 0
-          ? "✅ canonical に A プリセットを生成しました:"
+          ? "✅ Generated preset blocks in the canonical:"
           : result.applied
-            ? "A プリセットを生成しました(一部失敗、下記参照):"
-            : "A プリセットを生成できませんでした(下記参照):";
+            ? "Generated preset blocks (some failed, see below):"
+            : "Could not generate preset blocks (see below):";
       lines.push(header);
       for (const p of result.plans) {
         if (failed.has(p.path)) continue;
@@ -2273,22 +2301,24 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
       }
     }
   } else if (result.ok) {
-    lines.push("✅ 宣言された全 repo の A プリセットは canonical と同期済みです(生成不要)。");
+    lines.push(
+      "✅ Every declared repo's preset block is in sync with its canonical (nothing to generate).",
+    );
   } else {
     lines.push(
-      "ℹ️ 生成が必要な repo はありませんが、マーカー競合 / 衝突 / 未宣言 / 到達できない repo があります(下記参照)。",
+      "ℹ️ No repo needs generating, but there are marker conflicts / collisions / undeclared / unreachable repos (see below).",
     );
   }
   lines.push("");
 
   if (result.inSync.length > 0) {
-    lines.push(`同期済み (${result.inSync.length}): ${result.inSync.join(", ")}`);
+    lines.push(`In sync (${result.inSync.length}): ${result.inSync.join(", ")}`);
     lines.push("");
   }
 
   if (result.failures.length > 0) {
     lines.push(
-      `## 書き込みに失敗 (${result.failures.length}) — 一部の canonical を書けませんでした`,
+      `## Write failed (${result.failures.length}) — some canonicals could not be written`,
     );
     for (const f of result.failures) lines.push(`- ${f.repo}: ${f.message}`);
     lines.push("");
@@ -2296,22 +2326,22 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
 
   if (result.markerConflicts.length > 0) {
     lines.push(
-      `## マーカー競合 (${result.markerConflicts.length}) — canonical のマーカーが無い/壊れているため上書きしません`,
+      `## Marker conflicts (${result.markerConflicts.length}) — the canonical's markers are missing/malformed, so it is not overwritten`,
     );
     for (const c of result.markerConflicts) {
       const detail =
-        c.reason === "no_markers" ? "マーカー領域が無い" : `マーカー不整合(${c.reason})`;
+        c.reason === "no_markers" ? "no marker region" : `malformed markers (${c.reason})`;
       lines.push(`- ${c.repo}: ${detail}`);
     }
     lines.push(
-      `  対処: A プリセットを入れたい位置に次の2行を追加してください — \`${GENERATED_START}\` と \`${GENERATED_END}\`(無ければ basou が新規 canonical を作ります)。`,
+      `  Fix: add these two lines where you want the preset block — \`${GENERATED_START}\` and \`${GENERATED_END}\` (absent, basou creates a fresh canonical).`,
     );
     lines.push("");
   }
 
   if (result.unreadable.length > 0) {
     lines.push(
-      `## canonical 読み取り不能 (${result.unreadable.length}) — ディレクトリ/権限等で読めません`,
+      `## Canonical unreadable (${result.unreadable.length}) — could not be read (a directory, permissions, etc.)`,
     );
     for (const p of result.unreadable) lines.push(`- ${p}`);
     lines.push("");
@@ -2319,7 +2349,7 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
 
   if (result.collisions.length > 0) {
     lines.push(
-      `## canonical 衝突 (${result.collisions.length}) — 別 repo が同名 canonical を共有(自動生成しません)`,
+      `## Canonical collisions (${result.collisions.length}) — another repo shares the same-named canonical (not auto-generated)`,
     );
     for (const c of result.collisions) {
       lines.push(`- agents/${c.canonicalName}/AGENTS.md ← ${c.repos.join(", ")}`);
@@ -2329,7 +2359,7 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
 
   if (result.undeclared.length > 0) {
     lines.push(
-      `## 宣言なし (${result.undeclared.length}) — visibility / language / publishes が未設定のため生成しません`,
+      `## Undeclared (${result.undeclared.length}) — visibility / language / publishes unset, so nothing is generated`,
     );
     for (const p of result.undeclared) lines.push(`- ${p}`);
     lines.push("");
@@ -2337,20 +2367,20 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
 
   if (result.anchors.length > 0) {
     lines.push(
-      `## anchor (${result.anchors.length}) — 自身の AGENTS.md は手で維持するためスキップ`,
+      `## Anchor (${result.anchors.length}) — its own AGENTS.md is hand-maintained, so it is skipped`,
     );
     for (const p of result.anchors) lines.push(`- ${p}`);
     lines.push("");
   }
 
   if (result.unreachable.length > 0) {
-    lines.push(`## 到達不能 (${result.unreachable.length}) — パス未解決 / git repo でない`);
+    lines.push(`## Unreachable (${result.unreachable.length}) — path unresolved / not a git repo`);
     for (const p of result.unreachable) lines.push(`- ${p}`);
     lines.push("");
   }
 
   lines.push(
-    "注: マーカー領域のみを生成し、canonical の手書き部分(マーカー外)は保持します。生成内容は manifest の宣言から導出されます。",
+    "Note: only the marker region is generated; the canonical's hand-authored content (outside the markers) is preserved. The generated content is derived from the manifest declaration.",
   );
   return lines.join("\n");
 }
@@ -2545,7 +2575,7 @@ function gatherRepoTeardown(
     return basename(resolve(repositoryRoot, r.path)).toLowerCase() === cnFold;
   });
   const collisionNote =
-    "同名 basename の別 repo と共有のため撤去できません (手動で確認してください)";
+    "shared with another repo of the same basename, so it cannot be removed (check manually)";
 
   const items: TeardownItem[] = [];
   if (!isAnchor) {
@@ -2560,23 +2590,23 @@ function gatherRepoTeardown(
             kind: "instruction-symlink",
             label: spec.name,
             state: "foreign",
-            note: `別 target を指しています (${actualTarget ?? "?"})`,
+            note: `points at a different target (${actualTarget ?? "?"})`,
           });
         else if (state === "occupied")
           items.push({
             kind: "instruction-symlink",
             label: spec.name,
             state: "foreign",
-            note: "symlink ではなく実ファイルです",
+            note: "a real file, not a symlink",
           });
         else if (state === "blocked")
           items.push({
             kind: "instruction-symlink",
             label: spec.name,
             state: "blocked",
-            note: "検査できませんでした",
+            note: "could not be inspected",
           });
-        // "missing" → 何も無い → 省略
+        // "missing" → nothing there → omitted
       }
 
       // 2. `.gitignore` instruction patterns. The generator appends these WITHOUT
@@ -2593,7 +2623,7 @@ function gatherRepoTeardown(
               kind: "gitignore",
               label: p,
               state: "manual",
-              note: "basou 追記か手書きか判別不能 (マーカー無し) — 手動で削除してください",
+              note: "cannot tell a basou-appended line from a hand-added one (no marker) — remove manually",
             });
           }
         }
@@ -2602,7 +2632,7 @@ function gatherRepoTeardown(
           kind: "gitignore",
           label: ".gitignore",
           state: "blocked",
-          note: "読み取れませんでした",
+          note: "could not be read",
         });
       }
     }
@@ -2616,7 +2646,7 @@ function gatherRepoTeardown(
       try {
         isLink = lstatSync(linkPath).isSymbolicLink();
       } catch {
-        isLink = false; // 無し → 省略
+        isLink = false; // absent → omitted
       }
       if (isLink) {
         const owned =
@@ -2628,7 +2658,7 @@ function gatherRepoTeardown(
             kind: "view-symlink",
             label: canonicalName,
             state: "foreign",
-            note: "この repo を指していない view link です",
+            note: "a view link that does not point at this repo",
           });
         else if (canonicalShared)
           items.push({
@@ -2655,7 +2685,7 @@ function gatherRepoTeardown(
         kind: "canonical-block",
         label: canonicalLabel,
         state: "foreign",
-        note: "canonical が symlink です (生成物ではない)",
+        note: "the canonical is a symlink (not generated)",
       });
     } else if (existsSync(canonicalFile)) {
       let content: string | undefined;
@@ -2666,7 +2696,7 @@ function gatherRepoTeardown(
           kind: "canonical-block",
           label: canonicalLabel,
           state: "blocked",
-          note: "読み取れませんでした",
+          note: "could not be read",
         });
       }
       if (content !== undefined && content !== "") {
@@ -2686,7 +2716,7 @@ function gatherRepoTeardown(
             kind: "canonical-block",
             label: canonicalLabel,
             state: "manual",
-            note: "repo を解決できず所有を検証できません (手動で確認してください)",
+            note: "repo could not be resolved, so ownership cannot be verified (check manually)",
           });
         } else if (section.kind === "ok") {
           const emptyAfter = removeMarkerSection(content, canonicalLabel).trim().length === 0;
@@ -2695,7 +2725,9 @@ function gatherRepoTeardown(
             label: canonicalLabel,
             state: "removable",
             ...(emptyAfter
-              ? { note: "生成ブロック除去後は空になります (ファイルは手動削除候補)" }
+              ? {
+                  note: "the file becomes empty after the generated block is removed (a manual-delete candidate)",
+                }
               : {}),
           });
         } else if (section.kind === "no_markers") {
@@ -2703,14 +2735,14 @@ function gatherRepoTeardown(
             kind: "canonical-block",
             label: canonicalLabel,
             state: "foreign",
-            note: "生成ブロックがありません (手書きのみ — 触りません)",
+            note: "no generated block (hand-authored only — left untouched)",
           });
         } else {
           items.push({
             kind: "canonical-block",
             label: canonicalLabel,
             state: "blocked",
-            note: "マーカーが不整合です (手動で修正してください)",
+            note: "malformed markers (fix manually)",
           });
         }
       }
@@ -2746,7 +2778,7 @@ function applyRepoTeardown(
   const removed: string[] = [];
   const failed: { label: string; message: string }[] = [];
   const changed = (label: string) =>
-    failed.push({ label, message: "scan 後に状態が変わりました (再実行してください)" });
+    failed.push({ label, message: "the state changed since the scan (re-run)" });
 
   // Bind to the SCANNED identity: re-resolve the target now and require it to be
   // the SAME real path classified at scan. If the repo was resolvable at scan but
@@ -2875,19 +2907,19 @@ function renderProjectTeardown(result: ProjectTeardownResult): string {
   lines.push(`# teardown: ${result.target}`);
   lines.push("");
   if (result.isAnchor) {
-    lines.push("anchor (`.`) は teardown できません(プロジェクトの家です)。");
+    lines.push("The anchor (`.`) cannot be torn down (it is the project's home).");
     return lines.join("\n");
   }
   if (!result.resolved) {
     lines.push(
-      "注: repo パスを解決できませんでした(既に削除済み?)。repo 内の配線は検査できないため、view link / canonical のみ対象です。",
+      "Note: the repo path could not be resolved (already deleted?). The in-repo wiring cannot be inspected, so only the view link / canonical are in scope.",
     );
     lines.push("");
   }
   lines.push(
     result.inRoster
-      ? "状態: まだ roster に在籍しています(宣言は manifest に残ります)。"
-      : "状態: roster には在籍していません(archive 済み)。",
+      ? "Status: still a roster member (the declaration remains in the manifest)."
+      : "Status: not a roster member (already archived).",
   );
   lines.push("");
 
@@ -2897,42 +2929,42 @@ function renderProjectTeardown(result: ProjectTeardownResult): string {
   const blocked = result.items.filter((i) => i.state === "blocked");
 
   if (removable.length === 0) {
-    lines.push("撤去対象の basou 生成物はありません。");
+    lines.push("No basou-generated artifact to remove.");
   } else {
-    lines.push(`撤去対象 (${removable.length} 件):`);
+    lines.push(`To remove (${removable.length}):`);
     for (const i of removable)
       lines.push(`  - [${i.kind}] ${i.label}${i.note !== undefined ? ` — ${i.note}` : ""}`);
   }
   if (manual.length > 0) {
     lines.push("");
-    lines.push("手動で確認(自動撤去しません):");
+    lines.push("Check manually (not auto-removed):");
     for (const i of manual)
       lines.push(`  - [${i.kind}] ${i.label}${i.note !== undefined ? ` — ${i.note}` : ""}`);
   }
   if (foreign.length > 0) {
     lines.push("");
-    lines.push("触らないもの(basou 生成物ではない):");
+    lines.push("Left untouched (not basou-generated):");
     for (const i of foreign)
       lines.push(`  - [${i.kind}] ${i.label}${i.note !== undefined ? ` — ${i.note}` : ""}`);
   }
   if (blocked.length > 0) {
     lines.push("");
-    lines.push("検査できなかったもの:");
+    lines.push("Could not be inspected:");
     for (const i of blocked)
       lines.push(`  - [${i.kind}] ${i.label}${i.note !== undefined ? ` — ${i.note}` : ""}`);
   }
 
   lines.push("");
   if (result.applied) {
-    lines.push(`--apply: ${result.removed.length} 件を撤去しました。`);
+    lines.push(`--apply: removed ${result.removed.length}.`);
     for (const r of result.removed) lines.push(`  ✓ ${r}`);
     if (result.failed.length > 0) {
-      lines.push("失敗:");
+      lines.push("Failed:");
       for (const f of result.failed) lines.push(`  ✗ ${f.label} — ${f.message}`);
     }
   } else if (removable.length > 0) {
     lines.push(
-      "これは dry-run です。撤去するには --apply を付けてください(可逆ではない破壊操作です)。",
+      "This is a dry-run. Pass --apply to remove (this is a destructive, irreversible operation).",
     );
   }
   return lines.join("\n");
@@ -3105,47 +3137,47 @@ export async function doRunProjectArchive(
  */
 export function renderProjectArchive(result: ProjectArchiveResult): string {
   const lines: string[] = [];
-  lines.push("# repo の archive(roster から畳む)");
+  lines.push("# Archive a repo (fold it out of the roster)");
   lines.push("");
   lines.push(...preservedUnknownLines(result.preservedUnknownFields));
 
   if (!result.hasRoster) {
-    lines.push("ℹ️ repo ロースターが未宣言です(manifest の `repos`)。archive 対象がありません。");
+    lines.push("ℹ️ No repo roster declared (manifest `repos`). There is nothing to archive.");
     return lines.join("\n");
   }
 
   if (result.isAnchor) {
     lines.push(
-      `⚠️ \`${result.target}\` は anchor(プロジェクトの root)です。anchor は archive できません(manifest の家のため)。`,
+      `⚠️ \`${result.target}\` is the anchor (the project root). The anchor cannot be archived (it is the manifest's home).`,
     );
     return lines.join("\n");
   }
 
   if (!result.found) {
-    lines.push(`ℹ️ \`${result.target}\` は roster に宣言されていません(archive 対象なし)。`);
+    lines.push(`ℹ️ \`${result.target}\` is not declared in the roster (nothing to archive).`);
     return lines.join("\n");
   }
 
   // Manifest mutation summary.
   if (result.applied) {
-    lines.push(`✅ \`${result.target}\` を roster から削除しました。`);
+    lines.push(`✅ Removed \`${result.target}\` from the roster.`);
   } else {
-    lines.push(`\`${result.target}\` を roster から削除予定(dry-run、反映するには --apply):`);
+    lines.push(`To remove \`${result.target}\` from the roster (dry-run; pass --apply to write):`);
   }
   if (result.sourceRootRemoval !== undefined) {
     lines.push(
-      `- source_roots から ${result.sourceRootRemoval} を prune${result.applied ? "しました" : "します"}(以後 refresh の対象外)。`,
+      `- ${result.applied ? "Pruned" : "Will prune"} ${result.sourceRootRemoval} from source_roots (no longer captured by refresh).`,
     );
   } else {
-    lines.push("- source_roots に該当エントリはありません(prune 不要)。");
+    lines.push("- No matching entry in source_roots (nothing to prune).");
   }
   if (result.reposEmptied) {
     lines.push(
-      "- これが最後のメンバーです → roster は空になり `repos` 宣言は除去されます(プロジェクトを畳む)。",
+      "- This was the last member → the roster empties and the `repos` declaration is removed (the project is folded up).",
     );
   } else if (result.becomesSolo) {
     lines.push(
-      "- 残り 1 repo(solo)になります → workspace view は不要です(view 宣言/ディレクトリの撤去を検討)。",
+      "- This leaves 1 repo (solo) → the workspace view is unnecessary (consider removing the view declaration / directory).",
     );
   }
   lines.push("");
@@ -3153,29 +3185,35 @@ export function renderProjectArchive(result: ProjectArchiveResult): string {
   // Teardown checklist (report-only).
   const t = result.teardown;
   const items: string[] = [];
-  if (t.viewLink) items.push("workspace view の symlink エントリ");
-  if (t.instructionFiles.length > 0) items.push(`指示書(${t.instructionFiles.join(", ")})`);
+  if (t.viewLink) items.push("the workspace view's symlink entry");
+  if (t.instructionFiles.length > 0)
+    items.push(`instruction files (${t.instructionFiles.join(", ")})`);
   if (t.gitignorePatterns.length > 0)
-    items.push(`.gitignore の指示書パターン(${t.gitignorePatterns.join(", ")})`);
-  if (t.canonical) items.push(`anchor の canonical(agents/${basename(result.target)}/AGENTS.md)`);
+    items.push(`.gitignore instruction patterns (${t.gitignorePatterns.join(", ")})`);
+  if (t.canonical)
+    items.push(`the anchor's canonical (agents/${basename(result.target)}/AGENTS.md)`);
 
   if (!t.inspected) {
-    lines.push("## 手動 teardown(repo がディスク上に解決できないため未検査)");
     lines.push(
-      "- repo は既に削除済みの可能性があります。view symlink / 指示書 symlink / .gitignore / canonical が残っていないか手動で確認してください。",
+      "## Manual teardown (the repo could not be resolved on disk, so it was not inspected)",
+    );
+    lines.push(
+      "- The repo may already be deleted. Check manually for a leftover view symlink / instruction symlinks / .gitignore / canonical.",
     );
     lines.push("");
   } else if (items.length > 0) {
-    lines.push("## 手動 teardown(--apply は触れません。残っている wiring を手で撤去してください)");
+    lines.push(
+      "## Manual teardown (--apply does not touch these; remove the leftover wiring by hand)",
+    );
     for (const i of items) lines.push(`- ${i}`);
     lines.push("");
   } else {
-    lines.push("repo 側の wiring(view/指示書/.gitignore/canonical)は残っていません。");
+    lines.push("No repo-side wiring (view / instruction files / .gitignore / canonical) remains.");
     lines.push("");
   }
 
   lines.push(
-    "注: archive は manifest(.basou、git 追跡=可逆)のみを変更します。repo・捕捉履歴・on-disk の wiring は削除しません。",
+    "Note: archive only changes the manifest (.basou, git-tracked, reversible). The repo, its captured history, and its on-disk wiring are not removed.",
   );
   return lines.join("\n");
 }
@@ -3324,48 +3362,48 @@ export async function doRunProjectRename(
  */
 export function renderProjectRename(result: ProjectRenameResult): string {
   const lines: string[] = [];
-  lines.push("# repo の rename(roster のパス更新)");
+  lines.push("# Rename a repo (update its roster path)");
   lines.push("");
   lines.push(...preservedUnknownLines(result.preservedUnknownFields));
 
   if (!result.hasRoster) {
-    lines.push("ℹ️ repo ロースターが未宣言です(manifest の `repos`)。rename 対象がありません。");
+    lines.push("ℹ️ No repo roster declared (manifest `repos`). There is nothing to rename.");
     return lines.join("\n");
   }
   if (result.noop) {
-    lines.push(`ℹ️ \`${result.oldTarget}\` と \`${result.newTarget}\` は同一です(変更なし)。`);
+    lines.push(`ℹ️ \`${result.oldTarget}\` and \`${result.newTarget}\` are identical (no change).`);
     return lines.join("\n");
   }
   if (result.isAnchor) {
     lines.push(
-      `⚠️ \`${result.oldTarget}\` は anchor(プロジェクトの root)です。anchor は rename できません。`,
+      `⚠️ \`${result.oldTarget}\` is the anchor (the project root). The anchor cannot be renamed.`,
     );
     return lines.join("\n");
   }
   if (!result.found) {
-    lines.push(`ℹ️ \`${result.oldTarget}\` は roster に宣言されていません(rename 対象なし)。`);
+    lines.push(`ℹ️ \`${result.oldTarget}\` is not declared in the roster (nothing to rename).`);
     return lines.join("\n");
   }
   if (result.collision) {
     lines.push(
-      `⚠️ \`${result.newTarget}\` は既に roster に宣言されています。重複を避けるため rename しません。`,
+      `⚠️ \`${result.newTarget}\` is already declared in the roster. Not renaming, to avoid a duplicate.`,
     );
     return lines.join("\n");
   }
 
   if (result.applied) {
-    lines.push(`✅ \`${result.oldTarget}\` を \`${result.newTarget}\` に rename しました。`);
+    lines.push(`✅ Renamed \`${result.oldTarget}\` to \`${result.newTarget}\`.`);
   } else {
     lines.push(
-      `\`${result.oldTarget}\` を \`${result.newTarget}\` に rename 予定(dry-run、反映するには --apply):`,
+      `To rename \`${result.oldTarget}\` to \`${result.newTarget}\` (dry-run; pass --apply to write):`,
     );
   }
   if (result.sourceRootRenamed !== undefined) {
     lines.push(
-      `- source_roots の ${result.sourceRootRenamed} を ${result.newTarget} に更新${result.applied ? "しました" : "します"}。`,
+      `- ${result.applied ? "Updated" : "Will update"} ${result.sourceRootRenamed} to ${result.newTarget} in source_roots.`,
     );
   } else {
-    lines.push("- source_roots に該当エントリはありません(更新不要)。");
+    lines.push("- No matching entry in source_roots (nothing to update).");
   }
   lines.push("");
 
@@ -3376,29 +3414,29 @@ export function renderProjectRename(result: ProjectRenameResult): string {
     const items: string[] = [];
     if (result.wiring.canonicalDirOld)
       items.push(`anchor canonical: agents/${oldName}/ → agents/${newName}/`);
-    if (result.wiring.viewLinkOld) items.push(`workspace view の symlink: ${oldName} → ${newName}`);
+    if (result.wiring.viewLinkOld) items.push(`workspace view symlink: ${oldName} → ${newName}`);
     if (items.length > 0) {
       lines.push(
-        "## 手動リネーム(--apply は触れません。basename が変わるため手で更新してください)",
+        "## Manual rename (--apply does not touch these; the basename changed, so update them by hand)",
       );
       for (const i of items) lines.push(`- ${i}`);
     } else {
       lines.push(
-        `basename が ${oldName} → ${newName} に変わりますが、anchor canonical / view symlink は見つかりませんでした。`,
+        `The basename changes ${oldName} → ${newName}, but no anchor canonical / view symlink was found.`,
       );
     }
     lines.push(
-      "  反映後は `basou project symlinks` / `basou project workspace` で指示書 symlink と view を再生成してください。",
+      "  After applying, regenerate the instruction symlinks and the view with `basou project symlinks` / `basou project workspace`.",
     );
   } else {
     lines.push(
-      "注: basename は不変です。repo を別の場所へ移動した場合は `basou project symlinks` / `basou project workspace` で相対ターゲットを再生成してください。",
+      "Note: the basename is unchanged. If you moved the repo elsewhere, regenerate the relative targets with `basou project symlinks` / `basou project workspace`.",
     );
   }
   lines.push("");
 
   lines.push(
-    "注: rename は manifest(.basou、git 追跡=可逆)のみを変更します。repo の移動・on-disk の wiring 更新は行いません。",
+    "Note: rename only changes the manifest (.basou, git-tracked, reversible). It does not move the repo or update the on-disk wiring.",
   );
   return lines.join("\n");
 }

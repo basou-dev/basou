@@ -48,3 +48,10 @@ jobs:
         # the only verifier of CONTRIBUTING.md's "Both must pass"
         # contract.
         run: pnpm lint
+      - name: Lint (language)
+        # check-language.mjs scans packages/*/src/**/*.ts (excluding
+        # *.test.ts) for Japanese outside a small E-5 allowlist. biome
+        # does not detect natural-language content, so this guards the
+        # English-only convention for basou's public surface (source,
+        # comments, errors, CLI output) that biome cannot.
+        run: pnpm lint:lang

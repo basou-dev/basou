@@ -111,7 +111,7 @@ describe("basou review-gaps", () => {
     } finally {
       spy.mockRestore();
     }
-    expect(logs[0]).toContain("レビュー証跡のギャップ");
+    expect(logs[0]).toContain("Review-trail gaps");
     const parsed = JSON.parse(logs[1] ?? "{}");
     expect(parsed.gaps[0].repo).toBe("alpha");
   });

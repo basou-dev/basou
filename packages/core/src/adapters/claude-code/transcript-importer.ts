@@ -180,7 +180,7 @@ export function claudeTranscriptToImportPayload(
           // free-text "Other" reply (a counter-question, guidance, or other
           // meta answer) matches no offered label and is NOT a decision —
           // deriving one would pollute decisions.md and, worse, surface a
-          // non-decision as orientation's "直近の判断". A genuine free-text
+          // non-decision as orientation's latest-decision line. A genuine free-text
           // choice can still be recorded explicitly via `basou decision capture`.
           // One decision per question; Object.entries keeps insertion order for
           // string keys, and the stable sort below keeps it among same-ts events.
