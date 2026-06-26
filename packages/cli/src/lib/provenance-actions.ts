@@ -273,7 +273,7 @@ export async function refreshAll(args: {
   const handoffCounts = await regenerateHandoff(paths, nowIso);
   const decisionCounts = await regenerateDecisions(paths, nowIso);
   // A full refresh just imported every root, so the snapshot is current — record
-  // a zero staleness so the file's "これは最新か" verdict reads as up to date
+  // a zero staleness so the file's freshness verdict reads as up to date
   // instead of "run refresh to check". It still carries the unverifiable count
   // the import just hit: a session that grew but failed to re-import is behind
   // even right after a refresh, so the verdict must not falsely read "current".

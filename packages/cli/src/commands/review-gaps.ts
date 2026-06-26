@@ -114,14 +114,14 @@ export async function doRunReviewGaps(
 }
 
 function relAge(iso: string | null, now: Date): string {
-  if (iso === null) return "(不明)";
+  if (iso === null) return "(unknown)";
   const ms = now.getTime() - Date.parse(iso);
-  if (!Number.isFinite(ms) || ms < 0) return "たった今";
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
   const days = Math.floor(ms / 86_400_000);
-  if (days >= 1) return `${days}日前`;
+  if (days >= 1) return `${days}d ago`;
   const hours = Math.floor(ms / 3_600_000);
-  if (hours >= 1) return `${hours}時間前`;
-  return `${Math.max(1, Math.floor(ms / 60_000))}分前`;
+  if (hours >= 1) return `${hours}h ago`;
+  return `${Math.max(1, Math.floor(ms / 60_000))}m ago`;
 }
 
 function unitLine(u: ReviewGapUnit, now: Date): string {
@@ -129,9 +129,9 @@ function unitLine(u: ReviewGapUnit, now: Date): string {
   const head = `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"})`;
   if (u.verdict === "near_unbound") {
     const ids = u.reviews.map((r) => r.sessionId.slice(0, 14)).join(", ");
-    return `${head} — 近接レビューはあるが diff/変更ファイルを確認していない [${ids}]`;
+    return `${head} — a nearby review exists, but the diff / changed files were not examined [${ids}]`;
   }
-  return `${head} — 紐づくクロスモデルレビューなし`;
+  return `${head} — no bound cross-model review`;
 }
 
 function candidateLine(u: ReviewGapUnit, now: Date): string {
@@ -139,7 +139,7 @@ function candidateLine(u: ReviewGapUnit, now: Date): string {
   const cite = u.reviews
     .map((r) => `${r.sessionId.slice(0, 14)}${r.examinedDiff ? "(diff)" : ""}`)
     .join(", ");
-  return `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) — レビュー形跡: ${cite}`;
+  return `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) — review trace: ${cite}`;
 }
 
 /**
@@ -151,21 +151,21 @@ function candidateLine(u: ReviewGapUnit, now: Date): string {
 export function renderReviewGaps(summary: ReviewGapsSummary): string {
   const now = new Date(summary.generatedAt);
   const lines: string[] = [];
-  const scope = summary.scope ? summary.scope.join(", ") : "全リポジトリ";
-  lines.push(`# レビュー証跡のギャップ (${scope})`);
+  const scope = summary.scope ? summary.scope.join(", ") : "all repositories";
+  lines.push(`# Review-trail gaps (${scope})`);
   lines.push("");
 
   if (summary.gaps.length === 0) {
-    lines.push("✅ 取り込み済みの範囲では、レビュー証跡なしで着地した作業単位はありません。");
+    lines.push("✅ Within the captured range, no unit of work landed without a review trail.");
   } else {
-    lines.push(`⚠️ レビュー証跡なしで着地した作業単位: ${summary.gaps.length}`);
+    lines.push(`⚠️ Units of work that landed without a review trail: ${summary.gaps.length}`);
     for (const u of summary.gaps) lines.push(unitLine(u, now));
   }
   lines.push("");
 
   if (summary.candidates.length > 0) {
     lines.push(
-      `## 確認待ち (${summary.candidates.length}) — クロスモデルがレビューした形跡あり。この変更を本当に見たか確認してください`,
+      `## To confirm (${summary.candidates.length}) — a cross-model review trace exists; confirm it actually examined this change`,
     );
     for (const u of summary.candidates) lines.push(candidateLine(u, now));
     lines.push("");
@@ -174,20 +174,20 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
   if (summary.unknowns.length > 0) {
     const n = summary.unknowns.reduce((sum, u) => sum + u.commitCount, 0);
     lines.push(
-      `## 導出不可 (${summary.unknowns.length} 単位 / ${n} commit) — repo か時刻を捕捉から導けず、判定を保留(clear ではありません)`,
+      `## Undeterminable (${summary.unknowns.length} unit${summary.unknowns.length === 1 ? "" : "s"} / ${n} commit${n === 1 ? "" : "s"}) — repo or timestamp could not be derived from capture; verdict withheld (not a clear)`,
     );
     lines.push("");
   }
 
-  lines.push("## リポジトリ別");
+  lines.push("## By repository");
   for (const r of summary.repos) {
     lines.push(
-      `- ${r.repo}: ${r.units} 単位 (証跡なし ${r.omissionUnits} / 近接のみ ${r.nearUnboundUnits} / 確認待ち ${r.candidateUnits}${r.unknownUnits > 0 ? ` / 不明 ${r.unknownUnits}` : ""})`,
+      `- ${r.repo}: ${r.units} unit${r.units === 1 ? "" : "s"} (no trail ${r.omissionUnits} / nearby only ${r.nearUnboundUnits} / to confirm ${r.candidateUnits}${r.unknownUnits > 0 ? ` / unknown ${r.unknownUnits}` : ""})`,
     );
   }
   lines.push("");
   lines.push(
-    `注: read-only の advisory です。取り込み済みの commit のみが対象（最新取込 commit: ${summary.newestCommitAt === null ? "なし" : relAge(summary.newestCommitAt, now)}）。レビューの「実施」は自動判定せず、時間的近接だけでは合格にしません。enforce はしません。`,
+    `Note: read-only advisory. Only captured commits are in scope (newest captured commit: ${summary.newestCommitAt === null ? "none" : relAge(summary.newestCommitAt, now)}). It never auto-judges that a review "happened", and temporal proximity alone is not a pass. It does not enforce.`,
   );
   return lines.join("\n");
 }

@@ -58,7 +58,7 @@ export type NoteContext = {
 
 /**
  * Wire `basou note` onto `program`. A one-shot, free-text note that orientation
- * surfaces as the recorded next step ("次の起点") — the in-model way to leave a
+ * surfaces as the recorded next step — the in-model way to leave a
  * resume hint that survives into the next session. By default it creates an
  * ad-hoc session to hold the `note_added` event (imported sessions are not
  * attachable), mirroring `basou decision record`; `--session` attaches to an
