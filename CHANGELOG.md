@@ -3,6 +3,46 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.26.0 — 2026-06-26
+
+### Added
+
+- `basou project new [repos…]` — the greenfield entry point for standing up a
+  new multi-repo project from a declaration. At the anchor git repository it
+  scaffolds `.basou/` and seeds the manifest with a candidate `repos` roster
+  (the anchor plus any given repos, which must already be git repositories) and
+  a `workspace.view` placeholder; `source_roots` are derived (roster + view).
+  Dry-run by default; `--apply` writes. Supports `--view` / `--no-view` /
+  `--force` / `--local-only`. The declaration lives in the manifest's own
+  vocabulary, so the same shape drives both bootstrap and maintenance.
+- `basou project derive` — materialize a project's full wiring from the declared
+  manifest: sync `source_roots`, generate each repo's preset canonical and
+  instruction-file symlinks, the workspace view, and each public repo's
+  `.gitignore`, in dependency order. Dry-run by default; `--apply` writes.
+  Re-runnable (idempotent) — the greenfield counterpart to `new` and a one-shot
+  maintenance pass.
+- `basou project teardown <repo>` — remove the basou-generated wiring for one
+  repo (its instruction symlinks, `.gitignore` patterns, workspace-view symlink,
+  and the generated block in the anchor's canonical). Dry-run by default (a
+  classified removable / foreign / blocked plan); `--apply` removes only the
+  verified-basou artifacts, re-checking each just before it acts. The
+  destructive counterpart to `archive`; the anchor is refused and removal is not
+  reversible.
+
+### Changed
+
+- The `project` and `review-gaps` command output is now **English**, matching
+  basou's English-only public-surface convention. Report output (`orient`,
+  handoff, decisions) is unchanged. Command behavior is unchanged and `--json`
+  output is byte-identical.
+
+### Internal
+
+- Added a language lint (`pnpm lint:lang`, wired into CI) that fails on Japanese
+  in `packages/*/src` (excluding tests) outside a small allowlist of report
+  renderers — guarding the English-only convention that the formatter cannot
+  detect.
+
 ## 0.25.0 — 2026-06-25
 
 ### Fixed
