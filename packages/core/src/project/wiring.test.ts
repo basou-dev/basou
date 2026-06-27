@@ -134,4 +134,39 @@ describe("summarizeWiring", () => {
     expect(s.ok).toBe(true);
     expect(s.repos).toEqual([]);
   });
+
+  it("never flags a self repo's tracked instruction files as a risk (committed by design)", () => {
+    const s = summarizeWiring([
+      {
+        path: "../blog",
+        self: true,
+        visibility: "public",
+        reachable: true,
+        instructionFiles: files({
+          "AGENTS.md": { tracked: true },
+          "CLAUDE.md": { tracked: true },
+          ".github/copilot-instructions.md": { tracked: true },
+        }),
+      },
+    ]);
+    expect(s.risks).toEqual([]);
+    expect(s.self).toEqual(["../blog"]);
+    expect(s.unknown).toEqual([]);
+    expect(s.ok).toBe(true);
+  });
+
+  it("reports a self repo as self even with unset visibility (privacy is moot), still surfacing missing files", () => {
+    const s = summarizeWiring([
+      {
+        path: "../blog",
+        self: true,
+        reachable: true,
+        instructionFiles: files({ "CLAUDE.md": { present: false } }),
+      },
+    ]);
+    expect(s.self).toEqual(["../blog"]);
+    expect(s.unknown).toEqual([]);
+    expect(s.incomplete).toEqual([{ repo: "../blog", missing: ["CLAUDE.md"] }]);
+    expect(s.ok).toBe(true);
+  });
 });

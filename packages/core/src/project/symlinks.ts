@@ -62,12 +62,24 @@ export type RepoSymlinkFacts = {
    * it never links to itself). An anchor entry is skipped entirely.
    */
   isAnchor: boolean;
+  /**
+   * True when this repo declares `instructions: self`: its canonical AGENTS.md is
+   * a regular committed file in the repo itself, so only the CLAUDE.md / Copilot
+   * spokes are generated (never the AGENTS.md hub link), `canonicalPresent` means
+   * "the repo's own AGENTS.md is present" (an absent one is `selfAgentsMissing`,
+   * not `missingCanonical`), and the repo is excluded from anchor-canonical
+   * collision detection (it shares no anchor canonical). Absent => the default
+   * `hub` behavior, unchanged.
+   */
+  self?: boolean | undefined;
   /** False when the repo path could not be resolved / is not a usable git repo. */
   reachable: boolean;
   /**
-   * Whether the anchor's canonical source for this repo
-   * (`<anchor>/agents/<repo>/AGENTS.md`) exists. Without it the hub link would
-   * dangle, so no links are planned (reported as a missing canonical instead).
+   * For a `hub` repo: whether the anchor's canonical source
+   * (`<anchor>/agents/<repo>/AGENTS.md`) exists — without it the hub link would
+   * dangle, so no links are planned (reported as `missingCanonical` instead). For
+   * a `self` repo: whether the repo's OWN AGENTS.md exists — without it the
+   * spokes would dangle, so none are planned (reported as `selfAgentsMissing`).
    */
   canonicalPresent: boolean;
   /**
@@ -118,15 +130,22 @@ export type SymlinkPlanSummary = {
   conflicts: SymlinkConflict[];
   /** Repo paths whose anchor canonical (`agents/<repo>/AGENTS.md`) is absent, so nothing can be wired. */
   missingCanonical: string[];
+  /**
+   * `self` repo paths whose own AGENTS.md is absent, so the spokes would dangle
+   * and none are planned. Distinct from `missingCanonical` (which is the anchor
+   * canonical a `hub` repo links to): the operator authors a `self` repo's
+   * AGENTS.md by hand, then re-runs.
+   */
+  selfAgentsMissing: string[];
   /** Repo paths that could not be resolved / are not usable git repos. */
   unreachable: string[];
   /** Groups of distinct repos that resolve to the same canonical (ambiguous; not auto-wired). */
   collisions: SymlinkCollision[];
   /**
    * True only when nothing needs creating AND there are no conflicts, no missing
-   * canonicals, no unreachable repos, and no collisions — so a clean "all wired"
-   * verdict is never claimed while some repo was blocked, ambiguous, or could not
-   * be inspected.
+   * canonicals, no self repos missing their AGENTS.md, no unreachable repos, and
+   * no collisions — so a clean "all wired" verdict is never claimed while some
+   * repo was blocked, ambiguous, or could not be inspected.
    */
   ok: boolean;
 };
@@ -148,6 +167,12 @@ export type SymlinkPlanSummary = {
  *   {@link SymlinkCollision} and neither is auto-wired (silent sharing of one
  *   canonical is surfaced, not actioned).
  *
+ * A `self` repo (its `self` flag set by the caller) carries only its spoke files
+ * (CLAUDE.md / Copilot → its own AGENTS.md), is excluded from collision
+ * detection, and routes an absent own-AGENTS.md to `selfAgentsMissing` rather
+ * than `missingCanonical`. Otherwise it flows through the same create/conflict
+ * logic as a hub repo.
+ *
  * `ok` is true only when there is genuinely nothing to do and every repo was
  * judgeable, reachable, and unambiguous.
  */
@@ -164,10 +189,18 @@ export function summarizeSymlinkPlan(facts: RepoSymlinkFacts[]): SymlinkPlanSumm
 
   // Detect canonical-name collisions among the repos that would actually wire
   // (reachable, canonical present). Distinct repo paths sharing a canonical name
-  // are ambiguous: surface them and wire neither.
+  // are ambiguous: surface them and wire neither. `self` repos are excluded: each
+  // owns its AGENTS.md in its own tree, so two `self` repos sharing a basename
+  // collide on nothing (they never point at one shared anchor canonical).
   const byCanonical = new Map<string, string[]>();
   for (const f of deduped) {
-    if (f.isAnchor || !f.reachable || !f.canonicalPresent || f.canonicalName === undefined) {
+    if (
+      f.isAnchor ||
+      f.self === true ||
+      !f.reachable ||
+      !f.canonicalPresent ||
+      f.canonicalName === undefined
+    ) {
       continue;
     }
     const repos = byCanonical.get(f.canonicalName) ?? [];
@@ -186,6 +219,7 @@ export function summarizeSymlinkPlan(facts: RepoSymlinkFacts[]): SymlinkPlanSumm
   const plans: RepoSymlinkPlan[] = [];
   const conflicts: SymlinkConflict[] = [];
   const missingCanonical: string[] = [];
+  const selfAgentsMissing: string[] = [];
   const unreachable: string[] = [];
 
   for (const f of deduped) {
@@ -195,7 +229,10 @@ export function summarizeSymlinkPlan(facts: RepoSymlinkFacts[]): SymlinkPlanSumm
       continue;
     }
     if (!f.canonicalPresent) {
-      missingCanonical.push(f.path);
+      // For a `self` repo the missing file is its OWN AGENTS.md (the operator
+      // authors it), distinct from a `hub` repo's absent anchor canonical.
+      if (f.self === true) selfAgentsMissing.push(f.path);
+      else missingCanonical.push(f.path);
       continue;
     }
     // A repo sharing a canonical name with another is surfaced as a collision and
@@ -227,12 +264,14 @@ export function summarizeSymlinkPlan(facts: RepoSymlinkFacts[]): SymlinkPlanSumm
     plans,
     conflicts,
     missingCanonical,
+    selfAgentsMissing,
     unreachable,
     collisions,
     ok:
       plans.length === 0 &&
       conflicts.length === 0 &&
       missingCanonical.length === 0 &&
+      selfAgentsMissing.length === 0 &&
       unreachable.length === 0 &&
       collisions.length === 0,
   };

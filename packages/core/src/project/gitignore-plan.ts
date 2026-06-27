@@ -23,6 +23,13 @@ export type RepoGitignoreFacts = {
   path: string;
   /** Declared visibility; undefined when the operator has not set it yet. */
   visibility?: RepoVisibility | undefined;
+  /**
+   * True when this repo declares `instructions: self`: its instruction files are
+   * committed and SHARED, so they must NOT be gitignored — the repo is skipped
+   * (reported as `self`, never an addition) regardless of visibility. Absent =>
+   * the default `hub` behavior, unchanged.
+   */
+  self?: boolean | undefined;
   /** False when the repo path could not be resolved / is not a usable git repo. */
   reachable: boolean;
   /** Existing `.gitignore` lines, trimmed; an empty array when there is no `.gitignore`. */
@@ -40,12 +47,20 @@ export type GitignorePlanSummary = {
   plans: RepoGitignorePlan[];
   /** Repo paths skipped because visibility is unset (cannot decide safely). */
   unknown: string[];
+  /**
+   * `instructions: self` repo paths, skipped by design: their instruction files
+   * are committed and shared, so they are never gitignored. Reported (not
+   * silently dropped) and do NOT block the `ok` verdict — being skipped is the
+   * intended terminal state, not a gap.
+   */
+  self: string[];
   /** Repo paths that could not be resolved / are not usable git repos. */
   unreachable: string[];
   /**
    * True only when nothing needs adding AND every repo was judgeable and
    * reachable — so a clean verdict is never claimed while some repos were
-   * skipped (unset visibility) or could not be inspected (unreachable).
+   * skipped (unset visibility) or could not be inspected (unreachable). A `self`
+   * repo does not block it (it is intentionally not gitignored).
    */
   ok: boolean;
 };
@@ -58,9 +73,10 @@ function isPublicFacing(v: RepoVisibility | undefined): v is "public" | "future-
 /**
  * Compute the {@link GitignorePlanSummary}: for each public-facing, reachable
  * repo, the `required` patterns that are not already present in its `.gitignore`
- * (compared by trimmed exact line). Private repos require nothing; unset
- * visibility is reported as `unknown` and unreachable repos as `unreachable`.
- * `ok` is true when no repo needs any addition.
+ * (compared by trimmed exact line). Private repos require nothing; a `self` repo
+ * is reported as `self` (its committed instruction files are shared, never
+ * gitignored); unset visibility is reported as `unknown` and unreachable repos as
+ * `unreachable`. `ok` is true when no repo needs any addition.
  */
 export function planGitignore(input: {
   repos: RepoGitignoreFacts[];
@@ -68,11 +84,19 @@ export function planGitignore(input: {
 }): GitignorePlanSummary {
   const plans: RepoGitignorePlan[] = [];
   const unknown: string[] = [];
+  const self: string[] = [];
   const unreachable: string[] = [];
 
   for (const repo of input.repos) {
     if (!repo.reachable) {
       unreachable.push(repo.path);
+      continue;
+    }
+    // A `self` repo shares its committed instruction files — never gitignore
+    // them. Checked before visibility so an unset-visibility `self` repo is
+    // reported as `self`, not as an `unknown` gap to fill in.
+    if (repo.self === true) {
+      self.push(repo.path);
       continue;
     }
     if (repo.visibility === undefined) {
@@ -98,6 +122,7 @@ export function planGitignore(input: {
   return {
     plans,
     unknown,
+    self,
     unreachable,
     ok: plans.length === 0 && unknown.length === 0 && unreachable.length === 0,
   };

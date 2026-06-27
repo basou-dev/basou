@@ -98,6 +98,27 @@ describe("planGitignore", () => {
     expect(s.ok).toBe(false);
   });
 
+  it("skips a self repo (shared committed instruction files are never gitignored) and stays ok", () => {
+    const s = planGitignore({
+      repos: [repo({ path: "../blog", self: true, visibility: "public", currentLines: [] })],
+      required: REQUIRED,
+    });
+    expect(s.self).toEqual(["../blog"]);
+    expect(s.plans).toHaveLength(0);
+    expect(s.unknown).toEqual([]);
+    expect(s.ok).toBe(true);
+  });
+
+  it("reports a self repo as self even when its visibility is unset (not an unknown gap)", () => {
+    const s = planGitignore({
+      repos: [repo({ path: "../blog", self: true, currentLines: [] })],
+      required: REQUIRED,
+    });
+    expect(s.self).toEqual(["../blog"]);
+    expect(s.unknown).toEqual([]);
+    expect(s.ok).toBe(true);
+  });
+
   it("reports an unreachable repo and is not ok", () => {
     const s = planGitignore({
       repos: [{ path: "../gone", visibility: "public", reachable: false, currentLines: [] }],

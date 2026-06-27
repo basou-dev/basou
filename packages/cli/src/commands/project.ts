@@ -33,6 +33,7 @@ import {
   type InstructionFileFact,
   type InstructionSymlinkFact,
   type InstructionSymlinkState,
+  instructionMode,
   isGitNotFound,
   type Manifest,
   type PresetPlanSummary,
@@ -47,6 +48,7 @@ import {
   type RepoEntry,
   type RepoGitignoreFacts,
   type RepoGitignorePlan,
+  type RepoInstructions,
   type RepoPresetFacts,
   type RepoPresetPlan,
   type RepoSymlinkFacts,
@@ -1050,6 +1052,7 @@ async function gatherRepoWiring(
   const base = {
     path: entry.path,
     ...(entry.visibility !== undefined ? { visibility: entry.visibility } : {}),
+    ...(instructionMode(entry) === "self" ? { self: true } : {}),
   };
   let real: string;
   try {
@@ -1162,6 +1165,14 @@ export function renderProjectWiring(result: ProjectWiringResult): string {
     lines.push("");
   }
 
+  if (result.self.length > 0) {
+    lines.push(
+      `## instructions: self (${result.self.length}) — committed instruction files are intentional (no leak risk)`,
+    );
+    for (const p of result.self) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
   if (result.incomplete.length > 0) {
     lines.push(
       `## Missing instruction files (${result.incomplete.length}) — to be filled by a later generation slice`,
@@ -1205,6 +1216,7 @@ function gatherRepoGitignore(repositoryRoot: string, entry: RepoEntry): RepoGiti
   const base = {
     path: entry.path,
     ...(entry.visibility !== undefined ? { visibility: entry.visibility } : {}),
+    ...(instructionMode(entry) === "self" ? { self: true } : {}),
   };
   let real: string;
   try {
@@ -1338,6 +1350,14 @@ export function renderProjectGitignore(result: ProjectGitignoreResult): string {
     lines.push("");
   }
 
+  if (result.self.length > 0) {
+    lines.push(
+      `## instructions: self (${result.self.length}) — skipped by design; their committed instruction files are shared, never gitignored`,
+    );
+    for (const p of result.self) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
   if (result.unreachable.length > 0) {
     lines.push(`## Unreachable (${result.unreachable.length}) — path unresolved / not a git repo`);
     for (const p of result.unreachable) lines.push(`- ${p}`);
@@ -1372,16 +1392,23 @@ export async function runProjectSymlinks(
  * canonical), while CLAUDE.md and Copilot are spokes pointing back at the repo's
  * own AGENTS.md. `repoDirReal` and `canonicalFile` are both realpath-resolved so
  * the computed relative target matches a hand-wired link byte-for-byte.
+ *
+ * A `self` repo (`mode === "self"`) owns its AGENTS.md as a regular committed
+ * file, so the AGENTS.md hub link is omitted — only the two spokes are returned
+ * (their targets are identical to the hub case: each points at the repo's own
+ * AGENTS.md). `canonicalFile` is then unused.
  */
 function expectedSymlinkTargets(
   repoDirReal: string,
   canonicalFile: string,
+  mode: RepoInstructions = "hub",
 ): { name: string; target: string }[] {
-  return [
-    { name: "AGENTS.md", target: relative(repoDirReal, canonicalFile) },
+  const spokes = [
     { name: "CLAUDE.md", target: CANONICAL_FILE },
     { name: ".github/copilot-instructions.md", target: `../${CANONICAL_FILE}` },
   ];
+  if (mode === "self") return spokes;
+  return [{ name: "AGENTS.md", target: relative(repoDirReal, canonicalFile) }, ...spokes];
 }
 
 /**
@@ -1426,7 +1453,9 @@ function gatherRepoSymlinks(
   anchorReal: string,
   entry: RepoEntry,
 ): RepoSymlinkFacts {
-  const base = { path: entry.path };
+  const mode = instructionMode(entry);
+  const isSelf = mode === "self";
+  const base = { path: entry.path, ...(isSelf ? { self: true } : {}) };
   let real: string;
   try {
     real = realpathSync(resolve(repositoryRoot, entry.path));
@@ -1440,12 +1469,19 @@ function gatherRepoSymlinks(
     return { ...base, isAnchor: false, reachable: false, canonicalPresent: false, files: [] };
   }
 
-  const canonicalFile = join(anchorReal, "agents", basename(real), CANONICAL_FILE);
+  // For a `self` repo the canonical IS the repo's own committed AGENTS.md (only
+  // the spokes are generated, pointing back at it); for a `hub` repo it is the
+  // anchor's `agents/<repo>/AGENTS.md`. Either way an absent canonical means the
+  // links would dangle, so none are planned (summarize routes the two cases to
+  // `selfAgentsMissing` / `missingCanonical` respectively).
+  const canonicalFile = isSelf
+    ? join(real, CANONICAL_FILE)
+    : join(anchorReal, "agents", basename(real), CANONICAL_FILE);
   if (!existsSync(canonicalFile)) {
     return { ...base, isAnchor: false, reachable: true, canonicalPresent: false, files: [] };
   }
 
-  const files: InstructionSymlinkFact[] = expectedSymlinkTargets(real, canonicalFile).map(
+  const files: InstructionSymlinkFact[] = expectedSymlinkTargets(real, canonicalFile, mode).map(
     (spec) => {
       const { state, actualTarget } = inspectSymlink(join(real, spec.name), spec.target);
       return {
@@ -1660,6 +1696,14 @@ export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
       `## Canonical missing (${result.missingCanonical.length}) — the anchor has no agents/<repo>/AGENTS.md, so nothing can be generated`,
     );
     for (const p of result.missingCanonical) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
+  if (result.selfAgentsMissing.length > 0) {
+    lines.push(
+      `## AGENTS.md missing (${result.selfAgentsMissing.length}) — these \`instructions: self\` repos have no committed AGENTS.md yet; author it, then re-run to wire the spokes`,
+    );
+    for (const p of result.selfAgentsMissing) lines.push(`- ${p}`);
     lines.push("");
   }
 
@@ -2216,6 +2260,12 @@ async function gatherRepoPreset(
     ...(entry.language !== undefined ? { language: entry.language } : {}),
     ...(entry.publishes !== undefined ? { publishes: entry.publishes } : {}),
   };
+  // A `self` repo is hands-off: basou never writes (nor reads) its hand-authored
+  // AGENTS.md for preset purposes. Short-circuit before any filesystem probe so
+  // it is reported as `self` and skipped, whatever its on-disk state.
+  if (instructionMode(entry) === "self") {
+    return { ...declared, self: true, isAnchor: false, reachable: true, canonicalPresent: false };
+  }
   let real: string;
   try {
     real = realpathSync(resolve(repositoryRoot, entry.path));
@@ -2501,6 +2551,14 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
     lines.push("");
   }
 
+  if (result.self.length > 0) {
+    lines.push(
+      `## instructions: self (${result.self.length}) — hands-off; their hand-authored AGENTS.md is never written by basou`,
+    );
+    for (const p of result.self) lines.push(`- ${p}`);
+    lines.push("");
+  }
+
   if (result.unreachable.length > 0) {
     lines.push(`## Unreachable (${result.unreachable.length}) — path unresolved / not a git repo`);
     for (const p of result.unreachable) lines.push(`- ${p}`);
@@ -2648,7 +2706,10 @@ function viewLinkPointsAtPath(viewDir: string, name: string, expectedRepoPath: s
  * marks each `removable` (verified ours), `foreign` (present but not ours — never
  * touched), or `blocked` (uninspectable). Path-driven, NOT roster-driven, so it
  * works after `archive` has already dropped the repo from the manifest. The
- * anchor (`.`) is refused. Absent artifacts are omitted (nothing to report).
+ * anchor (`.`) is refused. Absent artifacts are omitted (nothing to report). A
+ * repo still declared `instructions: self` keeps its committed instruction files
+ * (they are the repo's own tracked content, not basou-generated): they are
+ * reported `foreign`, never removed.
  */
 function gatherRepoTeardown(
   repositoryRoot: string,
@@ -2670,13 +2731,19 @@ function gatherRepoTeardown(
   const canonicalName = basename(repoReal ?? targetAbs);
 
   const roster = manifest.repos ?? [];
-  const inRoster = roster.some((r) => {
+  const declaredEntry = roster.find((r) => {
     try {
       return realpathSync(resolve(repositoryRoot, r.path)) === (repoReal ?? "\0");
     } catch {
       return resolve(repositoryRoot, r.path) === targetAbs;
     }
   });
+  const inRoster = declaredEntry !== undefined;
+  // A `self` repo owns its instruction files in its own git history (committed,
+  // not basou-generated), so teardown must NOT remove them: each is classified
+  // `foreign` (left untouched) instead of `removable`. The view link and any
+  // stale anchor canonical are still basou's, so they keep their normal handling.
+  const isSelf = declaredEntry !== undefined && instructionMode(declaredEntry) === "self";
 
   // The canonical (`agents/<basename>/AGENTS.md`) and the view link
   // (`<view>/<basename>`) are keyed by BASENAME and SHARED by any other repo with
@@ -2711,6 +2778,20 @@ function gatherRepoTeardown(
     if (repoReal !== undefined) {
       for (const spec of teardownExpectedTargets(repoReal, anchorReal, canonicalName)) {
         const { state, actualTarget } = inspectSymlink(join(repoReal, spec.name), spec.target);
+        // A `self` repo's instruction files (the committed AGENTS.md and its
+        // committed CLAUDE.md / Copilot spokes) are the repo's own tracked
+        // content, NOT basou-generated wiring — never remove them. Report any
+        // present one as `foreign` (left untouched); a missing one is omitted.
+        if (isSelf) {
+          if (state !== "missing")
+            items.push({
+              kind: "instruction-symlink",
+              label: spec.name,
+              state: "foreign",
+              note: "instructions: self — committed, left untouched",
+            });
+          continue;
+        }
         if (state === "correct")
           items.push({ kind: "instruction-symlink", label: spec.name, state: "removable" });
         else if (state === "mismatch")
@@ -3959,7 +4040,7 @@ function gatherRetrofit(
   argAbs: string,
   argReal: string | undefined,
 ): RetrofitFacts {
-  const declared = roster.some((entry) => {
+  const declaredEntry = roster.find((entry) => {
     const entryAbs = resolve(repositoryRoot, entry.path);
     if (argReal !== undefined) {
       try {
@@ -3970,6 +4051,9 @@ function gatherRetrofit(
     }
     return entryAbs === argAbs;
   });
+  const declared = declaredEntry !== undefined;
+  // A declared `self` repo keeps its AGENTS.md in place — retrofit refuses it.
+  const self = declaredEntry !== undefined && instructionMode(declaredEntry) === "self";
 
   // Display the path anchor-relative. Use realpaths on both sides when the arg
   // resolves (so a symlinked tmp/cwd cannot skew it into a "../../private/var/…"
@@ -3983,6 +4067,7 @@ function gatherRetrofit(
     return {
       path,
       declared,
+      ...(self ? { self: true } : {}),
       isAnchor: false,
       reachable: false,
       canonicalName,
@@ -3998,6 +4083,7 @@ function gatherRetrofit(
   return {
     path,
     declared,
+    ...(self ? { self: true } : {}),
     isAnchor,
     reachable,
     canonicalName,
@@ -4163,6 +4249,10 @@ export function renderProjectRetrofit(result: ProjectRetrofitResult): string {
     if (result.reason === "not-declared") {
       lines.push(
         `ℹ️ \`${result.path}\` is not declared in the roster (manifest \`repos\`). Add it first with \`basou project new\` / \`basou project adopt\`, then re-run.`,
+      );
+    } else if (result.reason === "self") {
+      lines.push(
+        `ℹ️ \`${result.path}\` declares \`instructions: self\` — its \`${CANONICAL_FILE}\` is a hand-authored committed file that stays in the repo, so there is no anchor canonical to relocate it to. Retrofit does not apply (its CLAUDE.md / Copilot spokes are wired by \`basou project symlinks\`).`,
       );
     } else if (result.reason === "anchor") {
       lines.push(

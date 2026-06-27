@@ -234,3 +234,90 @@ describe("summarizeSymlinkPlan", () => {
     expect(s.ok).toBe(true);
   });
 });
+
+describe("summarizeSymlinkPlan — instructions: self", () => {
+  /** The two spoke files (no AGENTS.md hub) a `self` repo carries, pointing at its own AGENTS.md. */
+  function selfSpokes(
+    states: Partial<Record<string, InstructionSymlinkState>> = {},
+  ): InstructionSymlinkFact[] {
+    const specs: { name: string; expectedTarget: string }[] = [
+      { name: "CLAUDE.md", expectedTarget: "AGENTS.md" },
+      { name: ".github/copilot-instructions.md", expectedTarget: "../AGENTS.md" },
+    ];
+    return specs.map((s) => ({
+      name: s.name,
+      expectedTarget: s.expectedTarget,
+      state: states[s.name] ?? "correct",
+    }));
+  }
+
+  it("plans only the two spokes for a self repo (never the AGENTS.md hub link)", () => {
+    const s = summarizeSymlinkPlan([
+      repo({
+        path: "../blog",
+        self: true,
+        canonicalName: "blog",
+        files: selfSpokes({ "CLAUDE.md": "missing", ".github/copilot-instructions.md": "missing" }),
+      }),
+    ]);
+    expect(s.plans).toEqual([
+      {
+        path: "../blog",
+        toCreate: [
+          { name: "CLAUDE.md", target: "AGENTS.md" },
+          { name: ".github/copilot-instructions.md", target: "../AGENTS.md" },
+        ],
+      },
+    ]);
+    expect(s.selfAgentsMissing).toEqual([]);
+  });
+
+  it("is ok when a self repo's spokes are already wired", () => {
+    const s = summarizeSymlinkPlan([repo({ path: "../blog", self: true, files: selfSpokes() })]);
+    expect(s.ok).toBe(true);
+    expect(s.plans).toEqual([]);
+  });
+
+  it("routes an absent own-AGENTS.md to selfAgentsMissing, not missingCanonical", () => {
+    const s = summarizeSymlinkPlan([
+      repo({ path: "../blog", self: true, canonicalPresent: false, files: [] }),
+    ]);
+    expect(s.selfAgentsMissing).toEqual(["../blog"]);
+    expect(s.missingCanonical).toEqual([]);
+    expect(s.plans).toEqual([]);
+    expect(s.ok).toBe(false);
+  });
+
+  it("excludes self repos from canonical-name collision detection", () => {
+    // Two self repos sharing a basename do NOT collide (each owns its own AGENTS.md).
+    const s = summarizeSymlinkPlan([
+      repo({ path: "../x/blog", self: true, canonicalName: "blog", files: selfSpokes() }),
+      repo({ path: "../y/blog", self: true, canonicalName: "blog", files: selfSpokes() }),
+    ]);
+    expect(s.collisions).toEqual([]);
+    expect(s.ok).toBe(true);
+  });
+
+  it("a hub and a self repo coexist: the hub gets its links, the self gets only spokes", () => {
+    const s = summarizeSymlinkPlan([
+      repo({
+        path: "../basou",
+        canonicalName: "basou",
+        files: wiredFiles({ "AGENTS.md": "missing" }),
+      }),
+      repo({
+        path: "../blog",
+        self: true,
+        canonicalName: "blog",
+        files: selfSpokes({ "CLAUDE.md": "missing" }),
+      }),
+    ]);
+    expect(s.plans).toEqual([
+      {
+        path: "../basou",
+        toCreate: [{ name: "AGENTS.md", target: "../anchor/agents/basou/AGENTS.md" }],
+      },
+      { path: "../blog", toCreate: [{ name: "CLAUDE.md", target: "AGENTS.md" }] },
+    ]);
+  });
+});

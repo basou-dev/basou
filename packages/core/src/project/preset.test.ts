@@ -207,4 +207,34 @@ describe("summarizePresetPlan", () => {
       });
     expect(summarizePresetPlan([inSyncFact("../a"), inSyncFact("../b")]).ok).toBe(true);
   });
+
+  it("reports a self repo as self and never plans a write into its hand-authored AGENTS.md", () => {
+    const s = summarizePresetPlan([
+      // Even with renderable fields and a present canonical, a self repo is hands-off.
+      facts({
+        path: "../blog",
+        self: true,
+        visibility: "public",
+        language: "ja",
+        canonicalPresent: true,
+        markerKind: "ok",
+        currentBlock: "anything",
+      }),
+    ]);
+    expect(s.self).toEqual(["../blog"]);
+    expect(s.plans).toEqual([]);
+    expect(s.inSync).toEqual([]);
+    // A self repo does not block the clean verdict (intentionally not generated).
+    expect(s.ok).toBe(true);
+  });
+
+  it("excludes self repos from canonical-name collision detection", () => {
+    const s = summarizePresetPlan([
+      facts({ path: "../x/blog", self: true, canonicalName: "blog", visibility: "public" }),
+      facts({ path: "../y/blog", self: true, canonicalName: "blog", visibility: "public" }),
+    ]);
+    expect(s.collisions).toEqual([]);
+    expect(s.self).toEqual(["../x/blog", "../y/blog"]);
+    expect(s.ok).toBe(true);
+  });
 });

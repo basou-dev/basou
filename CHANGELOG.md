@@ -3,6 +3,26 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- Per-repo `instructions: hub | self` on a manifest `repos` entry — an additive
+  instruction-source axis, independent of `visibility` / `language` / `publishes`.
+  `hub` (the default when absent, so existing rosters are unchanged) is basou's
+  native hub-and-spoke topology: the canonical `AGENTS.md` lives in the project
+  anchor (`agents/<repo>/AGENTS.md`) and each repo carries gitignored symlinks to
+  it. `self` is the opt-in for a repo that owns its instructions in its own git
+  history: the canonical `AGENTS.md` is a regular, committed file in the repo, with
+  `CLAUDE.md` / Copilot as committed spoke symlinks to it. For a `self` repo the
+  `project` generators adapt — `symlinks` wires only the spokes (never the
+  `AGENTS.md` hub link, and reports `selfAgentsMissing` until the repo authors its
+  `AGENTS.md`); `gitignore` never ignores its shared instruction files; `preset`
+  is hands-off (it never writes the repo's `AGENTS.md`); `wiring` treats its
+  committed instruction files as intentional (never a privacy risk); and
+  `retrofit` refuses it (the `AGENTS.md` stays in the repo). `check`, `derive`,
+  and capture are unchanged.
+
 ## 0.27.0 — 2026-06-27
 
 ### Added
