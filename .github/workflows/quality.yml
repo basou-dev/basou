@@ -37,9 +37,14 @@ jobs:
         # having generated downstream .d.ts files. Verifies that all
         # workspace packages typecheck against the published shape.
         run: pnpm typecheck
-      - name: Test
-        # vitest per package; any test break here fails CI.
-        run: pnpm -r test
+      - name: Test + coverage gate
+        # vitest per package WITH v8 coverage; any test break fails CI, and
+        # so does coverage dropping below the per-package ratchet floors in
+        # packages/{core,cli,sdk}/vitest.config.ts (packages/basou has no
+        # test:coverage script and is skipped). The coverage run subsumes a
+        # plain `pnpm -r test`, so tests are not run twice. Floors only ever
+        # move up — see vitest.coverage.ts.
+        run: pnpm -r test:coverage
       - name: Lint
         # biome check across the workspace; this is the gap that the
         # security workflow alone did not cover and that let a

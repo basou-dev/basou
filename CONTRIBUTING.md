@@ -62,7 +62,13 @@ end-to-end.
   and lint; `pnpm typecheck` for types. Both must pass on every
   pull request.
 - **`pnpm test`** (= vitest) runs each package's suite; new
-  features land with tests in the same commit.
+  features land with tests in the same commit. CI runs
+  `pnpm test:coverage`, which additionally enforces a per-package
+  coverage **ratchet floor**
+  (`packages/{core,cli,sdk}/vitest.config.ts`): a PR that drops coverage
+  below the floor fails. When your tests raise coverage,
+  raise the floor in the same PR — floors only ever move up. The shared
+  measurement policy lives in `vitest.coverage.ts`.
 - **Error messages stay pathless on the CLI surface.** basou
   maintains a "no absolute paths in stderr" contract, and a
   workspace-write-time path sanitizer follows the same principle. See
