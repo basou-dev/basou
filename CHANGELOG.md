@@ -3,6 +3,20 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Internal
+
+- Added a per-package coverage gate (`pnpm test:coverage`, wired into the CI
+  quality scan as `Test + coverage gate`). Each package's `vitest.config.ts`
+  carries a ratchet floor — the measured baseline rounded down ~a point to
+  absorb cross-runner noise, not an aspirational target — and coverage falling
+  below it fails CI. The shared measurement policy (v8 provider, whole-`src`
+  denominator via `all`) lives in `vitest.coverage.ts`, so each package
+  declares only its own floor. Floors only ever move up: raise them in the same
+  PR when coverage improves; they are never lowered to make a red build pass.
+  No runtime behavior change.
+
 ## 0.28.0 — 2026-06-27
 
 ### Added

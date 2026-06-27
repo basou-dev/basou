@@ -22,12 +22,14 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "test": "pnpm -r run test",
+    "test:coverage": "pnpm -r run test:coverage",
     "test:watch": "pnpm -r --parallel run test:watch",
     "clean": "pnpm -r --parallel clean && rm -rf node_modules"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
     "@types/node": "^25.9.2",
+    "@vitest/coverage-v8": "^2.1.0",
     "tsup": "^8.3.0",
     "typescript": "^6.0.3",
     "vitest": "^2.1.0"
