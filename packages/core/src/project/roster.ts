@@ -26,6 +26,16 @@ export type RepoLanguage = "en" | "ja" | "en+ja";
 export type PublishKind = "web" | "npm";
 
 /**
+ * Where a repo's agent instruction files live (the instruction-source axis),
+ * independent of visibility / language / publishes. `hub` is basou's native,
+ * generated hub-and-spoke topology (canonical in the anchor, gitignored symlinks
+ * in each repo); `self` is the additive opt-in where the canonical AGENTS.md is a
+ * regular committed file in the repo itself and basou stays hands-off about its
+ * content. See {@link instructionMode} for the default (absent => `hub`).
+ */
+export type RepoInstructions = "hub" | "self";
+
+/**
  * One published surface. Its visibility and language are INDEPENDENT of the
  * source repo's: a private repo commonly publishes a public website. Both are
  * optional so a surface can be declared
@@ -48,7 +58,27 @@ export type RepoEntry = {
   language?: RepoLanguage | undefined;
   /** Published surfaces this repo emits (opt-in; absent for a repo that publishes nothing). */
   publishes?: PublishTarget[] | undefined;
+  /**
+   * Instruction-source mode. Absent => `hub` (basou's native generated topology),
+   * so an existing roster's behavior is unchanged. `self` opts the repo out of
+   * generation: its AGENTS.md is a hand-authored committed file and basou stays
+   * hands-off. Resolve the effective mode with {@link instructionMode}.
+   */
+  instructions?: RepoInstructions | undefined;
 };
+
+/**
+ * The effective instruction-source mode for a repo: the declared `instructions`,
+ * defaulting to `hub` when absent. The default is the single guarantee that an
+ * existing roster (which has no `instructions` field) keeps basou's current
+ * hub-and-spoke behavior byte-for-byte — every generator branches on this, never
+ * on the raw optional field, so "absent => hub" is decided in exactly one place.
+ */
+export function instructionMode(entry: {
+  instructions?: RepoInstructions | undefined;
+}): RepoInstructions {
+  return entry.instructions ?? "hub";
+}
 
 export type RosterDriftSummary = {
   declaredCount: number;

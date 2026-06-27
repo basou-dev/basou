@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { planRosterAdoption, reconcileSourceRoots, summarizeRosterDrift } from "./roster.js";
+import {
+  instructionMode,
+  planRosterAdoption,
+  reconcileSourceRoots,
+  summarizeRosterDrift,
+} from "./roster.js";
+
+describe("instructionMode", () => {
+  it("defaults an absent field to hub (the byte-for-byte backward-compatible default)", () => {
+    expect(instructionMode({})).toBe("hub");
+    expect(instructionMode({ instructions: undefined })).toBe("hub");
+  });
+
+  it("echoes an explicit hub", () => {
+    expect(instructionMode({ instructions: "hub" })).toBe("hub");
+  });
+
+  it("echoes an explicit self (the additive opt-in)", () => {
+    expect(instructionMode({ instructions: "self" })).toBe("self");
+  });
+});
 
 describe("summarizeRosterDrift", () => {
   it("flags a declared repo missing from source_roots as a gap (the bio class)", () => {

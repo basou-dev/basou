@@ -224,6 +224,13 @@
               ],
               "additionalProperties": {}
             }
+          },
+          "instructions": {
+            "type": "string",
+            "enum": [
+              "hub",
+              "self"
+            ]
           }
         },
         "required": [

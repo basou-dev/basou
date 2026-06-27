@@ -39,6 +39,21 @@ describe("classifyRetrofit", () => {
     expect(plan.reason).toBe("anchor");
   });
 
+  it("refuses a self repo (its AGENTS.md stays in the repo — retrofit does not apply)", () => {
+    // Even with otherwise-relocatable facts, a self repo is refused.
+    const plan = classifyRetrofit(baseFacts({ self: true }));
+    expect(plan.action).toBe("refuse");
+    expect(plan.reason).toBe("self");
+    expect(plan.canonicalPath).toBeUndefined();
+  });
+
+  it("precedence: the anchor refusal wins over self when both apply", () => {
+    const plan = classifyRetrofit(
+      baseFacts({ path: ".", canonicalName: ".", isAnchor: true, self: true }),
+    );
+    expect(plan.reason).toBe("anchor");
+  });
+
   it("refuses an unreachable repo (path unresolved / not a git repo)", () => {
     const plan = classifyRetrofit(baseFacts({ reachable: false }));
     expect(plan.action).toBe("refuse");

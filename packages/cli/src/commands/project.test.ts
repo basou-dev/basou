@@ -631,6 +631,22 @@ describe("basou project wiring", () => {
     expect(r.risks).toHaveLength(0);
   });
 
+  it("instructions: self — a public repo tracking all instruction files is reported as self, not a risk", async () => {
+    await makeRepo("blog", [
+      { name: "AGENTS.md", tracked: true },
+      { name: "CLAUDE.md", tracked: true },
+      { name: ".github/copilot-instructions.md", tracked: true },
+    ]);
+    await setupHostManifest([{ path: "../blog", visibility: "public", instructions: "self" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectWiring({}, { cwd: host() });
+    expect(r.risks).toEqual([]);
+    expect(r.self).toEqual(["../blog"]);
+    expect(r.unknown).toEqual([]);
+    expect(r.incomplete).toHaveLength(0);
+    expect(r.ok).toBe(true);
+  });
+
   it("reports hasRoster false when no roster is declared", async () => {
     const paths = await ensureBasouDirectory(host());
     const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
@@ -652,6 +668,8 @@ describe("basou project wiring", () => {
     const parsed = JSON.parse(out.join("\n")) as ProjectWiringResult;
     expect(parsed.risks).toEqual([{ repo: "../pub", visibility: "public", file: "AGENTS.md" }]);
     expect(parsed.hasRoster).toBe(true);
+    // The instructions-source axis adds an always-present (additive) `self` bucket.
+    expect(parsed.self).toEqual([]);
   });
 
   it("counts a (broken) symlink as a present instruction file (lstat, not exists)", async () => {
@@ -701,6 +719,7 @@ describe("renderProjectWiring", () => {
     repos: [],
     risks: [],
     unknown: [],
+    self: [],
     incomplete: [],
     unreachable: [],
     ok: true,
@@ -740,6 +759,13 @@ describe("renderProjectWiring", () => {
     expect(out).toContain("../takuhon");
     expect(out).toContain("[public]");
     expect(out).toContain("AGENTS.md");
+  });
+
+  it("lists a self section explaining committed instruction files are intentional", () => {
+    const out = renderProjectWiring({ ...base, self: ["../blog"] });
+    expect(out).toContain("instructions: self");
+    expect(out).toContain("../blog");
+    expect(out).toContain("no leak risk");
   });
 
   it("lists unknown-visibility, incomplete and unreachable sections", () => {
@@ -854,6 +880,19 @@ describe("basou project gitignore", () => {
     expect(await gitignoreOf("priv")).toBe("node_modules\n"); // untouched
   });
 
+  it("instructions: self — never gitignores a self repo's committed instruction files (even when public)", async () => {
+    await makeRepo("blog", "node_modules\n");
+    await setupHostManifest([{ path: "../blog", visibility: "public", instructions: "self" }]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectGitignore({ apply: true }, { cwd: host() });
+    expect(r.plans).toHaveLength(0);
+    expect(r.self).toEqual(["../blog"]);
+    expect(r.unknown).toEqual([]);
+    expect(r.applied).toBe(false);
+    expect(r.ok).toBe(true);
+    expect(await gitignoreOf("blog")).toBe("node_modules\n"); // untouched
+  });
+
   it("reports hasRoster false when no roster is declared", async () => {
     const paths = await ensureBasouDirectory(host());
     const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
@@ -874,6 +913,8 @@ describe("basou project gitignore", () => {
     const parsed = JSON.parse(out.join("\n")) as ProjectGitignoreResult;
     expect(parsed.plans[0]?.path).toBe("../pub");
     expect(parsed.applied).toBe(false);
+    // The instructions-source axis adds an always-present (additive) `self` bucket.
+    expect(parsed.self).toEqual([]);
   });
 });
 
@@ -881,6 +922,7 @@ describe("renderProjectGitignore", () => {
   const base: ProjectGitignoreResult = {
     plans: [],
     unknown: [],
+    self: [],
     unreachable: [],
     ok: true,
     hasRoster: true,
@@ -915,6 +957,13 @@ describe("renderProjectGitignore", () => {
     expect(out).toContain("../pub");
     expect(out).toContain("CLAUDE.md");
     expect(out).toContain("nothing is removed");
+  });
+
+  it("lists a self section explaining shared committed files are skipped by design", () => {
+    const out = renderProjectGitignore({ ...base, self: ["../blog"] });
+    expect(out).toContain("instructions: self");
+    expect(out).toContain("../blog");
+    expect(out).toContain("never gitignored");
   });
 
   it("applied lists what was added with a check mark", () => {
@@ -1125,6 +1174,8 @@ describe("basou project symlinks", () => {
     const parsed = JSON.parse(out.join("\n")) as ProjectSymlinksResult;
     expect(parsed.hasRoster).toBe(true);
     expect(parsed.plans[0]?.path).toBe("../pub");
+    // The instructions-source axis adds an always-present (additive) bucket.
+    expect(parsed.selfAgentsMissing).toEqual([]);
   });
 
   it("classifies a path whose parent is a regular file as blocked, not missing, and does not crash --apply", async () => {
@@ -1174,6 +1225,45 @@ describe("basou project symlinks", () => {
     expect(r.plans).toEqual([]);
     expect(r.ok).toBe(false);
   });
+
+  it("instructions: self — wires only the spokes, never an AGENTS.md hub link, and never touches the committed AGENTS.md", async () => {
+    await makeRepo("blog");
+    // The self repo owns its AGENTS.md as a regular committed file (no anchor canonical).
+    await writeFile(join(sibling("blog"), "AGENTS.md"), "hand-authored\n");
+    await setupHostManifest([{ path: "../blog", visibility: "public", instructions: "self" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.plans).toEqual([
+      {
+        path: "../blog",
+        toCreate: [
+          { name: "CLAUDE.md", target: "AGENTS.md" },
+          { name: ".github/copilot-instructions.md", target: "../AGENTS.md" },
+        ],
+      },
+    ]);
+    // The spokes point at the repo's own AGENTS.md...
+    expect(await readlink(join(sibling("blog"), "CLAUDE.md"))).toBe("AGENTS.md");
+    expect(await readlink(join(sibling("blog"), ".github/copilot-instructions.md"))).toBe(
+      "../AGENTS.md",
+    );
+    // ...and the committed AGENTS.md is left a regular file, untouched.
+    await expect(readlink(join(sibling("blog"), "AGENTS.md"))).rejects.toThrow();
+    expect(await readFile(join(sibling("blog"), "AGENTS.md"), "utf8")).toBe("hand-authored\n");
+  });
+
+  it("instructions: self — reports selfAgentsMissing when the repo has no committed AGENTS.md yet", async () => {
+    await makeRepo("blog");
+    await setupHostManifest([{ path: "../blog", instructions: "self" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.selfAgentsMissing).toEqual(["../blog"]);
+    expect(r.missingCanonical).toEqual([]);
+    expect(r.plans).toEqual([]);
+    expect(r.ok).toBe(false);
+    // No dangling spokes were created.
+    await expect(readlink(join(sibling("blog"), "CLAUDE.md"))).rejects.toThrow();
+  });
 });
 
 describe("renderProjectSymlinks", () => {
@@ -1181,6 +1271,7 @@ describe("renderProjectSymlinks", () => {
     plans: [],
     conflicts: [],
     missingCanonical: [],
+    selfAgentsMissing: [],
     unreachable: [],
     collisions: [],
     ok: true,
@@ -1225,6 +1316,14 @@ describe("renderProjectSymlinks", () => {
     expect(out).not.toContain("correctly wired");
     expect(out).toContain("Conflicts");
     expect(out).toContain("Canonical missing");
+  });
+
+  it("lists a selfAgentsMissing section pointing the operator to author AGENTS.md", () => {
+    const out = renderProjectSymlinks({ ...base, ok: false, selfAgentsMissing: ["../blog"] });
+    expect(out).not.toContain("correctly wired");
+    expect(out).toContain("AGENTS.md missing");
+    expect(out).toContain("instructions: self");
+    expect(out).toContain("../blog");
   });
 
   it("applied shows a check mark and created wording", () => {
@@ -1943,6 +2042,7 @@ describe("basou project preset", () => {
       unreadable: [],
       collisions: [],
       anchors: [],
+      self: [],
       unreachable: [],
       ok: true,
       hasRoster: false,
@@ -2051,6 +2151,29 @@ describe("basou project preset", () => {
     expect(r.plans).toEqual([]);
   });
 
+  it("instructions: self — never writes a preset block into the repo's hand-authored AGENTS.md", async () => {
+    await makeRepo("blog");
+    // The self repo has a hand-authored AGENTS.md with markers; preset must still leave it alone.
+    await writeFile(
+      join(sibling("blog"), "AGENTS.md"),
+      `# blog\n\n${GENERATED_START}\nstale\n${GENERATED_END}\n`,
+    );
+    await setupHostManifest([
+      { path: "../blog", visibility: "public", language: "ja", instructions: "self" },
+    ]);
+    mute();
+    const r = await doRunProjectPreset({ apply: true }, { cwd: host() });
+    expect(r.self).toEqual(["../blog"]);
+    expect(r.plans).toEqual([]);
+    expect(r.applied).toBe(false);
+    expect(r.ok).toBe(true);
+    // No anchor canonical was created, and the repo's AGENTS.md is byte-for-byte unchanged.
+    expect(existsSync(canonicalPath("blog"))).toBe(false);
+    expect(await readFile(join(sibling("blog"), "AGENTS.md"), "utf8")).toBe(
+      `# blog\n\n${GENERATED_START}\nstale\n${GENERATED_END}\n`,
+    );
+  });
+
   it("renders the generated block in the dry-run preview", () => {
     const expected = renderPresetBlock({ visibility: "public", language: "en" });
     const out = renderProjectPreset({
@@ -2061,6 +2184,7 @@ describe("basou project preset", () => {
       unreadable: [],
       collisions: [],
       anchors: [],
+      self: [],
       unreachable: [],
       ok: false,
       hasRoster: true,
@@ -2070,6 +2194,27 @@ describe("basou project preset", () => {
     expect(out).toContain("Preset blocks to generate");
     expect(out).toContain("ソース可視性: public");
     expect(out).toContain("agents/pub/AGENTS.md");
+  });
+
+  it("renders a self section explaining the hand-authored AGENTS.md is never written", () => {
+    const out = renderProjectPreset({
+      plans: [],
+      inSync: [],
+      undeclared: [],
+      markerConflicts: [],
+      unreadable: [],
+      collisions: [],
+      anchors: [],
+      self: ["../blog"],
+      unreachable: [],
+      ok: true,
+      hasRoster: true,
+      applied: false,
+      failures: [],
+    } satisfies ProjectPresetResult);
+    expect(out).toContain("instructions: self");
+    expect(out).toContain("../blog");
+    expect(out).toContain("hands-off");
   });
 
   it("surfaces two distinct repos sharing a canonical name as a collision (generates neither)", async () => {
@@ -2158,6 +2303,8 @@ describe("basou project preset", () => {
     expect(Array.isArray(parsed.inSync)).toBe(true);
     expect(Array.isArray(parsed.failures)).toBe(true);
     expect(parsed.ok).toBe(false);
+    // The instructions-source axis adds an always-present (additive) `self` bucket.
+    expect(parsed.self).toEqual([]);
   });
 });
 
@@ -2701,6 +2848,39 @@ describe("basou project teardown", () => {
     expect(r.removed).not.toContain("AGENTS.md");
   });
 
+  it("instructions: self — never removes the repo's committed AGENTS.md or its committed spokes", async () => {
+    await makeRepo("blog");
+    // A self repo owns its AGENTS.md as a regular committed file.
+    await writeFile(join(sibling("blog"), "AGENTS.md"), "hand-authored\n");
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, {
+      ...base,
+      workspace: { ...base.workspace, view: "../view" },
+      repos: [{ path: "." }, { path: "../blog", visibility: "public", instructions: "self" }],
+    });
+    mute();
+    // Wire the committed spokes (CLAUDE.md / copilot → AGENTS.md) and the view link.
+    await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    await doRunProjectWorkspace({ apply: true }, { cwd: host() });
+
+    const r = await doRunProjectTeardown("../blog", { apply: true }, { cwd: host() });
+    // Every instruction file is reported foreign (committed, left untouched), none removable.
+    const instr = r.items.filter((i) => i.kind === "instruction-symlink");
+    expect(instr.length).toBeGreaterThan(0);
+    expect(instr.every((i) => i.state === "foreign")).toBe(true);
+    // The committed files all survive --apply.
+    expect(await readFile(join(sibling("blog"), "AGENTS.md"), "utf8")).toBe("hand-authored\n");
+    expect(await readlink(join(sibling("blog"), "CLAUDE.md"))).toBe("AGENTS.md");
+    expect(await readlink(join(sibling("blog"), ".github/copilot-instructions.md"))).toBe(
+      "../AGENTS.md",
+    );
+    expect(r.removed).not.toContain("AGENTS.md");
+    expect(r.removed).not.toContain("CLAUDE.md");
+    // The basou-generated view link is still basou's, so it IS torn down.
+    expect(existsSync(join(parent as string, "view", "blog"))).toBe(false);
+  });
+
   it("refuses to tear down the anchor (`.`)", async () => {
     await makeRepo("pub");
     await wirePub();
@@ -3220,6 +3400,20 @@ describe("basou project retrofit", () => {
     expect(await readFile(join(host(), "AGENTS.md"), "utf8")).toBe("anchor own\n");
   });
 
+  it("instructions: self — refuses (the AGENTS.md stays in the repo) and never relocates it", async () => {
+    const dir = await makeRepo("blog");
+    await writeFile(join(dir, "AGENTS.md"), "hand-authored\n");
+    await setupHostManifest([{ path: "../blog", visibility: "public", instructions: "self" }]);
+    mute();
+    const r = await doRunProjectRetrofit("../blog", { apply: true }, { cwd: host() });
+    expect(r.action).toBe("refuse");
+    expect(r.reason).toBe("self");
+    expect(r.applied).toBe(false);
+    // The committed AGENTS.md is left in place; no anchor canonical is created.
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("hand-authored\n");
+    expect(existsSync(join(host(), "agents", "blog", "AGENTS.md"))).toBe(false);
+  });
+
   it("surfaces a regular-file spoke (CLAUDE.md) as a manual checklist", async () => {
     const dir = await makeRepo("foo");
     await writeFile(join(dir, "AGENTS.md"), "a\n");
@@ -3264,6 +3458,12 @@ describe("renderProjectRetrofit", () => {
     // valid under exactOptionalPropertyTypes — an explicit `undefined` is not).
     const out = renderProjectRetrofit(base({ action: "refuse", reason: "canonical-exists" }));
     expect(out).toContain("already exists");
+  });
+  it("self refusal explains the AGENTS.md stays in the repo (retrofit does not apply)", () => {
+    const out = renderProjectRetrofit(base({ action: "refuse", reason: "self" }));
+    expect(out).toContain("instructions: self");
+    expect(out).toContain("stays in the repo");
+    expect(out).toContain("basou project symlinks");
   });
   it("no roster points at new/adopt", () => {
     const out = renderProjectRetrofit(base({ hasRoster: false }));

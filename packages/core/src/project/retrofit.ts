@@ -41,6 +41,12 @@ export type RetrofitReason =
   | "ok"
   /** refuse: the repo is not in the declared roster. */
   | "not-declared"
+  /**
+   * refuse: the repo declares `instructions: self` — its AGENTS.md is a
+   * hand-authored committed file that stays in the repo, so there is no anchor
+   * canonical to relocate it to (retrofit does not apply).
+   */
+  | "self"
   /** refuse: the path is the project anchor (it owns the canonical directly — nothing to relocate). */
   | "anchor"
   /** refuse: the path does not resolve / is not a git repo. */
@@ -60,6 +66,12 @@ export type RetrofitFacts = {
   path: string;
   /** True when the path is declared in the manifest roster. */
   declared: boolean;
+  /**
+   * True when the declared entry uses `instructions: self` — its AGENTS.md stays
+   * in the repo, so retrofit (which relocates it to the anchor canonical) does
+   * not apply. Absent/false => the default `hub` behavior, unchanged.
+   */
+  self?: boolean | undefined;
   /** True when the path resolves to the anchor itself. */
   isAnchor: boolean;
   /** False when the path does not resolve / is not a git repo. */
@@ -95,8 +107,8 @@ export type RetrofitPlan = {
 /**
  * Classify the retrofit facts into one action. Refusals are checked first, in a
  * fixed precedence so the outcome is deterministic when several guardrails could
- * apply: undeclared → anchor → unreachable → uninspectable AGENTS.md. Then the
- * idempotent skips (already a symlink, or absent — nothing to move). Only a
+ * apply: undeclared → anchor → self → unreachable → uninspectable AGENTS.md. Then
+ * the idempotent skips (already a symlink, or absent — nothing to move). Only a
  * genuine regular-file AGENTS.md reaches the relocate decision, and even then a
  * pre-existing destination canonical refuses (relocating would clobber it).
  * `regularSpokes` is echoed in every outcome (it is advisory, relevant whenever a
@@ -111,6 +123,9 @@ export function classifyRetrofit(facts: RetrofitFacts): RetrofitPlan {
 
   if (!facts.declared) return { ...base, action: "refuse", reason: "not-declared" };
   if (facts.isAnchor) return { ...base, action: "refuse", reason: "anchor" };
+  // A `self` repo keeps its AGENTS.md in its own tree — there is no anchor
+  // canonical to relocate it to, so retrofit does not apply.
+  if (facts.self === true) return { ...base, action: "refuse", reason: "self" };
   if (!facts.reachable) return { ...base, action: "refuse", reason: "unreachable" };
   if (facts.agentsState === "blocked") return { ...base, action: "refuse", reason: "blocked" };
   if (facts.agentsState === "symlink")

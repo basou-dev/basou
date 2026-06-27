@@ -142,6 +142,13 @@ export type RepoPresetFacts = {
   path: string;
   /** True when this repo IS the project anchor (its own AGENTS.md is hand-maintained; skipped). */
   isAnchor: boolean;
+  /**
+   * True when this repo declares `instructions: self`: its AGENTS.md is
+   * hand-authored and basou stays hands-off — no preset block is ever written
+   * (reported as `self`, skipped like an anchor). Absent => the default `hub`
+   * behavior, unchanged.
+   */
+  self?: boolean | undefined;
   /** False when the repo path could not be resolved / is not a usable git repo. */
   reachable: boolean;
   /** Declared fields (the render input). */
@@ -216,14 +223,16 @@ export type PresetPlanSummary = {
   collisions: PresetCollision[];
   /** Repos that resolve to the anchor (their own AGENTS.md is hand-maintained; skipped). */
   anchors: string[];
+  /** `instructions: self` repos: hands-off, skipped (basou never writes their AGENTS.md). */
+  self: string[];
   /** Repo paths that could not be resolved / are not usable git repos. */
   unreachable: string[];
   /**
    * True only when nothing needs writing AND there are no marker conflicts, no
    * unreadable canonicals, no collisions, no unreachable repos, and no
    * undeclared repos — so a clean "all in sync" verdict is never claimed while
-   * some repo was skipped or unjudgeable. Anchors do not block it (they are
-   * intentionally not generated).
+   * some repo was skipped or unjudgeable. Anchors and `self` repos do not block
+   * it (they are intentionally not generated).
    */
   ok: boolean;
 };
@@ -261,10 +270,18 @@ export function summarizePresetPlan(facts: RepoPresetFacts[]): PresetPlanSummary
   }
 
   // Detect canonical-name collisions among repos that would actually generate
-  // (non-anchor, reachable, renderable, canonical name known).
+  // (non-anchor, non-self, reachable, renderable, canonical name known). A `self`
+  // repo writes nothing, so it shares no canonical and cannot collide.
   const byCanonical = new Map<string, string[]>();
   for (const f of deduped) {
-    if (f.isAnchor || !f.reachable || f.canonicalName === undefined || !isRenderable(f)) continue;
+    if (
+      f.isAnchor ||
+      f.self === true ||
+      !f.reachable ||
+      f.canonicalName === undefined ||
+      !isRenderable(f)
+    )
+      continue;
     const repos = byCanonical.get(f.canonicalName) ?? [];
     repos.push(f.path);
     byCanonical.set(f.canonicalName, repos);
@@ -284,11 +301,19 @@ export function summarizePresetPlan(facts: RepoPresetFacts[]): PresetPlanSummary
   const markerConflicts: PresetMarkerConflict[] = [];
   const unreadable: string[] = [];
   const anchors: string[] = [];
+  const self: string[] = [];
   const unreachable: string[] = [];
 
   for (const f of deduped) {
     if (f.isAnchor) {
       anchors.push(f.path);
+      continue;
+    }
+    // A `self` repo is hands-off: never generate a preset block into its
+    // hand-authored AGENTS.md. Checked before reachability/render so it is always
+    // reported as `self` regardless of on-disk state.
+    if (f.self === true) {
+      self.push(f.path);
       continue;
     }
     if (!f.reachable) {
@@ -344,6 +369,7 @@ export function summarizePresetPlan(facts: RepoPresetFacts[]): PresetPlanSummary
     unreadable,
     collisions,
     anchors,
+    self,
     unreachable,
     ok:
       plans.length === 0 &&

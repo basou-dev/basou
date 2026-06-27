@@ -29,6 +29,13 @@ export type RepoWiringFacts = {
   path: string;
   /** Declared visibility; undefined when the operator has not set it yet. */
   visibility?: RepoVisibility | undefined;
+  /**
+   * True when this repo declares `instructions: self`: its instruction files are
+   * committed BY DESIGN (shared in its own git history), so a tracked file is
+   * never a privacy risk — the repo is reported as `self` and excluded from the
+   * risk / unknown verdicts. Absent => the default `hub` behavior, unchanged.
+   */
+  self?: boolean | undefined;
   /** False when the repo path could not be resolved / is not a usable git repo. */
   reachable: boolean;
   /** Per instruction-file facts (omitted/empty when unreachable). */
@@ -52,6 +59,12 @@ export type WiringSummary = {
   risks: WiringRisk[];
   /** Repo paths whose visibility is unset, so the privacy verdict cannot be judged. */
   unknown: string[];
+  /**
+   * `instructions: self` repo paths: their instruction files are committed by
+   * design, so they carry no privacy risk and do not need a visibility verdict.
+   * Reported (not silently dropped) and do NOT block `ok`.
+   */
+  self: string[];
   /** Repos missing one or more instruction files (a wiring gap a later generate slice fills). */
   incomplete: { repo: string; missing: string[] }[];
   /** Repo paths that could not be resolved / are not usable git repos. */
@@ -70,12 +83,16 @@ function isPublicFacing(v: RepoVisibility | undefined): v is "public" | "future-
  * public-facing repo that TRACKS an instruction file is a {@link WiringRisk}
  * (its git history can expose the private canonical it points at); a repo with
  * unset visibility cannot be judged (`unknown`); a repo missing instruction
- * files is `incomplete` (a wiring gap, not a privacy problem). `ok` is true only
- * when nothing is at risk, every repo is judgeable, and every repo is reachable.
+ * files is `incomplete` (a wiring gap, not a privacy problem). A `self` repo is
+ * reported as `self` and bypasses the risk / unknown verdicts entirely — its
+ * instruction files are committed by design — though a genuinely missing one is
+ * still surfaced as `incomplete`. `ok` is true only when nothing is at risk,
+ * every repo is judgeable, and every repo is reachable.
  */
 export function summarizeWiring(facts: RepoWiringFacts[]): WiringSummary {
   const risks: WiringRisk[] = [];
   const unknown: string[] = [];
+  const self: string[] = [];
   const incomplete: { repo: string; missing: string[] }[] = [];
   const unreachable: string[] = [];
 
@@ -84,7 +101,11 @@ export function summarizeWiring(facts: RepoWiringFacts[]): WiringSummary {
       unreachable.push(f.path);
       continue;
     }
-    if (isPublicFacing(f.visibility)) {
+    if (f.self === true) {
+      // A `self` repo's tracked instruction files are intentional (committed,
+      // shared), so they are never a privacy risk and need no visibility verdict.
+      self.push(f.path);
+    } else if (isPublicFacing(f.visibility)) {
       for (const file of f.instructionFiles) {
         if (file.tracked) risks.push({ repo: f.path, visibility: f.visibility, file: file.name });
       }
@@ -99,6 +120,7 @@ export function summarizeWiring(facts: RepoWiringFacts[]): WiringSummary {
     repos: facts,
     risks,
     unknown,
+    self,
     incomplete,
     unreachable,
     ok: risks.length === 0 && unknown.length === 0 && unreachable.length === 0,

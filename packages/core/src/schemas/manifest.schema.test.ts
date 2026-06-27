@@ -171,6 +171,23 @@ describe("ManifestSchema", () => {
     expect(ManifestSchema.safeParse(variant).success).toBe(false);
   });
 
+  it("accepts an explicit instructions: hub | self on a repo entry", () => {
+    for (const instructions of ["hub", "self"]) {
+      const variant = { ...VALID_MANIFEST, repos: [{ path: "../blog", instructions }] };
+      expect(ManifestSchema.safeParse(variant).success, instructions).toBe(true);
+    }
+  });
+
+  it("accepts a repo entry with instructions absent (defaults to hub elsewhere)", () => {
+    const variant = { ...VALID_MANIFEST, repos: [{ path: "../blog" }] };
+    expect(ManifestSchema.safeParse(variant).success).toBe(true);
+  });
+
+  it("rejects an unknown instructions mode", () => {
+    const variant = { ...VALID_MANIFEST, repos: [{ path: "../x", instructions: "managed" }] };
+    expect(ManifestSchema.safeParse(variant).success).toBe(false);
+  });
+
   it("rejects an absolute or '~' path in a repos entry", () => {
     for (const bad of ["/abs/x", "~/x"]) {
       const variant = { ...VALID_MANIFEST, repos: [{ path: bad }] };

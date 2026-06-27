@@ -92,6 +92,20 @@ const RepoLanguageSchema = z.enum(["en", "ja", "en+ja"]);
 const PublishKindSchema = z.enum(["web", "npm"]);
 
 /**
+ * Where a repo's agent instruction files live, INDEPENDENT of the other axes.
+ * `hub` (the default when absent) is basou's native topology: the canonical
+ * AGENTS.md lives in the project anchor (`agents/<repo>/AGENTS.md`) and each repo
+ * carries gitignored symlinks to it — basou owns and generates the wiring. `self`
+ * is the additive opt-in: the canonical AGENTS.md is a regular, committed file in
+ * the repo itself (hand-authored, shared in its own git history), with CLAUDE.md /
+ * Copilot as committed spoke symlinks to it; basou never writes the repo's
+ * AGENTS.md content (hands-off — no preset block), never gitignores the
+ * instruction files, and only generates the spokes. Absent => `hub`, so an
+ * existing manifest's behavior is unchanged.
+ */
+const RepoInstructionsSchema = z.enum(["hub", "self"]);
+
+/**
  * One published surface. Its `visibility` and `language` are independent of the
  * source repo's (a private repo commonly publishes a public site) and both are
  * optional so a surface can be declared before those facts are pinned down.
@@ -108,6 +122,7 @@ const RepoEntrySchema = z.looseObject({
   visibility: RepoVisibilitySchema.optional(),
   language: RepoLanguageSchema.optional(),
   publishes: z.array(PublishTargetSchema).optional(),
+  instructions: RepoInstructionsSchema.optional(),
 });
 
 const WorkspaceMetaSchema = z.looseObject({

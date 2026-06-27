@@ -123,6 +123,7 @@ export type {
   PublishKind,
   PublishTarget,
   RepoEntry,
+  RepoInstructions,
   RepoLanguage,
   RepoVisibility,
   RosterAdoptionPlan,
@@ -130,6 +131,7 @@ export type {
   SourceRootsReconcile,
 } from "./project/roster.js";
 export {
+  instructionMode,
   planRosterAdoption,
   reconcileSourceRoots,
   summarizeRosterDrift,
