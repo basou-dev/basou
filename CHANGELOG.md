@@ -5,6 +5,22 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Added
+
+- `basou hook install` / `hook uninstall` / `hook status` — register, remove, and
+  inspect the Stop-hook capture reminder in `~/.claude/settings.json` instead of
+  hand-editing it. `install` is idempotent (it upgrades an existing entry in
+  place rather than duplicating), writes the node-path form so a shell alias is
+  not required, preserves all other settings and hooks, and keeps a one-time
+  backup. It registers the CLI's own resolved entry, so the same command works
+  whether basou runs from an npm install or a source build.
+- `basou hook stop --block` — an opt-in enforcement tier for the capture
+  reminder. By default the Stop hook stays non-blocking (advisory); with
+  `--block` (register it via `basou hook install --block`) a warranted reminder
+  is returned as a blocking `decision:"block"`, holding the agent in-turn to act
+  on it, bounded to a single turn by the loop guard. The default advisory output
+  is unchanged.
+
 ### Internal
 
 - Added a per-package coverage gate (`pnpm test:coverage`, wired into the CI
