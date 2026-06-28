@@ -5,21 +5,31 @@
 export const BASOU_CORE_VERSION = "0.1.0";
 
 export type {
+  BuildStopHookCommandOptions,
+  ClaudeSettings,
   ClaudeTranscriptRecord,
   ClaudeTranscriptToPayloadOptions,
   CommandLookup,
   StopHookEvaluation,
   StopHookEvaluationInput,
+  StopHookRemoval,
   StopHookSilentReason,
+  StopHookUpsert,
 } from "./adapters/claude-code/index.js";
 export {
+  buildStopHookCommand,
   CLAUDE_IMPORT_SOURCE,
   claudeCodeAdapterMetadata,
   claudeTranscriptToImportPayload,
   DEFAULT_STOP_HOOK_MIN_EDITS,
   evaluateStopHook,
+  findBasouStopHookCommand,
+  isBasouStopHookCommand,
+  removeStopHook,
   resolveClaudeCodeCommand,
+  STOP_HOOK_TIMEOUT_SECONDS,
   summarizeAdapterOutput,
+  upsertStopHook,
 } from "./adapters/claude-code/index.js";
 export type {
   CodexRolloutRecord,

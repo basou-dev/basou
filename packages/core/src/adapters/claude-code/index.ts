@@ -5,6 +5,20 @@ export {
   summarizeAdapterOutput,
 } from "./claude-code-adapter.js";
 export type {
+  BuildStopHookCommandOptions,
+  ClaudeSettings,
+  StopHookRemoval,
+  StopHookUpsert,
+} from "./settings-hook.js";
+export {
+  buildStopHookCommand,
+  findBasouStopHookCommand,
+  isBasouStopHookCommand,
+  removeStopHook,
+  STOP_HOOK_TIMEOUT_SECONDS,
+  upsertStopHook,
+} from "./settings-hook.js";
+export type {
   StopHookEvaluation,
   StopHookEvaluationInput,
   StopHookSilentReason,
