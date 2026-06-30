@@ -379,6 +379,8 @@ export {
   loadFederatedSessionEntries,
   loadSessionEntries,
   loadTaskEntries,
+  ORIENTATION_END,
+  ORIENTATION_START,
   overwriteYamlFile,
   PROTOCOL_END,
   PROTOCOL_START,
