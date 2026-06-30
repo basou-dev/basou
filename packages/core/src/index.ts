@@ -191,8 +191,19 @@ export type {
   ReviewGapsSummary,
   ReviewGapUnit,
   ReviewGapVerdict,
+  ReviewRecordBlockedInput,
+  ReviewRecordFindingInput,
+  ReviewRecordInput,
 } from "./review/index.js";
-export { findReviewGaps, normalizeRepoKey, normalizeRepoPath } from "./review/index.js";
+export {
+  buildReviewRecordedEvent,
+  buildReviewRecordLabel,
+  findReviewGaps,
+  normalizeRepoKey,
+  normalizeRepoPath,
+  parseReviewRecordInput,
+  REVIEW_RECORD_NO_INPUT_HINT,
+} from "./review/index.js";
 export { ChildProcessRunner } from "./runtime/child-process-runner.js";
 export type {
   CaptureMode,
@@ -216,6 +227,9 @@ export type {
   JsonSchemaArtifact,
   Manifest,
   NoteAddedEvent,
+  ReviewBlocked,
+  ReviewFinding,
+  ReviewRecordedEvent,
   RiskLevel,
   Session,
   SessionEndedEvent,

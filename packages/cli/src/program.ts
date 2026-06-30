@@ -14,6 +14,7 @@ import { registerProjectCommand } from "./commands/project.js";
 import { registerProtocolCommand } from "./commands/protocol.js";
 import { registerRefreshCommand } from "./commands/refresh.js";
 import { registerReportCommand } from "./commands/report.js";
+import { registerReviewCommand } from "./commands/review.js";
 import { registerReviewGapsCommand } from "./commands/review-gaps.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerSessionCommand } from "./commands/session.js";
@@ -70,6 +71,7 @@ export function buildProgram(): Command {
   registerDecisionsCommand(program);
   registerReportCommand(program);
   registerOrientCommand(program);
+  registerReviewCommand(program);
   registerReviewGapsCommand(program);
   registerProjectCommand(program);
   registerProtocolCommand(program);

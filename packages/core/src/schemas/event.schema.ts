@@ -234,6 +234,49 @@ const NoteAddedEventSchema = BaseEventSchema.extend({
   kind: z.enum(["note", "next_step"]).optional(),
 });
 
+// --- Review events ---
+
+// One finding surfaced by a review. Only `title` is required; severity /
+// location / summary are optional so a lightweight record (just "what was
+// found") round-trips, while a rich one carries triage detail. Non-strict
+// (like decision_recorded) so a future additive field needs no schema bump.
+const ReviewFindingSchema = z.object({
+  title: z.string().min(1),
+  severity: z.enum(["high", "medium", "low"]).optional(),
+  location: z.string().min(1).optional(),
+  summary: z.string().min(1).optional(),
+});
+
+// One finding the operator (or agent on the operator's behalf) BLOCKED from the
+// review's outcome as a spec-deviation or design-reversal — the core of the
+// adversarial-review protocol's "always report what you blocked" rule. Recording
+// these promotes that report from a volatile chat message to a durable trail
+// artifact. `reason` is constrained to the two protocol categories; `why` is the
+// free-text justification.
+const ReviewBlockedSchema = z.object({
+  title: z.string().min(1),
+  reason: z.enum(["spec-deviation", "design-reversal"]),
+  why: z.string().min(1).optional(),
+});
+
+// `review_recorded` is the durable record that an adversarial / second-opinion
+// review RAN — basou's own twin of `decision_recorded`, written deterministically
+// by `basou review record` (no runtime LLM). It is a self-report: basou records
+// that a review happened, it does not verify the review actually executed
+// (cryptographic enforcement is out of scope — read-only/advisory is preserved).
+// Required minimum = `reviewer` (what/who reviewed) + `target` (what was
+// reviewed); verdict / findings / blocked are optional but recommended. All
+// optional fields are additive so the wire format stays stable. Non-strict to
+// match decision_recorded (additive optional => no schema_version bump).
+const ReviewRecordedEventSchema = BaseEventSchema.extend({
+  type: z.literal("review_recorded"),
+  reviewer: z.string().min(1),
+  target: z.string().min(1),
+  verdict: z.enum(["pass", "needs-attention", "fail"]).optional(),
+  findings: z.array(ReviewFindingSchema).optional(),
+  blocked: z.array(ReviewBlockedSchema).optional(),
+});
+
 // --- Adapter output (`.strict()` rejects raw bodies) ---
 //
 // The spec forbids embedding raw adapter output (`content`, `body`, `raw`,
@@ -274,6 +317,7 @@ export const EventSchema = z.discriminatedUnion("type", [
   TaskDeletedEventSchema,
   TaskArchivedEventSchema,
   NoteAddedEventSchema,
+  ReviewRecordedEventSchema,
   AdapterOutputEventSchema,
 ]);
 
@@ -318,5 +362,11 @@ export type TaskDeletedEvent = z.infer<typeof TaskDeletedEventSchema>;
 export type TaskArchivedEvent = z.infer<typeof TaskArchivedEventSchema>;
 /** Narrowed runtime type for the `note_added` event variant. */
 export type NoteAddedEvent = z.infer<typeof NoteAddedEventSchema>;
+/** Narrowed runtime type for the `review_recorded` event variant. */
+export type ReviewRecordedEvent = z.infer<typeof ReviewRecordedEventSchema>;
+/** One finding surfaced by a `review_recorded` event. */
+export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+/** One blocked finding (spec-deviation / design-reversal) of a `review_recorded` event. */
+export type ReviewBlocked = z.infer<typeof ReviewBlockedSchema>;
 /** Narrowed runtime type for the `adapter_output` event variant (.strict()). */
 export type AdapterOutputEvent = z.infer<typeof AdapterOutputEventSchema>;

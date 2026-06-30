@@ -543,6 +543,12 @@ function eventVariantSummary(ev: Event): string {
       return `task ${shortTaskId(ev.task_id)}: ${ev.title} (archived)`;
     case "note_added":
       return ev.body.length > 80 ? `${ev.body.slice(0, 77)}...` : ev.body;
+    case "review_recorded": {
+      const verdict = ev.verdict !== undefined ? ` (${ev.verdict})` : "";
+      const blocked =
+        ev.blocked !== undefined && ev.blocked.length > 0 ? ` ${ev.blocked.length} blocked` : "";
+      return `${ev.reviewer} -> ${ev.target}${verdict}${blocked}`;
+    }
     case "adapter_output":
       return `${ev.stream} "${ev.summary}" raw_ref=${ev.raw_ref}`;
   }

@@ -3,6 +3,29 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou review record` — record that an adversarial / second-opinion review
+  ran, from a JSON object piped on stdin (or `--file`). The in-loop agent runs
+  the review with its own vendor-specific command, then pipes a description —
+  required `reviewer` + `target`, plus optional `verdict` / `findings[]` /
+  `blocked[]` — and basou writes one `review_recorded` event deterministically
+  (no runtime LLM), the twin of `basou decision capture`. `blocked[]` (a
+  spec-deviation / design-reversal the reviewer's finding was held back as) gives
+  the adversarial-review protocol's "always report what you blocked" a durable
+  trail home; an explicit empty `blocked: []` records that nothing was blocked.
+  It is a self-report — basou records that a review happened, it does not verify
+  the review executed. This is the signal source for a forthcoming Stop-gate that
+  reminds you to review before shipping; the gate itself is a follow-on slice.
+
+### Internal
+
+- Added the `review_recorded` event variant to the event schema (and its
+  regenerated published JSON Schema), plus a deterministic writer in core
+  (`parseReviewRecordInput` / `buildReviewRecordedEvent`).
+
 ## 0.29.0 — 2026-06-30
 
 ### Added

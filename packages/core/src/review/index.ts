@@ -9,3 +9,12 @@ export {
   type ReviewGapUnit,
   type ReviewGapVerdict,
 } from "./review-gaps.js";
+export {
+  buildReviewRecordedEvent,
+  buildReviewRecordLabel,
+  parseReviewRecordInput,
+  REVIEW_RECORD_NO_INPUT_HINT,
+  type ReviewRecordBlockedInput,
+  type ReviewRecordFindingInput,
+  type ReviewRecordInput,
+} from "./review-record.js";
