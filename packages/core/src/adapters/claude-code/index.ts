@@ -19,6 +19,8 @@ export {
   upsertStopHook,
 } from "./settings-hook.js";
 export type {
+  ReviewGateResult,
+  ReviewGateSilentReason,
   StopHookEvaluation,
   StopHookEvaluationInput,
   StopHookSilentReason,

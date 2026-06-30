@@ -25,6 +25,12 @@ All notable changes to **basou** are recorded here. The project follows
 - Added the `review_recorded` event variant to the event schema (and its
   regenerated published JSON Schema), plus a deterministic writer in core
   (`parseReviewRecordInput` / `buildReviewRecordedEvent`).
+- `evaluateStopHook` now also computes a review-gate verdict (`ReviewGateResult`)
+  in the same transcript pass: it detects ship acts (`git push` / `git merge` /
+  `gh pr create|merge`) and `basou review record`, and reports whether a
+  substantive-code session shipped without recording a review. Purely additive —
+  the capture nudge output is byte-identical, and no hook yet renders the review
+  verdict (the CLI wiring + opt-in enforcement tier are a follow-on slice).
 
 ## 0.29.0 — 2026-06-30
 
