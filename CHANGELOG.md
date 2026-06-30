@@ -17,8 +17,17 @@ All notable changes to **basou** are recorded here. The project follows
   the adversarial-review protocol's "always report what you blocked" a durable
   trail home; an explicit empty `blocked: []` records that nothing was blocked.
   It is a self-report — basou records that a review happened, it does not verify
-  the review executed. This is the signal source for a forthcoming Stop-gate that
-  reminds you to review before shipping; the gate itself is a follow-on slice.
+  the review executed. It is the signal source for the opt-in review gate below.
+
+- `basou hook stop --require-review` — an opt-in review gate for the Stop hook,
+  the twin of the capture reminder. Off by default; when enabled (register it via
+  `basou hook install --require-review`), basou also reminds the agent when the
+  session SHIPPED substantive code — a `git push` / `git merge` /
+  `gh pr create|merge` after enough file edits — without recording a review
+  (`basou review record`). The capture and review reminders compose into one Stop
+  envelope, and `--block` (opt-in enforcement) applies to both. `hook status`
+  reports which gates are active (`capture` vs `capture + review`). The default
+  capture-only output is byte-identical.
 
 ### Internal
 
@@ -26,11 +35,10 @@ All notable changes to **basou** are recorded here. The project follows
   regenerated published JSON Schema), plus a deterministic writer in core
   (`parseReviewRecordInput` / `buildReviewRecordedEvent`).
 - `evaluateStopHook` now also computes a review-gate verdict (`ReviewGateResult`)
-  in the same transcript pass: it detects ship acts (`git push` / `git merge` /
-  `gh pr create|merge`) and `basou review record`, and reports whether a
-  substantive-code session shipped without recording a review. Purely additive —
-  the capture nudge output is byte-identical, and no hook yet renders the review
-  verdict (the CLI wiring + opt-in enforcement tier are a follow-on slice).
+  in the same transcript pass — detecting ship acts and `basou review record`,
+  independently of the capture verdict. Ship detection is hyphen-safe (the
+  read-only `git merge-base` / `merge-tree` are not mistaken for `git merge`) and
+  excludes a dry-run push (`--dry-run` / `-n`).
 
 ## 0.29.0 — 2026-06-30
 

@@ -27,12 +27,20 @@ export type HookStopOptions = {
    * advisory behavior byte-identical.
    */
   block?: boolean;
+  /**
+   * Opt-in review gate: when true, a session that shipped substantive code
+   * without recording a review also warrants a nudge (composed into the same
+   * envelope as the capture nudge). Default (false) ignores the review verdict
+   * entirely, keeping the capture-only output byte-identical.
+   */
+  requireReview?: boolean;
 };
 
 /** Raw option shape from commander (values arrive as strings; parsed leniently). */
 type RawHookStopOptions = {
   minEdits?: string;
   block?: boolean;
+  requireReview?: boolean;
 };
 
 export type HookStopContext = {
@@ -80,6 +88,10 @@ export function registerHookCommand(program: Command): void {
       "--block",
       "Opt-in enforcement: hold the agent in-turn (decision:block) instead of a non-blocking reminder",
     )
+    .option(
+      "--require-review",
+      "Opt-in review gate: also remind when a session shipped substantive code (push / PR / merge) without recording a review",
+    )
     .addHelpText("after", HOOK_STOP_HELP)
     .action(async (options: RawHookStopOptions) => {
       // Parse leniently at the boundary rather than with a throwing commander
@@ -90,6 +102,7 @@ export function registerHookCommand(program: Command): void {
       await runHookStop({
         ...(minEdits !== undefined ? { minEdits } : {}),
         ...(options.block === true ? { block: true } : {}),
+        ...(options.requireReview === true ? { requireReview: true } : {}),
       });
     });
 
@@ -97,9 +110,11 @@ export function registerHookCommand(program: Command): void {
     .command("install")
     .description(
       "Register the Stop hook in ~/.claude/settings.json (reproducible, idempotent). " +
-        "Default is advisory; --block opts into in-turn enforcement.",
+        "Default is advisory capture-only; --block opts into in-turn enforcement, " +
+        "--require-review opts into the review gate.",
     )
     .option("--block", "Register the blocking (opt-in enforcement) form instead of advisory")
+    .option("--require-review", "Register with the opt-in review gate enabled")
     .option("--min-edits <n>", "Pass a custom file-edit threshold to the registered hook")
     .option("--settings <path>", "Override the settings.json path (intended for tests)")
     .option("--dry-run", "Print what would change without writing")
@@ -141,6 +156,12 @@ content-substantive work but ran no capture verb ('basou decision capture' /
 Substantive = EITHER >= ${DEFAULT_STOP_HOOK_MIN_EDITS} file edits (default) OR a free-form AskUserQuestion
 answer (an uncaptured conversational decision). Read-only Bash (ls / grep /
 git status) does NOT count.
+
+With --require-review (opt-in, 'basou hook install --require-review') it also
+reminds when the session SHIPPED substantive code (git push / git merge /
+gh pr create|merge) without recording a review ('basou review record'). This
+gate is off by default; when on, its reminder is composed into the same
+envelope as the capture reminder.
 
 By default the reminder is non-blocking: Claude sees it and may act on it or
 stop. With --block (opt-in enforcement, 'basou hook install --block') it instead
@@ -205,7 +226,19 @@ export async function doRunHookStop(options: HookStopOptions, ctx: HookStopConte
     stopHookActive: false,
     ...(options.minEdits !== undefined ? { minEdits: options.minEdits } : {}),
   });
-  if (evaluation.kind !== "nudge") return;
+
+  // Compose the two independent gates into one Stop response (a Stop hook emits
+  // at most one). The capture nudge always participates; the review nudge only
+  // when opted in via --require-review (otherwise the review verdict is ignored,
+  // so the capture-only output stays byte-identical). When both fire, their
+  // texts join into a single envelope.
+  const parts: string[] = [];
+  if (evaluation.kind === "nudge") parts.push(evaluation.additionalContext);
+  if (options.requireReview === true && evaluation.review.fires) {
+    parts.push(evaluation.review.additionalContext);
+  }
+  if (parts.length === 0) return;
+  const reason = parts.join("\n\n");
 
   // Default (advisory): a non-blocking reminder the agent may act on next turn
   // or ignore. Opt-in (--block): hold the agent in-turn so it acts on the
@@ -217,11 +250,11 @@ export async function doRunHookStop(options: HookStopOptions, ctx: HookStopConte
   // single turn (and Claude Code's own loop prevention bounds it regardless).
   const payloadJson =
     options.block === true
-      ? JSON.stringify({ decision: "block", reason: evaluation.additionalContext })
+      ? JSON.stringify({ decision: "block", reason })
       : JSON.stringify({
           hookSpecificOutput: {
             hookEventName: "Stop",
-            additionalContext: evaluation.additionalContext,
+            additionalContext: reason,
           },
         });
   write(`${payloadJson}\n`);
@@ -309,6 +342,7 @@ export const DEFAULT_CLAUDE_SETTINGS_PATH = join(homedir(), ".claude", "settings
 /** Raw option shape from commander for the management subcommands. */
 type RawHookInstallOptions = {
   block?: boolean;
+  requireReview?: boolean;
   minEdits?: string;
   settings?: string;
   dryRun?: boolean;
@@ -317,6 +351,7 @@ type RawHookInstallOptions = {
 
 export type HookInstallOptions = {
   block?: boolean;
+  requireReview?: boolean;
   minEdits?: number;
   settings?: string;
   dryRun?: boolean;
@@ -347,6 +382,7 @@ function resolveCliEntry(): string {
 function normalizeInstallOptions(raw: RawHookInstallOptions): HookInstallOptions {
   const out: HookInstallOptions = {};
   if (raw.block === true) out.block = true;
+  if (raw.requireReview === true) out.requireReview = true;
   if (raw.settings !== undefined) out.settings = raw.settings;
   if (raw.dryRun === true) out.dryRun = true;
   if (raw.verbose === true) out.verbose = true;
@@ -424,9 +460,13 @@ export async function doRunHookInstall(
   const command = buildStopHookCommand({
     cliEntry,
     ...(options.block === true ? { block: true } : {}),
+    ...(options.requireReview === true ? { requireReview: true } : {}),
     ...(options.minEdits !== undefined ? { minEdits: options.minEdits } : {}),
   });
-  const mode = options.block === true ? "blocking" : "advisory";
+  const mode = describeHookMode({
+    block: options.block === true,
+    review: options.requireReview === true,
+  });
 
   await assertNotSymlink(settingsPath);
   const { raw, parsed } = await readSettings(settingsPath);
@@ -516,8 +556,20 @@ export async function doRunHookStatus(options: HookInstallOptions): Promise<void
     console.log("basou Stop hook: not registered. Run 'basou hook install' to register it.");
     return;
   }
-  const mode = / --block\b/.test(command)
-    ? "blocking (opt-in enforcement)"
-    : "advisory (non-blocking)";
+  const mode = describeHookMode({
+    block: / --block\b/.test(command),
+    review: / --require-review\b/.test(command),
+  });
   console.log(`basou Stop hook: registered, ${mode}.`);
+}
+
+/**
+ * Human-readable description of an installed Stop hook's tiers: the enforcement
+ * dimension (advisory vs blocking, from `--block`) and which gates are active
+ * (capture is always on; review is added by `--require-review`).
+ */
+function describeHookMode(tiers: { block: boolean; review: boolean }): string {
+  const enforcement = tiers.block ? "blocking (opt-in enforcement)" : "advisory (non-blocking)";
+  const gates = tiers.review ? "capture + review" : "capture";
+  return `${enforcement}, ${gates}`;
 }

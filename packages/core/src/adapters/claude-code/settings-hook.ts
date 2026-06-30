@@ -41,6 +41,8 @@ export type BuildStopHookCommandOptions = {
   cliEntry: string;
   /** Register the blocking (opt-in enforcement) form. */
   block?: boolean;
+  /** Enable the opt-in review gate (adds `--require-review`). */
+  requireReview?: boolean;
   /** Override the file-edit threshold passed to `hook stop`. */
   minEdits?: number;
 };
@@ -65,6 +67,7 @@ function shellQuote(value: string): string {
 export function buildStopHookCommand(options: BuildStopHookCommandOptions): string {
   const flags: string[] = [];
   if (options.block === true) flags.push("--block");
+  if (options.requireReview === true) flags.push("--require-review");
   if (options.minEdits !== undefined) flags.push(`--min-edits ${options.minEdits}`);
   const suffix = flags.length > 0 ? ` ${flags.join(" ")}` : "";
   return `node ${shellQuote(options.cliEntry)} hook stop${suffix} 2>/dev/null || true`;
