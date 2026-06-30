@@ -48,6 +48,7 @@ describe("buildProgram", () => {
       "protocol",
       "refresh",
       "report",
+      "review",
       "review-gaps",
       "run",
       "session",

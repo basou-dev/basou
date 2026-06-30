@@ -98,6 +98,12 @@ const FIXTURES = [
   },
   {
     ...BASE,
+    type: "review_recorded" as const,
+    reviewer: "codex",
+    target: "working-tree",
+  },
+  {
+    ...BASE,
     type: "adapter_output" as const,
     stream: "stdout" as const,
     summary: "Build succeeded in 4ms",
@@ -602,5 +608,113 @@ describe("DecisionRecordedEventSchema (rich fields)", () => {
     expect(parsed.rationale).toBe("x");
     expect(parsed.alternatives).toEqual(["a", "b"]);
     expect(parsed.linked_events).toEqual(["evt_01HXABCDEF1234567890ABCDR1"]);
+  });
+});
+
+describe("ReviewRecordedEventSchema", () => {
+  const BASE_REVIEW = {
+    ...BASE,
+    type: "review_recorded" as const,
+    reviewer: "codex",
+    target: "working-tree",
+  };
+
+  it("accepts the required minimum (reviewer + target only)", () => {
+    const result = EventSchema.safeParse(BASE_REVIEW);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "review_recorded") throw new Error("narrowing failed");
+    expect(result.data.reviewer).toBe("codex");
+    expect(result.data.target).toBe("working-tree");
+    expect(result.data.verdict).toBeUndefined();
+    expect(result.data.findings).toBeUndefined();
+    expect(result.data.blocked).toBeUndefined();
+  });
+
+  it("accepts every rich field populated", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_REVIEW,
+      verdict: "needs-attention",
+      findings: [
+        { title: "Off-by-one", severity: "medium", location: "src/page.ts:42", summary: "..." },
+        { title: "Missing null check" },
+      ],
+      blocked: [{ title: "Drop the singleton", reason: "design-reversal", why: "Settled earlier" }],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "review_recorded") throw new Error("narrowing failed");
+    expect(result.data.verdict).toBe("needs-attention");
+    expect(result.data.findings).toHaveLength(2);
+    expect(result.data.blocked?.[0]?.reason).toBe("design-reversal");
+  });
+
+  it("accepts an explicit empty blocked array (= reviewed, blocked nothing)", () => {
+    const result = EventSchema.safeParse({ ...BASE_REVIEW, blocked: [] });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    if (result.data.type !== "review_recorded") throw new Error("narrowing failed");
+    expect(result.data.blocked).toEqual([]);
+  });
+
+  it("rejects a missing reviewer", () => {
+    const { reviewer, ...withoutReviewer } = BASE_REVIEW;
+    void reviewer;
+    expect(EventSchema.safeParse(withoutReviewer).success).toBe(false);
+  });
+
+  it("rejects an empty reviewer / target string", () => {
+    expect(EventSchema.safeParse({ ...BASE_REVIEW, reviewer: "" }).success).toBe(false);
+    expect(EventSchema.safeParse({ ...BASE_REVIEW, target: "" }).success).toBe(false);
+  });
+
+  it("rejects an unknown verdict value", () => {
+    expect(EventSchema.safeParse({ ...BASE_REVIEW, verdict: "lgtm" }).success).toBe(false);
+  });
+
+  it("rejects an unknown finding severity", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_REVIEW,
+      findings: [{ title: "x", severity: "critical" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a finding without a title", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_REVIEW,
+      findings: [{ severity: "low" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a blocked entry with an unknown reason", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_REVIEW,
+      blocked: [{ title: "x", reason: "nitpick" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a blocked entry missing the reason", () => {
+    const result = EventSchema.safeParse({
+      ...BASE_REVIEW,
+      blocked: [{ title: "x" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("round-trips a JSON serialization with rich fields intact", () => {
+    const original = {
+      ...BASE_REVIEW,
+      verdict: "pass",
+      findings: [{ title: "f", severity: "high" }],
+      blocked: [{ title: "b", reason: "spec-deviation", why: "out of scope" }],
+    };
+    const parsed = EventSchema.parse(JSON.parse(JSON.stringify(original)));
+    if (parsed.type !== "review_recorded") throw new Error("narrowing failed");
+    expect(parsed.verdict).toBe("pass");
+    expect(parsed.findings).toEqual([{ title: "f", severity: "high" }]);
+    expect(parsed.blocked).toEqual([{ title: "b", reason: "spec-deviation", why: "out of scope" }]);
   });
 });
