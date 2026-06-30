@@ -10,6 +10,8 @@ export type {
   ClaudeTranscriptRecord,
   ClaudeTranscriptToPayloadOptions,
   CommandLookup,
+  ReviewGateResult,
+  ReviewGateSilentReason,
   StopHookEvaluation,
   StopHookEvaluationInput,
   StopHookRemoval,
