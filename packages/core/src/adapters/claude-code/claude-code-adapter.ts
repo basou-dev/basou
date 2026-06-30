@@ -1,4 +1,6 @@
-import { spawn } from "node:child_process";
+import { type CommandLookup, isOnPath } from "../command-lookup.js";
+
+export type { CommandLookup };
 
 /**
  * Static metadata identifying the claude-code adapter as the session source.
@@ -11,14 +13,6 @@ export const claudeCodeAdapterMetadata = {
   kind: "claude-code-adapter",
   version: "0.1.0",
 } as const;
-
-/**
- * Lookup predicate used by {@link resolveClaudeCodeCommand} to decide
- * whether a candidate executable is reachable on PATH. Exposed as a
- * parameter so tests can substitute a deterministic mock; production
- * callers should omit it and rely on the default `which`-based lookup.
- */
-export type CommandLookup = (command: string) => Promise<boolean>;
 
 /**
  * Resolve the Claude Code CLI executable name. Tries `claude-code` first
@@ -36,20 +30,6 @@ export async function resolveClaudeCodeCommand(
     if (await lookup(candidate)) return { command: candidate };
   }
   throw new Error("Claude Code CLI not found in PATH. Install claude-code (or claude) first.");
-}
-
-/**
- * Default {@link CommandLookup} backed by `which` (POSIX) — the spawn
- * succeeds with exit code 0 iff the candidate is on PATH. Windows fallback
- * is intentionally not implemented in v0.1; call sites that target Windows
- * supply their own lookup.
- */
-async function isOnPath(command: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn("which", [command], { stdio: "ignore" });
-    child.on("error", () => resolve(false));
-    child.on("exit", (code) => resolve(code === 0));
-  });
 }
 
 /**

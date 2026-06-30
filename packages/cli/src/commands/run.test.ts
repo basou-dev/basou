@@ -16,7 +16,7 @@ import {
 } from "@basou/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type RunContext, registerRunCommand, runClaudeCode } from "./run.js";
+import { type RunContext, registerRunCommand, runClaudeCode, runCodex } from "./run.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -691,5 +691,86 @@ describe("runClaudeCode", () => {
     const yaml = await readFile(join(basouPaths(repo).sessions, sessionId, "session.yaml"), "utf8");
     expect(yaml).toContain("dirty-staged.txt");
     expect(yaml).toContain("dirty-untracked.txt");
+  });
+});
+
+describe("runCodex", () => {
+  const codexResolve = async (): Promise<{ command: string }> => ({ command: "codex" });
+
+  // codexChannelPath is ALWAYS overridden in these tests so the pre-spawn
+  // channel render never touches the real ~/.codex/AGENTS.md.
+  it("records a codex-adapter session and injects the env-policy flag into the child argv", async () => {
+    const repo = await setupInitedRepo();
+    const runner = makeFakeRunner({ exit_code: 0 });
+    const exitCode = await runCodex(
+      ["resume"],
+      { cwd: repo, snapshot: false },
+      {
+        runner,
+        now: () => FIXED_DATE,
+        resolveCodexCommand: codexResolve,
+        codexChannelPath: join(repo, "codex-AGENTS.md"),
+      },
+    );
+    expect(exitCode).toBe(0);
+    // The env-policy flag is prepended to whatever the user passed.
+    expect(runner.lastArgs).toEqual(["-c", "shell_environment_policy.inherit=all", "resume"]);
+    const sessionId = await findOnlySessionId(repo);
+    const lines = await readEventsLines(repo, sessionId);
+    expect(JSON.parse(lines[0] ?? "{}").source).toBe("codex-adapter");
+    // The recorded invocation reflects what actually ran (flag included).
+    const yaml = await readFile(join(basouPaths(repo).sessions, sessionId, "session.yaml"), "utf8");
+    expect(yaml).toContain("shell_environment_policy.inherit=all");
+    expect(yaml).toContain("codex-adapter");
+  });
+
+  it("renders this workspace's orientation into the overridden codex channel before spawn", async () => {
+    const repo = await setupInitedRepo();
+    // The launcher surfaces the LAST-rendered orientation (it does not refresh);
+    // seed one so the pre-spawn render has something to push.
+    await writeFile(basouPaths(repo).files.orientation, "# Orientation\n\nyou are right here\n");
+    const channelPath = join(repo, "codex-AGENTS.md");
+    const runner = makeFakeRunner({ exit_code: 0 });
+    await runCodex(
+      [],
+      { cwd: repo, snapshot: false },
+      {
+        runner,
+        now: () => FIXED_DATE,
+        resolveCodexCommand: codexResolve,
+        codexChannelPath: channelPath,
+      },
+    );
+    const channel = await readFile(channelPath, "utf8");
+    expect(channel).toContain("BASOU:ORIENTATION:START");
+    expect(channel).toContain("you are right here");
+  });
+
+  it("launches even when there is no orientation to render (best-effort channel)", async () => {
+    const repo = await setupInitedRepo();
+    // No orientation.md written → the pre-spawn render is a no-op, but the
+    // launch must still proceed and the channel file is never created.
+    const channelPath = join(repo, "codex-AGENTS.md");
+    const runner = makeFakeRunner({ exit_code: 0 });
+    const exitCode = await runCodex(
+      [],
+      { cwd: repo, snapshot: false },
+      {
+        runner,
+        now: () => FIXED_DATE,
+        resolveCodexCommand: codexResolve,
+        codexChannelPath: channelPath,
+      },
+    );
+    expect(exitCode).toBe(0);
+    await expect(access(channelPath)).rejects.toThrow();
+  });
+
+  it("registers a `codex` subcommand under `run`", () => {
+    const program = new Command();
+    registerRunCommand(program);
+    const run = program.commands.find((c) => c.name() === "run");
+    const subs = run?.commands.map((c) => c.name()) ?? [];
+    expect(subs).toEqual(expect.arrayContaining(["claude-code", "codex"]));
   });
 });

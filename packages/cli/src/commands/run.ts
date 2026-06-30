@@ -10,6 +10,7 @@ import {
   basouPaths,
   ChildProcessRunner,
   claudeCodeAdapterMetadata,
+  codexAdapterMetadata,
   appendChainedEvent as coreAppendChainedEvent,
   type DiffResult,
   finalizeSessionYaml,
@@ -24,15 +25,19 @@ import {
   readManifest,
   readYamlFile,
   resolveClaudeCodeCommand,
+  resolveCodexCommand,
   resolveRepositoryRoot,
   type Session,
   SessionSchema,
+  type SessionSourceKind,
   sanitizeRelatedFiles,
   sanitizeWorkingDirectory,
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
+import { renderOrientationToCodexChannel } from "../lib/context-channel.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 // Appends one event to the session's events.jsonl. The `sessionDir` argument
 // is retained for the test-injection seam (ctx.appendEvent); the production
@@ -40,6 +45,23 @@ import { isVerbose, renderCliError } from "../lib/error-render.js";
 type AppendEventFn = (sessionDir: string, event: unknown) => Promise<void>;
 type ResolveCommandFn = typeof resolveClaudeCodeCommand;
 type GetDiffFn = typeof getDiff;
+
+/** Static session-source metadata for a tracked tool (kind + wire version). */
+type AdapterMetadata = { kind: SessionSourceKind; version: "0.1.0" };
+
+/**
+ * The per-tool seams of {@link runTrackedTool}: how to find the executable, how
+ * to attribute the session, an optional arg transform (e.g. codex injects an
+ * env-policy flag), and an optional best-effort pre-spawn side effect (e.g.
+ * codex re-renders the orientation context channel for this workspace).
+ */
+type TrackedToolAdapter = {
+  resolveCommand: ResolveCommandFn;
+  metadata: AdapterMetadata;
+  transformArgs?: (args: string[]) => string[];
+  /** Runs after status->running, before the child spawns. Returns a status line to print, or null. */
+  preSpawn?: (cwd: string, ctx: RunContext) => Promise<string | null>;
+};
 
 /**
  * `basou run claude-code` orchestration: spawn claude-code as a single new
@@ -67,6 +89,12 @@ export type RunContext = {
   // Override the claude-code PATH lookup. Tests use this to skip real
   // `which` invocations and force success / failure deterministically.
   resolveCommand?: ResolveCommandFn;
+  // Override the codex PATH lookup (the `basou run codex` twin of resolveCommand).
+  resolveCodexCommand?: ResolveCommandFn;
+  // Override the Codex context-face path (defaults to the locked
+  // ~/.codex/AGENTS.md). Injectable for tests so the suite never writes to the
+  // real home-global file during a `basou run codex` pre-spawn channel render.
+  codexChannelPath?: string;
   // Override the git diff capability. Tests use this to force capability
   // failure deterministically without rewriting the git fixture state.
   getDiff?: GetDiffFn;
@@ -79,71 +107,133 @@ export type RunContext = {
  * callers omit it.
  *
  * Basou options (`--no-snapshot`, `--cwd`, `-v`) are defined on both the
- * `run` group and the inner `claude-code` subcommand. commander's
+ * `run` group and each tool subcommand via {@link addRunOptions}. commander's
  * `passThroughOptions()` only forwards UNKNOWN options to args, so a
  * group-only definition would make `basou run claude-code --no-snapshot`
- * crash with "unknown option". Duplicating the definitions lets the option
+ * crash with "unknown option". Declaring them in both places lets the option
  * be recognized regardless of position; only `--`-separated args go to the
- * child. v0.2+ adapter additions (codex / gemini) should consider
- * extracting a common-option helper rather than re-duplicating.
+ * child.
  */
 export function registerRunCommand(program: Command, ctx: RunContext = {}): void {
-  const runCommand = program
-    .command("run")
-    .description("Run an AI coding tool through Basou as a tracked session")
-    // Required so the inner `claude-code` subcommand can pass through
-    // arguments after `--` to the child without commander interpreting them
-    // as run-group options.
-    .enablePositionalOptions()
+  const runCommand = addRunOptions(
+    program
+      .command("run")
+      .description("Run an AI coding tool through Basou as a tracked session")
+      // Required so a tool subcommand can pass through arguments after `--` to
+      // the child without commander interpreting them as run-group options.
+      .enablePositionalOptions(),
+  );
+
+  // Shared subcommand dispatch: merge the run-group + subcommand options, run
+  // the tool's orchestration, and turn its exit code / error into a process
+  // exit. `run` is the per-tool entry (runClaudeCode / runCodex).
+  const dispatch = async (
+    args: string[],
+    options: RunOptions,
+    command: Command,
+    run: (args: string[], options: RunOptions, ctx: RunContext) => Promise<number>,
+  ): Promise<void> => {
+    const parentOptions = (command.parent?.opts() ?? {}) as RunOptions;
+    // Both layers default `snapshot` to `true` when --no-snapshot is omitted, so
+    // a naive spread would let the subcommand's default overwrite a --no-snapshot
+    // set on the parent. AND them: snapshot stays on only when neither disables it.
+    const snapshotOn = parentOptions.snapshot !== false && options.snapshot !== false;
+    const merged: RunOptions = { ...parentOptions, ...options, snapshot: snapshotOn };
+    try {
+      const exitCode = await run(args, merged, ctx);
+      process.exit(exitCode);
+    } catch (error: unknown) {
+      renderCliError(error, { verbose: isVerbose(merged) });
+      process.exit(1);
+    }
+  };
+
+  // Each tool subcommand redeclares the Basou options (see addRunOptions) so
+  // they are recognized when placed AFTER the subcommand name too.
+  addRunOptions(runCommand.command("claude-code [args...]"))
+    .description("Run Claude Code CLI as a Basou-tracked session")
+    .passThroughOptions()
+    .action((args: string[], options: RunOptions, command: Command) =>
+      dispatch(args, options, command, runClaudeCode),
+    );
+
+  addRunOptions(runCommand.command("codex [args...]"))
+    .description("Run the Codex CLI as a Basou-tracked session")
+    .passThroughOptions()
+    .action((args: string[], options: RunOptions, command: Command) =>
+      dispatch(args, options, command, runCodex),
+    );
+}
+
+/** Declare the shared Basou run options (`--no-snapshot` / `--cwd` / `-v`) on a command. */
+function addRunOptions(command: Command): Command {
+  return command
     .option("--no-snapshot", "Skip git_snapshot before/after the session")
     .option("--cwd <path>", "Run from a Basou root other than process.cwd()")
     .option("-v, --verbose", "Show error causes");
-
-  runCommand
-    .command("claude-code [args...]")
-    .description("Run Claude Code CLI as a Basou-tracked session")
-    // Same options redeclared on the subsubcommand so they are recognized
-    // when placed AFTER `claude-code` as well; see the function comment.
-    .option("--no-snapshot", "Skip git_snapshot before/after the session")
-    .option("--cwd <path>", "Run from a Basou root other than process.cwd()")
-    .option("-v, --verbose", "Show error causes")
-    .passThroughOptions()
-    .action(async (args: string[], options: RunOptions, command: Command) => {
-      const parentOptions = (command.parent?.opts() ?? {}) as RunOptions;
-      // Both layers default `snapshot` to `true` when --no-snapshot is
-      // omitted, so a naive spread would let the subsubcommand's default
-      // overwrite a `--no-snapshot` set on the parent. Take a logical AND
-      // instead: snapshot stays on only when neither layer disables it.
-      const snapshotOn = parentOptions.snapshot !== false && options.snapshot !== false;
-      const merged: RunOptions = {
-        ...parentOptions,
-        ...options,
-        snapshot: snapshotOn,
-      };
-      try {
-        const exitCode = await runClaudeCode(args, merged, ctx);
-        process.exit(exitCode);
-      } catch (error: unknown) {
-        renderCliError(error, { verbose: isVerbose(merged) });
-        process.exit(1);
-      }
-    });
 }
 
-export async function runClaudeCode(
+/** `basou run claude-code`: wrap the Claude Code CLI as a tracked session. */
+export function runClaudeCode(
   args: string[],
   options: RunOptions,
   ctx: RunContext = {},
 ): Promise<number> {
+  return runTrackedTool(args, options, ctx, {
+    resolveCommand: ctx.resolveCommand ?? resolveClaudeCodeCommand,
+    metadata: claudeCodeAdapterMetadata,
+  });
+}
+
+/**
+ * `basou run codex`: wrap the Codex CLI as a tracked session. Two grips beyond
+ * plain tracking: it injects `-c shell_environment_policy.inherit=all` so Codex
+ * tool calls can reach `basou` on PATH, and it re-renders this workspace's
+ * orientation into the Codex context face (~/.codex/AGENTS.md) just before spawn
+ * so the about-to-start interactive Codex auto-loads the current position.
+ */
+export function runCodex(
+  args: string[],
+  options: RunOptions,
+  ctx: RunContext = {},
+): Promise<number> {
+  return runTrackedTool(args, options, ctx, {
+    resolveCommand: ctx.resolveCodexCommand ?? resolveCodexCommand,
+    metadata: codexAdapterMetadata,
+    transformArgs: (a) => ["-c", "shell_environment_policy.inherit=all", ...a],
+    preSpawn: syncCodexOrientationChannelPreSpawn,
+  });
+}
+
+/**
+ * Shared `basou run <tool>` orchestration: spawn the tool as a single new Basou
+ * session and record its lifecycle (session_started, optional git_snapshot pre,
+ * status_changed, command_executed, optional git_snapshot post, file_changed ×
+ * N, status_changed, session_ended) to events.jsonl. The {@link adapter}
+ * supplies the per-tool seams; everything else is tool-agnostic.
+ *
+ * The child inherits the parent's stdio (`capture: "none"`) so the tool's
+ * interactive TTY remains usable; raw stdout/stderr is intentionally NOT
+ * captured into events.jsonl or `.basou/raw/`.
+ */
+async function runTrackedTool(
+  args: string[],
+  options: RunOptions,
+  ctx: RunContext,
+  adapter: TrackedToolAdapter,
+): Promise<number> {
   const runner = ctx.runner ?? new ChildProcessRunner();
   const now = ctx.now ?? (() => new Date());
-  const resolveCommand: ResolveCommandFn = ctx.resolveCommand ?? resolveClaudeCodeCommand;
   const getDiffFn: GetDiffFn = ctx.getDiff ?? getDiff;
 
-  // 1. Resolve the claude-code executable BEFORE any side-effect: a missing
-  //    CLI is a user installation issue, not something worth recording as a
-  //    Basou session. Failure here leaves no sessions/<id>/ entry behind.
-  const { command } = await resolveCommand();
+  // 1. Resolve the tool executable BEFORE any side-effect: a missing CLI is a
+  //    user installation issue, not something worth recording as a Basou
+  //    session. Failure here leaves no sessions/<id>/ entry behind.
+  const { command } = await adapter.resolveCommand();
+
+  // The actual child argv (a tool may inject flags, e.g. codex's env policy);
+  // recorded as the invocation so the session reflects what really ran.
+  const childArgs = adapter.transformArgs ? adapter.transformArgs(args) : args;
 
   const cwd = options.cwd ?? process.cwd();
 
@@ -176,10 +266,11 @@ export async function runClaudeCode(
   const session = buildInitialSession({
     id: sessionId,
     command,
-    args,
+    args: childArgs,
     cwd: repoRoot,
     workspaceId: manifest.workspace.id,
     startedAt,
+    source: adapter.metadata,
   });
   await writeYamlFile(sessionYamlPath, session);
 
@@ -190,7 +281,7 @@ export async function runClaudeCode(
     id: prefixedUlid("evt"),
     session_id: sessionId,
     occurred_at: startedAt,
-    source: claudeCodeAdapterMetadata.kind,
+    source: adapter.metadata.kind,
   });
 
   // 7. Optional pre-execute git_snapshot.
@@ -207,7 +298,7 @@ export async function runClaudeCode(
     id: prefixedUlid("evt"),
     session_id: sessionId,
     occurred_at: runningAt,
-    source: claudeCodeAdapterMetadata.kind,
+    source: adapter.metadata.kind,
     from: "initialized",
     to: "running",
   });
@@ -248,13 +339,22 @@ export async function runClaudeCode(
   process.on("exit", exitHandler);
   ctx.onExitHookInstalled?.(exitHandler);
 
+  // 9b. Tool-specific pre-spawn side effect (e.g. codex re-renders the
+  //     orientation context channel for this workspace). Best-effort: the
+  //     adapter swallows its own failures; a returned status line is printed
+  //     before the child takes over the TTY.
+  if (adapter.preSpawn !== undefined) {
+    const line = await adapter.preSpawn(cwd, ctx);
+    if (line !== null) console.log(line);
+  }
+
   // 10-11. runner.run() execute (capture: "none" inherits the parent stdio so
-  //         claude-code keeps a real TTY). Spawn-time errors finalize the
-  //         session as failed and propagate the error.
+  //         the tool keeps a real TTY). Spawn-time errors finalize the session
+  //         as failed and propagate the error.
   let result: RunResult;
   try {
     try {
-      result = await runner.run(command, args, {
+      result = await runner.run(command, childArgs, {
         cwd: repoRoot,
         capture: "none",
         signal: controller.signal,
@@ -265,10 +365,11 @@ export async function runClaudeCode(
     } catch (spawnError: unknown) {
       await finalizeSessionAsFailed(paths, sessionDir, sessionId, appendEvent, {
         command,
-        args,
+        args: childArgs,
         cwd: repoRoot,
         occurredAt: now().toISOString(),
         signalReceived,
+        sourceKind: adapter.metadata.kind,
       });
       throw spawnError;
     }
@@ -290,7 +391,7 @@ export async function runClaudeCode(
     occurred_at: endedAt,
     source: "terminal-recording",
     command,
-    args,
+    args: childArgs,
     cwd: repoRoot,
     exit_code: result.exit_code,
     ...(result.signal !== null ? { signal: result.signal } : {}),
@@ -342,7 +443,7 @@ export async function runClaudeCode(
     id: prefixedUlid("evt"),
     session_id: sessionId,
     occurred_at: endedAt,
-    source: claudeCodeAdapterMetadata.kind,
+    source: adapter.metadata.kind,
     from: "running",
     to: finalStatus,
   });
@@ -354,7 +455,7 @@ export async function runClaudeCode(
     id: prefixedUlid("evt"),
     session_id: sessionId,
     occurred_at: endedAt,
-    source: claudeCodeAdapterMetadata.kind,
+    source: adapter.metadata.kind,
     ...(result.exit_code !== null ? { exit_code: result.exit_code } : {}),
   });
 
@@ -522,6 +623,7 @@ function buildInitialSession(input: {
   cwd: string;
   workspaceId: PrefixedId<"ws">;
   startedAt: string;
+  source: AdapterMetadata;
 }): Session {
   const cmdline = [input.command, ...input.args].join(" ");
   return {
@@ -531,7 +633,7 @@ function buildInitialSession(input: {
       label: `basou run ${cmdline} (${input.startedAt})`,
       task_id: null,
       workspace_id: input.workspaceId,
-      source: { ...claudeCodeAdapterMetadata },
+      source: { ...input.source },
       started_at: input.startedAt,
       status: "initialized",
       working_directory: sanitizeWorkingDirectory(input.cwd, { homedir: homedir() }),
@@ -568,6 +670,7 @@ async function finalizeSessionAsFailed(
     cwd: string;
     occurredAt: string;
     signalReceived: NodeJS.Signals | null;
+    sourceKind: string;
   },
 ): Promise<void> {
   await appendEvent(sessionDir, {
@@ -591,7 +694,7 @@ async function finalizeSessionAsFailed(
     id: prefixedUlid("evt"),
     session_id: sessionId,
     occurred_at: ctx.occurredAt,
-    source: claudeCodeAdapterMetadata.kind,
+    source: ctx.sourceKind,
     from: "running",
     to: "failed",
   });
@@ -601,7 +704,7 @@ async function finalizeSessionAsFailed(
     id: prefixedUlid("evt"),
     session_id: sessionId,
     occurred_at: ctx.occurredAt,
-    source: claudeCodeAdapterMetadata.kind,
+    source: ctx.sourceKind,
   });
   await finalizeSessionYaml(paths, sessionId, (s) => {
     s.session.status = "failed";
@@ -620,5 +723,33 @@ async function resolveRepositoryRootForRun(cwd: string): Promise<string> {
       });
     }
     throw error;
+  }
+}
+
+/**
+ * `basou run codex` pre-spawn: re-render THIS workspace's already-generated
+ * orientation into the Codex context face just before launch, so the about-to-
+ * start interactive Codex auto-loads the current position even when the global
+ * channel last reflected a different workspace. Resolves the workspace the same
+ * way `basou orient` / `basou refresh` do (member -> planning master). It does
+ * NOT re-import (a launcher is not a refresh); it surfaces whatever the last
+ * refresh captured. Fully best-effort: any failure returns null so the launch
+ * is never blocked. The `ctx.codexChannelPath` seam keeps tests off the real
+ * home-global file.
+ */
+async function syncCodexOrientationChannelPreSpawn(
+  cwd: string,
+  ctx: RunContext,
+): Promise<string | null> {
+  try {
+    const root = await resolveBasouRootForCommand(cwd, "run");
+    const paths = basouPaths(root);
+    const rendered = await renderOrientationToCodexChannel({
+      orientationPath: paths.files.orientation,
+      ...(ctx.codexChannelPath !== undefined ? { channelPath: ctx.codexChannelPath } : {}),
+    });
+    return rendered === null ? null : rendered.line;
+  } catch {
+    return null;
   }
 }

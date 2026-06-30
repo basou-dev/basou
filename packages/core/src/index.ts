@@ -34,10 +34,16 @@ export {
   upsertStopHook,
 } from "./adapters/claude-code/index.js";
 export type {
+  CodexCommandLookup,
   CodexRolloutRecord,
   CodexRolloutToPayloadOptions,
 } from "./adapters/codex/index.js";
-export { CODEX_IMPORT_SOURCE, codexRolloutToImportPayload } from "./adapters/codex/index.js";
+export {
+  CODEX_IMPORT_SOURCE,
+  codexAdapterMetadata,
+  codexRolloutToImportPayload,
+  resolveCodexCommand,
+} from "./adapters/codex/index.js";
 export type { ApprovalLocation, LoadedApproval } from "./approval/index.js";
 export { enumerateApprovals, isLazyExpired, loadApproval } from "./approval/index.js";
 export type { DecisionsRendererInput, DecisionsRendererResult } from "./decisions/index.js";

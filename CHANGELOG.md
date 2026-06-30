@@ -7,6 +7,17 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- `basou run codex` — wrap the Codex CLI as a Basou-tracked session, the twin of
+  `basou run claude-code`. Two grips beyond plain tracking: it injects
+  `-c shell_environment_policy.inherit=all` so Codex's own tool calls can reach
+  `basou` on PATH, and just before spawn it re-renders THIS workspace's
+  orientation into the Codex context face (`~/.codex/AGENTS.md`) so the
+  about-to-start interactive Codex auto-loads the current position even when the
+  global channel last reflected a different workspace. The pre-spawn render is
+  best-effort (a failure never blocks the launch) and surfaces the
+  last-refreshed orientation without re-importing. The session is attributed to
+  the new `codex-adapter` source kind.
+
 - Codex context channel — `basou refresh` now renders the regenerated
   orientation into `~/.codex/AGENTS.md` (a marker-delimited `BASOU:ORIENTATION`
   block), the file Codex auto-loads at startup. Codex exposes no SessionStart
@@ -42,6 +53,15 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Internal
 
+- Added the `codex-adapter` session-source kind to `SessionSourceKindSchema`
+  (and the regenerated published JSON Schema) for live `basou run codex`
+  sessions — distinct from the after-the-fact `codex-import`. Added
+  `codexAdapterMetadata` / `resolveCodexCommand` to the core codex adapter, and
+  generalized `runClaudeCode`'s lifecycle into a shared `runTrackedTool(args,
+  options, ctx, adapter)` parametrized by per-tool seams (command resolver,
+  source metadata, arg transform, pre-spawn hook); `runClaudeCode` / `runCodex`
+  are thin wrappers. Claude-code behavior is preserved (its run tests are
+  unchanged and pass).
 - Added `ORIENTATION_START` / `ORIENTATION_END` markers to core and a shared
   `context-channel` lib (`syncMarkerBlock` / `removeMarkerBlock` /
   `assertNoMarkerLine`) that owns the symlink guard, append/replace, one-time

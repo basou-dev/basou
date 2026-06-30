@@ -1,12 +1,6 @@
-import {
-  assertBasouRootSafe,
-  type BasouPaths,
-  basouPaths,
-  findErrorCode,
-  readMarkdownFile,
-} from "@basou/core";
+import { assertBasouRootSafe, type BasouPaths, basouPaths, findErrorCode } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
-import { syncOrientationChannel } from "../lib/context-channel.js";
+import { renderOrientationToCodexChannel } from "../lib/context-channel.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
@@ -320,13 +314,11 @@ async function syncCodexOrientationChannel(
   channelPath?: string,
 ): Promise<string | null> {
   try {
-    const body = await readMarkdownFile(paths.files.orientation);
-    if (body === null) return null;
-    const { action } = await syncOrientationChannel({
-      body,
-      ...(channelPath !== undefined ? { target: channelPath } : {}),
+    const rendered = await renderOrientationToCodexChannel({
+      orientationPath: paths.files.orientation,
+      ...(channelPath !== undefined ? { channelPath } : {}),
     });
-    return `codex channel: orientation ${action} in ${channelPath ?? "~/.codex/AGENTS.md"}`;
+    return rendered === null ? null : rendered.line;
   } catch (error: unknown) {
     return `codex channel skipped: ${error instanceof Error ? error.message : String(error)}`;
   }
