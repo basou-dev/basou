@@ -1,6 +1,6 @@
 {
   "name": "@basou/cli",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "basou command-line tool",
