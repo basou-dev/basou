@@ -38,11 +38,15 @@ const FIXED_DATE = new Date("2026-05-09T03:00:00.000Z");
 let tmpRepo: string | undefined;
 let claudeRoot: string | undefined;
 let codexRoot: string | undefined;
+// A temp stand-in for ~/.codex/AGENTS.md so the channel sync never writes to the
+// real home-global file when the suite runs `doRunRefresh`.
+let codexChannelDir: string | undefined;
 
 beforeEach(async () => {
   tmpRepo = await mkdtemp(join(tmpdir(), "basou-refresh-test-"));
   claudeRoot = await mkdtemp(join(tmpdir(), "basou-refresh-claude-"));
   codexRoot = await mkdtemp(join(tmpdir(), "basou-refresh-codex-"));
+  codexChannelDir = await mkdtemp(join(tmpdir(), "basou-refresh-channel-"));
   await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: tmpRepo, env: ENV });
   await execFileAsync("git", ["config", "user.email", "test@example.com"], {
     cwd: tmpRepo,
@@ -52,12 +56,13 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const dir of [tmpRepo, claudeRoot, codexRoot]) {
+  for (const dir of [tmpRepo, claudeRoot, codexRoot, codexChannelDir]) {
     if (dir !== undefined) await rm(dir, { recursive: true, force: true });
   }
   tmpRepo = undefined;
   claudeRoot = undefined;
   codexRoot = undefined;
+  codexChannelDir = undefined;
   process.exitCode = 0;
   vi.restoreAllMocks();
 });
@@ -69,6 +74,10 @@ function getClaudeRoot(): string {
 function getCodexRoot(): string {
   if (codexRoot === undefined) throw new Error("codexRoot not initialized");
   return codexRoot;
+}
+function getCodexChannelPath(): string {
+  if (codexChannelDir === undefined) throw new Error("codexChannelDir not initialized");
+  return join(codexChannelDir, "AGENTS.md");
 }
 
 async function setupInitedRepo(): Promise<string> {
@@ -180,7 +189,12 @@ async function writeCodexRolloutAt(cwd: string, id: string): Promise<void> {
 }
 
 function ctxFor(repo: string) {
-  return { cwd: repo, claudeProjectsDir: getClaudeRoot(), codexSessionsDir: getCodexRoot() };
+  return {
+    cwd: repo,
+    claudeProjectsDir: getClaudeRoot(),
+    codexSessionsDir: getCodexRoot(),
+    codexChannelPath: getCodexChannelPath(),
+  };
 }
 
 describe("basou refresh", () => {
@@ -233,6 +247,30 @@ describe("basou refresh", () => {
 
     const paths = basouPaths(repo);
     await expect(access(paths.files.handoff)).rejects.toThrow();
+  });
+
+  it("renders the regenerated orientation into the Codex context face", async () => {
+    const repo = await setupInitedRepo();
+    await writeCodexRollout(repo);
+
+    await doRunRefresh({}, ctxFor(repo));
+
+    // The locked ~/.codex/AGENTS.md is overridden to a temp path in tests; it
+    // should carry the orientation block (and only the orientation block — the
+    // protocol channel is a separate command).
+    const channelBody = await readFile(getCodexChannelPath(), "utf8");
+    expect(channelBody).toContain("BASOU:ORIENTATION:START");
+    expect(channelBody).toContain("# Orientation");
+    expect(channelBody).not.toContain("BASOU:PROTOCOLS:START");
+  });
+
+  it("does not write the Codex context face under --dry-run", async () => {
+    const repo = await setupInitedRepo();
+    await writeCodexRollout(repo);
+
+    await doRunRefresh({ dryRun: true }, ctxFor(repo));
+
+    await expect(access(getCodexChannelPath())).rejects.toThrow();
   });
 
   it("aggregates manifest import.source_roots across sibling repos in one run", async () => {
@@ -399,6 +437,7 @@ describe("basou refresh (workspace view)", () => {
           cwd: view,
           claudeProjectsDir: getClaudeRoot(),
           codexSessionsDir: getCodexRoot(),
+          codexChannelPath: getCodexChannelPath(),
           nowProvider: () => FIXED_DATE,
         },
       );

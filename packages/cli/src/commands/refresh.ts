@@ -1,5 +1,12 @@
-import { assertBasouRootSafe, basouPaths, findErrorCode } from "@basou/core";
+import {
+  assertBasouRootSafe,
+  type BasouPaths,
+  basouPaths,
+  findErrorCode,
+  readMarkdownFile,
+} from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
+import { syncOrientationChannel } from "../lib/context-channel.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
@@ -71,6 +78,12 @@ export type RefreshContext = ImportContext & {
   nowProvider?: () => Date;
   /** Portfolio config path for `--portfolio`; defaults to `~/.basou/portfolio.yaml`. Injectable for tests. */
   portfolioConfigPath?: string;
+  /**
+   * Override the Codex context-face path (defaults to the locked
+   * `~/.codex/AGENTS.md`). Injectable for tests so the suite never writes to the
+   * real home-global file.
+   */
+  codexChannelPath?: string;
 };
 
 /**
@@ -158,7 +171,7 @@ export async function doRunRefreshPortfolio(
   for (const ws of workspaces) {
     const label = ws.label ?? ws.path;
     try {
-      const result = await computeRefresh(
+      const { result } = await computeRefresh(
         { ...options, portfolio: false },
         { ...ctx, cwd: ws.path },
       );
@@ -237,20 +250,21 @@ export async function doRunRefreshWatch(
 
 /**
  * Resolve the workspace and run the shared refresh pipeline, returning the
- * {@link RefreshResult} without printing. Shared by {@link doRunRefresh} and the
- * per-workspace loop in {@link doRunRefreshPortfolio}.
+ * {@link RefreshResult} and resolved {@link BasouPaths} without printing. Shared
+ * by {@link doRunRefresh} and the per-workspace loop in
+ * {@link doRunRefreshPortfolio}.
  */
 async function computeRefresh(
   options: RefreshOptions,
   ctx: RefreshContext,
-): Promise<RefreshResult> {
+): Promise<{ result: RefreshResult; paths: BasouPaths }> {
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveBasouRootForCommand(cwd, "refresh");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
   const nowIso = (ctx.nowProvider?.() ?? new Date()).toISOString();
-  return refreshAll({
+  const result = await refreshAll({
     options: {
       ...(options.project !== undefined && options.project.length > 0
         ? { project: options.project }
@@ -264,6 +278,7 @@ async function computeRefresh(
     paths,
     nowIso,
   });
+  return { result, paths };
 }
 
 /**
@@ -275,13 +290,46 @@ export async function doRunRefresh(
   options: RefreshOptions,
   ctx: RefreshContext,
 ): Promise<RefreshResult> {
-  const result = await computeRefresh(options, ctx);
+  const { result, paths } = await computeRefresh(options, ctx);
+  // After a real refresh, push the just-regenerated orientation into the Codex
+  // context face so an interactive Codex auto-loads the current position. Skip
+  // under --dry-run (nothing was written). The write happens in both human and
+  // --json modes; only the human-readable status line is suppressed for --json
+  // so the JSON result stays the sole stdout line.
+  const channelLine =
+    options.dryRun === true ? null : await syncCodexOrientationChannel(paths, ctx.codexChannelPath);
   if (options.json === true) {
     console.log(JSON.stringify(result));
   } else {
     printRefreshSummary(result);
+    if (channelLine !== null) console.log(channelLine);
   }
   return result;
+}
+
+/**
+ * Best-effort: render the just-regenerated orientation into the Codex context
+ * face (~/.codex/AGENTS.md), which an interactive Codex auto-loads at startup —
+ * Codex exposes no SessionStart hook, so this static channel is its only
+ * vendor-neutral active orientation path. Returns a human-readable status line,
+ * or null when there was nothing to render. Never throws: a channel failure
+ * must not fail the refresh.
+ */
+async function syncCodexOrientationChannel(
+  paths: BasouPaths,
+  channelPath?: string,
+): Promise<string | null> {
+  try {
+    const body = await readMarkdownFile(paths.files.orientation);
+    if (body === null) return null;
+    const { action } = await syncOrientationChannel({
+      body,
+      ...(channelPath !== undefined ? { target: channelPath } : {}),
+    });
+    return `codex channel: orientation ${action} in ${channelPath ?? "~/.codex/AGENTS.md"}`;
+  } catch (error: unknown) {
+    return `codex channel skipped: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 function describeImport(outcome: ImportOutcome): string {

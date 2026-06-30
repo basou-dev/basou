@@ -22,6 +22,8 @@ export type { MarkerSection, Markers } from "./markdown-store.js";
 export {
   GENERATED_END,
   GENERATED_START,
+  ORIENTATION_END,
+  ORIENTATION_START,
   PROTOCOL_END,
   PROTOCOL_START,
   parseMarkers,

@@ -11,6 +11,11 @@ export const PROTOCOL_START = "<!-- BASOU:PROTOCOLS:START -->";
 /** Marker line that ends a managed protocol block. */
 export const PROTOCOL_END = "<!-- BASOU:PROTOCOLS:END -->";
 
+/** Marker line that begins a managed orientation block in a vendor context face (e.g. ~/.codex/AGENTS.md). */
+export const ORIENTATION_START = "<!-- BASOU:ORIENTATION:START -->";
+/** Marker line that ends a managed orientation block. */
+export const ORIENTATION_END = "<!-- BASOU:ORIENTATION:END -->";
+
 /** A start/end marker pair. Both lines are matched whole-line, exact. */
 export type Markers = { start: string; end: string };
 

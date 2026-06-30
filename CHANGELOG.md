@@ -7,6 +7,17 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- Codex context channel — `basou refresh` now renders the regenerated
+  orientation into `~/.codex/AGENTS.md` (a marker-delimited `BASOU:ORIENTATION`
+  block), the file Codex auto-loads at startup. Codex exposes no SessionStart
+  hook, so this static channel is the only vendor-neutral way a "where am I"
+  reaches an interactive Codex — the floor of the Codex adapter that lets basou
+  steer more than just its maintainer's Claude Code. The orientation block is
+  transient (it changes every refresh) and lives in its own marker pair, so it
+  never disturbs a protocol block in the same file; the pre-basou original is
+  backed up once to `~/.codex/AGENTS.md.basou-bak`. The render is best-effort: a
+  channel failure never fails the refresh, and `--dry-run` writes nothing.
+
 - `basou review record` — record that an adversarial / second-opinion review
   ran, from a JSON object piped on stdin (or `--file`). The in-loop agent runs
   the review with its own vendor-specific command, then pipes a description —
@@ -31,6 +42,17 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Internal
 
+- Added `ORIENTATION_START` / `ORIENTATION_END` markers to core and a shared
+  `context-channel` lib (`syncMarkerBlock` / `removeMarkerBlock` /
+  `assertNoMarkerLine`) that owns the symlink guard, append/replace, one-time
+  backup, marker-line screen, and optimistic-concurrency recheck for managed
+  marker blocks in foreign auto-load files. `basou protocol` now delegates its
+  block mechanics to this helper: functional behavior is preserved (install /
+  update / unchanged / dry-run / symlink / backup / concurrency all match), while
+  the rare error and status messages are now shared and slightly more generic.
+  The protocol channel and the new orientation channel share one code path — the
+  vendor-neutral generalization of the protocol channel (Claude Code's
+  SessionStart hook is just its dynamic, Claude-specific counterpart).
 - Added the `review_recorded` event variant to the event schema (and its
   regenerated published JSON Schema), plus a deterministic writer in core
   (`parseReviewRecordInput` / `buildReviewRecordedEvent`).
