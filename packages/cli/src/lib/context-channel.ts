@@ -189,3 +189,28 @@ export async function syncOrientationChannel(opts: {
     ...(opts.dryRun === true ? { dryRun: true } : {}),
   });
 }
+
+/**
+ * Push an already-rendered orientation file into the Codex context face: read
+ * `orientationPath`, and if present sync it into the channel. Returns the
+ * resulting action plus a human status line, or null when there is no
+ * orientation to render. Throws on a real channel failure — callers decide
+ * whether that is a skip (best-effort). The shared body behind both
+ * `basou refresh` and the `basou run codex` pre-spawn step; `channelPath`
+ * overrides the locked target for tests.
+ */
+export async function renderOrientationToCodexChannel(opts: {
+  orientationPath: string;
+  channelPath?: string;
+}): Promise<{ action: BlockSyncAction; line: string } | null> {
+  const body = await readMarkdownFile(opts.orientationPath);
+  if (body === null) return null;
+  const { action } = await syncOrientationChannel({
+    body,
+    ...(opts.channelPath !== undefined ? { target: opts.channelPath } : {}),
+  });
+  return {
+    action,
+    line: `codex channel: orientation ${action} in ${opts.channelPath ?? "~/.codex/AGENTS.md"}`,
+  };
+}

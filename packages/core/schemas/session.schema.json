@@ -45,6 +45,7 @@
               "enum": [
                 "claude-code-adapter",
                 "claude-code-import",
+                "codex-adapter",
                 "codex-import",
                 "human",
                 "import",
