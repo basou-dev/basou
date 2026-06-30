@@ -44,11 +44,20 @@ function editLine(n: number): string {
   });
 }
 
+/** A transcript line for one assistant message running a single Bash command. */
+function cmdLine(command: string): string {
+  return JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-06-24T00:00:00.000Z",
+    message: { content: [{ type: "tool_use", name: "Bash", input: { command } }] },
+  });
+}
+
 /** Drive doRunHookStop with injected stdin + transcript, returning what it wrote. */
 async function run(
   stdin: unknown,
   transcript: string | { error: true },
-  opts: { minEdits?: number; block?: boolean } = {},
+  opts: { minEdits?: number; block?: boolean; requireReview?: boolean } = {},
 ): Promise<string> {
   let out = "";
   const ctx: HookStopContext = {
@@ -200,6 +209,109 @@ describe("doRunHookStop --block (opt-in enforcement)", () => {
   });
 });
 
+describe("doRunHookStop --require-review (opt-in review gate)", () => {
+  // A substantive-code session that shipped (git push) without a review record.
+  const shippedTranscript = [editLine(2), cmdLine("git push origin main")].join("\n");
+
+  it("ignores the review verdict by default (byte-identical capture-only output)", async () => {
+    // Without --require-review, a shipped-without-review session that is also
+    // already captured stays completely silent — the review verdict is not read.
+    const transcript = [
+      editLine(2),
+      cmdLine("basou decision capture <<'JSON'\n[]\nJSON"),
+      cmdLine("git push origin main"),
+    ].join("\n");
+    const out = await run({ transcript_path: "/t.jsonl", stop_hook_active: false }, transcript);
+    expect(out).toBe("");
+  });
+
+  it("emits a review nudge when a shipped session recorded no review", async () => {
+    const out = await run(
+      { transcript_path: "/t.jsonl", stop_hook_active: false },
+      shippedTranscript,
+      {
+        requireReview: true,
+      },
+    );
+    const context = nudgeContext(out);
+    expect(context).toContain("basou review record");
+    expect(context).toContain("shipped");
+  });
+
+  it("composes the capture and review nudges into one envelope when both fire", async () => {
+    // Substantive + uncaptured (capture fires) AND shipped without review
+    // (review fires) → a single envelope carrying both reminders.
+    const out = await run(
+      { transcript_path: "/t.jsonl", stop_hook_active: false },
+      shippedTranscript,
+      {
+        requireReview: true,
+      },
+    );
+    const context = nudgeContext(out);
+    expect(context).toContain("basou decision capture");
+    expect(context).toContain("basou review record");
+  });
+
+  it("emits a review-ONLY nudge when capture is satisfied but the shipped session was not reviewed", async () => {
+    // capture silent (already_captured via decision capture) + review fires
+    // (shipped without a review record). This is the independent-gate case: the
+    // review part must be emitted on its own, NOT gated behind a capture nudge —
+    // a regression to the old `kind !== "nudge"` early return would drop it.
+    const transcript = [
+      editLine(2),
+      cmdLine("basou decision capture <<'JSON'\n[]\nJSON"),
+      cmdLine("git push origin main"),
+    ].join("\n");
+    const out = await run({ transcript_path: "/t.jsonl", stop_hook_active: false }, transcript, {
+      requireReview: true,
+    });
+    const context = nudgeContext(out);
+    expect(context).toContain("basou review record");
+    // Capture was satisfied, so its reminder must NOT appear.
+    expect(context).not.toContain("basou decision capture");
+  });
+
+  it("stays silent when the shipped session already recorded a review", async () => {
+    const transcript = [
+      editLine(2),
+      cmdLine("git push origin main"),
+      cmdLine("basou review record --file r.json"),
+      cmdLine("basou decision capture <<'JSON'\n[]\nJSON"),
+    ].join("\n");
+    const out = await run({ transcript_path: "/t.jsonl", stop_hook_active: false }, transcript, {
+      requireReview: true,
+    });
+    expect(out).toBe("");
+  });
+
+  it("blocks with the review reason under --require-review --block", async () => {
+    const out = await run(
+      { transcript_path: "/t.jsonl", stop_hook_active: false },
+      shippedTranscript,
+      {
+        requireReview: true,
+        block: true,
+      },
+    );
+    const parsed = JSON.parse(out) as { decision: string; reason: string };
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("basou review record");
+    expect(out).not.toContain("hookSpecificOutput");
+  });
+
+  it("does not fire the review gate for a dry-run push", async () => {
+    const transcript = [editLine(2), cmdLine("git push --dry-run")].join("\n");
+    const out = await run({ transcript_path: "/t.jsonl", stop_hook_active: false }, transcript, {
+      requireReview: true,
+    });
+    // Capture still fires (substantive + uncaptured), but the review part must not.
+    const context = nudgeContext(out);
+    expect(context).toContain("basou decision capture");
+    expect(context).not.toContain("basou review record");
+  });
+});
+
 describe("hook install / uninstall / status", () => {
   let dir: string;
   let settingsPath: string;
@@ -209,6 +321,8 @@ describe("hook install / uninstall / status", () => {
   const ctx: HookInstallContext = { resolveCliEntry: () => cliEntry };
   const advisoryCmd = `node '${cliEntry}' hook stop 2>/dev/null || true`;
   const blockingCmd = `node '${cliEntry}' hook stop --block 2>/dev/null || true`;
+  const reviewCmd = `node '${cliEntry}' hook stop --require-review 2>/dev/null || true`;
+  const blockingReviewCmd = `node '${cliEntry}' hook stop --block --require-review 2>/dev/null || true`;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "basou-hook-install-"));
@@ -298,6 +412,53 @@ describe("hook install / uninstall / status", () => {
     logs.length = 0;
     await doRunHookStatus({ settings: settingsPath });
     expect(logs.join("\n")).toMatch(/registered.*blocking/);
+  });
+
+  it("registers the review tier with --require-review and reports it in status", async () => {
+    await doRunHookInstall({ settings: settingsPath, requireReview: true }, ctx);
+    const settings = (await readSettings()) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    expect(settings.hooks.Stop[0]?.hooks[0]?.command).toBe(reviewCmd);
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    // Capture-always-on; review added => "capture + review".
+    expect(logs.join("\n")).toMatch(/registered.*advisory.*capture \+ review/);
+  });
+
+  it("registers blocking + review together with --block --require-review", async () => {
+    await doRunHookInstall({ settings: settingsPath, block: true, requireReview: true }, ctx);
+    const settings = (await readSettings()) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    expect(settings.hooks.Stop[0]?.hooks[0]?.command).toBe(blockingReviewCmd);
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    expect(logs.join("\n")).toMatch(/registered.*blocking.*capture \+ review/);
+  });
+
+  it("a capture-only install reports just 'capture' in status (no review tier)", async () => {
+    await doRunHookInstall({ settings: settingsPath }, ctx);
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    const line = logs.join("\n");
+    expect(line).toContain("capture");
+    expect(line).not.toContain("review");
+  });
+
+  it("downgrades capture + review back to capture-only in place (no stale --require-review)", async () => {
+    // The opt-in/off-by-default safety property: re-installing WITHOUT
+    // --require-review over a review hook must drop the flag, not retain it.
+    await doRunHookInstall({ settings: settingsPath, requireReview: true }, ctx);
+    await doRunHookInstall({ settings: settingsPath }, ctx);
+    const settings = (await readSettings()) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    expect(settings.hooks.Stop).toHaveLength(1);
+    expect(settings.hooks.Stop[0]?.hooks[0]?.command).toBe(advisoryCmd);
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    expect(logs.join("\n")).not.toContain("review");
   });
 
   it("uninstall removes the basou hook and prunes empty scaffold", async () => {

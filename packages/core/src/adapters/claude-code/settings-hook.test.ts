@@ -23,6 +23,18 @@ describe("buildStopHookCommand", () => {
     );
   });
 
+  it("adds --require-review for the opt-in review gate", () => {
+    expect(buildStopHookCommand({ cliEntry: ENTRY, requireReview: true })).toBe(
+      `node '${ENTRY}' hook stop --require-review 2>/dev/null || true`,
+    );
+  });
+
+  it("orders flags --block, --require-review, --min-edits", () => {
+    expect(
+      buildStopHookCommand({ cliEntry: ENTRY, block: true, requireReview: true, minEdits: 3 }),
+    ).toBe(`node '${ENTRY}' hook stop --block --require-review --min-edits 3 2>/dev/null || true`);
+  });
+
   it("adds --min-edits when overridden, after --block", () => {
     expect(buildStopHookCommand({ cliEntry: ENTRY, block: true, minEdits: 3 })).toBe(
       `node '${ENTRY}' hook stop --block --min-edits 3 2>/dev/null || true`,
