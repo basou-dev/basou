@@ -7,7 +7,7 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "0.1.0"
+      "pattern": "^0\\.\\d+\\.\\d+$"
     },
     "id": {
       "type": "string",
@@ -126,5 +126,6 @@
     "risk_level",
     "action",
     "reason"
-  ]
+  ],
+  "additionalProperties": {}
 }

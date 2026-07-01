@@ -185,7 +185,7 @@ describe("writeStatus / readStatus", () => {
     });
     await writeStatus(paths, valid);
     // biome-ignore lint/suspicious/noExplicitAny: deliberate invalid snapshot for negative test
-    const broken = { ...valid, schema_version: "0.2.0" } as any;
+    const broken = { ...valid, schema_version: "1.0.0" } as any; // higher major -> gated
     await expect(writeStatus(paths, broken)).rejects.toThrow();
     const readBack = await readStatus(paths);
     expect(readBack).toEqual(valid);

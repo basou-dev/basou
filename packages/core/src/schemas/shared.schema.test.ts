@@ -67,11 +67,24 @@ describe("RiskLevelSchema", () => {
 });
 
 describe("SchemaVersionSchema", () => {
-  it("accepts the literal '0.1.0'", () => {
+  it("accepts any same-major (0.x.y) format version — forward-compatible", () => {
     expect(SchemaVersionSchema.safeParse("0.1.0").success).toBe(true);
+    expect(SchemaVersionSchema.safeParse("0.2.0").success).toBe(true);
+    expect(SchemaVersionSchema.safeParse("0.99.5").success).toBe(true);
   });
 
-  it("rejects any other version string", () => {
-    expect(SchemaVersionSchema.safeParse("0.2.0").success).toBe(false);
+  it("gates a higher/unknown major with an explicit upgrade message", () => {
+    const result = SchemaVersionSchema.safeParse("1.0.0");
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toMatch(/upgrade basou/i);
+    }
+    expect(SchemaVersionSchema.safeParse("2.3.4").success).toBe(false);
+  });
+
+  it("rejects malformed version strings", () => {
+    for (const bad of ["", "0.1", "0", "abc", "0.1.0-rc", "v0.1.0", "0.1.0.0"]) {
+      expect(SchemaVersionSchema.safeParse(bad).success).toBe(false);
+    }
   });
 });

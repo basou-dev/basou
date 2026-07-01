@@ -7,7 +7,7 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "0.1.0"
+      "pattern": "^0\\.\\d+\\.\\d+$"
     },
     "task": {
       "type": "object",
@@ -72,11 +72,13 @@
         "updated_at",
         "workspace_id",
         "created_in_session"
-      ]
+      ],
+      "additionalProperties": {}
     }
   },
   "required": [
     "schema_version",
     "task"
-  ]
+  ],
+  "additionalProperties": {}
 }

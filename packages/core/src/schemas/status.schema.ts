@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { IsoTimestampSchema, SchemaVersionSchema, WorkspaceIdSchema } from "./shared.schema.js";
+import {
+  CacheVersionSchema,
+  IsoTimestampSchema,
+  SchemaVersionSchema,
+  WorkspaceIdSchema,
+} from "./shared.schema.js";
 
 /**
  * Schema for `.basou/status.json` — a forward-incompat cache of the current
@@ -13,13 +18,17 @@ import { IsoTimestampSchema, SchemaVersionSchema, WorkspaceIdSchema } from "./sh
  */
 export const StatusSchema = z
   .object({
-    schema_version: SchemaVersionSchema,
+    // status.json is a rebuildable cache: exact-match-or-rebuild, not the
+    // durable forward-compat gate.
+    schema_version: CacheVersionSchema,
     generated_at: IsoTimestampSchema,
     workspace: z
       .object({
         id: WorkspaceIdSchema,
         name: z.string().min(1),
-        basou_version: z.literal("0.1.0"),
+        // Mirrors the manifest's basou_version, so it uses the same
+        // forward-compatible format gate (accept 0.x.y) rather than a literal.
+        basou_version: SchemaVersionSchema,
       })
       .strict(),
     directories_present: z

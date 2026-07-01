@@ -45,7 +45,7 @@ export const SessionSourceKindSchema = z.enum([
 /** Inferred runtime type for {@link SessionSourceKindSchema}. */
 export type SessionSourceKind = z.infer<typeof SessionSourceKindSchema>;
 
-const SessionSourceSchema = z.object({
+const SessionSourceSchema = z.looseObject({
   kind: SessionSourceKindSchema,
   version: z.literal("0.1.0"),
   // Optional id of the originating session in the SOURCE tool's own
@@ -62,7 +62,7 @@ const SessionSourceSchema = z.object({
   source_size_bytes: z.number().int().nonnegative().optional(),
 });
 
-const InvocationSchema = z.object({
+const InvocationSchema = z.looseObject({
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
   // Nullable to record signal-terminated runs where the child has no exit
@@ -99,14 +99,14 @@ const InvocationSchema = z.object({
  * backfill). Live sessions carry no engaged-time metrics and fall back to
  * event-derived active time at stats time.
  */
-export const SessionMetricsSchema = z.object({
+export const SessionMetricsSchema = z.looseObject({
   output_tokens: z.number().int().nonnegative().optional(),
   input_tokens: z.number().int().nonnegative().optional(),
   cached_input_tokens: z.number().int().nonnegative().optional(),
   reasoning_output_tokens: z.number().int().nonnegative().optional(),
   active_time_ms: z.number().int().nonnegative().optional(),
   active_intervals: z
-    .array(z.object({ start: IsoTimestampSchema, end: IsoTimestampSchema }))
+    .array(z.looseObject({ start: IsoTimestampSchema, end: IsoTimestampSchema }))
     .optional(),
   active_gap_cap_ms: z.number().int().nonnegative().optional(),
   active_time_method: z.string().optional(),
@@ -134,7 +134,7 @@ export const SessionIntegritySchema = z
 /** Inferred runtime type for {@link SessionIntegritySchema}. */
 export type SessionIntegrity = z.infer<typeof SessionIntegritySchema>;
 
-const SessionInnerSchema = z.object({
+const SessionInnerSchema = z.looseObject({
   id: SessionIdSchema,
   label: z.string().optional(),
   task_id: TaskIdSchema.nullable().optional(),
@@ -158,7 +158,7 @@ const SessionInnerSchema = z.object({
  * session document carries the actual fields nested under the outer
  * `session:` key.
  */
-export const SessionSchema = z.object({
+export const SessionSchema = z.looseObject({
   schema_version: SchemaVersionSchema,
   session: SessionInnerSchema,
 });

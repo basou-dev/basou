@@ -7,11 +7,11 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "0.1.0"
+      "pattern": "^0\\.\\d+\\.\\d+$"
     },
     "basou_version": {
       "type": "string",
-      "const": "0.1.0"
+      "pattern": "^0\\.\\d+\\.\\d+$"
     },
     "workspace": {
       "type": "object",

@@ -83,10 +83,16 @@ export async function doRunStatus(options: StatusOptions, ctx: StatusContext): P
     if (findErrorCode(error, "ENOENT")) {
       throw new Error("Workspace not initialized. Run 'basou init' first.");
     }
-    // ZodError's `message` echoes invalid input values verbatim, which can
-    // include path-like strings if a user-edited manifest contains them.
-    // Wrap in a fixed pathless message and surface only the cause's
-    // constructor name in verbose mode via the shared renderCliError helper.
+    // The format-version gate sets a safe, value-free message on its issue, so
+    // (unlike the raw ZodError, whose `message` echoes invalid values) it can be
+    // surfaced verbatim — otherwise the actionable "upgrade basou" guidance stays
+    // buried behind a generic wrap.
+    const gateMessage = formatVersionGateMessage(error);
+    if (gateMessage !== undefined) throw new Error(gateMessage, { cause: error });
+    // Otherwise ZodError's `message` echoes invalid input values verbatim, which
+    // can include path-like strings if a user-edited manifest contains them. Wrap
+    // in a fixed pathless message and surface only the cause's constructor name in
+    // verbose mode via the shared renderCliError helper.
     throw new Error("Failed to read workspace manifest", { cause: error });
   }
 
@@ -133,4 +139,30 @@ async function resolveRepositoryRootForStatus(cwd: string): Promise<string> {
     }
     throw error;
   }
+}
+
+/**
+ * If a manifest read failed the `.basou` format-version gate
+ * ({@link SchemaVersionSchema}), return that issue's message. The gate message
+ * is authored to be value-free (it names no user input), so it is safe to
+ * surface verbatim — the actionable "upgrade basou" line the operator needs —
+ * whereas a raw ZodError message echoes invalid values and must stay wrapped.
+ * Duck-typed on the ZodError shape so the command need not import zod.
+ */
+function formatVersionGateMessage(error: unknown): string | undefined {
+  const issues = (error as { issues?: unknown }).issues;
+  if (!Array.isArray(issues)) return undefined;
+  for (const issue of issues) {
+    const path = (issue as { path?: unknown }).path;
+    const message = (issue as { message?: unknown }).message;
+    if (
+      Array.isArray(path) &&
+      (path.includes("schema_version") || path.includes("basou_version")) &&
+      typeof message === "string" &&
+      message.startsWith("unsupported .basou format version")
+    ) {
+      return message;
+    }
+  }
+  return undefined;
 }

@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -171,6 +181,28 @@ describe("doRunStatus (pure runner)", () => {
     } finally {
       await rm(nonGitDir, { recursive: true, force: true });
     }
+  });
+
+  it("surfaces the format-version 'upgrade basou' gate message for a too-new manifest", async () => {
+    const { repo, paths } = await setupInitedRepo();
+    // Bump the on-disk manifest to a higher format major (bypassing writeManifest's
+    // validation) to simulate a workspace written by a newer basou.
+    const raw = await readFile(paths.files.manifest, "utf8");
+    await writeFile(
+      paths.files.manifest,
+      raw.replace(/basou_version:\s*0\.1\.0/, "basou_version: 1.0.0"),
+      "utf8",
+    );
+    let err: unknown;
+    try {
+      await doRunStatus({}, { cwd: repo });
+    } catch (caught) {
+      err = caught;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/upgrade basou/i);
+    // The message must NOT be the generic wrap that buries the guidance.
+    expect((err as Error).message).not.toBe("Failed to read workspace manifest");
   });
 });
 

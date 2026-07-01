@@ -32,6 +32,17 @@ describe("SessionSchema", () => {
     expect(SessionSchema.safeParse(VALID_SESSION).success).toBe(true);
   });
 
+  it("preserves an unknown top-level field (forward-compatible; loose, not strip)", () => {
+    // A future 0.x session may add fields this basou does not know. The loose
+    // schema must PRESERVE them so a read+rewrite (finalizeSessionYaml) does not
+    // silently drop them — this is what makes accepting a higher minor safe.
+    const withFuture = { ...VALID_SESSION, future_field: { note: "added in a later 0.x" } };
+    const parsed = SessionSchema.parse(withFuture);
+    expect((parsed as Record<string, unknown>).future_field).toEqual({
+      note: "added in a later 0.x",
+    });
+  });
+
   it("accepts task_id omitted entirely", () => {
     const { task_id: _task_id, ...inner } = VALID_SESSION.session;
     const variant = { ...VALID_SESSION, session: inner };
