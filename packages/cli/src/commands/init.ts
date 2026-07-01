@@ -14,6 +14,13 @@ export type InitOptions = {
   projectName?: string;
   projectDescription?: string;
   /**
+   * Deprecated and ignored. `project.repository_url` was removed (the remote is
+   * an observed git fact derived live, not stored). The flag is still accepted
+   * for `0.x` CLI stability and is removed at `1.0`; supplying it emits a
+   * deprecation warning and writes nothing.
+   */
+  repoUrl?: string;
+  /**
    * Import source roots (repeatable). Each may be absolute or relative to the
    * invocation cwd; persisted as a path relative to the repository root under
    * `import.source_roots`, so one `.basou/` can aggregate sibling repos.
@@ -43,6 +50,10 @@ export function registerInitCommand(program: Command): void {
     .option("--name <name>", "Workspace name (defaults to the repository directory name)")
     .option("--project-name <name>", "Project display name")
     .option("--project-description <description>", "Project description")
+    .option(
+      "--repo-url <url>",
+      "Deprecated and ignored (project.repository_url was removed); accepted for 0.x CLI stability, removed at 1.0",
+    )
     .option(
       "--source-root <path>",
       "Extra import source root, relative to the repo root (repeatable; aggregates sibling repos into this workspace)",
@@ -84,6 +95,14 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveRepositoryRootForInit(cwd);
   const workspaceName = options.name ?? basename(repositoryRoot);
+
+  // --repo-url is a deprecated no-op: project.repository_url was removed, so the
+  // flag writes nothing. Accepted for 0.x CLI stability; warn and drop it.
+  if (options.repoUrl !== undefined) {
+    console.error(
+      "Warning: --repo-url is deprecated and ignored (project.repository_url was removed); the flag will be removed at 1.0.",
+    );
+  }
 
   // Normalize each --source-root to a repo-root-relative path. A root that is
   // the repo root itself becomes ".". Stored relative so the committed manifest

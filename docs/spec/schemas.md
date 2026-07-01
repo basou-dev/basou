@@ -18,7 +18,6 @@ workspace:
 project:
   name: "Client Foo Landing Page"
   description: "Landing-page redesign for client foo"
-  repository_url: null  # optional
 
 capabilities:
   enabled:

@@ -107,6 +107,19 @@ describe("doRunInit (pure runner)", () => {
     expect("repository_url" in manifest.project).toBe(false);
   });
 
+  it("accepts --repo-url as a deprecated no-op: writes nothing, warns", async () => {
+    // Kept for 0.x CLI stability (removed at 1.0); it must not error, must not
+    // write repository_url, and must warn that it is ignored.
+    const repo = getTmpRepo();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await doRunInit({ repoUrl: "https://example.com/ignored.git" }, { cwd: repo });
+    const manifest = await readManifest(basouPaths(repo));
+    expect("repository_url" in manifest.project).toBe(false);
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toMatch(/--repo-url is deprecated and ignored/i);
+  });
+
   it("refuses to re-initialize without --force", async () => {
     const repo = getTmpRepo();
     await doRunInit({}, { cwd: repo });

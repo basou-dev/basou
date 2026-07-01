@@ -12,10 +12,12 @@ All notable changes to **basou** are recorded here. The project follows
   drifted silently on an org move or rename — a second source of truth for a
   fact git already owns. The manifest holds only declarative intent; the remote
   is an observed git fact, derived live where it is actually needed (the
-  portfolio view already does this). `basou init` no longer captures it and the
-  `--repo-url` flag is gone. The field is removed from the schema, but
-  `ProjectSchema` stays loose, so a legacy value is not rejected on read —
-  `writeManifest` strips it so any manifest rewrite self-heals.
+  portfolio view already does this). `basou init` no longer captures it; the
+  `--repo-url` flag is kept as a **deprecated no-op** (accepted so the `0.x` CLI
+  surface stays stable, warns that it is ignored, and is removed at `1.0`). The
+  field is removed from the schema, but `ProjectSchema` stays loose, so a legacy
+  value is not rejected on read — `writeManifest` strips it so any manifest
+  rewrite self-heals.
 
 ### Added
 
