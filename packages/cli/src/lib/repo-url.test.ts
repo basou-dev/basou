@@ -41,7 +41,7 @@ describe("toBrowserUrl", () => {
   it("returns null for un-normalizable inputs", () => {
     expect(toBrowserUrl("")).toBeNull();
     expect(toBrowserUrl("   ")).toBeNull();
-    expect(toBrowserUrl("/Users/me/projects/repo")).toBeNull(); // bare local path
+    expect(toBrowserUrl("/srv/git/repo")).toBeNull(); // bare local path
     expect(toBrowserUrl("../sibling")).toBeNull();
     expect(toBrowserUrl("git@host:")).toBeNull(); // empty path
     expect(toBrowserUrl("https://github.com")).toBeNull(); // no path
