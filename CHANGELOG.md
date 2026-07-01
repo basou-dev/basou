@@ -16,6 +16,22 @@ All notable changes to **basou** are recorded here. The project follows
   call (the browser only navigates when you click). A repo with no remote, or a
   URL that cannot be normalized, shows "local only" instead of a link.
 
+### Changed
+
+- `.basou` format version gate (pre-1.0-freeze). The on-disk `schema_version` /
+  `basou_version` fields are now validated as a forward-compatible **format
+  major** rather than the exact literal `0.1.0`: any `0.x.y` is accepted (a newer
+  minor/patch parses, since the entity schemas are loose and preserve unknown
+  fields), while a higher/unknown major (`1.x.y`+) is gated with an explicit
+  "upgrade basou" error instead of a cryptic field-level parse failure. The
+  format major is decoupled from the npm/product version — shipping product
+  `1.0.0` does not bump the format major; it stays `0` until the format itself
+  changes incompatibly. Defined before the semver-1.0 freeze because the gate
+  behavior is itself part of the frozen format contract and cannot be
+  retrofitted onto a frozen literal. The published JSON Schemas now carry a
+  `pattern` (`^0\.\d+\.\d+$`) in place of the old `const`, so cross-language
+  validators enforce the same major.
+
 ## 0.30.0 — 2026-07-01
 
 ### Added

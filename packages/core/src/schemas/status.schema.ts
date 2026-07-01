@@ -19,7 +19,9 @@ export const StatusSchema = z
       .object({
         id: WorkspaceIdSchema,
         name: z.string().min(1),
-        basou_version: z.literal("0.1.0"),
+        // Mirrors the manifest's basou_version, so it uses the same
+        // forward-compatible format gate (accept 0.x.y) rather than a literal.
+        basou_version: SchemaVersionSchema,
       })
       .strict(),
     directories_present: z

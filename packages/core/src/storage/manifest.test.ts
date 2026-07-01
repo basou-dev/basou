@@ -158,11 +158,11 @@ describe("writeManifest / readManifest", () => {
     expect(readBack.workspace.id).toBe("ws_01HXABCDEF1234567890ABCDEG");
   });
 
-  it("validates manifest before writing (rejects unknown basou_version)", async () => {
+  it("validates manifest before writing (gates a higher-major basou_version)", async () => {
     const paths = await ensureBasouDirectory(getRepoRoot());
     const manifest = createManifest({ workspaceName: "x", workspaceId: FIXED_WS_ID });
     // biome-ignore lint/suspicious/noExplicitAny: deliberate invalid manifest for negative test
-    const broken = { ...manifest, basou_version: "0.2.0" } as any;
+    const broken = { ...manifest, basou_version: "1.0.0" } as any; // higher major -> gated
     await expect(writeManifest(paths, broken)).rejects.toThrow();
   });
 

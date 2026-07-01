@@ -25,9 +25,11 @@ describe("StatusSchema", () => {
     expect(StatusSchema.safeParse(VALID_STATUS).success).toBe(true);
   });
 
-  it("rejects when schema_version is not '0.1.0'", () => {
-    const variant = { ...VALID_STATUS, schema_version: "0.2.0" };
-    expect(StatusSchema.safeParse(variant).success).toBe(false);
+  it("accepts a same-major schema_version (forward-compatible) but gates a higher major", () => {
+    expect(StatusSchema.safeParse({ ...VALID_STATUS, schema_version: "0.2.0" }).success).toBe(true);
+    expect(StatusSchema.safeParse({ ...VALID_STATUS, schema_version: "1.0.0" }).success).toBe(
+      false,
+    );
   });
 
   it("rejects a workspace.id that lacks the 'ws_' prefix", () => {

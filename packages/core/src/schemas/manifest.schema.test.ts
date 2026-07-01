@@ -59,9 +59,13 @@ describe("ManifestSchema", () => {
     expect(parsed.git.events_log).toBe("ignore");
   });
 
-  it("rejects when basou_version is not '0.1.0'", () => {
-    const variant = { ...VALID_MANIFEST, basou_version: "0.2.0" };
-    expect(ManifestSchema.safeParse(variant).success).toBe(false);
+  it("accepts a same-major basou_version (forward-compatible) but gates a higher major", () => {
+    expect(ManifestSchema.safeParse({ ...VALID_MANIFEST, basou_version: "0.2.0" }).success).toBe(
+      true,
+    );
+    expect(ManifestSchema.safeParse({ ...VALID_MANIFEST, basou_version: "1.0.0" }).success).toBe(
+      false,
+    );
   });
 
   it("accepts import.source_roots with relative paths (host '.' plus a sibling)", () => {

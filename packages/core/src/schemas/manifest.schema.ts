@@ -159,7 +159,11 @@ const WorkspaceMetaSchema = z.looseObject({
  */
 export const ManifestSchema = z.looseObject({
   schema_version: SchemaVersionSchema,
-  basou_version: z.literal("0.1.0"),
+  // Same forward-compatible format gate as schema_version (accept 0.x.y, gate a
+  // higher major with an upgrade error) rather than a hard literal. `basou_version`
+  // is a format stamp, not the npm/product version; consolidating it with
+  // schema_version is a candidate cleanup for the M4 freeze pass.
+  basou_version: SchemaVersionSchema,
   workspace: WorkspaceMetaSchema,
   project: ProjectSchema,
   capabilities: CapabilitiesSchema,

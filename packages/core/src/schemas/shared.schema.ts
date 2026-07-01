@@ -2,10 +2,25 @@ import { z } from "zod";
 import { type IdPrefix, isValidPrefixedId, type PrefixedId } from "../ids/ulid.js";
 
 /**
- * Schema version literal pinned to "0.1.0" for Basou v0.1.
- * Reused across every entity schema so inferred types narrow to the literal.
+ * The `.basou` on-disk format version, of the form `MAJOR.MINOR.PATCH`.
+ *
+ * This basou reads format **major 0**: it accepts any `0.x.y` (a newer MINOR /
+ * PATCH is additive and still parses, because the entity schemas are loose and
+ * preserve unknown fields) and GATES a higher / unknown major with an explicit
+ * "upgrade basou" error rather than a cryptic field-level parse failure. The
+ * gate behavior is part of the frozen format contract, so it is defined before
+ * the semver-1.0 freeze — it cannot be retrofitted onto a frozen `z.literal`.
+ *
+ * The format major is DECOUPLED from the npm / product version: shipping basou
+ * product 1.0.0 does not bump this major — it stays `0` until the on-disk format
+ * itself changes incompatibly. The regex (not a `.refine`) is the gate so it is
+ * emitted faithfully into the published JSON Schema `pattern`, letting a
+ * cross-language validator enforce the same major.
  */
-export const SchemaVersionSchema = z.literal("0.1.0");
+export const SchemaVersionSchema = z.string().regex(/^0\.\d+\.\d+$/, {
+  message:
+    "unsupported .basou format version: this basou reads format major 0 (0.x.y). If this workspace was written by a newer basou, upgrade basou to open it.",
+});
 
 /**
  * ISO 8601 timestamp with explicit timezone offset (e.g. `+09:00`).
