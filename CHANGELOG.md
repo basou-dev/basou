@@ -5,6 +5,18 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Removed
+
+- `project.repository_url` (manifest, pre-1.0-freeze cleanup). It was a
+  write-once copy of git's `remote.origin.url` that nothing read and that
+  drifted silently on an org move or rename — a second source of truth for a
+  fact git already owns. The manifest holds only declarative intent; the remote
+  is an observed git fact, derived live where it is actually needed (the
+  portfolio view already does this). `basou init` no longer captures it and the
+  `--repo-url` flag is gone. The field is removed from the schema, but
+  `ProjectSchema` stays loose, so a legacy value is not rejected on read —
+  `writeManifest` strips it so any manifest rewrite self-heals.
+
 ### Added
 
 - Portfolio view — live repo links. The workspace overview now lists each

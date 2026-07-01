@@ -13,7 +13,6 @@ const VALID_MANIFEST = {
   project: {
     name: "Client Foo Landing Page",
     description: "受託案件のLP改修",
-    repository_url: null,
   },
   capabilities: {
     enabled: ["git", "terminal", "approval"],
@@ -37,12 +36,15 @@ describe("ManifestSchema", () => {
     expect(ManifestSchema.safeParse(VALID_MANIFEST).success).toBe(true);
   });
 
-  it("accepts repository_url: null", () => {
+  it("preserves an unknown project key (loose) so a legacy repository_url survives read", () => {
+    // The field was removed from the schema; ProjectSchema stays loose so a
+    // legacy value is not rejected on read (writeManifest strips it on rewrite).
     const variant = {
       ...VALID_MANIFEST,
-      project: { ...VALID_MANIFEST.project, repository_url: null },
+      project: { ...VALID_MANIFEST.project, repository_url: "https://example.com/old.git" },
     };
-    expect(ManifestSchema.safeParse(variant).success).toBe(true);
+    const result = ManifestSchema.safeParse(variant);
+    expect(result.success).toBe(true);
   });
 
   it("rejects an unknown default_risk_level", () => {

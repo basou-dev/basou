@@ -4,7 +4,6 @@ import {
   createManifest,
   ensureBasouDirectory,
   resolveRepositoryRoot,
-  tryRemoteUrl,
   writeManifest,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -14,7 +13,6 @@ export type InitOptions = {
   name?: string;
   projectName?: string;
   projectDescription?: string;
-  repoUrl?: string;
   /**
    * Import source roots (repeatable). Each may be absolute or relative to the
    * invocation cwd; persisted as a path relative to the repository root under
@@ -37,12 +35,7 @@ export type InitContext = {
   cwd?: string;
 };
 
-/**
- * Register `basou init` on a commander program. The `--repo-url ""` (empty
- * string) form is the documented way to set `project.repository_url` to
- * `null` explicitly; omitting `--repo-url` falls back to
- * `git config --local remote.origin.url` and finally to omission.
- */
+/** Register `basou init` on a commander program. */
 export function registerInitCommand(program: Command): void {
   program
     .command("init")
@@ -50,10 +43,6 @@ export function registerInitCommand(program: Command): void {
     .option("--name <name>", "Workspace name (defaults to the repository directory name)")
     .option("--project-name <name>", "Project display name")
     .option("--project-description <description>", "Project description")
-    .option(
-      "--repo-url <url>",
-      "Repository URL (defaults to git remote.origin.url; pass empty string for null)",
-    )
     .option(
       "--source-root <path>",
       "Extra import source root, relative to the repo root (repeatable; aggregates sibling repos into this workspace)",
@@ -96,15 +85,6 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
   const repositoryRoot = await resolveRepositoryRootForInit(cwd);
   const workspaceName = options.name ?? basename(repositoryRoot);
 
-  // --repo-url > git config --local remote.origin.url > omit
-  // --repo-url "" => explicit null
-  let repositoryUrl: string | null | undefined;
-  if (options.repoUrl !== undefined) {
-    repositoryUrl = options.repoUrl === "" ? null : options.repoUrl;
-  } else {
-    repositoryUrl = await tryRemoteUrl(repositoryRoot);
-  }
-
   // Normalize each --source-root to a repo-root-relative path. A root that is
   // the repo root itself becomes ".". Stored relative so the committed manifest
   // carries no absolute machine paths.
@@ -120,7 +100,6 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
     ...(options.projectDescription !== undefined
       ? { projectDescription: options.projectDescription }
       : {}),
-    ...(repositoryUrl !== undefined ? { repositoryUrl } : {}),
     ...(sourceRoots.length > 0 ? { sourceRoots } : {}),
   });
 
