@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -234,6 +234,46 @@ describe("basou view server", () => {
       expect(d.initialized).toBe(true);
       expect(d.repoRoot).toBe(repo);
       expect(d.counts.sessions).toBe(0);
+    });
+  });
+
+  it("overview lists roster repos with live-derived clickable git links (nothing stored)", async () => {
+    const repo = await realpath(tmpRepo as string);
+    const paths = await ensureBasouDirectory(repo);
+    const manifest = {
+      ...createManifest({ workspaceName: "view-ws", now: FIXED_DATE, workspaceId: FIXED_WS_ID }),
+      repos: [
+        { path: ".", visibility: "private" as const },
+        { path: "../site", visibility: "public" as const },
+        { path: "../local-only" },
+      ],
+    };
+    await writeManifest(paths, manifest);
+
+    // Inject a deterministic live resolver: no real git remotes needed, and it
+    // proves the URL is derived at request time (never read from the manifest).
+    const remoteUrlOf = async (repoRoot: string): Promise<string | undefined> => {
+      if (repoRoot === repo) return "git@github.com:org/app.git";
+      if (repoRoot.endsWith("/site")) return "https://gitlab.com/org/site.git";
+      return undefined; // local-only repo => no link
+    };
+
+    await withServer(repo, { remoteUrlOf }, async (handle) => {
+      const { status, data } = await getJson(handle, "/api/overview");
+      expect(status).toBe(200);
+      const { repos } = data as {
+        repos: Array<{ name: string; path: string; url?: string; visibility?: string }>;
+      };
+      expect(repos).toEqual([
+        {
+          name: basename(repo),
+          path: ".",
+          url: "https://github.com/org/app",
+          visibility: "private",
+        },
+        { name: "site", path: "../site", url: "https://gitlab.com/org/site", visibility: "public" },
+        { name: "local-only", path: "../local-only" },
+      ]);
     });
   });
 

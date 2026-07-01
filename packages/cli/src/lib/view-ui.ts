@@ -411,8 +411,29 @@ export const VIEW_HTML = `<!doctype html>
         card(c.approvalsPending, 'approvals pending')
       ]);
       detail.appendChild(cards);
+      renderRepos(detail, d.repos || []);
       detail.appendChild(el('p', { class: 'muted', text: 'repo: ' + d.repoRoot }));
     }).catch(fail);
+  }
+  // The declared roster repos, each with a LIVE git link (derived server-side
+  // from the repo's local git config at request time, never stored). A repo
+  // with no remote renders as "local only". Links open in a new tab.
+  function renderRepos(detail, repos) {
+    if (!repos.length) return;
+    detail.appendChild(el('h3', { text: 'Repos' }));
+    var rows = el('div', { class: 'repos' }, []);
+    repos.forEach(function (r) {
+      var vis = r.visibility ? (' (' + r.visibility + ')') : '';
+      var link = r.url
+        ? el('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer', text: r.url })
+        : el('span', { class: 'muted', text: 'local only' });
+      rows.appendChild(el('div', { class: 'f' }, [
+        el('strong', { text: r.name }),
+        el('span', { class: 'muted', text: vis + '  ' }),
+        link
+      ]));
+    });
+    detail.appendChild(rows);
   }
   function card(n, label) {
     return el('div', { class: 'card' }, [

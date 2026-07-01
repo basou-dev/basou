@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import {
   type BasouPaths,
   computeWorkStats,
@@ -19,6 +19,7 @@ import {
   renderDecisions,
   renderHandoff,
   summarizeOrientation,
+  tryRemoteUrl,
 } from "@basou/core";
 import type { ImportContext } from "../commands/import.js";
 import {
@@ -30,6 +31,7 @@ import {
   regenerateDecisions,
   regenerateHandoff,
 } from "./provenance-actions.js";
+import { toBrowserUrl } from "./repo-url.js";
 import { VIEW_HTML } from "./view-ui.js";
 
 /**
@@ -54,6 +56,9 @@ export type WorkspaceEntry = {
   manifestError?: string;
 };
 
+/** Resolve a repo's remote URL live from its local git config; `undefined` when unset. */
+export type RemoteUrlResolver = (repoRoot: string) => Promise<string | undefined>;
+
 /** Everything the request handlers need; resolved once when the server starts. */
 export type ViewServerDeps = {
   /** At least one entry. Flat `/api/*` routes always target `workspaces[0]`. */
@@ -61,6 +66,12 @@ export type ViewServerDeps = {
   /** How the server was started; drives the UI landing (single detail vs portfolio cards). */
   mode: "single" | "portfolio";
   nowProvider: () => Date;
+  /**
+   * Live remote-URL resolver for roster repos, read fresh at render time so the
+   * displayed URL never drifts (the manifest stores no copy). Defaults to core's
+   * {@link tryRemoteUrl}; injectable so tests need no real git remotes.
+   */
+  remoteUrlOf?: RemoteUrlResolver;
 };
 
 /** A running view server, with the means to stop it. */
@@ -195,19 +206,32 @@ async function handleGet(
       sendError(res, 404, "Unknown workspace");
       return;
     }
-    if (!(await handleWorkspaceGet(res, scoped.sub, ws, deps.nowProvider))) {
+    if (!(await handleWorkspaceGet(res, scoped.sub, ws, deps.nowProvider, remoteUrlOf(deps)))) {
       sendError(res, 404, "Not found");
     }
     return;
   }
   if (pathname.startsWith(API_PREFIX)) {
     const sub = pathname.slice(API_PREFIX.length);
-    if (!(await handleWorkspaceGet(res, sub, primaryWorkspace(deps), deps.nowProvider))) {
+    if (
+      !(await handleWorkspaceGet(
+        res,
+        sub,
+        primaryWorkspace(deps),
+        deps.nowProvider,
+        remoteUrlOf(deps),
+      ))
+    ) {
       sendError(res, 404, "Not found");
     }
     return;
   }
   sendError(res, 404, "Not found");
+}
+
+/** The configured live remote-URL resolver, or core's default. */
+function remoteUrlOf(deps: ViewServerDeps): RemoteUrlResolver {
+  return deps.remoteUrlOf ?? tryRemoteUrl;
 }
 
 async function handlePost(
@@ -245,9 +269,10 @@ async function handleWorkspaceGet(
   sub: string,
   ws: WorkspaceEntry,
   nowProvider: () => Date,
+  resolveRemoteUrl: RemoteUrlResolver,
 ): Promise<boolean> {
   if (sub === "overview") {
-    sendJson(res, 200, await overview(ws, nowProvider));
+    sendJson(res, 200, await overview(ws, nowProvider, resolveRemoteUrl));
     return true;
   }
   if (sub === "sessions") {
@@ -438,6 +463,7 @@ async function captureStaleness(
 async function overview(
   ws: WorkspaceEntry,
   nowProvider: () => Date,
+  resolveRemoteUrl: RemoteUrlResolver,
 ): Promise<Record<string, unknown>> {
   let manifest: Manifest;
   try {
@@ -451,6 +477,7 @@ async function overview(
   const nowIso = nowProvider().toISOString();
   const handoff = await renderHandoff({ paths: ws.paths, nowIso });
   const approvals = await enumerateApprovals(ws.paths);
+  const repos = await rosterRepos(ws.repoRoot, manifest, resolveRemoteUrl);
   return {
     initialized: true,
     repoRoot: ws.repoRoot,
@@ -468,8 +495,41 @@ async function overview(
       approvalsPending: approvals.pending.length,
       approvalsResolved: approvals.resolved.length,
     },
+    repos,
     generatedAt: nowIso,
   };
+}
+
+/**
+ * The declared roster repos with a LIVE, clickable git link each — the remote is
+ * read fresh from every repo's local git config (via {@link resolveRemoteUrl},
+ * default {@link tryRemoteUrl}) and normalized to an https URL, so the link
+ * tracks a GitHub-org move or rename with zero stored state and no drift. A repo
+ * with no remote (purely local) or an un-normalizable URL simply carries no
+ * `url` and renders as "local only". Reading local git config is not a network
+ * call; nothing here reaches the internet — the browser only navigates when the
+ * human clicks. `name` is the basename and `path` the manifest-relative path
+ * (both commit-safe); the absolute path is used only to read git, never emitted.
+ */
+async function rosterRepos(
+  repoRoot: string,
+  manifest: Manifest,
+  resolveRemoteUrl: RemoteUrlResolver,
+): Promise<Array<Record<string, unknown>>> {
+  const roster = manifest.repos ?? [];
+  return Promise.all(
+    roster.map(async (repo) => {
+      const abs = resolve(repoRoot, repo.path);
+      const remote = await resolveRemoteUrl(abs);
+      const url = remote !== undefined ? toBrowserUrl(remote) : null;
+      return {
+        name: basename(abs),
+        path: repo.path,
+        ...(url !== null ? { url } : {}),
+        ...(repo.visibility !== undefined ? { visibility: repo.visibility } : {}),
+      };
+    }),
+  );
 }
 
 async function sessionsList(
