@@ -13,6 +13,7 @@ import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { loadPortfolioConfig, type PortfolioWorkspace } from "../lib/portfolio-config.js";
 import { checkPortfolioSafety, formatSafetyReport } from "../lib/portfolio-safety.js";
 import {
+  type RemoteUrlResolver,
   startViewServer,
   type ViewServerDeps,
   type ViewServerHandle,
@@ -53,6 +54,8 @@ export type ViewContext = {
   onListening?: (handle: ViewServerHandle) => void;
   /** Override the portfolio config path (tests). */
   portfolioConfigPath?: string;
+  /** Override the live roster remote-URL resolver (tests); defaults to core's tryRemoteUrl. */
+  remoteUrlOf?: RemoteUrlResolver;
 };
 
 function parsePort(value: string): number {
@@ -185,7 +188,12 @@ async function buildSingleDeps(ctx: ViewContext, cwd: string): Promise<ViewServe
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
   const entry = await buildWorkspaceEntry(repositoryRoot, ctx);
-  return { workspaces: [entry], mode: "single", nowProvider: nowProviderOf(ctx) };
+  return {
+    workspaces: [entry],
+    mode: "single",
+    nowProvider: nowProviderOf(ctx),
+    ...(ctx.remoteUrlOf !== undefined ? { remoteUrlOf: ctx.remoteUrlOf } : {}),
+  };
 }
 
 /**
@@ -218,7 +226,12 @@ async function buildPortfolioDeps(
     entries.push({ ...entry, key });
   }
   if (entries.length === 0) throw new Error("No workspaces to show.");
-  return { workspaces: entries, mode: "portfolio", nowProvider: nowProviderOf(ctx) };
+  return {
+    workspaces: entries,
+    mode: "portfolio",
+    nowProvider: nowProviderOf(ctx),
+    ...(ctx.remoteUrlOf !== undefined ? { remoteUrlOf: ctx.remoteUrlOf } : {}),
+  };
 }
 
 /**

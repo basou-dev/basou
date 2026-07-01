@@ -3,6 +3,19 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- Portfolio view — live repo links. The workspace overview now lists each
+  declared roster repo with a clickable link to where it is hosted, derived
+  live from the repo's local git config (`remote.origin.url`) at request time
+  and normalized to a host-agnostic `https://` URL (GitHub / GitLab / self-
+  hosted). Nothing is stored — the link tracks a GitHub-org move or rename with
+  no manifest state and no drift — and reading local git config is not a network
+  call (the browser only navigates when you click). A repo with no remote, or a
+  URL that cannot be normalized, shows "local only" instead of a link.
+
 ## 0.30.0 — 2026-07-01
 
 ### Added
