@@ -15,7 +15,8 @@ docs/
     ├── approval.md                 approval event semantics
     ├── generated-markdown.md       handoff.md / decisions.md rules
     ├── terminal-and-import.md      session lifecycle, terminal recording, import
-    └── cli-commands.md             CLI command catalog
+    ├── cli-commands.md             CLI command catalog
+    └── compatibility.md            semver guarantees, format versioning, deprecation
 ```
 
 ## How to use

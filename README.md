@@ -174,6 +174,10 @@ What that means for you today:
   directory next to your code, nothing is sent off-machine, and the
   generators are dry-run-by-default and non-destructive.
 
+For the precise semver contract — which surfaces `1.0` guarantees, how the
+on-disk format is versioned, and the deprecation policy — see
+[docs/spec/compatibility.md](docs/spec/compatibility.md).
+
 Issues and contributions are welcome.
 
 ## Packages

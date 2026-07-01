@@ -21,6 +21,14 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- Compatibility and stability policy (`docs/spec/compatibility.md`). Documents
+  the semver contract basou commits to at `1.0`: the three guaranteed surfaces
+  (the `basou` CLI — including the `--json` output shapes of the commands that
+  offer one — the `@basou/sdk` read API, and the `.basou/` on-disk format), the
+  explicit exclusion of `@basou/core` from the guarantee, the decoupling of the
+  on-disk format major from the product version and its forward-compatible gate,
+  and the deprecated-no-op flag deprecation policy. Published before the freeze
+  because the format gate cannot be retrofitted onto a frozen literal.
 - Portfolio view — live repo links. The workspace overview now lists each
   declared roster repo with a clickable link to where it is hosted, derived
   live from the repo's local git config (`remote.origin.url`) at request time
