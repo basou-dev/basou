@@ -68,7 +68,8 @@
           "required": [
             "kind",
             "version"
-          ]
+          ],
+          "additionalProperties": {}
         },
         "started_at": {
           "type": "string",
@@ -127,7 +128,8 @@
           "required": [
             "command",
             "exit_code"
-          ]
+          ],
+          "additionalProperties": {}
         },
         "related_files": {
           "default": [],
@@ -197,7 +199,8 @@
                 "required": [
                   "start",
                   "end"
-                ]
+                ],
+                "additionalProperties": {}
               }
             },
             "active_gap_cap_ms": {
@@ -213,7 +216,8 @@
               "minimum": 0,
               "maximum": 9007199254740991
             }
-          }
+          },
+          "additionalProperties": {}
         },
         "integrity": {
           "type": "object",
@@ -242,11 +246,13 @@
         "status",
         "working_directory",
         "invocation"
-      ]
+      ],
+      "additionalProperties": {}
     }
   },
   "required": [
     "schema_version",
     "session"
-  ]
+  ],
+  "additionalProperties": {}
 }

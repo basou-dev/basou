@@ -31,14 +31,14 @@ export type ApprovalStatus = z.infer<typeof ApprovalStatusSchema>;
  * round-trip without being stripped — matching the approval_requested
  * event variant.
  */
-export const ApprovalSchema = z.object({
+export const ApprovalSchema = z.looseObject({
   schema_version: SchemaVersionSchema,
   id: ApprovalIdSchema,
   session_id: SessionIdSchema,
   created_at: IsoTimestampSchema,
   status: ApprovalStatusSchema,
   risk_level: RiskLevelSchema,
-  action: z.object({ kind: z.string() }).passthrough(),
+  action: z.looseObject({ kind: z.string() }).passthrough(),
   reason: z.string(),
   expires_at: IsoTimestampSchema.nullable().default(null),
   // The four fields below are null while `status === "pending"` and set

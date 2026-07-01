@@ -195,7 +195,8 @@
                 "required": [
                   "start",
                   "end"
-                ]
+                ],
+                "additionalProperties": {}
               }
             },
             "active_gap_cap_ms": {
@@ -211,7 +212,8 @@
               "minimum": 0,
               "maximum": 9007199254740991
             }
-          }
+          },
+          "additionalProperties": {}
         },
         "integrity": {
           "type": "object",

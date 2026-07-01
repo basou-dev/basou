@@ -72,11 +72,13 @@
         "updated_at",
         "workspace_id",
         "created_in_session"
-      ]
+      ],
+      "additionalProperties": {}
     }
   },
   "required": [
     "schema_version",
     "task"
-  ]
+  ],
+  "additionalProperties": {}
 }

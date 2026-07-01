@@ -23,6 +23,17 @@ export const SchemaVersionSchema = z.string().regex(/^0\.\d+\.\d+$/, {
 });
 
 /**
+ * Version stamp for a REBUILDABLE cache file (`status.json`, `tasks/index.json`)
+ * — pinned to the exact literal, NOT the forward-compatible format gate. A cache
+ * is regenerated from the durable events on any mismatch, so its reader wants an
+ * exact-match-or-rebuild policy (a higher minor is a "rebuild", not "accept and
+ * preserve"). Keeping caches on a literal also keeps the published cache JSON
+ * Schema (`const`) faithful to that runtime behavior. Durable, forward-compatible
+ * fields use {@link SchemaVersionSchema} instead.
+ */
+export const CacheVersionSchema = z.literal("0.1.0");
+
+/**
  * ISO 8601 timestamp with explicit timezone offset (e.g. `+09:00`).
  *
  * The spec samples include offsets, so the default zod `.datetime()` (which

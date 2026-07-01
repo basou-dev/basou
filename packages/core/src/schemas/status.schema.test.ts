@@ -25,11 +25,24 @@ describe("StatusSchema", () => {
     expect(StatusSchema.safeParse(VALID_STATUS).success).toBe(true);
   });
 
-  it("accepts a same-major schema_version (forward-compatible) but gates a higher major", () => {
-    expect(StatusSchema.safeParse({ ...VALID_STATUS, schema_version: "0.2.0" }).success).toBe(true);
+  it("pins schema_version to the exact cache literal (status.json is a rebuildable cache)", () => {
+    // A cache is regenerated on any mismatch, so its own version is exact-match,
+    // NOT the durable forward-compatible gate.
+    expect(StatusSchema.safeParse({ ...VALID_STATUS, schema_version: "0.2.0" }).success).toBe(
+      false,
+    );
     expect(StatusSchema.safeParse({ ...VALID_STATUS, schema_version: "1.0.0" }).success).toBe(
       false,
     );
+  });
+
+  it("gates workspace.basou_version with the durable format gate (mirrors the manifest)", () => {
+    const withBasou = (v: string) => ({
+      ...VALID_STATUS,
+      workspace: { ...VALID_STATUS.workspace, basou_version: v },
+    });
+    expect(StatusSchema.safeParse(withBasou("0.2.0")).success).toBe(true); // same major -> ok
+    expect(StatusSchema.safeParse(withBasou("1.0.0")).success).toBe(false); // higher major -> gated
   });
 
   it("rejects a workspace.id that lacks the 'ws_' prefix", () => {

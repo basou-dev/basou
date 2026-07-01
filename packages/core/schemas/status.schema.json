@@ -7,7 +7,7 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "pattern": "^0\\.\\d+\\.\\d+$"
+      "const": "0.1.0"
     },
     "generated_at": {
       "type": "string",

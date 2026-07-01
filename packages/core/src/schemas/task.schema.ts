@@ -26,7 +26,7 @@ export const TaskStatusSchema = z.enum(["planned", "in_progress", "done", "cance
 /** Inferred runtime type for {@link TaskStatusSchema}. */
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
-const TaskInnerSchema = z.object({
+const TaskInnerSchema = z.looseObject({
   id: TaskIdSchema,
   title: z.string().min(1),
   label: z.string().min(1).optional(),
@@ -63,7 +63,7 @@ const TaskInnerSchema = z.object({
  * here — it is free-form user-edited content. The storage layer splits
  * the file into `task` (this schema) and `body` (the trailing string).
  */
-export const TaskSchema = z.object({
+export const TaskSchema = z.looseObject({
   schema_version: SchemaVersionSchema,
   task: TaskInnerSchema,
 });

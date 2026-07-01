@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IsoTimestampSchema, SchemaVersionSchema, TaskIdSchema } from "./shared.schema.js";
+import { CacheVersionSchema, IsoTimestampSchema, TaskIdSchema } from "./shared.schema.js";
 import { TaskStatusSchema } from "./task.schema.js";
 
 /**
@@ -39,7 +39,8 @@ export type TaskIndexEntry = z.infer<typeof TaskIndexEntrySchema>;
  */
 export const TaskIndexSchema = z
   .object({
-    schema_version: SchemaVersionSchema,
+    // Rebuildable cache: exact-match-or-rebuild, not the durable forward-compat gate.
+    schema_version: CacheVersionSchema,
     tasks: z.array(TaskIndexEntrySchema),
     last_rebuilt_at: IsoTimestampSchema,
   })
