@@ -90,14 +90,20 @@ describe("createManifest", () => {
     expect(manifest.project.name).toBe("My Project");
   });
 
-  it("sets repository_url: null when explicitly null", () => {
-    const manifest = createManifest({ workspaceName: "x", repositoryUrl: null });
-    expect(manifest.project.repository_url).toBeNull();
+  it("never emits project.repository_url (the field was removed)", () => {
+    const manifest = createManifest({ workspaceName: "x", projectName: "y" });
+    expect("repository_url" in manifest.project).toBe(false);
   });
 
-  it("omits repository_url when undefined", () => {
-    const manifest = createManifest({ workspaceName: "x" });
-    expect("repository_url" in manifest.project).toBe(false);
+  it("strips a legacy project.repository_url on write (one-field migration)", async () => {
+    const paths = await ensureBasouDirectory(getRepoRoot());
+    const manifest = createManifest({ workspaceName: "x", workspaceId: FIXED_WS_ID });
+    // Simulate a manifest written by an older basou that still carries the field;
+    // ProjectSchema is looseObject so it survives parse as an unknown key.
+    (manifest.project as Record<string, unknown>).repository_url = "https://example.com/old.git";
+    await writeManifest(paths, manifest);
+    const readBack = await readManifest(paths);
+    expect("repository_url" in readBack.project).toBe(false);
   });
 
   it("includes import.source_roots when provided (relative paths)", () => {
@@ -192,7 +198,6 @@ describe("writeManifest / readManifest", () => {
       workspaceName: "round-trip",
       projectName: "Round Trip",
       projectDescription: "test",
-      repositoryUrl: "https://example.com/foo.git",
       now: FIXED_DATE,
       workspaceId: FIXED_WS_ID,
     });

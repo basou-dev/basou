@@ -1,10 +1,14 @@
 import { z } from "zod";
 import { IsoTimestampSchema, SchemaVersionSchema, WorkspaceIdSchema } from "./shared.schema.js";
 
+// `repository_url` was removed: it was a write-once copy of git's `remote.origin.url`
+// that nothing read and that drifted on an org move/rename. The manifest holds only
+// declarative intent; the remote is an observed git fact, derived live where needed
+// (e.g. the portfolio view). ProjectSchema stays looseObject, so a legacy value
+// survives parse as an unknown key; writeManifest strips it so any rewrite self-heals.
 const ProjectSchema = z.looseObject({
   name: z.string().optional(),
   description: z.string().optional(),
-  repository_url: z.string().nullable().optional(),
 });
 
 const CapabilitiesSchema = z.looseObject({

@@ -4,7 +4,6 @@ import {
   createManifest,
   ensureBasouDirectory,
   resolveRepositoryRoot,
-  tryRemoteUrl,
   writeManifest,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -14,6 +13,12 @@ export type InitOptions = {
   name?: string;
   projectName?: string;
   projectDescription?: string;
+  /**
+   * Deprecated and ignored. `project.repository_url` was removed (the remote is
+   * an observed git fact derived live, not stored). The flag is still accepted
+   * for `0.x` CLI stability and is removed at `1.0`; supplying it emits a
+   * deprecation warning and writes nothing.
+   */
   repoUrl?: string;
   /**
    * Import source roots (repeatable). Each may be absolute or relative to the
@@ -37,12 +42,7 @@ export type InitContext = {
   cwd?: string;
 };
 
-/**
- * Register `basou init` on a commander program. The `--repo-url ""` (empty
- * string) form is the documented way to set `project.repository_url` to
- * `null` explicitly; omitting `--repo-url` falls back to
- * `git config --local remote.origin.url` and finally to omission.
- */
+/** Register `basou init` on a commander program. */
 export function registerInitCommand(program: Command): void {
   program
     .command("init")
@@ -52,7 +52,7 @@ export function registerInitCommand(program: Command): void {
     .option("--project-description <description>", "Project description")
     .option(
       "--repo-url <url>",
-      "Repository URL (defaults to git remote.origin.url; pass empty string for null)",
+      "Deprecated and ignored (project.repository_url was removed); accepted for 0.x CLI stability, removed at 1.0",
     )
     .option(
       "--source-root <path>",
@@ -96,13 +96,12 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
   const repositoryRoot = await resolveRepositoryRootForInit(cwd);
   const workspaceName = options.name ?? basename(repositoryRoot);
 
-  // --repo-url > git config --local remote.origin.url > omit
-  // --repo-url "" => explicit null
-  let repositoryUrl: string | null | undefined;
+  // --repo-url is a deprecated no-op: project.repository_url was removed, so the
+  // flag writes nothing. Accepted for 0.x CLI stability; warn and drop it.
   if (options.repoUrl !== undefined) {
-    repositoryUrl = options.repoUrl === "" ? null : options.repoUrl;
-  } else {
-    repositoryUrl = await tryRemoteUrl(repositoryRoot);
+    console.error(
+      "Warning: --repo-url is deprecated and ignored (project.repository_url was removed); the flag will be removed at 1.0.",
+    );
   }
 
   // Normalize each --source-root to a repo-root-relative path. A root that is
@@ -120,7 +119,6 @@ export async function doRunInit(options: InitOptions, ctx: InitContext): Promise
     ...(options.projectDescription !== undefined
       ? { projectDescription: options.projectDescription }
       : {}),
-    ...(repositoryUrl !== undefined ? { repositoryUrl } : {}),
     ...(sourceRoots.length > 0 ? { sourceRoots } : {}),
   });
 

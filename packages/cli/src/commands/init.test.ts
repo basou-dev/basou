@@ -94,7 +94,9 @@ describe("doRunInit (pure runner)", () => {
     expect(manifest.project.description).toBe("A test project");
   });
 
-  it("auto-fills project.repository_url from git remote.origin.url", async () => {
+  it("never writes project.repository_url, even with a git remote set", async () => {
+    // The field was removed: the remote is an observed git fact derived live
+    // where needed, not stored in the manifest.
     const repo = getTmpRepo();
     await execFileAsync("git", ["remote", "add", "origin", "https://example.com/foo.git"], {
       cwd: repo,
@@ -102,32 +104,20 @@ describe("doRunInit (pure runner)", () => {
     });
     await doRunInit({}, { cwd: repo });
     const manifest = await readManifest(basouPaths(repo));
-    expect(manifest.project.repository_url).toBe("https://example.com/foo.git");
-  });
-
-  it("omits project.repository_url when no remote and no --repo-url", async () => {
-    const repo = getTmpRepo();
-    await doRunInit({}, { cwd: repo });
-    const manifest = await readManifest(basouPaths(repo));
     expect("repository_url" in manifest.project).toBe(false);
   });
 
-  it("--repo-url overrides git remote", async () => {
+  it("accepts --repo-url as a deprecated no-op: writes nothing, warns", async () => {
+    // Kept for 0.x CLI stability (removed at 1.0); it must not error, must not
+    // write repository_url, and must warn that it is ignored.
     const repo = getTmpRepo();
-    await execFileAsync("git", ["remote", "add", "origin", "https://example.com/from-git.git"], {
-      cwd: repo,
-      env: ENV,
-    });
-    await doRunInit({ repoUrl: "https://override.example.com/foo.git" }, { cwd: repo });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await doRunInit({ repoUrl: "https://example.com/ignored.git" }, { cwd: repo });
     const manifest = await readManifest(basouPaths(repo));
-    expect(manifest.project.repository_url).toBe("https://override.example.com/foo.git");
-  });
-
-  it("--repo-url '' sets repository_url to null", async () => {
-    const repo = getTmpRepo();
-    await doRunInit({ repoUrl: "" }, { cwd: repo });
-    const manifest = await readManifest(basouPaths(repo));
-    expect(manifest.project.repository_url).toBeNull();
+    expect("repository_url" in manifest.project).toBe(false);
+    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stderr).toMatch(/--repo-url is deprecated and ignored/i);
   });
 
   it("refuses to re-initialize without --force", async () => {

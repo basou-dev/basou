@@ -7,13 +7,12 @@ import { readYamlFile, writeYamlFile } from "./yaml-store.js";
 /**
  * Inputs for {@link createManifest}. Optional fields drop out of the
  * resulting Manifest entirely (they are not emitted as `null`/`undefined`
- * in YAML); pass `null` for `repositoryUrl` to keep an explicit `null`.
+ * in YAML).
  */
 export type CreateManifestInput = {
   workspaceName: string;
   projectName?: string;
   projectDescription?: string;
-  repositoryUrl?: string | null;
   /** Override for tests; defaults to `new Date()`. */
   now?: Date;
   /** Override for tests; defaults to a freshly generated `ws_<ULID>`. */
@@ -43,7 +42,6 @@ export function createManifest(input: CreateManifestInput): Manifest {
   const project: Manifest["project"] = {
     ...(input.projectName !== undefined ? { name: input.projectName } : {}),
     ...(input.projectDescription !== undefined ? { description: input.projectDescription } : {}),
-    ...(input.repositoryUrl !== undefined ? { repository_url: input.repositoryUrl } : {}),
   };
 
   const manifest: Manifest = {
@@ -87,6 +85,11 @@ export async function writeManifest(
 ): Promise<void> {
   const force = options?.force === true;
   const validated = ManifestSchema.parse(manifest);
+  // One-field migration: `project.repository_url` was removed from the schema.
+  // ProjectSchema is looseObject, so a legacy value survives parse as an unknown
+  // key -- strip only that field here so any manifest rewrite self-heals, while
+  // the loose schema keeps preserving genuinely-unknown (forward-compat) keys.
+  delete (validated.project as Record<string, unknown>).repository_url;
 
   if (!force) {
     let existed = false;
