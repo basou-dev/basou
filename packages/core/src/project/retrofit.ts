@@ -55,6 +55,13 @@ export type RetrofitReason =
   | "blocked"
   /** refuse: the destination canonical already exists (relocating would clobber it). */
   | "canonical-exists"
+  /**
+   * refuse: the repo's canonical name equals the workspace view's, so
+   * `agents/<name>/AGENTS.md` would be owned by BOTH — relocating the repo's
+   * file into it (and later generating the view block over it) would corrupt
+   * one with the other. The operator renames the view directory or the repo.
+   */
+  | "view-collision"
   /** skip: AGENTS.md is already a symlink (likely already wired — idempotent). */
   | "already-symlink"
   /** skip: there is no AGENTS.md to relocate. */
@@ -78,6 +85,13 @@ export type RetrofitFacts = {
   reachable: boolean;
   /** The repo basename used for the anchor canonical `agents/<canonicalName>/AGENTS.md`. */
   canonicalName: string;
+  /**
+   * The workspace view's own canonical name (`agents/<viewCanonicalName>/AGENTS.md`),
+   * when a view is declared. A repo whose `canonicalName` equals it shares ONE
+   * canonical file with the view, so the relocate is refused (`view-collision`).
+   * Absent (no view declared) => no collision possible.
+   */
+  viewCanonicalName?: string | undefined;
   /** On-disk state of the repo's own `AGENTS.md`. */
   agentsState: RetrofitAgentsState;
   /** True when the destination canonical already exists (moving would clobber it). */
@@ -110,9 +124,11 @@ export type RetrofitPlan = {
  * apply: undeclared → anchor → self → unreachable → uninspectable AGENTS.md. Then
  * the idempotent skips (already a symlink, or absent — nothing to move). Only a
  * genuine regular-file AGENTS.md reaches the relocate decision, and even then a
- * pre-existing destination canonical refuses (relocating would clobber it).
- * `regularSpokes` is echoed in every outcome (it is advisory, relevant whenever a
- * relocate or skip leaves the operator to tidy the spokes).
+ * canonical name shared with the workspace view refuses (`view-collision` — the
+ * relocate would land in the view's own canonical) and a pre-existing destination
+ * canonical refuses (relocating would clobber it). `regularSpokes` is echoed in
+ * every outcome (it is advisory, relevant whenever a relocate or skip leaves the
+ * operator to tidy the spokes).
  */
 export function classifyRetrofit(facts: RetrofitFacts): RetrofitPlan {
   const base = {
@@ -131,6 +147,12 @@ export function classifyRetrofit(facts: RetrofitFacts): RetrofitPlan {
   if (facts.agentsState === "symlink")
     return { ...base, action: "skip", reason: "already-symlink" };
   if (facts.agentsState === "absent") return { ...base, action: "skip", reason: "absent" };
+  // The repo's canonical name equals the workspace view's: `agents/<name>/AGENTS.md`
+  // would be shared by both, so relocating into it (and later generating the view
+  // block over it) would corrupt one with the other. Checked before the plain
+  // canonical-exists refuse because the collision is the root cause to surface.
+  if (facts.viewCanonicalName !== undefined && facts.canonicalName === facts.viewCanonicalName)
+    return { ...base, action: "refuse", reason: "view-collision" };
   if (facts.canonicalExists) return { ...base, action: "refuse", reason: "canonical-exists" };
 
   return {

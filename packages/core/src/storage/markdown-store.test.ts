@@ -11,6 +11,7 @@ import {
   readMarkdownFile,
   removeMarkerSection,
   renderWithMarkers,
+  seedMarkers,
   writeMarkdownFile,
 } from "./markdown-store.js";
 
@@ -233,6 +234,54 @@ describe("markdown-store", () => {
       expect(
         removeMarkerSection(body, "CLAUDE.md", { start: PROTOCOL_START, end: PROTOCOL_END }),
       ).toBe("keep\nrest\n");
+    });
+  });
+
+  describe("seedMarkers", () => {
+    it("existing === null produces a fresh marker block (same as renderWithMarkers)", () => {
+      const result = seedMarkers(null, "body content", "AGENTS.md");
+      expect(result).toBe(`${GENERATED_START}\nbody content\n${GENERATED_END}\n`);
+    });
+
+    it("an ok file replaces the region and preserves before/after (delegates to renderWithMarkers)", () => {
+      const original = `intro\n${GENERATED_START}\nold\n${GENERATED_END}\ntail\n`;
+      const next = seedMarkers(original, "new body", "AGENTS.md");
+      expect(next).toBe(`intro\n${GENERATED_START}\nnew body\n${GENERATED_END}\ntail\n`);
+    });
+
+    it("a markerless (no_markers) file gets the block PREPENDED with the prose kept verbatim", () => {
+      const prose = "# hand-written\n\nsome policy\n";
+      const next = seedMarkers(prose, "generated", "AGENTS.md");
+      expect(next).toBe(`${GENERATED_START}\ngenerated\n${GENERATED_END}\n\n${prose}`);
+      // The original prose survives byte-for-byte after the block + one blank line.
+      expect(next.endsWith(prose)).toBe(true);
+    });
+
+    it("an empty-string (0-byte) canonical seeds the block cleanly", () => {
+      const next = seedMarkers("", "generated", "AGENTS.md");
+      expect(next).toBe(`${GENERATED_START}\ngenerated\n${GENERATED_END}\n\n`);
+    });
+
+    it("re-places a leading BOM at the file head (never mid-file) when seeding a markerless file", () => {
+      const prose = "# hand-written\n\nsome policy\n";
+      const next = seedMarkers(`\uFEFF${prose}`, "generated", "AGENTS.md");
+      // The BOM stays the very first character, before the seeded block ...
+      expect(next).toBe(`\uFEFF${GENERATED_START}\ngenerated\n${GENERATED_END}\n\n${prose}`);
+      expect(next.charCodeAt(0)).toBe(0xfeff);
+      // ... and never appears again mid-file (a stranded BOM would be mojibake).
+      expect(next.indexOf("\uFEFF", 1)).toBe(-1);
+      // Round-trip: the seeded file still parses ok (parseMarkers' BOM tolerance).
+      expect(parseMarkers(next).kind).toBe("ok");
+    });
+
+    it("throws on malformed markers (missing END), never rewriting a broken pair", () => {
+      const body = `${GENERATED_START}\nauto\n`;
+      expect(() => seedMarkers(body, "x", "AGENTS.md")).toThrow("Markers mismatched in AGENTS.md");
+    });
+
+    it("throws on malformed markers (multiple pairs)", () => {
+      const body = `${GENERATED_START}\na\n${GENERATED_END}\n${GENERATED_START}\nb\n${GENERATED_END}\n`;
+      expect(() => seedMarkers(body, "x", "AGENTS.md")).toThrow("Markers mismatched in AGENTS.md");
     });
   });
 

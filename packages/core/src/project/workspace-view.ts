@@ -21,7 +21,12 @@
  * Pruning stray entries already in the view IS now in scope (see `toPrune` /
  * `strayUnknown` and {@link ExistingViewLink}): the ownership model that tells an
  * orphaned repo link from the view's own instruction files / local state lives
- * here. Still NOT in scope: generating the view's own instruction files.
+ * here. Generating the view's OWN instruction files (its AGENTS.md canonical and
+ * the CLAUDE.md / Copilot spokes) is handled by `project preset` / `project
+ * symlinks`, which treat the view as a second instruction target — this planner's
+ * job stays the repo-aggregation symlinks and their strays. The prune ownership
+ * model here (which excludes the view's own top-level instruction-file symlinks
+ * from stray detection) is what keeps those generated files safe from pruning.
  */
 
 import { normalizeRelativePath as normalize } from "./relative-path.js";

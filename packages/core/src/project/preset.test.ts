@@ -3,6 +3,7 @@ import {
   isRenderable,
   type RepoPresetFacts,
   renderPresetBlock,
+  renderViewPresetBlock,
   summarizePresetPlan,
 } from "./preset.js";
 
@@ -236,5 +237,142 @@ describe("summarizePresetPlan", () => {
     expect(s.collisions).toEqual([]);
     expect(s.self).toEqual(["../x/blog", "../y/blog"]);
     expect(s.ok).toBe(true);
+  });
+
+  it("suppresses a repo whose canonical name equals the view's (a view-flagged collision)", () => {
+    const s = summarizePresetPlan(
+      [
+        facts({ path: "../ws", canonicalName: "ws", visibility: "public" }),
+        facts({ path: "../other", canonicalName: "other", visibility: "public" }),
+      ],
+      { viewCanonicalName: "ws" },
+    );
+    // The colliding repo is suppressed (no plan), surfaced as a view collision.
+    expect(s.collisions).toEqual([{ canonicalName: "ws", repos: ["../ws"], view: true }]);
+    expect(s.plans.map((p) => p.path)).toEqual(["../other"]);
+    expect(s.ok).toBe(false);
+  });
+
+  it("without the view option, the same facts are unchanged (no view collision)", () => {
+    const s = summarizePresetPlan([
+      facts({ path: "../ws", canonicalName: "ws", visibility: "public" }),
+    ]);
+    expect(s.collisions).toEqual([]);
+    expect(s.plans.map((p) => p.path)).toEqual(["../ws"]);
+  });
+});
+
+describe("renderViewPresetBlock", () => {
+  it("renders the header, repo count, aggregation table, commit / read / principle sections", () => {
+    const block = renderViewPresetBlock({
+      viewName: "ws",
+      repos: [
+        { name: "acme", visibility: "public", language: "en" },
+        { name: "acme-planning", visibility: "private", language: "ja" },
+      ],
+    });
+    expect(block).toContain("## workspace view 構成(basou が生成 — manifest が正本)");
+    expect(block).toContain("宣言された 2 個の repo を symlink で集約する");
+    // The aggregation table: header plus one row per repo, in declared order.
+    expect(block).toContain("| repo | 可視性 | 言語 | 指示書 |");
+    expect(block).toContain("| acme | public | en | hub(basou が生成) |");
+    expect(block).toContain("| acme-planning | private | ja | hub(basou が生成) |");
+    // Commit / read / principle sections.
+    expect(block).toContain("- acme → `cd acme`");
+    expect(block).toContain("- acme-planning/AGENTS.md");
+    expect(block).toContain("### 重要原則");
+    expect(block).toContain("- このディレクトリは状態を持たない(git 管理外)");
+  });
+
+  it("describes itself as generated, naming its own canonical (agents/<viewName>/AGENTS.md)", () => {
+    const block = renderViewPresetBlock({ viewName: "my-workspace", repos: [{ name: "a" }] });
+    expect(block).toContain("この AGENTS.md 自身も basou の生成物です");
+    expect(block).toContain("`agents/my-workspace/AGENTS.md`");
+  });
+
+  it("marks an instructions: self repo as self-managed in the instruction column", () => {
+    const block = renderViewPresetBlock({
+      viewName: "ws",
+      repos: [
+        { name: "hubbed", visibility: "public", language: "en" },
+        { name: "selfish", visibility: "public", language: "ja", self: true },
+      ],
+    });
+    expect(block).toContain("| hubbed | public | en | hub(basou が生成) |");
+    expect(block).toContain("| selfish | public | ja | self(repo が自己管理) |");
+  });
+
+  it("marks the anchor as hand-maintained (never hub) in the instruction column", () => {
+    const block = renderViewPresetBlock({
+      viewName: "ws",
+      repos: [
+        // The anchor's AGENTS.md is hand-maintained (preset skips it), so it is
+        // labeled `anchor`, not `hub` — even though it is not `instructions: self`.
+        { name: "planning", visibility: "private", language: "ja", anchor: true },
+        { name: "impl", visibility: "public", language: "en" },
+      ],
+    });
+    expect(block).toContain("| planning | private | ja | anchor(手管理) |");
+    expect(block).toContain("| impl | public | en | hub(basou が生成) |");
+    // `anchor` wins over an incidental `self` flag on the same row.
+    const both = renderViewPresetBlock({
+      viewName: "ws",
+      repos: [{ name: "planning", anchor: true, self: true }],
+    });
+    expect(both).toContain("| planning | 未設定 | 未設定 | anchor(手管理) |");
+  });
+
+  it("preserves the declared repo order in every list", () => {
+    const block = renderViewPresetBlock({
+      viewName: "ws",
+      repos: [{ name: "z" }, { name: "a" }, { name: "m" }],
+    });
+    // Table rows, cd lines, and AGENTS.md lines all follow the input order (not sorted).
+    expect(block.indexOf("| z |")).toBeLessThan(block.indexOf("| a |"));
+    expect(block.indexOf("| a |")).toBeLessThan(block.indexOf("| m |"));
+    expect(block.indexOf("`cd z`")).toBeLessThan(block.indexOf("`cd a`"));
+    expect(block.indexOf("- z/AGENTS.md")).toBeLessThan(block.indexOf("- a/AGENTS.md"));
+  });
+
+  it("renders each visibility / language value verbatim (short labels)", () => {
+    const block = renderViewPresetBlock({
+      viewName: "ws",
+      repos: [
+        { name: "pub", visibility: "public", language: "en" },
+        { name: "priv", visibility: "private", language: "ja" },
+        { name: "future", visibility: "future-public", language: "en+ja" },
+      ],
+    });
+    expect(block).toContain("| pub | public | en |");
+    expect(block).toContain("| priv | private | ja |");
+    expect(block).toContain("| future | future-public | en+ja |");
+  });
+
+  it("renders 未設定 for unset visibility / language", () => {
+    const block = renderViewPresetBlock({ viewName: "ws", repos: [{ name: "bare" }] });
+    expect(block).toContain("| bare | 未設定 | 未設定 |");
+  });
+
+  it("renders cleanly for an empty roster (0 repos, header-only table, empty lists)", () => {
+    const block = renderViewPresetBlock({ viewName: "ws", repos: [] });
+    expect(block).toContain("宣言された 0 個の repo を symlink で集約する");
+    expect(block).toContain("| repo | 可視性 | 言語 | 指示書 |");
+    expect(block).toContain("|---|---|---|---|");
+    // No repo rows / cd lines / AGENTS.md lines (the self-description names
+    // `agents/ws/AGENTS.md`, so the check is scoped to list items).
+    expect(block).not.toContain("`cd ");
+    expect(block).not.toContain("- ws/AGENTS.md");
+    expect(block).not.toMatch(/^- .*\/AGENTS\.md$/m);
+  });
+
+  it("is deterministic (byte-identical for the same input) and has no trailing newline", () => {
+    const input = {
+      viewName: "ws",
+      repos: [{ name: "basou", visibility: "public" as const, language: "en" as const }],
+    };
+    const a = renderViewPresetBlock(input);
+    const b = renderViewPresetBlock(input);
+    expect(a).toBe(b);
+    expect(a.endsWith("\n")).toBe(false);
   });
 });

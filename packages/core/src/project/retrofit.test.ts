@@ -66,6 +66,24 @@ describe("classifyRetrofit", () => {
     expect(plan.reason).toBe("blocked");
   });
 
+  it("refuses a canonical name shared with the workspace view (view-collision)", () => {
+    const plan = classifyRetrofit(baseFacts({ viewCanonicalName: "foo" }));
+    expect(plan.action).toBe("refuse");
+    expect(plan.reason).toBe("view-collision");
+  });
+
+  it("a view with a different canonical name does not block the relocate", () => {
+    const plan = classifyRetrofit(baseFacts({ viewCanonicalName: "foo-workspace" }));
+    expect(plan.action).toBe("relocate");
+    expect(plan.reason).toBe("ok");
+  });
+
+  it("precedence: view-collision is reported before canonical-exists (the root cause wins)", () => {
+    const plan = classifyRetrofit(baseFacts({ viewCanonicalName: "foo", canonicalExists: true }));
+    expect(plan.action).toBe("refuse");
+    expect(plan.reason).toBe("view-collision");
+  });
+
   it("refuses when the destination canonical already exists (would clobber)", () => {
     const plan = classifyRetrofit(baseFacts({ canonicalExists: true }));
     expect(plan.action).toBe("refuse");

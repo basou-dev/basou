@@ -30,6 +30,7 @@ export {
   readMarkdownFile,
   removeMarkerSection,
   renderWithMarkers,
+  seedMarkers,
   writeMarkdownFile,
 } from "./markdown-store.js";
 export type {

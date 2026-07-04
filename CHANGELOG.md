@@ -3,6 +3,46 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- Workspace view instruction files. The workspace view now gets its own
+  generated `AGENTS.md`, treated as a second instruction target alongside the
+  roster repos: `basou project preset` renders a view preset block (the
+  aggregated roster table with visibility / language / instruction-ownership
+  columns, commit and reading guidance, and a self-description naming its
+  canonical `agents/<view>/AGENTS.md`) into the view's canonical at the anchor,
+  and `basou project symlinks` wires the view's own AGENTS.md / CLAUDE.md /
+  Copilot spokes into the view directory. Both run as part of
+  `basou project derive`. The view-workspace stray-prune ownership model
+  already excludes the view's own instruction symlinks, so `workspace --prune`
+  never removes them. An empty roster is a whole no-op: the view is neither
+  inspected nor written. The `ok` verdict of `preset` / `symlinks` now also
+  covers the view target, so a pending view plan / conflict denies the clean
+  "nothing to generate" claim.
+- `basou project retrofit` — workspace-view auto-migration and an optional repo
+  argument. A hand-written, markerless view canonical (the one class `preset`
+  refuses to touch) is migrated by prepending the generated block while keeping
+  the prose verbatim. The repo argument is now optional: the bare form
+  (`basou project retrofit`) performs only that view migration, while a
+  repo-argument run reports the pending migration without writing it — one
+  invocation writes at most one target.
+- `seedMarkers` (`@basou/core`): seed a `BASOU:GENERATED` marker region into a
+  markerless markdown file by prepending the block and preserving the existing
+  content verbatim (a leading UTF-8 BOM stays at the file head); a well-formed
+  file is region-replaced and a malformed marker pair still throws.
+- View↔repo canonical-name collision guard. When the view directory's basename
+  equals a roster repo's resolved canonical name — both would own the same
+  `agents/<name>/AGENTS.md` — nothing is written into the shared canonical:
+  `preset` suppresses BOTH sides (the repo is surfaced as a `view`-flagged
+  collision), `symlinks` skips the view spokes, and `retrofit` refuses the
+  relocate (`view-collision`), each reporting the rename remedy.
+- `--json` additions (additive; existing fields keep their shape):
+  `project retrofit` results carry a `kind` discriminant (`"repo"` /
+  `"view-only"`), and `preset` / `symlinks` / `retrofit` results carry the
+  workspace-view outcome in a `view` field (absent when the roster is empty).
+
 ## 0.31.0 — 2026-07-02
 
 ### Removed

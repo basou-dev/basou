@@ -123,8 +123,15 @@ export type {
   PresetRepo,
   RepoPresetFacts,
   RepoPresetPlan,
+  ViewPresetInput,
+  ViewPresetRepo,
 } from "./project/preset.js";
-export { isRenderable, renderPresetBlock, summarizePresetPlan } from "./project/preset.js";
+export {
+  isRenderable,
+  renderPresetBlock,
+  renderViewPresetBlock,
+  summarizePresetPlan,
+} from "./project/preset.js";
 export type { RenamePlan } from "./project/rename.js";
 export { pathBasename, planRename } from "./project/rename.js";
 export type {
@@ -406,6 +413,7 @@ export {
   removeMarkerSection,
   renderWithMarkers,
   STUCK_THRESHOLD_MS,
+  seedMarkers,
   TaskWriteAfterEventError,
   updateTaskStatusWithEvent,
   writeManifest,
