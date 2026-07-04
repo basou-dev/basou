@@ -55,6 +55,16 @@ All notable changes to **basou** are recorded here. The project follows
   `BASOU:GENERATED` markers) — the operator owns it thereafter. It runs as
   step 3/6 of `derive`; an existing anchor doc (or an empty roster) is a no-op.
   New `@basou/core` export: `renderAnchorStarter`.
+- Anchor instruction-file spokes. `basou project symlinks` (and `derive`) now
+  wire the anchor's OWN `CLAUDE.md` / Copilot spokes → its root `AGENTS.md`,
+  once that AGENTS.md exists — the anchor was previously skipped entirely, so its
+  planning master carried an AGENTS.md but no cross-tool spokes (unlike every
+  other repo). The anchor is treated self-style: only the two spokes are wired
+  (never an `AGENTS.md` hub link — its root AGENTS.md IS the canonical), the
+  committed spokes are not gitignored (the anchor is private), and an un-seeded
+  anchor (no root AGENTS.md yet) is left alone rather than reported missing. This
+  completes the anchor's instruction-file topology so a basou-wired planning
+  master matches the hub-and-spoke shape of every other repo.
 
 ## 0.31.0 — 2026-07-02
 

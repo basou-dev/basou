@@ -1601,7 +1601,40 @@ function gatherRepoSymlinks(
     return { ...base, isAnchor: false, reachable: false, canonicalPresent: false, files: [] };
   }
   if (real === anchorReal) {
-    return { ...base, isAnchor: true, reachable: true, canonicalPresent: false, files: [] };
+    // The anchor hosts the OTHER repos' hub canonicals (agents/<repo>/AGENTS.md),
+    // but its OWN AGENTS.md is a regular committed file at the anchor root — the
+    // same shape as a `self` repo. So it is wired like `self`: only the CLAUDE.md
+    // / Copilot spokes are generated (pointing at the root AGENTS.md); the
+    // AGENTS.md hub link is never created (it IS the canonical). The spokes are
+    // wired only once that root AGENTS.md exists (seeded by `derive`, or
+    // hand-authored); an absent one means the spokes would dangle, so none are
+    // planned (canonicalPresent: false → the anchor is left alone until it is
+    // seeded, then a re-run wires the spokes).
+    const anchorCanonical = join(real, CANONICAL_FILE);
+    if (!existsSync(anchorCanonical)) {
+      return { ...base, isAnchor: true, reachable: true, canonicalPresent: false, files: [] };
+    }
+    const anchorFiles: InstructionSymlinkFact[] = expectedSymlinkTargets(
+      real,
+      anchorCanonical,
+      "self",
+    ).map((spec) => {
+      const { state, actualTarget } = inspectSymlink(join(real, spec.name), spec.target);
+      return {
+        name: spec.name,
+        expectedTarget: spec.target,
+        state,
+        ...(actualTarget !== undefined ? { actualTarget } : {}),
+      };
+    });
+    return {
+      ...base,
+      isAnchor: true,
+      reachable: true,
+      canonicalPresent: true,
+      canonicalName: basename(real),
+      files: anchorFiles,
+    };
   }
   if (!existsSync(join(real, ".git"))) {
     return { ...base, isAnchor: false, reachable: false, canonicalPresent: false, files: [] };

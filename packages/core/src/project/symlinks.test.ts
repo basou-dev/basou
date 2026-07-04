@@ -24,6 +24,25 @@ function wiredFiles(
   }));
 }
 
+/**
+ * The anchor's OWN spokes (self-style): only CLAUDE.md / Copilot, each pointing at
+ * the anchor's root AGENTS.md. No AGENTS.md hub link (the root AGENTS.md IS the
+ * canonical).
+ */
+function anchorSpokes(
+  states: Partial<Record<string, InstructionSymlinkState>> = {},
+): InstructionSymlinkFact[] {
+  const specs: { name: string; expectedTarget: string }[] = [
+    { name: "CLAUDE.md", expectedTarget: "AGENTS.md" },
+    { name: ".github/copilot-instructions.md", expectedTarget: "../AGENTS.md" },
+  ];
+  return specs.map((s) => ({
+    name: s.name,
+    expectedTarget: s.expectedTarget,
+    state: states[s.name] ?? "correct",
+  }));
+}
+
 function repo(over: Partial<RepoSymlinkFacts> & Pick<RepoSymlinkFacts, "path">): RepoSymlinkFacts {
   return {
     isAnchor: false,
@@ -42,20 +61,67 @@ describe("summarizeSymlinkPlan", () => {
     expect(s.conflicts).toEqual([]);
   });
 
-  it("skips the anchor entirely (it owns the canonical, never links to itself)", () => {
+  it("leaves an un-seeded anchor (no root AGENTS.md) alone — no plan, reported in no bucket", () => {
     const s = summarizeSymlinkPlan([
-      repo({ path: ".", isAnchor: true, files: [] }),
+      repo({ path: ".", isAnchor: true, canonicalPresent: false, files: [] }),
       repo({ path: "../basou" }),
     ]);
     expect(s.ok).toBe(true);
     expect(s.plans).toEqual([]);
-    // The anchor appears in none of the buckets.
+    // An un-seeded anchor is NOT reported as missing (distinct from a hub repo's
+    // absent canonical or a self repo's absent AGENTS.md).
     expect(s.missingCanonical).toEqual([]);
+    expect(s.selfAgentsMissing).toEqual([]);
     expect(s.unreachable).toEqual([]);
   });
 
-  it("ok is true for an anchor-only roster (a solo project has nothing to wire)", () => {
-    const s = summarizeSymlinkPlan([repo({ path: ".", isAnchor: true, files: [] })]);
+  it("wires the anchor's own CLAUDE.md / Copilot spokes once its root AGENTS.md exists", () => {
+    const s = summarizeSymlinkPlan([
+      repo({
+        path: ".",
+        isAnchor: true,
+        canonicalPresent: true,
+        canonicalName: "anchor",
+        files: anchorSpokes({
+          "CLAUDE.md": "missing",
+          ".github/copilot-instructions.md": "missing",
+        }),
+      }),
+      repo({ path: "../basou" }),
+    ]);
+    expect(s.plans).toEqual([
+      {
+        path: ".",
+        toCreate: [
+          { name: "CLAUDE.md", target: "AGENTS.md" },
+          { name: ".github/copilot-instructions.md", target: "../AGENTS.md" },
+        ],
+      },
+    ]);
+    // Only the two spokes — never an AGENTS.md hub link (the root AGENTS.md IS the canonical).
+    expect(s.plans[0]?.toCreate.some((c) => c.name === "AGENTS.md")).toBe(false);
+    expect(s.ok).toBe(false);
+  });
+
+  it("reports ok for a seeded anchor whose spokes are already correct (idempotent)", () => {
+    const s = summarizeSymlinkPlan([
+      repo({
+        path: ".",
+        isAnchor: true,
+        canonicalPresent: true,
+        canonicalName: "anchor",
+        files: anchorSpokes(),
+      }),
+      repo({ path: "../basou" }),
+    ]);
+    expect(s.ok).toBe(true);
+    expect(s.plans).toEqual([]);
+  });
+
+  it("ok is true for an un-seeded anchor-only roster (a solo project has nothing to wire yet)", () => {
+    const s = summarizeSymlinkPlan([
+      repo({ path: ".", isAnchor: true, canonicalPresent: false, files: [] }),
+    ]);
     expect(s.ok).toBe(true);
     expect(s.plans).toEqual([]);
   });

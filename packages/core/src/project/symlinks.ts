@@ -58,8 +58,13 @@ export type RepoSymlinkFacts = {
   /** Roster repo path (relative to the manifest root). */
   path: string;
   /**
-   * True when this repo IS the project anchor (it owns the canonical sources, so
-   * it never links to itself). An anchor entry is skipped entirely.
+   * True when this repo IS the project anchor (it hosts the OTHER repos' hub
+   * canonicals under `agents/`, so it is excluded from canonical-collision
+   * detection — it owns those, never links to them). Its OWN AGENTS.md is a
+   * regular committed file at the anchor root, the same shape as a `self` repo:
+   * only its CLAUDE.md / Copilot spokes are generated, and only once that root
+   * AGENTS.md exists (`canonicalPresent`). An anchor whose AGENTS.md is absent is
+   * left alone (not reported missing) until it is seeded.
    */
   isAnchor: boolean;
   /**
@@ -89,7 +94,7 @@ export type RepoSymlinkFacts = {
    * caller for reachable, canonical-present repos; undefined otherwise.
    */
   canonicalName?: string;
-  /** Per instruction-file facts (empty when anchor / unreachable / canonical absent). */
+  /** Per instruction-file facts (empty when an un-seeded anchor / unreachable / canonical absent). */
   files: InstructionSymlinkFact[];
 };
 
@@ -152,12 +157,18 @@ export type SymlinkPlanSummary = {
 
 /**
  * Compute the {@link SymlinkPlanSummary} from per-repo facts. For each declared,
- * non-anchor, reachable repo whose canonical exists: a `missing` link becomes a
- * create, a `mismatch`/`occupied`/`blocked` link becomes a {@link SymlinkConflict}
- * (never a create — we do not overwrite), and a `correct` link is a no-op. The
- * anchor is skipped (it owns the canonical), an absent canonical is reported as
- * `missingCanonical` (no links planned, since the hub would dangle), and an
- * unresolvable repo as `unreachable`.
+ * reachable repo whose canonical exists: a `missing` link becomes a create, a
+ * `mismatch`/`occupied`/`blocked` link becomes a {@link SymlinkConflict} (never a
+ * create — we do not overwrite), and a `correct` link is a no-op. An absent
+ * canonical is reported as `missingCanonical` (no links planned, since the hub
+ * would dangle), and an unresolvable repo as `unreachable`.
+ *
+ * The anchor is a special case: it hosts the other repos' hub canonicals (so it
+ * is excluded from collision detection — it owns those), but its OWN AGENTS.md is
+ * a root committed file (self-style), so its CLAUDE.md / Copilot spokes ARE wired
+ * — once that root AGENTS.md exists. An anchor whose AGENTS.md is absent is left
+ * alone (not reported as missing): the seed step / operator creates it, then a
+ * re-run wires the spokes.
  *
  * Robustness:
  * - Facts are deduped by normalized path (first wins), so a repo listed twice in
@@ -223,7 +234,13 @@ export function summarizeSymlinkPlan(facts: RepoSymlinkFacts[]): SymlinkPlanSumm
   const unreachable: string[] = [];
 
   for (const f of deduped) {
-    if (f.isAnchor) continue;
+    // The anchor hosts the other repos' hub canonicals, but its OWN AGENTS.md is
+    // a root committed file (self-style): only its CLAUDE.md / Copilot spokes are
+    // wired, and only once that AGENTS.md exists (canonicalPresent). An anchor
+    // whose AGENTS.md is absent is left alone (not reported as missing) — the seed
+    // step / operator creates it, then a re-run wires the spokes. It never owns a
+    // hub canonical of its own, so it is excluded from collision detection above.
+    if (f.isAnchor && !f.canonicalPresent) continue;
     if (!f.reachable) {
       unreachable.push(f.path);
       continue;
