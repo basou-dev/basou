@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
@@ -40,6 +40,7 @@ import {
   type ProjectNewResult,
   type ProjectPresetResult,
   type ProjectRenameResult,
+  type ProjectRetrofitRepoResult,
   type ProjectRetrofitResult,
   type ProjectSymlinksResult,
   type ProjectSyncResult,
@@ -79,6 +80,13 @@ afterEach(async () => {
 function repo(): string {
   if (tmpRepo === undefined) throw new Error("tmpRepo not initialized");
   return tmpRepo;
+}
+
+/** Narrow a retrofit result to the repo-argument form (fails the test otherwise). */
+function expectRepoRun(r: ProjectRetrofitResult): ProjectRetrofitRepoResult {
+  expect(r.kind).toBe("repo");
+  if (r.kind !== "repo") throw new Error("expected a repo-argument retrofit result");
+  return r;
 }
 
 async function setupManifest(opts: {
@@ -1278,6 +1286,9 @@ describe("renderProjectSymlinks", () => {
     hasRoster: true,
     applied: false,
     failures: [],
+    view: { kind: "no-view" },
+    viewCreated: [],
+    viewFailures: [],
   };
 
   it("guides to adopt when no roster is declared", () => {
@@ -2048,6 +2059,8 @@ describe("basou project preset", () => {
       hasRoster: false,
       applied: false,
       failures: [],
+      view: { kind: "no-view" },
+      viewApplied: false,
     } satisfies ProjectPresetResult);
     expect(out).toContain("No repo roster declared");
   });
@@ -2190,6 +2203,8 @@ describe("basou project preset", () => {
       hasRoster: true,
       applied: false,
       failures: [],
+      view: { kind: "no-view" },
+      viewApplied: false,
     } satisfies ProjectPresetResult);
     expect(out).toContain("Preset blocks to generate");
     expect(out).toContain("ソース可視性: public");
@@ -2211,6 +2226,8 @@ describe("basou project preset", () => {
       hasRoster: true,
       applied: false,
       failures: [],
+      view: { kind: "no-view" },
+      viewApplied: false,
     } satisfies ProjectPresetResult);
     expect(out).toContain("instructions: self");
     expect(out).toContain("../blog");
@@ -3298,7 +3315,7 @@ describe("basou project retrofit", () => {
     await writeFile(join(dir, "AGENTS.md"), "hand-authored\n");
     await setupHostManifest([{ path: "../foo", visibility: "private" }]);
     mute();
-    const r = await doRunProjectRetrofit("../foo", {}, { cwd: host() });
+    const r = expectRepoRun(await doRunProjectRetrofit("../foo", {}, { cwd: host() }));
     expect(r.action).toBe("relocate");
     expect(r.applied).toBe(false);
     expect(r.canonicalPath).toBe("agents/foo/AGENTS.md");
@@ -3312,7 +3329,7 @@ describe("basou project retrofit", () => {
     await writeFile(join(dir, "AGENTS.md"), "hand-authored\n");
     await setupHostManifest([{ path: "../foo", visibility: "private" }]);
     mute();
-    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    const r = expectRepoRun(await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() }));
     expect(r.applied).toBe(true);
     // the canonical now holds the original content.
     expect(await readFile(join(host(), "agents", "foo", "AGENTS.md"), "utf8")).toBe(
@@ -3329,7 +3346,7 @@ describe("basou project retrofit", () => {
     await setupHostManifest([{ path: "../foo", visibility: "private" }]);
     mute();
     await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
-    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    const r = expectRepoRun(await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() }));
     expect(r.action).toBe("skip");
     expect(r.reason).toBe("already-symlink");
     expect(r.applied).toBe(false);
@@ -3342,7 +3359,7 @@ describe("basou project retrofit", () => {
     await writeFile(join(host(), "agents", "foo", "AGENTS.md"), "canonical-side\n");
     await setupHostManifest([{ path: "../foo", visibility: "private" }]);
     mute();
-    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    const r = expectRepoRun(await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() }));
     expect(r.action).toBe("refuse");
     expect(r.reason).toBe("canonical-exists");
     expect(r.applied).toBe(false);
@@ -3361,7 +3378,7 @@ describe("basou project retrofit", () => {
     await symlink("nowhere-target", join(host(), "agents", "foo", "AGENTS.md"));
     await setupHostManifest([{ path: "../foo", visibility: "private" }]);
     mute();
-    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    const r = expectRepoRun(await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() }));
     expect(r.action).toBe("refuse");
     expect(r.reason).toBe("canonical-exists");
     expect(r.applied).toBe(false);
@@ -3373,7 +3390,7 @@ describe("basou project retrofit", () => {
     await makeRepo("foo");
     await setupHostManifest([{ path: "../foo", visibility: "private" }]);
     mute();
-    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    const r = expectRepoRun(await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() }));
     expect(r.action).toBe("skip");
     expect(r.reason).toBe("absent");
     expect(r.applied).toBe(false);
@@ -3384,7 +3401,7 @@ describe("basou project retrofit", () => {
     await writeFile(join(dir, "AGENTS.md"), "x\n");
     await setupHostManifest([{ path: ".", visibility: "private" }]);
     mute();
-    const r = await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() });
+    const r = expectRepoRun(await doRunProjectRetrofit("../foo", { apply: true }, { cwd: host() }));
     expect(r.action).toBe("refuse");
     expect(r.reason).toBe("not-declared");
     expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("x\n");
@@ -3394,7 +3411,7 @@ describe("basou project retrofit", () => {
     await writeFile(join(host(), "AGENTS.md"), "anchor own\n");
     await setupHostManifest([{ path: ".", visibility: "private" }]);
     mute();
-    const r = await doRunProjectRetrofit(".", { apply: true }, { cwd: host() });
+    const r = expectRepoRun(await doRunProjectRetrofit(".", { apply: true }, { cwd: host() }));
     expect(r.action).toBe("refuse");
     expect(r.reason).toBe("anchor");
     expect(await readFile(join(host(), "AGENTS.md"), "utf8")).toBe("anchor own\n");
@@ -3405,7 +3422,9 @@ describe("basou project retrofit", () => {
     await writeFile(join(dir, "AGENTS.md"), "hand-authored\n");
     await setupHostManifest([{ path: "../blog", visibility: "public", instructions: "self" }]);
     mute();
-    const r = await doRunProjectRetrofit("../blog", { apply: true }, { cwd: host() });
+    const r = expectRepoRun(
+      await doRunProjectRetrofit("../blog", { apply: true }, { cwd: host() }),
+    );
     expect(r.action).toBe("refuse");
     expect(r.reason).toBe("self");
     expect(r.applied).toBe(false);
@@ -3420,15 +3439,16 @@ describe("basou project retrofit", () => {
     await writeFile(join(dir, "CLAUDE.md"), "dup\n");
     await setupHostManifest([{ path: "../foo", visibility: "private" }]);
     mute();
-    const r = await doRunProjectRetrofit("../foo", {}, { cwd: host() });
+    const r = expectRepoRun(await doRunProjectRetrofit("../foo", {}, { cwd: host() }));
     expect(r.action).toBe("relocate");
     expect(r.regularSpokes).toContain("CLAUDE.md");
   });
 });
 
 describe("renderProjectRetrofit", () => {
-  function base(over: Partial<ProjectRetrofitResult> = {}): ProjectRetrofitResult {
+  function base(over: Partial<ProjectRetrofitRepoResult> = {}): ProjectRetrofitRepoResult {
     return {
+      kind: "repo",
       path: "../foo",
       action: "relocate",
       reason: "ok",
@@ -3437,6 +3457,8 @@ describe("renderProjectRetrofit", () => {
       regularSpokes: [],
       hasRoster: true,
       applied: false,
+      view: { kind: "no-view" },
+      viewApplied: false,
       ...over,
     };
   }
@@ -3465,8 +3487,402 @@ describe("renderProjectRetrofit", () => {
     expect(out).toContain("stays in the repo");
     expect(out).toContain("basou project symlinks");
   });
+  it("view-collision refusal names both owners and the remedy (rename one side)", () => {
+    const out = renderProjectRetrofit(base({ action: "refuse", reason: "view-collision" }));
+    expect(out).toContain("shares its canonical name with the workspace view");
+    expect(out).toContain("agents/foo/AGENTS.md");
+    expect(out).toContain("Rename the view directory or the repo");
+  });
   it("no roster points at new/adopt", () => {
     const out = renderProjectRetrofit(base({ hasRoster: false }));
     expect(out).toContain("No repo roster");
+  });
+  it("a repo-argument run reports a pending view seed as bare-form guidance, never as applied", () => {
+    const out = renderProjectRetrofit(base({ view: { kind: "seed", viewName: "ws", block: "x" } }));
+    expect(out).toContain("Run `basou project retrofit` (no repo argument)");
+    // The marker pair is portable by hand; preset only rewrites the region.
+    expect(out).toContain("moved anywhere in the file by hand");
+    expect(out).not.toContain("Prepended the generated block");
+  });
+  it("a bare-form seed report carries the marker-portability note (dry-run and applied)", () => {
+    const viewOnly = (viewApplied: boolean): ProjectRetrofitResult => ({
+      kind: "view-only",
+      hasRoster: true,
+      view: { kind: "seed", viewName: "ws", block: "x" },
+      viewApplied,
+    });
+    const dry = renderProjectRetrofit(viewOnly(false));
+    expect(dry).toContain("dry-run; pass --apply");
+    expect(dry).toContain("moved anywhere in the file by hand");
+    const applied = renderProjectRetrofit(viewOnly(true));
+    expect(applied).toContain("Prepended the generated block");
+    expect(applied).toContain("moved anywhere in the file by hand");
+  });
+});
+
+// The workspace view is a second instruction target: its own AGENTS.md canonical
+// (BASOU:GENERATED) plus the AGENTS.md/CLAUDE.md/Copilot spokes generated INTO the
+// view directory. These exercise the greenfield create path, the never-clobber
+// path, the retrofit seed path, and the stray-prune protection regression.
+describe("workspace view instruction files", () => {
+  const DERIVE_NOW = new Date("2026-06-26T12:00:00.000Z");
+  let parent: string | undefined;
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-viewagents-"));
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function p(name: string): string {
+    return join(parent as string, name);
+  }
+  async function makeGitRepo(name: string): Promise<string> {
+    const dir = p(name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+    return dir;
+  }
+  function mute(): void {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  }
+  /** Write a manifest at `anchor` with the given (optional) roster and view. */
+  async function setupManifestAt(
+    anchorDir: string,
+    opts: { repos?: RepoEntry[]; view?: string; sourceRoots?: string[] },
+  ): Promise<void> {
+    const paths = await ensureBasouDirectory(anchorDir);
+    const base = createManifest({
+      workspaceName: "anchor",
+      now: NOW,
+      workspaceId: WS,
+      ...(opts.sourceRoots !== undefined ? { sourceRoots: opts.sourceRoots } : {}),
+    });
+    await writeManifest(
+      paths,
+      {
+        ...base,
+        ...(opts.repos !== undefined ? { repos: opts.repos } : {}),
+        workspace: {
+          ...base.workspace,
+          ...(opts.view !== undefined ? { view: opts.view } : {}),
+        },
+      },
+      { force: true },
+    );
+  }
+
+  // (a) greenfield: new -> derive --apply generates the view canonical AND the
+  //     view's own instruction-file spokes.
+  it("(a) greenfield new -> derive --apply generates the view canonical + spokes", async () => {
+    await makeGitRepo("anchor");
+    await makeGitRepo("sibling");
+    mute();
+
+    // Scaffold the manifest with a view path (project new writes the declaration).
+    const newResult = await doRunProjectNew(
+      ["../sibling"],
+      { apply: true, view: "../anchor-workspace" },
+      { cwd: p("anchor") },
+    );
+    // project new seeds the view path into the manifest (E: derive creates the canonical).
+    expect(newResult.view).toBe("../anchor-workspace");
+    // Fill in visibility / language so the preset block is renderable, keeping the
+    // seeded roster + view.
+    await setupManifestAt(p("anchor"), {
+      repos: [
+        { path: ".", visibility: "private", language: "ja" },
+        { path: "../sibling", visibility: "public", language: "en" },
+      ],
+      view: "../anchor-workspace",
+      sourceRoots: ["."],
+    });
+
+    await doRunProjectDerive({ apply: true }, { cwd: p("anchor"), now: () => DERIVE_NOW });
+
+    // The view's own canonical exists at the anchor with a BASOU:GENERATED region.
+    const viewCanonical = join(p("anchor"), "agents", "anchor-workspace", "AGENTS.md");
+    expect(existsSync(viewCanonical)).toBe(true);
+    const canonicalBody = await readFile(viewCanonical, "utf8");
+    expect(canonicalBody).toContain(GENERATED_START);
+    expect(canonicalBody).toContain("workspace view 構成");
+    // The aggregation table lists the roster (anchor + sibling) by basename.
+    expect(canonicalBody).toContain("| anchor |");
+    expect(canonicalBody).toContain("| sibling |");
+
+    // The view directory carries its own instruction-file symlinks.
+    const view = p("anchor-workspace");
+    expect(await readlink(join(view, "AGENTS.md"))).toContain("agents/anchor-workspace/AGENTS.md");
+    expect(await readlink(join(view, "CLAUDE.md"))).toBe("AGENTS.md");
+    expect(await readlink(join(view, ".github", "copilot-instructions.md"))).toBe("../AGENTS.md");
+  });
+
+  // (b) a markerless (hand-authored) view canonical is a marker conflict for the
+  //     normal preset — never clobbered.
+  it("(b) preset surfaces a markerless view canonical as a conflict and never clobbers the prose", async () => {
+    await makeGitRepo("anchor");
+    await mkdir(p("anchor-workspace"), { recursive: true });
+    // A hand-authored view canonical with NO markers.
+    const viewCanonical = join(p("anchor"), "agents", "anchor-workspace", "AGENTS.md");
+    await mkdir(dirname(viewCanonical), { recursive: true });
+    const prose = "# workspace\n\nhand-written notes\n";
+    await writeFile(viewCanonical, prose);
+    await setupManifestAt(p("anchor"), {
+      repos: [{ path: ".", visibility: "private" }],
+      view: "../anchor-workspace",
+    });
+    mute();
+
+    const r = await doRunProjectPreset({ apply: true }, { cwd: p("anchor") });
+    expect(r.view?.kind).toBe("conflict");
+    if (r.view?.kind === "conflict") expect(r.view.reason).toBe("no_markers");
+    expect(r.viewApplied).toBe(false);
+    // A pending view conflict denies the clean verdict (no false-clear).
+    expect(r.ok).toBe(false);
+    // The hand-authored prose is byte-for-byte unchanged (never clobbered).
+    expect(await readFile(viewCanonical, "utf8")).toBe(prose);
+  });
+
+  // (c) a repo-argument retrofit only REPORTS the markerless view canonical
+  //     (even with --apply); the bare form performs the seed.
+  it("(c) repo-arg retrofit --apply reports the view seed without writing; the bare form migrates it", async () => {
+    await makeGitRepo("anchor");
+    await mkdir(p("anchor-workspace"), { recursive: true });
+    const viewCanonical = join(p("anchor"), "agents", "anchor-workspace", "AGENTS.md");
+    await mkdir(dirname(viewCanonical), { recursive: true });
+    const prose = "# workspace\n\nhand-written notes\n";
+    await writeFile(viewCanonical, prose);
+    await setupManifestAt(p("anchor"), {
+      repos: [{ path: ".", visibility: "private", language: "ja" }],
+      view: "../anchor-workspace",
+    });
+    mute();
+
+    // The repo-arg run surfaces the pending seed but never writes the view —
+    // one invocation writes at most one target.
+    const r = expectRepoRun(await doRunProjectRetrofit(".", { apply: true }, { cwd: p("anchor") }));
+    expect(r.view?.kind).toBe("seed");
+    expect(r.viewApplied).toBe(false);
+    expect(await readFile(viewCanonical, "utf8")).toBe(prose);
+
+    // The bare form performs the migration: block prepended, prose preserved.
+    const bare = await doRunProjectRetrofit(undefined, { apply: true }, { cwd: p("anchor") });
+    expect(bare.kind).toBe("view-only");
+    expect(bare.view?.kind).toBe("seed");
+    expect(bare.viewApplied).toBe(true);
+    const migrated = await readFile(viewCanonical, "utf8");
+    expect(migrated.startsWith(GENERATED_START)).toBe(true);
+    expect(migrated).toContain("workspace view 構成");
+    expect(migrated.endsWith(prose)).toBe(true);
+  });
+
+  // (c') the repo argument is optional: a bare `retrofit` runs only the view
+  //      canonical's migration (the invocation preset's guidance points at).
+  it("(c') retrofit without a repo argument runs the view-only migration", async () => {
+    await makeGitRepo("anchor");
+    await mkdir(p("anchor-workspace"), { recursive: true });
+    const viewCanonical = join(p("anchor"), "agents", "anchor-workspace", "AGENTS.md");
+    await mkdir(dirname(viewCanonical), { recursive: true });
+    const prose = "# workspace\n\nhand-written notes\n";
+    await writeFile(viewCanonical, prose);
+    await setupManifestAt(p("anchor"), {
+      repos: [{ path: ".", visibility: "private", language: "ja" }],
+      view: "../anchor-workspace",
+    });
+    mute();
+
+    // Dry-run: the seed is planned, nothing is written, and the result carries
+    // no repo-arg plan (the view-only form).
+    const dry = await doRunProjectRetrofit(undefined, {}, { cwd: p("anchor") });
+    expect(dry.kind).toBe("view-only");
+    expect(dry.view?.kind).toBe("seed");
+    expect(dry.viewApplied).toBe(false);
+    expect(await readFile(viewCanonical, "utf8")).toBe(prose);
+
+    // Apply: the block is prepended, the prose preserved.
+    const r = await doRunProjectRetrofit(undefined, { apply: true }, { cwd: p("anchor") });
+    expect(r.view?.kind).toBe("seed");
+    expect(r.viewApplied).toBe(true);
+    const migrated = await readFile(viewCanonical, "utf8");
+    expect(migrated.startsWith(GENERATED_START)).toBe(true);
+    expect(migrated.endsWith(prose)).toBe(true);
+  });
+
+  // (d) regression: the stray-prune (workspace) never removes the view's own
+  //     AGENTS.md / CLAUDE.md instruction symlinks.
+  it("(d) workspace --prune never removes the view's own AGENTS.md / CLAUDE.md symlinks", async () => {
+    const anchorDir = await makeGitRepo("anchor");
+    await makeGitRepo("sibling");
+    const view = p("anchor-workspace");
+    await mkdir(view, { recursive: true });
+    // The view's own instruction-file symlinks (as derive would generate them).
+    await mkdir(join(anchorDir, "agents", "anchor-workspace"), { recursive: true });
+    await writeFile(
+      join(anchorDir, "agents", "anchor-workspace", "AGENTS.md"),
+      `${GENERATED_START}\nx\n${GENERATED_END}\n`,
+    );
+    await symlink("../anchor/agents/anchor-workspace/AGENTS.md", join(view, "AGENTS.md"));
+    await symlink("AGENTS.md", join(view, "CLAUDE.md"));
+    // A genuine repo-aggregation link (sibling), plus the anchor's own.
+    await symlink("../sibling", join(view, "sibling"));
+    await symlink("../anchor", join(view, "anchor"));
+    await setupManifestAt(p("anchor"), {
+      repos: [{ path: "." }, { path: "../sibling" }],
+      view: "../anchor-workspace",
+    });
+    mute();
+
+    const r = await doRunProjectWorkspace({ prune: true }, { cwd: p("anchor") });
+    // No stray was detected for the instruction-file symlinks (they are excluded).
+    expect(r.toPrune.map((x) => x.name)).not.toContain("AGENTS.md");
+    expect(r.toPrune.map((x) => x.name)).not.toContain("CLAUDE.md");
+    // Both instruction-file symlinks survive.
+    expect(await readlink(join(view, "AGENTS.md"))).toBe(
+      "../anchor/agents/anchor-workspace/AGENTS.md",
+    );
+    expect(await readlink(join(view, "CLAUDE.md"))).toBe("AGENTS.md");
+  });
+
+  // (e) an empty roster (`repos` undeclared — the schema forbids an empty array)
+  //     is a whole no-op: the view is neither inspected nor written by preset /
+  //     symlinks / retrofit (no unreported writes, no empty-roster block).
+  it("(e) empty roster + declared view: preset/symlinks/retrofit --apply write nothing", async () => {
+    await makeGitRepo("anchor");
+    await setupManifestAt(p("anchor"), { view: "../anchor-workspace" });
+    mute();
+
+    const preset = await doRunProjectPreset({ apply: true }, { cwd: p("anchor") });
+    expect(preset.hasRoster).toBe(false);
+    expect(preset.view).toBeUndefined();
+    expect(preset.viewApplied).toBe(false);
+
+    const links = await doRunProjectSymlinks({ apply: true }, { cwd: p("anchor") });
+    expect(links.hasRoster).toBe(false);
+    expect(links.view).toBeUndefined();
+    expect(links.viewCreated).toEqual([]);
+
+    const bare = await doRunProjectRetrofit(undefined, { apply: true }, { cwd: p("anchor") });
+    expect(bare.kind).toBe("view-only");
+    expect(bare.hasRoster).toBe(false);
+    expect(bare.view).toBeUndefined();
+    expect(bare.viewApplied).toBe(false);
+
+    // Nothing landed on disk: no view canonical dir at the anchor, no view dir.
+    expect(existsSync(join(p("anchor"), "agents"))).toBe(false);
+    expect(existsSync(p("anchor-workspace"))).toBe(false);
+  });
+
+  // (f) view basename == a roster repo's canonical name: BOTH sides are
+  //     suppressed everywhere (preset both-side, symlinks view skip, retrofit
+  //     repo refuse + bare collision report) — nothing is ever written into the
+  //     shared agents/<name>/AGENTS.md.
+  it("(f) a view↔repo canonical-name collision suppresses both sides across preset/symlinks/retrofit", async () => {
+    await makeGitRepo("anchor");
+    const pubDir = await makeGitRepo("pub");
+    await writeFile(join(pubDir, "AGENTS.md"), "repo prose\n");
+    // The view lives elsewhere but shares the basename `pub`.
+    await setupManifestAt(p("anchor"), {
+      repos: [
+        { path: ".", visibility: "private" },
+        { path: "../pub", visibility: "public", language: "en" },
+      ],
+      view: "../nested/pub",
+    });
+    mute();
+
+    // preset: the repo side is suppressed as a view-flagged collision AND the
+    // view side reports the collision — neither writes the shared canonical.
+    const preset = await doRunProjectPreset({ apply: true }, { cwd: p("anchor") });
+    expect(preset.collisions).toEqual([{ canonicalName: "pub", repos: ["../pub"], view: true }]);
+    expect(preset.plans).toEqual([]);
+    expect(preset.view?.kind).toBe("collision");
+    if (preset.view?.kind === "collision") expect(preset.view.repoPath).toBe("../pub");
+    expect(preset.viewApplied).toBe(false);
+    expect(preset.ok).toBe(false);
+    expect(existsSync(join(p("anchor"), "agents", "pub", "AGENTS.md"))).toBe(false);
+    const presetOut = renderProjectPreset(preset);
+    expect(presetOut).toContain("the workspace view");
+
+    // symlinks: the view spokes are not wired (collision reported).
+    const links = await doRunProjectSymlinks({ apply: true }, { cwd: p("anchor") });
+    expect(links.view?.kind).toBe("collision");
+    expect(links.viewCreated).toEqual([]);
+    expect(links.ok).toBe(false);
+    expect(existsSync(join(p("nested"), "pub", "AGENTS.md"))).toBe(false);
+
+    // repo-arg retrofit: refuses the relocate (the canonical is the view's too).
+    const retro = expectRepoRun(
+      await doRunProjectRetrofit("../pub", { apply: true }, { cwd: p("anchor") }),
+    );
+    expect(retro.action).toBe("refuse");
+    expect(retro.reason).toBe("view-collision");
+    expect(retro.applied).toBe(false);
+    expect(await readFile(join(pubDir, "AGENTS.md"), "utf8")).toBe("repo prose\n");
+    expect(existsSync(join(p("anchor"), "agents", "pub", "AGENTS.md"))).toBe(false);
+
+    // bare retrofit: reports the collision, migrates nothing.
+    const bare = await doRunProjectRetrofit(undefined, { apply: true }, { cwd: p("anchor") });
+    expect(bare.view?.kind).toBe("collision");
+    expect(bare.viewApplied).toBe(false);
+    expect(renderProjectRetrofit(bare)).toContain("shares its canonical name");
+  });
+
+  // (g) ok never false-clears while the view is pending: repos all in sync +
+  //     a view plan => ok=false; after the view is generated too => ok=true.
+  it("(g) preset ok includes the view target (pending view plan denies the clean verdict)", async () => {
+    await makeGitRepo("anchor");
+    await makeGitRepo("pub");
+    // First: no view declared — sync the repo canonical.
+    await setupManifestAt(p("anchor"), {
+      repos: [{ path: "../pub", visibility: "public", language: "en" }],
+    });
+    mute();
+    await doRunProjectPreset({ apply: true }, { cwd: p("anchor") });
+
+    // Now declare the view: the repo is in sync but the view canonical is a
+    // pending create, so the clean verdict must be denied.
+    await setupManifestAt(p("anchor"), {
+      repos: [{ path: "../pub", visibility: "public", language: "en" }],
+      view: "../anchor-workspace",
+    });
+    const pending = await doRunProjectPreset({}, { cwd: p("anchor") });
+    expect(pending.inSync).toEqual(["../pub"]);
+    expect(pending.plans).toEqual([]);
+    expect(pending.view?.kind).toBe("plan");
+    expect(pending.ok).toBe(false);
+    expect(renderProjectPreset(pending)).not.toContain("nothing to generate).");
+
+    // After the view is generated too, the verdict is clean.
+    await doRunProjectPreset({ apply: true }, { cwd: p("anchor") });
+    const clean = await doRunProjectPreset({}, { cwd: p("anchor") });
+    expect(clean.view?.kind).toBe("in-sync");
+    expect(clean.ok).toBe(true);
+  });
+
+  it("(g') symlinks ok includes the view spokes (missing spokes deny the clean verdict)", async () => {
+    await makeGitRepo("anchor");
+    await setupManifestAt(p("anchor"), {
+      repos: [{ path: ".", visibility: "private" }],
+      view: "../anchor-workspace",
+    });
+    mute();
+    // Create the view canonical (the roster is just the anchor, which symlinks skips).
+    await doRunProjectPreset({ apply: true }, { cwd: p("anchor") });
+
+    // Repo side has nothing to do, but the view spokes are missing => ok=false.
+    const pending = await doRunProjectSymlinks({}, { cwd: p("anchor") });
+    expect(pending.plans).toEqual([]);
+    expect(pending.view?.kind).toBe("gathered");
+    expect(pending.ok).toBe(false);
+
+    // Wire the spokes; the verdict turns clean.
+    await doRunProjectSymlinks({ apply: true }, { cwd: p("anchor") });
+    const clean = await doRunProjectSymlinks({}, { cwd: p("anchor") });
+    expect(clean.view?.kind).toBe("gathered");
+    if (clean.view?.kind === "gathered") {
+      expect(clean.view.files.every((f) => f.state === "correct")).toBe(true);
+    }
+    expect(clean.ok).toBe(true);
   });
 });

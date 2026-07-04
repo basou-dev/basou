@@ -36,6 +36,8 @@ import {
   instructionMode,
   isGitNotFound,
   type Manifest,
+  type PresetAction,
+  type PresetMarkerKind,
   type PresetPlanSummary,
   parseMarkers,
   pathBasename,
@@ -62,16 +64,19 @@ import {
   readMarkdownFile,
   reconcileSourceRoots,
   removeMarkerSection,
+  renderViewPresetBlock,
   renderWithMarkers,
   resolveRepositoryRoot,
   type SourceRootsReconcile,
   type SymlinkPlanSummary,
   safeSimpleGit,
+  seedMarkers,
   summarizePresetPlan,
   summarizeRosterDrift,
   summarizeSymlinkPlan,
   summarizeWiring,
   unknownManifestKeys,
+  type ViewPresetRepo,
   type ViewRepoFact,
   type WiringSummary,
   type WorkspaceViewPlan,
@@ -165,6 +170,26 @@ export type ProjectSymlinksOptions = {
 
 export type ProjectSymlinksContext = ImportContext;
 
+/**
+ * The workspace view's own instruction-file spokes (AGENTS.md → the anchor
+ * canonical, CLAUDE.md → AGENTS.md, Copilot → ../AGENTS.md) — the same hub-shape
+ * wiring as a repo's, generated INTO the view directory. Reported separately: the
+ * view is not a roster repo.
+ */
+export type ViewSymlinksOutcome =
+  /** No `workspace.view` declared. */
+  | { kind: "no-view" }
+  /**
+   * The view's basename equals a roster repo's resolved canonical name — both
+   * would own the SAME `agents/<name>/AGENTS.md`, so no view spoke is wired and
+   * the ambiguity is surfaced for the operator to rename one side.
+   */
+  | { kind: "collision"; viewName: string; repoPath: string }
+  /** The view's own canonical (`agents/<viewName>/AGENTS.md`) does not exist yet, so nothing is wired (preset runs first). */
+  | { kind: "missing-canonical"; viewName: string }
+  /** The view's instruction links are inspected; `files` carries each spoke's state and target. */
+  | { kind: "gathered"; viewName: string; files: InstructionSymlinkFact[] };
+
 /** Result of {@link doRunProjectSymlinks}: the plan plus whether a roster exists and what `--apply` did. */
 export type ProjectSymlinksResult = SymlinkPlanSummary & {
   /** Whether a `repos` roster was declared (else there is nothing to generate — run adopt first). */
@@ -173,6 +198,16 @@ export type ProjectSymlinksResult = SymlinkPlanSummary & {
   applied: boolean;
   /** Per-file failures encountered during `--apply` (collected, not thrown — kept transparent). */
   failures: { repo: string; file: string; message: string }[];
+  /**
+   * The workspace view's own instruction-symlink outcome (a separately reported
+   * target). Absent when the roster is empty: the whole run is then a no-op, so
+   * the view is neither inspected nor written.
+   */
+  view?: ViewSymlinksOutcome;
+  /** Spokes actually created in the view directory by `--apply`. */
+  viewCreated: string[];
+  /** Per-file view-link create failures from `--apply` (collected, not thrown — pathless reason). */
+  viewFailures: { file: string; message: string }[];
 };
 
 export type ProjectRetrofitOptions = {
@@ -183,17 +218,78 @@ export type ProjectRetrofitOptions = {
 
 export type ProjectRetrofitContext = ImportContext;
 
-/** Result of {@link doRunProjectRetrofit}: the classified plan plus what `--apply` did. */
-export type ProjectRetrofitResult = RetrofitPlan & {
+/**
+ * The workspace view's own canonical auto-migration outcome. A view whose
+ * canonical (`agents/<viewName>/AGENTS.md`) is markerless hand-written prose is
+ * migrated by PREPENDING the generated block via `seedMarkers` (the prose is kept
+ * verbatim). This is retrofit's escape hatch for the class `project preset`
+ * refuses (it surfaces a markerless canonical as a conflict rather than clobber).
+ */
+export type ViewRetrofitOutcome =
+  /** No `workspace.view` declared — nothing to migrate. */
+  | { kind: "no-view" }
+  /**
+   * The view's basename equals a roster repo's resolved canonical name — the
+   * canonical is shared, so nothing is migrated (writing the view block into it
+   * would corrupt the repo's relocated prose, and vice versa).
+   */
+  | { kind: "collision"; viewName: string; repoPath: string }
+  /** The view canonical is absent — retrofit does not create it (`preset` / `derive` do); no migration. */
+  | { kind: "absent"; viewName: string }
+  /** The view canonical already has a BASOU:GENERATED region (well-formed) — nothing to migrate. */
+  | { kind: "already-marked"; viewName: string }
+  /** The view canonical is markerless prose — the generated block will be / was prepended. */
+  | { kind: "seed"; viewName: string; block: string }
+  /** The view canonical exists but could not be read (a directory, permissions, …). */
+  | { kind: "unreadable"; viewName: string }
+  /** The view canonical has malformed markers — surfaced, never rewritten. */
+  | { kind: "malformed"; viewName: string; reason: Exclude<PresetMarkerKind, "ok" | "no_markers"> };
+
+/** The view-migration fields shared by both {@link ProjectRetrofitResult} forms. */
+type ViewMigrationFields = {
   /** Whether a `repos` roster was declared at all. */
   hasRoster: boolean;
-  /** True only when `--apply` actually relocated the file and recreated the symlink. */
-  applied: boolean;
-  /** A pathless failure label when an `--apply` move/symlink step failed (collected, not thrown). */
-  failure?: string;
-  /** True when the failure left on-disk state changed (the canonical was written before a later step failed). */
-  partial?: boolean;
+  /**
+   * The workspace view's own canonical auto-migration outcome (a separate,
+   * `seedMarkers`-based step). Absent when the roster is empty: the whole run is
+   * then a no-op, so the view is neither inspected nor written.
+   */
+  view?: ViewRetrofitOutcome;
+  /**
+   * True when `--apply` prepended the generated block into the view canonical.
+   * Only the bare (view-only) form ever writes the view, so this is always
+   * `false` on a repo-argument result (which reports the pending seed instead).
+   */
+  viewApplied: boolean;
+  /** A pathless failure label when the view canonical's `--apply` seed write failed. */
+  viewFailure?: string;
 };
+
+/** Result of a bare run (`retrofit` without a repo argument): only the view canonical's migration. */
+export type ProjectRetrofitViewOnlyResult = ViewMigrationFields & {
+  /** Discriminant: the bare, view-only form. */
+  kind: "view-only";
+};
+
+/** Result of a repo-argument run: the classified plan plus what `--apply` did (pre-existing fields unchanged; `kind` is additive). */
+export type ProjectRetrofitRepoResult = RetrofitPlan &
+  ViewMigrationFields & {
+    /** Discriminant: the repo-argument form. */
+    kind: "repo";
+    /** True only when `--apply` actually relocated the file and recreated the symlink. */
+    applied: boolean;
+    /** A pathless failure label when an `--apply` move/symlink step failed (collected, not thrown). */
+    failure?: string;
+    /** True when the failure left on-disk state changed (the canonical was written before a later step failed). */
+    partial?: boolean;
+  };
+
+/**
+ * Result of {@link doRunProjectRetrofit}: the repo-argument form, or the
+ * view-only form when no repo argument was given — discriminate with
+ * `result.kind`.
+ */
+export type ProjectRetrofitResult = ProjectRetrofitRepoResult | ProjectRetrofitViewOnlyResult;
 
 export type ProjectWorkspaceOptions = {
   apply?: boolean;
@@ -232,6 +328,36 @@ export type ProjectPresetOptions = {
 
 export type ProjectPresetContext = ImportContext;
 
+/**
+ * The workspace view's own canonical is a SECOND preset target, generated by the
+ * same BASOU:GENERATED mechanism as each repo's. Its canonical lives at the anchor
+ * (`agents/<viewName>/AGENTS.md`, viewName = the view directory's basename), so it
+ * is judged and generated alongside the roster but reported separately (the view is
+ * not a repo — it has no `.git` and never enters the roster collision detection).
+ */
+export type ViewPresetOutcome =
+  /** No `workspace.view` declared — nothing to generate for the view. */
+  | { kind: "no-view" }
+  /**
+   * The view's basename equals a roster repo's resolved canonical name — both
+   * would own the SAME `agents/<name>/AGENTS.md`, so neither side is generated
+   * (the repo side is suppressed via the summary's collisions).
+   */
+  | { kind: "collision"; viewName: string; repoPath: string }
+  /** The view canonical is absent (a create) or its BASOU:GENERATED region is out of date (an update). */
+  | { kind: "plan"; action: PresetAction; canonicalName: string; viewName: string; block: string }
+  /** The view canonical's generated region already matches (nothing to write). */
+  | { kind: "in-sync"; canonicalName: string; viewName: string }
+  /** The view canonical exists but its markers are absent/malformed — surfaced, never clobbered. */
+  | {
+      kind: "conflict";
+      canonicalName: string;
+      viewName: string;
+      reason: Exclude<PresetMarkerKind, "ok">;
+    }
+  /** The view canonical exists but could not be read (a directory, permissions, …) — degraded. */
+  | { kind: "unreadable"; canonicalName: string; viewName: string };
+
 /** Result of {@link doRunProjectPreset}: the plan plus whether a roster exists and what `--apply` did. */
 export type ProjectPresetResult = PresetPlanSummary & {
   /** Whether a `repos` roster was declared (else there is nothing to generate — run adopt first). */
@@ -240,6 +366,16 @@ export type ProjectPresetResult = PresetPlanSummary & {
   applied: boolean;
   /** Per-repo write failures encountered during `--apply` (collected, not thrown — pathless reason). */
   failures: { repo: string; message: string }[];
+  /**
+   * The workspace view's own canonical outcome (a second, separately reported
+   * preset target). Absent when the roster is empty: the whole run is then a
+   * no-op, so the view is neither inspected nor written.
+   */
+  view?: ViewPresetOutcome;
+  /** True when `--apply` wrote the view canonical. */
+  viewApplied: boolean;
+  /** A pathless failure label when the view canonical's `--apply` write failed (collected, not thrown). */
+  viewFailure?: string;
 };
 
 export type ProjectArchiveOptions = {
@@ -635,11 +771,11 @@ export function registerProjectCommand(program: Command): void {
   project
     .command("retrofit")
     .argument(
-      "<repo>",
-      "The declared roster repo whose hand-authored AGENTS.md to relocate (e.g. ../foo)",
+      "[repo]",
+      "The declared roster repo whose hand-authored AGENTS.md to relocate (e.g. ../foo). Omit to run only the workspace view's canonical auto-migration",
     )
     .description(
-      "Fold an existing repo's hand-authored AGENTS.md into the project topology: move the repo's regular-file `AGENTS.md` to the anchor canonical (`agents/<repo>/AGENTS.md`) and replace it with a symlink, so the prose lives at the single source of truth. Dry-run by default; pass --apply to relocate. The onboarding counterpart to `new` for a repo that already carries its own AGENTS.md — run it before `basou project derive`, which then adds the preset block, the CLAUDE.md / Copilot spokes, and the .gitignore. Non-destructive: it refuses when the destination canonical already exists (it never clobbers it), and skips a repo whose AGENTS.md is already a symlink or absent. The anchor (`.`) is refused",
+      "Fold an existing repo's hand-authored AGENTS.md into the project topology: move the repo's regular-file `AGENTS.md` to the anchor canonical (`agents/<repo>/AGENTS.md`) and replace it with a symlink, so the prose lives at the single source of truth. Dry-run by default; pass --apply to relocate. The onboarding counterpart to `new` for a repo that already carries its own AGENTS.md — run it before `basou project derive`, which then adds the preset block, the CLAUDE.md / Copilot spokes, and the .gitignore. Non-destructive: it refuses when the destination canonical already exists (it never clobbers it), and skips a repo whose AGENTS.md is already a symlink or absent. The anchor (`.`) is refused. The workspace view's own canonical is auto-migrated when it is markerless prose (the generated block is prepended, the prose kept): omit the repo argument to perform that migration — a repo-argument run only reports it",
     )
     .option(
       "--apply",
@@ -647,7 +783,7 @@ export function registerProjectCommand(program: Command): void {
     )
     .option("--json", "Output the result as JSON")
     .option("-v, --verbose", "Show error causes")
-    .action(async (repo: string, opts: ProjectRetrofitOptions) => {
+    .action(async (repo: string | undefined, opts: ProjectRetrofitOptions) => {
       await runProjectRetrofit(repo, opts);
     });
 }
@@ -1547,6 +1683,102 @@ function failureReason(error: unknown): string {
 }
 
 /**
+ * The workspace-view ↔ roster canonical-name collision guard shared by preset /
+ * symlinks / retrofit. When the view directory's basename equals a roster repo's
+ * resolved canonical name, BOTH would own the same `agents/<name>/AGENTS.md`, so
+ * generating either side would clobber the other — every view generator refuses
+ * and surfaces the collision instead. Canonical names follow the repo-preset
+ * rule (realpath basename, falling back to the plain resolved basename when the
+ * path does not resolve). Returns the first colliding roster repo's declared
+ * path, or undefined when the view name is unique.
+ */
+function viewCanonicalCollision(
+  repositoryRoot: string,
+  roster: RepoEntry[],
+  viewName: string,
+): string | undefined {
+  for (const entry of roster) {
+    let name: string;
+    try {
+      name = basename(realpathSync(resolve(repositoryRoot, entry.path)));
+    } catch {
+      name = basename(resolve(repositoryRoot, entry.path));
+    }
+    if (name === viewName) return entry.path;
+  }
+  return undefined;
+}
+
+/**
+ * Gather the workspace view's OWN instruction-symlink facts. The view is wired
+ * exactly like a `hub` repo — AGENTS.md → the anchor canonical
+ * (`agents/<viewName>/AGENTS.md`), CLAUDE.md → AGENTS.md, Copilot → ../AGENTS.md —
+ * but it is a git-unmanaged directory, so the `.git` check {@link gatherRepoSymlinks}
+ * performs is skipped. The caller resolves the view directory ONCE and threads it
+ * here and into the apply step. A view name shared with a roster repo's canonical
+ * is a `collision` (nothing wired); when the view canonical does not exist yet
+ * (preset runs first), nothing is wired (`missing-canonical`). Pure filesystem
+ * reads.
+ */
+function gatherViewSymlinks(
+  repositoryRoot: string,
+  anchorReal: string,
+  roster: RepoEntry[],
+  viewDir: string,
+): ViewSymlinksOutcome {
+  const viewName = basename(viewDir);
+  const collision = viewCanonicalCollision(repositoryRoot, roster, viewName);
+  if (collision !== undefined) return { kind: "collision", viewName, repoPath: collision };
+  const canonicalFile = canonicalFileFor(anchorReal, viewName);
+  if (!existsSync(canonicalFile)) return { kind: "missing-canonical", viewName };
+
+  const files: InstructionSymlinkFact[] = expectedSymlinkTargets(viewDir, canonicalFile, "hub").map(
+    (spec) => {
+      const { state, actualTarget } = inspectSymlink(join(viewDir, spec.name), spec.target);
+      return {
+        name: spec.name,
+        expectedTarget: spec.target,
+        state,
+        ...(actualTarget !== undefined ? { actualTarget } : {}),
+      };
+    },
+  );
+  return { kind: "gathered", viewName, files };
+}
+
+/**
+ * Create the view's MISSING instruction links (making `.github` if needed). Only a
+ * `missing` spoke is created — a `correct` link is skipped, and a `mismatch` /
+ * `occupied` / `blocked` entry is left untouched (non-destructive, mirroring
+ * {@link applySymlinkPlan}). Failures are collected, not thrown.
+ *
+ * The recursive `mkdir` deliberately creates the view directory itself when it
+ * does not exist yet (not just `.github`): the symlinks step must be runnable
+ * standalone, without the workspace step (which also creates the view dir)
+ * having run first. The two steps intentionally share view-dir creation — the
+ * double ownership is a design choice, not an oversight.
+ */
+function applyViewSymlinks(
+  viewDir: string,
+  files: InstructionSymlinkFact[],
+): { created: string[]; failed: { file: string; message: string }[] } {
+  const created: string[] = [];
+  const failed: { file: string; message: string }[] = [];
+  for (const f of files) {
+    if (f.state !== "missing") continue;
+    const filePath = join(viewDir, f.name);
+    try {
+      mkdirSync(dirname(filePath), { recursive: true });
+      symlinkSync(f.expectedTarget, filePath);
+      created.push(f.name);
+    } catch (error: unknown) {
+      failed.push({ file: f.name, message: failureReason(error) });
+    }
+  }
+  return { created, failed };
+}
+
+/**
  * Generate each declared repo's instruction-file symlinks. Resolves the
  * workspace, reads the manifest, gathers each repo's current symlink state, and
  * plans the missing links. When `--apply` is set and there is something to
@@ -1579,11 +1811,49 @@ export async function doRunProjectSymlinks(
     }
   }
 
+  // The workspace view's own instruction spokes, wired like a hub repo into the
+  // view directory (its canonical was created by preset, which derive runs first).
+  // An empty roster skips the view entirely (`view` stays absent): the run is
+  // then a whole no-op, so nothing may be inspected or written into the view.
+  let view: ViewSymlinksOutcome | undefined;
+  let viewCreated: string[] = [];
+  const viewFailures: { file: string; message: string }[] = [];
+  if (roster.length > 0) {
+    const viewPath = manifest.workspace.view;
+    if (viewPath === undefined) {
+      view = { kind: "no-view" };
+    } else {
+      // Resolve the view dir ONCE and thread it into both gather and apply, so
+      // `--apply` writes into exactly the directory that was inspected.
+      const viewDir = resolveViewDir(repositoryRoot, viewPath);
+      view = gatherViewSymlinks(repositoryRoot, anchorReal, roster, viewDir);
+      if (options.apply === true && view.kind === "gathered") {
+        const { created, failed } = applyViewSymlinks(viewDir, view.files);
+        viewCreated = created;
+        for (const f of failed) viewFailures.push(f);
+      }
+    }
+  }
+
+  // The view is a second wiring target, so `ok`'s no-false-clear contract must
+  // include it: clean = absent (empty roster), no view declared, or every spoke
+  // already `correct`. A spoke to create, a conflicted spoke, a missing view
+  // canonical, or a name collision all deny the clean verdict (mirroring
+  // `SymlinkPlanSummary.ok`, which conflicts and collisions also break).
+  const viewClean =
+    view === undefined ||
+    view.kind === "no-view" ||
+    (view.kind === "gathered" && view.files.every((f) => f.state === "correct"));
+
   const result: ProjectSymlinksResult = {
     ...summary,
+    ok: summary.ok && viewClean,
     hasRoster: roster.length > 0,
     applied: createdCount > 0,
     failures,
+    ...(view !== undefined ? { view } : {}),
+    viewCreated,
+    viewFailures,
   };
 
   if (options.json === true) {
@@ -1652,7 +1922,7 @@ export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
     );
   } else {
     lines.push(
-      "ℹ️ No symlink needs generating, but there are conflicts / collisions / a missing canonical / unreachable repos (see below).",
+      "ℹ️ No repo symlink needs generating, but there are conflicts / collisions / a missing canonical / unreachable repos, or the workspace view's spokes need attention (see below).",
     );
   }
   lines.push("");
@@ -1713,10 +1983,75 @@ export function renderProjectSymlinks(result: ProjectSymlinksResult): string {
     lines.push("");
   }
 
+  appendViewSymlinksSection(lines, result);
+
   lines.push(
     "Note: an existing file or a symlink pointing elsewhere is never overwritten; only the missing links are created (GEMINI.md is discontinued and not generated).",
   );
   return lines.join("\n");
+}
+
+/**
+ * Append the workspace-view's own instruction-symlink section: the AGENTS.md /
+ * CLAUDE.md / Copilot spokes wired into the view directory. It is a second target
+ * (not a roster repo), so it is reported separately from the per-repo links. No
+ * `workspace.view` declared prints nothing.
+ */
+function appendViewSymlinksSection(lines: string[], result: ProjectSymlinksResult): void {
+  const view = result.view;
+  if (view === undefined || view.kind === "no-view") return;
+  lines.push("## Workspace view spokes (the view's own instruction files)");
+  if (view.kind === "collision") {
+    lines.push(
+      `⚠️ ${view.viewName}: the view shares its canonical name with the roster repo \`${view.repoPath}\` — both would own \`agents/${view.viewName}/${CANONICAL_FILE}\`, so no view spoke is wired. Rename the view directory or the repo to disambiguate, then re-run.`,
+    );
+    lines.push("");
+    return;
+  }
+  if (view.kind === "missing-canonical") {
+    lines.push(
+      `ℹ️ ${view.viewName}: the view canonical \`agents/${view.viewName}/${CANONICAL_FILE}\` does not exist yet — run \`basou project preset --apply\` first (or \`basou project derive --apply\`), then re-run.`,
+    );
+    lines.push("");
+    return;
+  }
+  const failedFiles = new Set(result.viewFailures.map((f) => f.file));
+  const missing = view.files.filter((f) => f.state === "missing");
+  const attempted = result.viewCreated.length > 0 || result.viewFailures.length > 0;
+  if (missing.length === 0) {
+    lines.push(`✅ ${view.viewName}: the view's instruction spokes are correctly wired.`);
+  } else if (!attempted) {
+    lines.push(`${view.viewName}: view spokes to create (dry-run; pass --apply to write):`);
+    for (const f of missing) lines.push(`    ${f.name} -> ${f.expectedTarget}`);
+  } else {
+    lines.push(`${view.viewName}: view spokes created:`);
+    for (const f of missing) {
+      if (failedFiles.has(f.name)) continue;
+      lines.push(`    ${f.name} -> ${f.expectedTarget}`);
+    }
+  }
+  if (result.viewFailures.length > 0) {
+    lines.push(`  Failed:`);
+    for (const f of result.viewFailures) lines.push(`    ${f.file}: ${f.message}`);
+  }
+  // Conflicts (mismatch/occupied/blocked) are surfaced so the operator sees why a
+  // spoke was not wired.
+  const conflicts = view.files.filter(
+    (f) => f.state === "mismatch" || f.state === "occupied" || f.state === "blocked",
+  );
+  if (conflicts.length > 0) {
+    lines.push(`  Conflicts (left untouched):`);
+    for (const f of conflicts) {
+      const detail =
+        f.state === "mismatch"
+          ? `points elsewhere (currently: ${f.actualTarget ?? "?"})`
+          : f.state === "occupied"
+            ? "a real file/directory"
+            : "an uninspectable path";
+      lines.push(`    ${f.name}: ${detail}`);
+    }
+  }
+  lines.push("");
 }
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectWorkspace}. */
@@ -2316,6 +2651,130 @@ async function gatherRepoPreset(
   };
 }
 
+/** Normalize a block for in-sync comparison: LF line endings, no trailing blank lines. */
+function normalizeViewBlock(s: string): string {
+  return s.replace(/\r\n/g, "\n").replace(/\n+$/, "");
+}
+
+/**
+ * Build the view's declared roster for the preset block: every roster repo's
+ * on-disk basename (resolved so an aliased/symlinked path still names the repo
+ * the operator sees), with its declared visibility / language and instruction
+ * ownership (`instructions: self` renders as self-managed in the block's
+ * instruction column). Falls back to the declared path's basename when a repo
+ * does not resolve, so the block is stable even while a sibling is transiently
+ * uncloned. The anchor is included (it is a roster entry the view aggregates too).
+ */
+function viewPresetReposFor(repositoryRoot: string, roster: RepoEntry[]): ViewPresetRepo[] {
+  // The anchor's own AGENTS.md is hand-maintained (preset skips it), so its row
+  // is labeled `anchor`, never `hub`. Resolve the anchor once to compare against.
+  let anchorReal: string | undefined;
+  try {
+    anchorReal = realpathSync(repositoryRoot);
+  } catch {
+    anchorReal = undefined;
+  }
+  return roster.map((entry) => {
+    const abs = resolve(repositoryRoot, entry.path);
+    let real: string | undefined;
+    try {
+      real = realpathSync(abs);
+    } catch {
+      real = undefined;
+    }
+    const name = basename(real ?? abs);
+    const isAnchor =
+      real !== undefined && anchorReal !== undefined ? real === anchorReal : abs === repositoryRoot;
+    return {
+      name,
+      ...(entry.visibility !== undefined ? { visibility: entry.visibility } : {}),
+      ...(entry.language !== undefined ? { language: entry.language } : {}),
+      ...(isAnchor ? { anchor: true } : instructionMode(entry) === "self" ? { self: true } : {}),
+    };
+  });
+}
+
+/**
+ * Judge the workspace view's OWN canonical (`agents/<viewName>/AGENTS.md`) as a
+ * preset target. Unlike {@link gatherRepoPreset} it does NOT require a `.git` — the
+ * view is a git-unmanaged directory, not a repo. The caller resolves the view
+ * name ONCE (from the resolved view dir) and threads it here and into the
+ * roster's summary, so the view↔repo collision suppression judges the same name
+ * on both sides; a name shared with a roster repo's canonical is a `collision`
+ * (nothing generated for the view). Returns the outcome the caller reports and,
+ * for a create/update, the block to write.
+ */
+function gatherViewPreset(
+  repositoryRoot: string,
+  anchorReal: string,
+  viewName: string,
+  roster: RepoEntry[],
+): ViewPresetOutcome {
+  const collision = viewCanonicalCollision(repositoryRoot, roster, viewName);
+  if (collision !== undefined) return { kind: "collision", viewName, repoPath: collision };
+  const desiredBlock = renderViewPresetBlock({
+    viewName,
+    repos: viewPresetReposFor(repositoryRoot, roster),
+  });
+  const canonicalFile = canonicalFileFor(anchorReal, viewName);
+
+  let content: string | null;
+  try {
+    content = readFileSync(canonicalFile, "utf8");
+  } catch (error: unknown) {
+    if (hasErrorCode(error) && error.code === "ENOENT") {
+      return {
+        kind: "plan",
+        action: "create",
+        canonicalName: viewName,
+        viewName,
+        block: desiredBlock,
+      };
+    }
+    // Present but unreadable (a directory at that path, permission denied, …).
+    return { kind: "unreadable", canonicalName: viewName, viewName };
+  }
+  const section = parseMarkers(content);
+  if (section.kind === "ok") {
+    if (normalizeViewBlock(section.generated) === normalizeViewBlock(desiredBlock)) {
+      return { kind: "in-sync", canonicalName: viewName, viewName };
+    }
+    return {
+      kind: "plan",
+      action: "update",
+      canonicalName: viewName,
+      viewName,
+      block: desiredBlock,
+    };
+  }
+  // Present but markers absent/malformed — surface, never clobber.
+  return { kind: "conflict", canonicalName: viewName, viewName, reason: section.kind };
+}
+
+/**
+ * Write the view's canonical (create or update), replacing only the marker region
+ * via {@link renderWithMarkers} — the same non-destructive, symlink-refusing,
+ * re-read-at-write mechanism {@link applyPresetPlan} uses for a repo canonical.
+ */
+async function applyViewPreset(
+  anchorReal: string,
+  outcome: Extract<ViewPresetOutcome, { kind: "plan" }>,
+): Promise<void> {
+  const file = canonicalFileFor(anchorReal, outcome.canonicalName);
+  const label = canonicalLabelFor(outcome.canonicalName);
+  let isLink = false;
+  try {
+    isLink = lstatSync(file).isSymbolicLink();
+  } catch {
+    isLink = false;
+  }
+  if (isLink) throw new Error(`Canonical is a symlink in ${label}`);
+
+  if (outcome.action === "create") mkdirSync(dirname(file), { recursive: true });
+  const existing = await readMarkdownFile(file);
+  await writeMarkdownFile(file, renderWithMarkers(existing, outcome.block, label));
+}
+
 /**
  * Write one planned canonical, always replacing ONLY the marker region via
  * {@link renderWithMarkers} so hand-authored content around it is preserved.
@@ -2391,7 +2850,19 @@ export async function doRunProjectPreset(
   const anchorReal = realpathSync(repositoryRoot);
   const facts: RepoPresetFacts[] = [];
   for (const entry of roster) facts.push(await gatherRepoPreset(repositoryRoot, anchorReal, entry));
-  const summary = summarizePresetPlan(facts);
+
+  // The view↔repo canonical-name guard: resolve the view's canonical name once
+  // and feed it into the roster summary, so a repo sharing it is suppressed as a
+  // collision (the view side is suppressed symmetrically by gatherViewPreset).
+  const viewPath = manifest.workspace.view;
+  const viewCanonicalName =
+    roster.length > 0 && viewPath !== undefined
+      ? basename(resolveViewDir(repositoryRoot, viewPath))
+      : undefined;
+  const summary = summarizePresetPlan(
+    facts,
+    viewCanonicalName !== undefined ? { viewCanonicalName } : undefined,
+  );
 
   const failures: { repo: string; message: string }[] = [];
   let writtenCount = 0;
@@ -2406,11 +2877,44 @@ export async function doRunProjectPreset(
     }
   }
 
+  // The workspace view's own canonical is a second preset target, judged and
+  // (on --apply) generated by the same mechanism but reported separately: it is
+  // a git-unmanaged directory, not a roster repo. An empty roster skips the view
+  // entirely (`view` stays absent): the run is then a whole no-op, so nothing may
+  // be inspected or written for the view either.
+  let view: ViewPresetOutcome | undefined;
+  let viewApplied = false;
+  let viewFailure: string | undefined;
+  if (roster.length > 0) {
+    view =
+      viewCanonicalName === undefined
+        ? { kind: "no-view" }
+        : gatherViewPreset(repositoryRoot, anchorReal, viewCanonicalName, roster);
+    if (options.apply === true && view.kind === "plan") {
+      try {
+        await applyViewPreset(anchorReal, view);
+        viewApplied = true;
+      } catch (error: unknown) {
+        viewFailure = presetFailureReason(error);
+      }
+    }
+  }
+
+  // The view is a second preset target, so `ok`'s no-false-clear contract must
+  // include it: clean = absent (empty roster), no view declared, or `in-sync`.
+  // A pending plan, a marker conflict, an unreadable canonical, or a name
+  // collision all deny the clean verdict.
+  const viewClean = view === undefined || view.kind === "no-view" || view.kind === "in-sync";
+
   const result: ProjectPresetResult = {
     ...summary,
+    ok: summary.ok && viewClean,
     hasRoster: roster.length > 0,
     applied: writtenCount > 0,
     failures,
+    ...(view !== undefined ? { view } : {}),
+    viewApplied,
+    ...(viewFailure !== undefined ? { viewFailure } : {}),
   };
 
   if (options.json === true) {
@@ -2484,7 +2988,7 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
     );
   } else {
     lines.push(
-      "ℹ️ No repo needs generating, but there are marker conflicts / collisions / undeclared / unreachable repos (see below).",
+      "ℹ️ No repo needs generating, but there are marker conflicts / collisions / undeclared / unreachable repos, or the workspace view canonical needs attention (see below).",
     );
   }
   lines.push("");
@@ -2527,10 +3031,14 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
 
   if (result.collisions.length > 0) {
     lines.push(
-      `## Canonical collisions (${result.collisions.length}) — another repo shares the same-named canonical (not auto-generated)`,
+      `## Canonical collisions (${result.collisions.length}) — another repo (or the workspace view) shares the same-named canonical (not auto-generated)`,
     );
     for (const c of result.collisions) {
-      lines.push(`- agents/${c.canonicalName}/AGENTS.md ← ${c.repos.join(", ")}`);
+      const suffix =
+        c.view === true
+          ? " + the workspace view (rename the view directory or the repo to disambiguate)"
+          : "";
+      lines.push(`- agents/${c.canonicalName}/AGENTS.md ← ${c.repos.join(", ")}${suffix}`);
     }
     lines.push("");
   }
@@ -2565,10 +3073,54 @@ export function renderProjectPreset(result: ProjectPresetResult): string {
     lines.push("");
   }
 
+  appendViewPresetSection(lines, result);
+
   lines.push(
     "Note: only the marker region is generated; the canonical's hand-authored content (outside the markers) is preserved. The generated content is derived from the manifest declaration.",
   );
   return lines.join("\n");
+}
+
+/**
+ * Append the workspace-view canonical's own section to the preset report. The
+ * view is a second preset target with the same create/update/in-sync/conflict
+ * outcomes as a repo canonical, reported separately so it is never conflated with
+ * the roster. No `workspace.view` declared prints nothing.
+ */
+function appendViewPresetSection(lines: string[], result: ProjectPresetResult): void {
+  const view = result.view;
+  if (view === undefined || view.kind === "no-view") return;
+  const canonical = canonicalLabelFor(view.viewName);
+  lines.push("## Workspace view canonical (the view's own AGENTS.md)");
+  if (view.kind === "collision") {
+    lines.push(
+      `⚠️ ${view.viewName}: shares its canonical name with the roster repo \`${view.repoPath}\` — both would own ${canonical}, so neither side is generated. Rename the view directory or the repo to disambiguate, then re-run.`,
+    );
+  } else if (view.kind === "in-sync") {
+    lines.push(`✅ ${view.viewName}: in sync with ${canonical} (nothing to generate).`);
+  } else if (view.kind === "plan") {
+    if (result.viewApplied) {
+      lines.push(`✅ ${view.viewName} [${view.action}] → ${canonical}`);
+    } else if (result.viewFailure !== undefined) {
+      lines.push(`- ${view.viewName} [${view.action}] → ${canonical}: ${result.viewFailure}`);
+    } else {
+      lines.push(
+        `- ${view.viewName} [${view.action}] → ${canonical} (dry-run; pass --apply to write):`,
+      );
+      for (const bl of view.block.split("\n")) lines.push(`    ${bl}`);
+    }
+  } else if (view.kind === "conflict") {
+    const detail =
+      view.reason === "no_markers" ? "no marker region" : `malformed markers (${view.reason})`;
+    lines.push(
+      `⚠️ ${view.viewName}: ${canonical} has ${detail}, so it is not overwritten. Add \`${GENERATED_START}\` / \`${GENERATED_END}\` where the block should go (or run \`basou project retrofit\` to prepend it, preserving your prose).`,
+    );
+  } else {
+    lines.push(
+      `⚠️ ${view.viewName}: ${canonical} could not be read (a directory, permissions, etc.). Resolve it by hand, then re-run.`,
+    );
+  }
+  lines.push("");
 }
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectArchive}. */
@@ -3954,7 +4506,7 @@ export async function doRunProjectDerive(
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectRetrofit}. */
 export async function runProjectRetrofit(
-  repo: string,
+  repo: string | undefined,
   options: ProjectRetrofitOptions,
   ctx: ProjectRetrofitContext = {},
 ): Promise<void> {
@@ -4030,7 +4582,9 @@ function pathPresent(p: string): boolean {
  * is the entry resolving to the manifest root; reachability is a `.git` under the
  * resolved path. The repo's own AGENTS.md state, whether the destination canonical
  * already exists (lstat — a dangling symlink counts), and any regular-file spokes
- * are read off disk. Pure filesystem reads — no writes.
+ * are read off disk. `viewCanonicalName` (the workspace view's resolved name, or
+ * undefined without a view) is threaded through so the classifier can refuse a
+ * relocate into a canonical the view shares. Pure filesystem reads — no writes.
  */
 function gatherRetrofit(
   repositoryRoot: string,
@@ -4039,6 +4593,7 @@ function gatherRetrofit(
   argPath: string,
   argAbs: string,
   argReal: string | undefined,
+  viewCanonicalName: string | undefined,
 ): RetrofitFacts {
   const declaredEntry = roster.find((entry) => {
     const entryAbs = resolve(repositoryRoot, entry.path);
@@ -4071,6 +4626,7 @@ function gatherRetrofit(
       isAnchor: false,
       reachable: false,
       canonicalName,
+      ...(viewCanonicalName !== undefined ? { viewCanonicalName } : {}),
       agentsState: "absent",
       canonicalExists: false,
       regularSpokes: [],
@@ -4087,6 +4643,7 @@ function gatherRetrofit(
     isAnchor,
     reachable,
     canonicalName,
+    ...(viewCanonicalName !== undefined ? { viewCanonicalName } : {}),
     agentsState: inspectAgentsState(join(argReal, CANONICAL_FILE)),
     canonicalExists: pathPresent(canonicalFile),
     regularSpokes: regularFileSpokes(argReal),
@@ -4142,15 +4699,91 @@ function relocateAgentsFile(repoReal: string, canonicalFile: string): RelocateRe
 }
 
 /**
+ * Judge the workspace view's OWN canonical for auto-migration. The greenfield flow
+ * BORNS the view canonical with markers (`preset` creates it clean), but an
+ * existing view carries a hand-written `agents/<viewName>/AGENTS.md` with prose and
+ * NO markers — the exact class `project preset` refuses (it surfaces it as a
+ * conflict rather than clobber). Retrofit seeds markers into it: prepend the
+ * generated block, keep the prose verbatim (`seedMarkers`). A view name shared
+ * with a roster repo's canonical is a `collision` (the shared canonical must
+ * never be seeded — it may hold the repo's relocated prose). An absent canonical
+ * is left to `preset`/`derive` (retrofit never creates it); a well-formed one
+ * needs no migration; a malformed one is surfaced, never rewritten. Pure reads
+ * (the write is {@link applyViewRetrofit}'s job).
+ */
+function gatherViewRetrofit(
+  repositoryRoot: string,
+  anchorReal: string,
+  viewPath: string | undefined,
+  roster: RepoEntry[],
+): ViewRetrofitOutcome {
+  if (viewPath === undefined) return { kind: "no-view" };
+  const viewDir = resolveViewDir(repositoryRoot, viewPath);
+  const viewName = basename(viewDir);
+  const collision = viewCanonicalCollision(repositoryRoot, roster, viewName);
+  if (collision !== undefined) return { kind: "collision", viewName, repoPath: collision };
+  const canonicalFile = canonicalFileFor(anchorReal, viewName);
+
+  let content: string | null;
+  try {
+    content = readFileSync(canonicalFile, "utf8");
+  } catch (error: unknown) {
+    if (hasErrorCode(error) && error.code === "ENOENT") return { kind: "absent", viewName };
+    return { kind: "unreadable", viewName };
+  }
+  const section = parseMarkers(content);
+  if (section.kind === "ok") return { kind: "already-marked", viewName };
+  if (section.kind === "no_markers") {
+    const block = renderViewPresetBlock({
+      viewName,
+      repos: viewPresetReposFor(repositoryRoot, roster),
+    });
+    return { kind: "seed", viewName, block };
+  }
+  return { kind: "malformed", viewName, reason: section.kind };
+}
+
+/**
+ * Prepend the generated block into the view's markerless canonical via
+ * {@link seedMarkers} (the hand-written prose is preserved verbatim after the
+ * block). A symlinked canonical is refused (mirroring {@link applyPresetPlan}). The
+ * seed is re-derived against the CURRENT file content at write time, so a canonical
+ * that gained markers between gather and write is reconciled (region-replaced), and
+ * a malformed one throws — collected by the caller, never clobbered.
+ */
+async function applyViewRetrofit(
+  anchorReal: string,
+  outcome: Extract<ViewRetrofitOutcome, { kind: "seed" }>,
+): Promise<void> {
+  const file = canonicalFileFor(anchorReal, outcome.viewName);
+  const label = canonicalLabelFor(outcome.viewName);
+  let isLink = false;
+  try {
+    isLink = lstatSync(file).isSymbolicLink();
+  } catch {
+    isLink = false;
+  }
+  if (isLink) throw new Error(`Canonical is a symlink in ${label}`);
+  const existing = await readMarkdownFile(file);
+  await writeMarkdownFile(file, seedMarkers(existing, outcome.block, label));
+}
+
+/**
  * Retrofit an existing repo's hand-authored `AGENTS.md` into the project
  * topology. Resolves the workspace, reads the manifest, gathers the repo's facts,
  * and classifies the one action. When `--apply` is set and the action is
  * `relocate`, it moves the file to the anchor canonical and recreates the symlink
  * (non-destructive — a present canonical, an already-wired symlink, an absent
- * file, the anchor, or an unreachable/undeclared repo all change nothing).
+ * file, the anchor, a canonical name shared with the workspace view, or an
+ * unreachable/undeclared repo all change nothing). The workspace view's OWN
+ * markerless canonical (the one class `project preset` refuses to touch) is
+ * REPORTED in the same pass, but only the bare form — no repo argument — actually
+ * seeds it (prepending the generated block via `seedMarkers`, preserving the
+ * prose), so one invocation writes at most one target. An empty roster skips the
+ * view entirely: the run is then a whole no-op.
  */
 export async function doRunProjectRetrofit(
-  repo: string,
+  repo: string | undefined,
   options: ProjectRetrofitOptions,
   ctx: ProjectRetrofitContext,
 ): Promise<ProjectRetrofitResult> {
@@ -4160,6 +4793,39 @@ export async function doRunProjectRetrofit(
   const manifest = await readManifest(paths);
   const roster = manifest.repos ?? [];
   const anchorReal = realpathSync(repositoryRoot);
+  const viewPath = manifest.workspace.view;
+
+  // No repo argument: run only the workspace view's canonical auto-migration
+  // (the path `project preset`'s marker-conflict guidance points at).
+  if (repo === undefined) {
+    let view: ViewRetrofitOutcome | undefined;
+    let viewApplied = false;
+    let viewFailure: string | undefined;
+    if (roster.length > 0) {
+      view = gatherViewRetrofit(repositoryRoot, anchorReal, viewPath, roster);
+      if (options.apply === true && view.kind === "seed") {
+        try {
+          await applyViewRetrofit(anchorReal, view);
+          viewApplied = true;
+        } catch (error: unknown) {
+          viewFailure = presetFailureReason(error);
+        }
+      }
+    }
+    const result: ProjectRetrofitResult = {
+      kind: "view-only",
+      hasRoster: roster.length > 0,
+      ...(view !== undefined ? { view } : {}),
+      viewApplied,
+      ...(viewFailure !== undefined ? { viewFailure } : {}),
+    };
+    if (options.json === true) {
+      console.log(JSON.stringify(result));
+    } else {
+      console.log(renderProjectRetrofit(result));
+    }
+    return result;
+  }
 
   // Resolve the arg ONCE and thread it into both classification and the move, so
   // `--apply` acts on exactly the repo that was classified (no second realpath
@@ -4173,7 +4839,19 @@ export async function doRunProjectRetrofit(
     argReal = undefined;
   }
 
-  const facts = gatherRetrofit(repositoryRoot, anchorReal, roster, repo, argAbs, argReal);
+  // The view's resolved canonical name feeds the classifier's view-collision
+  // refusal (a repo must never relocate into the canonical the view shares).
+  const viewCanonicalName =
+    viewPath !== undefined ? basename(resolveViewDir(repositoryRoot, viewPath)) : undefined;
+  const facts = gatherRetrofit(
+    repositoryRoot,
+    anchorReal,
+    roster,
+    repo,
+    argAbs,
+    argReal,
+    viewCanonicalName,
+  );
   const plan = classifyRetrofit(facts);
 
   let applied = false;
@@ -4192,12 +4870,24 @@ export async function doRunProjectRetrofit(
     }
   }
 
+  // The workspace view's own canonical is REPORTED in the same pass (a markerless
+  // prose canonical surfaces as `seed`), but a repo-argument run never writes it:
+  // the seed itself is the bare form's job, so `viewApplied` is always false
+  // here. An empty roster skips even the report (the run is a whole no-op).
+  let view: ViewRetrofitOutcome | undefined;
+  if (roster.length > 0) {
+    view = gatherViewRetrofit(repositoryRoot, anchorReal, viewPath, roster);
+  }
+
   const result: ProjectRetrofitResult = {
+    kind: "repo",
     ...plan,
     hasRoster: roster.length > 0,
     applied,
     ...(failure !== undefined ? { failure } : {}),
     ...(partial ? { partial } : {}),
+    ...(view !== undefined ? { view } : {}),
+    viewApplied: false,
   };
 
   if (options.json === true) {
@@ -4206,6 +4896,68 @@ export async function doRunProjectRetrofit(
     console.log(renderProjectRetrofit(result));
   }
   return result;
+}
+
+/**
+ * One-line guidance shown with a view seed report: the marker pair placement is
+ * the operator's choice, since preset only ever rewrites the region between them.
+ */
+const MARKER_PORTABILITY_NOTE =
+  "The marker pair can later be moved anywhere in the file by hand — `basou project preset` rewrites only the region between the markers.";
+
+/**
+ * Append the workspace-view canonical's auto-migration section to the retrofit
+ * report. Shown regardless of the repo-arg outcome (the view is a separate target
+ * inspected in the same pass — though only the bare form writes it). An absent
+ * `view` field (empty roster), no `workspace.view` declared, or a well-formed /
+ * absent canonical with nothing to seed, prints nothing.
+ */
+function appendViewRetrofitSection(lines: string[], result: ProjectRetrofitResult): void {
+  const view = result.view;
+  if (
+    view === undefined ||
+    view.kind === "no-view" ||
+    view.kind === "absent" ||
+    view.kind === "already-marked"
+  )
+    return;
+  const canonical = `agents/${view.viewName}/${CANONICAL_FILE}`;
+  lines.push("## Workspace view canonical (auto-migrate the view's own AGENTS.md)");
+  if (view.kind === "seed") {
+    if (result.kind === "repo") {
+      // A repo-argument run only reports the pending seed; the migration itself
+      // is the bare form's job (one invocation writes at most one target).
+      lines.push(
+        `\`${canonical}\` is markerless prose. Run \`basou project retrofit\` (no repo argument) to prepend the generated block, preserving the prose.`,
+      );
+      lines.push(MARKER_PORTABILITY_NOTE);
+    } else if (result.viewApplied) {
+      lines.push(
+        `✅ Prepended the generated block into \`${canonical}\` (your hand-written prose is preserved below it).`,
+      );
+      lines.push(MARKER_PORTABILITY_NOTE);
+    } else if (result.viewFailure !== undefined) {
+      lines.push(`⚠️ Could not seed \`${canonical}\`: ${result.viewFailure}. Nothing was changed.`);
+    } else {
+      lines.push(
+        `\`${canonical}\` is markerless prose. Retrofit will prepend the generated block, preserving the prose (dry-run; pass --apply to write).`,
+      );
+      lines.push(MARKER_PORTABILITY_NOTE);
+    }
+  } else if (view.kind === "collision") {
+    lines.push(
+      `⚠️ The view shares its canonical name with the roster repo \`${view.repoPath}\` — both would own \`${canonical}\`, so nothing is migrated. Rename the view directory or the repo to disambiguate, then re-run.`,
+    );
+  } else if (view.kind === "malformed") {
+    lines.push(
+      `⚠️ \`${canonical}\` has malformed markers (${view.reason}), so it is not rewritten. Fix the \`${GENERATED_START}\` / \`${GENERATED_END}\` pair by hand, then re-run.`,
+    );
+  } else {
+    lines.push(
+      `⚠️ \`${canonical}\` could not be read (a directory, permissions, etc.). Resolve it by hand, then re-run.`,
+    );
+  }
+  lines.push("");
 }
 
 /** Append the regular-file spoke checklist (the manual tidy-up `--apply` leaves alone). */
@@ -4243,6 +4995,30 @@ export function renderProjectRetrofit(result: ProjectRetrofitResult): string {
     return lines.join("\n");
   }
 
+  // View-only run (no repo argument): report just the view canonical's migration,
+  // with an explicit line for the outcomes appendViewRetrofitSection keeps silent.
+  if (result.kind === "view-only") {
+    const view = result.view;
+    // `view` is gathered whenever the roster is non-empty (the no-roster case
+    // returned above), so an absent field is treated like no-view defensively.
+    if (view === undefined || view.kind === "no-view") {
+      lines.push(
+        "ℹ️ No `workspace.view` declared — there is no view canonical to migrate. Pass a repo argument to relocate a repo's AGENTS.md instead.",
+      );
+    } else if (view.kind === "absent") {
+      lines.push(
+        `ℹ️ The view canonical \`agents/${view.viewName}/${CANONICAL_FILE}\` does not exist yet — run \`basou project preset --apply\` (or \`basou project derive --apply\`) to create it; there is nothing to migrate.`,
+      );
+    } else if (view.kind === "already-marked") {
+      lines.push(
+        `✅ \`agents/${view.viewName}/${CANONICAL_FILE}\` already has a BASOU:GENERATED region. Nothing to migrate.`,
+      );
+    } else {
+      appendViewRetrofitSection(lines, result);
+    }
+    return lines.join("\n").trimEnd();
+  }
+
   const canonical = `agents/${result.canonicalName}/${CANONICAL_FILE}`;
 
   if (result.action === "refuse") {
@@ -4266,12 +5042,18 @@ export function renderProjectRetrofit(result: ProjectRetrofitResult): string {
       lines.push(
         `⚠️ \`${result.path}/${CANONICAL_FILE}\` could not be inspected (a parent component is not a directory, a permission error, or the path is neither a regular file nor a symlink). Resolve it by hand, then re-run.`,
       );
+    } else if (result.reason === "view-collision") {
+      lines.push(
+        `⚠️ \`${result.path}\` shares its canonical name with the workspace view — \`${canonical}\` would be owned by both, so relocating would corrupt one with the other. Rename the view directory or the repo to disambiguate, then re-run.`,
+      );
     } else if (result.reason === "canonical-exists") {
       lines.push(
         `⚠️ The destination canonical \`${canonical}\` already exists. Not relocating, to avoid clobbering it. If the canonical is the source of truth, the repo's AGENTS.md is redundant (remove it, then run \`basou project symlinks\`); otherwise reconcile the two by hand.`,
       );
     }
-    return lines.join("\n");
+    lines.push("");
+    appendViewRetrofitSection(lines, result);
+    return lines.join("\n").trimEnd();
   }
 
   if (result.action === "skip") {
@@ -4286,6 +5068,7 @@ export function renderProjectRetrofit(result: ProjectRetrofitResult): string {
     }
     lines.push("");
     appendSpokeChecklist(lines, result.regularSpokes);
+    appendViewRetrofitSection(lines, result);
     return lines.join("\n").trimEnd();
   }
 
@@ -4303,7 +5086,9 @@ export function renderProjectRetrofit(result: ProjectRetrofitResult): string {
     } else {
       lines.push("Nothing was changed. Resolve the cause and re-run.");
     }
-    return lines.join("\n");
+    lines.push("");
+    appendViewRetrofitSection(lines, result);
+    return lines.join("\n").trimEnd();
   }
 
   if (result.applied) {
@@ -4319,6 +5104,7 @@ export function renderProjectRetrofit(result: ProjectRetrofitResult): string {
   }
   lines.push("");
   appendSpokeChecklist(lines, result.regularSpokes);
+  appendViewRetrofitSection(lines, result);
   lines.push(
     result.applied
       ? "Next: run `basou project derive --apply` to add the preset block, the CLAUDE.md / Copilot spokes, and the .gitignore."

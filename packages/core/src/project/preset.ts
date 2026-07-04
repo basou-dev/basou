@@ -122,6 +122,115 @@ export function renderPresetBlock(repo: PresetRepo): string {
   return lines.join("\n");
 }
 
+/** Short visibility label (the plain declared string, or 未設定 when unset). */
+function visibilityShortLabel(v: RepoVisibility | undefined): string {
+  return v ?? "未設定";
+}
+
+/** Short language label (the plain declared string, or 未設定 when unset). */
+function languageShortLabel(l: RepoLanguage | undefined): string {
+  return l ?? "未設定";
+}
+
+/** One repo aggregated by the view, rendered with its short visibility / language. */
+export type ViewPresetRepo = {
+  name: string;
+  visibility?: RepoVisibility | undefined;
+  language?: RepoLanguage | undefined;
+  /**
+   * True when the repo declares `instructions: self` (it owns its AGENTS.md;
+   * basou stays hands-off). Rendered in the instruction-ownership column so an
+   * agent reading the view knows which AGENTS.md files are generated and which
+   * are hand-maintained. Absent => the default `hub` (basou-generated).
+   */
+  self?: boolean | undefined;
+  /**
+   * True when this repo IS the project anchor (the planning master). Its own
+   * AGENTS.md is hand-maintained at the anchor root — basou never generates it
+   * (preset skips it), so the instruction column must NOT claim `hub`. Takes
+   * precedence over `self` in the label.
+   */
+  anchor?: boolean | undefined;
+};
+
+/** The declared fields the view preset block is rendered from. */
+export type ViewPresetInput = {
+  /**
+   * The view directory's basename — names the view's own canonical
+   * (`agents/<viewName>/AGENTS.md`) in the block's self-description, so a reader
+   * of the generated file learns where its editable source of truth lives.
+   */
+  viewName: string;
+  repos: ViewPresetRepo[];
+};
+
+/** Instruction-file ownership label: who writes the repo's AGENTS.md. */
+function instructionsLabel(repo: ViewPresetRepo): string {
+  if (repo.anchor === true) return "anchor(手管理)";
+  return repo.self === true ? "self(repo が自己管理)" : "hub(basou が生成)";
+}
+
+/**
+ * Render the workspace-view instruction-file preset block (the content between
+ * the BASOU:GENERATED markers in the view's own canonical). Like
+ * {@link renderPresetBlock} it is deterministic and OSS-generic: it derives
+ * entirely from the declared roster (repo names come from the manifest, no
+ * operator-specific string is embedded), so re-running on an unchanged manifest
+ * produces byte-identical output. The repos are listed in the order supplied.
+ * An empty roster still renders cleanly (a header-only table, empty lists).
+ * Returns the block WITHOUT a trailing newline; the marker writer adds the
+ * surrounding structure.
+ */
+export function renderViewPresetBlock(input: ViewPresetInput): string {
+  const lines: string[] = [];
+  lines.push("## workspace view 構成(basou が生成 — manifest が正本)");
+  lines.push("");
+  lines.push(
+    "このセクションは `.basou/manifest.yaml` の宣言から `basou project preset` が生成します。編集は manifest 側で行ってください(マーカー外の記述は保持されます)。",
+  );
+  lines.push(
+    `この AGENTS.md 自身も basou の生成物です(実体: \`agents/${input.viewName}/AGENTS.md\`、マーカー外の記述は保持されます)。`,
+  );
+  lines.push("");
+  lines.push(
+    `このディレクトリは、宣言された ${input.repos.length} 個の repo を symlink で集約する **view** です。実体を持たず、git 管理外です。`,
+  );
+  lines.push("");
+  lines.push("### 集約している repo");
+  lines.push("");
+  lines.push("| repo | 可視性 | 言語 | 指示書 |");
+  lines.push("|---|---|---|---|");
+  for (const r of input.repos) {
+    lines.push(
+      `| ${r.name} | ${visibilityShortLabel(r.visibility)} | ${languageShortLabel(r.language)} | ${instructionsLabel(r)} |`,
+    );
+  }
+  lines.push("");
+  lines.push("### どこで commit するか");
+  lines.push("");
+  lines.push(
+    "view では commit できません(git 管理外)。変更は必ず実体の repo に `cd` してから commit してください。",
+  );
+  lines.push("");
+  for (const r of input.repos) {
+    lines.push(`- ${r.name} → \`cd ${r.name}\``);
+  }
+  lines.push("");
+  lines.push("### 必ず読むべき規約");
+  lines.push("");
+  lines.push("作業規約は各 repo の AGENTS.md にあります。以下を読んでから作業してください。");
+  lines.push("");
+  for (const r of input.repos) {
+    lines.push(`- ${r.name}/AGENTS.md`);
+  }
+  lines.push("");
+  lines.push("### 重要原則");
+  lines.push("");
+  lines.push("- このディレクトリは状態を持たない(git 管理外)");
+  lines.push("- 重要なファイルをここに直接置かない(実体は各 repo に置く)");
+  return lines.join("\n");
+}
+
 /**
  * The canonical's marker state as parsed by the caller (mirrors
  * `markdown-store`'s `MarkerSection.kind`). `ok` means exactly one well-ordered
@@ -206,6 +315,13 @@ export type PresetMarkerConflict = {
 export type PresetCollision = {
   canonicalName: string;
   repos: string[];
+  /**
+   * True when the shared canonical is the WORKSPACE VIEW's own
+   * (`agents/<viewName>/AGENTS.md`): the listed repo(s) collide with the view,
+   * not (only) with each other, so neither the repo side nor the view side is
+   * generated. Absent for a plain repo↔repo collision.
+   */
+  view?: boolean;
 };
 
 export type PresetPlanSummary = {
@@ -257,8 +373,16 @@ function normalizeBlock(s: string): string {
  * - Two DISTINCT repos resolving to the same canonical name are a
  *   {@link PresetCollision} and neither is generated (silent clobbering of one
  *   canonical is surfaced, not actioned).
+ * - When the caller passes `opts.viewCanonicalName` (the workspace view's own
+ *   canonical name), a repo whose canonical name equals it is ALSO a collision
+ *   (flagged `view: true`) and is suppressed — the repo and the view would
+ *   otherwise write over one shared `agents/<name>/AGENTS.md`. Without the
+ *   option the behavior is unchanged.
  */
-export function summarizePresetPlan(facts: RepoPresetFacts[]): PresetPlanSummary {
+export function summarizePresetPlan(
+  facts: RepoPresetFacts[],
+  opts?: { viewCanonicalName?: string },
+): PresetPlanSummary {
   // Dedup by normalized path (first declaration wins).
   const deduped: RepoPresetFacts[] = [];
   const seenPath = new Set<string>();
@@ -289,8 +413,13 @@ export function summarizePresetPlan(facts: RepoPresetFacts[]): PresetPlanSummary
   const collisions: PresetCollision[] = [];
   const collidingPaths = new Set<string>();
   for (const [canonicalName, repos] of byCanonical) {
-    if (repos.length > 1) {
-      collisions.push({ canonicalName, repos });
+    // A repo↔repo collision (two distinct repos, one canonical) OR a repo↔view
+    // collision (the canonical name is the workspace view's own) — either way
+    // the shared canonical is ambiguous and none of the parties is generated.
+    const viewCollision =
+      opts?.viewCanonicalName !== undefined && canonicalName === opts.viewCanonicalName;
+    if (repos.length > 1 || viewCollision) {
+      collisions.push({ canonicalName, repos, ...(viewCollision ? { view: true } : {}) });
       for (const r of repos) collidingPaths.add(r);
     }
   }

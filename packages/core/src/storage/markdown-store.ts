@@ -175,6 +175,59 @@ export function renderWithMarkers(
 }
 
 /**
+ * Seed a marker region into a file, migrating a markerless (hand-authored) file
+ * IN PLACE instead of refusing it the way {@link renderWithMarkers} does. Used by
+ * `project retrofit` to auto-migrate an existing prose canonical: the generated
+ * block is prepended and every byte of the existing content is preserved.
+ *
+ * - `existing === null` (no file yet): identical to `renderWithMarkers(null, …)`
+ *   — a fresh `<START>\n<generated>\n<END>\n` block.
+ * - existing parses to `ok`: delegated to {@link renderWithMarkers} — the marked
+ *   region is replaced, everything before START / after END is kept.
+ * - `no_markers` (including a 0-byte / empty-string file): the block is PREPENDED
+ *   (`<START>\n<generated><END>\n\n<existing>`) so the hand-authored prose is kept
+ *   verbatim after one blank-line separator. A leading UTF-8 BOM is re-placed at
+ *   the FILE head (before the seeded block), never left mid-file — matching
+ *   {@link parseMarkers}' BOM tolerance. A leading YAML frontmatter (`---`) is
+ *   NOT special-cased: the block is prepended above it (a known limitation).
+ * - any malformed result (`missing_start` / `missing_end` / `multiple_pairs` /
+ *   `wrong_order`): throws a pathless error referencing `fileLabel`, exactly like
+ *   {@link renderWithMarkers} (a broken marker pair must never be silently rewritten).
+ */
+export function seedMarkers(
+  existing: string | null,
+  generated: string,
+  fileLabel: string,
+  markers: Markers = DEFAULT_MARKERS,
+): string {
+  const normalized = generated.endsWith("\n") ? generated : `${generated}\n`;
+  if (existing === null) {
+    return `${markers.start}\n${normalized}${markers.end}\n`;
+  }
+  const section = parseMarkers(existing, markers);
+  switch (section.kind) {
+    case "ok":
+      // A well-formed file is reconciled in place (region replaced); reuse the
+      // canonical writer so the before/after preservation is identical.
+      return renderWithMarkers(existing, generated, fileLabel, markers);
+    case "no_markers": {
+      // Prepend the block, keep the hand-authored body verbatim after one blank
+      // line. A leading UTF-8 BOM is stripped from the body and re-placed at the
+      // file head — a BOM stranded mid-file would defeat parseMarkers' BOM
+      // tolerance on the next parse and turn into mojibake in the prose.
+      const bom = existing.charCodeAt(0) === 0xfeff ? "\uFEFF" : "";
+      const body = bom === "" ? existing : existing.slice(1);
+      return `${bom}${markers.start}\n${normalized}${markers.end}\n\n${body}`;
+    }
+    case "missing_start":
+    case "missing_end":
+    case "multiple_pairs":
+    case "wrong_order":
+      throw new Error(`Markers mismatched in ${fileLabel}`);
+  }
+}
+
+/**
  * Remove a marker region from `existing`, returning the body without the block.
  *
  * - `no_markers`: returns `existing` unchanged (nothing to remove).
