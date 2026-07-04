@@ -33,6 +33,9 @@ const ALLOWLIST = [
   // E-5: generated instruction-file preset — the content language is tied to the
   // declared `language` of the target repo, a separate surface from CLI output.
   "packages/core/src/project/preset.ts",
+  // E-5: generated anchor AGENTS.md starter — the content language matches the
+  // sibling preset/view blocks it lives beside, a separate surface from CLI output.
+  "packages/core/src/project/anchor-starter.ts",
 ];
 
 // CJK symbols & punctuation (U+3000-303F, e.g. 、。「」), Hiragana/Katakana

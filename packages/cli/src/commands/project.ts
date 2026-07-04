@@ -20,6 +20,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   type AdoptCandidate,
+  type AnchorStarterRepo,
   type ArchivePlan,
   appendBasouGitignore,
   basouPaths,
@@ -64,6 +65,7 @@ import {
   readMarkdownFile,
   reconcileSourceRoots,
   removeMarkerSection,
+  renderAnchorStarter,
   renderViewPresetBlock,
   renderWithMarkers,
   resolveRepositoryRoot,
@@ -4477,23 +4479,27 @@ export async function doRunProjectDerive(
   // Each step reads the manifest itself, so sync's source_roots write is visible
   // downstream; order matters (preset before symlinks so link targets exist;
   // symlinks before gitignore so the files to ignore exist).
-  console.log("## 1/5 sync source_roots (roster → capture config)");
+  console.log("## 1/6 sync source_roots (roster → capture config)");
   await doRunProjectSync(stepOpts, stepCtx);
   console.log("");
 
-  console.log("## 2/5 generate instruction-file A preset (declaration → canonical)");
+  console.log("## 2/6 generate instruction-file A preset (declaration → canonical)");
   await doRunProjectPreset(stepOpts, stepCtx);
   console.log("");
 
-  console.log("## 3/5 generate instruction-file symlinks (each repo → canonical)");
+  console.log("## 3/6 seed the anchor's own AGENTS.md (greenfield only; create-only)");
+  await doRunProjectSeedAnchor(stepOpts, stepCtx);
+  console.log("");
+
+  console.log("## 4/6 generate instruction-file symlinks (each repo → canonical)");
   await doRunProjectSymlinks(stepOpts, stepCtx);
   console.log("");
 
-  console.log("## 4/5 generate workspace view (aggregate the roster repos)");
+  console.log("## 5/6 generate workspace view (aggregate the roster repos)");
   await doRunProjectWorkspace(stepOpts, stepCtx);
   console.log("");
 
-  console.log("## 5/5 generate .gitignore (exclude public repos' instruction files)");
+  console.log("## 6/6 generate .gitignore (exclude public repos' instruction files)");
   await doRunProjectGitignore(stepOpts, stepCtx);
   console.log("");
 
@@ -4502,6 +4508,87 @@ export async function doRunProjectDerive(
       ? "✅ Ran every step (each is idempotent, so a partial apply recovers on re-run)."
       : "ℹ️ Dry-run preview. Pass --apply to write the changes, then re-run.",
   );
+}
+
+/**
+ * Derive step: seed the anchor (planning master) repo's OWN root AGENTS.md when
+ * it is absent. The anchor's AGENTS.md is hand-maintained (preset skips it) and
+ * lives at the anchor ROOT — never under `agents/` — so a greenfield project has
+ * none until someone writes one, while a project onboarded the older way already
+ * carries one. This create-only seed gives the master a minimal starter
+ * (identity, a manifest-derived roster snapshot, per-repo pointers, TODO policy
+ * stubs) so greenfield bring-up reaches the same shape; the operator
+ * hand-maintains it from there (basou never rewrites it).
+ *
+ * Create-only and atomic: the write uses the exclusive `wx` flag, so an existing
+ * anchor doc (hand-authored, or a prior seed) is never clobbered — with no TOCTOU
+ * window between the presence check and the write. A dangling symlink at the path
+ * counts as present (never clobbered). An empty roster seeds nothing (there is no
+ * project to describe yet).
+ */
+export async function doRunProjectSeedAnchor(
+  options: { apply?: boolean },
+  ctx: ProjectSyncContext,
+): Promise<void> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "project derive");
+  const paths = basouPaths(repositoryRoot);
+  const manifest = await readManifest(paths);
+  const roster = manifest.repos ?? [];
+
+  console.log("# Anchor instruction-file seed (the planning master's own AGENTS.md)");
+  console.log("");
+
+  if (roster.length === 0) {
+    console.log("ℹ️ No repo roster declared — nothing to seed.");
+    return;
+  }
+
+  const anchorDoc = join(repositoryRoot, CANONICAL_FILE);
+  // lstat via pathPresent: a dangling symlink counts as present, so a hand-wired
+  // link (or any occupant) is never clobbered either.
+  if (pathPresent(anchorDoc)) {
+    console.log(
+      `✅ The anchor's own \`${CANONICAL_FILE}\` already exists — hand-maintained, left untouched.`,
+    );
+    return;
+  }
+
+  const viewPath = manifest.workspace.view;
+  const viewName =
+    viewPath !== undefined ? basename(resolveViewDir(repositoryRoot, viewPath)) : undefined;
+  const repos: AnchorStarterRepo[] = viewPresetReposFor(repositoryRoot, roster);
+  const content = renderAnchorStarter({
+    anchorName: basename(repositoryRoot),
+    ...(manifest.project?.name !== undefined ? { projectName: manifest.project.name } : {}),
+    ...(viewName !== undefined ? { viewName } : {}),
+    repos,
+  });
+
+  if (options.apply !== true) {
+    console.log(
+      `- ${CANONICAL_FILE} [create] → the anchor's own AGENTS.md (dry-run; pass --apply to write). A create-only starter; hand-maintain it afterward — basou never rewrites it.`,
+    );
+    return;
+  }
+
+  try {
+    writeFileSync(anchorDoc, content, { flag: "wx" });
+    console.log(
+      `✅ Seeded the anchor's own \`${CANONICAL_FILE}\` (create-only starter — hand-maintain it from here; basou never rewrites it).`,
+    );
+  } catch (error: unknown) {
+    // Raced with another writer between the presence check and the exclusive create.
+    if (hasErrorCode(error) && error.code === "EEXIST") {
+      console.log(
+        `✅ The anchor's own \`${CANONICAL_FILE}\` already exists — hand-maintained, left untouched.`,
+      );
+      return;
+    }
+    console.log(
+      `⚠️ Could not seed the anchor's \`${CANONICAL_FILE}\`: ${presetFailureReason(error)}`,
+    );
+  }
 }
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunProjectRetrofit}. */

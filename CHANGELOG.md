@@ -42,6 +42,19 @@ All notable changes to **basou** are recorded here. The project follows
   `project retrofit` results carry a `kind` discriminant (`"repo"` /
   `"view-only"`), and `preset` / `symlinks` / `retrofit` results carry the
   workspace-view outcome in a `view` field (absent when the roster is empty).
+- Anchor instruction-file seed. `basou project derive` now seeds the project
+  anchor's (the planning master's) own root `AGENTS.md` when it is absent — the
+  one instruction file basou otherwise never generates (preset skips the anchor;
+  its canonical lives at the anchor root, never under `agents/`). A greenfield
+  project (`new` → declare → `derive`) previously ended up with no conventions
+  doc for its planning master; this seeds a minimal, hand-maintainable starter
+  (identity, commit-routing, per-repo AGENTS.md pointers, a pointer to the
+  workspace view for the live roster, and `<!-- TODO -->` stubs for the facts
+  basou cannot derive). It is **create-only**: written once via an exclusive
+  `wx` write when the file is absent, and never rewritten or resynced (no
+  `BASOU:GENERATED` markers) — the operator owns it thereafter. It runs as
+  step 3/6 of `derive`; an existing anchor doc (or an empty roster) is a no-op.
+  New `@basou/core` export: `renderAnchorStarter`.
 
 ## 0.31.0 — 2026-07-02
 

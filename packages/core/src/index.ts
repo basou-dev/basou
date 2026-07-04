@@ -106,6 +106,11 @@ export type {
   OrientationSummary,
 } from "./orientation/index.js";
 export { renderOrientation, summarizeOrientation } from "./orientation/index.js";
+export type {
+  AnchorStarterInput,
+  AnchorStarterRepo,
+} from "./project/anchor-starter.js";
+export { renderAnchorStarter } from "./project/anchor-starter.js";
 export type { ArchivePlan } from "./project/archive.js";
 export { planArchive } from "./project/archive.js";
 export type {

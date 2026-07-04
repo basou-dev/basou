@@ -28,6 +28,7 @@ import {
   doRunProjectPreset,
   doRunProjectRename,
   doRunProjectRetrofit,
+  doRunProjectSeedAnchor,
   doRunProjectSymlinks,
   doRunProjectSync,
   doRunProjectTeardown,
@@ -3216,7 +3217,7 @@ describe("basou project derive", () => {
     expect(process.exitCode === 1).toBe(false);
   });
 
-  it("dry-run runs all five sections and writes nothing", async () => {
+  it("dry-run runs all six sections and writes nothing", async () => {
     const out: string[] = [];
     vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
       out.push(String(m));
@@ -3231,19 +3232,22 @@ describe("basou project derive", () => {
     });
     await doRunProjectDerive({}, { cwd: anchor() });
     const text = out.join("\n");
-    expect(text).toContain("1/5");
-    expect(text).toContain("2/5");
-    expect(text).toContain("3/5");
-    expect(text).toContain("4/5");
-    expect(text).toContain("5/5");
+    expect(text).toContain("1/6");
+    expect(text).toContain("2/6");
+    expect(text).toContain("3/6");
+    expect(text).toContain("4/6");
+    expect(text).toContain("5/6");
+    expect(text).toContain("6/6");
     // source_roots NOT written (dry-run): still just ["."].
     const after = await readManifest(basouPaths(anchor()));
     expect(after.import?.source_roots).toEqual(["."]);
     // No canonical, no view symlink generated.
     expect(existsSync(join(anchor(), "agents", "sibling", "AGENTS.md"))).toBe(false);
+    // The anchor's own AGENTS.md seed is a dry-run too: nothing written.
+    expect(existsSync(join(anchor(), "AGENTS.md"))).toBe(false);
   });
 
-  it("--apply runs sync -> preset -> symlinks -> workspace -> gitignore in order", async () => {
+  it("--apply runs sync -> preset -> seed-anchor -> symlinks -> workspace -> gitignore in order", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     await setupAnchorManifest({
       repos: [
@@ -3272,6 +3276,11 @@ describe("basou project derive", () => {
     // gitignore: the public sibling now ignores the instruction files.
     const gi = await readFile(join(parent ?? "", "sibling", ".gitignore"), "utf8");
     expect(gi).toContain("AGENTS.md");
+
+    // anchor seed: the planning master's own root AGENTS.md was created (a
+    // create-only starter, absent before the run).
+    const anchorDoc = await readFile(join(anchor(), "AGENTS.md"), "utf8");
+    expect(anchorDoc).toContain("planning master(anchor)");
   });
 });
 
@@ -3884,5 +3893,119 @@ describe("workspace view instruction files", () => {
       expect(clean.view.files.every((f) => f.state === "correct")).toBe(true);
     }
     expect(clean.ok).toBe(true);
+  });
+});
+
+describe("basou project derive: anchor seed (doRunProjectSeedAnchor)", () => {
+  let parent: string | undefined;
+  let logs: string[] = [];
+
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-anchor-seed-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+    logs = [];
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  function sibling(name: string): string {
+    return join(parent as string, name);
+  }
+  async function makeDir(name: string): Promise<void> {
+    await mkdir(sibling(name), { recursive: true });
+  }
+  async function setupHostManifest(
+    repos: RepoEntry[],
+    opts?: { view?: string; projectName?: string },
+  ): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({
+      workspaceName: "ws",
+      now: NOW,
+      workspaceId: WS,
+      ...(opts?.projectName !== undefined ? { projectName: opts.projectName } : {}),
+    });
+    await writeManifest(paths, {
+      ...base,
+      workspace: {
+        ...base.workspace,
+        ...(opts?.view !== undefined ? { view: opts.view } : {}),
+      },
+      // The schema requires a non-empty roster when present; an empty list means
+      // "no roster declared", which the manifest represents by omitting the key.
+      ...(repos.length > 0 ? { repos } : {}),
+    });
+  }
+  function capture(): void {
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      logs.push(String(m ?? ""));
+    });
+  }
+  const anchorDoc = (): string => join(host(), "AGENTS.md");
+
+  it("seeds the anchor's root AGENTS.md from the manifest when absent (--apply)", async () => {
+    await makeDir("pub");
+    await setupHostManifest(
+      [
+        { path: ".", visibility: "private", language: "en+ja" },
+        { path: "../pub", visibility: "public", language: "en" },
+      ],
+      { view: "../view", projectName: "Acme" },
+    );
+    capture();
+    await doRunProjectSeedAnchor({ apply: true }, { cwd: host() });
+    const content = await readFile(anchorDoc(), "utf8");
+    expect(content).toContain("# AGENTS.md (host)");
+    expect(content).toContain("**Acme の planning master(anchor)**");
+    // No manifest-derived roster snapshot table (it would drift in a frozen file).
+    expect(content).not.toContain("| repo | 可視性 | 言語 | 指示書 |");
+    // Pointers exclude the anchor itself and include the view (the live-roster source).
+    expect(content).toContain("- pub/AGENTS.md");
+    expect(content).not.toContain("- host/AGENTS.md");
+    expect(content).toContain("- view/AGENTS.md(workspace view");
+    expect(content).toContain("最新の repo 構成(roster)はここを正とする");
+    expect(logs.join("\n")).toContain("Seeded the anchor's own `AGENTS.md`");
+  });
+
+  it("dry-run reports a create but writes nothing", async () => {
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    capture();
+    await doRunProjectSeedAnchor({}, { cwd: host() });
+    expect(existsSync(anchorDoc())).toBe(false);
+    expect(logs.join("\n")).toContain("AGENTS.md [create]");
+  });
+
+  it("never clobbers an existing anchor doc (hand-maintained), even with --apply", async () => {
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    await writeFile(anchorDoc(), "# my hand-authored anchor\n");
+    capture();
+    await doRunProjectSeedAnchor({ apply: true }, { cwd: host() });
+    expect(await readFile(anchorDoc(), "utf8")).toBe("# my hand-authored anchor\n");
+    expect(logs.join("\n")).toContain("already exists — hand-maintained, left untouched");
+  });
+
+  it("is a no-op with an empty roster (no project to describe yet)", async () => {
+    await setupHostManifest([]);
+    capture();
+    await doRunProjectSeedAnchor({ apply: true }, { cwd: host() });
+    expect(existsSync(anchorDoc())).toBe(false);
+    expect(logs.join("\n")).toContain("No repo roster declared");
+  });
+
+  it("is create-only: a second --apply never rewrites the operator's edits", async () => {
+    await setupHostManifest([{ path: ".", visibility: "private" }], { view: "../view" });
+    capture();
+    await doRunProjectSeedAnchor({ apply: true }, { cwd: host() });
+    const first = await readFile(anchorDoc(), "utf8");
+    await writeFile(anchorDoc(), `${first}\n<!-- operator edit -->\n`);
+    await doRunProjectSeedAnchor({ apply: true }, { cwd: host() });
+    expect(await readFile(anchorDoc(), "utf8")).toContain("<!-- operator edit -->");
   });
 });
