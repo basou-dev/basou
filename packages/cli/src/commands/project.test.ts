@@ -1130,6 +1130,47 @@ describe("basou project symlinks", () => {
     expect(r2.plans).toEqual([]);
   });
 
+  it("reports a real file occupying an anchor spoke as a conflict and never overwrites it", async () => {
+    await writeFile(join(host(), "AGENTS.md"), "# anchor\n");
+    await writeFile(join(host(), "CLAUDE.md"), "# hand-authored, not a link\n");
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.conflicts).toContainEqual({ repo: ".", file: "CLAUDE.md", reason: "occupied" });
+    // The real file is never clobbered.
+    expect(await readFile(join(host(), "CLAUDE.md"), "utf8")).toBe("# hand-authored, not a link\n");
+  });
+
+  it("reports an anchor spoke pointing elsewhere as a mismatch and never repoints it", async () => {
+    await writeFile(join(host(), "AGENTS.md"), "# anchor\n");
+    await symlink("../somewhere/else.md", join(host(), "CLAUDE.md"));
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.conflicts).toContainEqual({
+      repo: ".",
+      file: "CLAUDE.md",
+      reason: "mismatch",
+      actualTarget: "../somewhere/else.md",
+    });
+    // The existing link is never repointed.
+    expect(await readlink(join(host(), "CLAUDE.md"))).toBe("../somewhere/else.md");
+  });
+
+  it("surfaces a dangling anchor AGENTS.md (broken symlink) as a conflict instead of silently skipping", async () => {
+    // A corrupted anchor: its own AGENTS.md is a dangling symlink. The seed step
+    // never clobbers it (lstat sees it present) and spokes cannot point at it — so
+    // it must be surfaced, not silently treated as un-seeded.
+    await symlink("nonexistent-target.md", join(host(), "AGENTS.md"));
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectSymlinks({}, { cwd: host() });
+    expect(r.conflicts).toContainEqual({ repo: ".", file: "AGENTS.md", reason: "blocked" });
+    expect(r.ok).toBe(false);
+    // No spokes are planned (they would dangle too).
+    expect(r.plans).toEqual([]);
+  });
+
   it("reports a link pointing elsewhere as a mismatch conflict and never repoints it on --apply", async () => {
     await makeRepo("pub");
     await makeCanonical("pub");

@@ -1578,6 +1578,30 @@ function inspectSymlink(
 }
 
 /**
+ * Classify the anchor's OWN root `AGENTS.md` for spoke wiring. `lstat` first (so
+ * a dangling symlink is seen as a link, not "absent"), then resolve:
+ * - `absent`  — nothing at the path (ENOENT): the anchor is un-seeded; leave it alone.
+ * - `usable`  — a regular file, or a symlink that resolves: wire the spokes to it.
+ * - `broken`  — present but not a usable AGENTS.md (a dangling symlink, a directory,
+ *               or an uninspectable path): the seed step never clobbers it and the
+ *               spokes cannot point at it, so it is surfaced as a conflict instead
+ *               of being silently treated as absent (which `existsSync` alone would
+ *               do for a dangling link — the seam that would otherwise leave a
+ *               structurally broken anchor unreported).
+ */
+function anchorCanonicalState(filePath: string): "absent" | "usable" | "broken" {
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(filePath);
+  } catch (error: unknown) {
+    if (hasErrorCode(error) && error.code === "ENOENT") return "absent";
+    return "broken";
+  }
+  if (st.isSymbolicLink()) return existsSync(filePath) ? "usable" : "broken";
+  return st.isFile() ? "usable" : "broken";
+}
+
+/**
  * Gather the symlink facts for one declared repo. Resolves the repo path
  * (realpath); the entry that resolves to the manifest root IS the anchor (it
  * owns the canonical, so it is flagged `isAnchor` and never linked to itself). A
@@ -1611,8 +1635,27 @@ function gatherRepoSymlinks(
     // planned (canonicalPresent: false → the anchor is left alone until it is
     // seeded, then a re-run wires the spokes).
     const anchorCanonical = join(real, CANONICAL_FILE);
-    if (!existsSync(anchorCanonical)) {
+    const anchorState = anchorCanonicalState(anchorCanonical);
+    if (anchorState === "absent") {
+      // Truly absent (ENOENT) — the anchor is not seeded yet. Left alone (no plan,
+      // no bucket) until `derive` seeds it or it is hand-authored, then a re-run
+      // wires the spokes.
       return { ...base, isAnchor: true, reachable: true, canonicalPresent: false, files: [] };
+    }
+    if (anchorState === "broken") {
+      // Present but NOT a usable AGENTS.md (a dangling symlink, or a directory):
+      // the seed step never clobbers it and the spokes cannot point at it, so the
+      // anchor is structurally broken. Surface it as a conflict on its AGENTS.md
+      // rather than silently skipping — the operator must fix the anchor's own
+      // AGENTS.md. No spokes are planned (they would dangle too).
+      return {
+        ...base,
+        isAnchor: true,
+        reachable: true,
+        canonicalPresent: true,
+        canonicalName: basename(real),
+        files: [{ name: CANONICAL_FILE, expectedTarget: CANONICAL_FILE, state: "blocked" }],
+      };
     }
     const anchorFiles: InstructionSymlinkFact[] = expectedSymlinkTargets(
       real,
