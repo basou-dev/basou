@@ -1096,6 +1096,81 @@ describe("basou project symlinks", () => {
     expect(r.conflicts).toEqual([]);
   });
 
+  it("wires the anchor's OWN CLAUDE.md / Copilot spokes when its root AGENTS.md exists (self-style, no AGENTS.md hub link)", async () => {
+    await makeRepo("pub");
+    await makeCanonical("pub");
+    // The anchor's own root AGENTS.md exists (seeded by derive / hand-authored).
+    await writeFile(join(host(), "AGENTS.md"), "# anchor\n");
+    await setupHostManifest([
+      { path: ".", visibility: "private" },
+      { path: "../pub", visibility: "public" },
+    ]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    // The anchor now carries a plan for its two spokes — never an AGENTS.md hub link.
+    const anchorPlan = r.plans.find((p) => p.path === ".");
+    expect(anchorPlan?.toCreate.map((c) => c.name).sort()).toEqual([
+      ".github/copilot-instructions.md",
+      "CLAUDE.md",
+    ]);
+    // Wired to the root AGENTS.md, self-style.
+    expect(await readlink(join(host(), "CLAUDE.md"))).toBe("AGENTS.md");
+    expect(await readlink(join(host(), ".github/copilot-instructions.md"))).toBe("../AGENTS.md");
+    // The anchor's own AGENTS.md stays the real committed file (never repointed into agents/).
+    expect(await readFile(join(host(), "AGENTS.md"), "utf8")).toBe("# anchor\n");
+  });
+
+  it("is idempotent for the anchor's spokes: a second --apply changes nothing", async () => {
+    await writeFile(join(host(), "AGENTS.md"), "# anchor\n");
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    mute();
+    await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    const r2 = await doRunProjectSymlinks({}, { cwd: host() });
+    expect(r2.ok).toBe(true);
+    expect(r2.plans).toEqual([]);
+  });
+
+  it("reports a real file occupying an anchor spoke as a conflict and never overwrites it", async () => {
+    await writeFile(join(host(), "AGENTS.md"), "# anchor\n");
+    await writeFile(join(host(), "CLAUDE.md"), "# hand-authored, not a link\n");
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.conflicts).toContainEqual({ repo: ".", file: "CLAUDE.md", reason: "occupied" });
+    // The real file is never clobbered.
+    expect(await readFile(join(host(), "CLAUDE.md"), "utf8")).toBe("# hand-authored, not a link\n");
+  });
+
+  it("reports an anchor spoke pointing elsewhere as a mismatch and never repoints it", async () => {
+    await writeFile(join(host(), "AGENTS.md"), "# anchor\n");
+    await symlink("../somewhere/else.md", join(host(), "CLAUDE.md"));
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    expect(r.conflicts).toContainEqual({
+      repo: ".",
+      file: "CLAUDE.md",
+      reason: "mismatch",
+      actualTarget: "../somewhere/else.md",
+    });
+    // The existing link is never repointed.
+    expect(await readlink(join(host(), "CLAUDE.md"))).toBe("../somewhere/else.md");
+  });
+
+  it("surfaces a dangling anchor AGENTS.md (broken symlink) as a conflict instead of silently skipping", async () => {
+    // A corrupted anchor: its own AGENTS.md is a dangling symlink. The seed step
+    // never clobbers it (lstat sees it present) and spokes cannot point at it — so
+    // it must be surfaced, not silently treated as un-seeded.
+    await symlink("nonexistent-target.md", join(host(), "AGENTS.md"));
+    await setupHostManifest([{ path: ".", visibility: "private" }]);
+    mute();
+    const r = await doRunProjectSymlinks({}, { cwd: host() });
+    expect(r.conflicts).toContainEqual({ repo: ".", file: "AGENTS.md", reason: "blocked" });
+    expect(r.ok).toBe(false);
+    // No spokes are planned (they would dangle too).
+    expect(r.plans).toEqual([]);
+  });
+
   it("reports a link pointing elsewhere as a mismatch conflict and never repoints it on --apply", async () => {
     await makeRepo("pub");
     await makeCanonical("pub");
@@ -3281,6 +3356,12 @@ describe("basou project derive", () => {
     // create-only starter, absent before the run).
     const anchorDoc = await readFile(join(anchor(), "AGENTS.md"), "utf8");
     expect(anchorDoc).toContain("planning master(anchor)");
+
+    // anchor spokes: with its AGENTS.md now seeded, the anchor's OWN CLAUDE.md /
+    // Copilot spokes are wired to it (self-style), like every other repo — never
+    // an AGENTS.md hub link (the root AGENTS.md IS the canonical).
+    expect(await readlink(join(anchor(), "CLAUDE.md"))).toBe("AGENTS.md");
+    expect(await readlink(join(anchor(), ".github/copilot-instructions.md"))).toBe("../AGENTS.md");
   });
 });
 
