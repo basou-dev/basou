@@ -184,6 +184,15 @@ export type {
 } from "./project/wiring.js";
 export { summarizeWiring } from "./project/wiring.js";
 export type {
+  IncompleteWiring,
+  MissingCanonical,
+  ViewWiringFacts,
+  WiringCollision,
+  WiringConflict,
+  WiringDriftSummary,
+} from "./project/wiring-drift.js";
+export { summarizeWiringDrift } from "./project/wiring-drift.js";
+export type {
   ExistingViewLink,
   ViewCollision,
   ViewConflict,

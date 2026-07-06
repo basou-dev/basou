@@ -37,6 +37,7 @@ import {
   gatherExistingViewLinks,
   type ProjectAdoptResult,
   type ProjectArchiveResult,
+  type ProjectCheckResult,
   type ProjectGitignoreResult,
   type ProjectNewResult,
   type ProjectPresetResult,
@@ -117,8 +118,8 @@ describe("basou project check", () => {
     });
     vi.spyOn(console, "log").mockImplementation(() => {});
     const s = await doRunProjectCheck({}, { cwd: repo() });
-    expect(s.ok).toBe(false);
-    expect(s.gaps.map((g) => g.path)).toEqual(["../takashimatsuyama-bio"]);
+    expect(s.roster.ok).toBe(false);
+    expect(s.roster.gaps.map((g) => g.path)).toEqual(["../takashimatsuyama-bio"]);
   });
 
   it("is ok when every declared repo is captured (the view is extra, not a gap)", async () => {
@@ -131,29 +132,120 @@ describe("basou project check", () => {
     });
     vi.spyOn(console, "log").mockImplementation(() => {});
     const s = await doRunProjectCheck({}, { cwd: repo() });
-    expect(s.ok).toBe(true);
-    expect(s.gaps).toHaveLength(0);
-    expect(s.extra).toEqual(["../takuhon-workspace"]);
+    // Roster is fully captured; the view is `extra`, not a gap. (The combined
+    // `s.ok` also folds in wiring drift, which fires here because the sibling
+    // repo is manifest-only — no on-disk dir — so it is unreachable; assert the
+    // roster verdict on its own.)
+    expect(s.roster.ok).toBe(true);
+    expect(s.roster.gaps).toHaveLength(0);
+    expect(s.roster.extra).toEqual(["../takuhon-workspace"]);
   });
 
-  it("reports declaredCount 0 when no roster is declared", async () => {
+  it("reports declaredCount 0 and skips the wiring pass when no roster is declared", async () => {
     await setupManifest({ sourceRoots: [".", "../takuhon"] });
     vi.spyOn(console, "log").mockImplementation(() => {});
     const s = await doRunProjectCheck({}, { cwd: repo() });
-    expect(s.declaredCount).toBe(0);
+    expect(s.roster.declaredCount).toBe(0);
+    // No roster => nothing to wire, so no wiring pass ran and the verdict is clean.
+    expect(s.wiring).toBeUndefined();
     expect(s.ok).toBe(true);
   });
 
-  it("--json prints the machine-readable summary", async () => {
+  it("--json prints the machine-readable combined result", async () => {
     await setupManifest({ repos: [{ path: "../x" }], sourceRoots: ["../x"] });
     const out: string[] = [];
     vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
       out.push(String(m));
     });
     await doRunProjectCheck({ json: true }, { cwd: repo() });
-    const parsed = JSON.parse(out.join("\n")) as RosterDriftSummary;
-    expect(parsed.ok).toBe(true);
-    expect(parsed.matched).toEqual(["../x"]);
+    const parsed = JSON.parse(out.join("\n")) as ProjectCheckResult;
+    expect(parsed.roster.ok).toBe(true);
+    expect(parsed.roster.matched).toEqual(["../x"]);
+  });
+});
+
+describe("basou project check — wiring drift (filesystem)", () => {
+  let parent: string | undefined;
+  beforeEach(async () => {
+    parent = await mkdtemp(join(tmpdir(), "basou-check-wiring-"));
+    const h = join(parent, "host");
+    await mkdir(h, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: h, env: ENV });
+  });
+  afterEach(async () => {
+    if (parent !== undefined) await rm(parent, { recursive: true, force: true });
+    parent = undefined;
+  });
+  function host(): string {
+    if (parent === undefined) throw new Error("parent not initialized");
+    return join(parent, "host");
+  }
+  function p(name: string): string {
+    return join(parent as string, name);
+  }
+  async function makeRepo(name: string): Promise<void> {
+    const dir = p(name);
+    await mkdir(dir, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+  }
+  async function setup(opts: {
+    repos: RepoEntry[];
+    sourceRoots: string[];
+    view?: string;
+  }): Promise<void> {
+    const paths = await ensureBasouDirectory(host());
+    const base = createManifest({ workspaceName: "ws", now: NOW, workspaceId: WS });
+    await writeManifest(paths, {
+      ...base,
+      repos: opts.repos,
+      import: { source_roots: opts.sourceRoots },
+      ...(opts.view !== undefined ? { workspace: { ...base.workspace, view: opts.view } } : {}),
+    });
+  }
+
+  it("surfaces a hub repo's AND the view's absent AGENTS.md canonical (the my-favorites regression)", async () => {
+    await makeRepo("r1");
+    await setup({
+      repos: [{ path: "." }, { path: "../r1" }],
+      sourceRoots: [".", "../r1", "../wsview"],
+      view: "../wsview",
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const s = await doRunProjectCheck({}, { cwd: host() });
+    // The roster is fully captured — the drift is purely in the wiring.
+    expect(s.roster.ok).toBe(true);
+    expect(s.wiring).toBeDefined();
+    expect(s.wiring?.ok).toBe(false);
+    const missing = s.wiring?.missingCanonicals ?? [];
+    // r1's anchor canonical (agents/r1/AGENTS.md) is absent, AND — the class that
+    // went unnoticed until visual inspection — the view's (agents/wsview/AGENTS.md).
+    expect(missing).toContainEqual({ target: "repo-hub", name: "../r1" });
+    expect(missing).toContainEqual({ target: "view", name: "wsview" });
+    // The un-seeded anchor '.' is left alone (its AGENTS.md is hand-authored), never reported missing.
+    expect(missing.some((m) => m.name === ".")).toBe(false);
+    expect(s.ok).toBe(false);
+  });
+
+  it("reports clean wiring once preset + symlinks have generated every canonical and spoke", async () => {
+    await makeRepo("r1");
+    // Visibility is declared so `project preset` generates each repo's canonical
+    // (it skips a repo whose visibility is unset — it cannot render the block).
+    await setup({
+      repos: [
+        { path: ".", visibility: "private" },
+        { path: "../r1", visibility: "private" },
+      ],
+      sourceRoots: [".", "../r1", "../wsview"],
+      view: "../wsview",
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await doRunProjectPreset({ apply: true }, { cwd: host() });
+    await doRunProjectSymlinks({ apply: true }, { cwd: host() });
+    const s = await doRunProjectCheck({}, { cwd: host() });
+    // The un-seeded anchor '.' has no AGENTS.md — correctly left alone (not drift),
+    // so the only repo whose canonical + spokes exist (r1) and the view are clean.
+    expect(s.wiring?.ok).toBe(true);
+    expect(s.ok).toBe(true);
   });
 });
 
@@ -336,10 +428,13 @@ describe("renderProjectCheck", () => {
 
   it("surfaces each gap with its visibility and never claims 'clear'", () => {
     const out = renderProjectCheck({
-      ...base,
-      declaredCount: 2,
-      gaps: [{ path: "../bio", visibility: "public" }],
-      matched: [".."],
+      roster: {
+        ...base,
+        declaredCount: 2,
+        gaps: [{ path: "../bio", visibility: "public" }],
+        matched: [".."],
+        ok: false,
+      },
       ok: false,
     });
     expect(out).toContain("../bio");
@@ -349,9 +444,7 @@ describe("renderProjectCheck", () => {
 
   it("reports a clean roster with a check mark", () => {
     const out = renderProjectCheck({
-      ...base,
-      declaredCount: 3,
-      matched: ["a", "b", "c"],
+      roster: { ...base, declaredCount: 3, matched: ["a", "b", "c"], ok: true },
       ok: true,
     });
     expect(out).toContain("✅");
@@ -359,9 +452,50 @@ describe("renderProjectCheck", () => {
   });
 
   it("explains the undeclared-roster case", () => {
-    const out = renderProjectCheck({ ...base, capturedCount: 1, extra: ["../x"] });
+    const out = renderProjectCheck({
+      roster: { ...base, capturedCount: 1, extra: ["../x"] },
+      ok: true,
+    });
     expect(out).toContain("No repo roster declared");
     expect(out).toContain("../x");
+  });
+
+  it("leads the wiring section with an absent AGENTS.md canonical (repo and view)", () => {
+    const out = renderProjectCheck({
+      roster: { ...base, declaredCount: 1, matched: ["../app"], ok: true },
+      wiring: {
+        missingCanonicals: [
+          { target: "repo-hub", name: "../app" },
+          { target: "view", name: "my-favorites" },
+        ],
+        incompleteWiring: [],
+        conflicts: [],
+        collisions: [],
+        unreachable: [],
+        ok: false,
+      },
+      ok: false,
+    });
+    expect(out).toContain("wiring drift");
+    expect(out).toContain("Missing instruction canonical");
+    expect(out).toContain("../app");
+    expect(out).toContain('view "my-favorites"');
+  });
+
+  it("reports a clean wiring section when there is no drift", () => {
+    const out = renderProjectCheck({
+      roster: { ...base, declaredCount: 1, matched: ["../app"], ok: true },
+      wiring: {
+        missingCanonicals: [],
+        incompleteWiring: [],
+        conflicts: [],
+        collisions: [],
+        unreachable: [],
+        ok: true,
+      },
+      ok: true,
+    });
+    expect(out).toContain("wired as declared");
   });
 });
 
@@ -468,8 +602,8 @@ describe("basou project adopt", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     await doRunProjectAdopt({ apply: true }, { cwd: host(), now: () => ADOPT_NOW });
     const s = await doRunProjectCheck({}, { cwd: host() });
-    expect(s.ok).toBe(true);
-    expect(s.gaps).toHaveLength(0);
+    expect(s.roster.ok).toBe(true);
+    expect(s.roster.gaps).toHaveLength(0);
   });
 
   it("--apply refuses (no write) when a roster already exists", async () => {
