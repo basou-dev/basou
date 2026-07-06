@@ -77,9 +77,12 @@ import {
   summarizeRosterDrift,
   summarizeSymlinkPlan,
   summarizeWiring,
+  summarizeWiringDrift,
   unknownManifestKeys,
   type ViewPresetRepo,
   type ViewRepoFact,
+  type ViewWiringFacts,
+  type WiringDriftSummary,
   type WiringSummary,
   type WorkspaceViewPlan,
   writeManifest,
@@ -96,6 +99,20 @@ export type ProjectCheckOptions = {
 };
 
 export type ProjectCheckContext = ImportContext;
+
+/**
+ * Combined result of {@link doRunProjectCheck}: the roster drift (declared repos
+ * vs the capture config) plus the wiring drift (instruction-file canonicals /
+ * symlinks vs basou's native topology). `wiring` is present only when a roster is
+ * declared — with no roster there is nothing to wire, so nothing to inspect.
+ * `ok` is the combined verdict: the roster is fully captured AND there is no
+ * wiring drift.
+ */
+export type ProjectCheckResult = {
+  roster: RosterDriftSummary;
+  wiring?: WiringDriftSummary;
+  ok: boolean;
+};
 
 export type ProjectSyncOptions = {
   apply?: boolean;
@@ -177,20 +194,14 @@ export type ProjectSymlinksContext = ImportContext;
  * canonical, CLAUDE.md → AGENTS.md, Copilot → ../AGENTS.md) — the same hub-shape
  * wiring as a repo's, generated INTO the view directory. Reported separately: the
  * view is not a roster repo.
+ *
+ * This is an alias of core's {@link ViewWiringFacts} — the single definition of
+ * the view's four gathered states (no-view / collision / missing-canonical /
+ * gathered), which `project check`'s wiring-drift pass also consumes. Keeping one
+ * type means adding a variant forces a compile error at every fold-in site
+ * (`summarizeWiringDrift`), rather than a new kind silently falling through.
  */
-export type ViewSymlinksOutcome =
-  /** No `workspace.view` declared. */
-  | { kind: "no-view" }
-  /**
-   * The view's basename equals a roster repo's resolved canonical name — both
-   * would own the SAME `agents/<name>/AGENTS.md`, so no view spoke is wired and
-   * the ambiguity is surfaced for the operator to rename one side.
-   */
-  | { kind: "collision"; viewName: string; repoPath: string }
-  /** The view's own canonical (`agents/<viewName>/AGENTS.md`) does not exist yet, so nothing is wired (preset runs first). */
-  | { kind: "missing-canonical"; viewName: string }
-  /** The view's instruction links are inspected; `files` carries each spoke's state and target. */
-  | { kind: "gathered"; viewName: string; files: InstructionSymlinkFact[] };
+export type ViewSymlinksOutcome = ViewWiringFacts;
 
 /** Result of {@link doRunProjectSymlinks}: the plan plus whether a roster exists and what `--apply` did. */
 export type ProjectSymlinksResult = SymlinkPlanSummary & {
@@ -575,8 +586,9 @@ const CANONICAL_FILE = "AGENTS.md";
  * Wire `basou project` (a read-only inspector for the project's declared repo
  * roster) and its `check` subcommand onto `program`. The roster is the single
  * source of truth for which repos make up a project; `check` compares it
- * against the capture config (`source_roots`) and surfaces drift. It writes
- * nothing and enforces nothing.
+ * against the capture config (`source_roots`) AND checks the instruction-file
+ * wiring (canonicals / symlinks) against basou's native topology, surfacing
+ * both classes of drift. It writes nothing and enforces nothing.
  */
 export function registerProjectCommand(program: Command): void {
   const project = program
@@ -586,7 +598,7 @@ export function registerProjectCommand(program: Command): void {
   project
     .command("check")
     .description(
-      "Compare the declared repo roster (manifest `repos`) against the capture config (`source_roots`) and surface drift (read-only, advisory)",
+      "Surface project drift (read-only, advisory): the declared repo roster (manifest `repos`) vs the capture config (`source_roots`), AND the instruction-file wiring vs basou's native topology — a missing AGENTS.md canonical (repo or workspace view), incomplete spokes, conflicts, or collisions",
     )
     .option("--json", "Output the result as JSON")
     .option("-v, --verbose", "Show error causes")
@@ -828,36 +840,72 @@ function preservedUnknownLines(fields: string[]): string[] {
   ];
 }
 
-/** Pure runner: resolves the workspace, reads the manifest, computes the drift, prints it (or JSON). */
+/**
+ * Runner: resolves the workspace, reads the manifest, computes BOTH the roster
+ * drift (declared repos vs `source_roots`, pure) and the wiring drift
+ * (instruction-file canonicals / symlinks vs basou's native topology). The wiring
+ * pass gathers each repo's + the view's on-disk instruction facts — the same
+ * gatherers `project symlinks` uses — so a MISSING canonical (most sharply the
+ * workspace view's own AGENTS.md) surfaces here as drift instead of going
+ * unnoticed until visual inspection. With no roster there is nothing to wire, so
+ * the wiring pass is skipped (and there is no filesystem probe beyond the manifest).
+ */
 export async function doRunProjectCheck(
   options: ProjectCheckOptions,
   ctx: ProjectCheckContext,
-): Promise<RosterDriftSummary> {
+): Promise<ProjectCheckResult> {
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveBasouRootForCommand(cwd, "project check");
   const paths = basouPaths(repositoryRoot);
   const manifest = await readManifest(paths);
 
-  const summary = summarizeRosterDrift({
+  const roster = summarizeRosterDrift({
     ...(manifest.repos !== undefined ? { repos: manifest.repos } : {}),
     sourceRoots: effectiveSourceRoots(manifest),
   });
 
-  if (options.json === true) {
-    console.log(JSON.stringify(summary));
-  } else {
-    console.log(renderProjectCheck(summary));
+  // Wiring drift: only when a roster is declared (else there is nothing to wire,
+  // so no filesystem probe). Gather each repo's + the view's instruction facts
+  // with the same gatherers `project symlinks` uses, then classify as drift.
+  let wiring: WiringDriftSummary | undefined;
+  const rosterRepos = manifest.repos ?? [];
+  if (rosterRepos.length > 0) {
+    const anchorReal = realpathSync(repositoryRoot);
+    const repoFacts = rosterRepos.map((entry) =>
+      gatherRepoSymlinks(repositoryRoot, anchorReal, entry),
+    );
+    let view: ViewWiringFacts = { kind: "no-view" };
+    const viewPath = manifest.workspace.view;
+    if (viewPath !== undefined) {
+      const viewDir = resolveViewDir(repositoryRoot, viewPath);
+      view = gatherViewSymlinks(repositoryRoot, anchorReal, rosterRepos, viewDir);
+    }
+    wiring = summarizeWiringDrift({ repos: repoFacts, view });
   }
-  return summary;
+
+  const result: ProjectCheckResult = {
+    roster,
+    ...(wiring !== undefined ? { wiring } : {}),
+    ok: roster.ok && (wiring?.ok ?? true),
+  };
+
+  if (options.json === true) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(renderProjectCheck(result));
+  }
+  return result;
 }
 
 /**
  * Render the advisory report. Leads with the capture gaps (declared repos not
  * being captured — the actionable drift), then the captured-but-undeclared
- * paths (commonly the workspace view), and states the read-only / no-enforce
+ * paths (commonly the workspace view), then the instruction-file wiring drift
+ * (absent AGENTS.md canonicals first), and states the read-only / no-enforce
  * framing so the verdict is not over-read.
  */
-export function renderProjectCheck(summary: RosterDriftSummary): string {
+export function renderProjectCheck(result: ProjectCheckResult): string {
+  const summary = result.roster;
   const lines: string[] = [];
   lines.push("# Project composition check (declared vs captured)");
   lines.push("");
@@ -896,8 +944,69 @@ export function renderProjectCheck(summary: RosterDriftSummary): string {
     lines.push("");
   }
 
+  const w = result.wiring;
+  if (w !== undefined) {
+    lines.push("## Instruction-file wiring drift (declared topology vs on-disk)");
+    if (w.ok) {
+      lines.push(
+        "✅ Every present repo's and the view's instruction files (AGENTS.md + spokes) are wired as declared.",
+      );
+    } else {
+      if (w.missingCanonicals.length > 0) {
+        lines.push(`⚠️ Missing instruction canonical (AGENTS.md): ${w.missingCanonicals.length}`);
+        for (const m of w.missingCanonicals) {
+          const where =
+            m.target === "view"
+              ? `view "${m.name}"`
+              : m.target === "repo-self"
+                ? `${m.name} (self)`
+                : m.name;
+          lines.push(`- ${where} — canonical AGENTS.md absent`);
+        }
+      }
+      if (w.incompleteWiring.length > 0) {
+        lines.push(
+          `⚠️ Incomplete wiring (canonical present, spokes missing): ${w.incompleteWiring.length}`,
+        );
+        for (const i of w.incompleteWiring) {
+          const where = i.target === "view" ? `view "${i.path}"` : i.path;
+          lines.push(`- ${where}: ${i.files.join(", ")}`);
+        }
+      }
+      if (w.conflicts.length > 0) {
+        lines.push(
+          `⚠️ Wiring conflicts (existing file/link, left untouched): ${w.conflicts.length}`,
+        );
+        for (const c of w.conflicts) {
+          const where = c.target === "view" ? `view "${c.path}"` : c.path;
+          const detail =
+            c.reason === "mismatch" && c.actualTarget !== undefined
+              ? `mismatch -> ${c.actualTarget}`
+              : c.reason;
+          lines.push(`- ${where} ${c.file}: ${detail}`);
+        }
+      }
+      if (w.collisions.length > 0) {
+        lines.push(`⚠️ Canonical-name collisions (ambiguous, not wired): ${w.collisions.length}`);
+        for (const c of w.collisions) {
+          const who = c.view === true ? `${c.repos.join(", ")} + view` : c.repos.join(", ");
+          lines.push(`- agents/${c.canonicalName}/AGENTS.md <- ${who}`);
+        }
+      }
+    }
+    // Unreachable is advisory (a declared repo not cloned on this machine — expected
+    // on a partial checkout), reported regardless of `ok` and never failing the check.
+    if (w.unreachable.length > 0) {
+      lines.push(
+        `ℹ️ Declared repos not present on this machine (advisory — not counted as drift): ${w.unreachable.length}`,
+      );
+      for (const u of w.unreachable) lines.push(`- ${u}`);
+    }
+    lines.push("");
+  }
+
   lines.push(
-    "Note: read-only advisory. It only shows the difference between the declaration (repos) and the capture config (source_roots); it does not enforce.",
+    "Note: read-only advisory. It shows the difference between the declaration (repos) and the capture config (source_roots), and the instruction-file wiring vs basou's native topology; it does not enforce or generate.",
   );
   return lines.join("\n");
 }
