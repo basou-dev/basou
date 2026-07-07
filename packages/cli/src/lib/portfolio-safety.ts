@@ -22,9 +22,21 @@ const execFileAsync = promisify(execFile);
 export type SafetyFinding = {
   workspaceLabel: string;
   workspaceRoot: string;
-  /** The configured (resolved) path of the monitored repo. Shown to the owner locally so they can fix it. */
+  /**
+   * The configured (resolved) path this finding is about, shown to the owner
+   * locally so they can fix it. For `footprint` / `overlap` / `unverifiable`
+   * it is the monitored repo; for `redundant` it is the redundant entry itself
+   * (the one to remove from the registry).
+   */
   monitoredRepo: string;
-  kind: "footprint" | "overlap" | "unverifiable";
+  /**
+   * `footprint` / `overlap` / `unverifiable` are monitored-repo write risks
+   * that gate a portfolio start. `redundant` is a registry-hygiene warning: a
+   * listed entry resolves to the same planning master as another (its view or a
+   * source-root repo), producing a duplicate card. It never gates a start — the
+   * read-only view still opens — but `basou view --check` reports it.
+   */
+  kind: "footprint" | "overlap" | "unverifiable" | "redundant";
   detail: string;
 };
 
@@ -120,13 +132,21 @@ export async function checkPortfolioSafety(workspaces: WorkspaceEntry[]): Promis
   const findings: SafetyFinding[] = [];
   let monitoredReposChecked = 0;
 
+  // Per-entry data for the redundancy pass, gathered as each manifest is read so
+  // no manifest is read twice.
+  const records: EntryRecord[] = [];
+
   for (const ws of workspaces) {
     const wsReal = await canonical(ws.repoRoot);
 
     let sourceRoots: ReadonlyArray<string> = [];
+    let viewPath: string | undefined;
+    let isMaster = false;
     try {
       const manifest = await readManifest(ws.paths);
       sourceRoots = manifest.import?.source_roots ?? [];
+      viewPath = manifest.workspace.view;
+      isMaster = true; // a readable manifest means this entry owns a `.basou/` store
     } catch (error: unknown) {
       if (error instanceof Error && error.message === "YAML file not found") {
         // Truly uninitialized: no source roots, and it only ever writes to its
@@ -142,6 +162,8 @@ export async function checkPortfolioSafety(workspaces: WorkspaceEntry[]): Promis
           detail:
             "the workspace manifest is present but unreadable — cannot determine which repos it monitors; treat as unsafe",
         });
+        // An unreadable master cannot claim members; record it as its own identity.
+        records.push({ ws, real: wsReal, isMaster: false, claimed: new Set() });
         continue;
       }
     }
@@ -153,6 +175,18 @@ export async function checkPortfolioSafety(workspaces: WorkspaceEntry[]): Promis
       const real = await canonical(display);
       if (real !== wsReal) monitored.set(real, display); // `.` (the workspace itself) is exempt
     }
+
+    // The canonical paths this master "owns" beyond its own root: its monitored
+    // source roots plus its generated workspace view. Reverses the master's
+    // declaration the same way {@link resolveMemberToMaster} matches a member's
+    // root against a master's `source_roots`, extended to cover the view (which
+    // is declared under `workspace.view`, not `source_roots`).
+    const claimed = new Set<string>(monitored.keys());
+    if (isMaster && viewPath !== undefined) {
+      const viewReal = await canonical(resolve(ws.repoRoot, viewPath));
+      if (viewReal !== wsReal) claimed.add(viewReal);
+    }
+    records.push({ ws, real: wsReal, isMaster, claimed });
 
     for (const [real, display] of monitored) {
       monitoredReposChecked++;
@@ -178,7 +212,66 @@ export async function checkPortfolioSafety(workspaces: WorkspaceEntry[]): Promis
     }
   }
 
+  findings.push(...detectRedundantEntries(records));
+
   return { findings, workspacesChecked: workspaces.length, monitoredReposChecked };
+}
+
+/** One registered portfolio entry, resolved for the redundancy pass. */
+type EntryRecord = {
+  ws: WorkspaceEntry;
+  /** The entry's own canonical (realpath) root. */
+  real: string;
+  /** True when the entry owns a readable `.basou/` store (it IS a planning master). */
+  isMaster: boolean;
+  /** Canonical paths this entry (when a master) claims: its source roots and view. */
+  claimed: Set<string>;
+};
+
+/**
+ * Detect portfolio entries that resolve to the same planning master as another
+ * listed entry — the duplicate-card footgun: registering both a master (its
+ * `.basou`-owning anchor) and its workspace view, or a member/source-root repo,
+ * shows the same underlying workspace twice.
+ *
+ * Each entry resolves to a master identity: a master (readable `.basou/`) is its
+ * own identity; a storeless entry inherits the identity of any listed master
+ * that claims its root (via a `source_root` or the `workspace.view`), else it is
+ * its own identity. Entries grouped under one identity beyond the first are
+ * flagged; the master (or, if the master itself is not listed, the first entry)
+ * is the primary the others point at.
+ */
+function detectRedundantEntries(records: EntryRecord[]): SafetyFinding[] {
+  const masterIdentity = (r: EntryRecord): string => {
+    if (r.isMaster) return r.real;
+    const owner = records.find((o) => o.isMaster && o.claimed.has(r.real));
+    return owner !== undefined ? owner.real : r.real;
+  };
+
+  const groups = new Map<string, EntryRecord[]>();
+  for (const r of records) {
+    const key = masterIdentity(r);
+    const group = groups.get(key);
+    if (group !== undefined) group.push(r);
+    else groups.set(key, [r]);
+  }
+
+  const findings: SafetyFinding[] = [];
+  for (const [identity, group] of groups) {
+    if (group.length < 2) continue;
+    const primary = group.find((r) => r.real === identity) ?? (group[0] as EntryRecord);
+    for (const r of group) {
+      if (r === primary) continue;
+      findings.push({
+        workspaceLabel: r.ws.label,
+        workspaceRoot: r.ws.repoRoot,
+        monitoredRepo: r.ws.repoRoot,
+        kind: "redundant",
+        detail: `resolves to the same workspace as portfolio entry "${primary.ws.label}" (${primary.ws.repoRoot}) and shows a duplicate card — register only the planning master (the anchor that owns .basou), not its workspace view or a source-root repo; remove this entry from the registry`,
+      });
+    }
+  }
+  return findings;
 }
 
 /** Human-readable preflight report lines (also used by `--check`). */
@@ -193,12 +286,24 @@ export function formatSafetyReport(result: SafetyResult): string[] {
       `Portfolio safety: OK. ${result.workspacesChecked} workspace(s), ${result.monitoredReposChecked} monitored repo(s) checked — no .basou footprint, no overlap.`,
     ];
   }
-  const lines = [`Portfolio safety: DANGER — ${result.findings.length} finding(s):`];
+  const kinds = new Set(result.findings.map((f) => f.kind));
+  // A footprint / overlap / unverifiable item is a monitored-repo write risk;
+  // a lone redundancy is registry hygiene, not danger.
+  const hasWriteRisk = kinds.has("footprint") || kinds.has("overlap") || kinds.has("unverifiable");
+  const severity = hasWriteRisk ? "DANGER" : "WARNING";
+  const lines = [`Portfolio safety: ${severity} — ${result.findings.length} finding(s):`];
   for (const f of result.findings) {
     lines.push(`  [${f.kind}] ${f.monitoredRepo} (workspace "${f.workspaceLabel}"): ${f.detail}`);
   }
-  lines.push(
-    "A monitored repo must have no basou footprint. Use a separate workspace repo whose source_roots point at the monitored repo as a sibling; never 'basou init' / 'run' / 'exec' inside a monitored repo.",
-  );
+  if (hasWriteRisk) {
+    lines.push(
+      "A monitored repo must have no basou footprint. Use a separate workspace repo whose source_roots point at the monitored repo as a sibling; never 'basou init' / 'run' / 'exec' inside a monitored repo.",
+    );
+  }
+  if (kinds.has("redundant")) {
+    lines.push(
+      "A redundant entry is a workspace already reached through another registered planning master. Register only the planning master (the anchor that owns .basou), never its workspace view or its member / source-root repos — those resolve back to the same workspace and produce duplicate cards.",
+    );
+  }
   return lines;
 }

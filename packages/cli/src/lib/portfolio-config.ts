@@ -11,11 +11,21 @@ import { readYamlFile } from "@basou/core";
  * exists to keep committed manifests path-clean; that constraint does not apply
  * to a user-level config under $HOME).
  *
+ * Each entry's `path` must be a **planning master** — the repo that OWNS the
+ * `.basou/` store (a grouped project's `-planning` hub, or a solo project's own
+ * repo). It is NOT the throwaway **workspace view** dir (the symlink aggregator,
+ * which has no `.basou/` of its own) and NOT a member / source-root repo the
+ * master aggregates. Listing a master's view or a member repo alongside the
+ * master resolves back to that same master and shows a duplicate card; `basou
+ * view --check` flags it as `redundant`. ("workspace" is used two ways in basou —
+ * the registered planning master here, and the generated view dir; a portfolio
+ * entry always means the former.)
+ *
  * Shape:
  *   version: 1            # optional, reserved for future migrations
  *   workspaces:
- *     - path: /abs/path/to/workspace-repo   # required, absolute (~ allowed)
- *       label: my-project                   # optional display label
+ *     - path: /abs/path/to/planning-master   # required, absolute (~ allowed); the .basou-owning anchor
+ *       label: my-project                    # optional display label
  */
 export type PortfolioWorkspace = { path: string; label?: string };
 

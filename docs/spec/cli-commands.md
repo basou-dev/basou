@@ -83,12 +83,23 @@ manifest, its paths are **absolute** (a leading `~` is expanded); the
 paths are ad-hoc and resolved against the cwd. An entry whose `.basou/` is
 missing or unreadable shows as a degraded card rather than failing the view.
 
+Each entry is a **planning master** — the repo that owns the `.basou/` store (a
+grouped project's `-planning` hub, or a solo project's own repo). It is **not**
+the throwaway **workspace view** dir (the symlink aggregator, which has no
+`.basou/` of its own) and **not** a member / source-root repo the master
+aggregates. Register the master only: listing its view or a member repo
+alongside it resolves back to the same workspace and shows a duplicate card,
+which `basou view --check` flags as `redundant`. (basou uses "workspace" two
+ways — the registered planning master here, and the generated view dir; a
+portfolio entry always means the master.)
+
 ```yaml
-# ~/.basou/portfolio.yaml
+# ~/.basou/portfolio.yaml — each path is a planning master (the .basou-owning
+# anchor), never its workspace view dir or a member repo it aggregates.
 version: 1
 workspaces:
-  - path: /abs/path/to/project-a    # absolute (~ allowed)
-    label: project-a                # optional display label
+  - path: /abs/path/to/project-a-planning   # absolute (~ allowed); owns .basou/
+    label: project-a                        # optional display label
   - path: /abs/path/to/project-b
 ```
 
@@ -122,3 +133,10 @@ on start and refuses to launch on danger (`--skip-safety-check` overrides). The
 preflight is read-only — it only stats `.basou` and runs `git ls-files` against
 monitored repos. Workspaces should be dedicated planning repos (a sibling of
 each monitored repo), never the monitored repo itself.
+
+The preflight also flags `redundant` entries — a registered path that resolves
+to the same planning master as another entry (its workspace view, or a member /
+source-root repo the master aggregates), which would show a duplicate card.
+Redundancy is registry hygiene, not a write risk: it is reported by `--check`
+(non-zero exit) but does **not** gate a `--portfolio` start. The fix is to
+register only the planning master and drop the view / member entry.
