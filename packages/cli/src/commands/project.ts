@@ -524,9 +524,24 @@ export type ProjectRenameResult = RenamePlan & {
 export type ProjectNewOptions = {
   apply?: boolean;
   /**
+   * The project's product name (`--project-name`, matching `basou init`). When set
+   * it becomes `project.name` in the manifest and the default view stem
+   * (`<project-name>-workspace`). Undefined → the view stem falls back to the
+   * anchor directory name and `project.name` is left unset: no product name is
+   * inferred (no `-planning` suffix stripping, no roster-prefix guessing).
+   * `--project-name` is the only way to decouple the view name from the anchor
+   * directory name — deliberately explicit, since basou mandates no anchor naming
+   * convention. Because the value also drives a filesystem path (the view stem),
+   * it is validated as a simple name: {@link validateProjectName} rejects an
+   * empty/blank value, path separators, and `..` so a committed manifest can never
+   * carry a corrupt view path.
+   */
+  projectName?: string;
+  /**
    * The workspace view. Commander folds `--view <path>` and `--no-view` onto the
    * same `view` property: a string is the override path, `false` is `--no-view`
-   * (solo project), and `undefined` is the default (`<name>-workspace` sibling).
+   * (solo project), and `undefined` is the default (`<name>-workspace` sibling,
+   * where `<name>` is `--project-name` or the anchor directory name).
    */
   view?: string | false;
   /** Write a `.basou/` full-exclude .gitignore block instead of the default ignore+commit block. */
@@ -546,10 +561,19 @@ export type ProjectNewContext = {
 export type ProjectNewResult = {
   /** The workspace name, derived from the anchor repo's directory name. */
   workspaceName: string;
+  /** The declared product name (`project.name`, from `--project-name`), or null when unset. */
+  projectName: string | null;
   /** The seeded `repos` roster (anchor `.` first, then the deduped declared repos). */
   repos: RepoEntry[];
   /** The seeded `workspace.view` path, or null when `--no-view` (solo project). */
   view: string | null;
+  /**
+   * True when `--project-name` was given but `--view` set the view path — the
+   * product name did NOT drive the view (the explicit `--view` wins). A render
+   * breadcrumb so the operator is not surprised that half of `--project-name`'s
+   * job was overridden.
+   */
+  viewOverridesProjectName: boolean;
   /** The derived `import.source_roots` (the roster paths plus the view when present). */
   sourceRoots: string[];
   /** Declared repo paths that are not git repositories (rejected — basou never creates repos). */
@@ -756,8 +780,12 @@ export function registerProjectCommand(program: Command): void {
     )
     .option("--apply", "Create `.basou/` and write the seeded manifest (default: dry-run preview)")
     .option(
+      "--project-name <name>",
+      "The project's product name (a simple name — letters, digits, '.', '-', '_'): sets `project.name` and the default view path (a `<name>-workspace` sibling). Omit to fall back to the anchor directory name; use --view for a custom view path",
+    )
+    .option(
       "--view <path>",
-      "Override the workspace view path (default: a <name>-workspace sibling)",
+      "Override the workspace view path (default: a `<name>-workspace` sibling, where <name> is --project-name or the anchor directory name)",
     )
     .option("--no-view", "Solo project: declare no workspace view")
     .option(
@@ -4426,6 +4454,26 @@ async function resolveRepositoryRootForNew(cwd: string): Promise<string> {
 }
 
 /**
+ * Validate a `--project-name` value. It is stored as `manifest.project.name` AND
+ * drives a filesystem path (the `<name>-workspace` view stem), so it must be a
+ * simple name: a non-empty ASCII token of letters, digits, `.`, `-`, `_` that
+ * starts with a letter or digit. This rejects a blank value (which would seed a
+ * `../-workspace` view), a path separator or `..` traversal (which would escape
+ * the parent dir or make the view a non-sibling), leading/interior whitespace,
+ * and non-ASCII (a view dir name must stay ASCII). The error echoes the offending
+ * value (a CLI arg, never a filesystem path) and points at `--view` as the escape
+ * hatch for an arbitrary view path. Returns the value unchanged when valid.
+ */
+function validateProjectName(name: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+    throw new Error(
+      `Invalid --project-name "${name}": use a simple name (letters, digits, '.', '-', '_'; starting with a letter or digit; no spaces or path separators). For a custom view path, use --view.`,
+    );
+  }
+  return name;
+}
+
+/**
  * Scaffold a new project: resolve the anchor (the current git repository),
  * normalize the given repo paths to repo-root-relative form and require each to
  * be a git repository (basou declares the project, it never creates a repo), then
@@ -4446,6 +4494,21 @@ export async function doRunProjectNew(
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveRepositoryRootForNew(cwd);
   const workspaceName = basename(repositoryRoot);
+  // `--project-name` is the explicit, first-class product name: it drives
+  // `project.name` and the default view stem. Because it also becomes part of a
+  // filesystem path (the `<name>-workspace` view dir), it is validated as a
+  // simple name — a blank value or a path separator would otherwise be written
+  // into a committed manifest's view path. When omitted the view stem falls back
+  // to the anchor directory name and no product name is inferred (basou mandates
+  // no anchor naming convention, so decoupling the view from the anchor is a
+  // deliberate opt-in rather than silent string munging).
+  const productName =
+    options.projectName !== undefined ? validateProjectName(options.projectName) : undefined;
+  const viewStem = productName ?? workspaceName;
+  // Breadcrumb signal: when a product name was given AND `--view` set an explicit
+  // path, the product name did NOT drive the view (the explicit path wins). The
+  // render surfaces this so the override is not silent.
+  const viewOverridesProjectName = productName !== undefined && typeof options.view === "string";
 
   // Normalize each given repo to a repo-root-relative path (the anchor itself
   // becomes "."), then classify it on disk. A path that is not a git repository
@@ -4483,9 +4546,9 @@ export async function doRunProjectNew(
   const roster: RepoEntry[] = rosterPaths.map((path) => ({ path }));
 
   // `--no-view` (commander stores it as `view === false`) drops the view; a
-  // string overrides the default `<name>-workspace` sibling.
-  const viewPath =
-    options.view === false ? null : (options.view ?? `../${workspaceName}-workspace`);
+  // string overrides the default `<viewStem>-workspace` sibling (viewStem is
+  // --project-name or the anchor directory name).
+  const viewPath = options.view === false ? null : (options.view ?? `../${viewStem}-workspace`);
 
   // Work happens with the view as cwd, so the view stays in `source_roots`; the
   // roster excludes it (a view is not a declared repo). Mirrors the existing
@@ -4496,8 +4559,14 @@ export async function doRunProjectNew(
   const existed = existsSync(paths.files.manifest);
 
   // Build the manifest from the declaration. `createManifest` knows source_roots
-  // but not repos/view, so attach those after.
-  const manifest: Manifest = createManifest({ workspaceName, sourceRoots });
+  // but not repos/view, so attach those after. `project.name` is written only
+  // when `--project-name` was given (an omitted name leaves the field unset
+  // rather than fabricating a product name from the anchor directory).
+  const manifest: Manifest = createManifest({
+    workspaceName,
+    sourceRoots,
+    ...(productName !== undefined ? { projectName: productName } : {}),
+  });
   manifest.repos = roster;
   if (viewPath !== null) manifest.workspace.view = viewPath;
 
@@ -4518,8 +4587,10 @@ export async function doRunProjectNew(
 
   const result: ProjectNewResult = {
     workspaceName,
+    projectName: productName ?? null,
     repos: roster,
     view: viewPath,
+    viewOverridesProjectName,
     sourceRoots,
     invalidRepos: [],
     existed,
@@ -4569,11 +4640,15 @@ export function renderProjectNew(result: ProjectNewResult): string {
     lines.push("");
   }
 
+  // Lead with the product identity when declared (mirrors `project derive`'s
+  // anchor-starter, whose title is `project.name ?? anchorName`); otherwise the
+  // anchor directory name.
+  const identity = result.projectName ?? result.workspaceName;
   if (result.applied) {
-    lines.push(`✅ Created \`.basou/\` for \`${result.workspaceName}\` and seeded the manifest:`);
+    lines.push(`✅ Created \`.basou/\` for \`${identity}\` and seeded the manifest:`);
   } else {
     lines.push(
-      `Will create \`.basou/\` for \`${result.workspaceName}\` and seed the manifest (dry-run; pass --apply to write):`,
+      `Will create \`.basou/\` for \`${identity}\` and seed the manifest (dry-run; pass --apply to write):`,
     );
   }
   lines.push("");
@@ -4584,9 +4659,17 @@ export function renderProjectNew(result: ProjectNewResult): string {
   }
   lines.push("");
 
+  if (result.projectName !== null) {
+    lines.push(`project name: ${result.projectName}`);
+    lines.push("");
+  }
+
   lines.push(
     result.view !== null ? `workspace view: ${result.view}` : "workspace view: none (solo project)",
   );
+  if (result.viewOverridesProjectName) {
+    lines.push("  (note: --view set this path, so --project-name did not drive the view name)");
+  }
   lines.push("");
 
   lines.push(`source_roots (${result.sourceRoots.length}):`);

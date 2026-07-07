@@ -3279,6 +3279,96 @@ describe("basou project new", () => {
     expect(after.import?.source_roots).toEqual([".", "../custom-view"]);
   });
 
+  it("--project-name sets project.name and derives the view from the product name (not the anchor dir)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    // anchor dir is "anchor"; --project-name decouples the view from it.
+    const r = await doRunProjectNew([], { apply: true, projectName: "nimart" }, { cwd: anchor() });
+    expect(r.projectName).toBe("nimart");
+    expect(r.view).toBe("../nimart-workspace");
+    expect(r.sourceRoots).toEqual([".", "../nimart-workspace"]);
+    expect(r.viewOverridesProjectName).toBe(false);
+    // workspace.name stays the anchor dir name; project.name carries the product.
+    const after = await readManifest(basouPaths(anchor()));
+    expect(after.workspace.name).toBe("anchor");
+    expect(after.project?.name).toBe("nimart");
+    expect(after.workspace.view).toBe("../nimart-workspace");
+  });
+
+  it("omitting --project-name leaves project.name unset and keeps the <anchor>-workspace default", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectNew([], { apply: true }, { cwd: anchor() });
+    expect(r.projectName).toBeNull();
+    expect(r.view).toBe("../anchor-workspace");
+    expect(r.viewOverridesProjectName).toBe(false);
+    const after = await readManifest(basouPaths(anchor()));
+    expect(after.project?.name).toBeUndefined();
+  });
+
+  it("--view wins over --project-name for the view path (breadcrumb noted), but project.name is still stored", async () => {
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m?: unknown) => {
+      out.push(String(m));
+    });
+    const r = await doRunProjectNew(
+      [],
+      { apply: true, projectName: "nimart", view: "../custom-view" },
+      { cwd: anchor() },
+    );
+    expect(r.view).toBe("../custom-view");
+    expect(r.projectName).toBe("nimart");
+    expect(r.viewOverridesProjectName).toBe(true);
+    // The override is surfaced, not silent (B3).
+    expect(out.join("\n")).toContain("--view set this path");
+    const after = await readManifest(basouPaths(anchor()));
+    expect(after.workspace.view).toBe("../custom-view");
+    expect(after.project?.name).toBe("nimart");
+  });
+
+  it("--no-view with --project-name declares no view but still stores project.name", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectNew(
+      [],
+      { apply: true, view: false, projectName: "nimart" },
+      { cwd: anchor() },
+    );
+    expect(r.view).toBeNull();
+    expect(r.projectName).toBe("nimart");
+    // `--view false` is not a string path override, so there is no breadcrumb.
+    expect(r.viewOverridesProjectName).toBe(false);
+    const after = await readManifest(basouPaths(anchor()));
+    expect(after.workspace.view).toBeUndefined();
+    expect(after.project?.name).toBe("nimart");
+  });
+
+  it.each([
+    ["empty", ""],
+    ["blank", "   "],
+    ["path separator", "foo/bar"],
+    ["parent traversal", "../evil"],
+    ["leading dot", ".hidden"],
+    ["trailing space", "foo "],
+    ["interior space", "foo bar"],
+    ["non-ascii", `caf${String.fromCharCode(0x00e9)}`],
+  ])("rejects an invalid --project-name (%s) before writing anything", async (_label, bad: string) => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await expect(
+      doRunProjectNew([], { apply: true, projectName: bad }, { cwd: anchor() }),
+    ).rejects.toThrow(/Invalid --project-name/);
+    // Validation runs before any write — no corrupt manifest lands on disk.
+    expect(existsSync(basouPaths(anchor()).files.manifest)).toBe(false);
+  });
+
+  it("accepts a dashed / underscored / dotted product-name slug", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await doRunProjectNew(
+      [],
+      { apply: true, projectName: "my_fav-2.0" },
+      { cwd: anchor() },
+    );
+    expect(r.projectName).toBe("my_fav-2.0");
+    expect(r.view).toBe("../my_fav-2.0-workspace");
+  });
+
   it("dedupes a given repo that resolves to the anchor itself", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const r = await doRunProjectNew(["."], { apply: true }, { cwd: anchor() });
@@ -3333,13 +3423,16 @@ describe("basou project new", () => {
     const parsed = JSON.parse(out.join("\n")) as ProjectNewResult;
     expect(parsed.repos).toEqual([{ path: "." }, { path: "../sibling" }]);
     expect(parsed.view).toBe("../anchor-workspace");
+    expect(parsed.projectName).toBeNull();
   });
 
   it("renderProjectNew shows the roster, view, and next-step guidance", () => {
     const text = renderProjectNew({
       workspaceName: "anchor",
+      projectName: null,
       repos: [{ path: "." }, { path: "../sibling" }],
       view: "../anchor-workspace",
+      viewOverridesProjectName: false,
       sourceRoots: [".", "../sibling", "../anchor-workspace"],
       invalidRepos: [],
       existed: false,
@@ -3348,6 +3441,46 @@ describe("basou project new", () => {
     expect(text).toContain("../sibling");
     expect(text).toContain("../anchor-workspace");
     expect(text).toContain("basou project derive");
+    // No product name declared → no `project name:` line, and the headline names
+    // the anchor dir.
+    expect(text).not.toContain("project name:");
+    expect(text).toContain("`anchor`");
+  });
+
+  it("renderProjectNew shows a `project name:` line and leads with the product identity", () => {
+    const text = renderProjectNew({
+      workspaceName: "nimart-planning",
+      projectName: "nimart",
+      repos: [{ path: "." }, { path: "../nimart-ops" }],
+      view: "../nimart-workspace",
+      viewOverridesProjectName: false,
+      sourceRoots: [".", "../nimart-ops", "../nimart-workspace"],
+      invalidRepos: [],
+      existed: false,
+      applied: true,
+    });
+    expect(text).toContain("project name: nimart");
+    expect(text).toContain("workspace view: ../nimart-workspace");
+    // B2: the headline echoes the product name (mirrors `project derive`'s
+    // anchor-starter), not the `nimart-planning` anchor dir.
+    expect(text).toContain("for `nimart`");
+    expect(text).not.toContain("for `nimart-planning`");
+  });
+
+  it("renderProjectNew surfaces a breadcrumb when --view overrode the --project-name view (B3)", () => {
+    const text = renderProjectNew({
+      workspaceName: "nimart-planning",
+      projectName: "nimart",
+      repos: [{ path: "." }],
+      view: "../custom-view",
+      viewOverridesProjectName: true,
+      sourceRoots: [".", "../custom-view"],
+      invalidRepos: [],
+      existed: false,
+      applied: true,
+    });
+    expect(text).toContain("workspace view: ../custom-view");
+    expect(text).toContain("--view set this path");
   });
 
   it("--apply --verbose .gitignore failure does not leak absolute paths", async () => {
