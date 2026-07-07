@@ -7,6 +7,18 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- `basou project new --project-name <name>` — an explicit product name for a
+  scaffolded project (matching `basou init --project-name`). When given it is
+  written to `manifest.project.name` and becomes the default workspace-view stem
+  (`../<name>-workspace`), so a project whose anchor is a `<product>-planning`-style
+  repo can name its view after the product rather than the anchor directory.
+  Validated as a simple name (letters, digits, `.`, `-`, `_`; no blanks or path
+  separators) since it drives a filesystem path. Omitting `--project-name` is
+  unchanged: the view still defaults to `../<anchor-dir>-workspace` and
+  `project.name` is left unset (no product name is inferred from the anchor
+  directory or the roster). `--view <path>` still overrides the full view path;
+  when it does, the scaffold report notes that `--project-name` did not drive the
+  view.
 - Workspace view instruction files. The workspace view now gets its own
   generated `AGENTS.md`, treated as a second instruction target alongside the
   roster repos: `basou project preset` renders a view preset block (the
