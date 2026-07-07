@@ -138,9 +138,10 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
   // Portfolio start auto-gates on the preflight. A footprint / overlap means a
   // monitored repo has (or would get) a `.basou/` — an irreversible write risk —
   // so the server is NOT started. An `unverifiable` item (e.g. an unreadable
-  // manifest) cannot cause a write through the read-only view, so it is warned
-  // about but does not block; `basou view --check` flags it strictly.
-  // `--skip-safety-check` overrides the abort entirely.
+  // manifest) or a `redundant` entry (a duplicate card) cannot cause a write
+  // through the read-only view, so they are warned about but do not block;
+  // `basou view --check` flags them strictly. `--skip-safety-check` overrides
+  // the abort entirely.
   if (deps.mode === "portfolio" && options.skipSafetyCheck !== true) {
     const result = await checkPortfolioSafety(deps.workspaces);
     const blocking = result.findings.filter((f) => f.kind === "footprint" || f.kind === "overlap");
@@ -152,7 +153,7 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
     }
     if (result.findings.length > 0) {
       console.error(
-        `Portfolio safety: ${result.findings.length} unverifiable item(s) — the read-only view will still open; run 'basou view --check' for detail.`,
+        `Portfolio safety: ${result.findings.length} non-blocking finding(s) — the read-only view will still open; run 'basou view --check' for detail.`,
       );
     }
   }

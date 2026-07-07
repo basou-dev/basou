@@ -579,6 +579,33 @@ describe("basou view safety preflight", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("starts the server despite a redundant entry (non-blocking) and warns on stderr", async () => {
+    // A master and its own workspace view both registered: `redundant`, but not
+    // a write risk, so the preflight must NOT gate the start (only footprint /
+    // overlap do). Contrast with the danger test above, which refuses to launch.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "basou-pf-redundant-")));
+    const master = join(root, "proj-planning");
+    const view = join(root, "proj-workspace");
+    await mkdir(view, { recursive: true }); // the throwaway view dir (no .basou)
+    const paths = await ensureBasouDirectory(master);
+    const manifest = createManifest({ workspaceName: "proj", workspaceId: WS_ID_A });
+    manifest.workspace.view = "../proj-workspace";
+    await writeManifest(paths, manifest);
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errs.push(a.map(String).join(" "));
+    });
+    try {
+      await withPortfolioServer([master, view], {}, async (handle) => {
+        const { status } = await getJson(handle, "/api/portfolio");
+        expect(status).toBe(200); // the server DID start — redundant does not gate
+      });
+      expect(errs.join("\n")).toContain("non-blocking finding(s)");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("basou view (CLI wrapper)", () => {

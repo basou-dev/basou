@@ -3,6 +3,25 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou view --check` now flags `redundant` portfolio entries — a registered
+  `~/.basou/portfolio.yaml` path that resolves to the same planning master as
+  another entry (its workspace view, or a member / source-root repo the master
+  aggregates), which otherwise shows a duplicate card. Each entry resolves to a
+  master identity (a `.basou`-owning master is its own; a storeless entry inherits
+  any listed master whose `source_roots` / `workspace.view` claim its root), and
+  entries grouped under one identity beyond the first are flagged. Redundancy is
+  registry hygiene, not a `.basou`-write risk: the preflight reports it (non-zero
+  exit) but does NOT gate a `--portfolio` start (only `footprint` / `overlap` do).
+  The report reads `WARNING` when only redundant entries are present and `DANGER`
+  when a footprint / overlap / unverifiable item is also found. The portfolio-config
+  doc and the CLI spec now state that a portfolio entry is a planning master (the
+  `.basou`-owning anchor), never its workspace view dir or a member repo it
+  aggregates, fixing the two-meaning "workspace" ambiguity.
+
 ## 0.32.0 — 2026-07-07
 
 ### Added
