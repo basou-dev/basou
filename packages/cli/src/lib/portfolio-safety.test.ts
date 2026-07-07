@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -166,6 +166,35 @@ describe("checkPortfolioSafety", () => {
     const result = await checkPortfolioSafety([wsEntry(a, "a"), wsEntry(b, "b")]);
     expect(result.findings.some((f) => f.kind === "redundant")).toBe(false);
   });
+
+  it("does not flag a source-root member that owns its own .basou store", async () => {
+    // The load-bearing false-positive guard: a member repo that is BOTH a
+    // source root of the master AND a planning master in its own right (owns a
+    // `.basou/`) must never be flagged redundant — `isMaster` gives it its own
+    // identity regardless of who lists it. (A footprint finding on the same
+    // member is a separate, expected axis and is not asserted here.)
+    const master = join(getParent(), "master");
+    const member = join(getParent(), "member");
+    await initWorkspace(member, ["."]); // member owns its own store
+    await initWorkspace(master, [".", "../member"]); // ...and is a source root of master
+
+    const result = await checkPortfolioSafety([
+      wsEntry(master, "master"),
+      wsEntry(member, "member"),
+    ]);
+    expect(result.findings.some((f) => f.kind === "redundant")).toBe(false);
+  });
+
+  it("flags a master registered twice under different symlink spellings (redundant)", async () => {
+    const real = join(getParent(), "master");
+    await initWorkspace(real, ["."]);
+    const link = join(getParent(), "master-link");
+    await symlink(real, link); // a second registry spelling that survives lexical de-dup
+
+    const result = await checkPortfolioSafety([wsEntry(real, "real"), wsEntry(link, "link")]);
+    const redundant = result.findings.filter((f) => f.kind === "redundant");
+    expect(redundant).toHaveLength(1); // both realpath-collapse to one master identity
+  });
 });
 
 describe("formatSafetyReport", () => {
@@ -222,5 +251,33 @@ describe("formatSafetyReport", () => {
     // The redundant advice appears; the monitored-repo footprint advice does not.
     expect(lines.some((l) => l.includes("A redundant entry"))).toBe(true);
     expect(lines.some((l) => l.includes("must have no basou footprint"))).toBe(false);
+  });
+
+  it("keeps DANGER and renders both advice blocks when footprint and redundant coexist", () => {
+    const lines = formatSafetyReport({
+      findings: [
+        {
+          workspaceLabel: "a",
+          workspaceRoot: "/p/a",
+          monitoredRepo: "/p/mon",
+          kind: "footprint",
+          detail: "a .basou/ entry exists here",
+        },
+        {
+          workspaceLabel: "b-view",
+          workspaceRoot: "/p/b-workspace",
+          monitoredRepo: "/p/b-workspace",
+          kind: "redundant",
+          detail: 'resolves to the same workspace as portfolio entry "b"',
+        },
+      ],
+      workspacesChecked: 2,
+      monitoredReposChecked: 1,
+    });
+    // A write risk anywhere keeps the whole report at DANGER.
+    expect(lines[0]).toContain("DANGER");
+    // Both advice blocks render, one per finding class present.
+    expect(lines.some((l) => l.includes("must have no basou footprint"))).toBe(true);
+    expect(lines.some((l) => l.includes("A redundant entry"))).toBe(true);
   });
 });
