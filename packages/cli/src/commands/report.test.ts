@@ -151,7 +151,7 @@ describe("basou report generate", () => {
 
     const text = joinCalls(out);
     expect(text).toContain("# Report");
-    expect(text).toContain("## 整合性");
+    expect(text).toContain("## Integrity");
     expect(text).toContain("1 verified, 1 unchained");
     expect(process.exitCode ?? 0).toBe(0);
   });

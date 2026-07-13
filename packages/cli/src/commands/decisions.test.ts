@@ -367,8 +367,8 @@ describe("basou decisions generate", () => {
     await doRunDecisionsGenerate({}, { cwd: repo, nowProvider: () => FIXED_DATE });
     const body = await readFile(basouPaths(repo).files.decisions, "utf8");
     expect(body).toContain(`## ${did}: use zod`);
-    expect(body).toContain("- 決定日: 2026-05-08");
-    expect(body).toContain("- 判断: use zod");
+    expect(body).toContain("- date: 2026-05-08");
+    expect(body).toContain("- decision: use zod");
   });
 
   it("case 12: multiple decisions across sessions render chronologically", async () => {

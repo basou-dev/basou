@@ -247,7 +247,7 @@ describe("openWorkspace", () => {
     const body = await ws.renderReport({ title: "Client X", timeZone: "UTC" });
     expect(typeof body).toBe("string");
     expect(body).toContain("# Report — Client X");
-    expect(body).toContain("## 整合性");
+    expect(body).toContain("## Integrity");
   });
 
   it("injects a clock for time-sensitive reads", async () => {
