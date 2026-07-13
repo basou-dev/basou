@@ -1,4 +1,5 @@
 import { normalizeRelativePath } from "../project/relative-path.js";
+import type { PublishTarget, RepoLanguage, RepoVisibility } from "../project/roster.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { readManifest } from "../storage/manifest.js";
@@ -57,9 +58,11 @@ export async function resolveViewLanguageFromPaths(paths: BasouPaths): Promise<V
  * Parameterized lines are functions so the two languages can order their
  * parts naturally.
  *
- * This module is the SINGLE home for generated-view Japanese (the E-5
- * language-lint allowlist points here, not at the renderers), so "user data
- * language" and "tool chrome language" can never blur together again.
+ * This module is the SINGLE home for generated Japanese — the view chrome here
+ * and the instruction-file content in {@link PresetStrings} (the E-5
+ * language-lint allowlist points here, not at the renderers/generators), so
+ * "user data language" and "tool-generated content language" can never blur
+ * together again.
  */
 export type ViewStrings = {
   /** Localized relative age for prose lines, e.g. "3日4時間前" / "3d 4h ago". */
@@ -408,5 +411,325 @@ const JA: ViewStrings = {
     headingChangedFiles: "## 変更ファイル",
     headingSessions: "## セッション一覧",
     headingIntegrity: "## 整合性",
+  },
+};
+
+/**
+ * Resolve a GENERATED INSTRUCTION-FILE's content language from the target
+ * repo's declared `language`. Unlike the views (workspace-level artifacts that
+ * follow the anchor), a preset block lives inside one repo's instruction file,
+ * so its audience is that repo's declared audience: `ja` renders Japanese
+ * (byte-identical to the pre-i18n output), `en` / `en+ja` / undeclared render
+ * English (one content language per generated block; en is the shared floor).
+ */
+export function resolveRepoContentLanguage(language: RepoLanguage | undefined): ViewLanguage {
+  return language === "ja" ? "ja" : "en";
+}
+
+/**
+ * Resolve the content language of a WORKSPACE-LEVEL instruction artifact (the
+ * view's AGENTS.md block, the anchor's starter) from an already-gathered
+ * roster: the entry flagged `anchor` speaks for the workspace, mirroring the
+ * views' anchor-language rule. No anchor entry (or no declared language)
+ * resolves to English. When more than one entry carries the flag, the first
+ * wins (declared order).
+ *
+ * Note the anchor is identified by the CALLER-SET flag, not by this module:
+ * {@link resolveViewLanguage} keys on the manifest path being `.`, while the
+ * instruction-file callers flag the anchor by resolved-path identity. For a
+ * conventional manifest (anchor declared as `.`) the two agree; a roster that
+ * reaches the anchor only through an aliased path is where they can diverge,
+ * and the caller's flag is authoritative for the instruction files.
+ */
+export function resolveAnchorContentLanguage(
+  repos: ReadonlyArray<{ anchor?: boolean | undefined; language?: RepoLanguage | undefined }>,
+): ViewLanguage {
+  return resolveRepoContentLanguage(repos.find((r) => r.anchor === true)?.language);
+}
+
+/**
+ * Every localized string the instruction-file generators emit: the per-repo
+ * preset block, the workspace view's block, and the anchor's starter. Lives in
+ * this module for the same reason as {@link ViewStrings}: it is the SINGLE
+ * home for generated Japanese, so the language-lint E-5 allowlist stays one
+ * file and "generated content language" is always a declaration-driven table
+ * lookup, never a hardcode.
+ */
+export type PresetStrings = {
+  repoBlock: {
+    heading: string;
+    intro: string;
+    /** Source git-visibility, rendered with the consequence the agent must respect. */
+    visibilityLabel: (v: RepoVisibility | undefined) => string;
+    /**
+     * Source language (commits/comments/code), rendered with the audience it
+     * serves. Invariant note: the table itself is SELECTED by this same field
+     * (ja -> JA table, everything else -> EN), so the JA table's en / en+ja /
+     * unset branches and the EN table's ja branch are unreachable from
+     * renderPresetBlock — they exist for table completeness (and the
+     * both-language sweep test), not because a render can emit them.
+     */
+    sourceLanguageLabel: (l: RepoLanguage | undefined) => string;
+    /** Published-surface kind. */
+    publishKindLabel: (k: PublishTarget["kind"]) => string;
+    /** A published surface's visibility (independent of the source repo's). */
+    publishVisibilityLabel: (v: RepoVisibility | undefined) => string;
+    /** A published surface's content language (read by end users; may differ from source). */
+    contentLanguageLabel: (l: RepoLanguage | undefined) => string;
+    /** "ソース可視性" — the source-visibility line label. */
+    sourceVisibilityLabel: string;
+    /** "ソース言語" — the source-language line label. */
+    sourceLanguageLineLabel: string;
+    /** "- 配信物: なし" — no published surfaces. */
+    publishesNone: string;
+    /** "- 配信物:" — the published-surfaces list header. */
+    publishesHeader: string;
+  };
+  viewBlock: {
+    heading: string;
+    intro: string;
+    selfNote: (viewName: string) => string;
+    aggregates: (repoCount: number) => string;
+    reposHeading: string;
+    tableHeader: string;
+    /** Instruction-file ownership labels: who writes the repo's AGENTS.md. */
+    instructionsAnchor: string;
+    instructionsSelf: string;
+    instructionsHub: string;
+    /** "未設定" — the short table cell for an undeclared visibility / language. */
+    unsetShort: string;
+    commitHeading: string;
+    commitBody: string;
+    conventionsHeading: string;
+    conventionsBody: string;
+    principlesHeading: string;
+    principleStateless: string;
+    principleNoFiles: string;
+  };
+  anchorStarter: {
+    identityLine: (title: string) => string;
+    starterNote: string;
+    basicsHeading: string;
+    basicsTodo: string;
+    commitHeading: string;
+    commitPlanning: string;
+    commitImplementation: string;
+    commitView: string;
+    conventionsHeading: string;
+    conventionsBody: string;
+    viewPointerLine: (viewName: string) => string;
+    policyHeading: string;
+    policyTodo: string[];
+  };
+};
+
+/** Look up the instruction-file string table for a resolved content language. */
+export function presetStrings(language: ViewLanguage): PresetStrings {
+  return language === "ja" ? PRESET_JA : PRESET_EN;
+}
+
+const PRESET_EN: PresetStrings = {
+  repoBlock: {
+    heading: "## Project configuration (generated by basou — the manifest is the source of truth)",
+    intro:
+      "This section is generated by `basou project preset` from the declarations in `.basou/manifest.yaml`. Edit the manifest, not this block (content outside the markers is preserved).",
+    visibilityLabel: (v) => {
+      switch (v) {
+        case "public":
+          return "public (the git history is public)";
+        case "private":
+          return "private (the git history is not public)";
+        case "future-public":
+          return "future-public (private today, planned to go public)";
+        default:
+          return "unset";
+      }
+    },
+    sourceLanguageLabel: (l) => {
+      switch (l) {
+        case "en":
+          return "en (commits, comments, and code in English)";
+        case "ja":
+          return "ja (commits, comments, and code in Japanese)";
+        case "en+ja":
+          return "en+ja (commits, comments, and code in English and Japanese)";
+        default:
+          return "unset";
+      }
+    },
+    publishKindLabel: (k) => (k === "web" ? "web (deployed)" : "npm (package)"),
+    publishVisibilityLabel: (v) => {
+      switch (v) {
+        case "public":
+          return "public";
+        case "private":
+          return "private";
+        case "future-public":
+          return "future-public";
+        default:
+          return "visibility unset";
+      }
+    },
+    contentLanguageLabel: (l) => l ?? "language unset",
+    sourceVisibilityLabel: "Source visibility",
+    sourceLanguageLineLabel: "Source language",
+    publishesNone: "- Published surfaces: none",
+    publishesHeader: "- Published surfaces:",
+  },
+  viewBlock: {
+    heading: "## Workspace view layout (generated by basou — the manifest is the source of truth)",
+    intro:
+      "This section is generated by `basou project preset` from the declarations in `.basou/manifest.yaml`. Edit the manifest, not this block (content outside the markers is preserved).",
+    selfNote: (viewName) =>
+      `This AGENTS.md is itself generated by basou (canonical: \`agents/${viewName}/AGENTS.md\`; content outside the markers is preserved).`,
+    aggregates: (n) =>
+      `This directory is a **view** aggregating the ${n} declared repo(s) via symlinks. It holds no content of its own and is not under git.`,
+    reposHeading: "### Aggregated repos",
+    tableHeader: "| repo | visibility | language | instructions |",
+    instructionsAnchor: "anchor (hand-maintained)",
+    instructionsSelf: "self (the repo owns it)",
+    instructionsHub: "hub (generated by basou)",
+    unsetShort: "unset",
+    commitHeading: "### Where to commit",
+    commitBody:
+      "You cannot commit in the view (it is not under git). Always `cd` into the actual repo before committing.",
+    conventionsHeading: "### Required reading",
+    conventionsBody:
+      "The working conventions live in each repo's AGENTS.md. Read these before working.",
+    principlesHeading: "### Key principles",
+    principleStateless: "- This directory holds no state (not under git)",
+    principleNoFiles: "- Do not place important files here directly (they belong in the repos)",
+  },
+  anchorStarter: {
+    identityLine: (title) =>
+      `> This repository is the **planning master (anchor) of ${title}**. AI agents working here should read this file first.`,
+    starterNote:
+      "> This file is a starter that `basou project derive` generated **once** at greenfield bring-up. Hand-maintain it from here — basou never regenerates or overwrites it (there are no BASOU:GENERATED markers; edit freely).",
+    basicsHeading: "## Project basics",
+    basicsTodo: "<!-- TODO: these cannot be derived from the manifest. Fill them in. -->",
+    commitHeading: "## Where to commit",
+    commitPlanning: "- **This repository (the planning master)**: plans, designs, strategy docs.",
+    commitImplementation:
+      "- **Each implementation repo**: implementation code. Always `cd` into the target repo before committing.",
+    commitView: "- **The workspace view**: not under git. You cannot commit in the view.",
+    conventionsHeading: "## Required reading",
+    conventionsBody:
+      "The working conventions live in each repo's AGENTS.md. Read these before working.",
+    viewPointerLine: (viewName) =>
+      `- ${viewName}/AGENTS.md (the workspace view, generated by basou) — **the authoritative, up-to-date repo roster (the live roster) lives there**`,
+    policyHeading: "## Working policy (project specifics)",
+    policyTodo: [
+      "<!-- TODO: describe these for your project.",
+      "  - Current phase / key documents",
+      "  - Secrets handling (where NOT to write them)",
+      "  - Language policy (commits / comments / docs)",
+      "  - Commit discipline (avoid mixed commits, etc.)",
+      "-->",
+    ],
+  },
+};
+
+// E-5: the Japanese instruction-file content. These values must stay
+// byte-identical to the pre-i18n generator output so a repo that declares
+// `language: ja` (or a ja anchor, for the view/starter) renders exactly what
+// it rendered before.
+const PRESET_JA: PresetStrings = {
+  repoBlock: {
+    heading: "## プロジェクト構成(basou が生成 — manifest が正本)",
+    intro:
+      "このセクションは `.basou/manifest.yaml` の宣言から `basou project preset` が生成します。編集は manifest 側で行ってください(マーカー外の記述は保持されます)。",
+    visibilityLabel: (v) => {
+      switch (v) {
+        case "public":
+          return "public(git 履歴は公開)";
+        case "private":
+          return "private(git 履歴は非公開)";
+        case "future-public":
+          return "future-public(現在は非公開・将来公開予定)";
+        default:
+          return "未設定";
+      }
+    },
+    sourceLanguageLabel: (l) => {
+      switch (l) {
+        case "en":
+          return "en(commit・コメント・コードは英語)";
+        case "ja":
+          return "ja(commit・コメント・コードは日本語)";
+        case "en+ja":
+          return "en+ja(commit・コメント・コードは日英)";
+        default:
+          return "未設定";
+      }
+    },
+    publishKindLabel: (k) => (k === "web" ? "web(デプロイ)" : "npm(パッケージ)"),
+    publishVisibilityLabel: (v) => {
+      switch (v) {
+        case "public":
+          return "公開";
+        case "private":
+          return "非公開";
+        case "future-public":
+          return "将来公開";
+        default:
+          return "可視性未設定";
+      }
+    },
+    contentLanguageLabel: (l) => l ?? "言語未設定",
+    sourceVisibilityLabel: "ソース可視性",
+    sourceLanguageLineLabel: "ソース言語",
+    publishesNone: "- 配信物: なし",
+    publishesHeader: "- 配信物:",
+  },
+  viewBlock: {
+    heading: "## workspace view 構成(basou が生成 — manifest が正本)",
+    intro:
+      "このセクションは `.basou/manifest.yaml` の宣言から `basou project preset` が生成します。編集は manifest 側で行ってください(マーカー外の記述は保持されます)。",
+    selfNote: (viewName) =>
+      `この AGENTS.md 自身も basou の生成物です(実体: \`agents/${viewName}/AGENTS.md\`、マーカー外の記述は保持されます)。`,
+    aggregates: (n) =>
+      `このディレクトリは、宣言された ${n} 個の repo を symlink で集約する **view** です。実体を持たず、git 管理外です。`,
+    reposHeading: "### 集約している repo",
+    tableHeader: "| repo | 可視性 | 言語 | 指示書 |",
+    instructionsAnchor: "anchor(手管理)",
+    instructionsSelf: "self(repo が自己管理)",
+    instructionsHub: "hub(basou が生成)",
+    unsetShort: "未設定",
+    commitHeading: "### どこで commit するか",
+    commitBody:
+      "view では commit できません(git 管理外)。変更は必ず実体の repo に `cd` してから commit してください。",
+    conventionsHeading: "### 必ず読むべき規約",
+    conventionsBody:
+      "作業規約は各 repo の AGENTS.md にあります。以下を読んでから作業してください。",
+    principlesHeading: "### 重要原則",
+    principleStateless: "- このディレクトリは状態を持たない(git 管理外)",
+    principleNoFiles: "- 重要なファイルをここに直接置かない(実体は各 repo に置く)",
+  },
+  anchorStarter: {
+    identityLine: (title) =>
+      `> このリポジトリは **${title} の planning master(anchor)** です。ここで作業する AI エージェントは、まずこのファイルを読んでください。`,
+    starterNote:
+      "> このファイルは `basou project derive` が greenfield 立ち上げ時に **一度だけ生成した starter** です。以後は手管理してください — basou は再生成も上書きもしません(BASOU:GENERATED マーカーは無く、自由に編集できます)。",
+    basicsHeading: "## プロジェクトの基本情報",
+    basicsTodo: "<!-- TODO: manifest からは導出できない項目です。埋めてください。 -->",
+    commitHeading: "## どこで commit するか",
+    commitPlanning: "- **このリポジトリ(planning master)**: 構想・計画・設計ドキュメント。",
+    commitImplementation:
+      "- **各実装 repo**: 実装コード。必ず対象 repo に `cd` してから commit してください。",
+    commitView: "- **workspace view**: git 管理外。view では commit できません。",
+    conventionsHeading: "## 必ず読むべき規約",
+    conventionsBody:
+      "作業規約は各 repo の AGENTS.md にあります。以下を読んでから作業してください。",
+    viewPointerLine: (viewName) =>
+      `- ${viewName}/AGENTS.md(workspace view・basou が生成)— **最新の repo 構成(roster)はここを正とする**`,
+    policyHeading: "## 作業方針(プロジェクト固有事項)",
+    policyTodo: [
+      "<!-- TODO: 以下をプロジェクトに合わせて記述してください。",
+      "  - 現在のフェーズ / 重要ドキュメント",
+      "  - 機密情報の扱い(どこに書かないか)",
+      "  - 言語ポリシー(commit / コメント / ドキュメントの言語)",
+      "  - commit 運用(混在コミットを避ける 等)",
+      "-->",
+    ],
   },
 };

@@ -17,25 +17,25 @@ describe("renderPresetBlock", () => {
         { kind: "npm", visibility: "public", language: "en" },
       ],
     });
-    expect(block).toContain("ソース可視性: private(git 履歴は非公開)");
-    expect(block).toContain("ソース言語: en(commit・コメント・コードは英語)");
-    expect(block).toContain("- 配信物:");
-    expect(block).toContain("web(デプロイ) — 公開 / en+ja");
-    expect(block).toContain("npm(パッケージ) — 公開 / en");
+    expect(block).toContain("Source visibility: private (the git history is not public)");
+    expect(block).toContain("Source language: en (commits, comments, and code in English)");
+    expect(block).toContain("- Published surfaces:");
+    expect(block).toContain("web (deployed) — public / en+ja");
+    expect(block).toContain("npm (package) — public / en");
     // web is declared first, so it renders first.
-    expect(block.indexOf("web(デプロイ)")).toBeLessThan(block.indexOf("npm(パッケージ)"));
+    expect(block.indexOf("web (deployed)")).toBeLessThan(block.indexOf("npm (package)"));
   });
 
-  it("renders '配信物: なし' when there are no published surfaces", () => {
+  it("renders 'Published surfaces: none' when there are no published surfaces", () => {
     const block = renderPresetBlock({ visibility: "public", language: "en" });
-    expect(block).toContain("- 配信物: なし");
+    expect(block).toContain("- Published surfaces: none");
   });
 
-  it("renders 未設定 for unset visibility/language and partial publish fields", () => {
+  it("renders 'unset' for unset visibility/language and partial publish fields", () => {
     const block = renderPresetBlock({ publishes: [{ kind: "web" }] });
-    expect(block).toContain("ソース可視性: 未設定");
-    expect(block).toContain("ソース言語: 未設定");
-    expect(block).toContain("web(デプロイ) — 可視性未設定 / 言語未設定");
+    expect(block).toContain("Source visibility: unset");
+    expect(block).toContain("Source language: unset");
+    expect(block).toContain("web (deployed) — visibility unset / language unset");
   });
 
   it("is deterministic (byte-identical for the same input) and has no trailing newline", () => {
@@ -43,7 +43,52 @@ describe("renderPresetBlock", () => {
     expect(renderPresetBlock(repo)).toBe(renderPresetBlock(repo));
     expect(renderPresetBlock(repo).endsWith("\n")).toBe(false);
   });
+
+  it("renders the Japanese content for a repo declaring language: ja", () => {
+    const block = renderPresetBlock({
+      visibility: "private",
+      language: "ja",
+      publishes: [{ kind: "web", visibility: "public", language: "en+ja" }],
+    });
+    expect(block).toContain("## プロジェクト構成(basou が生成 — manifest が正本)");
+    expect(block).toContain("ソース可視性: private(git 履歴は非公開)");
+    expect(block).toContain("ソース言語: ja(commit・コメント・コードは日本語)");
+    expect(block).toContain("web(デプロイ) — 公開 / en+ja");
+  });
+
+  it("renders English for en+ja (one content language; en is the shared floor)", () => {
+    const block = renderPresetBlock({ visibility: "private", language: "en+ja" });
+    expect(block).toContain("## Project configuration");
+    expect(block).toContain(
+      "Source language: en+ja (commits, comments, and code in English and Japanese)",
+    );
+    expect(block).not.toContain("プロジェクト構成");
+  });
+
+  // Golden full-block lock on the ja bytes: a repo declaring `language: ja`
+  // promises the exact pre-i18n output, so any edit to the ja table (or to how
+  // the generator assembles it) must surface here as a full-block diff.
+  it("golden: a ja repo renders this exact block", () => {
+    const block = renderPresetBlock({
+      visibility: "private",
+      language: "ja",
+      publishes: [{ kind: "web", visibility: "public", language: "en+ja" }, { kind: "npm" }],
+    });
+    expect(block).toBe(JA_GOLDEN_REPO_BLOCK);
+  });
 });
+
+const JA_GOLDEN_REPO_BLOCK = [
+  "## プロジェクト構成(basou が生成 — manifest が正本)",
+  "",
+  "このセクションは `.basou/manifest.yaml` の宣言から `basou project preset` が生成します。編集は manifest 側で行ってください(マーカー外の記述は保持されます)。",
+  "",
+  "- ソース可視性: private(git 履歴は非公開)",
+  "- ソース言語: ja(commit・コメント・コードは日本語)",
+  "- 配信物:",
+  "    - web(デプロイ) — 公開 / en+ja",
+  "    - npm(パッケージ) — 可視性未設定 / 言語未設定",
+].join("\n");
 
 describe("isRenderable", () => {
   it("is false only when visibility, language, and publishes are all absent", () => {
@@ -74,7 +119,7 @@ describe("summarizePresetPlan", () => {
     expect(s.plans).toHaveLength(1);
     expect(s.plans[0]?.action).toBe("create");
     expect(s.plans[0]?.path).toBe("../x");
-    expect(s.plans[0]?.desiredBlock).toContain("ソース可視性: public");
+    expect(s.plans[0]?.desiredBlock).toContain("Source visibility: public");
     expect(s.ok).toBe(false);
   });
 
@@ -271,22 +316,25 @@ describe("renderViewPresetBlock", () => {
         { name: "acme-planning", visibility: "private", language: "ja" },
       ],
     });
-    expect(block).toContain("## workspace view 構成(basou が生成 — manifest が正本)");
-    expect(block).toContain("宣言された 2 個の repo を symlink で集約する");
+    // No entry is flagged `anchor`, so the block resolves to English (the default).
+    expect(block).toContain(
+      "## Workspace view layout (generated by basou — the manifest is the source of truth)",
+    );
+    expect(block).toContain("aggregating the 2 declared repo(s) via symlinks");
     // The aggregation table: header plus one row per repo, in declared order.
-    expect(block).toContain("| repo | 可視性 | 言語 | 指示書 |");
-    expect(block).toContain("| acme | public | en | hub(basou が生成) |");
-    expect(block).toContain("| acme-planning | private | ja | hub(basou が生成) |");
+    expect(block).toContain("| repo | visibility | language | instructions |");
+    expect(block).toContain("| acme | public | en | hub (generated by basou) |");
+    expect(block).toContain("| acme-planning | private | ja | hub (generated by basou) |");
     // Commit / read / principle sections.
     expect(block).toContain("- acme → `cd acme`");
     expect(block).toContain("- acme-planning/AGENTS.md");
-    expect(block).toContain("### 重要原則");
-    expect(block).toContain("- このディレクトリは状態を持たない(git 管理外)");
+    expect(block).toContain("### Key principles");
+    expect(block).toContain("- This directory holds no state (not under git)");
   });
 
   it("describes itself as generated, naming its own canonical (agents/<viewName>/AGENTS.md)", () => {
     const block = renderViewPresetBlock({ viewName: "my-workspace", repos: [{ name: "a" }] });
-    expect(block).toContain("この AGENTS.md 自身も basou の生成物です");
+    expect(block).toContain("This AGENTS.md is itself generated by basou");
     expect(block).toContain("`agents/my-workspace/AGENTS.md`");
   });
 
@@ -298,8 +346,8 @@ describe("renderViewPresetBlock", () => {
         { name: "selfish", visibility: "public", language: "ja", self: true },
       ],
     });
-    expect(block).toContain("| hubbed | public | en | hub(basou が生成) |");
-    expect(block).toContain("| selfish | public | ja | self(repo が自己管理) |");
+    expect(block).toContain("| hubbed | public | en | hub (generated by basou) |");
+    expect(block).toContain("| selfish | public | ja | self (the repo owns it) |");
   });
 
   it("marks the anchor as hand-maintained (never hub) in the instruction column", () => {
@@ -312,14 +360,16 @@ describe("renderViewPresetBlock", () => {
         { name: "impl", visibility: "public", language: "en" },
       ],
     });
+    // The anchor declares ja, so the whole view block renders Japanese.
     expect(block).toContain("| planning | private | ja | anchor(手管理) |");
     expect(block).toContain("| impl | public | en | hub(basou が生成) |");
-    // `anchor` wins over an incidental `self` flag on the same row.
+    // `anchor` wins over an incidental `self` flag on the same row (this roster's
+    // anchor declares no language, so the block is English).
     const both = renderViewPresetBlock({
       viewName: "ws",
       repos: [{ name: "planning", anchor: true, self: true }],
     });
-    expect(both).toContain("| planning | 未設定 | 未設定 | anchor(手管理) |");
+    expect(both).toContain("| planning | unset | unset | anchor (hand-maintained) |");
   });
 
   it("preserves the declared repo order in every list", () => {
@@ -348,15 +398,15 @@ describe("renderViewPresetBlock", () => {
     expect(block).toContain("| future | future-public | en+ja |");
   });
 
-  it("renders 未設定 for unset visibility / language", () => {
+  it("renders 'unset' for unset visibility / language", () => {
     const block = renderViewPresetBlock({ viewName: "ws", repos: [{ name: "bare" }] });
-    expect(block).toContain("| bare | 未設定 | 未設定 |");
+    expect(block).toContain("| bare | unset | unset |");
   });
 
   it("renders cleanly for an empty roster (0 repos, header-only table, empty lists)", () => {
     const block = renderViewPresetBlock({ viewName: "ws", repos: [] });
-    expect(block).toContain("宣言された 0 個の repo を symlink で集約する");
-    expect(block).toContain("| repo | 可視性 | 言語 | 指示書 |");
+    expect(block).toContain("aggregating the 0 declared repo(s) via symlinks");
+    expect(block).toContain("| repo | visibility | language | instructions |");
     expect(block).toContain("|---|---|---|---|");
     // No repo rows / cd lines / AGENTS.md lines (the self-description names
     // `agents/ws/AGENTS.md`, so the check is scoped to list items).
@@ -375,4 +425,62 @@ describe("renderViewPresetBlock", () => {
     expect(a).toBe(b);
     expect(a.endsWith("\n")).toBe(false);
   });
+
+  // Golden full-block lock on the ja bytes: a roster whose ANCHOR declares
+  // `language: ja` promises the exact pre-i18n view block, whatever the other
+  // repos declare. Any edit to the ja table (or to how the generator assembles
+  // it) must surface here as a full-block diff.
+  it("golden: a ja-anchor roster renders this exact block", () => {
+    const block = renderViewPresetBlock({
+      viewName: "acme-workspace",
+      repos: [
+        { name: "acme-planning", visibility: "private", language: "ja", anchor: true },
+        { name: "acme", visibility: "public", language: "en", self: true },
+        { name: "acme-site", visibility: "private", language: "ja" },
+        { name: "acme-lab" },
+      ],
+    });
+    expect(block).toBe(JA_GOLDEN_VIEW_BLOCK);
+  });
 });
+
+const JA_GOLDEN_VIEW_BLOCK = [
+  "## workspace view 構成(basou が生成 — manifest が正本)",
+  "",
+  "このセクションは `.basou/manifest.yaml` の宣言から `basou project preset` が生成します。編集は manifest 側で行ってください(マーカー外の記述は保持されます)。",
+  "この AGENTS.md 自身も basou の生成物です(実体: `agents/acme-workspace/AGENTS.md`、マーカー外の記述は保持されます)。",
+  "",
+  "このディレクトリは、宣言された 4 個の repo を symlink で集約する **view** です。実体を持たず、git 管理外です。",
+  "",
+  "### 集約している repo",
+  "",
+  "| repo | 可視性 | 言語 | 指示書 |",
+  "|---|---|---|---|",
+  "| acme-planning | private | ja | anchor(手管理) |",
+  "| acme | public | en | self(repo が自己管理) |",
+  "| acme-site | private | ja | hub(basou が生成) |",
+  "| acme-lab | 未設定 | 未設定 | hub(basou が生成) |",
+  "",
+  "### どこで commit するか",
+  "",
+  "view では commit できません(git 管理外)。変更は必ず実体の repo に `cd` してから commit してください。",
+  "",
+  "- acme-planning → `cd acme-planning`",
+  "- acme → `cd acme`",
+  "- acme-site → `cd acme-site`",
+  "- acme-lab → `cd acme-lab`",
+  "",
+  "### 必ず読むべき規約",
+  "",
+  "作業規約は各 repo の AGENTS.md にあります。以下を読んでから作業してください。",
+  "",
+  "- acme-planning/AGENTS.md",
+  "- acme/AGENTS.md",
+  "- acme-site/AGENTS.md",
+  "- acme-lab/AGENTS.md",
+  "",
+  "### 重要原則",
+  "",
+  "- このディレクトリは状態を持たない(git 管理外)",
+  "- 重要なファイルをここに直接置かない(実体は各 repo に置く)",
+].join("\n");

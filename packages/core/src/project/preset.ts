@@ -14,6 +14,11 @@
  * caller's job.
  */
 
+import {
+  presetStrings,
+  resolveAnchorContentLanguage,
+  resolveRepoContentLanguage,
+} from "../lib/view-strings.js";
 import { normalizeRelativePath as normalizePath } from "./relative-path.js";
 import type { PublishTarget, RepoLanguage, RepoVisibility } from "./roster.js";
 
@@ -24,61 +29,9 @@ export type PresetRepo = {
   publishes?: PublishTarget[] | undefined;
 };
 
-/** Source git-visibility, rendered with the consequence the agent must respect. */
-function visibilityLabel(v: RepoVisibility | undefined): string {
-  switch (v) {
-    case "public":
-      return "public(git 履歴は公開)";
-    case "private":
-      return "private(git 履歴は非公開)";
-    case "future-public":
-      return "future-public(現在は非公開・将来公開予定)";
-    default:
-      return "未設定";
-  }
-}
-
-/** Source language (commits/comments/code), rendered with the audience it serves. */
-function sourceLanguageLabel(l: RepoLanguage | undefined): string {
-  switch (l) {
-    case "en":
-      return "en(commit・コメント・コードは英語)";
-    case "ja":
-      return "ja(commit・コメント・コードは日本語)";
-    case "en+ja":
-      return "en+ja(commit・コメント・コードは日英)";
-    default:
-      return "未設定";
-  }
-}
-
-/** Published-surface kind. */
-function publishKindLabel(k: PublishTarget["kind"]): string {
-  return k === "web" ? "web(デプロイ)" : "npm(パッケージ)";
-}
-
-/** A published surface's visibility (independent of the source repo's). */
-function publishVisibilityLabel(v: RepoVisibility | undefined): string {
-  switch (v) {
-    case "public":
-      return "公開";
-    case "private":
-      return "非公開";
-    case "future-public":
-      return "将来公開";
-    default:
-      return "可視性未設定";
-  }
-}
-
-/** A published surface's content language (read by end users; may differ from source). */
-function contentLanguageLabel(l: RepoLanguage | undefined): string {
-  return l ?? "言語未設定";
-}
-
 /**
  * Whether a repo has anything to render. A repo with no visibility, no language,
- * and no published surface yields an all-"未設定" block that helps no one, so it
+ * and no published surface yields an all-"unset" block that helps no one, so it
  * is reported as `undeclared` rather than generated.
  */
 export function isRenderable(repo: PresetRepo): boolean {
@@ -94,42 +47,34 @@ export function isRenderable(repo: PresetRepo): boolean {
  * BASOU:GENERATED markers in a canonical). Deterministic and OSS-generic: it
  * derives entirely from the declared fields, embedding no operator-specific
  * names, so re-running on an unchanged manifest produces byte-identical output
- * (the basis for drift detection). The published surfaces are listed in their
- * declared order. Returns the block WITHOUT a trailing newline; the marker
- * writer adds the surrounding structure.
+ * (the basis for drift detection). The block's content language follows the
+ * repo's own declared `language` (its audience): `ja` renders the Japanese
+ * strings byte-identical to the pre-i18n output; `en` / `en+ja` / undeclared
+ * render English. The published surfaces are listed in their declared order.
+ * Returns the block WITHOUT a trailing newline; the marker writer adds the
+ * surrounding structure.
  */
 export function renderPresetBlock(repo: PresetRepo): string {
+  const t = presetStrings(resolveRepoContentLanguage(repo.language)).repoBlock;
   const lines: string[] = [];
-  lines.push("## プロジェクト構成(basou が生成 — manifest が正本)");
+  lines.push(t.heading);
   lines.push("");
-  lines.push(
-    "このセクションは `.basou/manifest.yaml` の宣言から `basou project preset` が生成します。編集は manifest 側で行ってください(マーカー外の記述は保持されます)。",
-  );
+  lines.push(t.intro);
   lines.push("");
-  lines.push(`- ソース可視性: ${visibilityLabel(repo.visibility)}`);
-  lines.push(`- ソース言語: ${sourceLanguageLabel(repo.language)}`);
+  lines.push(`- ${t.sourceVisibilityLabel}: ${t.visibilityLabel(repo.visibility)}`);
+  lines.push(`- ${t.sourceLanguageLineLabel}: ${t.sourceLanguageLabel(repo.language)}`);
   const publishes = repo.publishes ?? [];
   if (publishes.length === 0) {
-    lines.push("- 配信物: なし");
+    lines.push(t.publishesNone);
   } else {
-    lines.push("- 配信物:");
+    lines.push(t.publishesHeader);
     for (const p of publishes) {
       lines.push(
-        `    - ${publishKindLabel(p.kind)} — ${publishVisibilityLabel(p.visibility)} / ${contentLanguageLabel(p.language)}`,
+        `    - ${t.publishKindLabel(p.kind)} — ${t.publishVisibilityLabel(p.visibility)} / ${t.contentLanguageLabel(p.language)}`,
       );
     }
   }
   return lines.join("\n");
-}
-
-/** Short visibility label (the plain declared string, or 未設定 when unset). */
-function visibilityShortLabel(v: RepoVisibility | undefined): string {
-  return v ?? "未設定";
-}
-
-/** Short language label (the plain declared string, or 未設定 when unset). */
-function languageShortLabel(l: RepoLanguage | undefined): string {
-  return l ?? "未設定";
 }
 
 /** One repo aggregated by the view, rendered with its short visibility / language. */
@@ -164,70 +109,64 @@ export type ViewPresetInput = {
   repos: ViewPresetRepo[];
 };
 
-/** Instruction-file ownership label: who writes the repo's AGENTS.md. */
-function instructionsLabel(repo: ViewPresetRepo): string {
-  if (repo.anchor === true) return "anchor(手管理)";
-  return repo.self === true ? "self(repo が自己管理)" : "hub(basou が生成)";
-}
-
 /**
  * Render the workspace-view instruction-file preset block (the content between
  * the BASOU:GENERATED markers in the view's own canonical). Like
  * {@link renderPresetBlock} it is deterministic and OSS-generic: it derives
  * entirely from the declared roster (repo names come from the manifest, no
  * operator-specific string is embedded), so re-running on an unchanged manifest
- * produces byte-identical output. The repos are listed in the order supplied.
- * An empty roster still renders cleanly (a header-only table, empty lists).
- * Returns the block WITHOUT a trailing newline; the marker writer adds the
- * surrounding structure.
+ * produces byte-identical output. The view is a workspace-level artifact, so
+ * its content language follows the ANCHOR entry's declared language (mirroring
+ * the generated views' rule); a `ja` anchor renders byte-identical to the
+ * pre-i18n output. The repos are listed in the order supplied. An empty roster
+ * still renders cleanly (a header-only table, empty lists). Returns the block
+ * WITHOUT a trailing newline; the marker writer adds the surrounding structure.
  */
 export function renderViewPresetBlock(input: ViewPresetInput): string {
+  const t = presetStrings(resolveAnchorContentLanguage(input.repos)).viewBlock;
+  const shortLabel = (v: string | undefined): string => v ?? t.unsetShort;
+  const instructionsLabel = (repo: ViewPresetRepo): string => {
+    if (repo.anchor === true) return t.instructionsAnchor;
+    return repo.self === true ? t.instructionsSelf : t.instructionsHub;
+  };
   const lines: string[] = [];
-  lines.push("## workspace view 構成(basou が生成 — manifest が正本)");
+  lines.push(t.heading);
   lines.push("");
-  lines.push(
-    "このセクションは `.basou/manifest.yaml` の宣言から `basou project preset` が生成します。編集は manifest 側で行ってください(マーカー外の記述は保持されます)。",
-  );
-  lines.push(
-    `この AGENTS.md 自身も basou の生成物です(実体: \`agents/${input.viewName}/AGENTS.md\`、マーカー外の記述は保持されます)。`,
-  );
+  lines.push(t.intro);
+  lines.push(t.selfNote(input.viewName));
   lines.push("");
-  lines.push(
-    `このディレクトリは、宣言された ${input.repos.length} 個の repo を symlink で集約する **view** です。実体を持たず、git 管理外です。`,
-  );
+  lines.push(t.aggregates(input.repos.length));
   lines.push("");
-  lines.push("### 集約している repo");
+  lines.push(t.reposHeading);
   lines.push("");
-  lines.push("| repo | 可視性 | 言語 | 指示書 |");
+  lines.push(t.tableHeader);
   lines.push("|---|---|---|---|");
   for (const r of input.repos) {
     lines.push(
-      `| ${r.name} | ${visibilityShortLabel(r.visibility)} | ${languageShortLabel(r.language)} | ${instructionsLabel(r)} |`,
+      `| ${r.name} | ${shortLabel(r.visibility)} | ${shortLabel(r.language)} | ${instructionsLabel(r)} |`,
     );
   }
   lines.push("");
-  lines.push("### どこで commit するか");
+  lines.push(t.commitHeading);
   lines.push("");
-  lines.push(
-    "view では commit できません(git 管理外)。変更は必ず実体の repo に `cd` してから commit してください。",
-  );
+  lines.push(t.commitBody);
   lines.push("");
   for (const r of input.repos) {
     lines.push(`- ${r.name} → \`cd ${r.name}\``);
   }
   lines.push("");
-  lines.push("### 必ず読むべき規約");
+  lines.push(t.conventionsHeading);
   lines.push("");
-  lines.push("作業規約は各 repo の AGENTS.md にあります。以下を読んでから作業してください。");
+  lines.push(t.conventionsBody);
   lines.push("");
   for (const r of input.repos) {
     lines.push(`- ${r.name}/AGENTS.md`);
   }
   lines.push("");
-  lines.push("### 重要原則");
+  lines.push(t.principlesHeading);
   lines.push("");
-  lines.push("- このディレクトリは状態を持たない(git 管理外)");
-  lines.push("- 重要なファイルをここに直接置かない(実体は各 repo に置く)");
+  lines.push(t.principleStateless);
+  lines.push(t.principleNoFiles);
   return lines.join("\n");
 }
 

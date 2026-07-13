@@ -18,7 +18,7 @@ All four share the same surface convention: an English document title, a
 `> Generated at <iso>` line, and localized `##` section headings (see the view
 language rule below).
 
-## §10.0 View language ("the workspace speaks the anchor's language")
+## §10.0 Generated-content language ("the workspace speaks the anchor's language")
 
 The tool-generated chrome of all four views — section headings, labels, and
 verdict prose — is localized per workspace, resolved from the manifest roster:
@@ -42,6 +42,17 @@ language is a project declaration (the manifest), not a caller preference.
 
 The rendered prose itself (headings, wording) is presentation, not contract —
 see `compatibility.md`. The templates below show the English chrome.
+
+### Instruction files (preset block, view block, anchor starter)
+
+The same declaration-driven rule extends to the GENERATED INSTRUCTION FILES
+(`basou project preset` / `derive` / `retrofit` / anchor seeding), with one
+refinement: a repo's preset block lives inside that repo's own instruction
+file, so its content language follows the **repo's own** declared `language`
+(`ja` renders Japanese; `en`, `en+ja`, or an undeclared language render
+English — silently, like the views). Workspace-level instruction artifacts —
+the view's generated AGENTS.md block and the anchor's create-only starter —
+follow the **anchor entry's** language, mirroring the views' rule.
 
 ## §10.1 Living-artifact policy (handoff.md, decisions.md)
 
