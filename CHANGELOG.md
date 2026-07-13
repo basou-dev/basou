@@ -27,10 +27,11 @@ All notable changes to **basou** are recorded here. The project follows
   blocks, view blocks, and anchor starters; it now receives English. To keep
   the Japanese content, declare `language: ja` on the repo entry (for its
   preset block) or on the anchor entry (for the view block and anchor starter)
-  in `.basou/manifest.yaml`. Blocks committed by earlier releases will surface
-  as an ordinary preset `update` / wiring drift on the next
-  `basou project preset` / `derive` / `check` run when their language
-  resolution changed. Rendered prose is presentation, not contract (see
+  in `.basou/manifest.yaml`. Blocks committed by earlier releases surface as an
+  ordinary preset `update` plan on the next `basou project preset` / `derive`
+  run when their language resolution changed (`basou project check` inspects
+  wiring structure, not generated-region content, so it does not detect this).
+  Rendered prose is presentation, not contract (see
   `docs/spec/compatibility.md`).
 
 ## 0.33.0 — 2026-07-13

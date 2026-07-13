@@ -194,6 +194,18 @@ describe("resolveAnchorContentLanguage", () => {
     expect(resolveAnchorContentLanguage([{ language: "ja" }])).toBe("en");
     expect(resolveAnchorContentLanguage([{ anchor: true }])).toBe("en");
   });
+
+  it("first-wins when more than one entry carries the anchor flag (declared order)", () => {
+    expect(
+      resolveAnchorContentLanguage([
+        { anchor: true, language: "ja" },
+        { anchor: true, language: "en" },
+      ]),
+    ).toBe("ja");
+    expect(resolveAnchorContentLanguage([{ anchor: true }, { anchor: true, language: "ja" }])).toBe(
+      "en",
+    );
+  });
 });
 
 describe("presetStrings", () => {

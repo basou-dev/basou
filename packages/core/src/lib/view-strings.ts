@@ -431,7 +431,15 @@ export function resolveRepoContentLanguage(language: RepoLanguage | undefined): 
  * view's AGENTS.md block, the anchor's starter) from an already-gathered
  * roster: the entry flagged `anchor` speaks for the workspace, mirroring the
  * views' anchor-language rule. No anchor entry (or no declared language)
- * resolves to English.
+ * resolves to English. When more than one entry carries the flag, the first
+ * wins (declared order).
+ *
+ * Note the anchor is identified by the CALLER-SET flag, not by this module:
+ * {@link resolveViewLanguage} keys on the manifest path being `.`, while the
+ * instruction-file callers flag the anchor by resolved-path identity. For a
+ * conventional manifest (anchor declared as `.`) the two agree; a roster that
+ * reaches the anchor only through an aliased path is where they can diverge,
+ * and the caller's flag is authoritative for the instruction files.
  */
 export function resolveAnchorContentLanguage(
   repos: ReadonlyArray<{ anchor?: boolean | undefined; language?: RepoLanguage | undefined }>,
@@ -453,7 +461,14 @@ export type PresetStrings = {
     intro: string;
     /** Source git-visibility, rendered with the consequence the agent must respect. */
     visibilityLabel: (v: RepoVisibility | undefined) => string;
-    /** Source language (commits/comments/code), rendered with the audience it serves. */
+    /**
+     * Source language (commits/comments/code), rendered with the audience it
+     * serves. Invariant note: the table itself is SELECTED by this same field
+     * (ja -> JA table, everything else -> EN), so the JA table's en / en+ja /
+     * unset branches and the EN table's ja branch are unreachable from
+     * renderPresetBlock — they exist for table completeness (and the
+     * both-language sweep test), not because a render can emit them.
+     */
     sourceLanguageLabel: (l: RepoLanguage | undefined) => string;
     /** Published-surface kind. */
     publishKindLabel: (k: PublishTarget["kind"]) => string;
