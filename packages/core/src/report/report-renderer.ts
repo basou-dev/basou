@@ -7,6 +7,12 @@ import {
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { type ChainVerdictStatus, verifyEventsChain } from "../events/verify.js";
 import { formatDurationMs } from "../lib/format-duration.js";
+import {
+  resolveViewLanguageFromPaths,
+  type ViewLanguage,
+  type ViewStrings,
+  viewStrings,
+} from "../lib/view-strings.js";
 import type {
   ApprovalStatus,
   RiskLevel,
@@ -27,7 +33,7 @@ import { loadTaskEntries, type TaskSkipReason } from "../storage/tasks.js";
  * Caps on how many items each section lists in the rendered markdown. The
  * structured `ReportData` always keeps the FULL set (machine consumers get
  * everything); only the human-facing markdown truncates (with a `... +N more`
- * line) so a report over a large workspace stays readable and "簡易".
+ * line) so a report over a large workspace stays readable and compact.
  */
 const CHANGED_FILES_MARKDOWN_LIMIT = 50;
 const DECISIONS_MARKDOWN_LIMIT = 20;
@@ -65,6 +71,12 @@ export type ReportRendererInput = {
   onWarning?: (warning: ReplayWarning, sessionId: string) => void;
   onSessionSkip?: (sessionId: string, reason: SessionSkipReason) => void;
   onTaskSkip?: (taskId: string, reason: TaskSkipReason) => void;
+  /**
+   * Generated-view chrome language. Omitted (the normal path) = resolved from
+   * the manifest's anchor repo via {@link resolveViewLanguageFromPaths}; the
+   * override exists for tests and programmatic callers that already resolved it.
+   */
+  language?: ViewLanguage;
 };
 
 export type ReportSessionItem = {
@@ -341,7 +353,8 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
     integrity,
   };
 
-  return { body: formatReportBody(data), data };
+  const language = input.language ?? (await resolveViewLanguageFromPaths(input.paths));
+  return { body: formatReportBody(data, viewStrings(language)), data };
 }
 
 function computePeriod(
@@ -376,7 +389,7 @@ function tallyTaskStatus(items: ReadonlyArray<ReportTaskItem>): TaskStatusCount[
   }));
 }
 
-function formatReportBody(data: ReportData): string {
+function formatReportBody(data: ReportData, t: ViewStrings): string {
   const lines: string[] = [];
   const titleSuffix = data.title !== undefined ? ` — ${data.title}` : "";
   lines.push(`# Report${titleSuffix}`);
@@ -389,7 +402,7 @@ function formatReportBody(data: ReportData): string {
   lines.push("");
 
   // Summary
-  lines.push("## 概要");
+  lines.push(t.report.headingSummary);
   lines.push("");
   lines.push(`- ${formatSessionsLine(data)}`);
   lines.push(
@@ -398,7 +411,7 @@ function formatReportBody(data: ReportData): string {
   lines.push("");
 
   // Volume + time
-  lines.push("## 作業量");
+  lines.push(t.report.headingVolume);
   lines.push("");
   const tokenCaveat = data.volume.tokensAvailable ? "" : "  (no token data captured)";
   lines.push(`- Output tokens: ${formatInt(data.volume.outputTokens)}${tokenCaveat}`);
@@ -422,7 +435,7 @@ function formatReportBody(data: ReportData): string {
   // Decisions — the most recent ones (the report explains what was decided;
   // ids live in --json, omitted here to keep the human narrative clean and
   // because batch-imported ids share a ULID timestamp prefix).
-  lines.push("## 判断");
+  lines.push(t.report.headingDecisions);
   lines.push("");
   if (data.decisions.items.length === 0) {
     lines.push("(no decisions recorded yet)");
@@ -445,7 +458,7 @@ function formatReportBody(data: ReportData): string {
   lines.push("");
 
   // Approvals
-  lines.push("## 承認");
+  lines.push(t.report.headingApprovals);
   lines.push("");
   if (data.approvals.items.length === 0) {
     lines.push("(none)");
@@ -464,7 +477,7 @@ function formatReportBody(data: ReportData): string {
   lines.push("");
 
   // Tasks
-  lines.push("## タスク");
+  lines.push(t.report.headingTasks);
   lines.push("");
   if (data.tasks.items.length === 0) {
     lines.push("(no tasks recorded yet)");
@@ -481,7 +494,7 @@ function formatReportBody(data: ReportData): string {
   lines.push("");
 
   // Changed files
-  lines.push("## 変更ファイル");
+  lines.push(t.report.headingChangedFiles);
   lines.push("");
   if (data.changedFiles.length === 0) {
     lines.push("(no related files recorded)");
@@ -494,7 +507,7 @@ function formatReportBody(data: ReportData): string {
 
   // Sessions — newest first. The started_at is the human row key; full ids are
   // in --json (and would collide as short ids for batch imports).
-  lines.push("## セッション一覧");
+  lines.push(t.report.headingSessions);
   lines.push("");
   if (data.sessions.items.length === 0) {
     lines.push("(no sessions yet)");
@@ -515,7 +528,7 @@ function formatReportBody(data: ReportData): string {
   lines.push("");
 
   // Integrity
-  lines.push("## 整合性");
+  lines.push(t.report.headingIntegrity);
   lines.push("");
   const i = data.integrity;
   lines.push(

@@ -222,13 +222,13 @@ describe("orientation-renderer", () => {
     expect(result.decisionCount).toBe(0);
 
     expect(result.body).toContain("# Orientation");
-    expect(result.body).toContain("## 今どこにいる");
-    expect(result.body).toContain("## 何が動く");
-    expect(result.body).toContain("## どこへ向かう");
-    expect(result.body).toContain("## これは最新か");
-    expect(result.body).toContain("- 最終 session: (no live sessions)");
+    expect(result.body).toContain("## Where you are now");
+    expect(result.body).toContain("## What is in flight");
+    expect(result.body).toContain("## Where you are heading");
+    expect(result.body).toContain("## Is this current");
+    expect(result.body).toContain("- Last session: (no live sessions)");
     // Plain verdict (no sessions yet) replaces the raw telemetry in the default view.
-    expect(result.body).toContain("まだ記録がありません。");
+    expect(result.body).toContain("No records yet.");
   });
 
   it("renders the pending-approval LIST with risk / action / reason (not just a count)", async () => {
@@ -245,7 +245,7 @@ describe("orientation-renderer", () => {
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
 
     expect(result.pendingApprovalsCount).toBe(1);
-    expect(result.body).toContain("### 承認待ち (1)");
+    expect(result.body).toContain("### Pending approvals (1)");
     expect(result.body).toContain("[critical] command: drop the production table");
     expect(result.body).toMatch(/session ses_01HXABCDEF/);
   });
@@ -264,7 +264,7 @@ describe("orientation-renderer", () => {
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
 
     expect(result.inFlightTaskCount).toBe(1);
-    expect(result.body).toContain("### 進行中 task (1)");
+    expect(result.body).toContain("### In-flight tasks (1)");
     expect(result.body).toContain("ship orientation MVP (in_progress)");
     expect(result.body).toContain("linked_sessions: 3");
   });
@@ -284,7 +284,7 @@ describe("orientation-renderer", () => {
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
 
     expect(result.suspectCount).toBe(1);
-    expect(result.body).toContain("### 要注意 session (1)");
+    expect(result.body).toContain("### Suspect sessions (1)");
     expect(result.body).toContain("ended (yaml stale)");
   });
 
@@ -313,7 +313,7 @@ describe("orientation-renderer", () => {
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO, verbose: true });
 
     expect(result.decisionCount).toBe(1);
-    expect(result.body).toContain("直近の判断: adopt orientation re-centering");
+    expect(result.body).toContain("Latest decision: adopt orientation re-centering");
     expect(result.body).toContain("newest captured session: 2026-05-08T11:00:00+09:00");
     expect(result.body).toMatch(/newest .* ago/);
     expect(result.body).toContain("claude-code-import 1");
@@ -345,12 +345,14 @@ describe("orientation-renderer", () => {
       staleness: { newSessions: 0, updatedSessions: 0 },
     });
     expect(result.body).toContain(
-      "✅ 取り込みは最新です。最後の作業は たった今(Codex)。未取り込みの native セッションはありません。",
+      "✅ The capture is current. Last work: just now (Codex). No uncaptured native sessions.",
     );
     // The verdict scopes its claim: it must NOT imply provenance is comprehensive,
     // and it explicitly states what it does not detect (drift / unrecorded decisions).
-    expect(result.body).not.toContain("取りこぼし・要注意なし");
-    expect(result.body).toContain("計画↔実装のドリフトや未記録の意思決定までは検知しません");
+    expect(result.body).not.toContain("no omissions");
+    expect(result.body).toContain(
+      "It does not detect planning-implementation drift or unrecorded decisions",
+    );
     // The default verdict translates the tool and hides the internal source enum.
     expect(result.body).not.toContain("codex-import");
   });
@@ -368,10 +370,10 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 2, updatedSessions: 1 },
     });
-    expect(result.body).toContain("⚠️ 古いです。");
-    expect(result.body).toContain("新規 2 件");
-    expect(result.body).toContain("更新 1 件");
-    expect(result.body).toContain("着手前に必ず `basou refresh`");
+    expect(result.body).toContain("⚠️ Stale.");
+    expect(result.body).toContain("2 new");
+    expect(result.body).toContain("1 updated");
+    expect(result.body).toContain("Run `basou refresh` before starting work");
   });
 
   it("これは最新か: an updated-ONLY probe drops the 必ず imperative but still offers refresh + explains the residual", async () => {
@@ -391,14 +393,14 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 1 },
     });
-    expect(result.body).toContain("⚠️ 更新されたセッションが 1 件");
+    expect(result.body).toContain("⚠️ 1 session(s) have been updated");
     // Action still offered (finished grown sessions are real, refresh-clearable).
-    expect(result.body).toContain("`basou refresh` で取り込めます");
+    expect(result.body).toContain("`basou refresh` can import them");
     // Residual is explained as normal.
-    expect(result.body).toContain("残ります＝正常");
+    expect(result.body).toContain("that is normal");
     // Crucially NOT the unsatisfiable imperative, and NOT a false ✅.
-    expect(result.body).not.toContain("着手前に必ず `basou refresh`");
-    expect(result.body).not.toContain("✅ 取り込みは最新です。");
+    expect(result.body).not.toContain("Run `basou refresh` before starting work");
+    expect(result.body).not.toContain("✅ The capture is current.");
   });
 
   it("これは最新か: an updated-ONLY probe over a COMPLETED session still surfaces refresh (no over-soft regression)", async () => {
@@ -416,9 +418,9 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 1 },
     });
-    expect(result.body).toContain("⚠️ 更新されたセッションが 1 件");
-    expect(result.body).toContain("`basou refresh` で取り込めます");
-    expect(result.body).not.toContain("✅ 取り込みは最新です。");
+    expect(result.body).toContain("⚠️ 1 session(s) have been updated");
+    expect(result.body).toContain("`basou refresh` can import them");
+    expect(result.body).not.toContain("✅ The capture is current.");
   });
 
   it("これは最新か: an updated probe over an ARCHIVED-only store is NOT mis-cleared as 'no records'", async () => {
@@ -437,8 +439,8 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 1 },
     });
-    expect(result.body).toContain("⚠️ 更新されたセッションが 1 件");
-    expect(result.body).not.toContain("ℹ️ まだ記録がありません。");
+    expect(result.body).toContain("⚠️ 1 session(s) have been updated");
+    expect(result.body).not.toContain("ℹ️ No records yet.");
   });
 
   it("staleness banner: an updated-ONLY probe shows NO top banner (live-session growth is not actionable up top)", async () => {
@@ -456,9 +458,9 @@ describe("orientation-renderer", () => {
     });
     // No banner is emitted (the marker only appears in banner lines); the verdict
     // still warns at the bottom.
-    expect(result.body).not.toContain("(詳細は末尾「これは最新か」)");
-    expect(result.body).not.toContain("> ⚠️ **古いです");
-    expect(result.body).toContain("⚠️ 更新されたセッションが 1 件");
+    expect(result.body).not.toContain('(details under "Is this current" at the bottom)');
+    expect(result.body).not.toContain("> ⚠️ **Stale");
+    expect(result.body).toContain("⚠️ 1 session(s) have been updated");
   });
 
   it("これは最新か: an unrun probe (null) says it cannot confirm rather than claiming current", async () => {
@@ -470,9 +472,9 @@ describe("orientation-renderer", () => {
       startedAt: FIXED_NOW_ISO,
     });
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).toContain("ℹ️ 取り込み済みの状態を表示しています。");
-    expect(result.body).toContain("最新か確認するには `basou refresh`");
-    expect(result.body).not.toContain("✅ 取り込みは最新です。");
+    expect(result.body).toContain("ℹ️ Showing the last imported state.");
+    expect(result.body).toContain("Run `basou refresh` to confirm this is current");
+    expect(result.body).not.toContain("✅ The capture is current.");
   });
 
   it("これは最新か: a fresh capture with suspect sessions still cautions in the verdict", async () => {
@@ -489,8 +491,8 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 0 },
     });
-    expect(result.body).toContain("✅ 取り込みは最新です。");
-    expect(result.body).toContain("ただし要注意セッションが 1 件あります");
+    expect(result.body).toContain("✅ The capture is current.");
+    expect(result.body).toContain("However, 1 suspect session(s) need attention");
   });
 
   it("これは最新か: unverifiable grown sessions block ✅ and point at verify/--force (no false-clear)", async () => {
@@ -509,13 +511,13 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 0, unverifiableSessions: 2 },
     });
-    expect(result.body).toContain("通常の `basou refresh` では安全に再取り込みできない");
-    expect(result.body).toContain("2 件");
+    expect(result.body).toContain("cannot be safely re-imported by a plain `basou refresh`");
+    expect(result.body).toContain("2 session(s)");
     // The action is refresh --force; verify is named as a SEPARATE integrity axis
     // (not the action), so a clean verify is not misread as "nothing to import".
     expect(result.body).toContain("`basou refresh --force`");
-    expect(result.body).toContain("`basou verify` は別物");
-    expect(result.body).not.toContain("✅ 取り込みは最新です。");
+    expect(result.body).toContain("`basou verify` is a different check");
+    expect(result.body).not.toContain("✅ The capture is current.");
   });
 
   it("staleness banner: a stale probe surfaces a top banner BEFORE 今どこにいる", async () => {
@@ -532,16 +534,18 @@ describe("orientation-renderer", () => {
       staleness: { newSessions: 2, updatedSessions: 1 },
     });
     // The banner is uniquely identified by its trailing pointer to the verdict.
-    const bannerMarker = "(詳細は末尾「これは最新か」)";
+    const bannerMarker = '(details under "Is this current" at the bottom)';
     expect(result.body).toContain(bannerMarker);
     // Confirmed stale: asserted, not hedged, with the uncaptured counts inline.
-    expect(result.body).toContain("> ⚠️ **古いです（未取り込み 新規 2 件・更新 1 件）**");
-    expect(result.body).toContain("着手前に必ず `basou refresh`");
+    expect(result.body).toContain("> ⚠️ **Stale (uncaptured: 2 new, 1 updated)**");
+    expect(result.body).toContain("Run `basou refresh` before starting work");
     // It must appear before the position section so a top-down reader meets it
     // before the direction / next-step content.
-    expect(result.body.indexOf(bannerMarker)).toBeLessThan(result.body.indexOf("## 今どこにいる"));
+    expect(result.body.indexOf(bannerMarker)).toBeLessThan(
+      result.body.indexOf("## Where you are now"),
+    );
     // The full verdict still renders at the bottom (after the banner).
-    expect(result.body.indexOf("## これは最新か")).toBeGreaterThan(
+    expect(result.body.indexOf("## Is this current")).toBeGreaterThan(
       result.body.indexOf(bannerMarker),
     );
   });
@@ -559,9 +563,9 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 0, unverifiableSessions: 2 },
     });
-    expect(result.body).toContain("> ⚠️ **再取り込みが必要**");
-    expect(result.body.indexOf("> ⚠️ **再取り込みが必要**")).toBeLessThan(
-      result.body.indexOf("## 今どこにいる"),
+    expect(result.body).toContain("> ⚠️ **Re-import needed**");
+    expect(result.body.indexOf("> ⚠️ **Re-import needed**")).toBeLessThan(
+      result.body.indexOf("## Where you are now"),
     );
   });
 
@@ -578,8 +582,8 @@ describe("orientation-renderer", () => {
       nowIso: FIXED_NOW_ISO,
       staleness: { newSessions: 0, updatedSessions: 0 },
     });
-    expect(result.body).toContain("✅ 取り込みは最新です。");
-    expect(result.body).not.toContain("(詳細は末尾「これは最新か」)");
+    expect(result.body).toContain("✅ The capture is current.");
+    expect(result.body).not.toContain('(details under "Is this current" at the bottom)');
     expect(result.body).not.toContain("> ⚠️");
   });
 
@@ -592,7 +596,7 @@ describe("orientation-renderer", () => {
       startedAt: FIXED_NOW_ISO,
     });
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).not.toContain("(詳細は末尾「これは最新か」)");
+    expect(result.body).not.toContain('(details under "Is this current" at the bottom)');
     expect(result.body).not.toContain("> ⚠️");
   });
 
@@ -634,35 +638,35 @@ describe("orientation-renderer", () => {
         "",
         "> Generated at 2026-05-09T03:00:00.000Z · sessions 0 · newest (unknown) · pending 0 · suspect 0",
         "",
-        "## 今どこにいる",
+        "## Where you are now",
         "",
-        "- 最終 session: (no live sessions)",
-        "- 直近の判断: (no decisions recorded yet; capture with `basou decision capture`)",
-        "- 直近の変更ファイル: (none recorded)",
+        "- Last session: (no live sessions)",
+        "- Latest decision: (no decisions recorded yet; capture with `basou decision capture`)",
+        "- Recently changed files: (none recorded)",
         "",
-        "## 最近の流れ (直近 5 session)",
+        "## Recent direction (last 5 sessions)",
         "",
-        "- (まだ記録がありません)",
+        "- (no records yet)",
         "",
-        "## 何が動く",
+        "## What is in flight",
         "",
-        "### 進行中 task (0)",
+        "### In-flight tasks (0)",
         "- (none)",
         "",
-        "### 承認待ち (0)",
+        "### Pending approvals (0)",
         "- (none)",
         "",
-        "### 要注意 session (0)",
+        "### Suspect sessions (0)",
         "- (none)",
         "",
-        "## どこへ向かう",
+        "## Where you are heading",
         "",
         "- (no planned tasks or recorded next step yet)",
         "",
-        "## これは最新か",
+        "## Is this current",
         "",
-        "ℹ️ まだ記録がありません。",
-        "このワークスペースで作業すると、ここに現在地が表示されます。",
+        "ℹ️ No records yet.",
+        "Work in this workspace and your current position will appear here.",
       ].join("\n"),
     );
   });
@@ -723,38 +727,38 @@ describe("orientation-renderer", () => {
         "",
         "> Generated at 2026-05-09T03:00:00.000Z · sessions 2 · newest just now · pending 1 · suspect 0",
         "",
-        "## 今どこにいる",
+        "## Where you are now",
         "",
-        "- 最終 session: fixture S01 (completed) [ses_01HXABCDEF]",
-        "- 直近の判断: wire portfolio API [decision_01HXABCDEF] (30分前)",
+        "- Last session: fixture S01 (completed) [ses_01HXABCDEF]",
+        "- Latest decision: wire portfolio API [decision_01HXABCDEF] (30m ago)",
         "  - 2 decisions total — see decisions.md",
-        "- 直近の変更ファイル: src/a.ts, src/b.ts (... +2 more)",
+        "- Recently changed files: src/a.ts, src/b.ts (... +2 more)",
         "",
-        "## 最近の流れ (直近 5 session)",
+        "## Recent direction (last 5 sessions)",
         "",
-        "- fixture S01 (たった今)",
-        "  - 判断: earlier decision; wire portfolio API",
-        "- fixture S02 (1日2時間前)",
+        "- fixture S01 (just now)",
+        "  - Decisions: earlier decision; wire portfolio API",
+        "- fixture S02 (1d 2h ago)",
         "",
-        "## 何が動く",
+        "## What is in flight",
         "",
-        "### 進行中 task (1)",
+        "### In-flight tasks (1)",
         "- ship portfolio MVP (planned) [task_01HXABCDEF] — linked_sessions: 3",
         "",
-        "### 承認待ち (1)",
+        "### Pending approvals (1)",
         "- [high] command: deploy to production — session ses_01HXABCDEF, since 2026-05-08T11:00:00+09:00 (expired)",
         "",
-        "### 要注意 session (0)",
+        "### Suspect sessions (0)",
         "- (none)",
         "",
-        "## どこへ向かう",
+        "## Where you are heading",
         "",
         "- ship portfolio MVP [task_01HXABCDEF]",
         "",
-        "## これは最新か",
+        "## Is this current",
         "",
-        "✅ 取り込みは最新です。最後の作業は たった今(Claude Code)。未取り込みの native セッションはありません。",
-        "注: この判定は取り込み済み native セッションの鮮度と suspect の有無だけを見ます。計画↔実装のドリフトや未記録の意思決定までは検知しません。",
+        "✅ The capture is current. Last work: just now (Claude Code). No uncaptured native sessions.",
+        "Note: this verdict only checks whether captured native sessions are current and whether any are suspect. It does not detect planning-implementation drift or unrecorded decisions.",
       ].join("\n"),
     );
   });
@@ -762,8 +766,8 @@ describe("orientation-renderer", () => {
 
 describe("最近の流れ (recent direction arc)", () => {
   function section(body: string): string {
-    const start = body.indexOf("## 最近の流れ");
-    const end = body.indexOf("## 何が動く");
+    const start = body.indexOf("## Recent direction");
+    const end = body.indexOf("## What is in flight");
     return body.slice(start, end);
   }
 
@@ -782,8 +786,8 @@ describe("最近の流れ (recent direction arc)", () => {
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     const s = section(result.body);
     // Both sessions' decisions appear (the arc), newest first.
-    expect(s).toContain("判断: adopt pnpm");
-    expect(s).toContain("判断: pick zod");
+    expect(s).toContain("Decisions: adopt pnpm");
+    expect(s).toContain("Decisions: pick zod");
     expect(s.indexOf("adopt pnpm")).toBeLessThan(s.indexOf("pick zod"));
   });
 
@@ -798,9 +802,9 @@ describe("最近の流れ (recent direction arc)", () => {
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     const s = section(result.body);
     // Sorted + capped to 3 files; no 判断 / 次の起点 line for this session.
-    expect(s).toContain("変更: src/w.ts, src/x.ts, src/y.ts");
+    expect(s).toContain("Changed: src/w.ts, src/x.ts, src/y.ts");
     expect(s).not.toContain("src/z.ts");
-    expect(s).not.toContain("判断:");
+    expect(s).not.toContain("Decisions:");
   });
 
   it("excludes a voided decision from the arc but still lists the session", async () => {
@@ -827,7 +831,7 @@ describe("最近の流れ (recent direction arc)", () => {
       noteLine(SES("N01"), "E01", "resume from the migration", FIXED_NOW_ISO, "next_step"),
     );
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(section(result.body)).toContain("次の起点: resume from the migration");
+    expect(section(result.body)).toContain("Next step: resume from the migration");
   });
 
   it("caps the arc at the 5 most recent non-archived sessions", async () => {
@@ -904,7 +908,7 @@ describe("最近の流れ (recent direction arc)", () => {
     );
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     const s = section(result.body);
-    expect(s).toContain("(まだ記録がありません)");
+    expect(s).toContain("(no records yet)");
     expect(s).not.toContain("archived-one");
   });
 });
@@ -1035,12 +1039,12 @@ describe("summarizeOrientation", () => {
 
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     // The decision still shows, now carrying its (stale) age...
-    expect(result.body).toContain("直近の判断: push wordpress-v0.1.1 tag");
+    expect(result.body).toContain("Latest decision: push wordpress-v0.1.1 tag");
     // ...and the full note, including the interpolated activity age (ended
-    // 2026-05-08T20:00+09 = 11:00Z; now 2026-05-09T03:00Z → 16時間前), so the
+    // 2026-05-08T20:00+09 = 11:00Z; now 2026-05-09T03:00Z → 16h ago), so the
     // stale decision does not masquerade as the current direction.
     expect(result.body).toContain(
-      "注: これは最後に「記録された」判断です。最終活動 (16時間前) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません。`basou decision capture` でこの session の判断を記録できます)。",
+      "Note: this is the latest *recorded* decision. The latest activity (16h ago) is more recent, so the current direction may not be reflected here (conversational decisions are not captured automatically; record this session's decisions with `basou decision capture`).",
     );
   });
 
@@ -1061,8 +1065,8 @@ describe("summarizeOrientation", () => {
     );
 
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).toContain("直近の判断: adopt lockstep release");
-    expect(result.body).not.toContain("注: これは最後に「記録された」判断です。");
+    expect(result.body).toContain("Latest decision: adopt lockstep release");
+    expect(result.body).not.toContain("Note: this is the latest *recorded* decision.");
   });
 
   it("flags a trailing decision when the later activity is in another session", async () => {
@@ -1101,11 +1105,11 @@ describe("summarizeOrientation", () => {
     expect(summary.freshness.latestActivityAt).toBe("2026-05-08T22:00:00+09:00");
 
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).toContain("直近の判断: adopt orientation re-centering");
+    expect(result.body).toContain("Latest decision: adopt orientation re-centering");
     // Firing across sessions is intentional: the recorded decision predates the
     // most recent captured work regardless of which session that work lives in.
     expect(result.body).toContain(
-      "注: これは最後に「記録された」判断です。最終活動 (14時間前) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません。`basou decision capture` でこの session の判断を記録できます)。",
+      "Note: this is the latest *recorded* decision. The latest activity (14h ago) is more recent, so the current direction may not be reflected here (conversational decisions are not captured automatically; record this session's decisions with `basou decision capture`).",
     );
   });
 
@@ -1143,7 +1147,7 @@ describe("summarizeOrientation", () => {
 
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain(
-      `- 次の起点 (記録済み, 1日前): resume from: ship v0.24.0 (steps 1-6) [session ${id.slice(0, 14)}]`,
+      `- Next step (recorded, 1d ago): resume from: ship v0.24.0 (steps 1-6) [session ${id.slice(0, 14)}]`,
     );
     // With a recorded next step present, the empty-direction fallback is gone.
     expect(result.body).not.toContain("(no planned tasks");
@@ -1166,7 +1170,7 @@ describe("summarizeOrientation", () => {
 
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     // Newlines/indents collapse to single spaces so the note stays one bullet.
-    expect(result.body).toContain("次の起点 (記録済み, ");
+    expect(result.body).toContain("Next step (recorded, ");
     expect(result.body).toContain("line one line two line three");
   });
 
@@ -1182,7 +1186,7 @@ describe("summarizeOrientation", () => {
     const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(summary.latestNote).toBeNull();
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).not.toContain("次の起点");
+    expect(result.body).not.toContain("Next step");
     expect(result.body).not.toContain("stale archived note");
   });
 
@@ -1199,7 +1203,7 @@ describe("summarizeOrientation", () => {
     const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(summary.latestNote).toBeNull();
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).not.toContain("次の起点");
+    expect(result.body).not.toContain("Next step");
     expect(result.body).not.toContain("started exploring auth.ts");
   });
 
@@ -1220,9 +1224,9 @@ describe("summarizeOrientation", () => {
     );
 
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).toContain("次の起点 (記録済み,");
+    expect(result.body).toContain("Next step (recorded,");
     expect(result.body).toContain(
-      "注: この起点の記録後 (最終活動 16時間前) も作業が続いています。再開点が古い可能性があります。",
+      "Note: work continued after this was recorded (latest activity 16h ago), so this starting point may be stale.",
     );
   });
 
@@ -1285,8 +1289,8 @@ describe("renderOrientation (resume coherence)", () => {
       decisionLine(s, "FA1", DEC("FA1"), "apply migration 0014-0018?", "2026-05-08T12:00:00Z"),
     );
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(body).toContain("継続点をユーザに確認してください");
-    expect(body).toContain("参考 (古い可能性");
+    expect(body).toContain("ask the user for the continuation point");
+    expect(body).toContain("Reference (possibly stale");
     expect(body).not.toContain("direction is inferred from recent decisions");
   });
 
@@ -1308,8 +1312,8 @@ describe("renderOrientation (resume coherence)", () => {
     );
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(body).toContain("direction is inferred from recent decisions");
-    expect(body).toContain("直近の判断: use pnpm");
-    expect(body).not.toContain("継続点をユーザに確認してください");
+    expect(body).toContain("Latest decision: use pnpm");
+    expect(body).not.toContain("ask the user for the continuation point");
   });
 
   it("F-B: 最終 session is the substantive session, not a newer empty resume session", async () => {
@@ -1360,7 +1364,7 @@ describe("renderOrientation (resume coherence)", () => {
       decisionLine(older, "PE2", DEC("DC2"), "an older decision", "2026-05-08T09:30:00Z"),
     );
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(body).toContain("この判断は最終 session とは別の session");
+    expect(body).toContain("this decision comes from a different session");
   });
 
   it("F-C: does NOT flag when the latest decision is in 最終 session", async () => {
@@ -1378,7 +1382,7 @@ describe("renderOrientation (resume coherence)", () => {
       decisionLine(s, "SE3", DEC("DC3"), "same-session decision", "2026-05-08T13:10:00Z"),
     );
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(body).not.toContain("別の session");
+    expect(body).not.toContain("different session");
   });
 });
 
@@ -1445,7 +1449,7 @@ describe("renderOrientation (federation / multi-host)", () => {
     });
     expect(body).toContain("@laptop");
     expect(body).toContain("> hosts: local, laptop");
-    expect(body).toContain("他ホストの取りこぼしは判定できません");
+    expect(body).toContain("Missed work on other hosts cannot be assessed here");
   });
 
   it("scopes the green freshness verdict to THIS host when federated (no global current claim)", async () => {
@@ -1470,9 +1474,9 @@ describe("renderOrientation (federation / multi-host)", () => {
       federatedRoots: [{ paths: laptop, host: "laptop" }],
     });
     // The probe is local-only, so the green claim must not read as global.
-    expect(body).toContain("✅ このホスト(ローカル)の取り込みは最新です");
-    expect(body).not.toContain("✅ 取り込みは最新です");
-    expect(body).toContain("他ホストの取りこぼしは判定できません");
+    expect(body).toContain("✅ The capture on this host (local) is current");
+    expect(body).not.toContain("✅ The capture is current");
+    expect(body).toContain("Missed work on other hosts cannot be assessed here");
   });
 
   it("attributes a remote suspect session to its host (@host on the 要注意 line)", async () => {
@@ -1494,7 +1498,7 @@ describe("renderOrientation (federation / multi-host)", () => {
       nowIso: FIXED_NOW_ISO,
       federatedRoots: [{ paths: laptop, host: "laptop" }],
     });
-    expect(body).toContain("### 要注意 session (1)");
+    expect(body).toContain("### Suspect sessions (1)");
     const suspectLine = body
       .split("\n")
       .find((l) => l.includes("(running)") && l.includes("@laptop"));
@@ -1615,11 +1619,11 @@ describe("renderOrientation (cross-project out-of-root files)", () => {
       relatedFiles: ["src/in-repo.ts", "/etc/hosts", "~/.claude/plans/p.md"],
     });
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(body).toContain("source_roots 外");
+    expect(body).toContain("outside source_roots");
     expect(body).toContain("/etc/hosts");
     // The advisory line names only the out-of-root file, not the in-repo or
     // agent-infra ones.
-    const warnLine = body.split("\n").find((l) => l.includes("source_roots 外")) ?? "";
+    const warnLine = body.split("\n").find((l) => l.includes("outside source_roots")) ?? "";
     expect(warnLine).toContain("/etc/hosts");
     expect(warnLine).not.toContain("src/in-repo.ts");
     expect(warnLine).not.toContain(".claude/plans");
@@ -1642,8 +1646,8 @@ describe("renderOrientation (cross-project out-of-root files)", () => {
       relatedFiles: [...inRepo, "~/zzz-not-a-project/blog.md"],
     });
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    const warnLine = body.split("\n").find((l) => l.includes("source_roots 外")) ?? "";
-    expect(warnLine).toContain("1 件");
+    const warnLine = body.split("\n").find((l) => l.includes("outside source_roots")) ?? "";
+    expect(warnLine).toContain("⚠ 1 outside source_roots");
     expect(warnLine).toContain("~/zzz-not-a-project/blog.md");
   });
 
@@ -1708,7 +1712,7 @@ describe("renderOrientation (cross-project out-of-root files)", () => {
       relatedFiles: ["/etc/hosts"],
     });
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(body).not.toContain("source_roots 外");
+    expect(body).not.toContain("outside source_roots");
   });
 });
 
@@ -1733,10 +1737,10 @@ describe("orientation — open tracks (strategic continuation)", () => {
     );
     const { body, openTrackCount } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(openTrackCount).toBe(1);
-    expect(body).toContain("## どこへ向かう");
-    expect(body).toContain("### 未完トラック (close まで継続表示) (1)");
+    expect(body).toContain("## Where you are heading");
+    expect(body).toContain("### Open tracks (shown until closed) (1)");
     expect(body).toContain("Phase 5 admin form coverage (6/19)");
-    expect(body).toContain("理由: raw-JSON admin editing is a stopgap, not the final shape");
+    expect(body).toContain("Why: raw-JSON admin editing is a stopgap, not the final shape");
     expect(body).toContain("basou decision void");
   });
 
@@ -1754,7 +1758,7 @@ describe("orientation — open tracks (strategic continuation)", () => {
     );
     const { body, openTrackCount } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(openTrackCount).toBe(0);
-    expect(body).not.toContain("### 未完トラック");
+    expect(body).not.toContain("### Open tracks");
     expect(body).not.toContain("closed track");
   });
 
@@ -1787,7 +1791,7 @@ describe("orientation — open tracks (strategic continuation)", () => {
       decisionLine(sid, "ET6", DEC("TR5"), "the track", "2026-05-08T12:00:00Z", { kind: "track" }),
     );
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(body).toContain("### 未完トラック");
+    expect(body).toContain("### Open tracks");
     expect(body).not.toContain("no planned tasks or recorded next step");
   });
 
@@ -1826,9 +1830,9 @@ describe("orientation — open tracks (strategic continuation)", () => {
     const { body, openTrackCount } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(openTrackCount).toBe(1);
     // The later decision is the latest direction…
-    expect(body).toContain("直近の判断: a later tactical call");
+    expect(body).toContain("Latest decision: a later tactical call");
     // …yet the strategic track still resurfaces in its own frame.
-    expect(body).toContain("### 未完トラック");
+    expect(body).toContain("### Open tracks");
     expect(body).toContain("the strategic track");
   });
 
@@ -1881,7 +1885,43 @@ describe("orientation — open tracks (strategic continuation)", () => {
     );
     const { body, openTrackCount } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(openTrackCount).toBe(11);
-    expect(body).toContain("### 未完トラック (close まで継続表示) (11)");
+    expect(body).toContain("### Open tracks (shown until closed) (11)");
     expect(body).toContain("... +1 more (see decisions.md)");
+  });
+});
+
+describe("renderOrientation (view language)", () => {
+  it("renders Japanese chrome when the manifest anchor declares language: ja", async () => {
+    const paths = await setupPaths();
+    const manifest = createManifest({ workspaceName: "fixture" });
+    manifest.repos = [{ path: ".", language: "ja" }];
+    await writeManifest(paths, manifest);
+    await placeSession(paths, { id: SES("S01"), status: "completed" });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("## 今どこにいる");
+    expect(result.body).toContain("## 最近の流れ (直近 5 session)");
+    expect(result.body).toContain("## 何が動く");
+    expect(result.body).toContain("## どこへ向かう");
+    expect(result.body).toContain("## これは最新か");
+    expect(result.body).toContain("- 最終 session: ");
+    expect(result.body).toContain("ℹ️ 取り込み済みの状態を表示しています。");
+  });
+
+  it("renders en chrome when the anchor declares en+ja (one chrome; en floor)", async () => {
+    const paths = await setupPaths();
+    const manifest = createManifest({ workspaceName: "fixture" });
+    manifest.repos = [{ path: ".", language: "en+ja" }];
+    await writeManifest(paths, manifest);
+    await placeSession(paths, { id: SES("S01"), status: "completed" });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("## Where you are now");
+    expect(result.body).not.toContain("## 今どこにいる");
+  });
+
+  it("honors an explicit language override without reading the manifest", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, { id: SES("S01"), status: "completed" });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO, language: "ja" });
+    expect(result.body).toContain("## 今どこにいる");
   });
 });

@@ -7,6 +7,31 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- The generated views — `handoff.md`, `orientation.md`, `decisions.md`, and
+  `basou report generate` — now localize their tool-generated chrome (section
+  headings, labels, freshness-verdict prose) per workspace: the view language
+  follows the manifest anchor repo's declared `language` ("the workspace speaks
+  the anchor's language"). `language: ja` on the anchor (the `repos[]` entry
+  whose `path` is `.`) renders the Japanese chrome exactly as before; `en`,
+  `en+ja`, an undeclared language, or no roster render English (the new
+  default). User data — decision titles, notes, labels, file paths — always
+  passes through verbatim; only the chrome is localized, and there is no
+  env-var / CLI-flag override (committed team artifacts speak the project's
+  declared language, not the caller's). All view strings now live in a single
+  `@basou/core` locale table (`viewStrings` / `resolveViewLanguage`, both
+  exported), which also shrinks the language-lint E-5 allowlist from four
+  renderers to that one module. The Codex context channel (`~/.codex/AGENTS.md`)
+  follows automatically since it carries the orientation body.
+
+### Changed
+
+- **Default view language is now English.** A workspace that never declared a
+  roster (or whose anchor has no `language`) previously rendered Japanese
+  headings; it now renders English. To keep the Japanese chrome, declare
+  `language: ja` on the anchor entry (`path: "."`) under `repos:` in
+  `.basou/manifest.yaml`. Rendered prose is presentation, not contract
+  (see `docs/spec/compatibility.md`).
+
 - `basou view --check` now flags `redundant` portfolio entries — a registered
   `~/.basou/portfolio.yaml` path that resolves to the same planning master as
   another entry (its workspace view, or a member / source-root repo the master

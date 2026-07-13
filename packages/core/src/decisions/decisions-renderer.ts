@@ -1,6 +1,12 @@
 import { lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
+import {
+  resolveViewLanguageFromPaths,
+  type ViewLanguage,
+  type ViewStrings,
+  viewStrings,
+} from "../lib/view-strings.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
 
@@ -9,6 +15,12 @@ export type DecisionsRendererInput = {
   nowIso: string;
   onWarning?: (warning: ReplayWarning, sessionId: string) => void;
   onSessionSkip?: (sessionId: string, reason: SessionSkipReason) => void;
+  /**
+   * Generated-view chrome language. Omitted (the normal path) = resolved from
+   * the manifest's anchor repo via {@link resolveViewLanguageFromPaths}; the
+   * override exists for tests and programmatic callers that already resolved it.
+   */
+  language?: ViewLanguage;
 };
 
 export type DecisionsRendererResult = {
@@ -148,7 +160,9 @@ export async function renderDecisions(
     return exists;
   }
 
+  const language = input.language ?? (await resolveViewLanguageFromPaths(input.paths));
   const body = await formatDecisionsBody({
+    language,
     nowIso: input.nowIso,
     decisions,
     knownEventIds,
@@ -158,11 +172,13 @@ export async function renderDecisions(
 }
 
 async function formatDecisionsBody(args: {
+  language: ViewLanguage;
   nowIso: string;
   decisions: ReadonlyArray<DecisionRecord>;
   knownEventIds: ReadonlySet<string>;
   fileExists: (relPath: string) => Promise<boolean>;
 }): Promise<string> {
+  const t: ViewStrings = viewStrings(args.language);
   const lines: string[] = [];
   lines.push("# Decisions");
   lines.push("");
@@ -174,7 +190,7 @@ async function formatDecisionsBody(args: {
   }
   for (const d of args.decisions) {
     // A track marker rides on the heading so the audit shows the decision was a
-    // strategic direction; for an open track it precedes the `- 種別` line below.
+    // strategic direction; for an open track it precedes the kind line below.
     const trackMark = d.kind === "track" ? " [TRACK]" : "";
     if (d.voided !== undefined) {
       // Struck heading + a void line; the decision body is kept for the audit
@@ -193,15 +209,15 @@ async function formatDecisionsBody(args: {
       lines.push("");
     }
     const occurredDate = d.occurredAt.slice(0, 10); // YYYY-MM-DD
-    lines.push(`- 決定日: ${occurredDate}`);
+    lines.push(`- ${t.decisions.dateLabel}: ${occurredDate}`);
     // An OPEN track keeps resurfacing in orientation/handoff; note that here so
     // the full record explains why it is still surfaced (a voided track is closed
     // and carries the VOIDED line instead).
     if (d.kind === "track" && d.voided === undefined) {
-      lines.push("- 種別: track (close まで orient/handoff に継続表示)");
+      lines.push(t.decisions.trackKindLine);
     }
     lines.push(`- session: ${shortDecisionSessionId(d.sessionId)}`);
-    lines.push(`- 判断: ${d.title}`);
+    lines.push(`- ${t.decisions.decisionLabel}: ${d.title}`);
     if (typeof d.rationale === "string" && d.rationale.length > 0) {
       lines.push(`- rationale: ${d.rationale}`);
     }

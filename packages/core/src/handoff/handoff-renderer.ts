@@ -2,6 +2,11 @@ import { join } from "node:path";
 import { enumerateApprovals } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
+import {
+  resolveViewLanguageFromPaths,
+  type ViewLanguage,
+  viewStrings,
+} from "../lib/view-strings.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import {
   loadSessionEntries,
@@ -33,6 +38,12 @@ export type HandoffRendererInput = {
   onTaskSkip?: (taskId: string, reason: TaskSkipReason) => void;
   /** Maximum related_files entries to display before `... +N more`. Default 20. */
   relatedFilesLimit?: number;
+  /**
+   * Generated-view chrome language. Omitted (the normal path) = resolved from
+   * the manifest's anchor repo via {@link resolveViewLanguageFromPaths}; the
+   * override exists for tests and programmatic callers that already resolved it.
+   */
+  language?: ViewLanguage;
 };
 
 export type HandoffRendererResult = {
@@ -44,7 +55,7 @@ export type HandoffRendererResult = {
   suspectCount: number;
   /** Total number of task.md files successfully loaded. */
   taskCount: number;
-  /** Tasks whose status is `planned` or `in_progress` (= shown in 次に実行すべき作業). */
+  /** Tasks whose status is `planned` or `in_progress` (= shown in the next-work section). */
   pendingTaskCount: number;
 };
 
@@ -86,16 +97,16 @@ type TaskStatusChangedRecord = {
  * {@link loadSessionEntries} / {@link enumerateApprovals}). It assembles the
  * the spec's `handoff.md` sections in order:
  *
- * 1. `現在の状態`: latest live session (status not archived, source not import).
- * 2. `直近の変更ファイル`: the most recent session's `related_files`, dedup +
+ * 1. Current state: latest live session (status not archived, source not import).
+ * 2. Recently changed files: the most recent session's `related_files`, dedup +
  *    sorted asc + truncated to `relatedFilesLimit` (default 20).
- * 3. `直近の判断`: latest `decision_recorded` event (chronological).
- * 4. `未決事項`: pending-approval count + suspect-session count.
- * 5. `次に読むべきファイル`: `.basou/decisions.md` + top-3 related files
+ * 3. Latest decision: latest `decision_recorded` event (chronological).
+ * 4. Unresolved items: pending-approval count + suspect-session count.
+ * 5. Files to read next: `.basou/decisions.md` + top-3 related files
  *    (the same `displayedFiles` source is intentionally reused in two
  *    sections — overview vs. resume context).
- * 6. `次に実行すべき作業`: placeholder until task events land.
- * 7. `セッション一覧`: all sessions newest first with inline suspect labels.
+ * 6. Work to do next: placeholder until task events land.
+ * 7. Sessions: all sessions newest first with inline suspect labels.
  *
  * Session enumeration goes through {@link loadSessionEntries} so the set of
  * sessions whose `decision_recorded` events we replay matches the
@@ -123,9 +134,9 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
 
   const decisions: DecisionRecord[] = [];
   // `kind: "track"` decisions (a strategic, unfinished direction); the open
-  // subset (minus voided) is surfaced as 未完トラック and resurfaces until closed.
+  // subset (minus voided) is surfaced as open tracks and resurfaces until closed.
   const tracks: TrackRecord[] = [];
-  // decision_ids marked no longer in force; the 直近の判断 pointer skips them so
+  // decision_ids marked no longer in force; the latest-decision pointer skips them so
   // a voided decision is never surfaced as current (mirrors the orientation
   // renderer, keeping the two outputs in agreement).
   const voidedDecisionIds = new Set<string>();
@@ -133,7 +144,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   const tasksStatusChanged: TaskStatusChangedRecord[] = [];
   // Activity tail over NON-archived sessions = max of the session boundary
   // (ended_at ?? started_at) AND every event's occurred_at. Mirrors the
-  // orientation renderer so the 直近の判断 staleness note fires identically (a
+  // orientation renderer so the latest-decision staleness note fires identically (a
   // decision that real work continued past is not presented as current).
   let latestActivityAt: string | null = null;
   const noteActivity = (iso: string): void => {
@@ -198,7 +209,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     const c = Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
     return c !== 0 ? c : a.decisionId.localeCompare(b.decisionId);
   });
-  // Newest decision NOT voided — the 直近の判断 pointer. A voided decision stays
+  // Newest decision NOT voided — the latest-decision pointer. A voided decision stays
   // in decisions.md (struck) but must not pose as the current direction.
   let latestDecision: DecisionRecord | undefined;
   for (let i = decisions.length - 1; i >= 0; i -= 1) {
@@ -260,15 +271,16 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   const liveEntries = entries.filter(
     (e) => e.session.session.status !== "archived" && e.session.session.source.kind !== "import",
   );
-  // Represent 最終 session with the most recent SUBSTANTIVE session, not a bare
-  // resume/refresh session (e.g. 1 command, 0 files) that merely happens to be
-  // newest — the latter hides the real-work session and disagrees with 直近の判断.
+  // Represent the last session with the most recent SUBSTANTIVE session, not a
+  // bare resume/refresh session (e.g. 1 command, 0 files) that merely happens to
+  // be newest — the latter hides the real-work session and disagrees with the
+  // latest decision.
   const latestSession = pickLatestSubstantiveEntry(liveEntries);
 
-  // 「直近の変更ファイル」 shows the files touched by the most recent SUBSTANTIVE
-  // session — the same session surfaced as 最終 session above — so the section
+  // "Recently changed files" shows the files touched by the most recent
+  // SUBSTANTIVE session — the same session surfaced as the last session above — so the section
   // reflects the latest real activity rather than the whole history. (A bare
-  // resume session has no related_files anyway, so following 最終 session here
+  // resume session has no related_files anyway, so following the last session here
   // shows the substantive work's files instead of an empty list.) Unioning every
   // session's related_files turned this into a whole-history dump once transcript
   // imports became the primary source, since each import carries a full day of
@@ -287,7 +299,9 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
       ? `${shortIdWithPrefix(firstEntry.sessionId)}..${shortIdWithPrefix(lastEntry.sessionId)}`
       : "";
 
+  const language = input.language ?? (await resolveViewLanguageFromPaths(input.paths));
   const body = formatHandoffBody({
+    language,
     nowIso: input.nowIso,
     sessionRange,
     sessionCount: entries.length,
@@ -319,6 +333,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
 }
 
 function formatHandoffBody(args: {
+  language: ViewLanguage;
   nowIso: string;
   sessionRange: string;
   sessionCount: number;
@@ -337,6 +352,7 @@ function formatHandoffBody(args: {
   pendingTasks: ReadonlyArray<TaskDocument>;
   totalTaskCount: number;
 }): string {
+  const t = viewStrings(args.language);
   const lines: string[] = [];
   lines.push("# Handoff");
   lines.push("");
@@ -347,8 +363,8 @@ function formatHandoffBody(args: {
   }
   lines.push("");
 
-  // 現在の状態
-  lines.push("## 現在の状態");
+  // Current state
+  lines.push(t.handoff.headingCurrentState);
   lines.push("");
   if (args.latestSession !== undefined) {
     const status = args.latestSession.session.session.status;
@@ -359,12 +375,12 @@ function formatHandoffBody(args: {
     // available, so it becomes the primary text and the bracket is dropped to
     // avoid repeating it.
     if (label !== undefined && label !== "") {
-      lines.push(`- 最終 session: ${label} (${status}) [${shortId}]`);
+      lines.push(`- ${t.common.lastSessionLabel}: ${label} (${status}) [${shortId}]`);
     } else {
-      lines.push(`- 最終 session: ${shortId} (${status})`);
+      lines.push(`- ${t.common.lastSessionLabel}: ${shortId} (${status})`);
     }
   } else {
-    lines.push("- 最終 session: (no live sessions)");
+    lines.push(`- ${t.common.lastSessionLabel}: (no live sessions)`);
   }
   if (args.latestActivityRecord !== undefined) {
     // Status comes from task.md when available. If the task_created event
@@ -385,15 +401,15 @@ function formatHandoffBody(args: {
     // Lead with the task title; the raw id is demoted to a trailing [short id]
     // and linked_sessions rides alongside the status.
     lines.push(
-      `- 最終 task: ${args.latestActivityRecord.title} (${statusLabel}${linkedSuffix}) [${shortIdWithPrefix(args.latestActivityRecord.taskId)}]`,
+      `- ${t.handoff.lastTaskLabel}: ${args.latestActivityRecord.title} (${statusLabel}${linkedSuffix}) [${shortIdWithPrefix(args.latestActivityRecord.taskId)}]`,
     );
   } else {
-    lines.push("- 最終 task: (no tasks recorded yet)");
+    lines.push(`- ${t.handoff.lastTaskLabel}: (no tasks recorded yet)`);
   }
   lines.push("");
 
-  // 直近の変更ファイル
-  lines.push("## 直近の変更ファイル");
+  // Recently changed files
+  lines.push(t.handoff.headingRecentFiles);
   lines.push("");
   if (args.displayedFiles.length === 0) {
     lines.push("(no related files recorded)");
@@ -403,8 +419,8 @@ function formatHandoffBody(args: {
   }
   lines.push("");
 
-  // 直近の判断
-  lines.push("## 直近の判断");
+  // Latest decision
+  lines.push(t.handoff.headingLatestDecision);
   lines.push("");
   if (args.latestDecision === undefined) {
     // Either no decisions, or every recorded decision has been voided — in
@@ -418,26 +434,22 @@ function formatHandoffBody(args: {
     // Staleness caveat (mirrors orientation): when real work continued well past
     // this decision, it may already be resolved/executed — do not let a resume
     // treat it as the current next step. handoff had no such note before, so a
-    // stale recorded decision posed unguarded as "直近の判断".
+    // stale recorded decision posed unguarded as the latest decision.
     if (args.latestActivityAt !== null && isTrailingStale(args.latestActivityAt, last.occurredAt)) {
-      lines.push(
-        "  - 注: 最終活動はこの判断より後です。会話で既に解決済みの可能性があるため、再開前に継続点を確認してください(会話での意思決定は自動記録されません。`basou decision capture` で記録できます)。",
-      );
+      lines.push(`  - ${t.handoff.decisionStaleNote}`);
     }
-    // When the latest decision is from a DIFFERENT session than 最終 session, the
+    // When the latest decision is from a DIFFERENT session than the last session, the
     // two "latest" pointers disagree; surface it so the timeline is unambiguous.
     if (args.latestSession !== undefined && last.sessionId !== args.latestSession.sessionId) {
-      lines.push(
-        `  - 注: この判断は最終 session とは別の session [${shortIdWithPrefix(last.sessionId)}] のものです。`,
-      );
+      lines.push(`  - ${t.common.decisionOtherSessionNote(shortIdWithPrefix(last.sessionId))}`);
     }
     lines.push("");
     lines.push(`(${args.decisions.length} decisions total — see decisions.md)`);
   }
   lines.push("");
 
-  // 未完トラック — open strategic directions that resurface until closed. Placed
-  // right after 直近の判断 (both decision-derived) and ahead of the mechanical
+  // Open tracks — open strategic directions that resurface until closed. Placed
+  // right after the latest decision (both decision-derived) and ahead of the mechanical
   // task list: an open track is the strongest "where to resume" signal, carrying
   // the next essential direction + why across the session boundary. Mirrors the
   // orientation renderer's forward section. Omitted entirely when none are open.
@@ -445,22 +457,22 @@ function formatHandoffBody(args: {
     const TRACK_DISPLAY_LIMIT = 10;
     const shown = args.openTracks.slice(0, TRACK_DISPLAY_LIMIT);
     const overflow = args.openTracks.length - shown.length;
-    lines.push("## 未完トラック (close まで継続表示)");
+    lines.push(t.handoff.headingOpenTracks);
     lines.push("");
-    for (const t of shown) {
-      lines.push(`- ${t.title} [${shortIdWithPrefix(t.decisionId)}]`);
-      if (t.rationale !== null && t.rationale.trim() !== "") {
-        lines.push(`  - 理由: ${handoffRationale(t.rationale)}`);
+    for (const track of shown) {
+      lines.push(`- ${track.title} [${shortIdWithPrefix(track.decisionId)}]`);
+      if (track.rationale !== null && track.rationale.trim() !== "") {
+        lines.push(`  - ${t.common.trackWhyLabel}: ${handoffRationale(track.rationale)}`);
       }
     }
     if (overflow > 0) lines.push(`- ... +${overflow} more (see decisions.md)`);
     lines.push("");
-    lines.push("完了したら `basou decision void <decision_id>` で閉じてください。");
+    lines.push(t.handoff.trackCloseInstruction);
     lines.push("");
   }
 
-  // 未決事項
-  lines.push("## 未決事項");
+  // Unresolved items
+  lines.push(t.handoff.headingUnresolved);
   lines.push("");
   if (args.pendingApprovalsCount > 0) {
     lines.push(`- ${args.pendingApprovalsCount} pending approvals`);
@@ -473,19 +485,19 @@ function formatHandoffBody(args: {
   }
   lines.push("");
 
-  // 次に読むべきファイル
+  // Files to read next
   // Drop self-reference to handoff.md, include `.basou/decisions.md` + the
   // top-3 of `displayedFiles` so the section points to concrete files. The
   // same `displayedFiles` source is reused intentionally (overview vs.
   // resume context).
-  lines.push("## 次に読むべきファイル");
+  lines.push(t.handoff.headingReadNext);
   lines.push("");
   lines.push("- .basou/decisions.md");
   for (const f of args.displayedFiles.slice(0, 3)) lines.push(`- ${f}`);
   lines.push("");
 
-  // 次に実行すべき作業
-  lines.push("## 次に実行すべき作業");
+  // Work to do next
+  lines.push(t.handoff.headingNextWork);
   lines.push("");
   if (args.pendingTasks.length === 0) {
     lines.push("(no pending tasks)");
@@ -499,11 +511,11 @@ function formatHandoffBody(args: {
   }
   lines.push("");
 
-  // セッション一覧 — the main table lists the operator's own sessions newest
+  // Sessions — the main table lists the operator's own sessions newest
   // first. This deliberately includes `claude-code-import` sessions: a
   // transcript captured after the fact via `basou import claude-code` is still
   // the operator's own work, so it belongs here rather than below. The separate
-  // 「Imported sessions」 sub-section holds ONLY cross-workspace round-trips
+  // "Imported sessions" sub-section holds ONLY cross-workspace round-trips
   // brought in via `basou session import` (source.kind === "import"), so it is
   // absent whenever there are none. The "(no sessions yet)" placeholder fires
   // only when the workspace is completely empty; "(no live sessions; …)" fires
@@ -512,7 +524,7 @@ function formatHandoffBody(args: {
   const importedTableEntries = args.entries.filter(
     (e) => e.session.session.source.kind === "import",
   );
-  lines.push("## セッション一覧");
+  lines.push(t.handoff.headingSessions);
   lines.push("");
   if (args.entries.length === 0) {
     lines.push("(no sessions yet)");
