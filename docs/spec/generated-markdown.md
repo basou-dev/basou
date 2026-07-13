@@ -30,8 +30,9 @@ verdict prose — is localized per workspace, resolved from the manifest roster:
 - `language: ja` on the anchor renders Japanese chrome; `en` renders English.
 - `en+ja` resolves to **English**: a generated view has exactly one chrome
   language, and English is the shared floor of a bilingual audience.
-- When no roster, no anchor entry, or no `language` is declared, the default
-  is **English**.
+- When no roster, no anchor entry, or no `language` is declared — or the
+  manifest is missing or unreadable — the fallback is **English**, silently:
+  rendering never fails or warns over language resolution.
 
 Only the tool-generated strings are localized. User data — decision titles,
 notes, session labels, file paths — always passes through verbatim, whatever

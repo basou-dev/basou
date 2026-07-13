@@ -196,7 +196,7 @@ describe("basou handoff generate", () => {
     expect(joinCalls(out)).toContain("sessions: 1");
   });
 
-  it("case 3: 直近の変更ファイル shows only the most recent session's related_files", async () => {
+  it("case 3: Recently changed files shows only the most recent session's related_files", async () => {
     const repo = await setupInitedRepo();
     // Older session — its files must NOT appear once a newer session supersedes it.
     await placeSession(repo, { id: SES("X02"), relatedFiles: ["src/a.ts"] });
@@ -356,7 +356,7 @@ describe("basou handoff generate", () => {
     expect(joinCalls(err)).toContain("Markers mismatched in handoff.md");
   });
 
-  it("case 11: pending approvals surface as a count in the 未決事項 section", async () => {
+  it("case 11: pending approvals surface as a count in the Unresolved items section", async () => {
     const repo = await setupInitedRepo();
     await placeSession(repo, { id: SES("X0A") });
     await placePendingApproval(repo, APPR("A01"));

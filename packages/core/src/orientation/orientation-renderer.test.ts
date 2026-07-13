@@ -331,7 +331,7 @@ describe("orientation-renderer", () => {
     expect(lower).not.toContain("utilization");
   });
 
-  it("これは最新か: a zero-staleness probe renders the ✅ current verdict with a translated tool name", async () => {
+  it("Is this current: a zero-staleness probe renders the ✅ current verdict with a translated tool name", async () => {
     const paths = await setupPaths();
     await placeSession(paths, {
       id: SES("S01"),
@@ -357,7 +357,7 @@ describe("orientation-renderer", () => {
     expect(result.body).not.toContain("codex-import");
   });
 
-  it("これは最新か: a non-zero staleness probe renders the ⚠️ stale verdict pointing at refresh", async () => {
+  it("Is this current: a non-zero staleness probe renders the ⚠️ stale verdict pointing at refresh", async () => {
     const paths = await setupPaths();
     await placeSession(paths, {
       id: SES("S01"),
@@ -376,9 +376,10 @@ describe("orientation-renderer", () => {
     expect(result.body).toContain("Run `basou refresh` before starting work");
   });
 
-  it("これは最新か: an updated-ONLY probe drops the 必ず imperative but still offers refresh + explains the residual", async () => {
-    // The active session always shows as grown ("更新"), so a "必ず refresh"
-    // imperative there can never be satisfied (dbp_wp's learned helplessness).
+  it("Is this current: an updated-ONLY probe drops the before-starting-work imperative but still offers refresh + explains the residual", async () => {
+    // The active session always shows as grown ("updated"), so a "refresh
+    // before starting work" imperative there can never be satisfied (dbp_wp's
+    // learned helplessness).
     // But refresh CAN clear a finished grown session, so the action must remain
     // offered (not softened away) — just without the unsatisfiable imperative.
     const paths = await setupPaths();
@@ -403,7 +404,7 @@ describe("orientation-renderer", () => {
     expect(result.body).not.toContain("✅ The capture is current.");
   });
 
-  it("これは最新か: an updated-ONLY probe over a COMPLETED session still surfaces refresh (no over-soft regression)", async () => {
+  it("Is this current: an updated-ONLY probe over a COMPLETED session still surfaces refresh (no over-soft regression)", async () => {
     // A finished session that grew (imported mid-flight, then ended with more
     // events) is real refresh-clearable backlog — it must not be hidden.
     const paths = await setupPaths();
@@ -423,7 +424,7 @@ describe("orientation-renderer", () => {
     expect(result.body).not.toContain("✅ The capture is current.");
   });
 
-  it("これは最新か: an updated probe over an ARCHIVED-only store is NOT mis-cleared as 'no records'", async () => {
+  it("Is this current: an updated probe over an ARCHIVED-only store is NOT mis-cleared as 'no records'", async () => {
     // newestStartedAt excludes archived sessions, so the store reads as empty for
     // the position sections — but the probe still counts a grown source. The
     // updated branch must run BEFORE the 'no records' branch (no false-clear).
@@ -463,7 +464,7 @@ describe("orientation-renderer", () => {
     expect(result.body).toContain("⚠️ 1 session(s) have been updated");
   });
 
-  it("これは最新か: an unrun probe (null) says it cannot confirm rather than claiming current", async () => {
+  it("Is this current: an unrun probe (null) says it cannot confirm rather than claiming current", async () => {
     const paths = await setupPaths();
     await placeSession(paths, {
       id: SES("S01"),
@@ -477,7 +478,7 @@ describe("orientation-renderer", () => {
     expect(result.body).not.toContain("✅ The capture is current.");
   });
 
-  it("これは最新か: a fresh capture with suspect sessions still cautions in the verdict", async () => {
+  it("Is this current: a fresh capture with suspect sessions still cautions in the verdict", async () => {
     const paths = await setupPaths();
     const id = SES("R01");
     await placeSession(
@@ -495,7 +496,7 @@ describe("orientation-renderer", () => {
     expect(result.body).toContain("However, 1 suspect session(s) need attention");
   });
 
-  it("これは最新か: unverifiable grown sessions block ✅ and point at verify/--force (no false-clear)", async () => {
+  it("Is this current: unverifiable grown sessions block ✅ and point at verify/--force (no false-clear)", async () => {
     const paths = await setupPaths();
     await placeSession(paths, {
       id: SES("S01"),
@@ -520,7 +521,7 @@ describe("orientation-renderer", () => {
     expect(result.body).not.toContain("✅ The capture is current.");
   });
 
-  it("staleness banner: a stale probe surfaces a top banner BEFORE 今どこにいる", async () => {
+  it("staleness banner: a stale probe surfaces a top banner BEFORE Where you are now", async () => {
     const paths = await setupPaths();
     await placeSession(paths, {
       id: SES("S01"),
@@ -764,7 +765,7 @@ describe("orientation-renderer", () => {
   });
 });
 
-describe("最近の流れ (recent direction arc)", () => {
+describe("Recent direction (direction arc)", () => {
   function section(body: string): string {
     const start = body.indexOf("## Recent direction");
     const end = body.indexOf("## What is in flight");
@@ -801,7 +802,7 @@ describe("最近の流れ (recent direction arc)", () => {
     });
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     const s = section(result.body);
-    // Sorted + capped to 3 files; no 判断 / 次の起点 line for this session.
+    // Sorted + capped to 3 files; no Decisions / Next step line for this session.
     expect(s).toContain("Changed: src/w.ts, src/x.ts, src/y.ts");
     expect(s).not.toContain("src/z.ts");
     expect(s).not.toContain("Decisions:");
@@ -823,7 +824,7 @@ describe("最近の流れ (recent direction arc)", () => {
     expect(s).not.toContain("wrong call");
   });
 
-  it("surfaces a next_step note as 次の起点 within the arc", async () => {
+  it("surfaces a next_step note as Next step within the arc", async () => {
     const paths = await setupPaths();
     await placeSession(
       paths,
@@ -1267,7 +1268,7 @@ describe("summarizeOrientation", () => {
 });
 
 // Resume coherence (HypArt triage): orient must not present a stale decision as
-// direction (F-A), must represent 最終 session with a substantive session (F-B),
+// direction (F-A), must represent Last session with a substantive session (F-B),
 // and must flag when the latest decision is from a different session (F-C).
 // NOTE: SES/EVT/DEC suffixes must be exactly 3 Crockford chars (no I/L/O/U) so
 // the synthesized ids pass ULID validation.
@@ -1316,7 +1317,7 @@ describe("renderOrientation (resume coherence)", () => {
     expect(body).not.toContain("ask the user for the continuation point");
   });
 
-  it("F-B: 最終 session is the substantive session, not a newer empty resume session", async () => {
+  it("F-B: Last session is the substantive session, not a newer empty resume session", async () => {
     const paths = await setupPaths();
     const work = SES("WRK");
     const resume = SES("RSM");
@@ -1341,9 +1342,9 @@ describe("renderOrientation (resume coherence)", () => {
     expect(summary.latestSession?.sessionId).toBe(work);
   });
 
-  it("F-C: flags when the latest decision is from a different session than 最終 session", async () => {
+  it("F-C: flags when the latest decision is from a different session than Last session", async () => {
     const paths = await setupPaths();
-    const work = SES("WK2"); // substantive + newest -> 最終 session
+    const work = SES("WK2"); // substantive + newest -> Last session
     const older = SES("PR2"); // prior session that holds the decision
     await placeSession(paths, {
       id: work,
@@ -1367,7 +1368,7 @@ describe("renderOrientation (resume coherence)", () => {
     expect(body).toContain("this decision comes from a different session");
   });
 
-  it("F-C: does NOT flag when the latest decision is in 最終 session", async () => {
+  it("F-C: does NOT flag when the latest decision is in Last session", async () => {
     const paths = await setupPaths();
     const s = SES("SAM");
     await placeSession(
@@ -1479,7 +1480,7 @@ describe("renderOrientation (federation / multi-host)", () => {
     expect(body).toContain("Missed work on other hosts cannot be assessed here");
   });
 
-  it("attributes a remote suspect session to its host (@host on the 要注意 line)", async () => {
+  it("attributes a remote suspect session to its host (@host on the suspect line)", async () => {
     const local = await setupPaths();
     await placeSession(
       local,
@@ -1717,7 +1718,7 @@ describe("renderOrientation (cross-project out-of-root files)", () => {
 });
 
 describe("orientation — open tracks (strategic continuation)", () => {
-  it("surfaces an open track with its rationale in the 未完トラック frame", async () => {
+  it("surfaces an open track with its rationale in the Open tracks frame", async () => {
     const paths = await setupPaths();
     const sid = SES("T01");
     await placeSession(
@@ -1812,7 +1813,7 @@ describe("orientation — open tracks (strategic continuation)", () => {
     expect(summary.openTracks[0]?.rationale).toBe("why it matters");
   });
 
-  it("an open track survives a LATER plain decision and coexists with 直近の判断 (the intent-leak regression)", async () => {
+  it("an open track survives a LATER plain decision and coexists with Latest decision (the intent-leak regression)", async () => {
     const paths = await setupPaths();
     const sid = SES("T07");
     const events =
@@ -1820,7 +1821,7 @@ describe("orientation — open tracks (strategic continuation)", () => {
         kind: "track",
       }) +
       // Newer PLAIN decision: pre-keystone this displaced the track from the
-      // single 直近の判断 pointer and the track was lost. It must still surface.
+      // single Latest decision pointer and the track was lost. It must still surface.
       decisionLine(sid, "ET9", DEC("TR8"), "a later tactical call", "2026-05-08T12:00:00Z");
     await placeSession(
       paths,
@@ -1924,4 +1925,110 @@ describe("renderOrientation (view language)", () => {
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO, language: "ja" });
     expect(result.body).toContain("## 今どこにいる");
   });
+
+  // Golden full-text lock on the JA chrome: `language: ja` promises the exact
+  // pre-i18n bytes, so any edit to the JA table (or to how the renderer
+  // assembles it) must show up here as a full-body diff, not slip through a
+  // handful of toContain probes. The fixture deliberately exercises the wide
+  // JA surface: banner, all five headings, in-flight tasks/approvals, an open
+  // track with rationale, a next-step note, the recent-direction arc, and the
+  // stale freshness verdict.
+  it("golden: a ja workspace renders this exact body", async () => {
+    const paths = await setupPaths();
+    const manifest = createManifest({ workspaceName: "fixture" });
+    manifest.repos = [{ path: ".", language: "ja" }];
+    await writeManifest(paths, manifest);
+    const sid = SES("G01");
+    await placeSession(
+      paths,
+      {
+        id: sid,
+        status: "completed",
+        label: "golden fixture",
+        source: "claude-code-import",
+        startedAt: "2026-05-08T11:00:00+09:00",
+        endedAt: "2026-05-08T12:00:00+09:00",
+        relatedFiles: ["src/a.ts", "src/b.ts"],
+      },
+      startedLine(sid, "G01", "2026-05-08T11:00:00+09:00") +
+        decisionLine(
+          sid,
+          "G02",
+          DEC("G01"),
+          "adopt zod for schema validation",
+          "2026-05-08T11:30:00+09:00",
+          {
+            kind: "track",
+            rationale: "single source of truth for schemas",
+          },
+        ) +
+        noteLine(
+          sid,
+          "G03",
+          "wire the golden fixture into CI",
+          "2026-05-08T11:40:00+09:00",
+          "next_step",
+        ) +
+        endedLine(sid, "G04", "2026-05-08T12:00:00+09:00"),
+    );
+    await placeTaskFile(paths, {
+      id: TASK("G01"),
+      title: "golden task",
+      status: "planned",
+      sessionId: sid,
+    });
+    await placePendingApproval(paths, { id: APPR("G01"), sessionId: sid });
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      staleness: { newSessions: 1, updatedSessions: 1 },
+    });
+    expect(result.body).toBe(JA_GOLDEN_BODY);
+  });
 });
+
+const JA_GOLDEN_BODY = [
+  "# Orientation",
+  "",
+  "> Generated at 2026-05-09T03:00:00.000Z · sessions 1 · newest 25h 00m ago · pending 1 · suspect 0",
+  "",
+  "> ⚠️ **古いです（未取り込み 新規 1 件・更新 1 件）** — 着手前に必ず `basou refresh` を実行してください(詳細は末尾「これは最新か」)。",
+  "",
+  "## 今どこにいる",
+  "",
+  "- 最終 session: golden fixture (completed) [ses_01HXABCDEF]",
+  "- 直近の判断: adopt zod for schema validation [decision_01HXABCDEF] (1日前)",
+  "- 直近の変更ファイル: src/a.ts, src/b.ts",
+  "",
+  "## 最近の流れ (直近 5 session)",
+  "",
+  "- golden fixture (1日前)",
+  "  - 判断: adopt zod for schema validation",
+  "  - 次の起点: wire the golden fixture into CI",
+  "",
+  "## 何が動く",
+  "",
+  "### 進行中 task (1)",
+  "- golden task (planned) [task_01HXABCDEF]",
+  "",
+  "### 承認待ち (1)",
+  "- [high] command: deploy to production — session ses_01HXABCDEF, since 2026-05-08T11:00:00+09:00",
+  "",
+  "### 要注意 session (0)",
+  "- (none)",
+  "",
+  "## どこへ向かう",
+  "",
+  "### 未完トラック (close まで継続表示) (1)",
+  "- adopt zod for schema validation [decision_01HXABCDEF] (1日前)",
+  "  - 理由: single source of truth for schemas",
+  "完了したら `basou decision void <decision_id>` で閉じてください。閉じるまで毎回ここに表示されます。",
+  "",
+  "- 次の起点 (記録済み, 1日前): wire the golden fixture into CI [session ses_01HXABCDEF]",
+  "- golden task [task_01HXABCDEF]",
+  "",
+  "## これは最新か",
+  "",
+  "⚠️ 古いです。最後の取り込み以降に未取り込みの作業があります(新規 1 件・更新 1 件)。",
+  "着手前に必ず `basou refresh` を実行してください。",
+].join("\n");

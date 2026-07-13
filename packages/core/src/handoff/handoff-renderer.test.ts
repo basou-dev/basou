@@ -260,7 +260,7 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain(`from ${SHORT(id)}..${SHORT(id)}`);
   });
 
-  it("case 3: 直近の変更ファイル shows only the most recent session's related_files", async () => {
+  it("case 3: Recently changed files shows only the most recent session's related_files", async () => {
     const paths = await setupPaths();
     // Older session — its unique files must NOT appear once a newer session
     // supersedes it.
@@ -287,7 +287,7 @@ describe("handoff-renderer", () => {
     expect(recentSection.split("- src/b.ts\n").length - 1).toBe(1);
   });
 
-  it("case 4: includes the latest decision_recorded in the 直近の判断 section", async () => {
+  it("case 4: includes the latest decision_recorded in the Latest decision section", async () => {
     const paths = await setupPaths();
     const id = SES("X04");
     const dec1 = DEC("D01");
@@ -327,7 +327,7 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain("2 suspect sessions detected");
   });
 
-  it("case 6: pending approvals surface as a count in the 未決事項 section", async () => {
+  it("case 6: pending approvals surface as a count in the Unresolved items section", async () => {
     const paths = await setupPaths();
     await placeSession(paths, { id: SES("X07") });
     await placePendingApproval(paths, APPR("A01"));
@@ -399,7 +399,7 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain("Sessions: 1 (completed 1). Tasks: 0.");
   });
 
-  it("case 11b: 最終 session falls back to the short id when the session has no label", async () => {
+  it("case 11b: Last session falls back to the short id when the session has no label", async () => {
     const paths = await setupPaths();
     const id = SES("X0R");
     await placeSession(paths, { id, status: "completed", omitLabel: true });
@@ -418,7 +418,7 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain(`> Generated at ${customNow}`);
   });
 
-  it("case 13: 最終 task / 次に実行すべき作業 stay placeholder when no tasks exist", async () => {
+  it("case 13: Last task / Work to do next stay placeholder when no tasks exist", async () => {
     const paths = await setupPaths();
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.taskCount).toBe(0);
@@ -427,7 +427,7 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain("(no pending tasks)");
   });
 
-  it("case 14: a single planned task surfaces as 最終 task and in 次に実行すべき作業", async () => {
+  it("case 14: a single planned task surfaces as Last task and in Work to do next", async () => {
     const paths = await setupPaths();
     const sid = SES("X0D");
     const taskId = TASK("T01");
@@ -448,7 +448,7 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain("Sessions: 1 (running 1). Tasks: 1.");
   });
 
-  it("case 15: multi tasks select the latest task_created event for 最終 task", async () => {
+  it("case 15: multi tasks select the latest task_created event for Last task", async () => {
     const paths = await setupPaths();
     const sid = SES("X0E");
     const t1 = TASK("T02");
@@ -500,10 +500,10 @@ describe("handoff-renderer", () => {
       sessionId: sid,
     });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
-    // The status-change wins: t1 (now done) surfaces in 最終 task, NOT t2.
+    // The status-change wins: t1 (now done) surfaces in Last task, NOT t2.
     expect(result.body).toContain(`- Last task: older task (done) [${SHORT(t1)}]`);
     // t2 collapses to the same short id as t1 in this fixture set, so
-    // distinguish by title: the newer task's title must not appear in 現在の状態.
+    // distinguish by title: the newer task's title must not appear in Current state.
     const stateSection = sliceSection(result.body, "## Current state", "## ");
     expect(stateSection).not.toContain("newer task");
   });
@@ -640,7 +640,7 @@ describe("handoff-renderer", () => {
     expect(result.pendingTaskCount).toBe(1);
     // Pending list shows only the in_progress task; done / cancelled excluded.
     // Scope to the section because the latest-activity task (t3, cancelled)
-    // still surfaces in 最終 task above with its title.
+    // still surfaces in Last task above with its title.
     const pendingSection = sliceSection(result.body, "## Work to do next", "## ");
     expect(pendingSection).toContain(`- ongoing (in_progress) [${SHORT(t1)}]`);
     expect(pendingSection).not.toContain("completed");
@@ -684,7 +684,7 @@ describe("handoff-renderer", () => {
     expect(result.body).not.toContain("running 0");
   });
 
-  it("case 18a: imported session related_files stay out of 直近の変更ファイル", async () => {
+  it("case 18a: imported session related_files stay out of Recently changed files", async () => {
     const paths = await setupPaths();
     const liveSid = SES("X2A");
     const importedSid = SES("X2B");
@@ -735,7 +735,7 @@ describe("handoff-renderer", () => {
 
 // Resume coherence (HypArt triage): handoff must carry a staleness caveat on a
 // trailing decision (F-A, which handoff previously lacked entirely), represent
-// 最終 session with a substantive session (F-B), and flag a cross-session
+// Last session with a substantive session (F-B), and flag a cross-session
 // decision (F-C). SES/EVT/DEC suffixes must be 3 Crockford chars (no I/L/O/U).
 describe("renderHandoff (resume coherence)", () => {
   it("F-A: a trailing (stale) latest decision carries a staleness caveat", async () => {
@@ -780,7 +780,7 @@ describe("renderHandoff (resume coherence)", () => {
     expect(body).not.toContain("the latest activity postdates this decision");
   });
 
-  it("F-B: 最終 session is the substantive session, not a newer empty resume session", async () => {
+  it("F-B: Last session is the substantive session, not a newer empty resume session", async () => {
     const paths = await setupPaths();
     const work = SES("HWK");
     const resume = SES("HRS");
@@ -801,20 +801,20 @@ describe("renderHandoff (resume coherence)", () => {
       label: "bare resume",
     });
     const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
-    // The 現在の状態 section's 最終 session line should name the substantive session.
+    // The Current state section's Last session line should name the substantive session.
     const stateSection = body.slice(body.indexOf("## Current state"));
     expect(stateSection).toContain("Last session: real work");
     expect(stateSection).not.toContain("Last session: bare resume");
-    // 直近の変更ファイル is coupled to 最終 session, so it shows the substantive
+    // Recently changed files is coupled to Last session, so it shows the substantive
     // session's files (not the bare resume's empty list).
     const filesSection = sliceSection(body, "## Recently changed files", "## ");
     expect(filesSection).toContain("src/a.ts");
     expect(filesSection).not.toContain("(no related files recorded)");
   });
 
-  it("F-C: flags when the latest decision is from a different session than 最終 session", async () => {
+  it("F-C: flags when the latest decision is from a different session than Last session", async () => {
     const paths = await setupPaths();
-    const work = SES("HC2"); // substantive + newest -> 最終 session
+    const work = SES("HC2"); // substantive + newest -> Last session
     const older = SES("HP2"); // prior session that holds the decision
     await placeSession(paths, {
       id: work,
@@ -859,7 +859,7 @@ function decisionVoidedLine(
 }
 
 describe("renderHandoff (voided decisions)", () => {
-  it("skips a voided decision when surfacing 直近の判断", async () => {
+  it("skips a voided decision when surfacing Latest decision", async () => {
     const paths = await setupPaths();
     const id = SES("VH1");
     const kept = DEC("HK1");
@@ -893,7 +893,7 @@ describe("renderHandoff (voided decisions)", () => {
 });
 
 describe("renderHandoff (open tracks)", () => {
-  it("surfaces an open track with its rationale in a 未完トラック section", async () => {
+  it("surfaces an open track with its rationale in a Open tracks section", async () => {
     const paths = await setupPaths();
     const id = SES("HT1");
     await placeSession(
@@ -937,7 +937,7 @@ describe("renderHandoff (open tracks)", () => {
           kind: "track",
         },
       ) +
-      // A newer PLAIN decision: under the old model this became 直近の判断 and the
+      // A newer PLAIN decision: under the old model this became Latest decision and the
       // track sank into the flat list. The track must still surface.
       decisionRecordedLine(
         id,
@@ -957,13 +957,13 @@ describe("renderHandoff (open tracks)", () => {
       events,
     );
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
-    // Both coexist: the track in its own section, the later decision as 直近の判断.
+    // Both coexist: the track in its own section, the later decision as Latest decision.
     expect(result.body).toContain("## Open tracks");
     expect(result.body).toContain("the strategic track");
     expect(result.body).toContain("a later tactical call");
   });
 
-  it("omits the 未完トラック section once the track is voided", async () => {
+  it("omits the Open tracks section once the track is voided", async () => {
     const paths = await setupPaths();
     const id = SES("HT2");
     const did = DEC("HT2");
@@ -986,7 +986,7 @@ describe("renderHandoff (open tracks)", () => {
     expect(result.body).not.toContain("closed track");
   });
 
-  it("a plain decision does not produce a 未完トラック section", async () => {
+  it("a plain decision does not produce a Open tracks section", async () => {
     const paths = await setupPaths();
     const id = SES("HT3");
     await placeSession(

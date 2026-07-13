@@ -26,8 +26,9 @@ const ALLOWLIST = [
   // report chrome). The `ja` strings live ONLY here; the renderers themselves
   // are English-only and select a language via the manifest's anchor repo.
   "packages/core/src/lib/view-strings.ts",
-  // E-5: generated instruction-file preset — the content language is tied to the
-  // declared `language` of the target repo, a separate surface from CLI output.
+  // E-5: generated instruction-file preset — a separate surface from CLI output.
+  // Its content is currently Japanese unconditionally; it does not yet follow the
+  // target repo's declared `language`.
   "packages/core/src/project/preset.ts",
   // E-5: generated anchor AGENTS.md starter — the content language matches the
   // sibling preset/view blocks it lives beside, a separate surface from CLI output.

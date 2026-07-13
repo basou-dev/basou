@@ -904,8 +904,8 @@ function formatOrientationBody(
       lines.push(`  - ${t.orientation.noteStaleNote(t.relativeAge(activityAt, now))}`);
     }
   }
-  for (const t of summary.plannedTasks) {
-    lines.push(`- ${t.title} [${shortId(t.id)}]`);
+  for (const task of summary.plannedTasks) {
+    lines.push(`- ${task.title} [${shortId(task.id)}]`);
   }
   // Fall back to the decision hint only when there is no open track, no recorded
   // next step, and no planned task — otherwise the section already says where to

@@ -389,7 +389,7 @@ describe("decisions-renderer (voided decisions)", () => {
 });
 
 describe("decisions-renderer (track decisions)", () => {
-  it("marks an open track with [TRACK] and the 種別 line", async () => {
+  it("marks an open track with [TRACK] and the kind line", async () => {
     const paths = await setupPaths();
     const sid = SES("T01");
     const did = DEC("T01");
@@ -408,7 +408,7 @@ describe("decisions-renderer (track decisions)", () => {
     expect(result.body).toContain("- rationale: raw JSON is a stopgap");
   });
 
-  it("a plain decision carries neither the [TRACK] marker nor the 種別 line", async () => {
+  it("a plain decision carries neither the [TRACK] marker nor the kind line", async () => {
     const paths = await setupPaths();
     const sid = SES("T02");
     const did = DEC("T02");
@@ -424,7 +424,7 @@ describe("decisions-renderer (track decisions)", () => {
     expect(result.body).not.toContain("- kind: track");
   });
 
-  it("a voided track shows both [VOIDED] and [TRACK] and drops the 種別 (still-surfaced) line", async () => {
+  it("a voided track shows both [VOIDED] and [TRACK] and drops the kind (still-surfaced) line", async () => {
     const paths = await setupPaths();
     const sid = SES("T03");
     const did = DEC("T03");

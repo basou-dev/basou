@@ -243,7 +243,7 @@ describe("basou orient", () => {
     expect(joinCalls(err)).toContain("Workspace not initialized. Run 'basou init' first.");
   });
 
-  it("これは最新か: a clean capture (no uncaptured native logs) prints the ✅ current verdict", async () => {
+  it("Is this current: a clean capture (no uncaptured native logs) prints the ✅ current verdict", async () => {
     const repo = await setupInitedRepo();
     await placeSession(repo, { id: SES("S01"), source: "claude-code-import" });
     const out = captureStdout();
@@ -251,7 +251,7 @@ describe("basou orient", () => {
     expect(joinCalls(out)).toContain("✅ The capture is current.");
   });
 
-  it("これは最新か: an uncaptured native session flips the verdict to ⚠️ stale → run refresh", async () => {
+  it("Is this current: an uncaptured native session flips the verdict to ⚠️ stale → run refresh", async () => {
     const repo = await setupInitedRepo();
     // A Codex rollout for this repo exists in the native logs but was never imported.
     await writeCodexRolloutAt(repo, "codex-uncaptured");
