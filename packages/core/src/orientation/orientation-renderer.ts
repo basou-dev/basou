@@ -4,6 +4,12 @@ import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { formatDurationMs } from "../lib/format-duration.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
 import { AGENT_INFRA_DIRS, classifyFilesBySourceRoot } from "../lib/source-root-scope.js";
+import {
+  resolveViewLanguageFromPaths,
+  type ViewLanguage,
+  type ViewStrings,
+  viewStrings,
+} from "../lib/view-strings.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { readManifest } from "../storage/manifest.js";
 import {
@@ -28,7 +34,7 @@ export type OrientationRendererInput = {
   /**
    * Result of a read-only dry-run staleness probe (sessions a `basou refresh`
    * would add or update), computed by the CLI which holds the import context.
-   * Drives the plain "これは最新か" verdict. `null` / omitted = not probed, so
+   * Drives the plain "is this current" verdict. `null` / omitted = not probed, so
    * the verdict says it cannot confirm freshness rather than claiming current.
    */
   staleness?: {
@@ -42,6 +48,12 @@ export type OrientationRendererInput = {
    * reads as a verdict for a supervisor, not developer diagnostics.
    */
   verbose?: boolean;
+  /**
+   * Generated-view chrome language. Omitted (the normal path) = resolved from
+   * the manifest's anchor repo via {@link resolveViewLanguageFromPaths}; the
+   * override exists for tests and programmatic callers that already resolved it.
+   */
+  language?: ViewLanguage;
   /**
    * Additional trail stores to MERGE into this orientation, each a local path
    * (an SSHFS mount / rsync mirror of another host's `.basou`) tagged with a
@@ -97,8 +109,8 @@ type TrackRecord = {
 type NoteRecord = { body: string; sessionId: string; occurredAt: string; host: string | null };
 
 /**
- * One recent session condensed to its direction signal, for the "最近の流れ"
- * (recent direction) section. Across the last N non-archived sessions
+ * One recent session condensed to its direction signal, for the "recent
+ * direction" section. Across the last N non-archived sessions
  * (newest first), this surfaces the ARC of recent intent — the decision titles
  * and next-step notes recorded in EACH session — rather than orientation's
  * single latest decision/note, which can be stale or missing. When a session
@@ -173,7 +185,7 @@ export type OrientationSummary = {
   decisionCount: number;
   /**
    * Open (non-voided) `kind: "track"` decisions — strategic, unfinished
-   * directions that the forward section ("どこへ向かう") resurfaces every session
+   * directions that the forward section ("where you are heading") resurfaces every session
    * until they are closed with `decision void` / supersede. Newest first. This
    * is the intent-continuity layer: distinct from the single latest decision
    * (point-in-time) and the recorded next step (`note`), an open track keeps
@@ -183,12 +195,12 @@ export type OrientationSummary = {
   openTracks: TrackRecord[];
   /**
    * Most recent `note_added` over non-archived sessions — the recorded next
-   * step / handoff ("次の起点") surfaced in the forward section; null when none.
+   * step / handoff ("next step") surfaced in the forward section; null when none.
    */
   latestNote: NoteRecord | null;
   /**
    * The last N non-archived sessions (newest first) condensed to their direction
-   * signal — the "最近の流れ" (recent direction) arc. Distinct from the single
+   * signal — the "recent direction" arc. Distinct from the single
    * latest decision/note: it shows the trajectory of intent across recent
    * sessions, and falls back to each session's changed files when no decision or
    * note was captured, so a resuming agent has grounding even when explicit
@@ -272,7 +284,7 @@ export async function summarizeOrientation(
   // One replay pass per session yields three facts:
   //  - `decisions`: chronological `decision_recorded` across ALL sessions.
   //  - `latestNote`: the most recent `note_added` over NON-archived sessions —
-  //    the operator's recorded next step / handoff ("次の起点"), surfaced in the
+  //    the operator's recorded next step / handoff ("next step"), surfaced in the
   //    forward section so a free-text resume hint survives into the next session.
   //  - `latestActivityAt`: the tail of captured activity over NON-archived
   //    sessions = max of the session boundary (ended_at ?? started_at) AND every
@@ -295,7 +307,7 @@ export async function summarizeOrientation(
   // "latest decision" pointer skips them so a voided decision is never
   // surfaced as the current direction.
   const voidedDecisionIds = new Set<string>();
-  // Per-session direction signals for the "最近の流れ" arc: each non-archived
+  // Per-session direction signals for the "recent direction" arc: each non-archived
   // session's decision titles (with ids so a later void can be filtered out) and
   // next_step note bodies, in chronological order. The recent-session slice +
   // file fallback are assembled after the scan (voids are resolved first).
@@ -414,7 +426,7 @@ export async function summarizeOrientation(
       return c !== 0 ? c : b.decisionId.localeCompare(a.decisionId);
     });
 
-  // "最近の流れ" arc: the last N non-archived sessions, newest first, each
+  // "Recent direction" arc: the last N non-archived sessions, newest first, each
   // condensed to the decisions/notes it recorded (voided decisions filtered out
   // so a struck decision is never presented as direction). A session with no
   // decision and no note falls back to its changed files, so the trajectory is
@@ -508,10 +520,10 @@ export async function summarizeOrientation(
   const liveEntries = entries.filter(
     (e) => e.session.session.status !== "archived" && e.session.session.source.kind !== "import",
   );
-  // Represent "最終 session" with the most recent SUBSTANTIVE session, not a bare
+  // Represent the last session with the most recent SUBSTANTIVE session, not a bare
   // resume/refresh session (e.g. 1 command, 0 files) that merely happens to be
-  // newest — the latter hides the real-work session and makes 最終 session and
-  // 直近の判断 disagree. Freshness ("newest captured session", below) still uses
+  // newest — the latter hides the real-work session and makes the last-session and
+  // latest-decision pointers disagree. Freshness ("newest captured session", below) still uses
   // pure recency, so the staleness signal stays honest.
   const latestEntry = pickLatestSubstantiveEntry(liveEntries);
   // `label` is `z.string().optional()` in the session schema — a parsed session
@@ -647,10 +659,12 @@ export async function renderOrientation(
   input: OrientationRendererInput,
 ): Promise<OrientationRendererResult> {
   const summary = await summarizeOrientation(input);
+  const language = input.language ?? (await resolveViewLanguageFromPaths(input.paths));
   return {
     body: formatOrientationBody(summary, {
       staleness: input.staleness ?? null,
       verbose: input.verbose === true,
+      language,
     }),
     sessionCount: summary.sessionCount,
     pendingApprovalsCount: summary.pendingApprovals.length,
@@ -670,8 +684,10 @@ function formatOrientationBody(
       unverifiableSessions?: number;
     } | null;
     verbose: boolean;
+    language: ViewLanguage;
   },
 ): string {
+  const t = viewStrings(opts.language);
   const lines: string[] = [];
   const now = new Date(summary.generatedAt);
   const newestRel = relativeAge(summary.freshness.newestStartedAt ?? undefined, now);
@@ -691,34 +707,36 @@ function formatOrientationBody(
 
   // Staleness banner up top: when there is uncaptured/grown native work, a
   // reader grounding top-down should meet the warning BEFORE the direction /
-  // "next step" sections, not only in the "これは最新か" verdict at the very
+  // "next step" sections, not only in the "is this current" verdict at the very
   // bottom (which is easy to start working before ever reaching). Shown only for
   // the actionable-stale states; the full verdict still renders at the end.
-  const banner = stalenessBanner(opts.staleness);
+  const banner = stalenessBanner(opts.staleness, t);
   if (banner.length > 0) {
     for (const line of banner) lines.push(line);
     lines.push("");
   }
 
   // "where am I now"
-  lines.push("## 今どこにいる");
+  lines.push(t.orientation.headingWhere);
   lines.push("");
   if (summary.latestSession !== null) {
     const s = summary.latestSession;
     const sid = shortId(s.sessionId);
     if (s.label !== null && s.label !== "") {
-      lines.push(`- 最終 session: ${s.label} (${s.status}) [${sid}]${hostSuffix(s.host)}`);
+      lines.push(
+        `- ${t.common.lastSessionLabel}: ${s.label} (${s.status}) [${sid}]${hostSuffix(s.host)}`,
+      );
     } else {
-      lines.push(`- 最終 session: ${sid} (${s.status})${hostSuffix(s.host)}`);
+      lines.push(`- ${t.common.lastSessionLabel}: ${sid} (${s.status})${hostSuffix(s.host)}`);
     }
   } else {
-    lines.push("- 最終 session: (no live sessions)");
+    lines.push(`- ${t.common.lastSessionLabel}: (no live sessions)`);
   }
   if (summary.latestDecision !== null) {
     const dec = summary.latestDecision;
-    const decAge = relativeAgeJa(dec.occurredAt, now);
+    const decAge = t.relativeAge(dec.occurredAt, now);
     lines.push(
-      `- 直近の判断: ${dec.title} [${shortId(dec.decisionId)}] (${decAge})${hostSuffix(dec.host)}`,
+      `- ${t.common.latestDecisionLabel}: ${dec.title} [${shortId(dec.decisionId)}] (${decAge})${hostSuffix(dec.host)}`,
     );
     // Honesty over recency theater: this is the latest *recorded* decision, not
     // necessarily the latest decision. When captured activity continued well
@@ -730,30 +748,28 @@ function formatOrientationBody(
     // honest whether the later activity is in the same session or another.
     const activityAt = summary.freshness.latestActivityAt;
     if (activityAt !== null && isTrailingStale(activityAt, dec.occurredAt)) {
-      lines.push(
-        `  - 注: これは最後に「記録された」判断です。最終活動 (${relativeAgeJa(activityAt, now)}) はこれより後のため、現在の方針が反映されていない可能性があります(会話での意思決定は自動記録されません。\`basou decision capture\` でこの session の判断を記録できます)。`,
-      );
+      lines.push(`  - ${t.orientation.decisionStaleNote(t.relativeAge(activityAt, now))}`);
     }
     // When the latest recorded decision comes from a DIFFERENT session than the
     // representative latest session, the two "latest" pointers disagree. Say so,
     // so a resume reader does not treat an older thread's decision as this
     // session's direction (a linear-timeline cue, not a stale claim).
     if (summary.latestSession !== null && dec.sessionId !== summary.latestSession.sessionId) {
-      lines.push(
-        `  - 注: この判断は最終 session とは別の session [${shortId(dec.sessionId)}] のものです。`,
-      );
+      lines.push(`  - ${t.common.decisionOtherSessionNote(shortId(dec.sessionId))}`);
     }
     if (summary.decisionCount > 1) {
       lines.push(`  - ${summary.decisionCount} decisions total — see decisions.md`);
     }
   } else {
-    lines.push("- 直近の判断: (no decisions recorded yet; capture with `basou decision capture`)");
+    lines.push(
+      `- ${t.common.latestDecisionLabel}: (no decisions recorded yet; capture with \`basou decision capture\`)`,
+    );
   }
   if (summary.relatedFiles.displayed.length > 0) {
     const shown = summary.relatedFiles.displayed.join(", ");
     const more =
       summary.relatedFiles.overflow > 0 ? ` (... +${summary.relatedFiles.overflow} more)` : "";
-    lines.push(`- 直近の変更ファイル: ${shown}${more}`);
+    lines.push(`- ${t.common.recentFilesLabel}: ${shown}${more}`);
     if (summary.relatedFiles.outOfRoot.length > 0) {
       // Cross-project boundary crossing: the latest session edited files
       // outside this project's source_roots. Flag it so a resuming agent does
@@ -765,12 +781,10 @@ function formatOrientationBody(
       const shownOut = out.slice(0, OUT_OF_ROOT_DISPLAY).join(", ");
       const outMore =
         out.length > OUT_OF_ROOT_DISPLAY ? ` (... +${out.length - OUT_OF_ROOT_DISPLAY} more)` : "";
-      lines.push(
-        `  - ⚠ source_roots 外 ${out.length} 件 (別プロジェクトの可能性): ${shownOut}${outMore}`,
-      );
+      lines.push(`  - ${t.orientation.outOfRootWarning(out.length, `${shownOut}${outMore}`)}`);
     }
   } else {
-    lines.push("- 直近の変更ファイル: (none recorded)");
+    lines.push(`- ${t.common.recentFilesLabel}: (none recorded)`);
   }
   lines.push("");
 
@@ -778,35 +792,37 @@ function formatOrientationBody(
   // net so a resuming agent sees the recent trajectory of intent (decisions /
   // next steps), or the activity (changed files) when capture was missed, rather
   // than only the single latest decision/note above.
-  lines.push(`## 最近の流れ (直近 ${RECENT_DIRECTION_SESSIONS} session)`);
+  lines.push(t.orientation.headingRecent(RECENT_DIRECTION_SESSIONS));
   lines.push("");
   if (summary.recentDirection.length === 0) {
-    lines.push("- (まだ記録がありません)");
+    lines.push(`- ${t.orientation.recentEmpty}`);
   } else {
     for (const s of summary.recentDirection) {
       const sid = shortId(s.sessionId);
-      const age = relativeAgeJa(s.occurredAt, now);
+      const age = t.relativeAge(s.occurredAt, now);
       const head = s.label !== null && s.label !== "" ? s.label : sid;
       lines.push(`- ${head} (${age})${hostSuffix(s.host)}`);
       if (s.decisions.length > 0) {
         const more = s.decisionsOverflow > 0 ? ` (+${s.decisionsOverflow})` : "";
-        lines.push(`  - 判断: ${s.decisions.map(noteSummary).join("; ")}${more}`);
+        lines.push(
+          `  - ${t.orientation.recentDecisionsLabel}: ${s.decisions.map(noteSummary).join("; ")}${more}`,
+        );
       }
       for (const note of s.notes) {
-        lines.push(`  - 次の起点: ${noteSummary(note)}`);
+        lines.push(`  - ${t.orientation.recentNextStepLabel}: ${noteSummary(note)}`);
       }
       // Files appear only as the fallback (no decision and no note this session).
       if (s.files.length > 0) {
-        lines.push(`  - 変更: ${s.files.join(", ")}`);
+        lines.push(`  - ${t.orientation.recentChangedLabel}: ${s.files.join(", ")}`);
       }
     }
   }
   lines.push("");
 
   // "what is in flight" — structured facts
-  lines.push("## 何が動く");
+  lines.push(t.orientation.headingInFlight);
   lines.push("");
-  lines.push(`### 進行中 task (${summary.inFlightTasks.length})`);
+  lines.push(t.orientation.inFlightTasksHeading(summary.inFlightTasks.length));
   if (summary.inFlightTasks.length === 0) {
     lines.push("- (none)");
   } else {
@@ -816,7 +832,7 @@ function formatOrientationBody(
     }
   }
   lines.push("");
-  lines.push(`### 承認待ち (${summary.pendingApprovals.length})`);
+  lines.push(t.orientation.pendingApprovalsHeading(summary.pendingApprovals.length));
   if (summary.pendingApprovals.length === 0) {
     lines.push("- (none)");
   } else {
@@ -828,7 +844,7 @@ function formatOrientationBody(
     }
   }
   lines.push("");
-  lines.push(`### 要注意 session (${summary.suspects.length})`);
+  lines.push(t.orientation.suspectSessionsHeading(summary.suspects.length));
   if (summary.suspects.length === 0) {
     lines.push("- (none)");
   } else {
@@ -841,7 +857,7 @@ function formatOrientationBody(
   lines.push("");
 
   // "where am I heading"
-  lines.push("## どこへ向かう");
+  lines.push(t.orientation.headingForward);
   lines.push("");
   // Open tracks lead the forward section: a strategic, unfinished direction
   // ("the next essential thing to build, and why") is the most important thing to
@@ -854,12 +870,14 @@ function formatOrientationBody(
     const TRACK_DISPLAY_LIMIT = 10;
     const shownTracks = summary.openTracks.slice(0, TRACK_DISPLAY_LIMIT);
     const trackOverflow = summary.openTracks.length - shownTracks.length;
-    lines.push(`### 未完トラック (close まで継続表示) (${summary.openTracks.length})`);
-    for (const t of shownTracks) {
-      const trackAge = relativeAgeJa(t.occurredAt, now);
-      lines.push(`- ${t.title} [${shortId(t.decisionId)}] (${trackAge})${hostSuffix(t.host)}`);
-      if (t.rationale !== null && t.rationale.trim() !== "") {
-        lines.push(`  - 理由: ${trackRationale(t.rationale)}`);
+    lines.push(t.orientation.openTracksHeading(summary.openTracks.length));
+    for (const track of shownTracks) {
+      const trackAge = t.relativeAge(track.occurredAt, now);
+      lines.push(
+        `- ${track.title} [${shortId(track.decisionId)}] (${trackAge})${hostSuffix(track.host)}`,
+      );
+      if (track.rationale !== null && track.rationale.trim() !== "") {
+        lines.push(`  - ${t.common.trackWhyLabel}: ${trackRationale(track.rationale)}`);
       }
     }
     if (trackOverflow > 0) {
@@ -867,31 +885,27 @@ function formatOrientationBody(
     }
     // Section-scoped close instruction: a top-level line (not an indented sub-
     // bullet) so it reads as guidance for the whole list, mirroring handoff.
-    lines.push(
-      "完了したら `basou decision void <decision_id>` で閉じてください。閉じるまで毎回ここに表示されます。",
-    );
+    lines.push(t.orientation.trackCloseInstruction);
     lines.push("");
   }
   // The recorded next step (a `basou note`) is the operator's explicit resume
   // hint; surface it first so a free-text handoff survives into the next session
   // rather than living only in a decision title or an external memory file.
   if (summary.latestNote !== null) {
-    const noteAge = relativeAgeJa(summary.latestNote.occurredAt, now);
+    const noteAge = t.relativeAge(summary.latestNote.occurredAt, now);
     lines.push(
-      `- 次の起点 (記録済み, ${noteAge}): ${noteSummary(summary.latestNote.body)} [session ${shortId(summary.latestNote.sessionId)}]${hostSuffix(summary.latestNote.host)}`,
+      `- ${t.orientation.nextStepRecordedLabel(noteAge)}: ${noteSummary(summary.latestNote.body)} [session ${shortId(summary.latestNote.sessionId)}]${hostSuffix(summary.latestNote.host)}`,
     );
     // Same honesty guard as the latest decision: if captured activity continued
     // well past when this resume hint was recorded, the work may have moved on,
     // so flag it rather than presenting a stale starting point as current.
     const activityAt = summary.freshness.latestActivityAt;
     if (activityAt !== null && isTrailingStale(activityAt, summary.latestNote.occurredAt)) {
-      lines.push(
-        `  - 注: この起点の記録後 (最終活動 ${relativeAgeJa(activityAt, now)}) も作業が続いています。再開点が古い可能性があります。`,
-      );
+      lines.push(`  - ${t.orientation.noteStaleNote(t.relativeAge(activityAt, now))}`);
     }
   }
-  for (const t of summary.plannedTasks) {
-    lines.push(`- ${t.title} [${shortId(t.id)}]`);
+  for (const task of summary.plannedTasks) {
+    lines.push(`- ${task.title} [${shortId(task.id)}]`);
   }
   // Fall back to the decision hint only when there is no open track, no recorded
   // next step, and no planned task — otherwise the section already says where to
@@ -910,14 +924,12 @@ function formatOrientationBody(
       // that treats it as the next task can re-attempt completed work. Ask for the
       // continuation point instead, and demote the decision to a labelled
       // reference rather than an instruction (aligns the forward section with the
-      // staleness warning already shown on the 直近の判断 line above).
-      lines.push(
-        "- (no planned tasks or recorded next step — 最終活動は直近の判断より後です。継続点をユーザに確認してください)",
-      );
-      lines.push(`  - 参考 (古い可能性・方針ではない): ${dec.title}`);
+      // staleness warning already shown on the latest-decision line above).
+      lines.push(t.orientation.fallbackStaleDirection);
+      lines.push(`  - ${t.orientation.fallbackStaleReferenceLabel}: ${dec.title}`);
     } else {
       lines.push("- (no planned tasks — direction is inferred from recent decisions)");
-      lines.push(`  - 直近の判断: ${dec.title}`);
+      lines.push(`  - ${t.common.latestDecisionLabel}: ${dec.title}`);
     }
     // Discoverability nudge: fires when there ARE recorded decisions but none give
     // a durable forward direction (latest is stale, or just point-in-time) — the
@@ -927,9 +939,7 @@ function formatOrientationBody(
     // yet) so it is a hint at the right time, not noise, and never shown when an
     // open track / note / planned task already gives direction.
     if (dec !== null) {
-      lines.push(
-        '  - 次に作るべき本質的な方向性が定まったら `basou decision capture` (`"kind":"track"`) / `basou decision record --track` で track 化すると、close まで毎 session ここに継続表示されます。',
-      );
+      lines.push(`  - ${t.orientation.trackNudge}`);
     }
   }
   lines.push("");
@@ -938,18 +948,16 @@ function formatOrientationBody(
   // I am looking at the latest and complete, and if not, what should I do? Raw
   // ISO / per-source counts / source roots / a zero suspect count are diagnostics
   // and move under `--verbose`.
-  lines.push("## これは最新か");
+  lines.push(t.orientation.headingCurrency);
   lines.push("");
-  for (const line of freshnessVerdict(summary, opts.staleness, now)) lines.push(line);
+  for (const line of freshnessVerdict(summary, opts.staleness, now, t)) lines.push(line);
   // The verdict above reflects the LOCAL store only (the dry-run probe reads
   // this machine's native logs). With federated hosts merged in, do not let it
   // imply the whole multi-host view is current — the other hosts' freshness is
   // unknowable here (their native logs are not on this machine).
   if (summary.hosts.length > 0) {
     lines.push("");
-    lines.push(
-      "注: 鮮度判定はこのマシンのローカルストアのみが対象です。他ホストの取りこぼしは判定できません(各ホストで basou refresh を実行し同期してください)。",
-    );
+    lines.push(t.orientation.federatedFreshnessNote);
   }
 
   if (opts.verbose) {
@@ -991,7 +999,7 @@ function formatOrientationBody(
  * Translate an internal source kind into the tool name a supervisor recognizes.
  * Unknown kinds pass through verbatim so a new adapter is never silently mislabeled.
  */
-function toolDisplayName(kind: string | null): string {
+function toolDisplayName(kind: string | null, t: ViewStrings): string {
   switch (kind) {
     case "claude-code-import":
     case "claude-code-adapter":
@@ -999,62 +1007,61 @@ function toolDisplayName(kind: string | null): string {
     case "codex-import":
       return "Codex";
     case "terminal":
-      return "ターミナル";
+      return t.orientation.toolTerminal;
     case "human":
-      return "手動メモ";
+      return t.orientation.toolHuman;
     case "import":
-      return "他ワークスペース";
+      return t.orientation.toolImport;
     default:
-      return kind ?? "不明";
+      return kind ?? t.orientation.toolUnknown;
   }
 }
 
 /**
  * A concise staleness banner for the TOP of the orientation, shown only when
  * there is uncaptured/grown native work to pull in (the states the full
- * "これは最新か" verdict flags with ⚠️). Surfaced near the header so a reader
- * grounding top-down meets it before the direction / "次の起点" sections, not
+ * "is this current" verdict flags with ⚠️). Surfaced near the header so a reader
+ * grounding top-down meets it before the direction / next-step sections, not
  * only at the very bottom. Returns [] when the capture is current, empty, or
  * unprobed — nothing actionable to flag up top (the bottom verdict still covers
  * those neutral states).
  */
 function stalenessBanner(
   staleness: { newSessions: number; updatedSessions: number; unverifiableSessions?: number } | null,
+  t: ViewStrings,
 ): string[] {
   if (staleness === null) return [];
   if ((staleness.unverifiableSessions ?? 0) > 0) {
-    return [
-      `> ⚠️ **再取り込みが必要** — native ログが変化したが通常の refresh では取り込めないセッションが ${staleness.unverifiableSessions} 件あります。\`basou refresh --force\` で再取り込みしてください(詳細は末尾「これは最新か」)。`,
-    ];
+    return [t.orientation.bannerUnverifiable(staleness.unverifiableSessions ?? 0)];
   }
   // Assert ONLY for genuinely uncaptured (never-imported) sessions: those are
-  // real backlog a `basou refresh` WILL pull in. A merely GROWN ("更新") session
-  // is dominated by the live session you are in — its transcript always advances
-  // past the last import, so refreshing re-grows it immediately and a "必ず
-  // refresh" imperative there can never be satisfied (the learned-helplessness
-  // dbp_wp reported). That state is the live session (normal), so it gets no top
-  // banner — only the calm bottom verdict explains it.
+  // real backlog a `basou refresh` WILL pull in. A merely GROWN ("updated")
+  // session is dominated by the live session you are in — its transcript always
+  // advances past the last import, so refreshing re-grows it immediately and a
+  // "must refresh" imperative there can never be satisfied (the learned-
+  // helplessness dbp_wp reported). That state is the live session (normal), so
+  // it gets no top banner — only the calm bottom verdict explains it.
   if (staleness.newSessions > 0) {
-    const parts: string[] = [`新規 ${staleness.newSessions} 件`];
-    if (staleness.updatedSessions > 0) parts.push(`更新 ${staleness.updatedSessions} 件`);
-    return [
-      `> ⚠️ **古いです（未取り込み ${parts.join("・")}）** — 着手前に必ず \`basou refresh\` を実行してください(詳細は末尾「これは最新か」)。`,
-    ];
+    const parts: string[] = [t.orientation.partNew(staleness.newSessions)];
+    if (staleness.updatedSessions > 0)
+      parts.push(t.orientation.partUpdated(staleness.updatedSessions));
+    return [t.orientation.bannerStale(parts.join(t.orientation.partsJoiner))];
   }
   return [];
 }
 
 /**
- * The plain "これは最新か" verdict: a status line plus one human sentence that
- * answers "is this current, and if not what do I do?". Freshness comes from the
- * dry-run `staleness` probe (uncaptured/grown native work); when it was not run
- * the verdict says so instead of claiming current. A non-zero suspect count is
- * surfaced as a caution even when the capture is fresh.
+ * The plain "is this current" verdict: a status line plus one human sentence
+ * that answers "is this current, and if not what do I do?". Freshness comes
+ * from the dry-run `staleness` probe (uncaptured/grown native work); when it
+ * was not run the verdict says so instead of claiming current. A non-zero
+ * suspect count is surfaced as a caution even when the capture is fresh.
  */
 function freshnessVerdict(
   summary: OrientationSummary,
   staleness: { newSessions: number; updatedSessions: number; unverifiableSessions?: number } | null,
   now: Date,
+  t: ViewStrings,
 ): string[] {
   // Unverifiable wins absolutely first: a source that GREW but could not be
   // re-imported safely (broken chain / unreadable / non-append) means the
@@ -1062,70 +1069,55 @@ function freshnessVerdict(
   // Claiming "current" here is the false-clear this verdict exists to prevent,
   // so it is surfaced ahead of every other state, including "no records".
   if (staleness !== null && (staleness.unverifiableSessions ?? 0) > 0) {
-    return [
-      `⚠️ native ログが変化しましたが、通常の \`basou refresh\` では安全に再取り込みできないセッションが ${staleness.unverifiableSessions} 件あります(非追記変更・前チェーン不整合など)。`,
-      "`basou refresh --force` で再取り込みしてください。(`basou verify` は別物=取り込み済みデータの改竄/破損検査で、ヘッダの suspect とは別軸です。verify が clean でも未取り込みは残り得ます。)",
-    ];
+    return [...t.orientation.verdictUnverifiable(staleness.unverifiableSessions ?? 0)];
   }
 
   // Genuinely uncaptured (NEVER-imported) sessions are real backlog a refresh
   // WILL pull in, even when the store is still empty — so assert it, and check it
-  // before the "no records" branch. A merely GROWN ("更新") session is NOT
-  // asserted here: the live session you are in always shows as grown, and a "必ず
-  // refresh" there can never be satisfied (it re-grows immediately). That case is
-  // the calm "updated-only" branch below.
+  // before the "no records" branch. A merely GROWN ("updated") session is NOT
+  // asserted here: the live session you are in always shows as grown, and a
+  // "must refresh" there can never be satisfied (it re-grows immediately). That
+  // case is the calm "updated-only" branch below.
   if (staleness !== null && staleness.newSessions > 0) {
-    const parts: string[] = [`新規 ${staleness.newSessions} 件`];
-    if (staleness.updatedSessions > 0) parts.push(`更新 ${staleness.updatedSessions} 件`);
-    return [
-      `⚠️ 古いです。最後の取り込み以降に未取り込みの作業があります(${parts.join("・")})。`,
-      "着手前に必ず `basou refresh` を実行してください。",
-    ];
+    const parts: string[] = [t.orientation.partNew(staleness.newSessions)];
+    if (staleness.updatedSessions > 0)
+      parts.push(t.orientation.partUpdated(staleness.updatedSessions));
+    return [...t.orientation.verdictStale(parts.join(t.orientation.partsJoiner))];
   }
 
-  // Grown ("更新") sessions only — no never-imported, no unverifiable. `basou
+  // Grown ("updated") sessions only — no never-imported, no unverifiable. `basou
   // refresh` CAN import these (e.g. a finished session imported mid-flight that
   // then gained more events), so it stays an actionable ⚠️ and the action is
   // offered — NOT softened to a silent ℹ️ that would hide that backlog. But the
   // imperative is dropped: the LIVE session you are in always shows as grown
-  // (its transcript advances past the last import), so a "必ず refresh" can never
-  // drive the count to zero. Explaining that residual is normal removes the
-  // learned helplessness dbp_wp reported. Placed before the "no records" branch
-  // so an archived-only store with a grown source is not mis-cleared as empty.
+  // (its transcript advances past the last import), so a "must refresh" can
+  // never drive the count to zero. Explaining that residual is normal removes
+  // the learned helplessness dbp_wp reported. Placed before the "no records"
+  // branch so an archived-only store with a grown source is not mis-cleared as
+  // empty.
   if (staleness !== null && staleness.updatedSessions > 0) {
-    const lines = [
-      `⚠️ 更新されたセッションが ${staleness.updatedSessions} 件あります。\`basou refresh\` で取り込めます。`,
-      "(進行中のセッションがある場合、それ自身は取り込み後も増え続けるため残ります＝正常です。)",
-    ];
+    const lines = [...t.orientation.verdictUpdatedOnly(staleness.updatedSessions)];
     if (summary.suspects.length > 0) {
-      lines.push(
-        `また要注意セッションが ${summary.suspects.length} 件あります(上記「要注意 session」参照)。`,
-      );
+      lines.push(t.orientation.verdictSuspectsAlso(summary.suspects.length));
     }
     return lines;
   }
 
   if (summary.freshness.newestStartedAt === null) {
-    return [
-      "ℹ️ まだ記録がありません。",
-      "このワークスペースで作業すると、ここに現在地が表示されます。",
-    ];
+    return [...t.orientation.verdictEmpty];
   }
 
-  const rel = relativeAgeJa(summary.freshness.newestStartedAt, now);
-  const tool = toolDisplayName(summary.freshness.newestSource);
+  const rel = t.relativeAge(summary.freshness.newestStartedAt, now);
+  const tool = toolDisplayName(summary.freshness.newestSource, t);
   const suspectCount = summary.suspects.length;
 
   if (staleness === null) {
-    return [
-      `ℹ️ 取り込み済みの状態を表示しています。最後の作業は ${rel}(${tool})。`,
-      "最新か確認するには `basou refresh` を実行してください。",
-    ];
+    return [...t.orientation.verdictUnprobed(rel, tool)];
   }
 
-  // The probe ran and found no uncaptured/grown native sessions, so the IMPORT is
-  // current. Scope the claim to exactly that — the old "取りこぼし・要注意なし"
-  // (no omissions / nothing to worry about) overclaimed: this verdict only checks
+  // The probe ran and found no uncaptured/grown native sessions, so the IMPORT
+  // is current. Scope the claim to exactly that — the old wording ("no
+  // omissions / nothing to worry about") overclaimed: this verdict only checks
   // that captured native sessions are imported and none are suspect. It does NOT
   // (and from telemetry alone cannot) detect planning/implementation drift or
   // unrecorded decisions, so it must not imply provenance is comprehensive.
@@ -1134,32 +1126,12 @@ function freshnessVerdict(
   // machine). Scope the green claim to THIS host so it never reads as "the whole
   // multi-host view is current" — the local-only-freshness caveat below adds the
   // per-host sync guidance. Local-only views keep the original wording.
-  const localScope = summary.hosts.length > 0 ? "このホスト(ローカル)の" : "";
-  const lines = [
-    `✅ ${localScope}取り込みは最新です。最後の作業は ${rel}(${tool})。未取り込みの native セッションはありません。`,
-  ];
+  const lines = [t.orientation.verdictCurrent(rel, tool, summary.hosts.length > 0)];
   if (suspectCount > 0) {
-    lines.push(`ただし要注意セッションが ${suspectCount} 件あります(上記「要注意 session」参照)。`);
+    lines.push(t.orientation.verdictSuspectsCaveat(suspectCount));
   }
-  lines.push(
-    "注: この判定は取り込み済み native セッションの鮮度と suspect の有無だけを見ます。計画↔実装のドリフトや未記録の意思決定までは検知しません。",
-  );
+  lines.push(t.orientation.verdictScopeDisclaimer);
   return lines;
-}
-
-/** Japanese relative age, e.g. "7時間26分前" / "3日前" / "たった今", for the verdict line. */
-function relativeAgeJa(startedAt: string | null, now: Date): string {
-  if (startedAt === null) return "(不明)";
-  const ms = now.getTime() - Date.parse(startedAt);
-  if (!Number.isFinite(ms) || ms < 0) return "たった今";
-  if (ms < 60_000) return "たった今";
-  const totalMin = Math.floor(ms / 60_000);
-  const days = Math.floor(totalMin / 1440);
-  const hours = Math.floor((totalMin % 1440) / 60);
-  const mins = totalMin % 60;
-  if (days > 0) return hours > 0 ? `${days}日${hours}時間前` : `${days}日前`;
-  if (hours > 0) return mins > 0 ? `${hours}時間${mins}分前` : `${hours}時間前`;
-  return `${mins}分前`;
 }
 
 /** "3h 05m ago" / "just now" / "(unknown)" for a session's age relative to `now`. */
@@ -1172,7 +1144,7 @@ function relativeAge(startedAt: string | undefined, now: Date): string {
   return `${formatDurationMs(ms)} ago`;
 }
 
-// "最近の流れ" caps: how many recent non-archived sessions to digest, and how
+// "Recent direction" caps: how many recent non-archived sessions to digest, and how
 // many decisions / notes / fallback files to show per session. Kept small so the
 // section stays a compact trajectory, not a full log (that is `basou handoff`).
 const RECENT_DIRECTION_SESSIONS = 5;

@@ -192,8 +192,8 @@ describe("basou orient", () => {
     await doRunOrient({}, ctxFor(repo));
     const stdout = joinCalls(out);
     expect(stdout).toContain("# Orientation");
-    expect(stdout).toContain("## 今どこにいる");
-    expect(stdout).toContain("## これは最新か");
+    expect(stdout).toContain("## Where you are now");
+    expect(stdout).toContain("## Is this current");
 
     const body = await readFile(basouPaths(repo).files.orientation, "utf8");
     expect(body).toContain("# Orientation");
@@ -207,7 +207,7 @@ describe("basou orient", () => {
     await doRunOrient({ quiet: true }, ctxFor(repo));
     const stdout = joinCalls(out);
     expect(stdout).toContain("Generated .basou/orientation.md");
-    expect(stdout).not.toContain("## 今どこにいる");
+    expect(stdout).not.toContain("## Where you are now");
     const body = await readFile(basouPaths(repo).files.orientation, "utf8");
     expect(body).toContain("# Orientation");
   });
@@ -243,22 +243,22 @@ describe("basou orient", () => {
     expect(joinCalls(err)).toContain("Workspace not initialized. Run 'basou init' first.");
   });
 
-  it("これは最新か: a clean capture (no uncaptured native logs) prints the ✅ current verdict", async () => {
+  it("Is this current: a clean capture (no uncaptured native logs) prints the ✅ current verdict", async () => {
     const repo = await setupInitedRepo();
     await placeSession(repo, { id: SES("S01"), source: "claude-code-import" });
     const out = captureStdout();
     await doRunOrient({}, ctxFor(repo));
-    expect(joinCalls(out)).toContain("✅ 取り込みは最新です。");
+    expect(joinCalls(out)).toContain("✅ The capture is current.");
   });
 
-  it("これは最新か: an uncaptured native session flips the verdict to ⚠️ stale → run refresh", async () => {
+  it("Is this current: an uncaptured native session flips the verdict to ⚠️ stale → run refresh", async () => {
     const repo = await setupInitedRepo();
     // A Codex rollout for this repo exists in the native logs but was never imported.
     await writeCodexRolloutAt(repo, "codex-uncaptured");
     const out = captureStdout();
     await doRunOrient({}, ctxFor(repo));
     const stdout = joinCalls(out);
-    expect(stdout).toContain("⚠️ 古いです。");
+    expect(stdout).toContain("⚠️ Stale.");
     expect(stdout).toContain("`basou refresh`");
   });
 
@@ -269,8 +269,8 @@ describe("basou orient", () => {
     const out = captureStdout();
     await doRunOrient({ refresh: true }, ctxFor(repo));
     const stdout = joinCalls(out);
-    expect(stdout).toContain("✅ 取り込みは最新です。");
-    expect(stdout).not.toContain("⚠️ 古いです。");
+    expect(stdout).toContain("✅ The capture is current.");
+    expect(stdout).not.toContain("⚠️ Stale.");
     // The session was actually imported (the arc/position reflects 1 session).
     expect(stdout).toContain("codex");
   });

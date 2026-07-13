@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import type { SessionSourceKind } from "../schemas/index.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
+import { createManifest, writeManifest } from "../storage/manifest.js";
 import { renderReport } from "./report-renderer.js";
 
 const WS_ID = "ws_01HXABCDEF1234567890ABCDEF" as const;
@@ -242,14 +243,14 @@ describe("report-renderer", () => {
     // Title + all sections present.
     expect(body).toContain("# Report — Client X");
     for (const h of [
-      "## 概要",
-      "## 作業量",
-      "## 判断",
-      "## 承認",
-      "## タスク",
-      "## 変更ファイル",
-      "## セッション一覧",
-      "## 整合性",
+      "## Summary",
+      "## Work volume",
+      "## Decisions",
+      "## Approvals",
+      "## Tasks",
+      "## Changed files",
+      "## Sessions",
+      "## Integrity",
     ]) {
       expect(body).toContain(h);
     }
@@ -401,5 +402,28 @@ describe("renderReport (track decisions)", () => {
     expect(body).not.toContain("ordinary call [track]");
     expect(data.decisions.items.find((d) => d.id === track)?.track).toBe(true);
     expect(data.decisions.items.find((d) => d.id === plain)?.track).toBeUndefined();
+  });
+});
+
+describe("renderReport (view language)", () => {
+  it("renders Japanese section headings when the manifest anchor declares language: ja", async () => {
+    const paths = await setupPaths();
+    const manifest = createManifest({ workspaceName: "fixture" });
+    manifest.repos = [{ path: ".", language: "ja" }];
+    await writeManifest(paths, manifest, { force: true });
+    await placeSession(paths, { id: SES("S01"), startedAt: "2026-05-08T11:00:00Z" });
+    const { body } = await renderReport({ paths, nowIso: NOW_ISO, timeZone: "UTC" });
+    for (const h of [
+      "## 概要",
+      "## 作業量",
+      "## 判断",
+      "## 承認",
+      "## タスク",
+      "## 変更ファイル",
+      "## セッション一覧",
+      "## 整合性",
+    ]) {
+      expect(body).toContain(h);
+    }
   });
 });

@@ -22,16 +22,13 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // allowed. Keep this list small — a new entry needs an explicit E-5 rationale,
 // not a convenience escape from translating output.
 const ALLOWLIST = [
-  // E-5: orientation.md render output — a user-facing status surface (Japanese).
-  "packages/core/src/orientation/orientation-renderer.ts",
-  // E-5: handoff.md render output — a user-facing status surface (Japanese).
-  "packages/core/src/handoff/handoff-renderer.ts",
-  // E-5: decisions.md render output — a user-facing status surface (Japanese).
-  "packages/core/src/decisions/decisions-renderer.ts",
-  // E-5: status report render output — a user-facing status surface (Japanese).
-  "packages/core/src/report/report-renderer.ts",
-  // E-5: generated instruction-file preset — the content language is tied to the
-  // declared `language` of the target repo, a separate surface from CLI output.
+  // E-5: the single generated-view locale table (handoff/orientation/decisions/
+  // report chrome). The `ja` strings live ONLY here; the renderers themselves
+  // are English-only and select a language via the manifest's anchor repo.
+  "packages/core/src/lib/view-strings.ts",
+  // E-5: generated instruction-file preset — a separate surface from CLI output.
+  // Its content is currently Japanese unconditionally; it does not yet follow the
+  // target repo's declared `language`.
   "packages/core/src/project/preset.ts",
   // E-5: generated anchor AGENTS.md starter — the content language matches the
   // sibling preset/view blocks it lives beside, a separate surface from CLI output.

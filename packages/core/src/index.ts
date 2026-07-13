@@ -100,6 +100,12 @@ export {
 } from "./lib/path-sanitizer.js";
 export type { SourceRootScope } from "./lib/source-root-scope.js";
 export { AGENT_INFRA_DIRS, classifyFilesBySourceRoot } from "./lib/source-root-scope.js";
+export type { ViewLanguage, ViewStrings } from "./lib/view-strings.js";
+export {
+  resolveViewLanguage,
+  resolveViewLanguageFromPaths,
+  viewStrings,
+} from "./lib/view-strings.js";
 export type {
   OrientationRendererInput,
   OrientationRendererResult,

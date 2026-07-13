@@ -15,8 +15,33 @@ reading provenance. They fall into two categories:
   region to preserve) and it is also printed to stdout. See §10.7.
 
 All four share the same surface convention: an English document title, a
-`> Generated at <iso>` line, and Japanese `##` section headings with
-mostly-English inline content.
+`> Generated at <iso>` line, and localized `##` section headings (see the view
+language rule below).
+
+## §10.0 View language ("the workspace speaks the anchor's language")
+
+The tool-generated chrome of all four views — section headings, labels, and
+verdict prose — is localized per workspace, resolved from the manifest roster:
+
+- The view language follows the **anchor repo** — the `repos[]` entry whose
+  `path` is `.` (the planning/trail home the views live in). This is a
+  deliberate, documented coupling between the anchor's declared audience and
+  the views' audience; other repos' languages do not participate.
+- `language: ja` on the anchor renders Japanese chrome; `en` renders English.
+- `en+ja` resolves to **English**: a generated view has exactly one chrome
+  language, and English is the shared floor of a bilingual audience.
+- When no roster, no anchor entry, or no `language` is declared — or the
+  manifest is missing or unreadable — the fallback is **English**, silently:
+  rendering never fails or warns over language resolution.
+
+Only the tool-generated strings are localized. User data — decision titles,
+notes, session labels, file paths — always passes through verbatim, whatever
+language it is written in. There is no environment-variable or CLI-flag
+override: `handoff.md` / `decisions.md` are committed team artifacts, so their
+language is a project declaration (the manifest), not a caller preference.
+
+The rendered prose itself (headings, wording) is presentation, not contract —
+see `compatibility.md`. The templates below show the English chrome.
 
 ## §10.1 Living-artifact policy (handoff.md, decisions.md)
 
@@ -56,31 +81,36 @@ text on the marker line is accepted to support legacy variants.
 
 ## Current state
 
-- Latest session: ses_01HX...C (completed)
-- Latest task: task_01HX_lp_form (in_progress)
+- Last session: ses_01HX...C (completed)
+- Last task: task_01HX_lp_form (in_progress)
 
 ## Recently changed files
 
 - src/components/ContactForm.tsx
 - src/styles/contact.css
 
-## Recent decisions
+## Latest decision
 
-- Adopted zod for ContactForm validation (decision_01HX...)
+- Adopted zod for ContactForm validation [decision_01HX...]
 
-## Open questions
+## Unresolved items
 
-- Redirect destination after submission success
+- 1 pending approvals
 
 ## Files to read next
 
-- src/components/ContactForm.tsx
 - .basou/decisions.md
+- src/components/ContactForm.tsx
 
-## Next steps
+## Work to do next
 
-- Finalize the post-submission UI flow
-- Add an E2E test
+- Finalize the post-submission UI flow (planned) [task_01HX...]
+
+## Sessions
+
+| short_id | status | started_at | label |
+|---|---|---|---|
+| 01HX...C | completed | 2026-05-04T12:00:00+09:00 | lp form |
 <!-- BASOU:GENERATED:END -->
 
 <!-- Below: human-authored notes -->
@@ -104,16 +134,16 @@ These fields originate from `decision_recorded` events.
 
 ## decision_01HX...: ContactForm validation
 
-- **Date**: 2026-05-04
-- **session**: ses_01HX...
-- **Decision**: adopt zod
-- **rationale**: integrates with the TypeScript type system; error messages
+- date: 2026-05-04
+- session: 01HX...
+- decision: adopt zod
+- rationale: integrates with the TypeScript type system; error messages
   are easy to customize
-- **alternatives**: yup, joi, hand-written validation
-- **rejected_reason**: yup's TypeScript integration is weak; joi is
+- alternatives: yup, joi, hand-written validation
+- rejected_reason: yup's TypeScript integration is weak; joi is
   overkill; hand-written is maintenance-heavy
-- **linked_events**: evt_01HX..., evt_01HX...
-- **linked_files**: src/components/ContactForm.tsx
+- linked_events: evt_01HX..., evt_01HX...
+- linked_files: src/components/ContactForm.tsx
 <!-- BASOU:GENERATED:END -->
 
 <!-- Below: human-authored notes -->
@@ -156,10 +186,9 @@ stdout (JSON-only, pipe-safe). `--title <text>` adds a subject line. A successfu
 render always exits 0 — integrity verdicts inside the report are informational and
 never fail the command (unlike `basou verify`).
 
-**Sections** (in order): `## 概要` (summary), `## 作業量` (volume + time),
-`## 判断` (decisions), `## 承認` (approvals), `## タスク` (tasks),
-`## 変更ファイル` (changed files), `## セッション一覧` (sessions), `## 整合性`
-(integrity). The markdown caps long lists with a `... +N more` line; the `--json`
+**Sections** (in order): `## Summary`, `## Work volume` (volume + time),
+`## Decisions`, `## Approvals`, `## Tasks`, `## Changed files`, `## Sessions`,
+`## Integrity` (localized per §10.0). The markdown caps long lists with a `... +N more` line; the `--json`
 shape always carries the full set. Changed files union only **non-import** sessions
 (matching handoff), so cross-workspace round-trip imports do not dominate.
 
@@ -168,19 +197,19 @@ shape always carries the full set. Changed files union only **non-import** sessi
 
 > Generated at 2026-05-09T03:00:00.000Z (2026-05-04..2026-05-08)
 
-## 概要
+## Summary
 
 - Sessions: 12 (completed 9, failed 1, imported 2)
 - Active time 6h 12m, 412,300 output tokens
 
-## 作業量
+## Work volume
 
 - Output tokens: 412,300
 - Actions: 84 commands, 37 files, 9 decisions
 - Active time: 6h 12m  (union; idle gaps > 5m excluded; tz UTC)
 - Span: 31h 40m  (total elapsed)
 
-## 整合性
+## Integrity
 
 Provenance internally tamper-checked: 10 verified, 2 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 tampered (of 12 sessions).
 
@@ -216,6 +245,7 @@ next intent only. It MUST NOT show per-agent scorecards, productivity
 comparisons, or utilization — orientation is self-orientation about your own
 product, not surveillance of the fleet.
 
-**Sections** (in order): `## 今どこにいる` (where am I now), `## 何が動く`
-(what is in flight — structured facts), `## どこへ向かう` (where am I heading),
-`## これは最新か` (is this current — capture freshness / coverage).
+**Sections** (in order): `## Where you are now`, `## Recent direction (last N
+sessions)`, `## What is in flight` (structured facts), `## Where you are
+heading`, `## Is this current` (capture freshness / coverage) — localized per
+§10.0.

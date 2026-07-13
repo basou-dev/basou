@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
+import { createManifest, writeManifest } from "../storage/manifest.js";
 import { renderDecisions } from "./decisions-renderer.js";
 
 const FIXED_WS_ID = "ws_01HXABCDEF1234567890ABCDEF" as const;
@@ -114,9 +115,9 @@ describe("decisions-renderer", () => {
     const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.decisionCount).toBe(1);
     expect(result.body).toContain(`## ${did}: use zod`);
-    expect(result.body).toContain("- 決定日: 2026-05-08");
+    expect(result.body).toContain("- date: 2026-05-08");
     expect(result.body).toContain("- session:");
-    expect(result.body).toContain("- 判断: use zod");
+    expect(result.body).toContain("- decision: use zod");
   });
 
   it("case 3: aggregates decisions across multiple sessions in chronological order", async () => {
@@ -325,8 +326,8 @@ describe("decisions-renderer", () => {
     );
     const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain(`## ${did}: legacy`);
-    expect(result.body).toContain("- 決定日: 2026-05-08");
-    expect(result.body).toContain("- 判断: legacy");
+    expect(result.body).toContain("- date: 2026-05-08");
+    expect(result.body).toContain("- decision: legacy");
     expect(result.body).not.toContain("rationale:");
     expect(result.body).not.toContain("alternatives:");
     expect(result.body).not.toContain("linked_events:");
@@ -388,7 +389,7 @@ describe("decisions-renderer (voided decisions)", () => {
 });
 
 describe("decisions-renderer (track decisions)", () => {
-  it("marks an open track with [TRACK] and the 種別 line", async () => {
+  it("marks an open track with [TRACK] and the kind line", async () => {
     const paths = await setupPaths();
     const sid = SES("T01");
     const did = DEC("T01");
@@ -403,11 +404,11 @@ describe("decisions-renderer (track decisions)", () => {
     );
     const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain(`## ${did}: admin form coverage [TRACK]`);
-    expect(result.body).toContain("- 種別: track (close まで orient/handoff に継続表示)");
+    expect(result.body).toContain("- kind: track (stays in orient/handoff until closed)");
     expect(result.body).toContain("- rationale: raw JSON is a stopgap");
   });
 
-  it("a plain decision carries neither the [TRACK] marker nor the 種別 line", async () => {
+  it("a plain decision carries neither the [TRACK] marker nor the kind line", async () => {
     const paths = await setupPaths();
     const sid = SES("T02");
     const did = DEC("T02");
@@ -420,10 +421,10 @@ describe("decisions-renderer (track decisions)", () => {
     const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain(`## ${did}: use zod`);
     expect(result.body).not.toContain("[TRACK]");
-    expect(result.body).not.toContain("- 種別: track");
+    expect(result.body).not.toContain("- kind: track");
   });
 
-  it("a voided track shows both [VOIDED] and [TRACK] and drops the 種別 (still-surfaced) line", async () => {
+  it("a voided track shows both [VOIDED] and [TRACK] and drops the kind (still-surfaced) line", async () => {
     const paths = await setupPaths();
     const sid = SES("T03");
     const did = DEC("T03");
@@ -436,6 +437,25 @@ describe("decisions-renderer (track decisions)", () => {
     expect(result.body).toContain(`## ~~${did}: closed track~~ [VOIDED] [TRACK]`);
     expect(result.body).toContain("VOIDED: shipped");
     // A closed track is no longer resurfaced, so it must not claim it is.
-    expect(result.body).not.toContain("close まで orient/handoff に継続表示");
+    expect(result.body).not.toContain("stays in orient/handoff until closed");
+  });
+});
+
+describe("renderDecisions (view language)", () => {
+  it("renders Japanese chrome when the manifest anchor declares language: ja", async () => {
+    const paths = await setupPaths();
+    const manifest = createManifest({ workspaceName: "fixture" });
+    manifest.repos = [{ path: ".", language: "ja" }];
+    await writeManifest(paths, manifest);
+    await placeSession(
+      paths,
+      SES("S01"),
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(SES("S01"), "E01", DEC("D01"), "use zod", "2026-05-08T12:00:00+09:00"),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("- 決定日: 2026-05-08");
+    expect(result.body).toContain("- 判断: use zod");
+    expect(result.body).not.toContain("- decision:");
   });
 });
