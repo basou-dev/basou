@@ -27,12 +27,22 @@
  * operator-specific string beyond the declared repo names / project name.
  */
 
+import { presetStrings, resolveAnchorContentLanguage } from "../lib/view-strings.js";
+import type { RepoLanguage } from "./roster.js";
+
 /** One roster repo referenced by the anchor starter's per-repo pointers. */
 export type AnchorStarterRepo = {
   /** The repo's display name (its on-disk basename). */
   name: string;
   /** True when this repo IS the anchor (the planning master itself; excluded from the pointers). */
   anchor?: boolean | undefined;
+  /**
+   * The repo's declared `language`. Only the ANCHOR entry's value participates:
+   * the starter is the anchor's own file, so its content language follows the
+   * anchor's declared audience (`ja` renders the pre-i18n Japanese bytes;
+   * anything else renders English).
+   */
+  language?: RepoLanguage | undefined;
 };
 
 /** The declared fields the anchor starter is rendered from. */
@@ -53,26 +63,26 @@ export type AnchorStarterInput = {
  * declaration; everything basou cannot know (product facts, phase, secrets,
  * language policy) is left as an explicit `<!-- TODO -->` for the operator. The
  * live roster is NOT snapshotted here — the file points at the workspace view's
- * generated AGENTS.md for it. Returns the file content WITH a trailing newline.
+ * generated AGENTS.md for it. The content language follows the ANCHOR entry's
+ * declared `language` (a ja anchor renders byte-identical to the pre-i18n
+ * output; anything else renders English). Returns the file content WITH a
+ * trailing newline.
  */
 export function renderAnchorStarter(input: AnchorStarterInput): string {
+  const t = presetStrings(resolveAnchorContentLanguage(input.repos)).anchorStarter;
   const lines: string[] = [];
   const title = input.projectName ?? input.anchorName;
 
   lines.push(`# AGENTS.md (${input.anchorName})`);
   lines.push("");
-  lines.push(
-    `> このリポジトリは **${title} の planning master(anchor)** です。ここで作業する AI エージェントは、まずこのファイルを読んでください。`,
-  );
+  lines.push(t.identityLine(title));
   lines.push(">");
-  lines.push(
-    "> このファイルは `basou project derive` が greenfield 立ち上げ時に **一度だけ生成した starter** です。以後は手管理してください — basou は再生成も上書きもしません(BASOU:GENERATED マーカーは無く、自由に編集できます)。",
-  );
+  lines.push(t.starterNote);
   lines.push("");
 
-  lines.push("## プロジェクトの基本情報");
+  lines.push(t.basicsHeading);
   lines.push("");
-  lines.push("<!-- TODO: manifest からは導出できない項目です。埋めてください。 -->");
+  lines.push(t.basicsTodo);
   lines.push("");
   lines.push("```text");
   lines.push(`Product name:          ${input.projectName ?? "<!-- TODO -->"}`);
@@ -84,36 +94,29 @@ export function renderAnchorStarter(input: AnchorStarterInput): string {
   lines.push("```");
   lines.push("");
 
-  lines.push("## どこで commit するか");
+  lines.push(t.commitHeading);
   lines.push("");
-  lines.push("- **このリポジトリ(planning master)**: 構想・計画・設計ドキュメント。");
-  lines.push("- **各実装 repo**: 実装コード。必ず対象 repo に `cd` してから commit してください。");
-  lines.push("- **workspace view**: git 管理外。view では commit できません。");
+  lines.push(t.commitPlanning);
+  lines.push(t.commitImplementation);
+  lines.push(t.commitView);
   lines.push("");
 
-  lines.push("## 必ず読むべき規約");
+  lines.push(t.conventionsHeading);
   lines.push("");
-  lines.push("作業規約は各 repo の AGENTS.md にあります。以下を読んでから作業してください。");
+  lines.push(t.conventionsBody);
   lines.push("");
   for (const r of input.repos) {
     if (r.anchor === true) continue; // this file
     lines.push(`- ${r.name}/AGENTS.md`);
   }
   if (input.viewName !== undefined) {
-    lines.push(
-      `- ${input.viewName}/AGENTS.md(workspace view・basou が生成)— **最新の repo 構成(roster)はここを正とする**`,
-    );
+    lines.push(t.viewPointerLine(input.viewName));
   }
   lines.push("");
 
-  lines.push("## 作業方針(プロジェクト固有事項)");
+  lines.push(t.policyHeading);
   lines.push("");
-  lines.push("<!-- TODO: 以下をプロジェクトに合わせて記述してください。");
-  lines.push("  - 現在のフェーズ / 重要ドキュメント");
-  lines.push("  - 機密情報の扱い(どこに書かないか)");
-  lines.push("  - 言語ポリシー(commit / コメント / ドキュメントの言語)");
-  lines.push("  - commit 運用(混在コミットを避ける 等)");
-  lines.push("-->");
+  lines.push(...t.policyTodo);
 
   return `${lines.join("\n")}\n`;
 }

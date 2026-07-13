@@ -3,6 +3,36 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- The generated instruction files now localize their content from the
+  declaration, completing the i18n pass that v0.33.0 started for the views. A
+  repo's preset block (`basou project preset` / `derive` / `retrofit`) follows
+  the **repo's own** declared `language`: `ja` renders the Japanese content
+  byte-identical to previous releases; `en`, `en+ja`, or an undeclared language
+  render English. The workspace view's generated AGENTS.md block and the
+  anchor's create-only starter follow the **anchor entry's** language,
+  mirroring the views' "the workspace speaks the anchor's language" rule. All
+  instruction-file strings moved into the single `@basou/core` locale table
+  (`presetStrings` / `resolveRepoContentLanguage` /
+  `resolveAnchorContentLanguage`, all exported), shrinking the language-lint
+  E-5 allowlist from three files to that one module.
+
+### Changed
+
+- **Default instruction-file language is now English.** A repo that declares no
+  `language` (or declares `en` / `en+ja`) previously received Japanese preset
+  blocks, view blocks, and anchor starters; it now receives English. To keep
+  the Japanese content, declare `language: ja` on the repo entry (for its
+  preset block) or on the anchor entry (for the view block and anchor starter)
+  in `.basou/manifest.yaml`. Blocks committed by earlier releases will surface
+  as an ordinary preset `update` / wiring drift on the next
+  `basou project preset` / `derive` / `check` run when their language
+  resolution changed. Rendered prose is presentation, not contract (see
+  `docs/spec/compatibility.md`).
+
 ## 0.33.0 — 2026-07-13
 
 ### Added

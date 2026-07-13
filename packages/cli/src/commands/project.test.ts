@@ -2303,8 +2303,8 @@ describe("basou project preset", () => {
     const body = await readFile(canonicalPath("pub"), "utf8");
     expect(body).toContain(GENERATED_START);
     expect(body).toContain(GENERATED_END);
-    expect(body).toContain("ソース可視性: private");
-    expect(body).toContain("web(デプロイ) — 公開 / en+ja");
+    expect(body).toContain("Source visibility: private");
+    expect(body).toContain("web (deployed) — public / en+ja");
   });
 
   it("--apply updates only the marker region, preserving hand-authored content", async () => {
@@ -2417,7 +2417,7 @@ describe("basou project preset", () => {
       viewApplied: false,
     } satisfies ProjectPresetResult);
     expect(out).toContain("Preset blocks to generate");
-    expect(out).toContain("ソース可視性: public");
+    expect(out).toContain("Source visibility: public");
     expect(out).toContain("agents/pub/AGENTS.md");
   });
 
@@ -3620,9 +3620,10 @@ describe("basou project derive", () => {
     expect(gi).toContain("AGENTS.md");
 
     // anchor seed: the planning master's own root AGENTS.md was created (a
-    // create-only starter, absent before the run).
+    // create-only starter, absent before the run; the anchor declares no
+    // language, so it renders the English starter).
     const anchorDoc = await readFile(join(anchor(), "AGENTS.md"), "utf8");
-    expect(anchorDoc).toContain("planning master(anchor)");
+    expect(anchorDoc).toContain("planning master (anchor)");
 
     // anchor spokes: with its AGENTS.md now seeded, the anchor's OWN CLAUDE.md /
     // Copilot spokes are wired to it (self-style), like every other repo — never
@@ -4311,14 +4312,18 @@ describe("basou project derive: anchor seed (doRunProjectSeedAnchor)", () => {
     await doRunProjectSeedAnchor({ apply: true }, { cwd: host() });
     const content = await readFile(anchorDoc(), "utf8");
     expect(content).toContain("# AGENTS.md (host)");
-    expect(content).toContain("**Acme の planning master(anchor)**");
+    // The anchor declares en+ja, which resolves to the English starter (one
+    // content language; en is the shared floor).
+    expect(content).toContain("**planning master (anchor) of Acme**");
     // No manifest-derived roster snapshot table (it would drift in a frozen file).
-    expect(content).not.toContain("| repo | 可視性 | 言語 | 指示書 |");
+    expect(content).not.toContain("| repo | visibility | language | instructions |");
     // Pointers exclude the anchor itself and include the view (the live-roster source).
     expect(content).toContain("- pub/AGENTS.md");
     expect(content).not.toContain("- host/AGENTS.md");
-    expect(content).toContain("- view/AGENTS.md(workspace view");
-    expect(content).toContain("最新の repo 構成(roster)はここを正とする");
+    expect(content).toContain("- view/AGENTS.md (the workspace view");
+    expect(content).toContain(
+      "the authoritative, up-to-date repo roster (the live roster) lives there",
+    );
     expect(logs.join("\n")).toContain("Seeded the anchor's own `AGENTS.md`");
   });
 

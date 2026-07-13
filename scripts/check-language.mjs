@@ -22,17 +22,13 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // allowed. Keep this list small — a new entry needs an explicit E-5 rationale,
 // not a convenience escape from translating output.
 const ALLOWLIST = [
-  // E-5: the single generated-view locale table (handoff/orientation/decisions/
-  // report chrome). The `ja` strings live ONLY here; the renderers themselves
-  // are English-only and select a language via the manifest's anchor repo.
+  // E-5: the single locale table for ALL generated content — the view chrome
+  // (handoff/orientation/decisions/report) and the instruction-file strings
+  // (repo preset block, view block, anchor starter). The `ja` strings live
+  // ONLY here; the renderers/generators themselves are English-only and select
+  // a language from the declaration (the manifest anchor for workspace-level
+  // artifacts, the target repo's own `language` for its preset block).
   "packages/core/src/lib/view-strings.ts",
-  // E-5: generated instruction-file preset — a separate surface from CLI output.
-  // Its content is currently Japanese unconditionally; it does not yet follow the
-  // target repo's declared `language`.
-  "packages/core/src/project/preset.ts",
-  // E-5: generated anchor AGENTS.md starter — the content language matches the
-  // sibling preset/view blocks it lives beside, a separate surface from CLI output.
-  "packages/core/src/project/anchor-starter.ts",
 ];
 
 // CJK symbols & punctuation (U+3000-303F, e.g. 、。「」), Hiragana/Katakana

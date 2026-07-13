@@ -43,6 +43,15 @@ language is a project declaration (the manifest), not a caller preference.
 The rendered prose itself (headings, wording) is presentation, not contract —
 see `compatibility.md`. The templates below show the English chrome.
 
+The same declaration-driven rule extends to the GENERATED INSTRUCTION FILES
+(`basou project preset` / `derive` / `retrofit` / anchor seeding), with one
+refinement: a repo's preset block lives inside that repo's own instruction
+file, so its content language follows the **repo's own** declared `language`
+(`ja` renders Japanese; `en`, `en+ja`, undeclared, or a missing declaration
+render English — silently, like the views). Workspace-level instruction
+artifacts — the view's generated AGENTS.md block and the anchor's create-only
+starter — follow the **anchor entry's** language, mirroring the views' rule.
+
 ## §10.1 Living-artifact policy (handoff.md, decisions.md)
 
 - **Generated**: basou produces them by reading events.jsonl.

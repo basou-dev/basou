@@ -5,7 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { createManifest, writeManifest } from "../storage/manifest.js";
-import { resolveViewLanguage, resolveViewLanguageFromPaths, viewStrings } from "./view-strings.js";
+import {
+  presetStrings,
+  resolveAnchorContentLanguage,
+  resolveRepoContentLanguage,
+  resolveViewLanguage,
+  resolveViewLanguageFromPaths,
+  viewStrings,
+} from "./view-strings.js";
 
 type RepoEntry = NonNullable<Manifest["repos"]>[number];
 
@@ -154,6 +161,71 @@ describe("viewStrings", () => {
         t.orientation.verdictCurrent("1h ago", "terminal", false),
         t.orientation.verdictCurrent("1h ago", "terminal", true),
         t.orientation.verdictSuspectsCaveat(1),
+      ];
+      for (const line of rendered) {
+        expect(typeof line).toBe("string");
+        expect(line.length).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("resolveRepoContentLanguage", () => {
+  it("resolves ja only from an explicit ja declaration", () => {
+    expect(resolveRepoContentLanguage("ja")).toBe("ja");
+    expect(resolveRepoContentLanguage("en")).toBe("en");
+    expect(resolveRepoContentLanguage("en+ja")).toBe("en");
+    expect(resolveRepoContentLanguage(undefined)).toBe("en");
+  });
+});
+
+describe("resolveAnchorContentLanguage", () => {
+  it("follows the anchor-flagged entry's language", () => {
+    expect(
+      resolveAnchorContentLanguage([{ anchor: true, language: "ja" }, { language: "en" }]),
+    ).toBe("ja");
+    expect(
+      resolveAnchorContentLanguage([{ anchor: true, language: "en+ja" }, { language: "ja" }]),
+    ).toBe("en");
+  });
+
+  it("defaults to en with no anchor entry or no anchor language", () => {
+    expect(resolveAnchorContentLanguage([])).toBe("en");
+    expect(resolveAnchorContentLanguage([{ language: "ja" }])).toBe("en");
+    expect(resolveAnchorContentLanguage([{ anchor: true }])).toBe("en");
+  });
+});
+
+describe("presetStrings", () => {
+  // Same rationale as the viewStrings sweep: exercise every parameterized entry
+  // in BOTH languages so a table entry that throws or renders empty cannot ship,
+  // and the label maps cover every enum branch.
+  it("every parameterized entry renders a non-empty string in both languages", () => {
+    for (const lang of ["en", "ja"] as const) {
+      const t = presetStrings(lang);
+      const rendered: string[] = [
+        t.repoBlock.visibilityLabel("public"),
+        t.repoBlock.visibilityLabel("private"),
+        t.repoBlock.visibilityLabel("future-public"),
+        t.repoBlock.visibilityLabel(undefined),
+        t.repoBlock.sourceLanguageLabel("en"),
+        t.repoBlock.sourceLanguageLabel("ja"),
+        t.repoBlock.sourceLanguageLabel("en+ja"),
+        t.repoBlock.sourceLanguageLabel(undefined),
+        t.repoBlock.publishKindLabel("web"),
+        t.repoBlock.publishKindLabel("npm"),
+        t.repoBlock.publishVisibilityLabel("public"),
+        t.repoBlock.publishVisibilityLabel("private"),
+        t.repoBlock.publishVisibilityLabel("future-public"),
+        t.repoBlock.publishVisibilityLabel(undefined),
+        t.repoBlock.contentLanguageLabel("en+ja"),
+        t.repoBlock.contentLanguageLabel(undefined),
+        t.viewBlock.selfNote("ws"),
+        t.viewBlock.aggregates(0),
+        t.viewBlock.aggregates(3),
+        t.anchorStarter.identityLine("Acme"),
+        t.anchorStarter.viewPointerLine("acme-workspace"),
+        ...t.anchorStarter.policyTodo,
       ];
       for (const line of rendered) {
         expect(typeof line).toBe("string");
