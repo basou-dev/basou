@@ -15,7 +15,9 @@ All notable changes to **basou** are recorded here. The project follows
   without opening a browser or reading the config file by hand. It reads only
   the config and probes existence + `.basou` presence — it never runs the
   `basou view --check` redundancy/footprint safety preflight, which stays its
-  own surface.
+  own surface. Both `basou portfolio` and `basou portfolio list` list; passing
+  `--check` (which belongs to `basou view`) prints a pointer to
+  `basou view --portfolio --check` instead of a bare `unknown option` error.
 
 ## 0.34.0 — 2026-07-14
 

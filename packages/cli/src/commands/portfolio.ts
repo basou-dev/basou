@@ -9,6 +9,12 @@ export type PortfolioListOptions = {
   verbose?: boolean;
 };
 
+/** Options for the `basou portfolio` command surface: the list options plus the `--check` redirect flag. */
+export type PortfolioCommandOptions = PortfolioListOptions & {
+  /** Set by the natural `basou portfolio --check` mistake; prints a pointer to `basou view --portfolio --check`. */
+  check?: boolean;
+};
+
 /**
  * Injectable seams for {@link doRunPortfolioList} so tests stay hermetic: the
  * config path to read, and the two on-disk probes (existence and `.basou`
@@ -63,10 +69,23 @@ export function registerPortfolioCommand(program: Command): void {
     .description(
       "List the workspaces you orient across (read-only): every planning master registered in ~/.basou/portfolio.yaml, with its path and whether it exists / is initialized. The headless text/JSON counterpart to the `basou view --portfolio` GUI — for discovering where a sibling project lives without opening a browser",
     )
+    // Accept the explicit `list` spelling as an alias for the bare command, so
+    // both `basou portfolio` and `basou portfolio list` work (an agent reaching
+    // for a `list` sub-verb should not hit a `too many arguments` foot-gun). Any
+    // other word is a typo — rejected with a pointer, not silently listed.
+    .argument("[action]", "optional literal `list` (the only, and default, action)")
     .option("--json", "Output the result as JSON")
+    // `--check` belongs to `basou view` (the redundancy/footprint safety
+    // preflight). It is declared here ONLY to turn the natural `basou portfolio
+    // --check` mistake into a pointer instead of a bare `unknown option` error;
+    // it never runs a preflight (the scope boundary vs `view --check` holds).
+    .option(
+      "--check",
+      "moved: the redundancy/footprint safety preflight is `basou view --portfolio --check` (this prints that pointer and exits)",
+    )
     .option("-v, --verbose", "Show error causes")
-    .action(async (opts: PortfolioListOptions) => {
-      await runPortfolioList(opts);
+    .action(async (action: string | undefined, opts: PortfolioCommandOptions) => {
+      await runPortfolioCommand(action, opts);
     });
 }
 
@@ -77,6 +96,36 @@ function isDirectory(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Dispatch the `basou portfolio [action]` surface. Bare and the explicit `list`
+ * spelling both list; `--check` is redirected to `basou view --portfolio
+ * --check` (this command never runs the preflight); any other action word is a
+ * typo, rejected with a pointer. Non-list branches write to stderr and set
+ * exitCode 1 (the CLI's usage-error convention, matching commander's own
+ * unknown-option/argument exit) rather than throwing.
+ */
+export async function runPortfolioCommand(
+  action: string | undefined,
+  options: PortfolioCommandOptions,
+  ctx: PortfolioListContext = {},
+): Promise<void> {
+  if (options.check === true) {
+    console.error(
+      "`basou portfolio` is a read-only listing; it has no safety preflight.\nRun `basou view --portfolio --check` for the redundancy/footprint check.",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (action !== undefined && action !== "list") {
+    console.error(
+      `Unknown portfolio action '${action}'. Run \`basou portfolio\` or \`basou portfolio list\` to list the registered workspaces.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  await runPortfolioList(options, ctx);
 }
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunPortfolioList}. */
