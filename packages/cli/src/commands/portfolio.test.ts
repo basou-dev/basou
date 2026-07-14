@@ -7,6 +7,7 @@ import {
   type PortfolioListContext,
   type PortfolioListResult,
   renderPortfolioList,
+  runPortfolioCommand,
   runPortfolioList,
 } from "./portfolio.js";
 
@@ -116,6 +117,53 @@ describe("doRunPortfolioList", () => {
       await runPortfolioList({}, { configPath: join(getDir(), "nope.yaml") });
       expect(process.exitCode).toBe(1);
       expect(err).toHaveBeenCalledWith(expect.stringMatching(/No portfolio config/));
+    } finally {
+      process.exitCode = prevExit;
+    }
+  });
+});
+
+describe("runPortfolioCommand", () => {
+  it("lists on the bare invocation (action undefined) and on the explicit `list`", async () => {
+    const a = join(getDir(), "alpha-planning");
+    const configPath = await writeConfig(`workspaces:\n  - path: ${a}\n    label: alpha\n`);
+    const ctx: PortfolioListContext = {
+      configPath,
+      pathExists: () => true,
+      isInitialized: () => true,
+    };
+    for (const action of [undefined, "list"] as const) {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await runPortfolioCommand(action, {}, ctx);
+      expect(log.mock.calls[0]?.[0]).toContain("# Portfolio (workspaces you orient across)");
+      log.mockRestore();
+    }
+  });
+
+  it("redirects --check to `basou view --portfolio --check` (exit 1, never lists or reads the config)", async () => {
+    const prevExit = process.exitCode;
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      // configPath points nowhere: a working redirect must short-circuit before any read.
+      await runPortfolioCommand(undefined, { check: true }, { configPath: "/nope/nope.yaml" });
+      expect(process.exitCode).toBe(1);
+      expect(err).toHaveBeenCalledWith(expect.stringMatching(/basou view --portfolio --check/));
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = prevExit;
+    }
+  });
+
+  it("rejects an unknown action with a pointer (exit 1, never lists or reads the config)", async () => {
+    const prevExit = process.exitCode;
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      await runPortfolioCommand("bogus", {}, { configPath: "/nope/nope.yaml" });
+      expect(process.exitCode).toBe(1);
+      expect(err).toHaveBeenCalledWith(expect.stringMatching(/Unknown portfolio action 'bogus'/));
+      expect(log).not.toHaveBeenCalled();
     } finally {
       process.exitCode = prevExit;
     }
