@@ -10,6 +10,7 @@ import { registerImportCommand } from "./commands/import.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerNoteCommand } from "./commands/note.js";
 import { registerOrientCommand } from "./commands/orient.js";
+import { registerPortfolioCommand } from "./commands/portfolio.js";
 import { registerProjectCommand } from "./commands/project.js";
 import { registerProtocolCommand } from "./commands/protocol.js";
 import { registerRefreshCommand } from "./commands/refresh.js";
@@ -71,6 +72,7 @@ export function buildProgram(): Command {
   registerDecisionsCommand(program);
   registerReportCommand(program);
   registerOrientCommand(program);
+  registerPortfolioCommand(program);
   registerReviewCommand(program);
   registerReviewGapsCommand(program);
   registerProjectCommand(program);

@@ -44,6 +44,7 @@ describe("buildProgram", () => {
       "init",
       "note",
       "orient",
+      "portfolio",
       "project",
       "protocol",
       "refresh",
