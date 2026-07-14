@@ -3,6 +3,20 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou portfolio` — a read-only, headless listing of the workspaces
+  registered in `~/.basou/portfolio.yaml` (each entry's label, path, and
+  whether it exists / is an initialized planning master), with `--json`. It is
+  the text/JSON counterpart to the `basou view --portfolio` GUI: an agent
+  oriented in one project can now discover where a sibling project lives
+  without opening a browser or reading the config file by hand. It reads only
+  the config and probes existence + `.basou` presence — it never runs the
+  `basou view --check` redundancy/footprint safety preflight, which stays its
+  own surface.
+
 ## 0.34.0 — 2026-07-14
 
 ### Added
