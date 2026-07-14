@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
@@ -70,6 +70,15 @@ export function registerPortfolioCommand(program: Command): void {
     });
 }
 
+/** Whether `path` resolves to a directory on disk (a missing/other-type path → false). */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunPortfolioList}. */
 export async function runPortfolioList(
   options: PortfolioListOptions,
@@ -96,7 +105,11 @@ export async function doRunPortfolioList(
 ): Promise<PortfolioListResult> {
   const configPath = ctx.configPath ?? DEFAULT_PORTFOLIO_CONFIG_PATH;
   const pathExists = ctx.pathExists ?? ((p: string) => existsSync(p));
-  const isInitialized = ctx.isInitialized ?? ((p: string) => existsSync(join(p, ".basou")));
+  // A `.basou` store is a DIRECTORY. Match basou's canonical `hasBasouStore`
+  // (repo-root.ts) `isDirectory()` check rather than a bare `existsSync`, so a
+  // stray regular file named `.basou` is not mis-reported as an initialized
+  // master (which the real resolver would reject).
+  const isInitialized = ctx.isInitialized ?? ((p: string) => isDirectory(join(p, ".basou")));
 
   const workspaces = await loadPortfolioConfig(configPath);
   const result: PortfolioListResult = {

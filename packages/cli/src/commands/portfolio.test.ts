@@ -7,6 +7,7 @@ import {
   type PortfolioListContext,
   type PortfolioListResult,
   renderPortfolioList,
+  runPortfolioList,
 } from "./portfolio.js";
 
 let dir: string | undefined;
@@ -78,11 +79,16 @@ describe("doRunPortfolioList", () => {
       { configPath, pathExists: () => true, isInitialized: () => true },
     );
     expect(log).toHaveBeenCalledTimes(1);
-    const printed = JSON.parse(log.mock.calls[0]?.[0] as string) as PortfolioListResult;
+    const raw = log.mock.calls[0]?.[0] as string;
+    const printed = JSON.parse(raw) as PortfolioListResult;
     expect(printed).toEqual({
       configPath,
       workspaces: [{ label: "alpha", path: a, exists: true, initialized: true }],
     });
+    // Contract: single-line minified JSON (no pretty-print), so line-oriented
+    // consumers (e.g. `basou portfolio --json | jq -c`) stay stable.
+    expect(raw).not.toContain("\n");
+    expect(raw).toBe(JSON.stringify(printed));
   });
 
   it("prints the human listing when --json is not set", async () => {
@@ -101,6 +107,18 @@ describe("doRunPortfolioList", () => {
     await expect(
       doRunPortfolioList({}, { configPath: join(getDir(), "nope.yaml") }),
     ).rejects.toThrow(/No portfolio config/);
+  });
+
+  it("runPortfolioList (wired entry) renders the error and sets exitCode 1 on a missing config", async () => {
+    const prevExit = process.exitCode;
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await runPortfolioList({}, { configPath: join(getDir(), "nope.yaml") });
+      expect(process.exitCode).toBe(1);
+      expect(err).toHaveBeenCalledWith(expect.stringMatching(/No portfolio config/));
+    } finally {
+      process.exitCode = prevExit;
+    }
   });
 });
 
