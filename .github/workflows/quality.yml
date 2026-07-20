@@ -19,7 +19,7 @@ jobs:
         # pnpm version is read from the `packageManager` field of the
         # workspace root package.json; the action errors out if both
         # are specified.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: pnpm
