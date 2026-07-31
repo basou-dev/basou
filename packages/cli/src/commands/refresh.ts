@@ -335,6 +335,18 @@ function describeImport(outcome: ImportOutcome): string {
   if (outcome.skippedAlreadyImported > 0)
     parts.push(`${outcome.skippedAlreadyImported} already imported`);
   if (outcome.skippedLegacyUntracked > 0) parts.push(`${outcome.skippedLegacyUntracked} legacy`);
+  // Report EVERY discovered-but-dropped source, not just the benign
+  // already-imported ones. A source the adapter could derive nothing from ("no
+  // actions") is indistinguishable from "nothing new happened" when it is
+  // hidden, which is how a vendor log-format change stayed invisible: refresh
+  // kept reporting a quiet, healthy-looking line while whole sessions were
+  // being discarded. `basou import <adapter>` has always printed these; refresh
+  // now matches it, so a silent drop cannot read as an up-to-date workspace.
+  if (outcome.skippedNoAction > 0) parts.push(`${outcome.skippedNoAction} with no actions`);
+  if (outcome.skippedDecreased > 0) parts.push(`${outcome.skippedDecreased} shrank`);
+  if (outcome.skippedDuplicate > 0) parts.push(`${outcome.skippedDuplicate} duplicated`);
+  if (outcome.skippedUnverifiable > 0)
+    parts.push(`${outcome.skippedUnverifiable} unverifiable (run 'basou verify')`);
   return `${outcome.adapter}: ${verb} ${parts.join(", ")}`;
 }
 

@@ -57,11 +57,20 @@ export type CodexRolloutToPayloadOptions = {
  * provenance-level events from the rollout's message-level records:
  *
  * - `session_started` / `session_ended` from the first / last timestamped record.
- * - `command_executed` from each `exec_command` function call, recorded as
- *   `bash -c "<cmd>"`. The shell line and working directory come from the
- *   call's JSON `arguments` (`{ cmd, workdir }`); the exit code and duration
- *   are parsed from the paired `function_call_output` (matched by `call_id`),
- *   whose text carries `Process exited with code N` and `Wall time: X seconds`.
+ * - `command_executed` from each shell execution, recorded as `bash -c "<cmd>"`.
+ *   Codex has written these two different ways, and BOTH are read (an operator's
+ *   `~/.codex/sessions` holds a mix across a CLI upgrade):
+ *     - one `function_call` named `exec_command` per command, with JSON
+ *       `arguments` (`{ cmd, workdir }`) and a `function_call_output` whose text
+ *       carries `Process exited with code N` / `Wall time: X seconds`;
+ *     - a scripted `custom_tool_call` (see
+ *       {@link readExecCommandsFromScript}) whose `input` is a JS program that
+ *       calls `tools.exec_command({ cmd, workdir })` — possibly several times in
+ *       one call — and whose output reports only `Wall time X seconds` for the
+ *       whole script, with no per-command exit code.
+ *   Reading only the first shape made every session recorded by a CLI that had
+ *   moved to the second derive ZERO commands, so the whole session was dropped
+ *   as "no actions" — capture went silently blind rather than degrading.
  *
  * Per-session `metrics` are also derived: token totals from the cumulative
  * `token_count` events; active time from the real `task_started` ->
@@ -183,6 +192,41 @@ export function codexRolloutToImportPayload(
     }
 
     if (readString(record.type) !== "response_item") continue;
+
+    // Scripted tool call: one call can carry several `tools.exec_command(...)`
+    // invocations. Keyed on the CALL SITE inside the script, not on the tool's
+    // `name` ("exec" today), because the name is the vendor's to rename while
+    // the call site is what the script must contain to run a command.
+    if (readString(payload.type) === "custom_tool_call") {
+      const commands = readExecCommandsFromScript(readString(payload.input));
+      if (commands.length === 0) continue;
+      const output = readCallId(payload.call_id, outputsByCallId);
+      // The script reports ONE wall time for the whole program, so it is only
+      // honest as a command duration when the script ran exactly one command;
+      // otherwise every command would be credited with the whole script's time.
+      // Fall back to the schema floor (0 = unrecorded) instead.
+      const durationMs = commands.length === 1 ? parseWallTimeMs(output) : 0;
+      const scriptTsMs = Date.parse(ts);
+      if (Number.isFinite(scriptTsMs)) engagementTsMs.push(scriptTsMs);
+      for (const command of commands) {
+        derived.push(
+          // The per-command exit code is absent from this format (the script
+          // would have to print it), so it stays null — "unknown", not "0".
+          commandExecutedEvent(
+            ts,
+            placeholderSessionId,
+            command.cmd,
+            command.workdir ?? workingDir ?? ".",
+            {
+              exitCode: null,
+              durationMs,
+            },
+          ),
+        );
+      }
+      continue;
+    }
+
     if (readString(payload.type) !== "function_call") continue;
     if (readString(payload.name) !== "exec_command") continue;
 
@@ -414,6 +458,137 @@ function readCallId(value: unknown, outputs: ReadonlyMap<string, string>): strin
   return callId !== undefined ? outputs.get(callId) : undefined;
 }
 
+/** The call site every scripted shell execution must contain to run a command. */
+const EXEC_CALL_SITE = "tools.exec_command";
+
+/**
+ * Parse the shell executions out of a scripted tool call's `input` — a JS
+ * program such as `const r = await tools.exec_command({cmd:"…", workdir:"…"})`,
+ * sometimes running several commands (e.g. inside `Promise.all([...])`), so this
+ * returns ALL of them in script order.
+ *
+ * The script is scanned, not evaluated: for each `tools.exec_command(` the
+ * following object literal is delimited by brace matching (string-aware) and its
+ * `cmd` / `workdir` string values are read. Object-literal syntax is accepted in
+ * the forms Codex actually emits — bare or quoted keys, and single-, double- or
+ * back-quoted values — with JS escapes decoded so the recorded shell line is the
+ * one that ran.
+ *
+ * Deliberately NOT resolved, since that would mean running the script: a command
+ * passed by variable (`{ cmd, workdir }` shorthand, `{ cmd: line }`) is skipped,
+ * and an interpolation inside a template literal (`${…}`) is recorded verbatim —
+ * a visible placeholder is more honest than either inventing the value or
+ * dropping the evidence that a command ran.
+ */
+function readExecCommandsFromScript(
+  script: string | undefined,
+): Array<{ cmd: string; workdir: string | undefined }> {
+  if (script === undefined) return [];
+  const commands: Array<{ cmd: string; workdir: string | undefined }> = [];
+  let from = 0;
+  for (;;) {
+    const site = script.indexOf(EXEC_CALL_SITE, from);
+    if (site === -1) break;
+    const afterSite = site + EXEC_CALL_SITE.length;
+    from = afterSite;
+    const objectStart = script.indexOf("{", afterSite);
+    if (objectStart === -1) break;
+    // Accept the literal as THIS call's argument only when nothing but the
+    // call's own parenthesis separates them; otherwise `exec_command(line)`
+    // would swallow an unrelated later literal.
+    if (!/^\s*\(\s*$/.test(script.slice(afterSite, objectStart))) continue;
+    const objectEnd = findObjectEnd(script, objectStart);
+    if (objectEnd === -1) continue;
+    const literal = script.slice(objectStart, objectEnd + 1);
+    from = objectEnd + 1;
+    const cmd = readScriptStringField(literal, "cmd");
+    if (cmd === undefined) continue;
+    commands.push({ cmd, workdir: readScriptStringField(literal, "workdir") });
+  }
+  return commands;
+}
+
+/**
+ * Index of the `}` closing the object literal that opens at `start`, or -1 when
+ * it is unterminated. String literals (including template literals) and their
+ * escapes are tracked so a brace inside a shell command does not end the object.
+ */
+function findObjectEnd(script: string, start: number): number {
+  let depth = 0;
+  let quote: string | undefined;
+  for (let i = start; i < script.length; i++) {
+    const ch = script[i];
+    if (quote !== undefined) {
+      if (ch === "\\") {
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = undefined;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** Simple JS string escapes; anything else decodes to the character itself. */
+const SCRIPT_STRING_ESCAPES: Readonly<Record<string, string>> = {
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  b: "\b",
+  f: "\f",
+  v: "\v",
+  "0": "\0",
+};
+
+/**
+ * Read one string field of a scanned object literal (`cmd: "…"`, `"cmd": '…'`,
+ * `cmd: \`…\``). Returns undefined when the key is absent or its value is not a
+ * string literal (a variable / shorthand), so the caller can skip the call. The
+ * key must start a property (line start or after `{` / `,`) so `max_cmd:` does
+ * not answer for `cmd:`.
+ */
+function readScriptStringField(literal: string, key: string): string | undefined {
+  const pattern = new RegExp(
+    `(?:^|[{,\\s])(?:"${key}"|'${key}'|${key})\\s*:\\s*` +
+      "(\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"|'(?:[^'\\\\]|\\\\[\\s\\S])*'|`(?:[^`\\\\]|\\\\[\\s\\S])*`)",
+  );
+  const match = literal.match(pattern);
+  const quoted = match?.[1];
+  if (quoted === undefined) return undefined;
+  const value = unescapeScriptString(quoted);
+  return value.length > 0 ? value : undefined;
+}
+
+/** Decode a JS string literal (quotes included) to the value it denotes. */
+function unescapeScriptString(quoted: string): string {
+  return quoted
+    .slice(1, -1)
+    .replace(
+      /\\(u\{[0-9a-fA-F]{1,6}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g,
+      (_match, sequence: string) => {
+        if (sequence.startsWith("u{")) {
+          return String.fromCodePoint(Number.parseInt(sequence.slice(2, -1), 16));
+        }
+        if (sequence.startsWith("u") || sequence.startsWith("x")) {
+          return String.fromCodePoint(Number.parseInt(sequence.slice(1), 16));
+        }
+        // A backslash-newline is a JS line continuation: it denotes nothing.
+        if (sequence === "\n" || sequence === "\r") return "";
+        return SCRIPT_STRING_ESCAPES[sequence] ?? sequence;
+      },
+    );
+}
+
 /**
  * Build a turn's `[start, end]` wall-clock interval from its `task_complete`.
  * `end` is the completion record's own timestamp (ISO, ms precision); `start`
@@ -472,23 +647,30 @@ function parseExitCode(output: string | undefined): number | null {
 }
 
 /**
- * Codex's `exec_command` output text reports wall-clock duration as
- * `Wall time: X seconds`. Returns `0` (the schema floor) when absent or
- * non-finite, matching the Claude importer's missing-duration default.
+ * Codex's output text reports wall-clock duration as `Wall time: X seconds` for
+ * a per-command `exec_command` call and `Wall time X seconds` (no colon) for a
+ * whole script, so the colon is optional here. Returns `0` (the schema floor)
+ * when absent or non-finite, matching the Claude importer's missing-duration
+ * default.
  */
 function parseWallTimeMs(output: string | undefined): number {
   if (output === undefined) return 0;
-  const match = output.match(/Wall time:\s*([\d.]+)\s*seconds/);
+  const match = output.match(/Wall time:?\s*([\d.]+)\s*seconds/);
   if (match?.[1] === undefined) return 0;
   const seconds = Number.parseFloat(match[1]);
   return Number.isFinite(seconds) ? Math.round(seconds * 1000) : 0;
 }
 
 /**
- * Index every `function_call_output`'s text by its `call_id`, so a command's
- * exit code and duration can be looked up at the originating `function_call`.
- * Only string outputs are kept — image / structured tool results are arrays
- * and carry no command outcome.
+ * Index every tool output's text by its `call_id`, so a command's exit code and
+ * duration can be looked up at the originating call.
+ *
+ * A `function_call_output` carries its text as a plain string; only strings are
+ * kept there because an array output is an image / structured tool result that
+ * carries no command outcome. A scripted `custom_tool_call_output` instead
+ * carries an ARRAY of content parts (`{ type: "input_text", text }`) whose FIRST
+ * part is the outcome banner (`Script completed` / `Wall time X seconds`), so
+ * those parts are joined back into one text.
  */
 function indexOutputs(records: ReadonlyArray<CodexRolloutRecord>): Map<string, string> {
   const byId = new Map<string, string>();
@@ -496,10 +678,26 @@ function indexOutputs(records: ReadonlyArray<CodexRolloutRecord>): Map<string, s
     if (readString(record.type) !== "response_item") continue;
     const payload = isObject(record.payload) ? record.payload : undefined;
     if (payload === undefined) continue;
-    if (readString(payload.type) !== "function_call_output") continue;
+    const payloadType = readString(payload.type);
+    const output =
+      payloadType === "function_call_output"
+        ? readString(payload.output)
+        : payloadType === "custom_tool_call_output"
+          ? readOutputParts(payload.output)
+          : undefined;
     const callId = readString(payload.call_id);
-    const output = readString(payload.output);
     if (callId !== undefined && output !== undefined) byId.set(callId, output);
   }
   return byId;
+}
+
+/** Join a scripted tool output's content parts (or read it as a plain string). */
+function readOutputParts(value: unknown): string | undefined {
+  const asString = readString(value);
+  if (asString !== undefined) return asString;
+  if (!Array.isArray(value)) return undefined;
+  const texts = value
+    .map((part) => (isObject(part) ? readString(part.text) : undefined))
+    .filter((text): text is string => text !== undefined);
+  return texts.length > 0 ? texts.join("\n") : undefined;
 }

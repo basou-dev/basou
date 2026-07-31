@@ -3,6 +3,37 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- The Codex adapter reads the CLI's **scripted** tool calls, so sessions
+  recorded by a newer Codex are captured again. Codex moved from one
+  `function_call` per command (`name: "exec_command"`, JSON arguments) to a
+  single scripted `custom_tool_call` whose input is a JS program calling
+  `tools.exec_command({ cmd, workdir })` — possibly several times per call. The
+  importer only read the older shape, so every session written the new way
+  derived zero commands and was dropped whole as "no actions": `basou refresh`
+  reported a healthy, quiet line while the entire Codex side of the trail went
+  missing (and with it the cross-model review evidence `basou review-gaps`
+  looks for). Both shapes are now read, so a `~/.codex/sessions` holding a mix
+  across a CLI upgrade imports completely. The scripted format records no
+  per-command exit code, so those commands import with `exit_code: null`
+  ("unknown", not "0"), and a script's single wall time is credited as a
+  duration only when that script ran exactly one command. A command passed to
+  the script by variable stays unresolvable without running the script and is
+  skipped rather than guessed.
+
+### Changed
+
+- `basou refresh` now names **every** discovered-but-dropped source, not only
+  the benign already-imported ones: sources it could derive nothing from
+  (`N with no actions`), a truncated source (`N shrank`), an anomalously
+  duplicated one (`N duplicated`), and one whose in-place re-import was refused
+  (`N unverifiable`). `basou import <adapter>` always printed these; refresh
+  hid them, so a silent drop was indistinguishable from "nothing new happened"
+  — which is how the Codex format change above stayed invisible.
+
 ## 0.35.0 — 2026-07-15
 
 ### Added
