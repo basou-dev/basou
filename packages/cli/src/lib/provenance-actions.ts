@@ -33,10 +33,15 @@ export type ImportOutcome =
       replacedCount: number;
       /** Sessions re-imported in place because their source grew. */
       reimportedCount: number;
+      /** Discovered but derived nothing importable (e.g. a source shape the adapter cannot read). */
       skippedNoAction: number;
       skippedAlreadyImported: number;
       /** Already imported but with no recorded source size (pre-size-tracking); not re-imported. */
       skippedLegacyUntracked: number;
+      /** Already imported and the source is now SMALLER (truncated / rotated); not re-imported. */
+      skippedDecreased: number;
+      /** Already imported and the source looks anomalously duplicated; not re-imported. */
+      skippedDuplicate: number;
       /** Source grew but a safe re-import was refused (broken chain / unreadable / non-append); captured state is provably behind. */
       skippedUnverifiable: number;
       eventTotal: number;
@@ -145,6 +150,8 @@ async function runImport(adapter: ImportAdapter, fn: () => Promise<void>): Promi
       skippedNoAction: readCount(json.skipped_no_action),
       skippedAlreadyImported: readCount(json.skipped_already_imported),
       skippedLegacyUntracked: readCount(json.skipped_legacy_untracked),
+      skippedDecreased: readCount(json.skipped_decreased),
+      skippedDuplicate: readCount(json.skipped_duplicate),
       skippedUnverifiable: readCount(json.skipped_unverifiable),
       eventTotal: readCount(json.event_total),
       dryRun: json.dry_run === true,

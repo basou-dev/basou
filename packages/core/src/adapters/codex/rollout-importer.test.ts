@@ -37,6 +37,37 @@ function execOutput(ts: string, callId: string, output: string): CodexRolloutRec
   };
 }
 
+/**
+ * A scripted tool call, the shape a newer Codex CLI writes: one
+ * `custom_tool_call` whose `input` is a JS program calling the tools.
+ */
+function scriptCall(ts: string, callId: string, input: string, name = "exec"): CodexRolloutRecord {
+  return {
+    type: "response_item",
+    timestamp: ts,
+    payload: {
+      type: "custom_tool_call",
+      name,
+      status: "completed",
+      call_id: callId,
+      input,
+    },
+  };
+}
+
+/** A scripted tool call's output: content PARTS, not a plain string. */
+function scriptOutput(ts: string, callId: string, ...texts: string[]): CodexRolloutRecord {
+  return {
+    type: "response_item",
+    timestamp: ts,
+    payload: {
+      type: "custom_tool_call_output",
+      call_id: callId,
+      output: texts.map((text) => ({ type: "input_text", text })),
+    },
+  };
+}
+
 function eventMsg(ts: string, type: string): CodexRolloutRecord {
   return { type: "event_msg", timestamp: ts, payload: { type, message: "..." } };
 }
@@ -450,5 +481,355 @@ describe("codexRolloutToImportPayload", () => {
     // Machine is bounded to the in-session span (5 min), not the full 10-min
     // duration, so it stays a subset of active time.
     expect(payload.session.metrics?.machine_active_time_ms).toBe(5 * 60 * 1000);
+  });
+});
+
+describe("codexRolloutToImportPayload (scripted tool calls)", () => {
+  it("derives command_executed from a scripted exec_command call", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `const r = await tools.exec_command({cmd:"npm test",workdir:"${CWD}/pkg",yield_time_ms:10000}); text(r.output)\n`,
+      ),
+      // The script's output banner has no colon after "Wall time" and arrives as
+      // content parts rather than a string.
+      scriptOutput(
+        "2026-07-31T00:00:03.000Z",
+        "call_1",
+        "Script completed\nWall time 1.5 seconds\nOutput:\n",
+        "ok",
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+    expect(payload.events.map((e) => e.type)).toEqual([
+      "session_started",
+      "command_executed",
+      "session_ended",
+    ]);
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.args).toEqual(["-c", "npm test"]);
+    expect(command.cwd).toBe(`${CWD}/pkg`);
+    expect(command.duration_ms).toBe(1500);
+    // This format records no per-command exit code: unknown, not zero.
+    expect(command.exit_code).toBeNull();
+  });
+
+  it("derives one command per exec_command call when a script runs several", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `const results = await Promise.all([
+  tools.exec_command({ cmd: "git -C ${CWD} diff", workdir: "${CWD}" }),
+  tools.exec_command({ "cmd": "wc -l README.md" }),
+]);`,
+      ),
+      scriptOutput("2026-07-31T00:00:04.000Z", "call_1", "Script completed\nWall time 2.0 seconds"),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const commands = payload.events.filter((e) => e.type === "command_executed");
+    expect(commands.length).toBe(2);
+    const [first, second] = commands;
+    if (first?.type !== "command_executed" || second?.type !== "command_executed") {
+      throw new Error("expected command_executed");
+    }
+    expect(first.args).toEqual(["-c", `git -C ${CWD} diff`]);
+    expect(first.cwd).toBe(CWD);
+    // A quoted key is read like a bare one; no workdir falls back to session cwd.
+    expect(second.args).toEqual(["-c", "wc -l README.md"]);
+    expect(second.cwd).toBe(CWD);
+    // One wall time covers the whole script, so it is not credited to each
+    // command (that would report 2s twice for a 2s script).
+    expect(first.duration_ms).toBe(0);
+    expect(second.duration_ms).toBe(0);
+    expect(payload.session.label).toBe("codex 2026-07-31: 2 commands");
+  });
+
+  it("decodes escapes and reads a command containing braces and quotes", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        // Escaped quotes, an escaped backslash, and a shell brace group that must
+        // not be mistaken for the end of the argument object.
+        `await tools.exec_command({cmd:"rg -n \\"foo|bar\\" . | awk '{print \\$1}' | sed 's/\\\\s//'",workdir:"${CWD}"});`,
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.args).toEqual(["-c", `rg -n "foo|bar" . | awk '{print $1}' | sed 's/\\s//'`]);
+    // The workdir after the brace group is still found, so the command binds to
+    // its repo rather than the session cwd.
+    expect(command.cwd).toBe(CWD);
+  });
+
+  it("reads a back-quoted command and keeps an unresolved interpolation verbatim", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: the template literal belongs to the captured script text, not to this file
+        "await tools.exec_command({ cmd: `node -e '${script}'` });",
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the placeholder survives verbatim requires writing it out
+    expect(command.args).toEqual(["-c", "node -e '${script}'"]);
+  });
+
+  it("ignores scripted calls with no readable command", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      // A non-shell tool.
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'const p = await tools.update_plan({plan:[{step:"read",status:"pending"}]});',
+      ),
+      // A command passed by variable cannot be resolved without running the
+      // script, so it is skipped rather than guessed.
+      scriptCall(
+        "2026-07-31T00:00:02.000Z",
+        "call_2",
+        `const cmd = "ls"; await tools.exec_command({ cmd, workdir: "${CWD}" });`,
+      ),
+    ];
+    // Nothing observable ran, so the session carries no provenance worth
+    // importing — the same verdict as a rollout with no tool calls at all.
+    expect(transform(records)).toBeNull();
+  });
+
+  it("does not read a non-script custom tool as a program, even when its body quotes an exec call", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      // `apply_patch` shares the scripted envelope but its input is a patch body.
+      // A patch that ADDS a line of example code must not derive a command: the
+      // text was written into a file, it never ran.
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `*** Begin Patch\n*** Update File: docs/adapter.md\n+await tools.exec_command({cmd:"rm -rf build"});\n*** End Patch`,
+        "apply_patch",
+      ),
+    ];
+    expect(transform(records)).toBeNull();
+  });
+
+  it("ignores exec calls that are string content or commented out, not code", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        [
+          // A heredoc written INTO a file: the inner call never ran.
+          `await tools.exec_command({cmd:"cat > note.md <<'EOF'\\nawait tools.exec_command({cmd:\\"rm -rf /\\"});\\nEOF"});`,
+          // A commented-out call, whose apostrophe must not open a string and
+          // swallow the real call that follows it.
+          `// don't use tools.exec_command({cmd:"stale"}) here`,
+          '/* tools.exec_command({cmd:"also stale"}) */',
+          `await tools.exec_command({cmd:"git status"});`,
+        ].join("\n"),
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const commands = payload.events.filter((e) => e.type === "command_executed");
+    expect(commands.map((e) => (e.type === "command_executed" ? e.args[1] : null))).toEqual([
+      `cat > note.md <<'EOF'\nawait tools.exec_command({cmd:"rm -rf /"});\nEOF`,
+      "git status",
+    ]);
+  });
+
+  it("reads a call whose argument object is preceded by a comment", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'await tools.exec_command(/* why */ {cmd:"ls"});',
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.args).toEqual(["-c", "ls"]);
+  });
+
+  it("skips a call whose effective cmd is decided outside the text", () => {
+    const cases = [
+      // A spread hands the choice to JS: `opts.cmd` may override the literal.
+      'await tools.exec_command({cmd:"literal", ...opts});',
+      // Built by an expression: the recorded text would be a partial command.
+      'await tools.exec_command({cmd:"git " + verb});',
+      // Given twice: JS keeps the last, so picking either is a guess.
+      'await tools.exec_command({cmd:"first", cmd:"second"});',
+      // A nested object also carrying `cmd` must not answer for the real one.
+      'await tools.exec_command({env:{cmd:"nested"}});',
+    ];
+    for (const input of cases) {
+      const records: CodexRolloutRecord[] = [
+        sessionMeta("2026-07-31T00:00:00.000Z"),
+        scriptCall("2026-07-31T00:00:01.000Z", "call_1", input),
+      ];
+      expect(transform(records), input).toBeNull();
+    }
+  });
+
+  it("survives a malformed escape instead of aborting the import", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      // An out-of-range code point and a truncated \u would both crash a naive
+      // decoder (String.fromCodePoint throws), taking the whole refresh with them.
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        String.raw`await tools.exec_command({cmd:"echo \u{110000} \u12 \u{} é"});`,
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    // Every invalid escape keeps its literal text, backslash included, so the
+    // recorded line still shows what the script contained; the valid one decodes.
+    expect(command.args).toEqual(["-c", String.raw`echo \u{110000} \u12 \u{} é`]);
+  });
+
+  it("reads a command nested in another tool call's arguments", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      // The inner command runs before the outer call receives its arguments.
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'await tools.update_plan({plan:[{step:(await tools.exec_command({cmd:"pwd"})).output,status:"completed"}]});',
+      ),
+      scriptOutput("2026-07-31T00:00:02.000Z", "call_1", "Script completed\nWall time 1.0 seconds"),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.args).toEqual(["-c", "pwd"]);
+    // Two tool calls ran, so the script's single wall time is not the command's.
+    expect(command.duration_ms).toBe(0);
+  });
+
+  it("ignores a call site that merely ends a longer identifier", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'mytools.exec_command({cmd:"echo phantom"});',
+      ),
+    ];
+    expect(transform(records)).toBeNull();
+  });
+
+  it("stops at a truncated script instead of rescanning it, keeping what it read", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      // A log cut mid-record: the first call is complete, the rest is not. A
+      // script that RAN cannot have an unterminated bracket, so scanning stops
+      // rather than re-walking the tail from every later call site.
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `await tools.exec_command({cmd:"ls"});\n${'await tools.exec_command({cmd:"x"'.repeat(200)}`,
+      ),
+    ];
+    const started = Date.now();
+    const payload = transform(records);
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const commands = payload.events.filter((e) => e.type === "command_executed");
+    expect(commands.map((e) => (e.type === "command_executed" ? e.args[1] : null))).toEqual(["ls"]);
+  });
+
+  it("survives a script pathological enough to exhaust the stack", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `await tools.exec_command({cmd:\`${"${`".repeat(20000)}${"`}".repeat(20000)}\`});`,
+      ),
+    ];
+    // No throw: the record is skipped, the import continues.
+    expect(() => transform(records)).not.toThrow();
+  });
+
+  it("does not credit a command with a script's time when the script did other work", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'await tools.web__run({search_query:[{q:"x"}]});\nawait tools.exec_command({cmd:"ls"});',
+      ),
+      scriptOutput(
+        "2026-07-31T00:00:31.000Z",
+        "call_1",
+        "Script completed\nWall time 30.0 seconds",
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    // The 30s belong to the web search, not to `ls`.
+    expect(command.duration_ms).toBe(0);
+  });
+
+  it("reads both call formats in one rollout (a CLI upgrade mid-history)", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      execCall("2026-07-31T00:00:01.000Z", "call_1", "git status"),
+      execOutput(
+        "2026-07-31T00:00:02.000Z",
+        "call_1",
+        "Wall time: 0.2000 seconds\nProcess exited with code 0\nOutput:\n",
+      ),
+      scriptCall(
+        "2026-07-31T00:00:03.000Z",
+        "call_2",
+        'await tools.exec_command({cmd:"git commit -m x"});',
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const commands = payload.events.filter((e) => e.type === "command_executed");
+    expect(commands.map((e) => (e.type === "command_executed" ? e.args[1] : null))).toEqual([
+      "git status",
+      "git commit -m x",
+    ]);
   });
 });

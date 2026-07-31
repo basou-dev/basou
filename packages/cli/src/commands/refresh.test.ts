@@ -453,7 +453,7 @@ describe("basou refresh (workspace view)", () => {
   });
 });
 
-describe("printRefreshSummary (decisions line)", () => {
+describe("printRefreshSummary", () => {
   const baseResult = (over: Partial<RefreshResult>): RefreshResult => ({
     claudeCode: { adapter: "claude-code", status: "skipped", reason: "no source logs" },
     codex: { adapter: "codex", status: "skipped", reason: "no source logs" },
@@ -488,6 +488,33 @@ describe("printRefreshSummary (decisions line)", () => {
     }
     return lines.join("\n");
   }
+
+  it("names every discovered-but-dropped source, so a silent skip cannot read as up to date", () => {
+    const out = capture(
+      baseResult({
+        codex: {
+          adapter: "codex",
+          status: "ran",
+          importedCount: 0,
+          replacedCount: 0,
+          reimportedCount: 0,
+          skippedNoAction: 2,
+          skippedAlreadyImported: 4,
+          skippedLegacyUntracked: 0,
+          skippedDecreased: 0,
+          skippedDuplicate: 0,
+          skippedUnverifiable: 1,
+          eventTotal: 0,
+          dryRun: false,
+        },
+      }),
+    );
+    // Without the drop counts this line read "imported 0 session(s), 0 events, 4
+    // already imported" — indistinguishable from "nothing new happened".
+    expect(out).toContain("2 with no actions");
+    expect(out).toContain("1 unverifiable (run 'basou verify')");
+    expect(out).toContain("4 already imported");
+  });
 
   it("0 decisions WITH captured sessions: states the count and nudges the runnable command (not 'regenerated (0)')", () => {
     const out = capture(baseResult({ decisions: { status: "generated", decisionCount: 0 } }));
