@@ -499,24 +499,42 @@ type ScriptScan = {
  * Values are read only when they are plainly readable, because resolving anything
  * else would mean running the script. A call is SKIPPED (not guessed) when `cmd`
  * is passed by variable or shorthand (`{ cmd }`, `{ cmd: line }`), built by an
- * expression (`{ cmd: "git " + verb }`), overridden by a spread (`{ cmd: "…",
- * ...opts }` — where JS, not the text, decides), or given twice. An interpolation
- * inside a template literal (`${…}`) is kept verbatim: a visible placeholder is
- * more honest than inventing the value or dropping the evidence that a command ran.
+ * expression (`{ cmd: "git " + verb }`), given twice, or accompanied by a spread
+ * (`{ ...job, cmd: "…" }`): JS lets a spread supply `cmd` or `workdir` invisibly,
+ * so even when the text names a command the directory it ran in may not be there.
+ * An interpolation inside a template literal (`${…}`) is kept verbatim: a visible
+ * placeholder is more honest than inventing the value or dropping the evidence
+ * that a command ran.
+ *
+ * Nothing here throws: a pathological script must cost one skipped record, never
+ * the import.
  */
 function scanScript(script: string | undefined): ScriptScan {
   const scan: ScriptScan = { commands: [], toolCallCount: 0 };
   if (script === undefined) return scan;
+  try {
+    collectScriptCalls(script, scan);
+  } catch {
+    // e.g. a stack exhausted by thousands of nested template substitutions.
+    // Keep whatever was already collected rather than losing the session.
+  }
+  return scan;
+}
+
+/** Walk `script` at code level, accumulating tool calls into `scan`. */
+function collectScriptCalls(script: string, scan: ScriptScan): void {
   let i = 0;
   while (i < script.length) {
     const skipped = skipNonCode(script, i);
     if (skipped !== i) {
       // Unterminated string / comment: nothing readable remains.
-      if (skipped === -1) return scan;
+      if (skipped === -1) return;
       i = skipped;
       continue;
     }
-    if (!script.startsWith(TOOL_CALL_PREFIX, i)) {
+    // `tools.` must start a reference, not end a longer identifier
+    // (`mytools.exec_command` is somebody else's function).
+    if (!script.startsWith(TOOL_CALL_PREFIX, i) || isIdentifierChar(script[i - 1])) {
       i++;
       continue;
     }
@@ -532,13 +550,24 @@ function scanScript(script: string | undefined): ScriptScan {
     i = open + 1;
     if (argsStart === -1 || script[argsStart] !== "{") continue;
     const argsEnd = findObjectEnd(script, argsStart);
-    if (argsEnd === -1) continue;
-    i = argsEnd + 1;
+    // An unterminated bracket cannot happen in a script that RAN; it means the
+    // log was truncated mid-record. Stop rather than re-scanning the remaining
+    // input from every later call site (which is quadratic in the input size).
+    if (argsEnd === -1) return;
+    // Resume INSIDE the argument object: a tool call can be nested in another
+    // call's arguments (`tools.update_plan({step:(await tools.exec_command(…))})`)
+    // and the inner command did run. Its own strings are skipped as strings, so
+    // rescanning the object costs one pass and finds nothing spurious.
+    i = argsStart + 1;
     if (script.slice(nameStart, nameEnd) !== EXEC_TOOL) continue;
     const command = readExecArguments(script.slice(argsStart, argsEnd + 1));
     if (command !== undefined) scan.commands.push(command);
   }
-  return scan;
+}
+
+/** Whether a character can appear inside a JS identifier. */
+function isIdentifierChar(ch: string | undefined): boolean {
+  return ch !== undefined && /[A-Za-z0-9_$]/.test(ch);
 }
 
 /**
@@ -756,21 +785,27 @@ const SCRIPT_STRING_ESCAPES: Readonly<Record<string, string>> = {
  * Decode a JS string literal (quotes included) to the value it denotes.
  *
  * Nothing here may THROW: this runs on a vendor log line, and one malformed
- * escape must cost one skipped value, never the whole import. A code-point
- * escape that is out of range (`\u{110000}`) or malformed keeps its literal text
- * instead of being decoded.
+ * escape must cost one skipped value, never the whole import. An escape that is
+ * out of range (`\u{110000}`) or malformed (`\u12`, `\u{}`) keeps its literal
+ * text — backslash included — rather than being decoded or silently dropped, so
+ * the recorded shell line still shows what the script contained.
+ *
+ * Known limit: an escape inside a preserved `${...}` substitution is decoded like
+ * any other, so the placeholder is verbatim in shape but not byte-for-byte.
  */
 function unescapeScriptString(quoted: string): string {
   return quoted
     .slice(1, -1)
     .replace(
-      /\\(u\{[0-9a-fA-F]{1,6}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g,
+      /\\(u\{[0-9a-fA-F]{1,6}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|\r\n|[\s\S])/g,
       (match, sequence: string) => {
         // Single-character escapes first: a bare `\u` / `\x` that is NOT a valid
         // hex form reaches this branch, and must not be read as a code point.
-        if (sequence.length === 1) {
+        if (sequence.length <= 2) {
           // A backslash-newline is a JS line continuation: it denotes nothing.
-          if (sequence === "\n" || sequence === "\r") return "";
+          if (sequence === "\n" || sequence === "\r" || sequence === "\r\n") return "";
+          // A malformed hex escape keeps its backslash, so `\u{}` stays visible.
+          if (sequence === "u" || sequence === "x") return match;
           return SCRIPT_STRING_ESCAPES[sequence] ?? sequence;
         }
         const hex = sequence.startsWith("u{") ? sequence.slice(2, -1) : sequence.slice(1);

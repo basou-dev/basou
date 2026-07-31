@@ -28,8 +28,13 @@ All notable changes to **basou** are recorded here. The project follows
 
   Values are read only where the text alone decides them. A call is skipped
   rather than guessed when its command is passed by variable or shorthand, built
-  by an expression, overridden by a spread, or given twice; an unresolved
-  `${...}` interpolation is kept verbatim. The scripted format records no
+  by an expression, accompanied by a spread (which can supply the command or its
+  directory invisibly), or given twice; an unresolved `${...}` interpolation is
+  kept verbatim, and a malformed escape keeps its literal text. A command nested
+  in another tool call's arguments is read, since it ran before the outer call.
+  A truncated script — impossible in one that actually ran — stops the scan
+  instead of being re-walked from every later call site, and no input can make
+  the scan throw. The scripted format records no
   per-command exit code, so those commands import with `exit_code: null`
   ("unknown", not "0"), and the script's single wall time is credited as a
   duration only when that script made exactly one tool call — a script that also

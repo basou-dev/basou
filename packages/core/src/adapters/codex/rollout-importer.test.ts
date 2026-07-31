@@ -705,7 +705,7 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
       scriptCall(
         "2026-07-31T00:00:01.000Z",
         "call_1",
-        String.raw`await tools.exec_command({cmd:"echo \u{110000} \u12 é"});`,
+        String.raw`await tools.exec_command({cmd:"echo \u{110000} \u12 \u{} é"});`,
       ),
     ];
     const payload = transform(records);
@@ -713,8 +713,76 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
     if (payload === null) return;
     const command = payload.events[1];
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
-    // The invalid escapes keep their literal text; the valid one decodes.
-    expect(command.args).toEqual(["-c", String.raw`echo \u{110000} u12 é`]);
+    // Every invalid escape keeps its literal text, backslash included, so the
+    // recorded line still shows what the script contained; the valid one decodes.
+    expect(command.args).toEqual(["-c", String.raw`echo \u{110000} \u12 \u{} é`]);
+  });
+
+  it("reads a command nested in another tool call's arguments", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      // The inner command runs before the outer call receives its arguments.
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'await tools.update_plan({plan:[{step:(await tools.exec_command({cmd:"pwd"})).output,status:"completed"}]});',
+      ),
+      scriptOutput("2026-07-31T00:00:02.000Z", "call_1", "Script completed\nWall time 1.0 seconds"),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.args).toEqual(["-c", "pwd"]);
+    // Two tool calls ran, so the script's single wall time is not the command's.
+    expect(command.duration_ms).toBe(0);
+  });
+
+  it("ignores a call site that merely ends a longer identifier", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'mytools.exec_command({cmd:"echo phantom"});',
+      ),
+    ];
+    expect(transform(records)).toBeNull();
+  });
+
+  it("stops at a truncated script instead of rescanning it, keeping what it read", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      // A log cut mid-record: the first call is complete, the rest is not. A
+      // script that RAN cannot have an unterminated bracket, so scanning stops
+      // rather than re-walking the tail from every later call site.
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `await tools.exec_command({cmd:"ls"});\n${'await tools.exec_command({cmd:"x"'.repeat(200)}`,
+      ),
+    ];
+    const started = Date.now();
+    const payload = transform(records);
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const commands = payload.events.filter((e) => e.type === "command_executed");
+    expect(commands.map((e) => (e.type === "command_executed" ? e.args[1] : null))).toEqual(["ls"]);
+  });
+
+  it("survives a script pathological enough to exhaust the stack", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `await tools.exec_command({cmd:\`${"${`".repeat(20000)}${"`}".repeat(20000)}\`});`,
+      ),
+    ];
+    // No throw: the record is skipped, the import continues.
+    expect(() => transform(records)).not.toThrow();
   });
 
   it("does not credit a command with a script's time when the script did other work", () => {
