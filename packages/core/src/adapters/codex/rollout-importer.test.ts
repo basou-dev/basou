@@ -41,13 +41,13 @@ function execOutput(ts: string, callId: string, output: string): CodexRolloutRec
  * A scripted tool call, the shape a newer Codex CLI writes: one
  * `custom_tool_call` whose `input` is a JS program calling the tools.
  */
-function scriptCall(ts: string, callId: string, input: string): CodexRolloutRecord {
+function scriptCall(ts: string, callId: string, input: string, name = "exec"): CodexRolloutRecord {
   return {
     type: "response_item",
     timestamp: ts,
     payload: {
       type: "custom_tool_call",
-      name: "exec",
+      name,
       status: "completed",
       call_id: callId,
       input,
@@ -615,6 +615,129 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
     // Nothing observable ran, so the session carries no provenance worth
     // importing — the same verdict as a rollout with no tool calls at all.
     expect(transform(records)).toBeNull();
+  });
+
+  it("does not read a non-script custom tool as a program, even when its body quotes an exec call", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      // `apply_patch` shares the scripted envelope but its input is a patch body.
+      // A patch that ADDS a line of example code must not derive a command: the
+      // text was written into a file, it never ran.
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `*** Begin Patch\n*** Update File: docs/adapter.md\n+await tools.exec_command({cmd:"rm -rf build"});\n*** End Patch`,
+        "apply_patch",
+      ),
+    ];
+    expect(transform(records)).toBeNull();
+  });
+
+  it("ignores exec calls that are string content or commented out, not code", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        [
+          // A heredoc written INTO a file: the inner call never ran.
+          `await tools.exec_command({cmd:"cat > note.md <<'EOF'\\nawait tools.exec_command({cmd:\\"rm -rf /\\"});\\nEOF"});`,
+          // A commented-out call, whose apostrophe must not open a string and
+          // swallow the real call that follows it.
+          `// don't use tools.exec_command({cmd:"stale"}) here`,
+          '/* tools.exec_command({cmd:"also stale"}) */',
+          `await tools.exec_command({cmd:"git status"});`,
+        ].join("\n"),
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const commands = payload.events.filter((e) => e.type === "command_executed");
+    expect(commands.map((e) => (e.type === "command_executed" ? e.args[1] : null))).toEqual([
+      `cat > note.md <<'EOF'\nawait tools.exec_command({cmd:"rm -rf /"});\nEOF`,
+      "git status",
+    ]);
+  });
+
+  it("reads a call whose argument object is preceded by a comment", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'await tools.exec_command(/* why */ {cmd:"ls"});',
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.args).toEqual(["-c", "ls"]);
+  });
+
+  it("skips a call whose effective cmd is decided outside the text", () => {
+    const cases = [
+      // A spread hands the choice to JS: `opts.cmd` may override the literal.
+      'await tools.exec_command({cmd:"literal", ...opts});',
+      // Built by an expression: the recorded text would be a partial command.
+      'await tools.exec_command({cmd:"git " + verb});',
+      // Given twice: JS keeps the last, so picking either is a guess.
+      'await tools.exec_command({cmd:"first", cmd:"second"});',
+      // A nested object also carrying `cmd` must not answer for the real one.
+      'await tools.exec_command({env:{cmd:"nested"}});',
+    ];
+    for (const input of cases) {
+      const records: CodexRolloutRecord[] = [
+        sessionMeta("2026-07-31T00:00:00.000Z"),
+        scriptCall("2026-07-31T00:00:01.000Z", "call_1", input),
+      ];
+      expect(transform(records), input).toBeNull();
+    }
+  });
+
+  it("survives a malformed escape instead of aborting the import", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      // An out-of-range code point and a truncated \u would both crash a naive
+      // decoder (String.fromCodePoint throws), taking the whole refresh with them.
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        String.raw`await tools.exec_command({cmd:"echo \u{110000} \u12 é"});`,
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    // The invalid escapes keep their literal text; the valid one decodes.
+    expect(command.args).toEqual(["-c", String.raw`echo \u{110000} u12 é`]);
+  });
+
+  it("does not credit a command with a script's time when the script did other work", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'await tools.web__run({search_query:[{q:"x"}]});\nawait tools.exec_command({cmd:"ls"});',
+      ),
+      scriptOutput(
+        "2026-07-31T00:00:31.000Z",
+        "call_1",
+        "Script completed\nWall time 30.0 seconds",
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    // The 30s belong to the web search, not to `ls`.
+    expect(command.duration_ms).toBe(0);
   });
 
   it("reads both call formats in one rollout (a CLI upgrade mid-history)", () => {

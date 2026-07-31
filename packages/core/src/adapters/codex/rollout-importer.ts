@@ -194,21 +194,26 @@ export function codexRolloutToImportPayload(
     if (readString(record.type) !== "response_item") continue;
 
     // Scripted tool call: one call can carry several `tools.exec_command(...)`
-    // invocations. Keyed on the CALL SITE inside the script, not on the tool's
-    // `name` ("exec" today), because the name is the vendor's to rename while
-    // the call site is what the script must contain to run a command.
+    // invocations. Only the SCRIPT tool's input is scanned as a program — other
+    // custom tools share this envelope (`apply_patch` carries a patch body,
+    // which can legitimately CONTAIN the text of an exec call) and scanning
+    // those would fabricate commands that never ran. If the vendor renames the
+    // script tool, this fails closed to "no actions", which `basou refresh` now
+    // reports rather than hiding.
     if (readString(payload.type) === "custom_tool_call") {
-      const commands = readExecCommandsFromScript(readString(payload.input));
-      if (commands.length === 0) continue;
+      if (readString(payload.name) !== SCRIPT_TOOL_NAME) continue;
+      const scan = scanScript(readString(payload.input));
+      if (scan.commands.length === 0) continue;
       const output = readCallId(payload.call_id, outputsByCallId);
-      // The script reports ONE wall time for the whole program, so it is only
-      // honest as a command duration when the script ran exactly one command;
-      // otherwise every command would be credited with the whole script's time.
-      // Fall back to the schema floor (0 = unrecorded) instead.
-      const durationMs = commands.length === 1 ? parseWallTimeMs(output) : 0;
+      // The output reports ONE wall time for the whole program, so it is only
+      // honest as a command duration when that program did exactly one thing:
+      // a script that also searched the web or updated a plan would credit the
+      // command with time it did not spend. Anything else falls back to the
+      // schema floor (0 = unrecorded).
+      const durationMs = scan.toolCallCount === 1 ? parseWallTimeMs(output) : 0;
       const scriptTsMs = Date.parse(ts);
       if (Number.isFinite(scriptTsMs)) engagementTsMs.push(scriptTsMs);
-      for (const command of commands) {
+      for (const command of scan.commands) {
         derived.push(
           // The per-command exit code is absent from this format (the script
           // would have to print it), so it stays null — "unknown", not "0".
@@ -458,83 +463,280 @@ function readCallId(value: unknown, outputs: ReadonlyMap<string, string>): strin
   return callId !== undefined ? outputs.get(callId) : undefined;
 }
 
-/** The call site every scripted shell execution must contain to run a command. */
-const EXEC_CALL_SITE = "tools.exec_command";
+/** Name of the custom tool whose `input` is a script (vs `apply_patch` etc.). */
+const SCRIPT_TOOL_NAME = "exec";
+
+/** Prefix of every tool call in a script; `tools.<name>(`. */
+const TOOL_CALL_PREFIX = "tools.";
+
+/** The scripted tool that runs a shell command. */
+const EXEC_TOOL = "exec_command";
+
+/** One shell execution read out of a script. */
+type ScriptedCommand = { cmd: string; workdir: string | undefined };
+
+/** What a script was found to do: its resolvable commands and how many tools it called at all. */
+type ScriptScan = {
+  commands: ScriptedCommand[];
+  /** Every `tools.<name>(` call site found at code level, exec or not. */
+  toolCallCount: number;
+};
 
 /**
- * Parse the shell executions out of a scripted tool call's `input` — a JS
- * program such as `const r = await tools.exec_command({cmd:"…", workdir:"…"})`,
- * sometimes running several commands (e.g. inside `Promise.all([...])`), so this
- * returns ALL of them in script order.
+ * Scan a scripted tool call's `input` — a JS program such as
+ * `const r = await tools.exec_command({cmd:"…", workdir:"…"})`, sometimes running
+ * several commands (e.g. inside `Promise.all([...])`) — and return every shell
+ * execution it can resolve, in script order, plus the total number of tool calls
+ * it makes (which tells the caller whether a single script-level wall time can
+ * honestly be attributed to one command).
  *
- * The script is scanned, not evaluated: for each `tools.exec_command(` the
- * following object literal is delimited by brace matching (string-aware) and its
- * `cmd` / `workdir` string values are read. Object-literal syntax is accepted in
- * the forms Codex actually emits — bare or quoted keys, and single-, double- or
- * back-quoted values — with JS escapes decoded so the recorded shell line is the
- * one that ran.
+ * The script is SCANNED, never evaluated, and the scan is at CODE level: string
+ * literals, template literals and both comment forms are skipped, so a call site
+ * that appears inside a heredoc, a patch body, a quoted example or a commented-out
+ * line is not mistaken for a command that ran. That mistake would fabricate
+ * provenance, which is worse than missing a command.
  *
- * Deliberately NOT resolved, since that would mean running the script: a command
- * passed by variable (`{ cmd, workdir }` shorthand, `{ cmd: line }`) is skipped,
- * and an interpolation inside a template literal (`${…}`) is recorded verbatim —
- * a visible placeholder is more honest than either inventing the value or
- * dropping the evidence that a command ran.
+ * Values are read only when they are plainly readable, because resolving anything
+ * else would mean running the script. A call is SKIPPED (not guessed) when `cmd`
+ * is passed by variable or shorthand (`{ cmd }`, `{ cmd: line }`), built by an
+ * expression (`{ cmd: "git " + verb }`), overridden by a spread (`{ cmd: "…",
+ * ...opts }` — where JS, not the text, decides), or given twice. An interpolation
+ * inside a template literal (`${…}`) is kept verbatim: a visible placeholder is
+ * more honest than inventing the value or dropping the evidence that a command ran.
  */
-function readExecCommandsFromScript(
-  script: string | undefined,
-): Array<{ cmd: string; workdir: string | undefined }> {
-  if (script === undefined) return [];
-  const commands: Array<{ cmd: string; workdir: string | undefined }> = [];
-  let from = 0;
-  for (;;) {
-    const site = script.indexOf(EXEC_CALL_SITE, from);
-    if (site === -1) break;
-    const afterSite = site + EXEC_CALL_SITE.length;
-    from = afterSite;
-    const objectStart = script.indexOf("{", afterSite);
-    if (objectStart === -1) break;
-    // Accept the literal as THIS call's argument only when nothing but the
-    // call's own parenthesis separates them; otherwise `exec_command(line)`
-    // would swallow an unrelated later literal.
-    if (!/^\s*\(\s*$/.test(script.slice(afterSite, objectStart))) continue;
-    const objectEnd = findObjectEnd(script, objectStart);
-    if (objectEnd === -1) continue;
-    const literal = script.slice(objectStart, objectEnd + 1);
-    from = objectEnd + 1;
-    const cmd = readScriptStringField(literal, "cmd");
-    if (cmd === undefined) continue;
-    commands.push({ cmd, workdir: readScriptStringField(literal, "workdir") });
+function scanScript(script: string | undefined): ScriptScan {
+  const scan: ScriptScan = { commands: [], toolCallCount: 0 };
+  if (script === undefined) return scan;
+  let i = 0;
+  while (i < script.length) {
+    const skipped = skipNonCode(script, i);
+    if (skipped !== i) {
+      // Unterminated string / comment: nothing readable remains.
+      if (skipped === -1) return scan;
+      i = skipped;
+      continue;
+    }
+    if (!script.startsWith(TOOL_CALL_PREFIX, i)) {
+      i++;
+      continue;
+    }
+    const nameStart = i + TOOL_CALL_PREFIX.length;
+    const nameEnd = readIdentifierEnd(script, nameStart);
+    const open = skipWhitespaceAndComments(script, nameEnd);
+    if (nameEnd === nameStart || open === -1 || script[open] !== "(") {
+      i = nameStart;
+      continue;
+    }
+    scan.toolCallCount++;
+    const argsStart = skipWhitespaceAndComments(script, open + 1);
+    i = open + 1;
+    if (argsStart === -1 || script[argsStart] !== "{") continue;
+    const argsEnd = findObjectEnd(script, argsStart);
+    if (argsEnd === -1) continue;
+    i = argsEnd + 1;
+    if (script.slice(nameStart, nameEnd) !== EXEC_TOOL) continue;
+    const command = readExecArguments(script.slice(argsStart, argsEnd + 1));
+    if (command !== undefined) scan.commands.push(command);
   }
-  return commands;
+  return scan;
 }
 
 /**
- * Index of the `}` closing the object literal that opens at `start`, or -1 when
- * it is unterminated. String literals (including template literals) and their
- * escapes are tracked so a brace inside a shell command does not end the object.
+ * Index just past the string literal / comment starting at `at`, `at` itself when
+ * that position is ordinary code, or -1 when the literal or block comment is
+ * unterminated. Template literals consume their `${…}` substitutions whole, so a
+ * tool call written inside one is treated as string content (skipped, per the
+ * "resolve nothing" rule) rather than as a command that ran.
+ */
+function skipNonCode(script: string, at: number): number {
+  const ch = script[at];
+  if (ch === '"' || ch === "'" || ch === "`") return skipStringLiteral(script, at);
+  if (ch !== "/") return at;
+  const next = script[at + 1];
+  if (next === "/") {
+    const eol = script.indexOf("\n", at + 2);
+    return eol === -1 ? script.length : eol + 1;
+  }
+  if (next === "*") {
+    const end = script.indexOf("*/", at + 2);
+    return end === -1 ? -1 : end + 2;
+  }
+  return at;
+}
+
+/** Index just past the string literal opening at `at`, or -1 when unterminated. */
+function skipStringLiteral(script: string, at: number): number {
+  const quote = script[at];
+  for (let i = at + 1; i < script.length; i++) {
+    const ch = script[i];
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    if (quote === "`" && ch === "$" && script[i + 1] === "{") {
+      const end = findObjectEnd(script, i + 1);
+      if (end === -1) return -1;
+      i = end;
+    }
+  }
+  return -1;
+}
+
+/** Index just past a run of whitespace and comments, or -1 on an unterminated comment. */
+function skipWhitespaceAndComments(script: string, at: number): number {
+  let i = at;
+  while (i < script.length) {
+    if (/\s/.test(script[i] ?? "")) {
+      i++;
+      continue;
+    }
+    if (script[i] !== "/") return i;
+    const skipped = skipNonCode(script, i);
+    if (skipped === -1) return -1;
+    if (skipped === i) return i;
+    i = skipped;
+  }
+  return i;
+}
+
+/** Index just past an identifier (may be empty, in which case start is returned). */
+function readIdentifierEnd(script: string, start: number): number {
+  let i = start;
+  while (i < script.length && /[A-Za-z0-9_$]/.test(script[i] ?? "")) i++;
+  return i;
+}
+
+/**
+ * Index of the `}` / `)` / `]` closing the bracket that opens at `start`, or -1
+ * when it is unterminated. Strings and comments are skipped so a bracket inside a
+ * shell command or a comment does not end the literal.
  */
 function findObjectEnd(script: string, start: number): number {
-  let depth = 0;
-  let quote: string | undefined;
-  for (let i = start; i < script.length; i++) {
-    const ch = script[i];
-    if (quote !== undefined) {
-      if (ch === "\\") {
-        i++;
-        continue;
+  const closers: Record<string, string> = { "{": "}", "(": ")", "[": "]" };
+  const stack: string[] = [];
+  let i = start;
+  while (i < script.length) {
+    const skipped = skipNonCode(script, i);
+    if (skipped === -1) return -1;
+    if (skipped !== i) {
+      i = skipped;
+      continue;
+    }
+    const ch = script[i] ?? "";
+    const closer = closers[ch];
+    if (closer !== undefined) {
+      stack.push(closer);
+    } else if (ch === "}" || ch === ")" || ch === "]") {
+      if (stack.pop() !== ch) return -1;
+      if (stack.length === 0) return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * Read an exec call's argument object (the literal text, braces included) into
+ * its shell line and optional working directory. Only top-level properties whose
+ * value is a single string literal are read; see {@link scanScript} for the forms
+ * that are deliberately skipped instead of guessed. Returns undefined when no
+ * usable `cmd` can be read, so the caller skips the call.
+ */
+function readExecArguments(literal: string): ScriptedCommand | undefined {
+  const values = new Map<string, string | undefined>();
+  let i = 1; // past the opening brace
+  while (i < literal.length) {
+    const at = skipWhitespaceAndComments(literal, i);
+    if (at === -1) return undefined;
+    const ch = literal[at];
+    if (ch === "}" || ch === undefined) break;
+    if (ch === ",") {
+      i = at + 1;
+      continue;
+    }
+    // A spread hands the decision to JS: which value wins is not in the text.
+    if (literal.startsWith("...", at)) return undefined;
+    let key: string;
+    let afterKey: number;
+    if (ch === '"' || ch === "'") {
+      const end = skipStringLiteral(literal, at);
+      if (end === -1) return undefined;
+      key = literal.slice(at + 1, end - 1);
+      afterKey = end;
+    } else {
+      afterKey = readIdentifierEnd(literal, at);
+      if (afterKey === at) return undefined; // unreadable property syntax
+      key = literal.slice(at, afterKey);
+    }
+    const colon = skipWhitespaceAndComments(literal, afterKey);
+    if (colon === -1) return undefined;
+    if (literal[colon] !== ":") {
+      // Shorthand (`{ cmd }`): the value lives in a variable, not the text.
+      if (key === "cmd" || key === "workdir") return undefined;
+      i = colon;
+      const next = skipToPropertyEnd(literal, colon);
+      if (next === -1) return undefined;
+      i = next;
+      continue;
+    }
+    const valueAt = skipWhitespaceAndComments(literal, colon + 1);
+    if (valueAt === -1) return undefined;
+    const valueChar = literal[valueAt];
+    let value: string | undefined;
+    let afterValue = valueAt;
+    if (valueChar === '"' || valueChar === "'" || valueChar === "`") {
+      const end = skipStringLiteral(literal, valueAt);
+      if (end === -1) return undefined;
+      const decoded = unescapeScriptString(literal.slice(valueAt, end));
+      afterValue = end;
+      // The literal must BE the value: `"git " + verb` continues into an
+      // expression whose result is not in the text.
+      const after = skipWhitespaceAndComments(literal, end);
+      if (after === -1) return undefined;
+      const terminator = literal[after];
+      if (terminator === "," || terminator === "}") {
+        value = decoded.length > 0 ? decoded : undefined;
+        afterValue = after;
+      } else if (key === "cmd" || key === "workdir") {
+        return undefined;
       }
-      if (ch === quote) quote = undefined;
+    } else if (key === "cmd" || key === "workdir") {
+      return undefined; // a variable / expression / object: not resolvable
+    }
+    if (key === "cmd" || key === "workdir") {
+      // Given twice, JS keeps the last; rather than pick, treat it as unresolvable.
+      if (values.has(key)) return undefined;
+      values.set(key, value);
+    }
+    const next = skipToPropertyEnd(literal, afterValue);
+    if (next === -1) return undefined;
+    i = next;
+  }
+  const cmd = values.get("cmd");
+  if (cmd === undefined) return undefined;
+  return { cmd, workdir: values.get("workdir") };
+}
+
+/** Index of the `,` or closing `}` that ends the property containing `at`, or -1. */
+function skipToPropertyEnd(literal: string, at: number): number {
+  let i = at;
+  while (i < literal.length) {
+    const skipped = skipNonCode(literal, i);
+    if (skipped === -1) return -1;
+    if (skipped !== i) {
+      i = skipped;
       continue;
     }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      quote = ch;
+    const ch = literal[i];
+    if (ch === "," || ch === "}") return i;
+    if (ch === "{" || ch === "(" || ch === "[") {
+      const end = findObjectEnd(literal, i);
+      if (end === -1) return -1;
+      i = end + 1;
       continue;
     }
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return i;
-    }
+    i++;
   }
   return -1;
 }
@@ -551,42 +753,41 @@ const SCRIPT_STRING_ESCAPES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Read one string field of a scanned object literal (`cmd: "…"`, `"cmd": '…'`,
- * `cmd: \`…\``). Returns undefined when the key is absent or its value is not a
- * string literal (a variable / shorthand), so the caller can skip the call. The
- * key must start a property (line start or after `{` / `,`) so `max_cmd:` does
- * not answer for `cmd:`.
+ * Decode a JS string literal (quotes included) to the value it denotes.
+ *
+ * Nothing here may THROW: this runs on a vendor log line, and one malformed
+ * escape must cost one skipped value, never the whole import. A code-point
+ * escape that is out of range (`\u{110000}`) or malformed keeps its literal text
+ * instead of being decoded.
  */
-function readScriptStringField(literal: string, key: string): string | undefined {
-  const pattern = new RegExp(
-    `(?:^|[{,\\s])(?:"${key}"|'${key}'|${key})\\s*:\\s*` +
-      "(\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"|'(?:[^'\\\\]|\\\\[\\s\\S])*'|`(?:[^`\\\\]|\\\\[\\s\\S])*`)",
-  );
-  const match = literal.match(pattern);
-  const quoted = match?.[1];
-  if (quoted === undefined) return undefined;
-  const value = unescapeScriptString(quoted);
-  return value.length > 0 ? value : undefined;
-}
-
-/** Decode a JS string literal (quotes included) to the value it denotes. */
 function unescapeScriptString(quoted: string): string {
   return quoted
     .slice(1, -1)
     .replace(
       /\\(u\{[0-9a-fA-F]{1,6}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g,
-      (_match, sequence: string) => {
-        if (sequence.startsWith("u{")) {
-          return String.fromCodePoint(Number.parseInt(sequence.slice(2, -1), 16));
+      (match, sequence: string) => {
+        // Single-character escapes first: a bare `\u` / `\x` that is NOT a valid
+        // hex form reaches this branch, and must not be read as a code point.
+        if (sequence.length === 1) {
+          // A backslash-newline is a JS line continuation: it denotes nothing.
+          if (sequence === "\n" || sequence === "\r") return "";
+          return SCRIPT_STRING_ESCAPES[sequence] ?? sequence;
         }
-        if (sequence.startsWith("u") || sequence.startsWith("x")) {
-          return String.fromCodePoint(Number.parseInt(sequence.slice(1), 16));
-        }
-        // A backslash-newline is a JS line continuation: it denotes nothing.
-        if (sequence === "\n" || sequence === "\r") return "";
-        return SCRIPT_STRING_ESCAPES[sequence] ?? sequence;
+        const hex = sequence.startsWith("u{") ? sequence.slice(2, -1) : sequence.slice(1);
+        return codePointOrLiteral(hex, match);
       },
     );
+}
+
+/** Decode a hex code point, falling back to the escape's literal text when invalid. */
+function codePointOrLiteral(hex: string, literal: string): string {
+  const code = Number.parseInt(hex, 16);
+  if (!Number.isInteger(code) || code < 0 || code > 0x10ffff) return literal;
+  try {
+    return String.fromCodePoint(code);
+  } catch {
+    return literal;
+  }
 }
 
 /**

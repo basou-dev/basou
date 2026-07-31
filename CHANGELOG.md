@@ -17,12 +17,23 @@ All notable changes to **basou** are recorded here. The project follows
   reported a healthy, quiet line while the entire Codex side of the trail went
   missing (and with it the cross-model review evidence `basou review-gaps`
   looks for). Both shapes are now read, so a `~/.codex/sessions` holding a mix
-  across a CLI upgrade imports completely. The scripted format records no
+  across a CLI upgrade imports completely.
+
+  Only the script tool's own input is read as a program: other custom tools
+  share the same envelope (`apply_patch` carries a patch body, which can
+  legitimately contain the text of an exec call), and the scan itself is at code
+  level — string literals, template literals and both comment forms are skipped
+  — so a call site sitting inside a heredoc, a patch body, or a commented-out
+  line never fabricates a command that did not run.
+
+  Values are read only where the text alone decides them. A call is skipped
+  rather than guessed when its command is passed by variable or shorthand, built
+  by an expression, overridden by a spread, or given twice; an unresolved
+  `${...}` interpolation is kept verbatim. The scripted format records no
   per-command exit code, so those commands import with `exit_code: null`
-  ("unknown", not "0"), and a script's single wall time is credited as a
-  duration only when that script ran exactly one command. A command passed to
-  the script by variable stays unresolvable without running the script and is
-  skipped rather than guessed.
+  ("unknown", not "0"), and the script's single wall time is credited as a
+  duration only when that script made exactly one tool call — a script that also
+  searched the web would otherwise charge that time to the command.
 
 ### Changed
 
