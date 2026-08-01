@@ -283,5 +283,12 @@ function unattachedLines(u: ReviewGapsSummary["unattachedSelfReports"]): string[
       `  ${u.noMatchingUnit} named a repository, but no captured unit of work fell within the window of it`,
     );
   }
+  if (u.unverifiableUnit > 0) {
+    // Deliberately not folded into the line above: work WAS captured, and saying
+    // otherwise would deny the operator a unit they can go and look at.
+    lines.push(
+      `  ${u.unverifiableUnit} fell within the window of captured work, but that work's own repository path could not be verified — the pairing could not be checked either way`,
+    );
+  }
   return lines;
 }

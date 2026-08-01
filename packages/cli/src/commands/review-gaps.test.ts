@@ -147,7 +147,13 @@ function summaryOf(
   gaps: ReviewGapUnit[],
   unattached: Partial<ReviewGapsSummary["unattachedSelfReports"]> = {},
 ): ReviewGapsSummary {
-  const counts = { noRepos: 0, unresolvableRepo: 0, noMatchingUnit: 0, ...unattached };
+  const counts = {
+    noRepos: 0,
+    unresolvableRepo: 0,
+    noMatchingUnit: 0,
+    unverifiableUnit: 0,
+    ...unattached,
+  };
   return {
     generatedAt: NOW.toISOString(),
     windowHours: 24,
@@ -168,7 +174,8 @@ function summaryOf(
     unknowns: [],
     unattachedSelfReports: {
       ...counts,
-      total: counts.noRepos + counts.unresolvableRepo + counts.noMatchingUnit,
+      total:
+        counts.noRepos + counts.unresolvableRepo + counts.noMatchingUnit + counts.unverifiableUnit,
     },
     newestCommitAt: "2026-05-09T10:05:00.000Z",
   };
@@ -232,6 +239,12 @@ describe("renderReviewGaps", () => {
     expect(out).toContain("3 named a repository, but no captured unit of work");
     // The count is global, and says so, rather than vanishing under a scope.
     expect(out).toContain("not just any --repo scope");
+  });
+
+  it("does not deny that captured work exists when the pairing merely could not be checked", () => {
+    const out = renderReviewGaps(summaryOf([gapUnit()], { unverifiableUnit: 1 }));
+    expect(out).toContain("could not be verified");
+    expect(out).not.toContain("no captured unit of work fell within the window");
   });
 
   it("does not assert the missing-`repos` cause for a record that had one", () => {

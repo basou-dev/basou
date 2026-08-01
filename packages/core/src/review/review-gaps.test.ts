@@ -854,6 +854,7 @@ describe("findReviewGaps — self-reported reviews", () => {
       noRepos: 1,
       unresolvableRepo: 2,
       noMatchingUnit: 0,
+      unverifiableUnit: 0,
     });
     expect(s.gaps[0]?.selfReports).toHaveLength(0);
   });
@@ -873,6 +874,7 @@ describe("findReviewGaps — self-reported reviews", () => {
       noRepos: 0,
       unresolvableRepo: 0,
       noMatchingUnit: 1,
+      unverifiableUnit: 0,
     });
   });
 
@@ -925,6 +927,7 @@ describe("findReviewGaps — self-reported reviews", () => {
       noRepos: 1,
       unresolvableRepo: 0,
       noMatchingUnit: 0,
+      unverifiableUnit: 0,
     });
     expect(scoped.unattachedSelfReports).toEqual(unscoped.unattachedSelfReports);
     expect(scoped.gaps.every((u) => u.repo === "alpha")).toBe(true);
@@ -1035,6 +1038,7 @@ describe("findReviewGaps — record key provenance", () => {
       noRepos: 0,
       unresolvableRepo: 1,
       noMatchingUnit: 0,
+      unverifiableUnit: 0,
     });
   });
 
@@ -1056,6 +1060,7 @@ describe("findReviewGaps — record key provenance", () => {
       noRepos: 0,
       unresolvableRepo: 1,
       noMatchingUnit: 1,
+      unverifiableUnit: 0,
     });
   });
 
@@ -1090,7 +1095,94 @@ describe("findReviewGaps — record key provenance", () => {
     // claim attaches to it.
     expect(s.gaps).toHaveLength(1);
     expect(s.gaps[0]?.selfReports).toHaveLength(0);
-    expect(s.unattachedSelfReports.noMatchingUnit).toBe(1);
+    // ...and the reason says so. Calling this "no work in the window" would deny
+    // a unit that is right there in the report above it.
+    expect(s.unattachedSelfReports.unverifiableUnit).toBe(1);
+    expect(s.unattachedSelfReports.noMatchingUnit).toBe(0);
+  });
+
+  it("refuses a unit where only SOME commits came from a verified path", async () => {
+    const paths = await setup();
+    const live = join(getRoot(), "bar");
+    await mkdir(join(live, ".git"), { recursive: true });
+    const removedView = join(getRoot(), "foo-workspace", "bar");
+    await placeSession(paths, { id: SES("PC"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("PC"), "2026-05-09T09:30:00.000Z", { repos: [live] }),
+    ]);
+    // One session, two commits sharing a key: one path resolved, the other only
+    // collapsed to it by name. One resolved commit must not vouch for a sibling
+    // whose origin was guessed at.
+    await placeSession(
+      paths,
+      { id: SES("PD"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("PD"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          live,
+        ),
+        cmd(
+          SES("PD"),
+          "claude-code-import",
+          "2026-05-09T10:06:00.000Z",
+          ["-c", "git commit -m y"],
+          removedView,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps[0]?.commitCount).toBe(2);
+    expect(s.gaps[0]?.selfReports).toHaveLength(0);
+    expect(s.unattachedSelfReports.unverifiableUnit).toBe(1);
+  });
+
+  it("resolves a relative `cd` target against the captured cwd", async () => {
+    const paths = await setup();
+    // Two sessions each running `cd ../app`, from different places. Left as the
+    // literal spelling both would key `../app` and their work would pair.
+    const x = join(getRoot(), "x");
+    const y = join(getRoot(), "y");
+    await mkdir(join(x, "app", ".git"), { recursive: true });
+    await mkdir(join(y, "app", ".git"), { recursive: true });
+    await mkdir(join(x, "here"), { recursive: true });
+    await mkdir(join(y, "here"), { recursive: true });
+    await placeSession(
+      paths,
+      { id: SES("PE"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [
+        cmd(
+          SES("PE"),
+          "codex-import",
+          "2026-05-09T09:30:00.000Z",
+          ["-c", "cd ../app && git diff"],
+          join(x, "here"),
+        ),
+      ],
+    );
+    await placeSession(
+      paths,
+      { id: SES("PF"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("PF"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "cd ../app && git commit -m x"],
+          join(y, "here"),
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // The review examined x/app; the commit landed in y/app. Keying both as
+    // `../app` would call this a candidate — the one verdict this must never
+    // reach by accident.
+    expect(s.candidates).toHaveLength(0);
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.verdict).toBe("omission");
   });
 
   it("refuses to key a record from a relative path", async () => {

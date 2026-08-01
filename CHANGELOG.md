@@ -29,6 +29,14 @@ All notable changes to **basou** are recorded here. The project follows
   does not accept a claimed review time: what a path resolves to is something
   basou observes, not something the reviewed party asserts.
 
+### Fixed
+
+- `basou review-gaps` resolves a relative `cd` target against the captured
+  working directory instead of keying it by its own spelling. `cd ../app` run
+  beside two different repositories used to collapse to one key, so a review of
+  one repository could be cited as a **candidate** for a commit in the other —
+  the one verdict this surfacer must never reach by accident.
+
 ### Changed
 
 - `basou review-gaps` reads `review_recorded` events. A unit of work whose repo
@@ -61,10 +69,13 @@ All notable changes to **basou** are recorded here. The project follows
   filter is how silence starts looking like success again.
 
   A record binds only to work in a repository that is **present on this machine**,
-  with both sides resolving to the same canonical root. If the repository has
-  moved or gone — or if the unit's own key survived only through the
-  `*-workspace` name collapse, which is a heuristic on a directory name — the
-  record is reported as unverifiable rather than paired.
+  with both sides resolving to the same canonical root — every commit in the
+  unit, not merely one of them. If the repository has moved or gone, or a
+  commit's key survived only through the `*-workspace` name collapse (a
+  heuristic on a directory name), the pairing is refused and reported as
+  unverifiable. That is kept distinct from "no work in the window": work was
+  captured, and saying otherwise would deny the operator a unit they can go and
+  look at.
 
   This is narrower than the key a commit gets, on purpose. A commit's path was
   observed by basou when the command ran, so a moved repository's recorded path

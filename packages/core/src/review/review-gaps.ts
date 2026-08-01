@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
@@ -101,6 +101,12 @@ export type UnattachedSelfReports = {
   unresolvableRepo: number;
   /** It named a resolvable repository, but no unit of work fell in the window. */
   noMatchingUnit: number;
+  /**
+   * Work WAS captured in the window, but the unit's own repository path could
+   * not be verified, so the pairing could not be checked either way. Distinct
+   * from {@link noMatchingUnit}, which would deny that the work exists.
+   */
+  unverifiableUnit: number;
 };
 
 export type ReviewGapRepoSummary = {
@@ -385,21 +391,37 @@ function commandRepoWithProvenance(
   args: string[],
   cwd: string,
 ): { key: string | null; resolved: boolean } {
-  const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
-  const raw = cd ? (cd[1] as string) : cwd;
+  const raw = commandRepoPath(args, cwd);
   return { key: normalizeRepoPath(raw), resolved: resolveRepoRoot(raw) !== null };
+}
+
+/**
+ * The path a command effectively ran in, as an absolute location wherever the
+ * capture allows one.
+ *
+ * An explicit `cd <target> &&` wins over cwd — and wins EVEN WHEN the target
+ * resolves to nothing: the command ran there, so it must not be silently
+ * re-credited to the session's cwd (which could falsely bind an unrelated repo
+ * and clear a real gap).
+ *
+ * A RELATIVE target is joined to the captured cwd, which is the base the shell
+ * used. Left relative it would key as its own literal spelling, so `cd ../app`
+ * run beside two different repositories would collapse to one key and pair
+ * their work — the failure being a false `candidate`, the exact verdict this
+ * surfacer must never produce by accident. `..` is folded textually, matching
+ * how a shell resolves it against the logical path it was given.
+ */
+function commandRepoPath(args: string[], cwd: string): string {
+  const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
+  if (!cd?.[1]) return cwd;
+  const target = stripQuotes(cd[1].trim());
+  if (target.startsWith("~/") || isAbsolute(target) || target.includes("$")) return target;
+  return resolve(cwd, target);
 }
 
 /** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
 function commandRepo(args: string[], cwd: string): string | null {
-  // An explicit `cd <target> &&` wins over cwd — and wins EVEN WHEN the target
-  // resolves to null (a non-repo dir): the command ran there, so it must not be
-  // silently re-credited to the session's cwd (which could falsely bind an
-  // unrelated repo and clear a real gap). Fall back to cwd only when there was
-  // no explicit `cd`.
-  const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
-  if (cd) return normalizeRepoPath(cd[1]);
-  return normalizeRepoPath(cwd);
+  return normalizeRepoPath(commandRepoPath(args, cwd));
 }
 
 /** True when a captured command exited non-zero (a failure is not evidence / not landed work). */
@@ -583,6 +605,9 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
   // record is never reported as "matched nothing" merely because the operator
   // scoped the report to alpha.
   const attachedSelfReports = new Set<string>();
+  // Records that DID fall in a unit's window but were refused because the
+  // unit's own repository could not be verified.
+  const refusedForUnit = new Set<string>();
 
   for (const [sessionId, byRepo] of workUnits) {
     for (const [repoPath, commits] of byRepo) {
@@ -603,18 +628,23 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       const earliest = first ?? last ?? 0;
       const latest = last ?? first ?? 0;
       // BOTH sides must name a repository that is here. A record key is always
-      // a resolved root; a unit's key qualifies only when a commit's own path
+      // a resolved root; a unit's key qualifies only when the commits' own paths
       // resolved. Re-resolving `repoPath` would not do: the string fallback can
       // land on a path that exists (collapsing `*-workspace` out of
       // `/x/foo-workspace/bar` gives `/x/bar`), and it reached it by guessing
       // from a directory name, which is what this rule refuses.
-      const unitRepoIsHere = commits.some((c) => c.keyResolved);
-      const selfBound = unitRepoIsHere
-        ? selfReports.filter(
-            (r) =>
-              r.repos.has(repoPath) && r.at >= earliest - windowMs && r.at <= latest + windowMs,
-          )
-        : [];
+      //
+      // EVERY commit, not some: one resolved commit does not vouch for a sibling
+      // whose own path was guessed at. They share a key, but that is what is in
+      // question — a claim would then cover work whose origin is unverified.
+      const unitRepoIsHere = commits.every((c) => c.keyResolved);
+      const inWindow = selfReports.filter(
+        (r) => r.repos.has(repoPath) && r.at >= earliest - windowMs && r.at <= latest + windowMs,
+      );
+      const selfBound = unitRepoIsHere ? inWindow : [];
+      // Refused for the unit's sake, not for want of work. Kept apart so the
+      // report does not go on to deny that this unit exists.
+      if (!unitRepoIsHere) for (const r of inWindow) refusedForUnit.add(r.eventId);
       for (const r of selfBound) attachedSelfReports.add(r.eventId);
 
       if (scope !== null && !scope.includes(label)) continue;
@@ -686,11 +716,13 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
     }
   }
 
-  // Everything pooled resolved to a live repository root, so a record that
-  // reached nothing can only mean no captured work in the window belongs to it.
-  // Records whose path could not be verified never entered the pool and were
-  // counted as unresolvable at collection.
-  const noMatchingUnit = selfReports.filter((r) => !attachedSelfReports.has(r.eventId)).length;
+  // Everything pooled resolved to a live repository root. A record that reached
+  // nothing either fell in a unit's window and was refused because that unit's
+  // repository could not be verified, or found no work at all. Reporting the
+  // first as the second would deny that a captured unit exists.
+  const missed = selfReports.filter((r) => !attachedSelfReports.has(r.eventId));
+  const unverifiableUnit = missed.filter((r) => refusedForUnit.has(r.eventId)).length;
+  const noMatchingUnit = missed.length - unverifiableUnit;
 
   const recentFirst = (a: ReviewGapUnit, b: ReviewGapUnit): number =>
     (Date.parse(b.lastCommitAt ?? "") || 0) - (Date.parse(a.lastCommitAt ?? "") || 0);
@@ -718,10 +750,11 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
     candidates: units.filter((u) => u.verdict === "candidate").sort(recentFirst),
     unknowns: units.filter((u) => u.verdict === "unknown").sort(recentFirst),
     unattachedSelfReports: {
-      total: noRepos + unresolvableRepo + noMatchingUnit,
+      total: noRepos + unresolvableRepo + noMatchingUnit + unverifiableUnit,
       noRepos,
       unresolvableRepo,
       noMatchingUnit,
+      unverifiableUnit,
     },
     newestCommitAt: newestCommit === null ? null : new Date(newestCommit).toISOString(),
   };
