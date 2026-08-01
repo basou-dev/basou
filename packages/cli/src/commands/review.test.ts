@@ -176,9 +176,12 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
       target: "wt",
       repos: ["../elsewhere", missing],
     });
-    const error = await doRunReviewRecord({}, ctx(repo, input)).catch((e: unknown) => e as Error);
-    expect(error.message).toContain("'../elsewhere' — use an absolute path");
-    expect(error.message).toContain(`'${missing}' — no such path on this machine`);
+    const error = await doRunReviewRecord({}, ctx(repo, input)).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(error?.message).toContain("'../elsewhere' — use an absolute path");
+    expect(error?.message).toContain(`'${missing}' — no such path on this machine`);
   });
 
   it("rev-2e: --dry-run rejects an unbindable repos entry too", async () => {
