@@ -1056,6 +1056,40 @@ describe("findReviewGaps — record key provenance", () => {
     });
   });
 
+  it("refuses to pair when only the unit's key survived a name-based collapse", async () => {
+    const paths = await setup();
+    // The repository IS here, but the commit was captured through a view path
+    // that is not: the unit's key comes from the `*-workspace` string collapse,
+    // a heuristic on a directory name. Both sides must name a repository that
+    // resolves, or the pairing is still a guess.
+    const live = join(getRoot(), "bar");
+    await mkdir(join(live, ".git"), { recursive: true });
+    const removedView = join(getRoot(), "foo-workspace", "bar");
+    await placeSession(paths, { id: SES("PA"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("PA"), "2026-05-09T09:30:00.000Z", { repos: [live] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("PB"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("PB"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          removedView,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // The collapse still forms a unit — that part is existing behaviour — but no
+    // claim attaches to it.
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.selfReports).toHaveLength(0);
+    expect(s.unattachedSelfReports.noMatchingUnit).toBe(1);
+  });
+
   it("refuses to key a record from a relative path", async () => {
     const paths = await setup();
     // Both spellings would collapse to the literal key `../app`, binding a

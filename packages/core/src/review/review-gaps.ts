@@ -576,9 +576,19 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       // prevents: the unit keeps its verdict and stays in the count either way.
       const earliest = first ?? last ?? 0;
       const latest = last ?? first ?? 0;
-      const selfBound = selfReports.filter(
-        (r) => r.repos.has(repoPath) && r.at >= earliest - windowMs && r.at <= latest + windowMs,
-      );
+      // BOTH sides must name a repository that is here. A record key is always
+      // a resolved root, but a unit's key may have come from the string
+      // fallback — a commit captured through a `*-workspace` view that has since
+      // been removed collapses to a path that can genuinely exist. That collapse
+      // is a heuristic on a directory NAME, so pairing a claim to it would still
+      // be the guess this rule exists to refuse.
+      const unitRepoIsHere = resolveRepoRoot(repoPath) !== null;
+      const selfBound = unitRepoIsHere
+        ? selfReports.filter(
+            (r) =>
+              r.repos.has(repoPath) && r.at >= earliest - windowMs && r.at <= latest + windowMs,
+          )
+        : [];
       for (const r of selfBound) attachedSelfReports.add(r.eventId);
 
       if (scope !== null && !scope.includes(label)) continue;

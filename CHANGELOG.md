@@ -61,8 +61,10 @@ All notable changes to **basou** are recorded here. The project follows
   filter is how silence starts looking like success again.
 
   A record binds only to work in a repository that is **present on this machine**,
-  resolved to the same canonical root from both sides. If the repository has
-  moved or gone, the record is reported as unverifiable rather than paired.
+  with both sides resolving to the same canonical root. If the repository has
+  moved or gone — or if the unit's own key survived only through the
+  `*-workspace` name collapse, which is a heuristic on a directory name — the
+  record is reported as unverifiable rather than paired.
 
   This is narrower than the key a commit gets, on purpose. A commit's path was
   observed by basou when the command ran, so a moved repository's recorded path
