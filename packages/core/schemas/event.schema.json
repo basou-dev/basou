@@ -1297,6 +1297,20 @@
           "type": "string",
           "minLength": 1
         },
+        "repos": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "commits": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "verdict": {
           "type": "string",
           "enum": [

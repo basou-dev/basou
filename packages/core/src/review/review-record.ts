@@ -27,6 +27,19 @@ export type ReviewRecordInput = {
   reviewer: string;
   /** What was reviewed (e.g. "working-tree", a git ref, "PR #145"). Required. */
   target: string;
+  /**
+   * Repository paths the review examined. Optional, but it is the ONLY thing
+   * that can bind this record to the reviewed repo: the record lands in an
+   * ad-hoc session whose location is the planning repo it was written from, not
+   * the repo under review. Without it `review-gaps` cannot associate the record
+   * with a unit of work.
+   */
+  repos?: string[];
+  /**
+   * Commit SHAs the review examined. Optional; recorded as the reviewer's own
+   * claim about coverage.
+   */
+  commits?: string[];
   /** Overall outcome. Optional. */
   verdict?: "pass" | "needs-attention" | "fail";
   /** Findings surfaced by the review. Optional. */
@@ -46,6 +59,8 @@ const VALID_BLOCK_REASONS: ReadonlySet<string> = new Set(["spec-deviation", "des
 const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "reviewer",
   "target",
+  "repos",
+  "commits",
   "verdict",
   "findings",
   "blocked",
@@ -86,7 +101,7 @@ export function parseReviewRecordInput(raw: string): ReviewRecordInput {
   for (const key of Object.keys(obj)) {
     if (!ALLOWED_KEYS.has(key)) {
       throw new Error(
-        `Unknown field '${key}'. Allowed: reviewer, target, verdict, findings, blocked.`,
+        `Unknown field '${key}'. Allowed: reviewer, target, repos, commits, verdict, findings, blocked.`,
       );
     }
   }
@@ -95,6 +110,12 @@ export function parseReviewRecordInput(raw: string): ReviewRecordInput {
   const target = requireNonEmptyString(obj.target, "target");
   const out: ReviewRecordInput = { reviewer, target };
 
+  if (obj.repos !== undefined) {
+    out.repos = parseStringArray(obj.repos, "repos");
+  }
+  if (obj.commits !== undefined) {
+    out.commits = parseStringArray(obj.commits, "commits");
+  }
   if (obj.verdict !== undefined) {
     if (typeof obj.verdict !== "string" || !VALID_VERDICTS.has(obj.verdict)) {
       throw new Error(`verdict must be one of pass, needs-attention, fail, got '${obj.verdict}'.`);
@@ -108,6 +129,14 @@ export function parseReviewRecordInput(raw: string): ReviewRecordInput {
     out.blocked = parseBlocked(obj.blocked);
   }
   return out;
+}
+
+/** Parse a flat array of non-empty strings (`repos` / `commits`). */
+function parseStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${field} must be an array of strings.`);
+  }
+  return value.map((item, i) => requireNonEmptyString(item, `${field}[${i}]`));
 }
 
 function parseFindings(value: unknown): ReviewRecordFindingInput[] {
@@ -205,6 +234,8 @@ export function buildReviewRecordedEvent(input: {
     type: "review_recorded",
     reviewer: review.reviewer,
     target: review.target,
+    ...(review.repos !== undefined ? { repos: review.repos } : {}),
+    ...(review.commits !== undefined ? { commits: review.commits } : {}),
     ...(review.verdict !== undefined ? { verdict: review.verdict } : {}),
     ...(review.findings !== undefined ? { findings: review.findings } : {}),
     ...(review.blocked !== undefined ? { blocked: review.blocked } : {}),

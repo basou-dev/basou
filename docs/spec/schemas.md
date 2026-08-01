@@ -185,6 +185,7 @@ Events written by the import paths additionally carry an optional top-level
 | Task | `task_deleted` | task.md hard-delete record. Added in v0.2; emitted by `basou task delete --yes`; no tombstone, so the event payload (`task_id` + final `title`) is the only persistent record. |
 | Task | `task_archived` | task.md moved to `.basou/tasks/archive/<id>.md`. Added in v0.2; emitted by `basou task archive --yes`; the task survives at the new path, so the event session's `task_id` is pinned. |
 | Note | `note_added` | human-added note |
+| Review | `review_recorded` | self-reported record that an adversarial / second-opinion review ran. Emitted by `basou review record`. `reviewer` + `target` are required; `repos` (the repository paths reviewed) is what lets `basou review-gaps` bind the record to a unit of work, since the record itself lands in the planning repo. |
 | Adapter | `adapter_output` | adapter output (summary only; raw kept separately) |
 
 ## §7.3 Extension rules (no breaking changes)

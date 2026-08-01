@@ -8,6 +8,7 @@ export {
   type ReviewGapsSummary,
   type ReviewGapUnit,
   type ReviewGapVerdict,
+  type SelfReportedReview,
 } from "./review-gaps.js";
 export {
   buildReviewRecordedEvent,

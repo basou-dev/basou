@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { ReviewGapsSummary, ReviewGapUnit } from "@basou/core";
 import {
   basouPaths,
   createManifest,
@@ -11,7 +12,7 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { doRunReviewGaps, parseWindow } from "./review-gaps.js";
+import { doRunReviewGaps, parseWindow, renderReviewGaps } from "./review-gaps.js";
 
 const execFileAsync = promisify(execFile);
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
@@ -125,5 +126,82 @@ describe("basou review-gaps", () => {
     );
     expect(summary.scope).toEqual(["beta"]);
     expect(summary.gaps).toHaveLength(0); // the only commit is in alpha
+  });
+});
+
+function gapUnit(overrides: Partial<ReviewGapUnit> = {}): ReviewGapUnit {
+  return {
+    repo: "alpha",
+    sessionId: SES("C1"),
+    commitCount: 2,
+    firstCommitAt: "2026-05-09T10:00:00.000Z",
+    lastCommitAt: "2026-05-09T10:05:00.000Z",
+    verdict: "omission",
+    reviews: [],
+    selfReports: [],
+    ...overrides,
+  };
+}
+
+function summaryOf(gaps: ReviewGapUnit[], unboundSelfReports = 0): ReviewGapsSummary {
+  return {
+    generatedAt: NOW.toISOString(),
+    windowHours: 24,
+    scope: null,
+    repos: [
+      {
+        repo: "alpha",
+        units: gaps.length,
+        omissionUnits: gaps.filter((u) => u.verdict === "omission").length,
+        nearUnboundUnits: gaps.filter((u) => u.verdict === "near_unbound").length,
+        candidateUnits: 0,
+        unknownUnits: 0,
+        selfReportedGapUnits: gaps.filter((u) => u.selfReports.length > 0).length,
+      },
+    ],
+    gaps,
+    candidates: [],
+    unknowns: [],
+    unboundSelfReports,
+    newestCommitAt: "2026-05-09T10:05:00.000Z",
+  };
+}
+
+describe("renderReviewGaps", () => {
+  it("labels a self-reported gap as unverified while still counting it as a gap", () => {
+    const out = renderReviewGaps(
+      summaryOf([
+        gapUnit({
+          selfReports: [
+            {
+              sessionId: SES("S1"),
+              eventId: "evt_01HXABCDEF1234567890AB0001",
+              reviewer: "gpt-5.6",
+              target: "working-tree",
+              recordedAt: "2026-05-09T09:30:00.000Z",
+              commits: [],
+            },
+          ],
+        }),
+      ]),
+    );
+    expect(out).toContain("self-reported by gpt-5.6 (unverified; still counted)");
+    // The top-line count must not shrink because a record exists.
+    expect(out).toContain("Units of work that landed without a review trail: 1");
+    expect(out).toContain("no trail 1");
+    expect(out).toContain("self-reported 1");
+    expect(out).toContain("must not be a way to make the number go down");
+  });
+
+  it("omits the label and the tally when no record named the repo", () => {
+    const out = renderReviewGaps(summaryOf([gapUnit()]));
+    expect(out).not.toContain("self-reported by");
+    expect(out).not.toContain("/ self-reported");
+  });
+
+  it("explains a record that could not be bound to any unit", () => {
+    const out = renderReviewGaps(summaryOf([gapUnit()], 3));
+    expect(out).toContain("3 review records could not be bound");
+    expect(out).toContain("`repos`");
   });
 });
