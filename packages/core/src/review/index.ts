@@ -1,14 +1,19 @@
 export {
   type CitedReview,
   findReviewGaps,
+  findUnbindableRepos,
   normalizeRepoKey,
   normalizeRepoPath,
+  type RepoPathProblem,
   type ReviewGapRepoSummary,
   type ReviewGapsInput,
   type ReviewGapsSummary,
   type ReviewGapUnit,
   type ReviewGapVerdict,
+  resolveRepoRoot,
   type SelfReportedReview,
+  type UnattachedSelfReports,
+  type UnbindableRepo,
 } from "./review-gaps.js";
 export {
   buildReviewRecordedEvent,

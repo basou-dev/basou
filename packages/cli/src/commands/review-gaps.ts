@@ -124,14 +124,26 @@ function relAge(iso: string | null, now: Date): string {
   return `${Math.max(1, Math.floor(ms / 60_000))}m ago`;
 }
 
+/** Short SHAs a record claimed to cover, capped so one line stays readable. */
+function claimedCommits(commits: string[]): string {
+  if (commits.length === 0) return "";
+  const shown = commits.slice(0, 3).map((c) => c.slice(0, 8));
+  return ` claiming ${shown.join(", ")}${commits.length > shown.length ? ", ..." : ""}`;
+}
+
 /**
  * The self-report suffix. It is appended to a gap line — never substituted for
- * it — so the record is visible without the unit ceasing to be a gap.
+ * it — so the record is visible without the unit ceasing to be a gap. The
+ * commits a record claimed are shown as exactly that: the reviewer's claim,
+ * which nothing here checks and no count uses.
  */
 function selfReportSuffix(u: ReviewGapUnit): string {
   if (u.selfReports.length === 0) return "";
-  const who = [...new Set(u.selfReports.map((r) => r.reviewer))].join(", ");
-  return ` · self-reported by ${who} (unverified; still counted)`;
+  const parts = u.selfReports.map(
+    (r) =>
+      `${r.reviewer}${claimedCommits(r.commits)}${r.recordedAfterCommit ? " (recorded after the commit)" : ""}`,
+  );
+  return ` · self-reported by ${parts.join("; ")} — unverified, still counted`;
 }
 
 function unitLine(u: ReviewGapUnit, now: Date): string {
@@ -202,10 +214,35 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
   lines.push(
     'Note: a "self-reported" unit has a `basou review record` naming this repo, but nothing corroborates it — it stays in the count above, because an empty record must not be a way to make the number go down.',
   );
-  if (summary.unboundSelfReports > 0) {
+  lines.push(...unattachedLines(summary.unattachedSelfReports));
+  return lines.join("\n");
+}
+
+/**
+ * Recorded reviews that changed nothing, with the cause of each. The causes are
+ * listed separately rather than summarised because they are different mistakes:
+ * only one of them is fixed by adding a `repos` field, and asserting that cause
+ * for all of them would state a reason this never established.
+ */
+function unattachedLines(u: ReviewGapsSummary["unattachedSelfReports"]): string[] {
+  if (u.total === 0) return [];
+  const lines = [
+    `Note: ${u.total} recorded review${u.total === 1 ? "" : "s"} changed nothing in this report (counted across all repositories, not just any --repo scope):`,
+  ];
+  if (u.noRepos > 0) {
     lines.push(
-      `Note: ${summary.unboundSelfReports} review record${summary.unboundSelfReports === 1 ? "" : "s"} could not be bound to any unit. A record binds through the repository paths in its \`repos\` field; without them, the record's own location is the planning repo, not the repo reviewed.`,
+      `  ${u.noRepos} named no repository — add \`repos\` to the record; without it the record's own location is the planning repo, not the repo reviewed`,
     );
   }
-  return lines.join("\n");
+  if (u.unresolvableRepo > 0) {
+    lines.push(
+      `  ${u.unresolvableRepo} named a path that is not a repository root on this machine`,
+    );
+  }
+  if (u.noMatchingUnit > 0) {
+    lines.push(
+      `  ${u.noMatchingUnit} named a repository, but no captured unit of work fell within the window of it`,
+    );
+  }
+  return lines;
 }

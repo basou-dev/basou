@@ -8,8 +8,10 @@ import {
   buildReviewRecordLabel,
   createAdHocSessionWithEvent,
   findErrorCode,
+  findUnbindableRepos,
   type PrefixedId,
   parseReviewRecordInput,
+  type RepoPathProblem,
   type ReviewRecordInput,
   readManifest,
   sanitizePath,
@@ -85,8 +87,14 @@ a workspace-view directory and it resolves to the planning repo, like
 Name the repositories you reviewed in "repos". The record lands in the planning
 repo, so that field is the only thing tying it to the repo under review: without
 it, 'basou review-gaps' cannot surface this record against the work it covered.
+Each entry must be an absolute path (or ~/...) to a repository ROOT; a relative
+path, a path that is not there, or a subdirectory is rejected outright, because
+it would store a record that can never appear against any work. "commits" is
+kept as your claim about coverage and is never used to bind.
+
 A recorded review is a self-report -- review-gaps labels the unit but still
-counts it as a gap, because nothing corroborates the claim.
+counts it as a gap, because nothing corroborates the claim. Recording after the
+commit is fine: the record is still shown, marked as written after the fact.
 
 Example (heredoc on stdin):
   basou review record <<'JSON'
@@ -152,6 +160,7 @@ export async function doRunReviewRecord(
 
   const raw = await readReviewInput(options, ctx);
   const review = parseReviewRecordInput(raw);
+  assertReposCanBind(review);
 
   if (options.dryRun === true) {
     printReviewPreview(options, review);
@@ -193,6 +202,35 @@ export async function doRunReviewRecord(
     eventId: adHoc.targetEventIds[0] as string,
     review,
   });
+}
+
+const REPO_PROBLEM_HINT: Record<RepoPathProblem, string> = {
+  relative: "use an absolute path (or ~/...) to the repository root",
+  absent: "no such path on this machine",
+  not_a_repo_root: "that path is inside a repository, not its root",
+};
+
+/**
+ * Reject `repos` entries that could never bind to a unit of work, checked with
+ * the same definition of a repository key `basou review-gaps` binds with.
+ *
+ * Structural validation happens in core's pure parser; this needs the disk, so
+ * it lives here. It is a hard error rather than a warning because a record that
+ * cannot bind is worse than no record: it is stored, it counts as a review
+ * having been written down, and it silently never appears against the work it
+ * claims to cover.
+ */
+function assertReposCanBind(review: ReviewRecordInput): void {
+  const unbindable = findUnbindableRepos(review.repos ?? []);
+  if (unbindable.length === 0) return;
+  const detail = unbindable
+    .map(({ repo, problem }) => `  '${repo}' — ${REPO_PROBLEM_HINT[problem]}`)
+    .join("\n");
+  throw new Error(
+    `${unbindable.length} of ${review.repos?.length} 'repos' entr${unbindable.length === 1 ? "y" : "ies"} cannot be bound to a repository:\n${detail}\n` +
+      "'repos' is what ties this record to the repository it reviewed, so an " +
+      "entry that resolves to nothing would leave the record stored but invisible.",
+  );
 }
 
 async function readReviewInput(

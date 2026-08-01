@@ -133,20 +133,63 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
   it("rev-2b: repos and commits are persisted, and the text output names the repo count", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
+    // The repo under test is a real git repo, so it binds; the operator's own
+    // spelling is preserved rather than rewritten to a canonical path.
     const input = JSON.stringify({
       reviewer: "codex",
       target: "working-tree",
-      repos: ["~/projects/alpha", "~/projects/beta"],
+      repos: [repo],
       commits: ["a1b2c3d"],
     });
     await doRunReviewRecord({}, ctx(repo, input));
     const review = (await readAdHocEvents(repo)).find(
       (e) => e.type === "review_recorded",
     ) as Record<string, unknown>;
-    expect(review.repos).toEqual(["~/projects/alpha", "~/projects/beta"]);
+    expect(review.repos).toEqual([repo]);
     expect(review.commits).toEqual(["a1b2c3d"]);
     // The repo count is echoed so the agent can see the record is bindable.
-    expect(joinCalls(out)).toContain("2 repos");
+    expect(joinCalls(out)).toContain("1 repo");
+  });
+
+  it("rev-2c: a repos entry that could never bind is rejected before anything is written", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const input = JSON.stringify({
+      reviewer: "codex",
+      target: "working-tree",
+      repos: [repo, "../elsewhere", join(repo, "src")],
+    });
+    await expect(doRunReviewRecord({}, ctx(repo, input))).rejects.toThrow(
+      /2 of 3 'repos' entries cannot be bound/,
+    );
+    // Nothing was written: a record that cannot bind is worse than no record.
+    const dirs = (await readdir(basouPaths(repo).sessions)).filter((d) => d.startsWith("ses_"));
+    expect(dirs).toHaveLength(0);
+  });
+
+  it("rev-2d: the rejection names each offending entry and its cause", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const missing = join(repo, "no-such-repo");
+    const input = JSON.stringify({
+      reviewer: "codex",
+      target: "wt",
+      repos: ["../elsewhere", missing],
+    });
+    const error = await doRunReviewRecord({}, ctx(repo, input)).catch((e: unknown) => e as Error);
+    expect(error.message).toContain("'../elsewhere' — use an absolute path");
+    expect(error.message).toContain(`'${missing}' — no such path on this machine`);
+  });
+
+  it("rev-2e: --dry-run rejects an unbindable repos entry too", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await expect(
+      doRunReviewRecord(
+        { dryRun: true },
+        ctx(repo, JSON.stringify({ reviewer: "c", target: "wt", repos: ["../elsewhere"] })),
+      ),
+    ).rejects.toThrow(/cannot be bound/);
   });
 
   it("rev-3: an explicit empty blocked array round-trips (reviewed, blocked nothing)", async () => {

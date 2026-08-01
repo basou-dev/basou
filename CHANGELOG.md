@@ -15,22 +15,39 @@ All notable changes to **basou** are recorded here. The project follows
   review claims to have covered. Both are optional and additive, so existing
   records stay valid and `schema_version` is unchanged.
 
+  A `repos` entry must be an absolute path (or `~/…`) to a repository **root**,
+  checked against the same definition of a repository key that `review-gaps`
+  binds with. A relative path, a path that is not there, or a subdirectory is
+  rejected with the reason, naming the entry. Storing one would be worse than
+  storing nothing: the record would count as a review having been written down
+  while never appearing against any work.
+
 ### Changed
 
 - `basou review-gaps` reads `review_recorded` events. A unit of work whose repo
-  was named by a record in the window is labelled **self-reported**, and the
-  per-repository tally counts it.
+  was named by a record in the window is labelled **self-reported**, the record's
+  claimed commits are shown as a claim, and the per-repository tally counts it.
 
   The label re-classifies; it does not clear. A self-reported unit keeps its
   verdict and stays in the gap count, because a self-report is exactly that —
   the agent's own claim, with nothing corroborating it. Were the count to drop,
   writing an empty record would become a way to make the number go down, which
-  is the weakness the Stop-gate already has. A record written after the commit
-  is not bound at all: it cannot have gated work that already landed.
+  is the weakness the Stop-gate already has.
 
-  When a record names no resolvable repository it is reported as unbound, with
-  the reason. "I recorded a review and nothing changed" was previously
-  indistinguishable from "the record was ignored".
+  A record written after the commit is shown too, marked as written after the
+  fact. It cannot have gated the work, but `occurred_at` is when basou persisted
+  the record, not when the review ran — a review, then the commit, then the
+  record is an ordinary sequence. Since the label can never reduce the count,
+  hiding the claim only discarded the operator's own note.
+
+- `basou review-gaps` reports every recorded review that changed nothing, with
+  the cause of each: no repository named, a path that is not a repository root,
+  or a repository with no unit of work in the window. The causes are listed
+  separately because they are different mistakes, and basou should not assert a
+  reason it has not established. The count is global and stays visible under a
+  `--repo` scope — it is a caveat about the tool's own input handling, and a
+  completeness caveat that vanishes under a filter is how silence starts looking
+  like success again.
 
 ## 0.35.1 — 2026-08-01
 

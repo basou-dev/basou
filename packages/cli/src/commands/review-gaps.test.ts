@@ -143,7 +143,11 @@ function gapUnit(overrides: Partial<ReviewGapUnit> = {}): ReviewGapUnit {
   };
 }
 
-function summaryOf(gaps: ReviewGapUnit[], unboundSelfReports = 0): ReviewGapsSummary {
+function summaryOf(
+  gaps: ReviewGapUnit[],
+  unattached: Partial<ReviewGapsSummary["unattachedSelfReports"]> = {},
+): ReviewGapsSummary {
+  const counts = { noRepos: 0, unresolvableRepo: 0, noMatchingUnit: 0, ...unattached };
   return {
     generatedAt: NOW.toISOString(),
     windowHours: 24,
@@ -162,30 +166,33 @@ function summaryOf(gaps: ReviewGapUnit[], unboundSelfReports = 0): ReviewGapsSum
     gaps,
     candidates: [],
     unknowns: [],
-    unboundSelfReports,
+    unattachedSelfReports: {
+      ...counts,
+      total: counts.noRepos + counts.unresolvableRepo + counts.noMatchingUnit,
+    },
     newestCommitAt: "2026-05-09T10:05:00.000Z",
+  };
+}
+
+function selfReport(
+  overrides: Partial<ReviewGapUnit["selfReports"][number]> = {},
+): ReviewGapUnit["selfReports"][number] {
+  return {
+    sessionId: SES("S1"),
+    eventId: "evt_01HXABCDEF1234567890AB0001",
+    reviewer: "gpt-5.6",
+    target: "working-tree",
+    recordedAt: "2026-05-09T09:30:00.000Z",
+    commits: [],
+    recordedAfterCommit: false,
+    ...overrides,
   };
 }
 
 describe("renderReviewGaps", () => {
   it("labels a self-reported gap as unverified while still counting it as a gap", () => {
-    const out = renderReviewGaps(
-      summaryOf([
-        gapUnit({
-          selfReports: [
-            {
-              sessionId: SES("S1"),
-              eventId: "evt_01HXABCDEF1234567890AB0001",
-              reviewer: "gpt-5.6",
-              target: "working-tree",
-              recordedAt: "2026-05-09T09:30:00.000Z",
-              commits: [],
-            },
-          ],
-        }),
-      ]),
-    );
-    expect(out).toContain("self-reported by gpt-5.6 (unverified; still counted)");
+    const out = renderReviewGaps(summaryOf([gapUnit({ selfReports: [selfReport()] })]));
+    expect(out).toContain("self-reported by gpt-5.6 — unverified, still counted");
     // The top-line count must not shrink because a record exists.
     expect(out).toContain("Units of work that landed without a review trail: 1");
     expect(out).toContain("no trail 1");
@@ -193,15 +200,43 @@ describe("renderReviewGaps", () => {
     expect(out).toContain("must not be a way to make the number go down");
   });
 
+  it("shows the claimed commits as a claim, and flags a record written after the commit", () => {
+    const out = renderReviewGaps(
+      summaryOf([
+        gapUnit({
+          selfReports: [
+            selfReport({ commits: ["a1b2c3d4e5f6", "0123456"], recordedAfterCommit: true }),
+          ],
+        }),
+      ]),
+    );
+    expect(out).toContain("claiming a1b2c3d4, 0123456");
+    expect(out).toContain("(recorded after the commit)");
+    expect(out).toContain("unverified, still counted");
+  });
+
   it("omits the label and the tally when no record named the repo", () => {
     const out = renderReviewGaps(summaryOf([gapUnit()]));
     expect(out).not.toContain("self-reported by");
     expect(out).not.toContain("/ self-reported");
+    expect(out).not.toContain("changed nothing in this report");
   });
 
-  it("explains a record that could not be bound to any unit", () => {
-    const out = renderReviewGaps(summaryOf([gapUnit()], 3));
-    expect(out).toContain("3 review records could not be bound");
-    expect(out).toContain("`repos`");
+  it("names the cause of each record that changed nothing", () => {
+    const out = renderReviewGaps(
+      summaryOf([gapUnit()], { noRepos: 2, unresolvableRepo: 1, noMatchingUnit: 3 }),
+    );
+    expect(out).toContain("6 recorded reviews changed nothing in this report");
+    expect(out).toContain("2 named no repository");
+    expect(out).toContain("1 named a path that is not a repository root");
+    expect(out).toContain("3 named a repository, but no captured unit of work");
+    // The count is global, and says so, rather than vanishing under a scope.
+    expect(out).toContain("not just any --repo scope");
+  });
+
+  it("does not assert the missing-`repos` cause for a record that had one", () => {
+    const out = renderReviewGaps(summaryOf([gapUnit()], { noMatchingUnit: 1 }));
+    expect(out).toContain("1 recorded review changed nothing");
+    expect(out).not.toContain("named no repository");
   });
 });
