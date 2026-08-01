@@ -260,18 +260,26 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
 }
 
 /**
- * A key for a path named by a RECORD. Same permissive resolution commits get —
- * a repository that has moved still keys by its recorded path on both sides —
- * but only from an absolute location. A relative spelling names nothing on its
- * own: `../app` recorded from one directory and `cd ../app` captured in another
- * would collapse to the same literal key and bind unrelated repositories.
- * Commits keep the looser behaviour they have always had; this is about what a
- * record is allowed to claim.
+ * A key for a path named by a RECORD: only a repository that is present on this
+ * machine right now, resolved to its canonical root.
+ *
+ * This is deliberately narrower than the key a commit gets. A commit's path was
+ * OBSERVED by basou at the moment the command ran, so when the repository has
+ * since moved, the recorded path is still the best evidence of where the work
+ * happened and keeps its string fallback. A record's path is a claim about
+ * where a review looked, and pairing it with work by string resemblance alone —
+ * when nothing on disk can confirm the two name the same repository — is a
+ * guess. `review-gaps` exists because guesses about whether a protocol was
+ * followed are worse than an admission of ignorance, so an unverifiable record
+ * is reported as unverifiable rather than bound.
+ *
+ * What this rules out, by construction rather than by patching: a relative
+ * spelling colliding with an unrelated `cd ../app`, a record and a commit
+ * disagreeing about a symlink whose target has vanished, and a moved repository
+ * pairing on a coincidence of spelling.
  */
 function recordRepoKey(p: string): string | null {
-  const s = stripQuotes(p.trim());
-  if (!(s.startsWith("~/") || isAbsolute(s))) return null;
-  return normalizeRepoPath(p);
+  return resolveRepoRoot(p);
 }
 
 /** Why a hand-typed repository path cannot become a binding key. */
@@ -406,8 +414,6 @@ type SelfReportRec = Omit<SelfReportedReview, "recordedAfterCommit"> & {
   at: number;
   /** Normalized repo paths the record named; the only binding key it has. */
   repos: Set<string>;
-  /** A named path is a repository root on disk now — used only to explain a miss. */
-  onDisk: boolean;
 };
 
 const REVIEW_SOURCE = "codex-import"; // the cross-model reviewer vendor (v1)
@@ -474,29 +480,18 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
             ev.repos_resolved !== undefined && ev.repos_resolved.length > 0
               ? ev.repos_resolved
               : (ev.repos ?? []);
-          // Keyed the SAME way commits are. Strictness here would break the
-          // pairing it was meant to protect: when a repository moves, a captured
-          // commit keeps its old path through the string fallback and still
-          // forms a unit, so a record rejected for that same path could never
-          // reach it. Accuracy about WHY a record reached nothing is recovered
-          // below, from whether the path is really on disk, rather than by
-          // refusing to key it.
           const repos = new Set(
             named.map((r) => recordRepoKey(r)).filter((r): r is string => r !== null),
           );
           if (repos.size === 0 || Number.isNaN(recordedAt)) {
             // Name the mistake: an absent `repos` is the operator forgetting a
-            // field, a `repos` that yields no key at all is a wrong path. Only
-            // the first is what the record's own location could explain.
+            // field, a `repos` naming nothing verifiable is a path basou cannot
+            // check. Only the first is what the record's own location explains.
             if (named.length === 0) noRepos++;
             else unresolvableRepo++;
             continue;
           }
           selfReports.push({
-            // Whether any named path is a repository root on this machine right
-            // now. Decides the REASON reported if this record reaches nothing;
-            // it never affects binding.
-            onDisk: named.some((r) => resolveRepoRoot(r) !== null),
             sessionId: entry.sessionId,
             eventId: ev.id,
             reviewer: ev.reviewer,
@@ -655,13 +650,11 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
     }
   }
 
-  // Records that keyed fine but reached nothing. Split by whether the path is
-  // actually there: "the repository is right, but no work in the window" and
-  // "that path is not a repository here any more" are different problems, and
-  // reporting one as the other asserts a cause never established.
-  const missed = selfReports.filter((r) => !attachedSelfReports.has(r.eventId));
-  const noMatchingUnit = missed.filter((r) => r.onDisk).length;
-  unresolvableRepo += missed.length - noMatchingUnit;
+  // Everything pooled resolved to a live repository root, so a record that
+  // reached nothing can only mean no captured work in the window belongs to it.
+  // Records whose path could not be verified never entered the pool and were
+  // counted as unresolvable at collection.
+  const noMatchingUnit = selfReports.filter((r) => !attachedSelfReports.has(r.eventId)).length;
 
   const recentFirst = (a: ReviewGapUnit, b: ReviewGapUnit): number =>
     (Date.parse(b.lastCommitAt ?? "") || 0) - (Date.parse(a.lastCommitAt ?? "") || 0);

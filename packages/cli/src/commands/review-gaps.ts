@@ -275,7 +275,7 @@ function unattachedLines(u: ReviewGapsSummary["unattachedSelfReports"]): string[
   }
   if (u.unresolvableRepo > 0) {
     lines.push(
-      `  ${u.unresolvableRepo} named a path that is not a repository root on this machine`,
+      `  ${u.unresolvableRepo} named a path that is not a repository root on this machine — unverifiable, so not paired with any work`,
     );
   }
   if (u.noMatchingUnit > 0) {

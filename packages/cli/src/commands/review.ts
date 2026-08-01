@@ -93,6 +93,12 @@ path, a path that is not there, or a subdirectory is rejected outright, because
 it would store a record that can never appear against any work. "commits" is
 kept as your claim about coverage and is never used to bind.
 
+A record is paired with work only while that repository is still present on the
+machine. If it moves or goes away, 'basou review-gaps' reports the record as
+unverifiable rather than pairing it on a matching path string -- it cannot
+confirm the two name the same repository, and a guess about whether a review
+happened is worse than saying so.
+
 A recorded review is a self-report -- review-gaps labels the unit but still
 counts it as a gap, because nothing corroborates the claim. Recording after the
 commit is fine: the record is still shown, marked as written after the fact.

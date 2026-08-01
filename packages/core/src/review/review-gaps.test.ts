@@ -999,10 +999,12 @@ describe("findReviewGaps — record key provenance", () => {
     return root;
   }
 
-  it("still pairs a record with its unit after the repository has moved away", async () => {
+  it("refuses to pair a record with work in a repository that is no longer here", async () => {
     const paths = await setup();
-    // Neither side is on disk any more: the commit keeps its old path through
-    // the string fallback, so a record naming the same path must reach it.
+    // The commit keeps its old path through the string fallback and still forms
+    // a unit, so the two strings DO match. basou declines anyway: nothing on
+    // disk can confirm they name the same repository, and a guess about whether
+    // a review happened is worse than saying it cannot be checked.
     const gone = join(getRoot(), "moved-away");
     await placeSession(paths, { id: SES("P1"), source: "human", startedAt: NOW }, [
       reviewRecorded(SES("P1"), "2026-05-09T09:30:00.000Z", { reposResolved: [gone] }),
@@ -1023,42 +1025,29 @@ describe("findReviewGaps — record key provenance", () => {
 
     const s = await findReviewGaps({ paths, nowIso: NOW });
     expect(s.gaps).toHaveLength(1);
-    expect(s.gaps[0]?.selfReports).toHaveLength(1);
-    expect(s.unattachedSelfReports.total).toBe(0);
+    expect(s.gaps[0]?.selfReports).toHaveLength(0);
+    // Reported as unverifiable, not silently dropped and not called a miss.
+    expect(s.unattachedSelfReports).toEqual({
+      total: 1,
+      noRepos: 0,
+      unresolvableRepo: 1,
+      noMatchingUnit: 0,
+    });
   });
 
-  it("blames an absent path on the path, not on 'no work in the window'", async () => {
+  it("separates a path it cannot check from a repository with no work in the window", async () => {
     const paths = await setup();
     const gone = join(getRoot(), "moved-away");
-    const attaches = join(getRoot(), "also-moved");
     const live = join(getRoot(), "alpha");
     await mkdir(join(live, ".git"), { recursive: true });
     await placeSession(paths, { id: SES("P3"), source: "human", startedAt: NOW }, [
-      // keys fine via the fallback, but reaches nothing AND is not on disk
+      // not on disk: basou cannot check this one at all
       reviewRecorded(SES("P3"), "2026-05-09T09:30:00.000Z", { repos: [gone] }),
-      // on disk, reaches nothing: a genuinely different problem
+      // on disk, but no captured work belongs to it: a different problem
       reviewRecorded(SES("P3"), "2026-05-09T09:31:00.000Z", { repos: [live] }),
-      // absent AND attaching. Classifying at collection time (as the previous
-      // implementation did) would count this as unresolvable and never let it
-      // reach its unit, so this entry is what separates the two designs.
-      reviewRecorded(SES("P3"), "2026-05-09T09:32:00.000Z", { repos: [attaches] }),
     ]);
-    await placeSession(
-      paths,
-      { id: SES("P6"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("P6"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "git commit -m x"],
-          attaches,
-        ),
-      ],
-    );
 
     const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.gaps.find((u) => u.repo === "also-moved")?.selfReports).toHaveLength(1);
     expect(s.unattachedSelfReports).toEqual({
       total: 2,
       noRepos: 0,

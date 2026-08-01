@@ -60,14 +60,17 @@ All notable changes to **basou** are recorded here. The project follows
   tool's own input handling, and a completeness caveat that vanishes under a
   filter is how silence starts looking like success again.
 
-  A record's repositories are keyed the same way commits are, so a repository
-  that has moved still pairs its record with its work — both sides fall back to
-  the recorded path. The one restriction is that a record may only key from an
-  absolute location: a relative spelling names nothing on its own, and `../app`
-  recorded in one directory would otherwise collapse onto `cd ../app` captured
-  in another. Which of the two causes a miss gets reported is decided afterwards
-  from whether the path is a repository root right now, rather than by refusing
-  to key it.
+  A record binds only to work in a repository that is **present on this machine**,
+  resolved to the same canonical root from both sides. If the repository has
+  moved or gone, the record is reported as unverifiable rather than paired.
+
+  This is narrower than the key a commit gets, on purpose. A commit's path was
+  observed by basou when the command ran, so a moved repository's recorded path
+  is still evidence of where the work happened. A record's path is a claim about
+  where a review looked, and pairing it with work by string resemblance — when
+  nothing on disk can confirm the two name the same repository — is a guess.
+  `review-gaps` exists because a guess about whether a protocol was followed is
+  worse than an admission of ignorance.
 
 ## 0.35.1 — 2026-08-01
 
