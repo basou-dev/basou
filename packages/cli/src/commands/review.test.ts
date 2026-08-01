@@ -130,6 +130,25 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
     ]);
   });
 
+  it("rev-2b: repos and commits are persisted, and the text output names the repo count", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    const input = JSON.stringify({
+      reviewer: "codex",
+      target: "working-tree",
+      repos: ["~/projects/basou", "~/projects/basou-planning"],
+      commits: ["a1b2c3d"],
+    });
+    await doRunReviewRecord({}, ctx(repo, input));
+    const review = (await readAdHocEvents(repo)).find(
+      (e) => e.type === "review_recorded",
+    ) as Record<string, unknown>;
+    expect(review.repos).toEqual(["~/projects/basou", "~/projects/basou-planning"]);
+    expect(review.commits).toEqual(["a1b2c3d"]);
+    // The repo count is echoed so the agent can see the record is bindable.
+    expect(joinCalls(out)).toContain("2 repos");
+  });
+
   it("rev-3: an explicit empty blocked array round-trips (reviewed, blocked nothing)", async () => {
     const repo = await setupInitedRepo();
     captureStdout();

@@ -124,14 +124,24 @@ function relAge(iso: string | null, now: Date): string {
   return `${Math.max(1, Math.floor(ms / 60_000))}m ago`;
 }
 
+/**
+ * The self-report suffix. It is appended to a gap line — never substituted for
+ * it — so the record is visible without the unit ceasing to be a gap.
+ */
+function selfReportSuffix(u: ReviewGapUnit): string {
+  if (u.selfReports.length === 0) return "";
+  const who = [...new Set(u.selfReports.map((r) => r.reviewer))].join(", ");
+  return ` · self-reported by ${who} (unverified; still counted)`;
+}
+
 function unitLine(u: ReviewGapUnit, now: Date): string {
   const when = relAge(u.lastCommitAt, now);
   const head = `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"})`;
   if (u.verdict === "near_unbound") {
     const ids = u.reviews.map((r) => r.sessionId.slice(0, 14)).join(", ");
-    return `${head} — a nearby review exists, but the diff / changed files were not examined [${ids}]`;
+    return `${head} — a nearby review exists, but the diff / changed files were not examined [${ids}]${selfReportSuffix(u)}`;
   }
-  return `${head} — no bound cross-model review`;
+  return `${head} — no bound cross-model review${selfReportSuffix(u)}`;
 }
 
 function candidateLine(u: ReviewGapUnit, now: Date): string {
@@ -182,12 +192,20 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
   lines.push("## By repository");
   for (const r of summary.repos) {
     lines.push(
-      `- ${r.repo}: ${r.units} unit${r.units === 1 ? "" : "s"} (no trail ${r.omissionUnits} / nearby only ${r.nearUnboundUnits} / to confirm ${r.candidateUnits}${r.unknownUnits > 0 ? ` / unknown ${r.unknownUnits}` : ""})`,
+      `- ${r.repo}: ${r.units} unit${r.units === 1 ? "" : "s"} (no trail ${r.omissionUnits} / nearby only ${r.nearUnboundUnits} / to confirm ${r.candidateUnits}${r.unknownUnits > 0 ? ` / unknown ${r.unknownUnits}` : ""}${r.selfReportedGapUnits > 0 ? ` / self-reported ${r.selfReportedGapUnits}` : ""})`,
     );
   }
   lines.push("");
   lines.push(
     `Note: read-only advisory. Only captured commits are in scope (newest captured commit: ${summary.newestCommitAt === null ? "none" : relAge(summary.newestCommitAt, now)}). It never auto-judges that a review "happened", and temporal proximity alone is not a pass. It does not enforce.`,
   );
+  lines.push(
+    'Note: a "self-reported" unit has a `basou review record` naming this repo, but nothing corroborates it — it stays in the count above, because an empty record must not be a way to make the number go down.',
+  );
+  if (summary.unboundSelfReports > 0) {
+    lines.push(
+      `Note: ${summary.unboundSelfReports} review record${summary.unboundSelfReports === 1 ? "" : "s"} could not be bound to any unit. A record binds through the repository paths in its \`repos\` field; without them, the record's own location is the planning repo, not the repo reviewed.`,
+    );
+  }
   return lines.join("\n");
 }

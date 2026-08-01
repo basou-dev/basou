@@ -28,6 +28,13 @@ import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.
  *  - `unknown`       the repo or time could not be derived; abstain rather than
  *                    guess (an abstention is never counted as a clear).
  *
+ * A `review_recorded` event (written by `basou review record`) is a SELF-REPORT:
+ * the agent's own claim that a review ran, with nothing corroborating it. Such a
+ * record is bound to a unit by the repo paths it names and surfaced as a label,
+ * but it NEVER changes a verdict and never leaves the gap list — otherwise an
+ * empty record would become a way to make the count go down, the same weakness
+ * the Stop-gate has. It re-labels; it does not clear.
+ *
  * It reads only captured provenance and writes nothing.
  */
 
@@ -43,6 +50,21 @@ export type CitedReview = {
   endedAt: string | null;
 };
 
+/**
+ * A `review_recorded` self-report bound to a unit by the repo paths it named.
+ * Carries no corroboration: it is what the agent said it did, not what the
+ * capture observed.
+ */
+export type SelfReportedReview = {
+  sessionId: string;
+  eventId: string;
+  reviewer: string;
+  target: string;
+  recordedAt: string;
+  /** Commit SHAs the record claimed to cover; display only, never a binding key. */
+  commits: string[];
+};
+
 /** One unit of work (a committing session's commits in one repo) and its verdict. */
 export type ReviewGapUnit = {
   repo: string;
@@ -54,6 +76,12 @@ export type ReviewGapUnit = {
   verdict: ReviewGapVerdict;
   /** For `candidate` / `near_unbound`: the review sessions considered. */
   reviews: CitedReview[];
+  /**
+   * `review_recorded` self-reports naming this repo in the window. Present on
+   * every repo-keyed unit; it re-labels the unit and NEVER alters `verdict`, so
+   * a self-reported gap is still a gap.
+   */
+  selfReports: SelfReportedReview[];
 };
 
 export type ReviewGapRepoSummary = {
@@ -63,6 +91,8 @@ export type ReviewGapRepoSummary = {
   nearUnboundUnits: number;
   candidateUnits: number;
   unknownUnits: number;
+  /** Of the units with no bound trail, how many carry a self-report only. */
+  selfReportedGapUnits: number;
 };
 
 export type ReviewGapsSummary = {
@@ -77,6 +107,13 @@ export type ReviewGapsSummary = {
   candidates: ReviewGapUnit[];
   /** Units whose repo/time could not be derived from the captured command; abstained, not cleared. */
   unknowns: ReviewGapUnit[];
+  /**
+   * `review_recorded` records that named no resolvable repo (or no timestamp)
+   * and so could not be bound to any unit — the usual cause of "I recorded a
+   * review and nothing changed". Like {@link unknowns} these belong to no repo,
+   * so the count is reported only when no `--repo` scope is applied (0 otherwise).
+   */
+  unboundSelfReports: number;
   /** Newest captured commit considered; commits not yet imported are invisible. */
   newestCommitAt: string | null;
 };
@@ -261,6 +298,12 @@ type ReviewRec = {
   /** repo key -> what the review touched in it. */
   repos: Map<string, { examinedDiff: boolean; files: Set<string> }>;
 };
+/** A `review_recorded` event reduced to what binding and display need. */
+type SelfReportRec = SelfReportedReview & {
+  at: number;
+  /** Normalized repo paths the record named; the only binding key it has. */
+  repos: Set<string>;
+};
 
 const REVIEW_SOURCE = "codex-import"; // the cross-model reviewer vendor (v1)
 const DEFAULT_WINDOW_HOURS = 24;
@@ -292,6 +335,9 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
   const entries = await loadSessionEntries(input.paths, loadOpts);
 
   const reviews: ReviewRec[] = [];
+  const selfReports: SelfReportRec[] = [];
+  // `review_recorded` records that named no resolvable repo / no usable time
+  let unboundSelfReports = 0;
   // committing session -> repo path -> commits
   const workUnits = new Map<string, Map<string, CommitRec[]>>();
   // committing session -> commit times whose repo/time could not be derived
@@ -307,6 +353,33 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       for await (const ev of replayEvents(sessionDir, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
+        // A self-reported review. Collected from ANY session (the record lands
+        // in an ad-hoc session, not a vendor-imported one), and bound only by
+        // the repo paths it names — the ad-hoc session's own location is the
+        // planning repo, which would bind the wrong repo entirely.
+        if (ev.type === "review_recorded") {
+          const recordedAt = Date.parse(ev.occurred_at);
+          const repos = new Set(
+            (ev.repos ?? [])
+              .map((r) => normalizeRepoPath(r))
+              .filter((r): r is string => r !== null),
+          );
+          if (repos.size === 0 || Number.isNaN(recordedAt)) {
+            unboundSelfReports++;
+            continue;
+          }
+          selfReports.push({
+            sessionId: entry.sessionId,
+            eventId: ev.id,
+            reviewer: ev.reviewer,
+            target: ev.target,
+            recordedAt: ev.occurred_at,
+            commits: ev.commits ?? [],
+            at: recordedAt,
+            repos,
+          });
+          continue;
+        }
         if (ev.type !== "command_executed") continue;
         // A failed command is neither review evidence nor landed work.
         if (commandFailed(ev.exit_code)) continue;
@@ -388,6 +461,15 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         bound.length > 0 ? "candidate" : nearby.length > 0 ? "near_unbound" : "omission";
       const cited = verdict === "candidate" ? bound : verdict === "near_unbound" ? nearby : [];
 
+      // Self-reports naming this repo, in the same pre-filter window. Attached
+      // AFTER the verdict is computed, and deliberately not an input to it: a
+      // record must never move a unit out of `gaps`. A record written after the
+      // commit is excluded — it cannot have gated a commit that already landed,
+      // and labeling it would imply the protocol was followed when it was not.
+      const selfBound = selfReports.filter(
+        (r) => r.repos.has(repoPath) && r.at <= before && r.at >= before - windowMs,
+      );
+
       units.push({
         repo: label,
         sessionId,
@@ -395,6 +477,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         firstCommitAt: first === null ? null : new Date(first).toISOString(),
         lastCommitAt: last === null ? null : new Date(last).toISOString(),
         verdict,
+        selfReports: selfBound.map(toSelfReportedReview),
         reviews: cited.map((r) => ({
           sessionId: r.sessionId,
           examinedDiff: r.repos.get(repoPath)?.examinedDiff ?? false,
@@ -422,6 +505,8 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         lastCommitAt: last === null ? null : new Date(last).toISOString(),
         verdict: "unknown",
         reviews: [],
+        // No repo key, so nothing a record's `repos` could bind to.
+        selfReports: [],
       });
     }
   }
@@ -439,6 +524,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       nearUnboundUnits: us.filter((u) => u.verdict === "near_unbound").length,
       candidateUnits: us.filter((u) => u.verdict === "candidate").length,
       unknownUnits: us.filter((u) => u.verdict === "unknown").length,
+      selfReportedGapUnits: us.filter((u) => isGap(u) && u.selfReports.length > 0).length,
     };
   });
 
@@ -447,11 +533,29 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
     windowHours,
     scope,
     repos,
-    gaps: units
-      .filter((u) => u.verdict === "omission" || u.verdict === "near_unbound")
-      .sort(recentFirst),
+    gaps: units.filter(isGap).sort(recentFirst),
     candidates: units.filter((u) => u.verdict === "candidate").sort(recentFirst),
     unknowns: units.filter((u) => u.verdict === "unknown").sort(recentFirst),
+    // Belongs to no repo, so it is meaningless under a repo scope (same rule
+    // as `unknowns`).
+    unboundSelfReports: scope === null ? unboundSelfReports : 0,
     newestCommitAt: newestCommit === null ? null : new Date(newestCommit).toISOString(),
+  };
+}
+
+/** A unit with no bound review trail. Self-reports never move a unit out of this set. */
+function isGap(u: ReviewGapUnit): boolean {
+  return u.verdict === "omission" || u.verdict === "near_unbound";
+}
+
+/** Drop the binding-only fields so the emitted record carries just the report. */
+function toSelfReportedReview(r: SelfReportRec): SelfReportedReview {
+  return {
+    sessionId: r.sessionId,
+    eventId: r.eventId,
+    reviewer: r.reviewer,
+    target: r.target,
+    recordedAt: r.recordedAt,
+    commits: r.commits,
   };
 }

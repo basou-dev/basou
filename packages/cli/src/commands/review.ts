@@ -63,6 +63,8 @@ Input format (a single JSON object describing one review):
   {
     "reviewer": "codex",
     "target":   "working-tree",
+    "repos":    ["~/projects/basou"],
+    "commits":  ["a1b2c3d"],
     "verdict":  "needs-attention",
     "findings": [
       { "title": "Off-by-one in pager", "severity": "medium", "location": "src/page.ts:42", "summary": "..." }
@@ -72,17 +74,23 @@ Input format (a single JSON object describing one review):
     ]
   }
 
-Only "reviewer" and "target" are required; verdict / findings / blocked are
-optional. Record blocked findings (spec-deviation / design-reversal) here so the
-adversarial-review protocol's "always report what you blocked" becomes a durable
-trail artifact -- an explicit empty "blocked": [] is encouraged to record that
-you blocked nothing. The review is written into one ad-hoc session timestamped
-now. Run from a workspace-view directory and it resolves to the planning repo,
-like 'basou decision capture' / 'basou note'.
+Only "reviewer" and "target" are required; the rest are optional. Record blocked
+findings (spec-deviation / design-reversal) here so the adversarial-review
+protocol's "always report what you blocked" becomes a durable trail artifact --
+an explicit empty "blocked": [] is encouraged to record that you blocked
+nothing. The review is written into one ad-hoc session timestamped now. Run from
+a workspace-view directory and it resolves to the planning repo, like
+'basou decision capture' / 'basou note'.
+
+Name the repositories you reviewed in "repos". The record lands in the planning
+repo, so that field is the only thing tying it to the repo under review: without
+it, 'basou review-gaps' cannot surface this record against the work it covered.
+A recorded review is a self-report -- review-gaps labels the unit but still
+counts it as a gap, because nothing corroborates the claim.
 
 Example (heredoc on stdin):
   basou review record <<'JSON'
-  { "reviewer": "codex", "target": "working-tree", "verdict": "pass", "blocked": [] }
+  { "reviewer": "codex", "target": "working-tree", "repos": ["~/projects/basou"], "verdict": "pass", "blocked": [] }
   JSON
 `;
 
@@ -228,6 +236,8 @@ function reviewToPayload(review: ReviewRecordInput): Record<string, unknown> {
     reviewer: review.reviewer,
     target: review.target,
   };
+  if (review.repos !== undefined) payload.repos = review.repos;
+  if (review.commits !== undefined) payload.commits = review.commits;
   if (review.verdict !== undefined) payload.verdict = review.verdict;
   if (review.findings !== undefined) payload.findings = review.findings;
   if (review.blocked !== undefined) payload.blocked = review.blocked;
@@ -237,6 +247,11 @@ function reviewToPayload(review: ReviewRecordInput): Record<string, unknown> {
 function reviewSummaryLine(review: ReviewRecordInput): string {
   const parts: string[] = [];
   if (review.verdict !== undefined) parts.push(`verdict: ${review.verdict}`);
+  // Surface the repo count so the agent can see at a glance whether this record
+  // is bindable by review-gaps at all.
+  if (review.repos !== undefined) {
+    parts.push(`${review.repos.length} repo${review.repos.length === 1 ? "" : "s"}`);
+  }
   if (review.findings !== undefined) {
     parts.push(`${review.findings.length} finding${review.findings.length === 1 ? "" : "s"}`);
   }

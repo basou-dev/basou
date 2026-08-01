@@ -123,6 +123,42 @@ describe("parseReviewRecordInput", () => {
       parseReviewRecordInput('{ "reviewer": "c", "target": "wt", "findings": {} }'),
     ).toThrow(/findings must be an array/);
   });
+
+  it("parses repos and commits", () => {
+    const review = parseReviewRecordInput(
+      JSON.stringify({
+        reviewer: "codex",
+        target: "working-tree",
+        repos: ["~/projects/basou", "/home/u/projects/basou-planning"],
+        commits: ["a1b2c3d", "e4f5a6b"],
+      }),
+    );
+    expect(review.repos).toEqual(["~/projects/basou", "/home/u/projects/basou-planning"]);
+    expect(review.commits).toEqual(["a1b2c3d", "e4f5a6b"]);
+  });
+
+  it("preserves an explicit empty repos array (it simply binds nothing)", () => {
+    const review = parseReviewRecordInput('{ "reviewer": "c", "target": "wt", "repos": [] }');
+    expect(review.repos).toEqual([]);
+  });
+
+  it("throws when repos / commits are not arrays of non-empty strings", () => {
+    expect(() =>
+      parseReviewRecordInput('{ "reviewer": "c", "target": "wt", "repos": "~/projects/basou" }'),
+    ).toThrow(/repos must be an array of strings/);
+    expect(() =>
+      parseReviewRecordInput('{ "reviewer": "c", "target": "wt", "repos": ["ok", "  "] }'),
+    ).toThrow(/repos\[1\] must be a non-empty string/);
+    expect(() =>
+      parseReviewRecordInput('{ "reviewer": "c", "target": "wt", "commits": [7] }'),
+    ).toThrow(/commits\[0\] must be a non-empty string/);
+  });
+
+  it("names repos and commits in the unknown-field hint", () => {
+    expect(() =>
+      parseReviewRecordInput('{ "reviewer": "c", "target": "wt", "repo": "x" }'),
+    ).toThrow(/Allowed: reviewer, target, repos, commits, verdict, findings, blocked/);
+  });
 });
 
 describe("buildReviewRecordedEvent", () => {
@@ -143,6 +179,8 @@ describe("buildReviewRecordedEvent", () => {
     expect(Object.keys(parsed)).not.toContain("verdict");
     expect(Object.keys(parsed)).not.toContain("findings");
     expect(Object.keys(parsed)).not.toContain("blocked");
+    expect(Object.keys(parsed)).not.toContain("repos");
+    expect(Object.keys(parsed)).not.toContain("commits");
   });
 
   it("carries every optional field through into a schema-valid event", () => {
@@ -150,6 +188,8 @@ describe("buildReviewRecordedEvent", () => {
       JSON.stringify({
         reviewer: "codex",
         target: "PR #145",
+        repos: ["~/projects/basou"],
+        commits: ["a1b2c3d"],
         verdict: "fail",
         findings: [{ title: "bug", severity: "high" }],
         blocked: [{ title: "scope creep", reason: "spec-deviation" }],
@@ -164,6 +204,8 @@ describe("buildReviewRecordedEvent", () => {
     const parsed = EventSchema.parse(event);
     if (parsed.type !== "review_recorded") throw new Error("narrowing failed");
     expect(parsed.verdict).toBe("fail");
+    expect(parsed.repos).toEqual(["~/projects/basou"]);
+    expect(parsed.commits).toEqual(["a1b2c3d"]);
     expect(parsed.findings).toEqual([{ title: "bug", severity: "high" }]);
     expect(parsed.blocked).toEqual([{ title: "scope creep", reason: "spec-deviation" }]);
   });

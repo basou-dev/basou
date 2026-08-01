@@ -232,6 +232,7 @@ export type {
   ReviewRecordBlockedInput,
   ReviewRecordFindingInput,
   ReviewRecordInput,
+  SelfReportedReview,
 } from "./review/index.js";
 export {
   buildReviewRecordedEvent,

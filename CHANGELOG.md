@@ -3,6 +3,35 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou review record` accepts `repos` and `commits`. A recorded review lands
+  in an ad-hoc session whose only location is the planning repo it was written
+  from — not the repo under review — so until now nothing tied a record to the
+  work it covered. Naming the repository paths in `repos` gives
+  `basou review-gaps` something to bind to; `commits` records the SHAs the
+  review claims to have covered. Both are optional and additive, so existing
+  records stay valid and `schema_version` is unchanged.
+
+### Changed
+
+- `basou review-gaps` reads `review_recorded` events. A unit of work whose repo
+  was named by a record in the window is labelled **self-reported**, and the
+  per-repository tally counts it.
+
+  The label re-classifies; it does not clear. A self-reported unit keeps its
+  verdict and stays in the gap count, because a self-report is exactly that —
+  the agent's own claim, with nothing corroborating it. Were the count to drop,
+  writing an empty record would become a way to make the number go down, which
+  is the weakness the Stop-gate already has. A record written after the commit
+  is not bound at all: it cannot have gated work that already landed.
+
+  When a record names no resolvable repository it is reported as unbound, with
+  the reason. "I recorded a review and nothing changed" was previously
+  indistinguishable from "the record was ignored".
+
 ## 0.35.1 — 2026-08-01
 
 ### Fixed
