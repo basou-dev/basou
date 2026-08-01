@@ -146,6 +146,16 @@ export type ReviewGapsSummary = {
    * looking like success again — the very failure this surfacer exists to catch.
    */
   unattachedSelfReports: UnattachedSelfReports;
+  /**
+   * How many (record, unit) pairings fell inside a unit's window but could not
+   * be checked, because that unit's own repository path was never verified.
+   *
+   * Counted per PAIRING, not per record, and reported even when the record
+   * attached to some other unit: {@link unattachedSelfReports} only speaks for
+   * records that changed nothing at all, so a record that landed once and was
+   * refused elsewhere would otherwise leave the refusal invisible.
+   */
+  refusedPairings: number;
   /** Newest captured commit considered; commits not yet imported are invisible. */
   newestCommitAt: string | null;
 };
@@ -234,6 +244,11 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
   // expand a leading ~ so the same repo recorded as `~/projects/x` and
   // `/Users/u/projects/x` collapses to one binding key (the events capture both).
   if (s.startsWith("~/")) s = homedir() + s.slice(1);
+  // An unexpanded variable ANYWHERE makes this a template, not a location:
+  // `$ROOT/app` held different values in different sessions, so keying it
+  // literally would collapse unrelated repositories onto one key. Checking only
+  // the final segment missed exactly that shape.
+  if (s.includes("$")) return null;
 
   // Prefer the on-disk truth: realpath follows the view's symlink so ANY view
   // name (not only `*-workspace`) collapses to the real repo path. Only absolute
@@ -392,6 +407,7 @@ function commandRepoWithProvenance(
   cwd: string,
 ): { key: string | null; resolved: boolean } {
   const raw = commandRepoPath(args, cwd);
+  if (raw === null) return { key: null, resolved: false };
   return { key: normalizeRepoPath(raw), resolved: resolveRepoRoot(raw) !== null };
 }
 
@@ -411,17 +427,33 @@ function commandRepoWithProvenance(
  * surfacer must never produce by accident. `..` is folded textually, matching
  * how a shell resolves it against the logical path it was given.
  */
-function commandRepoPath(args: string[], cwd: string): string {
-  const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
+function commandRepoPath(args: string[], cwd: string): string | null {
+  const line = args.join(" ");
+  // `cd &&` with no argument means $HOME, which the capture does not record.
+  if (/\bcd\s*&&/.test(line)) return null;
+  const cd = line.match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
   if (!cd?.[1]) return cwd;
   const target = stripQuotes(cd[1].trim());
-  if (target.startsWith("~/") || isAbsolute(target) || target.includes("$")) return target;
+  // Forms whose meaning lives outside the captured text. `-` is $OLDPWD;
+  // `~user` is another account's home; an unexpanded `$VAR` is whatever it held
+  // at the time. Resolving any of them against cwd would mint a key -- `<cwd>/-`
+  // -- that two unrelated sessions can share, and a shared key here produces a
+  // false CANDIDATE. Abstain instead: an underivable repo becomes `unknown`.
+  if (target === "-" || target.includes("$")) return null;
+  if (target.startsWith("~") && !target.startsWith("~/")) return null;
+  if (target.startsWith("~/") || isAbsolute(target)) return target;
+  // A relative target is only meaningful against an ABSOLUTE captured cwd. The
+  // importers fall back to "." when the shell's directory was not recorded, and
+  // joining to that would resolve against whatever directory `review-gaps`
+  // happens to run in -- crediting the work to a repository next door.
+  if (!isAbsolute(cwd)) return null;
   return resolve(cwd, target);
 }
 
 /** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
 function commandRepo(args: string[], cwd: string): string | null {
-  return normalizeRepoPath(commandRepoPath(args, cwd));
+  const raw = commandRepoPath(args, cwd);
+  return raw === null ? null : normalizeRepoPath(raw);
 }
 
 /** True when a captured command exited non-zero (a failure is not evidence / not landed work). */
@@ -608,6 +640,8 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
   // Records that DID fall in a unit's window but were refused because the
   // unit's own repository could not be verified.
   const refusedForUnit = new Set<string>();
+  // Per PAIRING, so a record that attached elsewhere still reports its refusals.
+  let refusedPairings = 0;
 
   for (const [sessionId, byRepo] of workUnits) {
     for (const [repoPath, commits] of byRepo) {
@@ -644,7 +678,10 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       const selfBound = unitRepoIsHere ? inWindow : [];
       // Refused for the unit's sake, not for want of work. Kept apart so the
       // report does not go on to deny that this unit exists.
-      if (!unitRepoIsHere) for (const r of inWindow) refusedForUnit.add(r.eventId);
+      if (!unitRepoIsHere) {
+        refusedPairings += inWindow.length;
+        for (const r of inWindow) refusedForUnit.add(r.eventId);
+      }
       for (const r of selfBound) attachedSelfReports.add(r.eventId);
 
       if (scope !== null && !scope.includes(label)) continue;
@@ -756,6 +793,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       noMatchingUnit,
       unverifiableUnit,
     },
+    refusedPairings,
     newestCommitAt: newestCommit === null ? null : new Date(newestCommit).toISOString(),
   };
 }

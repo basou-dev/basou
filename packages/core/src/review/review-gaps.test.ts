@@ -14,7 +14,13 @@ import {
 
 const WS = "ws_01HXABCDEF1234567890ABCDEF";
 const NOW = "2026-05-10T00:00:00.000Z";
-const SES = (s: string): string => `ses_01HXABCDEF1234567890ABC${s.padStart(3, "0")}`;
+const SES = (s: string): string => {
+  // Crockford base32 excludes I, L, O and U; an id containing one is rejected as
+  // malformed and its session silently skipped, which quietly changes what a
+  // fixture is testing.
+  if (/[ILOU]/.test(s)) throw new Error(`fixture id '${s}' uses a non-ULID character`);
+  return `ses_01HXABCDEF1234567890ABC${s.padStart(3, "0")}`;
+};
 
 let workDir: string | undefined;
 beforeEach(async () => {
@@ -1183,6 +1189,107 @@ describe("findReviewGaps — record key provenance", () => {
     expect(s.candidates).toHaveLength(0);
     expect(s.gaps).toHaveLength(1);
     expect(s.gaps[0]?.verdict).toBe("omission");
+  });
+
+  it("abstains on a relative `cd` when the captured cwd is not absolute", async () => {
+    const paths = await setup();
+    // The importers write `cwd: "."` when the shell's directory was not
+    // recorded. Joining to that would resolve against whatever directory
+    // review-gaps happens to run in, crediting the work to a repository next
+    // door to the operator's terminal.
+    await placeSession(
+      paths,
+      { id: SES("PG"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("PG"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "cd ../app && git commit -m x"],
+          ".",
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(0);
+    expect(s.unknowns).toHaveLength(1);
+    expect(s.unknowns[0]?.verdict).toBe("unknown");
+  });
+
+  it("abstains on shell-special `cd` forms rather than minting a shared key", async () => {
+    const paths = await setup();
+    const base = getRoot();
+    // `-` is $OLDPWD, `$VAR` held different values per session, `~user` is
+    // another account. Keyed literally, two unrelated sessions would share
+    // `<cwd>/-` or `$ROOT/app` and produce a false candidate.
+    for (const [i, target] of ["-", "$ROOT/app", "~someone/app"].entries()) {
+      await placeSession(
+        paths,
+        {
+          id: SES(`H${i}`),
+          source: "claude-code-import",
+          startedAt: "2026-05-09T10:00:00.000Z",
+        },
+        [
+          cmd(
+            SES(`H${i}`),
+            "claude-code-import",
+            "2026-05-09T10:05:00.000Z",
+            ["-c", `cd ${target} && git commit -m x`],
+            base,
+          ),
+        ],
+      );
+    }
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(0);
+    expect(s.unknowns).toHaveLength(3);
+  });
+
+  it("reports a refused pairing even when the record attached to another unit", async () => {
+    const paths = await setup();
+    const live = join(getRoot(), "bar");
+    await mkdir(join(live, ".git"), { recursive: true });
+    const removedView = join(getRoot(), "foo-workspace", "bar");
+    await placeSession(paths, { id: SES("PH"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("PH"), "2026-05-09T09:30:00.000Z", { repos: [live] }),
+    ]);
+    // one unit it CAN pair with...
+    await placeSession(
+      paths,
+      { id: SES("PK"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("PK"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          live,
+        ),
+      ],
+    );
+    // ...and one it cannot, whose key only name-collapsed onto the same repo
+    await placeSession(
+      paths,
+      { id: SES("PJ"), source: "claude-code-import", startedAt: "2026-05-09T10:10:00.000Z" },
+      [
+        cmd(
+          SES("PJ"),
+          "claude-code-import",
+          "2026-05-09T10:15:00.000Z",
+          ["-c", "git commit -m y"],
+          removedView,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // It attached once, so it is not "a record that changed nothing"...
+    expect(s.unattachedSelfReports.total).toBe(0);
+    // ...but the pairing it could not be checked against is still reported.
+    expect(s.refusedPairings).toBe(1);
   });
 
   it("refuses to key a record from a relative path", async () => {

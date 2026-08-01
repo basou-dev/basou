@@ -254,6 +254,13 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
     'Note: a "self-reported" unit has a `basou review record` naming this repo, but nothing corroborates it — it stays in the count above, because an empty record must not be a way to make the number go down.',
   );
   lines.push(...unattachedLines(summary.unattachedSelfReports));
+  if (summary.refusedPairings > 0) {
+    // Per pairing, so a record that landed on one unit still reports the units
+    // it could not be checked against.
+    lines.push(
+      `Note: ${summary.refusedPairings} pairing${summary.refusedPairings === 1 ? "" : "s"} between a recorded review and captured work could not be checked, because that work's own repository path was never verified.`,
+    );
+  }
   return lines.join("\n");
 }
 

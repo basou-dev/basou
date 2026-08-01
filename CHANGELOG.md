@@ -37,6 +37,19 @@ All notable changes to **basou** are recorded here. The project follows
   one repository could be cited as a **candidate** for a commit in the other —
   the one verdict this surfacer must never reach by accident.
 
+  Where the target's meaning is not in the captured text, it abstains instead of
+  inventing a key: `cd -` is `$OLDPWD`, `~user` is another account's home, an
+  unexpanded `$VAR` held whatever it held at the time, and a relative target is
+  meaningless when the importer recorded no working directory. Each of those
+  used to produce a literal key that two unrelated sessions could share, and a
+  shared key is exactly how a false candidate appears. An unexpanded variable is
+  now rejected anywhere in a path, not only in its last segment.
+
+- `basou review-gaps` reports pairings it could not check. A recorded review
+  that landed on one unit of work while being refused against another used to
+  leave that refusal invisible, because the record itself had not "changed
+  nothing". Refusals are counted per pairing.
+
 ### Changed
 
 - `basou review-gaps` reads `review_recorded` events. A unit of work whose repo

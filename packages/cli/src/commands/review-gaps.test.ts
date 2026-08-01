@@ -177,6 +177,7 @@ function summaryOf(
       total:
         counts.noRepos + counts.unresolvableRepo + counts.noMatchingUnit + counts.unverifiableUnit,
     },
+    refusedPairings: 0,
     newestCommitAt: "2026-05-09T10:05:00.000Z",
   };
 }
