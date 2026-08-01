@@ -236,7 +236,7 @@ function assertReposCanBind(review: ReviewRecordInput): void {
   // like /Volumes/<client>/… would reach stderr and any captured log intact.
   // The caller supplied the array, so the index identifies the entry exactly.
   const detail = unbindable
-    .map(({ repo, problem }) => `  repos[${entries.indexOf(repo)}] — ${REPO_PROBLEM_HINT[problem]}`)
+    .map(({ index, problem }) => `  repos[${index}] — ${REPO_PROBLEM_HINT[problem]}`)
     .join("\n");
   throw new Error(
     `${unbindable.length} of ${review.repos?.length} 'repos' entr${unbindable.length === 1 ? "y" : "ies"} cannot be bound to a repository:\n${detail}\n` +

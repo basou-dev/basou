@@ -678,14 +678,17 @@ describe("normalizeRepoPath (realpath resolution)", () => {
 
     expect(findUnbindableRepos([repoDir])).toEqual([]);
     expect(findUnbindableRepos(["../myrepo"])).toEqual([
-      { repo: "../myrepo", problem: "relative" },
+      { repo: "../myrepo", index: 0, problem: "relative" },
     ]);
     expect(findUnbindableRepos([join(base, "myrepoo")])).toEqual([
-      { repo: join(base, "myrepoo"), problem: "absent" },
+      { repo: join(base, "myrepoo"), index: 0, problem: "absent" },
     ]);
     expect(findUnbindableRepos([join(repoDir, "packages")])).toEqual([
-      { repo: join(repoDir, "packages"), problem: "not_a_repo_root" },
+      { repo: join(repoDir, "packages"), index: 0, problem: "not_a_repo_root" },
     ]);
+    // Two identical bad entries are two problems at two positions; matching by
+    // value would name the first twice and lose the second.
+    expect(findUnbindableRepos(["../a", repoDir, "../a"]).map((u) => u.index)).toEqual([0, 2]);
   });
 
   it("everything findUnbindableRepos accepts resolves to the same key the reader binds with", async () => {
@@ -1027,6 +1030,7 @@ describe("findReviewGaps — record key provenance", () => {
   it("blames an absent path on the path, not on 'no work in the window'", async () => {
     const paths = await setup();
     const gone = join(getRoot(), "moved-away");
+    const attaches = join(getRoot(), "also-moved");
     const live = join(getRoot(), "alpha");
     await mkdir(join(live, ".git"), { recursive: true });
     await placeSession(paths, { id: SES("P3"), source: "human", startedAt: NOW }, [
@@ -1034,15 +1038,59 @@ describe("findReviewGaps — record key provenance", () => {
       reviewRecorded(SES("P3"), "2026-05-09T09:30:00.000Z", { repos: [gone] }),
       // on disk, reaches nothing: a genuinely different problem
       reviewRecorded(SES("P3"), "2026-05-09T09:31:00.000Z", { repos: [live] }),
+      // absent AND attaching. Classifying at collection time (as the previous
+      // implementation did) would count this as unresolvable and never let it
+      // reach its unit, so this entry is what separates the two designs.
+      reviewRecorded(SES("P3"), "2026-05-09T09:32:00.000Z", { repos: [attaches] }),
     ]);
+    await placeSession(
+      paths,
+      { id: SES("P6"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("P6"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          attaches,
+        ),
+      ],
+    );
 
     const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps.find((u) => u.repo === "also-moved")?.selfReports).toHaveLength(1);
     expect(s.unattachedSelfReports).toEqual({
       total: 2,
       noRepos: 0,
       unresolvableRepo: 1,
       noMatchingUnit: 1,
     });
+  });
+
+  it("refuses to key a record from a relative path", async () => {
+    const paths = await setup();
+    // Both spellings would collapse to the literal key `../app`, binding a
+    // record written beside one repository to a commit made beside another.
+    await placeSession(paths, { id: SES("P7"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("P7"), "2026-05-09T09:30:00.000Z", { repos: ["../app"] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("P8"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("P8"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "cd ../app && git commit -m x"],
+          join(getRoot(), "unrelated"),
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps.flatMap((u) => u.selfReports)).toHaveLength(0);
+    expect(s.unattachedSelfReports.unresolvableRepo).toBe(1);
   });
 
   it("does not let an empty repos_resolved shadow a populated repos", async () => {

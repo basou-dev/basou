@@ -133,18 +133,27 @@ function flatten(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * Split into user-perceived characters. Neither UTF-16 units nor code points
+ * are the right unit: a cap between them can strip a combining mark or leave a
+ * ZWJ emoji sequence half-rendered.
+ */
+function graphemes(value: string): string[] {
+  return [...GRAPHEMES.segment(value)].map((s) => s.segment);
+}
+
 /** {@link flatten} plus a length cap, for free-form recorded text. */
 function oneLine(value: string, max: number): string {
-  // Sliced by CODE POINT: `String.slice` counts UTF-16 units, so a cap landing
-  // inside a surrogate pair would emit half a character.
-  const flat = [...flatten(value)];
+  const flat = graphemes(flatten(value));
   return flat.length > max ? `${flat.slice(0, max - 1).join("")}…` : flat.join("");
 }
 
 /** Short SHAs a record claimed to cover, capped so one line stays readable. */
 function claimedCommits(commits: string[]): string {
   if (commits.length === 0) return "";
-  const shown = commits.slice(0, 3).map((c) => [...flatten(c)].slice(0, 8).join(""));
+  const shown = commits.slice(0, 3).map((c) => graphemes(flatten(c)).slice(0, 8).join(""));
   return ` claiming ${shown.join(", ")}${commits.length > shown.length ? ", ..." : ""}`;
 }
 

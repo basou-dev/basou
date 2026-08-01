@@ -259,11 +259,26 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
   return s;
 }
 
+/**
+ * A key for a path named by a RECORD. Same permissive resolution commits get —
+ * a repository that has moved still keys by its recorded path on both sides —
+ * but only from an absolute location. A relative spelling names nothing on its
+ * own: `../app` recorded from one directory and `cd ../app` captured in another
+ * would collapse to the same literal key and bind unrelated repositories.
+ * Commits keep the looser behaviour they have always had; this is about what a
+ * record is allowed to claim.
+ */
+function recordRepoKey(p: string): string | null {
+  const s = stripQuotes(p.trim());
+  if (!(s.startsWith("~/") || isAbsolute(s))) return null;
+  return normalizeRepoPath(p);
+}
+
 /** Why a hand-typed repository path cannot become a binding key. */
 export type RepoPathProblem = "relative" | "absent" | "not_a_repo_root";
 
 /** A `repos` entry that cannot bind, and why. */
-export type UnbindableRepo = { repo: string; problem: RepoPathProblem };
+export type UnbindableRepo = { repo: string; index: number; problem: RepoPathProblem };
 
 /**
  * Strict repo-root resolution for HAND-TYPED input (a record's `repos`), as
@@ -307,10 +322,13 @@ function classifyRepoPath(p: string | null | undefined): {
  */
 export function findUnbindableRepos(repos: readonly string[]): UnbindableRepo[] {
   const out: UnbindableRepo[] = [];
-  for (const repo of repos) {
+  // Carries the INDEX rather than letting the caller look the value back up:
+  // two identical bad entries are two distinct problems, and a value lookup
+  // would report the first position twice and never name the second.
+  repos.forEach((repo, index) => {
     const { problem } = classifyRepoPath(repo);
-    if (problem !== null) out.push({ repo, problem });
-  }
+    if (problem !== null) out.push({ repo, index, problem });
+  });
   return out;
 }
 
@@ -464,7 +482,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
           // below, from whether the path is really on disk, rather than by
           // refusing to key it.
           const repos = new Set(
-            named.map((r) => normalizeRepoPath(r)).filter((r): r is string => r !== null),
+            named.map((r) => recordRepoKey(r)).filter((r): r is string => r !== null),
           );
           if (repos.size === 0 || Number.isNaN(recordedAt)) {
             // Name the mistake: an absent `repos` is the operator forgetting a

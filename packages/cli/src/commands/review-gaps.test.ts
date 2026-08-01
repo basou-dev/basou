@@ -261,6 +261,21 @@ describe("renderReviewGaps", () => {
     expect(out).not.toContain("unverified, still counted");
   });
 
+  it("truncates on a grapheme boundary, not mid-emoji-sequence", () => {
+    const out = renderReviewGaps(
+      summaryOf([
+        // A ZWJ sequence straddling the cap: slicing by code point would keep
+        // the first emoji plus a dangling joiner.
+        gapUnit({
+          selfReports: [selfReport({ reviewer: `${"a".repeat(37)}\u{1F469}‍\u{1F4BB}xyz` })],
+        }),
+      ]),
+    );
+    // 41 graphemes, so the 40-cap keeps 39 and appends the ellipsis.
+    expect(out).not.toContain("‍…");
+    expect(out).toContain(`${"a".repeat(37)}\u{1F469}‍\u{1F4BB}x…`);
+  });
+
   it("truncates a reviewer name on a character boundary", () => {
     const out = renderReviewGaps(
       summaryOf([

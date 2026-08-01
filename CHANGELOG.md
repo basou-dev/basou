@@ -60,12 +60,14 @@ All notable changes to **basou** are recorded here. The project follows
   tool's own input handling, and a completeness caveat that vanishes under a
   filter is how silence starts looking like success again.
 
-  A record's repositories are resolved strictly, unlike the paths basou captured
-  itself. A captured `cd` target whose repository has since moved is still the
-  best key available and keeps its string fallback; a path written into a record
-  has no such claim, and falling back would both mint a key no commit can match
-  and then report the failure as "no work in the window" — a cause that was
-  never established.
+  A record's repositories are keyed the same way commits are, so a repository
+  that has moved still pairs its record with its work — both sides fall back to
+  the recorded path. The one restriction is that a record may only key from an
+  absolute location: a relative spelling names nothing on its own, and `../app`
+  recorded in one directory would otherwise collapse onto `cd ../app` captured
+  in another. Which of the two causes a miss gets reported is decided afterwards
+  from whether the path is a repository root right now, rather than by refusing
+  to key it.
 
 ## 0.35.1 — 2026-08-01
 
