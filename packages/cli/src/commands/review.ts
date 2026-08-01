@@ -14,6 +14,7 @@ import {
   type RepoPathProblem,
   type ReviewRecordInput,
   readManifest,
+  resolveRepoRoot,
   sanitizePath,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -160,7 +161,12 @@ export async function doRunReviewRecord(
 
   const raw = await readReviewInput(options, ctx);
   const review = parseReviewRecordInput(raw);
-  assertReposCanBind(review);
+  assertReposCanBind(review, { repositoryRoot });
+  // Resolved here, at the one moment the filesystem state that made the entries
+  // valid is known to hold.
+  const reposResolved = (review.repos ?? [])
+    .map((r) => resolveRepoRoot(r))
+    .filter((r): r is string => r !== null);
 
   if (options.dryRun === true) {
     printReviewPreview(options, review);
@@ -193,7 +199,7 @@ export async function doRunReviewRecord(
     invocation: { command: "basou review record", args: invocationArgs },
     targetEventBuilders: [
       (sessionId: PrefixedId<"ses">, eventId: PrefixedId<"evt">) =>
-        buildReviewRecordedEvent({ eventId, sessionId, occurredAt, review }),
+        buildReviewRecordedEvent({ eventId, sessionId, occurredAt, review, reposResolved }),
     ],
   });
 
@@ -220,11 +226,20 @@ const REPO_PROBLEM_HINT: Record<RepoPathProblem, string> = {
  * having been written down, and it silently never appears against the work it
  * claims to cover.
  */
-function assertReposCanBind(review: ReviewRecordInput): void {
+function assertReposCanBind(review: ReviewRecordInput, opts: { repositoryRoot: string }): void {
   const unbindable = findUnbindableRepos(review.repos ?? []);
   if (unbindable.length === 0) return;
   const detail = unbindable
-    .map(({ repo, problem }) => `  '${repo}' — ${REPO_PROBLEM_HINT[problem]}`)
+    .map(({ repo, problem }) => {
+      // Echoed back through the same sanitizer the --file path uses: the CLI's
+      // error surface is contractually pathless, and an entry naming a client
+      // or machine layout must not reach stderr or a captured log verbatim.
+      const shown = sanitizePath(repo, {
+        workingDirectory: opts.repositoryRoot,
+        homedir: homedir(),
+      });
+      return `  '${shown}' — ${REPO_PROBLEM_HINT[problem]}`;
+    })
     .join("\n");
   throw new Error(
     `${unbindable.length} of ${review.repos?.length} 'repos' entr${unbindable.length === 1 ? "y" : "ies"} cannot be bound to a repository:\n${detail}\n` +

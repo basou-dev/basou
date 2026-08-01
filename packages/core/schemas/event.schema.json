@@ -1304,6 +1304,13 @@
             "minLength": 1
           }
         },
+        "repos_resolved": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "commits": {
           "type": "array",
           "items": {

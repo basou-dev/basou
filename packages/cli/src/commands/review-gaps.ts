@@ -124,12 +124,30 @@ function relAge(iso: string | null, now: Date): string {
   return `${Math.max(1, Math.floor(ms / 60_000))}m ago`;
 }
 
+/**
+ * Flatten recorded text onto one line and cap it. Recorded content is written
+ * by whatever ran the review; it must not be able to restructure this report —
+ * a newline inside a claimed SHA would otherwise inject a Markdown line.
+ */
+function flatten(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
+/** {@link flatten} plus a length cap, for free-form recorded text. */
+function oneLine(value: string, max: number): string {
+  const flat = flatten(value);
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
 /** Short SHAs a record claimed to cover, capped so one line stays readable. */
 function claimedCommits(commits: string[]): string {
   if (commits.length === 0) return "";
-  const shown = commits.slice(0, 3).map((c) => c.slice(0, 8));
+  const shown = commits.slice(0, 3).map((c) => flatten(c).slice(0, 8));
   return ` claiming ${shown.join(", ")}${commits.length > shown.length ? ", ..." : ""}`;
 }
+
+/** Self-reports rendered inline before the rest are summarised as a count. */
+const SELF_REPORTS_SHOWN = 3;
 
 /**
  * The self-report suffix. It is appended to a gap line — never substituted for
@@ -139,10 +157,14 @@ function claimedCommits(commits: string[]): string {
  */
 function selfReportSuffix(u: ReviewGapUnit): string {
   if (u.selfReports.length === 0) return "";
-  const parts = u.selfReports.map(
-    (r) =>
-      `${r.reviewer}${claimedCommits(r.commits)}${r.recordedAfterCommit ? " (recorded after the commit)" : ""}`,
-  );
+  const parts = u.selfReports
+    .slice(0, SELF_REPORTS_SHOWN)
+    .map(
+      (r) =>
+        `${oneLine(r.reviewer, 40)}${claimedCommits(r.commits)}${r.recordedAfterCommit ? " (recorded after the commit)" : ""}`,
+    );
+  const rest = u.selfReports.length - parts.length;
+  if (rest > 0) parts.push(`+${rest} more`);
   return ` · self-reported by ${parts.join("; ")} — unverified, still counted`;
 }
 
@@ -161,7 +183,10 @@ function candidateLine(u: ReviewGapUnit, now: Date): string {
   const cite = u.reviews
     .map((r) => `${r.sessionId.slice(0, 14)}${r.examinedDiff ? "(diff)" : ""}`)
     .join(", ");
-  return `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) — review trace: ${cite}`;
+  // A record bound here counts as attached, so it is absent from the unattached
+  // diagnostic; without this suffix it would exist only in --json and the claim
+  // would be silently missing from the report the operator actually reads.
+  return `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) — review trace: ${cite}${selfReportSuffix(u)}`;
 }
 
 /**

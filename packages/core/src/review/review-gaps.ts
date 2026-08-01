@@ -445,9 +445,17 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         // planning repo, which would bind the wrong repo entirely.
         if (ev.type === "review_recorded") {
           const recordedAt = Date.parse(ev.occurred_at);
-          const named = ev.repos ?? [];
+          // Prefer what the paths resolved to when the record was written: the
+          // author's spelling can be a symlink retargeted since. Older records
+          // predate the field and fall back to their `repos`.
+          const named = ev.repos_resolved ?? ev.repos ?? [];
+          // STRICT resolution, unlike captured `cd` targets: a record's path
+          // that cannot be verified against the disk must not become a literal
+          // key. Doing so would both mint a key no commit can match and, worse,
+          // report the failure later as "no work in the window" — asserting a
+          // cause never established, the defect this surfacer exists to avoid.
           const repos = new Set(
-            named.map((r) => normalizeRepoPath(r)).filter((r): r is string => r !== null),
+            named.map((r) => resolveRepoRoot(r)).filter((r): r is string => r !== null),
           );
           if (repos.size === 0 || Number.isNaN(recordedAt)) {
             // Name the mistake: an absent `repos` is the operator forgetting a

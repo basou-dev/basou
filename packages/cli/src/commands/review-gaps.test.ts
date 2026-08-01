@@ -239,4 +239,46 @@ describe("renderReviewGaps", () => {
     expect(out).toContain("1 recorded review changed nothing");
     expect(out).not.toContain("named no repository");
   });
+
+  it("shows the claim on a candidate unit too, not only on gaps", () => {
+    const candidate = gapUnit({
+      verdict: "candidate",
+      reviews: [
+        { sessionId: SES("R1"), examinedDiff: true, files: [], endedAt: NOW.toISOString() },
+      ],
+      selfReports: [selfReport({ reviewer: "codex" })],
+    });
+    const summary = summaryOf([]);
+    const out = renderReviewGaps({ ...summary, candidates: [candidate] });
+    // A bound record counts as attached, so it is absent from the unattached
+    // diagnostic; if the line dropped it, it would exist only in --json.
+    expect(out).toContain("review trace:");
+    expect(out).toContain("self-reported by codex");
+  });
+
+  it("cannot let recorded text restructure the report", () => {
+    const out = renderReviewGaps(
+      summaryOf([
+        gapUnit({
+          selfReports: [
+            selfReport({ reviewer: "evil\n## Injected heading", commits: ["abc\n- fake gap"] }),
+          ],
+        }),
+      ]),
+    );
+    const injected = out
+      .split("\n")
+      .filter((l) => l.startsWith("## Injected") || l === "- fake gap");
+    expect(injected).toEqual([]);
+    expect(out).toContain("evil ## Injected heading");
+  });
+
+  it("caps how many self-reports one line renders", () => {
+    const many = Array.from({ length: 6 }, (_, i) =>
+      selfReport({ reviewer: `r${i}`, eventId: `evt_01HXABCDEF1234567890AB000${i}` }),
+    );
+    const out = renderReviewGaps(summaryOf([gapUnit({ selfReports: many })]));
+    expect(out).toContain("+3 more");
+    expect(out).not.toContain("r5");
+  });
 });

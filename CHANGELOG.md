@@ -22,11 +22,22 @@ All notable changes to **basou** are recorded here. The project follows
   storing nothing: the record would count as a review having been written down
   while never appearing against any work.
 
+  The record also carries `repos_resolved`, what those paths resolved to at the
+  moment it was written. `repos` keeps the author's spelling, which may be a
+  symlink whose target later changes; the resolved form is the stable binding
+  key. It is derived by basou and rejected as input, for the same reason basou
+  does not accept a claimed review time: what a path resolves to is something
+  basou observes, not something the reviewed party asserts.
+
 ### Changed
 
 - `basou review-gaps` reads `review_recorded` events. A unit of work whose repo
   was named by a record in the window is labelled **self-reported**, the record's
   claimed commits are shown as a claim, and the per-repository tally counts it.
+  The label appears on units that already have a review trace too, so a claim is
+  never silently dropped just because something else already vouched for the
+  work. Recorded text is flattened onto one line and capped before rendering:
+  what an agent wrote down must not be able to restructure the report.
 
   The label re-classifies; it does not clear. A self-reported unit keeps its
   verdict and stays in the gap count, because a self-report is exactly that —
@@ -41,13 +52,20 @@ All notable changes to **basou** are recorded here. The project follows
   hiding the claim only discarded the operator's own note.
 
 - `basou review-gaps` reports every recorded review that changed nothing, with
-  the cause of each: no repository named, a path that is not a repository root,
-  or a repository with no unit of work in the window. The causes are listed
-  separately because they are different mistakes, and basou should not assert a
-  reason it has not established. The count is global and stays visible under a
-  `--repo` scope — it is a caveat about the tool's own input handling, and a
-  completeness caveat that vanishes under a filter is how silence starts looking
-  like success again.
+  the cause of each: no repository named, a path that does not resolve to a
+  repository root on this machine, or a repository with no unit of work in the
+  window. The causes are listed separately because they are different mistakes,
+  and basou should not assert a reason it has not established. The count is
+  global and stays visible under a `--repo` scope — it is a caveat about the
+  tool's own input handling, and a completeness caveat that vanishes under a
+  filter is how silence starts looking like success again.
+
+  A record's repositories are resolved strictly, unlike the paths basou captured
+  itself. A captured `cd` target whose repository has since moved is still the
+  best key available and keeps its string fallback; a path written into a record
+  has no such claim, and falling back would both mint a key no commit can match
+  and then report the failure as "no work in the window" — a cause that was
+  never established.
 
 ## 0.35.1 — 2026-08-01
 

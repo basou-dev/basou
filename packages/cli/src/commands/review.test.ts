@@ -147,8 +147,25 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
     ) as Record<string, unknown>;
     expect(review.repos).toEqual([repo]);
     expect(review.commits).toEqual(["a1b2c3d"]);
+    // What the path resolved to is recorded separately: it is basou's own
+    // observation and the stable binding key, while `repos` keeps the spelling.
+    expect(review.repos_resolved).toEqual([await realpath(repo)]);
     // The repo count is echoed so the agent can see the record is bindable.
     expect(joinCalls(out)).toContain("1 repo");
+  });
+
+  it("rev-2f: repos_resolved is derived, never accepted from the piped input", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await expect(
+      doRunReviewRecord(
+        {},
+        ctx(
+          repo,
+          JSON.stringify({ reviewer: "c", target: "wt", repos_resolved: ["/somewhere/else"] }),
+        ),
+      ),
+    ).rejects.toThrow(/Unknown field 'repos_resolved'/);
   });
 
   it("rev-2c: a repos entry that could never bind is rejected before anything is written", async () => {
@@ -181,7 +198,11 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
       (e: unknown) => e as Error,
     );
     expect(error?.message).toContain("'../elsewhere' — use an absolute path");
-    expect(error?.message).toContain(`'${missing}' — no such path on this machine`);
+    expect(error?.message).toContain("no such path on this machine");
+    // The CLI's error surface is contractually pathless: the offending entry is
+    // named, but not as a raw absolute path.
+    expect(error?.message).not.toContain(missing);
+    expect(error?.message).toContain("no-such-repo");
   });
 
   it("rev-2e: --dry-run rejects an unbindable repos entry too", async () => {
