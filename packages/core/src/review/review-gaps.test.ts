@@ -725,7 +725,7 @@ describe("normalizeRepoPath (realpath resolution)", () => {
 describe("findReviewGaps — self-reported reviews", () => {
   let root: string | undefined;
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "basou-rg-sr-"));
+    root = await realpath(await mkdtemp(join(tmpdir(), "basou-rg-sr-")));
   });
   afterEach(async () => {
     if (root !== undefined) {
@@ -986,7 +986,10 @@ describe("findReviewGaps — self-reported reviews", () => {
 describe("findReviewGaps — record key provenance", () => {
   let root: string | undefined;
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "basou-rg-pv-"));
+    // realpath'd: on macOS `mkdtemp` returns a /var path that resolves to
+    // /private/var, and that difference alone can make keys disagree — masking
+    // whether the code under test actually decided anything.
+    root = await realpath(await mkdtemp(join(tmpdir(), "basou-rg-pv-")));
   });
   afterEach(async () => {
     if (root !== undefined) {

@@ -370,6 +370,26 @@ function inspectCommand(args: string[]): { files: string[]; examinedDiff: boolea
   return { files: [...files], examinedDiff };
 }
 
+/**
+ * Repo a command effectively ran in, with whether that key was RESOLVED against
+ * the disk or produced by the string fallback.
+ *
+ * The provenance cannot be recovered from the key afterwards. A fallback key is
+ * not necessarily a path that fails to resolve: collapsing a `*-workspace`
+ * segment out of `/x/foo-workspace/bar` yields `/x/bar`, which may well exist.
+ * Asking "does this key resolve?" would then answer yes about a key that was
+ * guessed from a directory NAME, so the question has to be answered where the
+ * key is made.
+ */
+function commandRepoWithProvenance(
+  args: string[],
+  cwd: string,
+): { key: string | null; resolved: boolean } {
+  const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
+  const raw = cd ? (cd[1] as string) : cwd;
+  return { key: normalizeRepoPath(raw), resolved: resolveRepoRoot(raw) !== null };
+}
+
 /** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
 function commandRepo(args: string[], cwd: string): string | null {
   // An explicit `cd <target> &&` wins over cwd — and wins EVEN WHEN the target
@@ -398,7 +418,13 @@ function commitFiles(args: string[]): string[] {
     .map((t) => basename(t));
 }
 
-type CommitRec = { repo: string; at: number; files: string[] };
+type CommitRec = {
+  repo: string;
+  at: number;
+  files: string[];
+  /** The key came from resolving the path on disk, not from the string fallback. */
+  keyResolved: boolean;
+};
 type ReviewRec = {
   sessionId: string;
   endedAt: number | null;
@@ -525,7 +551,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
 
         // committing (code-author) session: collect git-commit events
         if (!ev.args.join(" ").includes("git commit")) continue;
-        const repo = commandRepo(ev.args, ev.cwd);
+        const { key: repo, resolved: keyResolved } = commandRepoWithProvenance(ev.args, ev.cwd);
         if (repo === null || Number.isNaN(at)) {
           // Surface as unknown rather than silently dropping an observed commit.
           const list = unknownCommits.get(entry.sessionId) ?? [];
@@ -535,7 +561,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         }
         const byRepo = workUnits.get(entry.sessionId) ?? new Map<string, CommitRec[]>();
         const list = byRepo.get(repo) ?? [];
-        list.push({ repo, at, files: commitFiles(ev.args) });
+        list.push({ repo, at, files: commitFiles(ev.args), keyResolved });
         byRepo.set(repo, list);
         workUnits.set(entry.sessionId, byRepo);
       }
@@ -577,12 +603,12 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       const earliest = first ?? last ?? 0;
       const latest = last ?? first ?? 0;
       // BOTH sides must name a repository that is here. A record key is always
-      // a resolved root, but a unit's key may have come from the string
-      // fallback — a commit captured through a `*-workspace` view that has since
-      // been removed collapses to a path that can genuinely exist. That collapse
-      // is a heuristic on a directory NAME, so pairing a claim to it would still
-      // be the guess this rule exists to refuse.
-      const unitRepoIsHere = resolveRepoRoot(repoPath) !== null;
+      // a resolved root; a unit's key qualifies only when a commit's own path
+      // resolved. Re-resolving `repoPath` would not do: the string fallback can
+      // land on a path that exists (collapsing `*-workspace` out of
+      // `/x/foo-workspace/bar` gives `/x/bar`), and it reached it by guessing
+      // from a directory name, which is what this rule refuses.
+      const unitRepoIsHere = commits.some((c) => c.keyResolved);
       const selfBound = unitRepoIsHere
         ? selfReports.filter(
             (r) =>
