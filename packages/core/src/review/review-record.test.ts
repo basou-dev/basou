@@ -129,11 +129,11 @@ describe("parseReviewRecordInput", () => {
       JSON.stringify({
         reviewer: "codex",
         target: "working-tree",
-        repos: ["~/projects/basou", "/home/u/projects/basou-planning"],
+        repos: ["~/projects/alpha", "/home/u/projects/beta"],
         commits: ["a1b2c3d", "e4f5a6b"],
       }),
     );
-    expect(review.repos).toEqual(["~/projects/basou", "/home/u/projects/basou-planning"]);
+    expect(review.repos).toEqual(["~/projects/alpha", "/home/u/projects/beta"]);
     expect(review.commits).toEqual(["a1b2c3d", "e4f5a6b"]);
   });
 
