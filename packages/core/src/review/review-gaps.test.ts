@@ -978,3 +978,100 @@ describe("findReviewGaps — self-reported reviews", () => {
     expect(s.unattachedSelfReports.total).toBe(0);
   });
 });
+
+/** Round-3 regressions: provenance decides strictness, not which field it came from. */
+describe("findReviewGaps — record key provenance", () => {
+  let root: string | undefined;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "basou-rg-pv-"));
+  });
+  afterEach(async () => {
+    if (root !== undefined) {
+      await rm(root, { recursive: true, force: true });
+      root = undefined;
+    }
+  });
+  function getRoot(): string {
+    if (root === undefined) throw new Error("root not initialized");
+    return root;
+  }
+
+  it("still pairs a record with its unit after the repository has moved away", async () => {
+    const paths = await setup();
+    // Neither side is on disk any more: the commit keeps its old path through
+    // the string fallback, so a record naming the same path must reach it.
+    const gone = join(getRoot(), "moved-away");
+    await placeSession(paths, { id: SES("P1"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("P1"), "2026-05-09T09:30:00.000Z", { reposResolved: [gone] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("P2"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("P2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          gone,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.selfReports).toHaveLength(1);
+    expect(s.unattachedSelfReports.total).toBe(0);
+  });
+
+  it("blames an absent path on the path, not on 'no work in the window'", async () => {
+    const paths = await setup();
+    const gone = join(getRoot(), "moved-away");
+    const live = join(getRoot(), "alpha");
+    await mkdir(join(live, ".git"), { recursive: true });
+    await placeSession(paths, { id: SES("P3"), source: "human", startedAt: NOW }, [
+      // keys fine via the fallback, but reaches nothing AND is not on disk
+      reviewRecorded(SES("P3"), "2026-05-09T09:30:00.000Z", { repos: [gone] }),
+      // on disk, reaches nothing: a genuinely different problem
+      reviewRecorded(SES("P3"), "2026-05-09T09:31:00.000Z", { repos: [live] }),
+    ]);
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.unattachedSelfReports).toEqual({
+      total: 2,
+      noRepos: 0,
+      unresolvableRepo: 1,
+      noMatchingUnit: 1,
+    });
+  });
+
+  it("does not let an empty repos_resolved shadow a populated repos", async () => {
+    const paths = await setup();
+    const live = join(getRoot(), "alpha");
+    await mkdir(join(live, ".git"), { recursive: true });
+    // The writer never emits this shape, but an imported event may carry it.
+    await placeSession(paths, { id: SES("P4"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("P4"), "2026-05-09T09:30:00.000Z", {
+        repos: [live],
+        reposResolved: [],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("P5"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("P5"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          live,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps[0]?.selfReports).toHaveLength(1);
+    expect(s.unattachedSelfReports.noRepos).toBe(0);
+  });
+});

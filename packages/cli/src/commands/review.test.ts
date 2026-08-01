@@ -184,6 +184,23 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
     expect(dirs).toHaveLength(0);
   });
 
+  it("rev-2d2: the rejection never echoes a path outside the workspace or home", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    // sanitizePath leaves this verbatim, so echoing the value at all would leak it.
+    const outside = "/Volumes/Client-Delta/secret/missing";
+    const error = await doRunReviewRecord(
+      {},
+      ctx(repo, JSON.stringify({ reviewer: "c", target: "wt", repos: [outside] })),
+    ).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(error?.message).toContain("repos[0]");
+    expect(error?.message).not.toContain("Client-Delta");
+    expect(error?.message).not.toContain(outside);
+  });
+
   it("rev-2d: the rejection names each offending entry and its cause", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
@@ -197,12 +214,13 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
       () => undefined,
       (e: unknown) => e as Error,
     );
-    expect(error?.message).toContain("'../elsewhere' — use an absolute path");
-    expect(error?.message).toContain("no such path on this machine");
-    // The CLI's error surface is contractually pathless: the offending entry is
-    // named, but not as a raw absolute path.
+    expect(error?.message).toContain("repos[0] — use an absolute path");
+    expect(error?.message).toContain("repos[1] — no such path on this machine");
+    // The CLI's error surface is contractually pathless. Naming the entry by
+    // index leaks nothing: sanitizePath only relativises paths under the
+    // workspace or home and returns anything else verbatim.
     expect(error?.message).not.toContain(missing);
-    expect(error?.message).toContain("no-such-repo");
+    expect(error?.message).not.toContain("no-such-repo");
   });
 
   it("rev-2e: --dry-run rejects an unbindable repos entry too", async () => {

@@ -254,6 +254,24 @@ describe("renderReviewGaps", () => {
     // diagnostic; if the line dropped it, it would exist only in --json.
     expect(out).toContain("review trace:");
     expect(out).toContain("self-reported by codex");
+    // ...but a candidate is NOT in the gap count, so the gap wording must not
+    // be reused here while the report also says there are zero gaps.
+    expect(out).toContain("no unit of work landed without a review trail");
+    expect(out).toContain("— unverified");
+    expect(out).not.toContain("unverified, still counted");
+  });
+
+  it("truncates a reviewer name on a character boundary", () => {
+    const out = renderReviewGaps(
+      summaryOf([
+        // 42 code points, so the 40-cap truncates exactly where the emoji sits
+        gapUnit({ selfReports: [selfReport({ reviewer: `${"a".repeat(38)}\u{1F600}xyz` })] }),
+      ]),
+    );
+    // Slicing UTF-16 units would land inside the surrogate pair and emit half a
+    // character; the cap must fall on a code point.
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(out).toContain(`${"a".repeat(38)}\u{1F600}…`);
   });
 
   it("cannot let recorded text restructure the report", () => {

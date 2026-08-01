@@ -135,14 +135,16 @@ function flatten(value: string): string {
 
 /** {@link flatten} plus a length cap, for free-form recorded text. */
 function oneLine(value: string, max: number): string {
-  const flat = flatten(value);
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  // Sliced by CODE POINT: `String.slice` counts UTF-16 units, so a cap landing
+  // inside a surrogate pair would emit half a character.
+  const flat = [...flatten(value)];
+  return flat.length > max ? `${flat.slice(0, max - 1).join("")}…` : flat.join("");
 }
 
 /** Short SHAs a record claimed to cover, capped so one line stays readable. */
 function claimedCommits(commits: string[]): string {
   if (commits.length === 0) return "";
-  const shown = commits.slice(0, 3).map((c) => flatten(c).slice(0, 8));
+  const shown = commits.slice(0, 3).map((c) => [...flatten(c)].slice(0, 8).join(""));
   return ` claiming ${shown.join(", ")}${commits.length > shown.length ? ", ..." : ""}`;
 }
 
@@ -150,12 +152,15 @@ function claimedCommits(commits: string[]): string {
 const SELF_REPORTS_SHOWN = 3;
 
 /**
- * The self-report suffix. It is appended to a gap line — never substituted for
- * it — so the record is visible without the unit ceasing to be a gap. The
- * commits a record claimed are shown as exactly that: the reviewer's claim,
- * which nothing here checks and no count uses.
+ * The self-report suffix. It is appended to a line — never substituted for it —
+ * so the record is visible without changing what the unit is. The commits a
+ * record claimed are shown as exactly that: the reviewer's claim, which nothing
+ * here checks and no count uses.
+ *
+ * `stillCounted` is false on a candidate: the wording must stay true, and a
+ * candidate is not in the gap count the phrase refers to.
  */
-function selfReportSuffix(u: ReviewGapUnit): string {
+function selfReportSuffix(u: ReviewGapUnit, stillCounted: boolean): string {
   if (u.selfReports.length === 0) return "";
   const parts = u.selfReports
     .slice(0, SELF_REPORTS_SHOWN)
@@ -165,7 +170,7 @@ function selfReportSuffix(u: ReviewGapUnit): string {
     );
   const rest = u.selfReports.length - parts.length;
   if (rest > 0) parts.push(`+${rest} more`);
-  return ` · self-reported by ${parts.join("; ")} — unverified, still counted`;
+  return ` · self-reported by ${parts.join("; ")} — ${stillCounted ? "unverified, still counted" : "unverified"}`;
 }
 
 function unitLine(u: ReviewGapUnit, now: Date): string {
@@ -173,9 +178,9 @@ function unitLine(u: ReviewGapUnit, now: Date): string {
   const head = `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"})`;
   if (u.verdict === "near_unbound") {
     const ids = u.reviews.map((r) => r.sessionId.slice(0, 14)).join(", ");
-    return `${head} — a nearby review exists, but the diff / changed files were not examined [${ids}]${selfReportSuffix(u)}`;
+    return `${head} — a nearby review exists, but the diff / changed files were not examined [${ids}]${selfReportSuffix(u, true)}`;
   }
-  return `${head} — no bound cross-model review${selfReportSuffix(u)}`;
+  return `${head} — no bound cross-model review${selfReportSuffix(u, true)}`;
 }
 
 function candidateLine(u: ReviewGapUnit, now: Date): string {
@@ -186,7 +191,7 @@ function candidateLine(u: ReviewGapUnit, now: Date): string {
   // A record bound here counts as attached, so it is absent from the unattached
   // diagnostic; without this suffix it would exist only in --json and the claim
   // would be silently missing from the report the operator actually reads.
-  return `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) — review trace: ${cite}${selfReportSuffix(u)}`;
+  return `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) — review trace: ${cite}${selfReportSuffix(u, false)}`;
 }
 
 /**

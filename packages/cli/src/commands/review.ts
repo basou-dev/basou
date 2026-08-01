@@ -161,7 +161,7 @@ export async function doRunReviewRecord(
 
   const raw = await readReviewInput(options, ctx);
   const review = parseReviewRecordInput(raw);
-  assertReposCanBind(review, { repositoryRoot });
+  assertReposCanBind(review);
   // Resolved here, at the one moment the filesystem state that made the entries
   // valid is known to hold.
   const reposResolved = (review.repos ?? [])
@@ -226,20 +226,17 @@ const REPO_PROBLEM_HINT: Record<RepoPathProblem, string> = {
  * having been written down, and it silently never appears against the work it
  * claims to cover.
  */
-function assertReposCanBind(review: ReviewRecordInput, opts: { repositoryRoot: string }): void {
-  const unbindable = findUnbindableRepos(review.repos ?? []);
+function assertReposCanBind(review: ReviewRecordInput): void {
+  const entries = review.repos ?? [];
+  const unbindable = findUnbindableRepos(entries);
   if (unbindable.length === 0) return;
+  // Named by INDEX, never by value. The CLI's error surface is contractually
+  // pathless, and `sanitizePath` cannot make it so here: it relativises a path
+  // under the workspace or home and returns anything else verbatim, so an entry
+  // like /Volumes/<client>/… would reach stderr and any captured log intact.
+  // The caller supplied the array, so the index identifies the entry exactly.
   const detail = unbindable
-    .map(({ repo, problem }) => {
-      // Echoed back through the same sanitizer the --file path uses: the CLI's
-      // error surface is contractually pathless, and an entry naming a client
-      // or machine layout must not reach stderr or a captured log verbatim.
-      const shown = sanitizePath(repo, {
-        workingDirectory: opts.repositoryRoot,
-        homedir: homedir(),
-      });
-      return `  '${shown}' — ${REPO_PROBLEM_HINT[problem]}`;
-    })
+    .map(({ repo, problem }) => `  repos[${entries.indexOf(repo)}] — ${REPO_PROBLEM_HINT[problem]}`)
     .join("\n");
   throw new Error(
     `${unbindable.length} of ${review.repos?.length} 'repos' entr${unbindable.length === 1 ? "y" : "ies"} cannot be bound to a repository:\n${detail}\n` +

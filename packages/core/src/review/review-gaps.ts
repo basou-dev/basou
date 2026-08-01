@@ -388,6 +388,8 @@ type SelfReportRec = Omit<SelfReportedReview, "recordedAfterCommit"> & {
   at: number;
   /** Normalized repo paths the record named; the only binding key it has. */
   repos: Set<string>;
+  /** A named path is a repository root on disk now — used only to explain a miss. */
+  onDisk: boolean;
 };
 
 const REVIEW_SOURCE = "codex-import"; // the cross-model reviewer vendor (v1)
@@ -447,25 +449,36 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
           const recordedAt = Date.parse(ev.occurred_at);
           // Prefer what the paths resolved to when the record was written: the
           // author's spelling can be a symlink retargeted since. Older records
-          // predate the field and fall back to their `repos`.
-          const named = ev.repos_resolved ?? ev.repos ?? [];
-          // STRICT resolution, unlike captured `cd` targets: a record's path
-          // that cannot be verified against the disk must not become a literal
-          // key. Doing so would both mint a key no commit can match and, worse,
-          // report the failure later as "no work in the window" — asserting a
-          // cause never established, the defect this surfacer exists to avoid.
+          // predate the field and fall back to their `repos`. A PRESENT BUT
+          // EMPTY `repos_resolved` must not shadow a populated `repos` — the
+          // writer never emits that shape, but an imported event may carry it.
+          const named =
+            ev.repos_resolved !== undefined && ev.repos_resolved.length > 0
+              ? ev.repos_resolved
+              : (ev.repos ?? []);
+          // Keyed the SAME way commits are. Strictness here would break the
+          // pairing it was meant to protect: when a repository moves, a captured
+          // commit keeps its old path through the string fallback and still
+          // forms a unit, so a record rejected for that same path could never
+          // reach it. Accuracy about WHY a record reached nothing is recovered
+          // below, from whether the path is really on disk, rather than by
+          // refusing to key it.
           const repos = new Set(
-            named.map((r) => resolveRepoRoot(r)).filter((r): r is string => r !== null),
+            named.map((r) => normalizeRepoPath(r)).filter((r): r is string => r !== null),
           );
           if (repos.size === 0 || Number.isNaN(recordedAt)) {
             // Name the mistake: an absent `repos` is the operator forgetting a
-            // field, a `repos` that resolves to nothing is a wrong path. Only
+            // field, a `repos` that yields no key at all is a wrong path. Only
             // the first is what the record's own location could explain.
             if (named.length === 0) noRepos++;
             else unresolvableRepo++;
             continue;
           }
           selfReports.push({
+            // Whether any named path is a repository root on this machine right
+            // now. Decides the REASON reported if this record reaches nothing;
+            // it never affects binding.
+            onDisk: named.some((r) => resolveRepoRoot(r) !== null),
             sessionId: entry.sessionId,
             eventId: ev.id,
             reviewer: ev.reviewer,
@@ -624,10 +637,13 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
     }
   }
 
-  // A record that normalized fine but reached no unit is the remaining silent
-  // case, and the one the operator hits most: the repo is right, but no work in
-  // the window belongs to it.
-  const noMatchingUnit = selfReports.filter((r) => !attachedSelfReports.has(r.eventId)).length;
+  // Records that keyed fine but reached nothing. Split by whether the path is
+  // actually there: "the repository is right, but no work in the window" and
+  // "that path is not a repository here any more" are different problems, and
+  // reporting one as the other asserts a cause never established.
+  const missed = selfReports.filter((r) => !attachedSelfReports.has(r.eventId));
+  const noMatchingUnit = missed.filter((r) => r.onDisk).length;
+  unresolvableRepo += missed.length - noMatchingUnit;
 
   const recentFirst = (a: ReviewGapUnit, b: ReviewGapUnit): number =>
     (Date.parse(b.lastCommitAt ?? "") || 0) - (Date.parse(a.lastCommitAt ?? "") || 0);
