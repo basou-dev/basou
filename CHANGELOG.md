@@ -82,7 +82,10 @@ All notable changes to **basou** are recorded here. The project follows
 
   A record binds only to work in a repository that is **present on this machine**,
   with both sides resolving to the same canonical root — every commit in the
-  unit, not merely one of them. If the repository has moved or gone, or a
+  unit and every repository the record names, not merely one of them. A record
+  naming both a live repository and one that has gone is refused whole: pooling
+  it on the strength of the live half attached it there and said nothing about
+  the half that could not be checked. If the repository has moved or gone, or a
   commit's key survived only through the `*-workspace` name collapse (a
   heuristic on a directory name), the pairing is refused and reported as
   unverifiable. That is kept distinct from "no work in the window": work was

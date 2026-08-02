@@ -243,8 +243,16 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
   if (summary.unknowns.length > 0) {
     const n = summary.unknowns.reduce((sum, u) => sum + u.commitCount, 0);
     lines.push(
-      `## Undeterminable (${summary.unknowns.length} unit${summary.unknowns.length === 1 ? "" : "s"} / ${n} commit${n === 1 ? "" : "s"}) — repo or timestamp could not be derived from capture; verdict withheld (not a clear). Belongs to no repository, so this is listed in full even under --repo`,
+      `## Undeterminable (${summary.unknowns.length} unit${summary.unknowns.length === 1 ? "" : "s"} / ${n} commit${n === 1 ? "" : "s"}) — repo or timestamp could not be derived from capture; verdict withheld (not a clear). Belongs to no repository, so this is listed even under --repo`,
     );
+    // Listed, not just counted: a bare tally leaves nothing to go and look at,
+    // and this section exists precisely so work the tool could not examine does
+    // not disappear behind a number.
+    for (const u of summary.unknowns) {
+      lines.push(
+        `- ${relAge(u.lastCommitAt, now)} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) [${u.sessionId.slice(0, 14)}]`,
+      );
+    }
     lines.push("");
   }
 

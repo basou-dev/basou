@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
@@ -271,7 +271,6 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
     .pop();
   if (seg === undefined) return null;
   // the view dir itself is not a repo; an unexpanded shell var is not a repo
-  // the view dir itself is not a repo; an unexpanded shell var is not a repo
   if (/-workspace$/.test(seg) || seg.includes("$")) return null;
   return s;
 }
@@ -528,10 +527,16 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
             ev.repos_resolved !== undefined && ev.repos_resolved.length > 0
               ? ev.repos_resolved
               : (ev.repos ?? []);
-          const repos = new Set(
-            named.map((r) => recordRepoKey(r)).filter((r): r is string => r !== null),
-          );
-          if (repos.size === 0 || Number.isNaN(recordedAt)) {
+          // EVERY named repository must verify, not merely one. A record naming
+          // both a live and a vanished repository was pooled on the strength of
+          // the live one, attached there, and the half it could not check went
+          // unmentioned -- or, if the live half had no work, was reported as
+          // "no work in the window", which is not what happened. Refusing the
+          // record keeps the invariant that everything pooled is fully
+          // checkable, and says so instead of half-saying it.
+          const keys = named.map((r) => recordRepoKey(r));
+          const repos = new Set(keys.filter((r): r is string => r !== null));
+          if (keys.some((k) => k === null) || repos.size === 0 || Number.isNaN(recordedAt)) {
             // Name the mistake: an absent `repos` is the operator forgetting a
             // field, a `repos` naming nothing verifiable is a path basou cannot
             // check. Only the first is what the record's own location explains.

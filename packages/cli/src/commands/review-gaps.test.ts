@@ -270,6 +270,22 @@ describe("renderReviewGaps", () => {
     expect(out).toContain("never verified");
   });
 
+  it("lists undeterminable units rather than only counting them", () => {
+    const base = summaryOf([]);
+    const out = renderReviewGaps({
+      ...base,
+      gaps: [],
+      unknowns: [
+        gapUnit({ repo: "(unknown)", verdict: "unknown", sessionId: SES("U1"), commitCount: 2 }),
+        gapUnit({ repo: "(unknown)", verdict: "unknown", sessionId: SES("U2"), commitCount: 1 }),
+      ],
+    });
+    expect(out).toContain("Undeterminable (2 units / 3 commits)");
+    // A bare tally leaves nothing to go and look at.
+    expect(out).toContain(SES("U1").slice(0, 14));
+    expect(out).toContain(SES("U2").slice(0, 14));
+  });
+
   it("does not assert the missing-`repos` cause for a record that had one", () => {
     const out = renderReviewGaps(summaryOf([gapUnit()], { noMatchingUnit: 1 }));
     expect(out).toContain("1 recorded review changed nothing");

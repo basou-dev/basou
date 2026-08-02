@@ -219,7 +219,7 @@ export async function doRunReviewRecord(
 const REPO_PROBLEM_HINT: Record<RepoPathProblem, string> = {
   relative: "use an absolute path (or ~/...) to the repository root",
   absent: "no such path on this machine",
-  not_a_repo_root: "that path is inside a repository, not its root",
+  not_a_repo_root: "that path is not a repository root",
 };
 
 /**

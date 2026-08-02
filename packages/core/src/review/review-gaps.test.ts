@@ -1262,6 +1262,42 @@ describe("findReviewGaps — record key provenance", () => {
     expect(scoped.newestCommitAt).toBe("2026-05-09T10:05:00.000Z");
   });
 
+  it("refuses a record that names one live repository and one that is gone", async () => {
+    const paths = await setup();
+    const alpha = join(getRoot(), "alpha");
+    await mkdir(join(alpha, ".git"), { recursive: true });
+    const gone = join(getRoot(), "moved-away");
+    // Pooling on the strength of the live half attached the record to alpha and
+    // said nothing about the half it could not check -- or, with no work in
+    // alpha, called it "no work in the window", which is not what happened.
+    await placeSession(paths, { id: SES("SA"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("SA"), "2026-05-09T09:30:00.000Z", { repos: [alpha, gone] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("SB"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("SB"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          alpha,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps.find((u) => u.repo === "alpha")?.selfReports).toHaveLength(0);
+    expect(s.unattachedSelfReports).toEqual({
+      total: 1,
+      noRepos: 0,
+      unresolvableRepo: 1,
+      noMatchingUnit: 0,
+      unverifiableUnit: 0,
+    });
+  });
+
   it("refuses to key a record from a relative path", async () => {
     const paths = await setup();
     // Both spellings would collapse to the literal key `../app`, binding a
