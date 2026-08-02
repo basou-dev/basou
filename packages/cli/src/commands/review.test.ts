@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, symlink } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -133,23 +133,28 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
   it("rev-2b: repos and commits are persisted, and the text output names the repo count", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
-    // The repo under test is a real git repo, so it binds; the operator's own
-    // spelling is preserved rather than rewritten to a canonical path.
+    // Named through a SYMLINK, so the spelling and what it resolves to are
+    // different strings. Passing the repo's own path would let an
+    // implementation that merely copied `repos` satisfy this.
+    const viaLink = join(dirname(repo), `link-${basename(repo)}`);
+    await symlink(repo, viaLink);
     const input = JSON.stringify({
       reviewer: "codex",
       target: "working-tree",
-      repos: [repo],
+      repos: [viaLink],
       commits: ["a1b2c3d"],
     });
     await doRunReviewRecord({}, ctx(repo, input));
     const review = (await readAdHocEvents(repo)).find(
       (e) => e.type === "review_recorded",
     ) as Record<string, unknown>;
-    expect(review.repos).toEqual([repo]);
+    // The operator's own spelling is preserved, not rewritten...
+    expect(review.repos).toEqual([viaLink]);
     expect(review.commits).toEqual(["a1b2c3d"]);
-    // What the path resolved to is recorded separately: it is basou's own
-    // observation and the stable binding key, while `repos` keeps the spelling.
-    expect(review.repos_resolved).toEqual([await realpath(repo)]);
+    // ...and what it resolved to is recorded separately: basou's own
+    // observation, and the stable binding key.
+    expect(review.repos_resolved).toEqual([repo]);
+    expect(review.repos_resolved).not.toEqual(review.repos);
     // The repo count is echoed so the agent can see the record is bindable.
     expect(joinCalls(out)).toContain("1 repo");
   });

@@ -31,9 +31,10 @@ import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.
  * A `review_recorded` event (written by `basou review record`) is a SELF-REPORT:
  * the agent's own claim that a review ran, with nothing corroborating it. Such a
  * record is bound to a unit by the repo paths it names and surfaced as a label,
- * but it NEVER changes a verdict and never leaves the gap list — otherwise an
- * empty record would become a way to make the count go down, the same weakness
- * the Stop-gate has. It re-labels; it does not clear.
+ * but it NEVER changes that unit's verdict — a gap stays a gap, a candidate
+ * stays a candidate — otherwise an empty record would become a way to make the
+ * gap count go down, the same weakness the Stop-gate has. It re-labels; it does
+ * not clear.
  *
  * It reads only captured provenance and writes nothing.
  */

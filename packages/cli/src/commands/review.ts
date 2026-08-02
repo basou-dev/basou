@@ -99,9 +99,11 @@ unverifiable rather than pairing it on a matching path string -- it cannot
 confirm the two name the same repository, and a guess about whether a review
 happened is worse than saying so.
 
-A recorded review is a self-report -- review-gaps labels the unit but still
-counts it as a gap, because nothing corroborates the claim. Recording after the
-commit is fine: the record is still shown, marked as written after the fact.
+A recorded review is a self-report -- review-gaps labels the unit but does not
+change what it is, because nothing corroborates the claim: a unit that was a gap
+is still a gap, and one that already had a review trace is still a candidate.
+Recording after the commit is fine: the record is still shown, marked as written
+after the fact.
 
 Example (heredoc on stdin):
   basou review record <<'JSON'

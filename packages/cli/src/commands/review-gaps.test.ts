@@ -376,11 +376,14 @@ describe("renderReviewGaps", () => {
         }),
       ]),
     );
-    const injected = out
-      .split("\n")
-      .filter((l) => l.startsWith("## Injected") || l === "- fake gap");
-    expect(injected).toEqual([]);
+    // No line of the report may BEGIN inside recorded text. Asserted per
+    // channel, because each is flattened separately: the reviewer name and the
+    // claimed SHA. Without flattening the SHA is capped mid-injection to
+    // `abc\n- fa`, which an exact-match assertion on `- fake gap` would miss.
+    expect(out).not.toMatch(/^## Injected/m);
+    expect(out).not.toMatch(/^- fa/m);
     expect(out).toContain("evil ## Injected heading");
+    expect(out).toContain("claiming abc - fa");
   });
 
   it("caps how many self-reports one line renders", () => {
