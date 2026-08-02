@@ -269,8 +269,12 @@ const ReviewBlockedSchema = z.object({
 // `repos` names the repository paths the review examined: the record lands in
 // an ad-hoc session whose only location is the planning repo it was written
 // from, so without it there is nothing to bind a record to the reviewed repo
-// (see `review-gaps`). `commits` names commit SHAs the review examined, kept as
-// the reviewer's own claim about coverage. All optional fields are additive so
+// (see `review-gaps`). `repos_resolved` is what those paths resolved to when
+// the record was written — derived by basou, never accepted from input, and the
+// stable binding key: `repos` keeps the author's spelling, which can be a
+// symlink whose target later changes. `commits` names commit SHAs the review
+// examined, kept as the reviewer's own claim about coverage. All optional
+// fields are additive so
 // the wire format stays stable. Non-strict to match decision_recorded (additive
 // optional => no schema_version bump).
 const ReviewRecordedEventSchema = BaseEventSchema.extend({
@@ -278,6 +282,7 @@ const ReviewRecordedEventSchema = BaseEventSchema.extend({
   reviewer: z.string().min(1),
   target: z.string().min(1),
   repos: z.array(z.string().min(1)).optional(),
+  repos_resolved: z.array(z.string().min(1)).optional(),
   commits: z.array(z.string().min(1)).optional(),
   verdict: z.enum(["pass", "needs-attention", "fail"]).optional(),
   findings: z.array(ReviewFindingSchema).optional(),

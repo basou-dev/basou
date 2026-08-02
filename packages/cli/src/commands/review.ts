@@ -8,10 +8,13 @@ import {
   buildReviewRecordLabel,
   createAdHocSessionWithEvent,
   findErrorCode,
+  findUnbindableRepos,
   type PrefixedId,
   parseReviewRecordInput,
+  type RepoPathProblem,
   type ReviewRecordInput,
   readManifest,
+  resolveRepoRoot,
   sanitizePath,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -85,8 +88,22 @@ a workspace-view directory and it resolves to the planning repo, like
 Name the repositories you reviewed in "repos". The record lands in the planning
 repo, so that field is the only thing tying it to the repo under review: without
 it, 'basou review-gaps' cannot surface this record against the work it covered.
-A recorded review is a self-report -- review-gaps labels the unit but still
-counts it as a gap, because nothing corroborates the claim.
+Each entry must be an absolute path (or ~/...) to a repository ROOT; a relative
+path, a path that is not there, or a subdirectory is rejected outright, because
+it would store a record that can never appear against any work. "commits" is
+kept as your claim about coverage and is never used to bind.
+
+A record is paired with work only while that repository is still present on the
+machine. If it moves or goes away, 'basou review-gaps' reports the record as
+unverifiable rather than pairing it on a matching path string -- it cannot
+confirm the two name the same repository, and a guess about whether a review
+happened is worse than saying so.
+
+A recorded review is a self-report -- review-gaps labels the unit but does not
+change what it is, because nothing corroborates the claim: a unit that was a gap
+is still a gap, and one that already had a review trace is still a candidate.
+Recording after the commit is fine: the record is still shown, marked as written
+after the fact.
 
 Example (heredoc on stdin):
   basou review record <<'JSON'
@@ -152,6 +169,12 @@ export async function doRunReviewRecord(
 
   const raw = await readReviewInput(options, ctx);
   const review = parseReviewRecordInput(raw);
+  assertReposCanBind(review);
+  // Resolved here, at the one moment the filesystem state that made the entries
+  // valid is known to hold.
+  const reposResolved = (review.repos ?? [])
+    .map((r) => resolveRepoRoot(r))
+    .filter((r): r is string => r !== null);
 
   if (options.dryRun === true) {
     printReviewPreview(options, review);
@@ -184,7 +207,7 @@ export async function doRunReviewRecord(
     invocation: { command: "basou review record", args: invocationArgs },
     targetEventBuilders: [
       (sessionId: PrefixedId<"ses">, eventId: PrefixedId<"evt">) =>
-        buildReviewRecordedEvent({ eventId, sessionId, occurredAt, review }),
+        buildReviewRecordedEvent({ eventId, sessionId, occurredAt, review, reposResolved }),
     ],
   });
 
@@ -193,6 +216,41 @@ export async function doRunReviewRecord(
     eventId: adHoc.targetEventIds[0] as string,
     review,
   });
+}
+
+const REPO_PROBLEM_HINT: Record<RepoPathProblem, string> = {
+  relative: "use an absolute path (or ~/...) to the repository root",
+  absent: "no such path on this machine",
+  not_a_repo_root: "that path is not a repository root",
+};
+
+/**
+ * Reject `repos` entries that could never bind to a unit of work, checked with
+ * the same definition of a repository key `basou review-gaps` binds with.
+ *
+ * Structural validation happens in core's pure parser; this needs the disk, so
+ * it lives here. It is a hard error rather than a warning because a record that
+ * cannot bind is worse than no record: it is stored, it counts as a review
+ * having been written down, and it silently never appears against the work it
+ * claims to cover.
+ */
+function assertReposCanBind(review: ReviewRecordInput): void {
+  const entries = review.repos ?? [];
+  const unbindable = findUnbindableRepos(entries);
+  if (unbindable.length === 0) return;
+  // Named by INDEX, never by value. The CLI's error surface is contractually
+  // pathless, and `sanitizePath` cannot make it so here: it relativises a path
+  // under the workspace or home and returns anything else verbatim, so an entry
+  // like /Volumes/<client>/… would reach stderr and any captured log intact.
+  // The caller supplied the array, so the index identifies the entry exactly.
+  const detail = unbindable
+    .map(({ index, problem }) => `  repos[${index}] — ${REPO_PROBLEM_HINT[problem]}`)
+    .join("\n");
+  throw new Error(
+    `${unbindable.length} of ${review.repos?.length} 'repos' entr${unbindable.length === 1 ? "y" : "ies"} cannot be bound to a repository:\n${detail}\n` +
+      "'repos' is what ties this record to the repository it reviewed, so an " +
+      "entry that resolves to nothing would leave the record stored but invisible.",
+  );
 }
 
 async function readReviewInput(

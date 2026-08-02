@@ -224,6 +224,7 @@ export type {
 export { renderReport } from "./report/index.js";
 export type {
   CitedReview,
+  RepoPathProblem,
   ReviewGapRepoSummary,
   ReviewGapsInput,
   ReviewGapsSummary,
@@ -233,15 +234,19 @@ export type {
   ReviewRecordFindingInput,
   ReviewRecordInput,
   SelfReportedReview,
+  UnattachedSelfReports,
+  UnbindableRepo,
 } from "./review/index.js";
 export {
   buildReviewRecordedEvent,
   buildReviewRecordLabel,
   findReviewGaps,
+  findUnbindableRepos,
   normalizeRepoKey,
   normalizeRepoPath,
   parseReviewRecordInput,
   REVIEW_RECORD_NO_INPUT_HINT,
+  resolveRepoRoot,
 } from "./review/index.js";
 export { ChildProcessRunner } from "./runtime/child-process-runner.js";
 export type {

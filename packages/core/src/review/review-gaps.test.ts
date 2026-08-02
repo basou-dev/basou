@@ -4,11 +4,23 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
-import { findReviewGaps, normalizeRepoKey, normalizeRepoPath } from "./review-gaps.js";
+import {
+  findReviewGaps,
+  findUnbindableRepos,
+  normalizeRepoKey,
+  normalizeRepoPath,
+  resolveRepoRoot,
+} from "./review-gaps.js";
 
 const WS = "ws_01HXABCDEF1234567890ABCDEF";
 const NOW = "2026-05-10T00:00:00.000Z";
-const SES = (s: string): string => `ses_01HXABCDEF1234567890ABC${s.padStart(3, "0")}`;
+const SES = (s: string): string => {
+  // Crockford base32 excludes I, L, O and U; an id containing one is rejected as
+  // malformed and its session silently skipped, which quietly changes what a
+  // fixture is testing.
+  if (/[ILOU]/.test(s)) throw new Error(`fixture id '${s}' uses a non-ULID character`);
+  return `ses_01HXABCDEF1234567890ABC${s.padStart(3, "0")}`;
+};
 
 let workDir: string | undefined;
 beforeEach(async () => {
@@ -83,7 +95,13 @@ function cmd(
 function reviewRecorded(
   sessionId: string,
   occurredAt: string,
-  fields: { reviewer?: string; target?: string; repos?: string[]; commits?: string[] } = {},
+  fields: {
+    reviewer?: string;
+    target?: string;
+    repos?: string[];
+    reposResolved?: string[];
+    commits?: string[];
+  } = {},
 ): string {
   evtSeq++;
   return JSON.stringify({
@@ -96,6 +114,7 @@ function reviewRecorded(
     reviewer: fields.reviewer ?? "codex",
     target: fields.target ?? "working-tree",
     ...(fields.repos !== undefined ? { repos: fields.repos } : {}),
+    ...(fields.reposResolved !== undefined ? { repos_resolved: fields.reposResolved } : {}),
     ...(fields.commits !== undefined ? { commits: fields.commits } : {}),
   });
 }
@@ -105,6 +124,15 @@ const ALPHA = "/home/u/projects/alpha";
 async function setup(): Promise<BasouPaths> {
   return ensureBasouDirectory(getWorkDir());
 }
+
+describe("SES fixture guard", () => {
+  it("rejects an id containing a character Crockford base32 excludes", () => {
+    // A fixture id with `I` was rejected as malformed, so its session silently
+    // vanished and the test it anchored proved nothing.
+    expect(() => SES("PI")).toThrow(/non-ULID character/);
+    expect(() => SES("PK")).not.toThrow();
+  });
+});
 
 describe("normalizeRepoKey", () => {
   it("collapses a workspace-view-routed path to the same key as the direct path", () => {
@@ -651,186 +679,48 @@ describe("normalizeRepoPath (realpath resolution)", () => {
     expect(s.gaps.some((u) => u.repo === "alpha" && u.verdict === "omission")).toBe(true);
   });
 
-  it("binds a self-reported review by `repos` but keeps the unit in gaps (a record never clears)", async () => {
-    const paths = await setup();
-    // the record lands in an ad-hoc session whose cwd is the PLANNING repo —
-    // only `repos` can tie it to the repo actually reviewed.
-    await placeSession(
-      paths,
-      { id: SES("S1"), source: "human", startedAt: "2026-05-09T09:00:00.000Z" },
-      [
-        reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
-          reviewer: "gpt-5.6",
-          repos: [ALPHA],
-          commits: ["a1b2c3d"],
-        }),
-      ],
-    );
-    await placeSession(
-      paths,
-      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("S2"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "git commit -m x"],
-          ALPHA,
-        ),
-      ],
-    );
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    // The label appears...
-    expect(s.gaps).toHaveLength(1);
-    expect(s.gaps[0]?.selfReports).toHaveLength(1);
-    expect(s.gaps[0]?.selfReports[0]?.reviewer).toBe("gpt-5.6");
-    expect(s.gaps[0]?.selfReports[0]?.commits).toEqual(["a1b2c3d"]);
-    // ...and the verdict / gap count are untouched: a self-report is not a clear.
-    expect(s.gaps[0]?.verdict).toBe("omission");
-    expect(s.candidates).toHaveLength(0);
-    expect(s.repos[0]?.omissionUnits).toBe(1);
-    expect(s.repos[0]?.selfReportedGapUnits).toBe(1);
-    // Binding fields are internal; the emitted record carries only the report.
-    expect(Object.keys(s.gaps[0]?.selfReports[0] ?? {}).sort()).toEqual([
-      "commits",
-      "eventId",
-      "recordedAt",
-      "reviewer",
-      "sessionId",
-      "target",
+  it("findUnbindableRepos rejects hand-typed paths that could never match a commit", async () => {
+    const base = getRoot();
+    const repoDir = join(base, "myrepo");
+    await mkRepo(repoDir);
+    await mkdir(join(repoDir, "packages"), { recursive: true });
+
+    // The whole point of the strict check: normalizeRepoPath ACCEPTS the two
+    // below (its string fallback exists for captured data), so a writer that
+    // reused it would store keys no commit can ever match. The subdirectory is
+    // rejected by both, and is here for the cause it reports.
+    expect(normalizeRepoPath("../myrepo")).not.toBeNull();
+    expect(normalizeRepoPath(join(base, "myrepoo"))).not.toBeNull();
+
+    expect(findUnbindableRepos([repoDir])).toEqual([]);
+    expect(findUnbindableRepos(["../myrepo"])).toEqual([
+      { repo: "../myrepo", index: 0, problem: "relative" },
     ]);
+    expect(findUnbindableRepos([join(base, "myrepoo")])).toEqual([
+      { repo: join(base, "myrepoo"), index: 0, problem: "absent" },
+    ]);
+    expect(findUnbindableRepos([join(repoDir, "packages")])).toEqual([
+      { repo: join(repoDir, "packages"), index: 0, problem: "not_a_repo_root" },
+    ]);
+    // Two identical bad entries are two problems at two positions; matching by
+    // value would name the first twice and lose the second.
+    expect(findUnbindableRepos(["../a", repoDir, "../a"]).map((u) => u.index)).toEqual([0, 2]);
   });
 
-  it("counts a record with no resolvable `repos` as unbound rather than binding it to the record's own location", async () => {
-    const paths = await setup();
-    await placeSession(
-      paths,
-      { id: SES("S3"), source: "human", startedAt: "2026-05-09T09:00:00.000Z" },
-      [
-        // no `repos` at all
-        reviewRecorded(SES("S3"), "2026-05-09T09:30:00.000Z"),
-        // `repos` present but unresolvable (a view root is not a repo)
-        reviewRecorded(SES("S3"), "2026-05-09T09:31:00.000Z", {
-          repos: ["/home/u/projects/foo-workspace"],
-        }),
-      ],
-    );
-    await placeSession(
-      paths,
-      { id: SES("S4"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("S4"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "git commit -m x"],
-          ALPHA,
-        ),
-      ],
-    );
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.unboundSelfReports).toBe(2);
-    expect(s.gaps[0]?.selfReports).toHaveLength(0);
-    expect(s.repos[0]?.selfReportedGapUnits).toBe(0);
-  });
+  it("everything findUnbindableRepos accepts resolves to the same key the reader binds with", async () => {
+    const base = getRoot();
+    const repoDir = join(base, "myrepo");
+    await mkRepo(repoDir);
+    const viewLink = join(base, "some-view");
+    await mkdir(viewLink, { recursive: true });
+    await symlink(repoDir, join(viewLink, "myrepo"));
 
-  it("does not bind a record naming a different repo, or one written after the commit", async () => {
-    const paths = await setup();
-    await placeSession(
-      paths,
-      { id: SES("S5"), source: "human", startedAt: "2026-05-09T09:00:00.000Z" },
-      [
-        // right window, wrong repo
-        reviewRecorded(SES("S5"), "2026-05-09T09:30:00.000Z", {
-          repos: ["/home/u/projects/beta"],
-        }),
-        // right repo, but recorded after the commit landed — it cannot have gated it
-        reviewRecorded(SES("S5"), "2026-05-09T10:30:00.000Z", { repos: [ALPHA] }),
-      ],
-    );
-    await placeSession(
-      paths,
-      { id: SES("S6"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("S6"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "git commit -m x"],
-          ALPHA,
-        ),
-      ],
-    );
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    const alpha = s.gaps.find((u) => u.repo === "alpha");
-    expect(alpha?.selfReports).toHaveLength(0);
-    expect(alpha?.verdict).toBe("omission");
-    expect(s.unboundSelfReports).toBe(0);
-  });
-
-  it("suppresses the unbound-record count under a repo scope (it belongs to no repo)", async () => {
-    const paths = await setup();
-    await placeSession(
-      paths,
-      { id: SES("S7"), source: "human", startedAt: "2026-05-09T09:00:00.000Z" },
-      [reviewRecorded(SES("S7"), "2026-05-09T09:30:00.000Z")],
-    );
-    await placeSession(
-      paths,
-      { id: SES("S8"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("S8"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "git commit -m x"],
-          ALPHA,
-        ),
-      ],
-    );
-    expect((await findReviewGaps({ paths, nowIso: NOW })).unboundSelfReports).toBe(1);
-    expect(
-      (await findReviewGaps({ paths, nowIso: NOW, scope: ["alpha"] })).unboundSelfReports,
-    ).toBe(0);
-  });
-
-  it("labels a near_unbound unit with a self-report without promoting it to candidate", async () => {
-    const paths = await setup();
-    await placeSession(
-      paths,
-      { id: SES("S9"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
-      [
-        cmd(
-          SES("S9"),
-          "codex-import",
-          "2026-05-09T09:30:00.000Z",
-          ["-c", "sed -n '1,5p' NOTES.md"],
-          ALPHA,
-        ),
-      ],
-    );
-    await placeSession(
-      paths,
-      { id: SES("SA"), source: "human", startedAt: "2026-05-09T09:40:00.000Z" },
-      [reviewRecorded(SES("SA"), "2026-05-09T09:45:00.000Z", { repos: [ALPHA] })],
-    );
-    await placeSession(
-      paths,
-      { id: SES("SB"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("SB"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "git add src/app.ts && git commit -m x"],
-          ALPHA,
-        ),
-      ],
-    );
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.candidates).toHaveLength(0);
-    expect(s.gaps[0]?.verdict).toBe("near_unbound");
-    expect(s.gaps[0]?.selfReports).toHaveLength(1);
+    // The asymmetry must run the safe way: the writer is stricter, never looser.
+    for (const accepted of [repoDir, join(viewLink, "myrepo"), `${repoDir}/`]) {
+      expect(findUnbindableRepos([accepted])).toEqual([]);
+      expect(normalizeRepoPath(accepted)).toBe(await realpath(repoDir));
+      expect(resolveRepoRoot(accepted)).toBe(await realpath(repoDir));
+    }
   });
 
   it("does not collapse a non-`*-workspace` view that is absent on disk (fallback is name-bound)", () => {
@@ -840,5 +730,628 @@ describe("normalizeRepoPath (realpath resolution)", () => {
     expect(normalizeRepoPath("/home/u/projects/dev-view/myrepo")).toBe(
       "/home/u/projects/dev-view/myrepo",
     );
+  });
+});
+
+/**
+ * Self-reports bind on STRICTLY resolved repository roots, so these fixtures
+ * need real directories — a made-up path is (correctly) reported as
+ * unresolvable rather than minting a key no commit can match.
+ */
+describe("findReviewGaps — self-reported reviews", () => {
+  let root: string | undefined;
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), "basou-rg-sr-")));
+  });
+  afterEach(async () => {
+    if (root !== undefined) {
+      await rm(root, { recursive: true, force: true });
+      root = undefined;
+    }
+  });
+  function getRoot(): string {
+    if (root === undefined) throw new Error("root not initialized");
+    return root;
+  }
+  async function mkRepo(name: string): Promise<string> {
+    const p = join(getRoot(), name);
+    await mkdir(join(p, ".git"), { recursive: true });
+    return p;
+  }
+  async function placeCommits(
+    paths: BasouPaths,
+    id: string,
+    repo: string,
+    times: string[],
+  ): Promise<void> {
+    await placeSession(
+      paths,
+      { id, source: "claude-code-import", startedAt: times[0] as string },
+      times.map((t) => cmd(id, "claude-code-import", t, ["-c", "git commit -m x"], repo)),
+    );
+  }
+  async function placeRecords(paths: BasouPaths, id: string, lines: string[]): Promise<void> {
+    await placeSession(paths, { id, source: "human", startedAt: NOW }, lines);
+  }
+
+  it("binds by repos and keeps the unit in gaps (a record never clears)", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        reviewer: "gpt-5.6",
+        repos: [repo],
+        commits: ["a1b2c3d"],
+      }),
+    ]);
+    await placeCommits(paths, SES("S2"), repo, ["2026-05-09T10:05:00.000Z"]);
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.selfReports).toHaveLength(1);
+    expect(s.gaps[0]?.selfReports[0]?.reviewer).toBe("gpt-5.6");
+    expect(s.gaps[0]?.selfReports[0]?.commits).toEqual(["a1b2c3d"]);
+    expect(s.gaps[0]?.selfReports[0]?.recordedAfterCommit).toBe(false);
+    // The verdict and the gap count are untouched: a self-report is not a clear.
+    expect(s.gaps[0]?.verdict).toBe("omission");
+    expect(s.candidates).toHaveLength(0);
+    expect(s.repos[0]?.selfReportedGapUnits).toBe(1);
+    // Binding fields are internal; the emitted record carries just the report.
+    expect(Object.keys(s.gaps[0]?.selfReports[0] ?? {}).sort()).toEqual([
+      "commits",
+      "eventId",
+      "recordedAfterCommit",
+      "recordedAt",
+      "reviewer",
+      "sessionId",
+      "target",
+    ]);
+  });
+
+  it("prefers repos_resolved, so a retargeted symlink cannot move an old claim", async () => {
+    const paths = await setup();
+    const alpha = await mkRepo("alpha");
+    const beta = await mkRepo("beta");
+    const view = join(getRoot(), "view");
+    await mkdir(view, { recursive: true });
+    const viewLink = join(view, "repo");
+    await symlink(alpha, viewLink);
+
+    await placeRecords(paths, SES("S1"), [
+      // written against the view path, but resolved at write time to alpha
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        reviewer: "pinned",
+        repos: [viewLink],
+        reposResolved: [await realpath(alpha)],
+      }),
+      // a legacy record with only the spelling, re-resolved at read time
+      reviewRecorded(SES("S1"), "2026-05-09T09:31:00.000Z", {
+        reviewer: "unpinned",
+        repos: [viewLink],
+      }),
+    ]);
+    await placeCommits(paths, SES("S2"), alpha, ["2026-05-09T10:05:00.000Z"]);
+    await placeCommits(paths, SES("S3"), beta, ["2026-05-09T10:06:00.000Z"]);
+
+    // the view is repointed after the records were written
+    await rm(viewLink);
+    await symlink(beta, viewLink);
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const on = (repo: string): string[] =>
+      (s.gaps.find((u) => u.repo === repo)?.selfReports ?? []).map((r) => r.reviewer);
+    // resolved-at-write-time still points where the review actually happened
+    expect(on("alpha")).toContain("pinned");
+    expect(on("beta")).not.toContain("pinned");
+    // the legacy spelling follows the symlink to the wrong repo — the instability
+    // `repos_resolved` exists to remove
+    expect(on("beta")).toContain("unpinned");
+  });
+
+  it("separates the causes of a record that changed nothing", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    const notARepo = join(getRoot(), "scratch");
+    await mkdir(notARepo, { recursive: true });
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z"),
+      reviewRecorded(SES("S1"), "2026-05-09T09:31:00.000Z", { repos: [notARepo] }),
+      // a path that is simply gone: it must be reported as unresolvable, NOT as
+      // "no work in the window" — that would assert a cause never established
+      reviewRecorded(SES("S1"), "2026-05-09T09:32:00.000Z", {
+        repos: [join(getRoot(), "vanished")],
+      }),
+    ]);
+    await placeCommits(paths, SES("S2"), repo, ["2026-05-09T10:05:00.000Z"]);
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.unattachedSelfReports).toEqual({
+      total: 3,
+      noRepos: 1,
+      unresolvableRepo: 2,
+      noMatchingUnit: 0,
+      unverifiableUnit: 0,
+    });
+    expect(s.gaps[0]?.selfReports).toHaveLength(0);
+  });
+
+  it("reports a resolvable repo that reached no unit of work", async () => {
+    const paths = await setup();
+    const alpha = await mkRepo("alpha");
+    const beta = await mkRepo("beta");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", { repos: [beta] }),
+    ]);
+    await placeCommits(paths, SES("S2"), alpha, ["2026-05-09T10:05:00.000Z"]);
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.unattachedSelfReports).toEqual({
+      total: 1,
+      noRepos: 0,
+      unresolvableRepo: 0,
+      noMatchingUnit: 1,
+      unverifiableUnit: 0,
+    });
+  });
+
+  it("attaches a record written after the commit, flagged, rather than hiding it", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T10:30:00.000Z", { repos: [repo] }),
+    ]);
+    await placeCommits(paths, SES("S2"), repo, ["2026-05-09T10:05:00.000Z"]);
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const alpha = s.gaps.find((u) => u.repo === "alpha");
+    expect(alpha?.selfReports[0]?.recordedAfterCommit).toBe(true);
+    // Surfacing the claim is not accepting it.
+    expect(alpha?.verdict).toBe("omission");
+    expect(s.unattachedSelfReports.total).toBe(0);
+  });
+
+  it("does not attach a record older than the window (the window is load-bearing)", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      // 24h + 1ms before the commit, with the default 24h window
+      reviewRecorded(SES("S1"), "2026-05-08T10:04:59.999Z", { repos: [repo] }),
+    ]);
+    await placeCommits(paths, SES("S2"), repo, ["2026-05-09T10:05:00.000Z"]);
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps.find((u) => u.repo === "alpha")?.selfReports).toHaveLength(0);
+    expect(s.unattachedSelfReports.noMatchingUnit).toBe(1);
+  });
+
+  it("keeps the unattached diagnostic global under a repo scope", async () => {
+    const paths = await setup();
+    const alpha = await mkRepo("alpha");
+    const beta = await mkRepo("beta");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z"),
+      // attaches to the BETA unit; scoping to alpha must not make it "matched nothing"
+      reviewRecorded(SES("S1"), "2026-05-09T09:31:00.000Z", { repos: [beta] }),
+    ]);
+    await placeCommits(paths, SES("S2"), alpha, ["2026-05-09T10:05:00.000Z"]);
+    await placeCommits(paths, SES("S3"), beta, ["2026-05-09T10:06:00.000Z"]);
+
+    const unscoped = await findReviewGaps({ paths, nowIso: NOW });
+    const scoped = await findReviewGaps({ paths, nowIso: NOW, scope: ["alpha"] });
+    expect(unscoped.unattachedSelfReports).toEqual({
+      total: 1,
+      noRepos: 1,
+      unresolvableRepo: 0,
+      noMatchingUnit: 0,
+      unverifiableUnit: 0,
+    });
+    expect(scoped.unattachedSelfReports).toEqual(unscoped.unattachedSelfReports);
+    expect(scoped.gaps.every((u) => u.repo === "alpha")).toBe(true);
+  });
+
+  it("labels a near_unbound unit without promoting it to candidate", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeSession(
+      paths,
+      { id: SES("R1"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [cmd(SES("R1"), "codex-import", "2026-05-09T09:30:00.000Z", ["-c", "cat NOTES.md"], repo)],
+    );
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:45:00.000Z", { repos: [repo] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git add src/app.ts && git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.candidates).toHaveLength(0);
+    expect(s.gaps[0]?.verdict).toBe("near_unbound");
+    expect(s.gaps[0]?.selfReports).toHaveLength(1);
+  });
+
+  it("attaches to a candidate unit as well, so the claim is not lost behind a trace", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeSession(
+      paths,
+      { id: SES("R1"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [cmd(SES("R1"), "codex-import", "2026-05-09T09:30:00.000Z", ["-c", "git diff"], repo)],
+    );
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:45:00.000Z", { repos: [repo] }),
+    ]);
+    await placeCommits(paths, SES("S2"), repo, ["2026-05-09T10:05:00.000Z"]);
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.candidates).toHaveLength(1);
+    expect(s.candidates[0]?.selfReports).toHaveLength(1);
+    // Attached, so it must not also be reported as having reached nothing.
+    expect(s.unattachedSelfReports.total).toBe(0);
+  });
+});
+
+/** Round-3 regressions: provenance decides strictness, not which field it came from. */
+describe("findReviewGaps — record key provenance", () => {
+  let root: string | undefined;
+  beforeEach(async () => {
+    // realpath'd: on macOS `mkdtemp` returns a /var path that resolves to
+    // /private/var, and that difference alone can make keys disagree — masking
+    // whether the code under test actually decided anything.
+    root = await realpath(await mkdtemp(join(tmpdir(), "basou-rg-pv-")));
+  });
+  afterEach(async () => {
+    if (root !== undefined) {
+      await rm(root, { recursive: true, force: true });
+      root = undefined;
+    }
+  });
+  function getRoot(): string {
+    if (root === undefined) throw new Error("root not initialized");
+    return root;
+  }
+
+  it("refuses to pair a record with work in a repository that is no longer here", async () => {
+    const paths = await setup();
+    // The commit keeps its old path through the string fallback and still forms
+    // a unit, so the two strings DO match. basou declines anyway: nothing on
+    // disk can confirm they name the same repository, and a guess about whether
+    // a review happened is worse than saying it cannot be checked.
+    const gone = join(getRoot(), "moved-away");
+    await placeSession(paths, { id: SES("P1"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("P1"), "2026-05-09T09:30:00.000Z", { reposResolved: [gone] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("P2"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("P2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          gone,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.selfReports).toHaveLength(0);
+    // Reported as unverifiable, not silently dropped and not called a miss.
+    expect(s.unattachedSelfReports).toEqual({
+      total: 1,
+      noRepos: 0,
+      unresolvableRepo: 1,
+      noMatchingUnit: 0,
+      unverifiableUnit: 0,
+    });
+  });
+
+  it("separates a path it cannot check from a repository with no work in the window", async () => {
+    const paths = await setup();
+    const gone = join(getRoot(), "moved-away");
+    const live = join(getRoot(), "alpha");
+    await mkdir(join(live, ".git"), { recursive: true });
+    await placeSession(paths, { id: SES("P3"), source: "human", startedAt: NOW }, [
+      // not on disk: basou cannot check this one at all
+      reviewRecorded(SES("P3"), "2026-05-09T09:30:00.000Z", { repos: [gone] }),
+      // on disk, but no captured work belongs to it: a different problem
+      reviewRecorded(SES("P3"), "2026-05-09T09:31:00.000Z", { repos: [live] }),
+    ]);
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.unattachedSelfReports).toEqual({
+      total: 2,
+      noRepos: 0,
+      unresolvableRepo: 1,
+      noMatchingUnit: 1,
+      unverifiableUnit: 0,
+    });
+  });
+
+  it("refuses to pair when only the unit's key survived a name-based collapse", async () => {
+    const paths = await setup();
+    // The repository IS here, but the commit was captured through a view path
+    // that is not: the unit's key comes from the `*-workspace` string collapse,
+    // a heuristic on a directory name. Both sides must name a repository that
+    // resolves, or the pairing is still a guess.
+    const live = join(getRoot(), "bar");
+    await mkdir(join(live, ".git"), { recursive: true });
+    const removedView = join(getRoot(), "foo-workspace", "bar");
+    await placeSession(paths, { id: SES("PA"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("PA"), "2026-05-09T09:30:00.000Z", { repos: [live] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("PB"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("PB"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          removedView,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // The collapse still forms a unit — that part is existing behaviour — but no
+    // claim attaches to it.
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.selfReports).toHaveLength(0);
+    // ...and the reason says so. Calling this "no work in the window" would deny
+    // a unit that is right there in the report above it.
+    expect(s.unattachedSelfReports.unverifiableUnit).toBe(1);
+    expect(s.unattachedSelfReports.noMatchingUnit).toBe(0);
+  });
+
+  it("refuses a unit where only SOME commits came from a verified path", async () => {
+    const paths = await setup();
+    const live = join(getRoot(), "bar");
+    await mkdir(join(live, ".git"), { recursive: true });
+    const removedView = join(getRoot(), "foo-workspace", "bar");
+    await placeSession(paths, { id: SES("PC"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("PC"), "2026-05-09T09:30:00.000Z", { repos: [live] }),
+    ]);
+    // One session, two commits sharing a key: one path resolved, the other only
+    // collapsed to it by name. One resolved commit must not vouch for a sibling
+    // whose origin was guessed at.
+    await placeSession(
+      paths,
+      { id: SES("PD"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("PD"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          live,
+        ),
+        cmd(
+          SES("PD"),
+          "claude-code-import",
+          "2026-05-09T10:06:00.000Z",
+          ["-c", "git commit -m y"],
+          removedView,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps[0]?.commitCount).toBe(2);
+    expect(s.gaps[0]?.selfReports).toHaveLength(0);
+    expect(s.unattachedSelfReports.unverifiableUnit).toBe(1);
+  });
+
+  it("reports a refused pairing even when the record attached to another unit", async () => {
+    const paths = await setup();
+    const live = join(getRoot(), "bar");
+    await mkdir(join(live, ".git"), { recursive: true });
+    const removedView = join(getRoot(), "foo-workspace", "bar");
+    await placeSession(paths, { id: SES("PH"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("PH"), "2026-05-09T09:30:00.000Z", { repos: [live] }),
+    ]);
+    // one unit it CAN pair with...
+    await placeSession(
+      paths,
+      { id: SES("PK"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("PK"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          live,
+        ),
+      ],
+    );
+    // ...and one it cannot, whose key only name-collapsed onto the same repo
+    await placeSession(
+      paths,
+      { id: SES("PJ"), source: "claude-code-import", startedAt: "2026-05-09T10:10:00.000Z" },
+      [
+        cmd(
+          SES("PJ"),
+          "claude-code-import",
+          "2026-05-09T10:15:00.000Z",
+          ["-c", "git commit -m y"],
+          removedView,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // It attached once, so it is not "a record that changed nothing"...
+    expect(s.unattachedSelfReports.total).toBe(0);
+    // ...but the pairing it could not be checked against is still reported.
+    expect(s.refusedPairings).toBe(1);
+  });
+
+  it("reports undeterminable work even under a repo scope", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("QF"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("QF"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          // a workspace view ROOT is not a repository, so the commit cannot be placed
+          "/home/u/projects/foo-workspace",
+        ),
+      ],
+    );
+
+    // Suppressing these under a scope produced zero gaps, zero unknowns and a
+    // success line for work the tool could not place.
+    const scoped = await findReviewGaps({ paths, nowIso: NOW, scope: ["alpha"] });
+    expect(scoped.unknowns).toHaveLength(1);
+  });
+
+  it("keeps a scoped report's tally and footer about the scoped repository", async () => {
+    const paths = await setup();
+    const alpha = join(getRoot(), "alpha");
+    await mkdir(join(alpha, ".git"), { recursive: true });
+    await placeSession(
+      paths,
+      { id: SES("RC"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("RC"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          alpha,
+        ),
+      ],
+    );
+    // A later, unrelated commit that cannot be placed at all.
+    await placeSession(
+      paths,
+      { id: SES("RD"), source: "claude-code-import", startedAt: "2026-05-09T11:00:00.000Z" },
+      [
+        cmd(
+          SES("RD"),
+          "claude-code-import",
+          "2026-05-09T11:30:00.000Z",
+          ["-c", "git commit -m y"],
+          "/home/u/projects/foo-workspace",
+        ),
+      ],
+    );
+
+    const scoped = await findReviewGaps({ paths, nowIso: NOW, scope: ["alpha"] });
+    // Listed as a caveat...
+    expect(scoped.unknowns).toHaveLength(1);
+    // ...without becoming a row in a tally headed "By repository", or the
+    // scoped report's "newest captured commit".
+    expect(scoped.repos.map((r) => r.repo)).toEqual(["alpha"]);
+    expect(scoped.newestCommitAt).toBe("2026-05-09T10:05:00.000Z");
+  });
+
+  it("refuses a record that names one live repository and one that is gone", async () => {
+    const paths = await setup();
+    const alpha = join(getRoot(), "alpha");
+    await mkdir(join(alpha, ".git"), { recursive: true });
+    const gone = join(getRoot(), "moved-away");
+    // Pooling on the strength of the live half attached the record to alpha and
+    // said nothing about the half it could not check -- or, with no work in
+    // alpha, called it "no work in the window", which is not what happened.
+    await placeSession(paths, { id: SES("SA"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("SA"), "2026-05-09T09:30:00.000Z", { repos: [alpha, gone] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("SB"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("SB"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          alpha,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps.find((u) => u.repo === "alpha")?.selfReports).toHaveLength(0);
+    expect(s.unattachedSelfReports).toEqual({
+      total: 1,
+      noRepos: 0,
+      unresolvableRepo: 1,
+      noMatchingUnit: 0,
+      unverifiableUnit: 0,
+    });
+  });
+
+  it("refuses to key a record from a relative path", async () => {
+    const paths = await setup();
+    // Both spellings would collapse to the literal key `../app`, binding a
+    // record written beside one repository to a commit made beside another.
+    await placeSession(paths, { id: SES("P7"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("P7"), "2026-05-09T09:30:00.000Z", { repos: ["../app"] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("P8"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("P8"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "cd ../app && git commit -m x"],
+          join(getRoot(), "unrelated"),
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps.flatMap((u) => u.selfReports)).toHaveLength(0);
+    expect(s.unattachedSelfReports.unresolvableRepo).toBe(1);
+  });
+
+  it("does not let an empty repos_resolved shadow a populated repos", async () => {
+    const paths = await setup();
+    const live = join(getRoot(), "alpha");
+    await mkdir(join(live, ".git"), { recursive: true });
+    // The writer never emits this shape, but an imported event may carry it.
+    await placeSession(paths, { id: SES("P4"), source: "human", startedAt: NOW }, [
+      reviewRecorded(SES("P4"), "2026-05-09T09:30:00.000Z", {
+        repos: [live],
+        reposResolved: [],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("P5"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("P5"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          live,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps[0]?.selfReports).toHaveLength(1);
+    expect(s.unattachedSelfReports.noRepos).toBe(0);
   });
 });

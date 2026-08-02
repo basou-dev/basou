@@ -223,6 +223,13 @@ export function buildReviewRecordedEvent(input: {
   sessionId: PrefixedId<"ses">;
   occurredAt: string;
   review: ReviewRecordInput;
+  /**
+   * The canonical repository roots `review.repos` resolved to on this machine.
+   * A CALLER-DERIVED value, not part of the piped input: what a path resolves to
+   * is something basou observes, and the whole point of keeping it is that the
+   * author's spelling may be a symlink whose target changes later.
+   */
+  reposResolved?: string[];
 }): Event {
   const { review } = input;
   return {
@@ -235,6 +242,9 @@ export function buildReviewRecordedEvent(input: {
     reviewer: review.reviewer,
     target: review.target,
     ...(review.repos !== undefined ? { repos: review.repos } : {}),
+    ...(input.reposResolved !== undefined && input.reposResolved.length > 0
+      ? { repos_resolved: input.reposResolved }
+      : {}),
     ...(review.commits !== undefined ? { commits: review.commits } : {}),
     ...(review.verdict !== undefined ? { verdict: review.verdict } : {}),
     ...(review.findings !== undefined ? { findings: review.findings } : {}),

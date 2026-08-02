@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, symlink } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -20,8 +20,11 @@ const FIXED_DATE = new Date("2026-06-29T03:00:00.000Z");
 const FIXED_NOW = new Date("2026-06-30T12:00:00.000Z");
 
 let tmpRepo: string | undefined;
+/** Temp dirs created by individual tests, removed with the fixture repo. */
+let extraTmp: string[] = [];
 
 beforeEach(async () => {
+  extraTmp = [];
   tmpRepo = await mkdtemp(join(tmpdir(), "basou-review-cli-test-"));
   await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: tmpRepo, env: ENV });
   await execFileAsync("git", ["config", "user.email", "test@example.com"], {
@@ -36,6 +39,8 @@ afterEach(async () => {
     await rm(tmpRepo, { recursive: true, force: true });
     tmpRepo = undefined;
   }
+  for (const dir of extraTmp) await rm(dir, { recursive: true, force: true });
+  extraTmp = [];
   process.exitCode = 0;
   vi.restoreAllMocks();
 });
@@ -133,20 +138,118 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
   it("rev-2b: repos and commits are persisted, and the text output names the repo count", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
+    // A DIFFERENT repository from the one the command runs in, named through a
+    // SYMLINK. Both matter: pointing at the workspace repo would let an
+    // implementation that ignores `repos` and reports `repositoryRoot` pass,
+    // and naming it directly would let one that merely copies `repos` pass.
+    const reviewed = await realpath(await mkdtemp(join(tmpdir(), "basou-reviewed-")));
+    extraTmp.push(reviewed);
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: reviewed,
+      env: ENV,
+    });
+    const viaLink = join(repo, "link-to-reviewed");
+    await symlink(reviewed, viaLink);
     const input = JSON.stringify({
       reviewer: "codex",
       target: "working-tree",
-      repos: ["~/projects/alpha", "~/projects/beta"],
+      repos: [viaLink],
       commits: ["a1b2c3d"],
     });
     await doRunReviewRecord({}, ctx(repo, input));
     const review = (await readAdHocEvents(repo)).find(
       (e) => e.type === "review_recorded",
     ) as Record<string, unknown>;
-    expect(review.repos).toEqual(["~/projects/alpha", "~/projects/beta"]);
+    // The operator's own spelling is preserved, not rewritten...
+    expect(review.repos).toEqual([viaLink]);
     expect(review.commits).toEqual(["a1b2c3d"]);
+    // ...and what it resolved to is recorded separately: basou's own
+    // observation, and the stable binding key.
+    expect(review.repos_resolved).toEqual([reviewed]);
+    expect(review.repos_resolved).not.toEqual(review.repos);
+    expect(review.repos_resolved).not.toEqual([repo]);
     // The repo count is echoed so the agent can see the record is bindable.
-    expect(joinCalls(out)).toContain("2 repos");
+    expect(joinCalls(out)).toContain("1 repo");
+  });
+
+  it("rev-2f: repos_resolved is derived, never accepted from the piped input", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await expect(
+      doRunReviewRecord(
+        {},
+        ctx(
+          repo,
+          JSON.stringify({ reviewer: "c", target: "wt", repos_resolved: ["/somewhere/else"] }),
+        ),
+      ),
+    ).rejects.toThrow(/Unknown field 'repos_resolved'/);
+  });
+
+  it("rev-2c: a repos entry that could never bind is rejected before anything is written", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const input = JSON.stringify({
+      reviewer: "codex",
+      target: "working-tree",
+      repos: [repo, "../elsewhere", join(repo, "src")],
+    });
+    await expect(doRunReviewRecord({}, ctx(repo, input))).rejects.toThrow(
+      /2 of 3 'repos' entries cannot be bound/,
+    );
+    // Nothing was written: a record that cannot bind is worse than no record.
+    const dirs = (await readdir(basouPaths(repo).sessions)).filter((d) => d.startsWith("ses_"));
+    expect(dirs).toHaveLength(0);
+  });
+
+  it("rev-2d2: the rejection never echoes a path outside the workspace or home", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    // sanitizePath leaves this verbatim, so echoing the value at all would leak it.
+    const outside = "/Volumes/Client-Delta/secret/missing";
+    const error = await doRunReviewRecord(
+      {},
+      ctx(repo, JSON.stringify({ reviewer: "c", target: "wt", repos: [outside] })),
+    ).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(error?.message).toContain("repos[0]");
+    expect(error?.message).not.toContain("Client-Delta");
+    expect(error?.message).not.toContain(outside);
+  });
+
+  it("rev-2d: the rejection names each offending entry and its cause", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const missing = join(repo, "no-such-repo");
+    const input = JSON.stringify({
+      reviewer: "codex",
+      target: "wt",
+      repos: ["../elsewhere", missing],
+    });
+    const error = await doRunReviewRecord({}, ctx(repo, input)).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(error?.message).toContain("repos[0] — use an absolute path");
+    expect(error?.message).toContain("repos[1] — no such path on this machine");
+    // The CLI's error surface is contractually pathless. Naming the entry by
+    // index leaks nothing: sanitizePath only relativises paths under the
+    // workspace or home and returns anything else verbatim.
+    expect(error?.message).not.toContain(missing);
+    expect(error?.message).not.toContain("no-such-repo");
+  });
+
+  it("rev-2e: --dry-run rejects an unbindable repos entry too", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await expect(
+      doRunReviewRecord(
+        { dryRun: true },
+        ctx(repo, JSON.stringify({ reviewer: "c", target: "wt", repos: ["../elsewhere"] })),
+      ),
+    ).rejects.toThrow(/cannot be bound/);
   });
 
   it("rev-3: an explicit empty blocked array round-trips (reviewed, blocked nothing)", async () => {

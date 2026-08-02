@@ -15,22 +15,92 @@ All notable changes to **basou** are recorded here. The project follows
   review claims to have covered. Both are optional and additive, so existing
   records stay valid and `schema_version` is unchanged.
 
+  A `repos` entry must be an absolute path (or `~/…`) to a repository **root**,
+  checked against the same definition of a repository key that `review-gaps`
+  binds with. A relative path, a path that is not there, or a subdirectory is
+  rejected with the reason, naming the entry. Storing one would be worse than
+  storing nothing: the record would count as a review having been written down
+  while never appearing against any work.
+
+  The record also carries `repos_resolved`, what those paths resolved to at the
+  moment it was written. `repos` keeps the author's spelling, which may be a
+  symlink whose target later changes; the resolved form is the stable binding
+  key. It is derived by basou and rejected as input, for the same reason basou
+  does not accept a claimed review time: what a path resolves to is something
+  basou observes, not something the reviewed party asserts.
+
+### Fixed
+
+- Work that `basou review-gaps` cannot place is no longer hidden by `--repo`,
+  and no longer sits under a success line. An abstention belongs to no
+  repository, so a scope cannot attribute it — but suppressing it made a scoped
+  report show zero gaps, zero undeterminable units and a green line for work the
+  tool had simply stopped being able to examine. A count that falls because the
+  tool stopped looking is the same false reassurance as a count that falls
+  because a claim was believed.
+
+  For the same reason it stays out of that report's other numbers: under a
+  scope, an undeterminable unit is listed in its own section — with its session
+  id, so there is something to go and look at — but does not become a row in a
+  tally headed "By repository", nor the scoped report's "newest captured
+  commit".
+
+- `basou review-gaps` reports pairings it could not check. A recorded review
+  that landed on one unit of work while being refused against another used to
+  leave that refusal invisible, because the record itself had not "changed
+  nothing". Refusals are counted per pairing.
+
 ### Changed
 
 - `basou review-gaps` reads `review_recorded` events. A unit of work whose repo
-  was named by a record in the window is labelled **self-reported**, and the
-  per-repository tally counts it.
+  was named by a record in the window is labelled **self-reported**, the record's
+  claimed commits are shown as a claim, and the per-repository tally counts it.
+  The label appears on units that already have a review trace too, so a claim is
+  never silently dropped just because something else already vouched for the
+  work. Recorded text is flattened onto one line and capped before rendering:
+  what an agent wrote down must not be able to restructure the report.
 
   The label re-classifies; it does not clear. A self-reported unit keeps its
-  verdict and stays in the gap count, because a self-report is exactly that —
-  the agent's own claim, with nothing corroborating it. Were the count to drop,
-  writing an empty record would become a way to make the number go down, which
-  is the weakness the Stop-gate already has. A record written after the commit
-  is not bound at all: it cannot have gated work that already landed.
+  verdict — so a unit that was a gap is still a gap, and one that already had a
+  review trace is still a candidate — because a self-report is exactly that: the
+  agent's own claim, with nothing corroborating it. Were a record able to move a
+  unit out of the gap count, writing an empty one would become a way to make the
+  number go down, which is the weakness the Stop-gate already has.
 
-  When a record names no resolvable repository it is reported as unbound, with
-  the reason. "I recorded a review and nothing changed" was previously
-  indistinguishable from "the record was ignored".
+  A record written after the commit is shown too, marked as written after the
+  fact. It cannot have gated the work, but `occurred_at` is when basou persisted
+  the record, not when the review ran — a review, then the commit, then the
+  record is an ordinary sequence. Since the label can never reduce the count,
+  hiding the claim only discarded the operator's own note.
+
+- `basou review-gaps` reports every recorded review that changed nothing, with
+  the cause of each: no repository named, a path that does not resolve to a
+  repository root on this machine, or a repository with no unit of work in the
+  window. The causes are listed separately because they are different mistakes,
+  and basou should not assert a reason it has not established. The count is
+  global and stays visible under a `--repo` scope — it is a caveat about the
+  tool's own input handling, and a completeness caveat that vanishes under a
+  filter is how silence starts looking like success again.
+
+  A record binds only to work in a repository that is **present on this machine**,
+  with both sides resolving to the same canonical root — every commit in the
+  unit and every repository the record names, not merely one of them. A record
+  naming both a live repository and one that has gone is refused whole: pooling
+  it on the strength of the live half attached it there and said nothing about
+  the half that could not be checked. If the repository has moved or gone, or a
+  commit's key survived only through the `*-workspace` name collapse (a
+  heuristic on a directory name), the pairing is refused and reported as
+  unverifiable. That is kept distinct from "no work in the window": work was
+  captured, and saying otherwise would deny the operator a unit they can go and
+  look at.
+
+  This is narrower than the key a commit gets, on purpose. A commit's path was
+  observed by basou when the command ran, so a moved repository's recorded path
+  is still evidence of where the work happened. A record's path is a claim about
+  where a review looked, and pairing it with work by string resemblance — when
+  nothing on disk can confirm the two name the same repository — is a guess.
+  `review-gaps` exists because a guess about whether a protocol was followed is
+  worse than an admission of ignorance.
 
 ## 0.35.1 — 2026-08-01
 

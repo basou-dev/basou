@@ -143,7 +143,17 @@ function gapUnit(overrides: Partial<ReviewGapUnit> = {}): ReviewGapUnit {
   };
 }
 
-function summaryOf(gaps: ReviewGapUnit[], unboundSelfReports = 0): ReviewGapsSummary {
+function summaryOf(
+  gaps: ReviewGapUnit[],
+  unattached: Partial<ReviewGapsSummary["unattachedSelfReports"]> = {},
+): ReviewGapsSummary {
+  const counts = {
+    noRepos: 0,
+    unresolvableRepo: 0,
+    noMatchingUnit: 0,
+    unverifiableUnit: 0,
+    ...unattached,
+  };
   return {
     generatedAt: NOW.toISOString(),
     windowHours: 24,
@@ -162,30 +172,35 @@ function summaryOf(gaps: ReviewGapUnit[], unboundSelfReports = 0): ReviewGapsSum
     gaps,
     candidates: [],
     unknowns: [],
-    unboundSelfReports,
+    unattachedSelfReports: {
+      ...counts,
+      total:
+        counts.noRepos + counts.unresolvableRepo + counts.noMatchingUnit + counts.unverifiableUnit,
+    },
+    refusedPairings: 0,
     newestCommitAt: "2026-05-09T10:05:00.000Z",
+  };
+}
+
+function selfReport(
+  overrides: Partial<ReviewGapUnit["selfReports"][number]> = {},
+): ReviewGapUnit["selfReports"][number] {
+  return {
+    sessionId: SES("S1"),
+    eventId: "evt_01HXABCDEF1234567890AB0001",
+    reviewer: "gpt-5.6",
+    target: "working-tree",
+    recordedAt: "2026-05-09T09:30:00.000Z",
+    commits: [],
+    recordedAfterCommit: false,
+    ...overrides,
   };
 }
 
 describe("renderReviewGaps", () => {
   it("labels a self-reported gap as unverified while still counting it as a gap", () => {
-    const out = renderReviewGaps(
-      summaryOf([
-        gapUnit({
-          selfReports: [
-            {
-              sessionId: SES("S1"),
-              eventId: "evt_01HXABCDEF1234567890AB0001",
-              reviewer: "gpt-5.6",
-              target: "working-tree",
-              recordedAt: "2026-05-09T09:30:00.000Z",
-              commits: [],
-            },
-          ],
-        }),
-      ]),
-    );
-    expect(out).toContain("self-reported by gpt-5.6 (unverified; still counted)");
+    const out = renderReviewGaps(summaryOf([gapUnit({ selfReports: [selfReport()] })]));
+    expect(out).toContain("self-reported by gpt-5.6 — unverified, still counted");
     // The top-line count must not shrink because a record exists.
     expect(out).toContain("Units of work that landed without a review trail: 1");
     expect(out).toContain("no trail 1");
@@ -193,15 +208,190 @@ describe("renderReviewGaps", () => {
     expect(out).toContain("must not be a way to make the number go down");
   });
 
+  it("shows the claimed commits as a claim, and flags a record written after the commit", () => {
+    const out = renderReviewGaps(
+      summaryOf([
+        gapUnit({
+          selfReports: [
+            selfReport({ commits: ["a1b2c3d4e5f6", "0123456"], recordedAfterCommit: true }),
+          ],
+        }),
+      ]),
+    );
+    expect(out).toContain("claiming a1b2c3d4, 0123456");
+    expect(out).toContain("(recorded after the commit)");
+    expect(out).toContain("unverified, still counted");
+  });
+
   it("omits the label and the tally when no record named the repo", () => {
     const out = renderReviewGaps(summaryOf([gapUnit()]));
     expect(out).not.toContain("self-reported by");
     expect(out).not.toContain("/ self-reported");
+    expect(out).not.toContain("changed nothing in this report");
   });
 
-  it("explains a record that could not be bound to any unit", () => {
-    const out = renderReviewGaps(summaryOf([gapUnit()], 3));
-    expect(out).toContain("3 review records could not be bound");
-    expect(out).toContain("`repos`");
+  it("names the cause of each record that changed nothing", () => {
+    const out = renderReviewGaps(
+      summaryOf([gapUnit()], { noRepos: 2, unresolvableRepo: 1, noMatchingUnit: 3 }),
+    );
+    expect(out).toContain("6 recorded reviews changed nothing in this report");
+    expect(out).toContain("2 named no repository");
+    expect(out).toContain("1 named a path that is not a repository root");
+    expect(out).toContain("3 named a repository, but no captured unit of work");
+    // The count is global, and says so, rather than vanishing under a scope.
+    expect(out).toContain("not just any --repo scope");
+  });
+
+  it("does not deny that captured work exists when the pairing merely could not be checked", () => {
+    const out = renderReviewGaps(summaryOf([gapUnit()], { unverifiableUnit: 1 }));
+    expect(out).toContain("could not be verified");
+    expect(out).not.toContain("no captured unit of work fell within the window");
+  });
+
+  it("does not print the success line when work could not be placed at all", () => {
+    const base = summaryOf([]);
+    const unknown = gapUnit({ repo: "(unknown)", verdict: "unknown", commitCount: 3 });
+    const out = renderReviewGaps({ ...base, gaps: [], unknowns: [unknown] });
+    // A zero that means "stopped looking" must not read like a zero that means
+    // "nothing was missed".
+    expect(out).not.toContain("✅");
+    expect(out).toContain("could not be placed in a repository at all");
+    expect(out).toContain("Undeterminable");
+  });
+
+  it("keeps the success line when there is genuinely nothing outstanding", () => {
+    const out = renderReviewGaps(summaryOf([]));
+    expect(out).toContain("✅");
+  });
+
+  it("reports pairings it could not check", () => {
+    const out = renderReviewGaps({ ...summaryOf([gapUnit()]), refusedPairings: 2 });
+    expect(out).toContain("2 pairings between a recorded review and captured work");
+    expect(out).toContain("never verified");
+  });
+
+  it("lists undeterminable units with an id that identifies them", () => {
+    // Ids that differ only in their RANDOM part, as two sessions from the same
+    // millisecond do. A rendered prefix would be identical for both, which is
+    // how the previous version of this test passed while showing only one.
+    const first = "ses_01HXABCDEF1234567890AAAAA1";
+    const second = "ses_01HXABCDEF1234567890BBBBB2";
+    const out = renderReviewGaps({
+      ...summaryOf([]),
+      gaps: [],
+      unknowns: [
+        gapUnit({ repo: "(unknown)", verdict: "unknown", sessionId: first, commitCount: 2 }),
+        gapUnit({ repo: "(unknown)", verdict: "unknown", sessionId: second, commitCount: 1 }),
+      ],
+    });
+    expect(out).toContain("Undeterminable (2 units / 3 commits)");
+    // A bare tally leaves nothing to go and look at, and a shared prefix is not
+    // something the operator can paste into another command.
+    expect(out).toContain(first);
+    expect(out).toContain(second);
+  });
+
+  it("does not claim a self-reported CANDIDATE stays in the gap count", () => {
+    const candidate = gapUnit({
+      verdict: "candidate",
+      reviews: [
+        { sessionId: SES("R1"), examinedDiff: true, files: [], endedAt: NOW.toISOString() },
+      ],
+      selfReports: [selfReport()],
+    });
+    const out = renderReviewGaps({ ...summaryOf([]), gaps: [], candidates: [candidate] });
+    // The candidate is rendered, but it is not in the gap count, so the note
+    // about staying in that count must not appear.
+    expect(out).toContain("self-reported by gpt-5.6");
+    expect(out).not.toContain("stays in the count above");
+  });
+
+  it("does claim it for a self-reported gap", () => {
+    const out = renderReviewGaps(summaryOf([gapUnit({ selfReports: [selfReport()] })]));
+    expect(out).toContain("stays in the count above");
+  });
+
+  it("does not assert the missing-`repos` cause for a record that had one", () => {
+    const out = renderReviewGaps(summaryOf([gapUnit()], { noMatchingUnit: 1 }));
+    expect(out).toContain("1 recorded review changed nothing");
+    expect(out).not.toContain("named no repository");
+  });
+
+  it("shows the claim on a candidate unit too, not only on gaps", () => {
+    const candidate = gapUnit({
+      verdict: "candidate",
+      reviews: [
+        { sessionId: SES("R1"), examinedDiff: true, files: [], endedAt: NOW.toISOString() },
+      ],
+      selfReports: [selfReport({ reviewer: "codex" })],
+    });
+    const summary = summaryOf([]);
+    const out = renderReviewGaps({ ...summary, candidates: [candidate] });
+    // A bound record counts as attached, so it is absent from the unattached
+    // diagnostic; if the line dropped it, it would exist only in --json.
+    expect(out).toContain("review trace:");
+    expect(out).toContain("self-reported by codex");
+    // ...but a candidate is NOT in the gap count, so the gap wording must not
+    // be reused here while the report also says there are zero gaps.
+    expect(out).toContain("no unit of work landed without a review trail");
+    expect(out).toContain("— unverified");
+    expect(out).not.toContain("unverified, still counted");
+  });
+
+  it("truncates on a grapheme boundary, not mid-emoji-sequence", () => {
+    const out = renderReviewGaps(
+      summaryOf([
+        // A ZWJ sequence straddling the cap: slicing by code point would keep
+        // the first emoji plus a dangling joiner.
+        gapUnit({
+          selfReports: [selfReport({ reviewer: `${"a".repeat(37)}\u{1F469}‍\u{1F4BB}xyz` })],
+        }),
+      ]),
+    );
+    // 41 graphemes, so the 40-cap keeps 39 and appends the ellipsis.
+    expect(out).not.toContain("‍…");
+    expect(out).toContain(`${"a".repeat(37)}\u{1F469}‍\u{1F4BB}x…`);
+  });
+
+  it("truncates a reviewer name on a character boundary", () => {
+    const out = renderReviewGaps(
+      summaryOf([
+        // 42 code points, so the 40-cap truncates exactly where the emoji sits
+        gapUnit({ selfReports: [selfReport({ reviewer: `${"a".repeat(38)}\u{1F600}xyz` })] }),
+      ]),
+    );
+    // Slicing UTF-16 units would land inside the surrogate pair and emit half a
+    // character; the cap must fall on a code point.
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(out).toContain(`${"a".repeat(38)}\u{1F600}…`);
+  });
+
+  it("cannot let recorded text restructure the report", () => {
+    const out = renderReviewGaps(
+      summaryOf([
+        gapUnit({
+          selfReports: [
+            selfReport({ reviewer: "evil\n## Injected heading", commits: ["abc\n- fake gap"] }),
+          ],
+        }),
+      ]),
+    );
+    // No line of the report may BEGIN inside recorded text. Asserted per
+    // channel, because each is flattened separately: the reviewer name and the
+    // claimed SHA. Without flattening the SHA is capped mid-injection to
+    // `abc\n- fa`, which an exact-match assertion on `- fake gap` would miss.
+    expect(out).not.toMatch(/^## Injected/m);
+    expect(out).not.toMatch(/^- fa/m);
+    expect(out).toContain("evil ## Injected heading");
+    expect(out).toContain("claiming abc - fa");
+  });
+
+  it("caps how many self-reports one line renders", () => {
+    const many = Array.from({ length: 6 }, (_, i) =>
+      selfReport({ reviewer: `r${i}`, eventId: `evt_01HXABCDEF1234567890AB000${i}` }),
+    );
+    const out = renderReviewGaps(summaryOf([gapUnit({ selfReports: many })]));
+    expect(out).toContain("+3 more");
+    expect(out).not.toContain("r5");
   });
 });

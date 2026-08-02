@@ -31,9 +31,10 @@ import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.
  * A `review_recorded` event (written by `basou review record`) is a SELF-REPORT:
  * the agent's own claim that a review ran, with nothing corroborating it. Such a
  * record is bound to a unit by the repo paths it names and surfaced as a label,
- * but it NEVER changes a verdict and never leaves the gap list — otherwise an
- * empty record would become a way to make the count go down, the same weakness
- * the Stop-gate has. It re-labels; it does not clear.
+ * but it NEVER changes that unit's verdict — a gap stays a gap, a candidate
+ * stays a candidate — otherwise an empty record would become a way to make the
+ * gap count go down, the same weakness the Stop-gate has. It re-labels; it does
+ * not clear.
  *
  * It reads only captured provenance and writes nothing.
  */
@@ -63,6 +64,14 @@ export type SelfReportedReview = {
   recordedAt: string;
   /** Commit SHAs the record claimed to cover; display only, never a binding key. */
   commits: string[];
+  /**
+   * The record was written after this unit's first commit, so it cannot have
+   * gated the work. Surfaced rather than hidden — a claim made after the fact is
+   * still the operator's own note about what happened, and the label can never
+   * reduce the gap count — but kept distinguishable, because when a record was
+   * written is part of what the operator is judging.
+   */
+  recordedAfterCommit: boolean;
 };
 
 /** One unit of work (a committing session's commits in one repo) and its verdict. */
@@ -82,6 +91,28 @@ export type ReviewGapUnit = {
    * a self-reported gap is still a gap.
    */
   selfReports: SelfReportedReview[];
+};
+
+/** Recorded reviews that reached no unit of work, broken down by cause. */
+export type UnattachedSelfReports = {
+  total: number;
+  /** The record named no repository at all. */
+  noRepos: number;
+  /**
+   * At least one repository it named could not be verified as a repo root on
+   * this machine. ANY unverifiable entry puts the record here, even alongside
+   * one that resolved: a half-checkable claim is refused whole, so that
+   * everything that does get paired was checkable in full.
+   */
+  unresolvableRepo: number;
+  /** It named a resolvable repository, but no unit of work fell in the window. */
+  noMatchingUnit: number;
+  /**
+   * Work WAS captured in the window, but the unit's own repository path could
+   * not be verified, so the pairing could not be checked either way. Distinct
+   * from {@link noMatchingUnit}, which would deny that the work exists.
+   */
+  unverifiableUnit: number;
 };
 
 export type ReviewGapRepoSummary = {
@@ -108,12 +139,29 @@ export type ReviewGapsSummary = {
   /** Units whose repo/time could not be derived from the captured command; abstained, not cleared. */
   unknowns: ReviewGapUnit[];
   /**
-   * `review_recorded` records that named no resolvable repo (or no timestamp)
-   * and so could not be bound to any unit — the usual cause of "I recorded a
-   * review and nothing changed". Like {@link unknowns} these belong to no repo,
-   * so the count is reported only when no `--repo` scope is applied (0 otherwise).
+   * Recorded reviews that changed nothing in this report — the answer to "I ran
+   * `basou review record` and the omission is still there". Reported with the
+   * reason for each, because basou must not assert a cause it has not
+   * established; "no `repos` field" and "a `repos` that does not resolve" are
+   * different mistakes with different fixes.
+   *
+   * Unlike {@link unknowns} this is NOT suppressed under a `--repo` scope, and
+   * attachment is computed against every unit rather than the scoped ones. It is
+   * a caveat about the tool's own input handling, not repo-dimensioned data, and
+   * a completeness caveat that disappears under a filter is how silence starts
+   * looking like success again — the very failure this surfacer exists to catch.
    */
-  unboundSelfReports: number;
+  unattachedSelfReports: UnattachedSelfReports;
+  /**
+   * How many (record, unit) pairings fell inside a unit's window but could not
+   * be checked, because that unit's own repository path was never verified.
+   *
+   * Counted per PAIRING, not per record, and reported even when the record
+   * attached to some other unit: {@link unattachedSelfReports} only speaks for
+   * records that changed nothing at all, so a record that landed once and was
+   * refused elsewhere would otherwise leave the refusal invisible.
+   */
+  refusedPairings: number;
   /** Newest captured commit considered; commits not yet imported are invisible. */
   newestCommitAt: string | null;
 };
@@ -234,6 +282,87 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
 }
 
 /**
+ * A key for a path named by a RECORD: only a repository that is present on this
+ * machine right now, resolved to its canonical root.
+ *
+ * This is deliberately narrower than the key a commit gets. A commit's path was
+ * OBSERVED by basou at the moment the command ran, so when the repository has
+ * since moved, the recorded path is still the best evidence of where the work
+ * happened and keeps its string fallback. A record's path is a claim about
+ * where a review looked, and pairing it with work by string resemblance alone —
+ * when nothing on disk can confirm the two name the same repository — is a
+ * guess. `review-gaps` exists because guesses about whether a protocol was
+ * followed are worse than an admission of ignorance, so an unverifiable record
+ * is reported as unverifiable rather than bound.
+ *
+ * What this rules out, by construction rather than by patching: a relative
+ * spelling colliding with an unrelated `cd ../app`, a record and a commit
+ * disagreeing about a symlink whose target has vanished, and a moved repository
+ * pairing on a coincidence of spelling.
+ */
+function recordRepoKey(p: string): string | null {
+  return resolveRepoRoot(p);
+}
+
+/** Why a hand-typed repository path cannot become a binding key. */
+export type RepoPathProblem = "relative" | "absent" | "not_a_repo_root";
+
+/** A `repos` entry that cannot bind, and why. */
+export type UnbindableRepo = { repo: string; index: number; problem: RepoPathProblem };
+
+/**
+ * Strict repo-root resolution for HAND-TYPED input (a record's `repos`), as
+ * opposed to {@link normalizeRepoPath}, which reads paths basou itself captured.
+ *
+ * The difference is the string fallback. `normalizeRepoPath` keeps one for
+ * captured data: a historical `cd` target whose repo has since moved is still
+ * the best key available, and refusing it would lose an observation basou
+ * genuinely made. Typed input has no such claim on the benefit of the doubt — a
+ * relative path, a typo, or a subdirectory would mint a key that no commit can
+ * ever match, and the record would then be accepted, stored, and silently
+ * unbindable forever. So this verifies against the disk and returns null
+ * otherwise.
+ *
+ * The asymmetry runs the safe way: everything this accepts, `normalizeRepoPath`
+ * resolves to the same key, so a record the writer took is a record the reader
+ * can bind.
+ */
+export function resolveRepoRoot(p: string | null | undefined): string | null {
+  return classifyRepoPath(p).resolved;
+}
+
+/** Resolve a hand-typed repo path, naming the reason when it cannot bind. */
+function classifyRepoPath(p: string | null | undefined): {
+  resolved: string | null;
+  problem: RepoPathProblem | null;
+} {
+  let s = stripQuotes((p ?? "").trim()).replace(/\/+$/, "");
+  if (s.startsWith("~/")) s = homedir() + s.slice(1);
+  if (s.length === 0 || !isAbsolute(s)) return { resolved: null, problem: "relative" };
+  const real = resolveRealpath(s);
+  if (real === null) return { resolved: null, problem: "absent" };
+  if (!isRepoRoot(real)) return { resolved: null, problem: "not_a_repo_root" };
+  return { resolved: real, problem: null };
+}
+
+/**
+ * The `repos` entries that could never bind to a unit of work, for the writer to
+ * reject before the record is stored. Sharing {@link classifyRepoPath} with the
+ * reader is the point: the writer must not accept a path the reader cannot use.
+ */
+export function findUnbindableRepos(repos: readonly string[]): UnbindableRepo[] {
+  const out: UnbindableRepo[] = [];
+  // Carries the INDEX rather than letting the caller look the value back up:
+  // two identical bad entries are two distinct problems, and a value lookup
+  // would report the first position twice and never name the second.
+  repos.forEach((repo, index) => {
+    const { problem } = classifyRepoPath(repo);
+    if (problem !== null) out.push({ repo, index, problem });
+  });
+  return out;
+}
+
+/**
  * Short repo key (the final path segment) for DISPLAY and `--scope` matching.
  * Binding uses {@link normalizeRepoPath} to avoid basename collisions; this is
  * only the human-facing label.
@@ -263,16 +392,41 @@ function inspectCommand(args: string[]): { files: string[]; examinedDiff: boolea
   return { files: [...files], examinedDiff };
 }
 
-/** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
-function commandRepo(args: string[], cwd: string): string | null {
+/**
+ * Repo a command effectively ran in, with whether that key was RESOLVED against
+ * the disk or produced by the string fallback.
+ *
+ * The provenance cannot be recovered from the key afterwards: the string
+ * fallback can land on a path that exists (collapsing `*-workspace` out of
+ * `/x/foo-workspace/bar` gives `/x/bar`), so asking "does this key resolve?"
+ * would answer yes about a key that was guessed from a directory name.
+ *
+ * How the path itself is derived is deliberately unchanged from before this
+ * change: deciding which directory a captured shell line really ran in needs a
+ * narrow, explicitly-abstaining grammar, and that is its own piece of work.
+ */
+function commandRepoWithProvenance(
+  args: string[],
+  cwd: string,
+): { key: string | null; resolved: boolean } {
+  const raw = commandRepoPath(args, cwd);
+  return { key: normalizeRepoPath(raw), resolved: resolveRepoRoot(raw) !== null };
+}
+
+/** The path a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
+function commandRepoPath(args: string[], cwd: string): string {
   // An explicit `cd <target> &&` wins over cwd — and wins EVEN WHEN the target
   // resolves to null (a non-repo dir): the command ran there, so it must not be
   // silently re-credited to the session's cwd (which could falsely bind an
   // unrelated repo and clear a real gap). Fall back to cwd only when there was
   // no explicit `cd`.
   const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
-  if (cd) return normalizeRepoPath(cd[1]);
-  return normalizeRepoPath(cwd);
+  return cd?.[1] ?? cwd;
+}
+
+/** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
+function commandRepo(args: string[], cwd: string): string | null {
+  return normalizeRepoPath(commandRepoPath(args, cwd));
 }
 
 /** True when a captured command exited non-zero (a failure is not evidence / not landed work). */
@@ -291,15 +445,25 @@ function commitFiles(args: string[]): string[] {
     .map((t) => basename(t));
 }
 
-type CommitRec = { repo: string; at: number; files: string[] };
+type CommitRec = {
+  repo: string;
+  at: number;
+  files: string[];
+  /** The key came from resolving the path on disk, not from the string fallback. */
+  keyResolved: boolean;
+};
 type ReviewRec = {
   sessionId: string;
   endedAt: number | null;
   /** repo key -> what the review touched in it. */
   repos: Map<string, { examinedDiff: boolean; files: Set<string> }>;
 };
-/** A `review_recorded` event reduced to what binding and display need. */
-type SelfReportRec = SelfReportedReview & {
+/**
+ * A `review_recorded` event reduced to what binding and display need.
+ * `recordedAfterCommit` is deliberately absent: it is a fact about a record
+ * PAIRED WITH a unit, not about the record, so it is decided at attach time.
+ */
+type SelfReportRec = Omit<SelfReportedReview, "recordedAfterCommit"> & {
   at: number;
   /** Normalized repo paths the record named; the only binding key it has. */
   repos: Set<string>;
@@ -336,8 +500,9 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
 
   const reviews: ReviewRec[] = [];
   const selfReports: SelfReportRec[] = [];
-  // `review_recorded` records that named no resolvable repo / no usable time
-  let unboundSelfReports = 0;
+  // Records rejected before they ever reach the binding step, by cause.
+  let noRepos = 0;
+  let unresolvableRepo = 0;
   // committing session -> repo path -> commits
   const workUnits = new Map<string, Map<string, CommitRec[]>>();
   // committing session -> commit times whose repo/time could not be derived
@@ -359,13 +524,31 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         // planning repo, which would bind the wrong repo entirely.
         if (ev.type === "review_recorded") {
           const recordedAt = Date.parse(ev.occurred_at);
-          const repos = new Set(
-            (ev.repos ?? [])
-              .map((r) => normalizeRepoPath(r))
-              .filter((r): r is string => r !== null),
-          );
-          if (repos.size === 0 || Number.isNaN(recordedAt)) {
-            unboundSelfReports++;
+          // Prefer what the paths resolved to when the record was written: the
+          // author's spelling can be a symlink retargeted since. Older records
+          // predate the field and fall back to their `repos`. A PRESENT BUT
+          // EMPTY `repos_resolved` must not shadow a populated `repos` — the
+          // writer never emits that shape, but an imported event may carry it.
+          const named =
+            ev.repos_resolved !== undefined && ev.repos_resolved.length > 0
+              ? ev.repos_resolved
+              : (ev.repos ?? []);
+          // EVERY named repository must verify, not merely one. A record naming
+          // both a live and a vanished repository was pooled on the strength of
+          // the live one, attached there, and the half it could not check went
+          // unmentioned -- or, if the live half had no work, was reported as
+          // "no work in the window", which is not what happened. Refusing the
+          // record keeps the invariant that everything pooled is fully
+          // checkable, and says so instead of half-saying it.
+          const keys = named.map((r) => recordRepoKey(r));
+          const repos = new Set(keys.filter((r): r is string => r !== null));
+          if (keys.some((k) => k === null) || repos.size === 0 || Number.isNaN(recordedAt)) {
+            // Name the mistake: an absent `repos` is the operator forgetting a
+            // field, while a `repos` holding any path basou cannot check is a
+            // wrong path. Only the first is what the record's own location
+            // explains.
+            if (named.length === 0) noRepos++;
+            else unresolvableRepo++;
             continue;
           }
           selfReports.push({
@@ -402,7 +585,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
 
         // committing (code-author) session: collect git-commit events
         if (!ev.args.join(" ").includes("git commit")) continue;
-        const repo = commandRepo(ev.args, ev.cwd);
+        const { key: repo, resolved: keyResolved } = commandRepoWithProvenance(ev.args, ev.cwd);
         if (repo === null || Number.isNaN(at)) {
           // Surface as unknown rather than silently dropping an observed commit.
           const list = unknownCommits.get(entry.sessionId) ?? [];
@@ -412,7 +595,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         }
         const byRepo = workUnits.get(entry.sessionId) ?? new Map<string, CommitRec[]>();
         const list = byRepo.get(repo) ?? [];
-        list.push({ repo, at, files: commitFiles(ev.args) });
+        list.push({ repo, at, files: commitFiles(ev.args), keyResolved });
         byRepo.set(repo, list);
         workUnits.set(entry.sessionId, byRepo);
       }
@@ -429,25 +612,71 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
   const windowMs = windowHours * 3600 * 1000;
   const units: ReviewGapUnit[] = [];
   let newestCommit: number | null = null;
+  // Event ids of records that reached at least one unit ANYWHERE. Collected
+  // across every unit, including those a `--repo` scope excludes, so a beta
+  // record is never reported as "matched nothing" merely because the operator
+  // scoped the report to alpha.
+  const attachedSelfReports = new Set<string>();
+  // Records that DID fall in a unit's window but were refused because the
+  // unit's own repository could not be verified.
+  const refusedForUnit = new Set<string>();
+  // Per PAIRING, so a record that attached elsewhere still reports its refusals.
+  let refusedPairings = 0;
 
   for (const [sessionId, byRepo] of workUnits) {
     for (const [repoPath, commits] of byRepo) {
       const label = basename(repoPath);
-      if (scope !== null && !scope.includes(label)) continue;
       const times = commits.map((c) => c.at).sort((a, b) => a - b);
       const first = times[0] ?? null;
       const last = times[times.length - 1] ?? null;
+
+      // Self-reports naming this repo, within the window on EITHER side of the
+      // unit. Computed before the scope filter so attachment is global.
+      //
+      // A record written after the commit is attached too, but flagged. It
+      // cannot have gated the work, yet `occurred_at` is when basou persisted
+      // the record, not when the review ran — a review at 09:55, a commit at
+      // 10:00 and a record at 10:01 is an ordinary sequence. Hiding it would
+      // discard the operator's own note to avoid a misreading the label already
+      // prevents: the unit keeps its verdict and stays in the count either way.
+      const earliest = first ?? last ?? 0;
+      const latest = last ?? first ?? 0;
+      // BOTH sides must name a repository that is here. A record key is always
+      // a resolved root; a unit's key qualifies only when the commits' own paths
+      // resolved. Re-resolving `repoPath` would not do: the string fallback can
+      // land on a path that exists (collapsing `*-workspace` out of
+      // `/x/foo-workspace/bar` gives `/x/bar`), and it reached it by guessing
+      // from a directory name, which is what this rule refuses.
+      //
+      // EVERY commit, not some: one resolved commit does not vouch for a sibling
+      // whose own path was guessed at. They share a key, but that is what is in
+      // question — a claim would then cover work whose origin is unverified.
+      const unitRepoIsHere = commits.every((c) => c.keyResolved);
+      const inWindow = selfReports.filter(
+        (r) => r.repos.has(repoPath) && r.at >= earliest - windowMs && r.at <= latest + windowMs,
+      );
+      const selfBound = unitRepoIsHere ? inWindow : [];
+      // Refused for the unit's sake, not for want of work. Kept apart so the
+      // report does not go on to deny that this unit exists.
+      if (!unitRepoIsHere) {
+        refusedPairings += inWindow.length;
+        for (const r of inWindow) refusedForUnit.add(r.eventId);
+      }
+      for (const r of selfBound) attachedSelfReports.add(r.eventId);
+
+      if (scope !== null && !scope.includes(label)) continue;
       if (last !== null) newestCommit = newestCommit === null ? last : Math.max(newestCommit, last);
       const changedFiles = new Set(commits.flatMap((c) => c.files));
 
       // candidate reviews: the SAME repo path (collision-safe), ended before this
       // unit's first commit, within the coarse window. The window is only a
       // pre-filter — binding is by examined diff / overlapping files, never by
-      // temporal proximity alone.
-      const before = first ?? last ?? 0;
+      // temporal proximity alone. Unlike a self-report this stays one-sided: a
+      // captured review session is evidence of gating, and evidence that only
+      // exists after the commit is not evidence of it.
       const nearby = reviews.filter((r) => {
         if (!r.repos.has(repoPath) || r.endedAt === null) return false;
-        return r.endedAt <= before && r.endedAt >= before - windowMs;
+        return r.endedAt <= earliest && r.endedAt >= earliest - windowMs;
       });
       const bound = nearby.filter((r) => {
         const touched = r.repos.get(repoPath);
@@ -461,15 +690,6 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         bound.length > 0 ? "candidate" : nearby.length > 0 ? "near_unbound" : "omission";
       const cited = verdict === "candidate" ? bound : verdict === "near_unbound" ? nearby : [];
 
-      // Self-reports naming this repo, in the same pre-filter window. Attached
-      // AFTER the verdict is computed, and deliberately not an input to it: a
-      // record must never move a unit out of `gaps`. A record written after the
-      // commit is excluded — it cannot have gated a commit that already landed,
-      // and labeling it would imply the protocol was followed when it was not.
-      const selfBound = selfReports.filter(
-        (r) => r.repos.has(repoPath) && r.at <= before && r.at >= before - windowMs,
-      );
-
       units.push({
         repo: label,
         sessionId,
@@ -477,7 +697,9 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         firstCommitAt: first === null ? null : new Date(first).toISOString(),
         lastCommitAt: last === null ? null : new Date(last).toISOString(),
         verdict,
-        selfReports: selfBound.map(toSelfReportedReview),
+        // Attached after the verdict is computed, and deliberately not an input
+        // to it: a record must never move a unit out of `gaps`.
+        selfReports: selfBound.map((r) => toSelfReportedReview(r, r.at > earliest)),
         reviews: cited.map((r) => ({
           sessionId: r.sessionId,
           examinedDiff: r.repos.get(repoPath)?.examinedDiff ?? false,
@@ -487,36 +709,47 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       });
     }
   }
-
-  // Observed commits whose repo/time could not be derived become explicit
-  // `unknown` units (an abstention, never a clear). They cannot be attributed to
-  // a scoped repo, so they are reported only when no `--repo` scope is applied.
-  if (scope === null) {
-    for (const [sessionId, times] of unknownCommits) {
-      const valid = times.filter((t): t is number => t !== null).sort((a, b) => a - b);
-      const first = valid[0] ?? null;
-      const last = valid[valid.length - 1] ?? null;
-      if (last !== null) newestCommit = newestCommit === null ? last : Math.max(newestCommit, last);
-      units.push({
-        repo: "(unknown)",
-        sessionId,
-        commitCount: times.length,
-        firstCommitAt: first === null ? null : new Date(first).toISOString(),
-        lastCommitAt: last === null ? null : new Date(last).toISOString(),
-        verdict: "unknown",
-        reviews: [],
-        // No repo key, so nothing a record's `repos` could bind to.
-        selfReports: [],
-      });
+  for (const [sessionId, times] of unknownCommits) {
+    const valid = times.filter((t): t is number => t !== null).sort((a, b) => a - b);
+    const first = valid[0] ?? null;
+    const last = valid[valid.length - 1] ?? null;
+    // Under a scope the footer speaks for the scoped repo, and an undeterminable
+    // commit belongs to no repo: it must be listed as a caveat without silently
+    // becoming that repo's "newest captured commit".
+    if (last !== null && scope === null) {
+      newestCommit = newestCommit === null ? last : Math.max(newestCommit, last);
     }
+    units.push({
+      repo: "(unknown)",
+      sessionId,
+      commitCount: times.length,
+      firstCommitAt: first === null ? null : new Date(first).toISOString(),
+      lastCommitAt: last === null ? null : new Date(last).toISOString(),
+      verdict: "unknown",
+      reviews: [],
+      // No repo key, so nothing a record's `repos` could bind to.
+      selfReports: [],
+    });
   }
+
+  // Everything pooled resolved to a live repository root. A record that reached
+  // nothing either fell in a unit's window and was refused because that unit's
+  // repository could not be verified, or found no work at all. Reporting the
+  // first as the second would deny that a captured unit exists.
+  const missed = selfReports.filter((r) => !attachedSelfReports.has(r.eventId));
+  const unverifiableUnit = missed.filter((r) => refusedForUnit.has(r.eventId)).length;
+  const noMatchingUnit = missed.length - unverifiableUnit;
 
   const recentFirst = (a: ReviewGapUnit, b: ReviewGapUnit): number =>
     (Date.parse(b.lastCommitAt ?? "") || 0) - (Date.parse(a.lastCommitAt ?? "") || 0);
 
-  const repoKeys = [...new Set(units.map((u) => u.repo))].sort();
+  // The tally is headed "By repository" and, under a scope, is read as being
+  // about that repository. An undeterminable unit belongs to none, so it stays
+  // out of the tally there -- it is listed in its own section instead.
+  const talliedUnits = scope === null ? units : units.filter((u) => u.verdict !== "unknown");
+  const repoKeys = [...new Set(talliedUnits.map((u) => u.repo))].sort();
   const repos: ReviewGapRepoSummary[] = repoKeys.map((repo) => {
-    const us = units.filter((u) => u.repo === repo);
+    const us = talliedUnits.filter((u) => u.repo === repo);
     return {
       repo,
       units: us.length,
@@ -536,9 +769,14 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
     gaps: units.filter(isGap).sort(recentFirst),
     candidates: units.filter((u) => u.verdict === "candidate").sort(recentFirst),
     unknowns: units.filter((u) => u.verdict === "unknown").sort(recentFirst),
-    // Belongs to no repo, so it is meaningless under a repo scope (same rule
-    // as `unknowns`).
-    unboundSelfReports: scope === null ? unboundSelfReports : 0,
+    unattachedSelfReports: {
+      total: noRepos + unresolvableRepo + noMatchingUnit + unverifiableUnit,
+      noRepos,
+      unresolvableRepo,
+      noMatchingUnit,
+      unverifiableUnit,
+    },
+    refusedPairings,
     newestCommitAt: newestCommit === null ? null : new Date(newestCommit).toISOString(),
   };
 }
@@ -549,7 +787,7 @@ function isGap(u: ReviewGapUnit): boolean {
 }
 
 /** Drop the binding-only fields so the emitted record carries just the report. */
-function toSelfReportedReview(r: SelfReportRec): SelfReportedReview {
+function toSelfReportedReview(r: SelfReportRec, recordedAfterCommit: boolean): SelfReportedReview {
   return {
     sessionId: r.sessionId,
     eventId: r.eventId,
@@ -557,5 +795,6 @@ function toSelfReportedReview(r: SelfReportRec): SelfReportedReview {
     target: r.target,
     recordedAt: r.recordedAt,
     commits: r.commits,
+    recordedAfterCommit,
   };
 }
