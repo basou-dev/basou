@@ -40,9 +40,10 @@ All notable changes to **basou** are recorded here. The project follows
   because a claim was believed.
 
   For the same reason it stays out of that report's other numbers: under a
-  scope, an undeterminable unit is listed in full in its own section but does
-  not become a row in a tally headed "By repository", nor the scoped report's
-  "newest captured commit".
+  scope, an undeterminable unit is listed in its own section — with its session
+  id, so there is something to go and look at — but does not become a row in a
+  tally headed "By repository", nor the scoped report's "newest captured
+  commit".
 
 - `basou review-gaps` reports pairings it could not check. A recorded review
   that landed on one unit of work while being refused against another used to
@@ -60,10 +61,11 @@ All notable changes to **basou** are recorded here. The project follows
   what an agent wrote down must not be able to restructure the report.
 
   The label re-classifies; it does not clear. A self-reported unit keeps its
-  verdict and stays in the gap count, because a self-report is exactly that —
-  the agent's own claim, with nothing corroborating it. Were the count to drop,
-  writing an empty record would become a way to make the number go down, which
-  is the weakness the Stop-gate already has.
+  verdict — so a unit that was a gap is still a gap, and one that already had a
+  review trace is still a candidate — because a self-report is exactly that: the
+  agent's own claim, with nothing corroborating it. Were a record able to move a
+  unit out of the gap count, writing an empty one would become a way to make the
+  number go down, which is the weakness the Stop-gate already has.
 
   A record written after the commit is shown too, marked as written after the
   fact. It cannot have gated the work, but `occurred_at` is when basou persisted

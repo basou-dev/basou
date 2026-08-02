@@ -270,20 +270,45 @@ describe("renderReviewGaps", () => {
     expect(out).toContain("never verified");
   });
 
-  it("lists undeterminable units rather than only counting them", () => {
-    const base = summaryOf([]);
+  it("lists undeterminable units with an id that identifies them", () => {
+    // Ids that differ only in their RANDOM part, as two sessions from the same
+    // millisecond do. A rendered prefix would be identical for both, which is
+    // how the previous version of this test passed while showing only one.
+    const first = "ses_01HXABCDEF1234567890AAAAA1";
+    const second = "ses_01HXABCDEF1234567890BBBBB2";
     const out = renderReviewGaps({
-      ...base,
+      ...summaryOf([]),
       gaps: [],
       unknowns: [
-        gapUnit({ repo: "(unknown)", verdict: "unknown", sessionId: SES("U1"), commitCount: 2 }),
-        gapUnit({ repo: "(unknown)", verdict: "unknown", sessionId: SES("U2"), commitCount: 1 }),
+        gapUnit({ repo: "(unknown)", verdict: "unknown", sessionId: first, commitCount: 2 }),
+        gapUnit({ repo: "(unknown)", verdict: "unknown", sessionId: second, commitCount: 1 }),
       ],
     });
     expect(out).toContain("Undeterminable (2 units / 3 commits)");
-    // A bare tally leaves nothing to go and look at.
-    expect(out).toContain(SES("U1").slice(0, 14));
-    expect(out).toContain(SES("U2").slice(0, 14));
+    // A bare tally leaves nothing to go and look at, and a shared prefix is not
+    // something the operator can paste into another command.
+    expect(out).toContain(first);
+    expect(out).toContain(second);
+  });
+
+  it("does not claim a self-reported CANDIDATE stays in the gap count", () => {
+    const candidate = gapUnit({
+      verdict: "candidate",
+      reviews: [
+        { sessionId: SES("R1"), examinedDiff: true, files: [], endedAt: NOW.toISOString() },
+      ],
+      selfReports: [selfReport()],
+    });
+    const out = renderReviewGaps({ ...summaryOf([]), gaps: [], candidates: [candidate] });
+    // The candidate is rendered, but it is not in the gap count, so the note
+    // about staying in that count must not appear.
+    expect(out).toContain("self-reported by gpt-5.6");
+    expect(out).not.toContain("stays in the count above");
+  });
+
+  it("does claim it for a self-reported gap", () => {
+    const out = renderReviewGaps(summaryOf([gapUnit({ selfReports: [selfReport()] })]));
+    expect(out).toContain("stays in the count above");
   });
 
   it("does not assert the missing-`repos` cause for a record that had one", () => {

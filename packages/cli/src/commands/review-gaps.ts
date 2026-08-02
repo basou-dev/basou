@@ -249,8 +249,13 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
     // and this section exists precisely so work the tool could not examine does
     // not disappear behind a number.
     for (const u of summary.unknowns) {
+      // The whole session id, not a prefix. Elsewhere a line carries a repo name
+      // and a review trace; here the session is the only handle on the work, and
+      // a ULID's leading characters are its timestamp -- two sessions from the
+      // same millisecond share them, so a prefix can be both indistinguishable
+      // here and ambiguous to the commands the operator would paste it into.
       lines.push(
-        `- ${relAge(u.lastCommitAt, now)} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) [${u.sessionId.slice(0, 14)}]`,
+        `- ${relAge(u.lastCommitAt, now)} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) [${u.sessionId}]`,
       );
     }
     lines.push("");
@@ -266,9 +271,13 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
   lines.push(
     `Note: read-only advisory. Only captured commits are in scope (newest captured commit: ${summary.newestCommitAt === null ? "none" : relAge(summary.newestCommitAt, now)}). It never auto-judges that a review "happened", and temporal proximity alone is not a pass. It does not enforce.`,
   );
-  lines.push(
-    'Note: a "self-reported" unit has a `basou review record` naming this repo, but nothing corroborates it — it stays in the count above, because an empty record must not be a way to make the number go down.',
-  );
+  // Only claimed for a unit the count above actually contains. A candidate can
+  // carry a record too, and saying it "stays in the count" would be false there.
+  if (summary.gaps.some((u) => u.selfReports.length > 0)) {
+    lines.push(
+      'Note: a "self-reported" unit has a `basou review record` naming this repo, but nothing corroborates it — it stays in the count above, because an empty record must not be a way to make the number go down.',
+    );
+  }
   lines.push(...unattachedLines(summary.unattachedSelfReports));
   if (summary.refusedPairings > 0) {
     // Per pairing, so a record that landed on one unit still reports the units

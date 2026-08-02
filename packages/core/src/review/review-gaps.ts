@@ -97,7 +97,12 @@ export type UnattachedSelfReports = {
   total: number;
   /** The record named no repository at all. */
   noRepos: number;
-  /** It named repositories, but none resolved to a repo root on this machine. */
+  /**
+   * At least one repository it named could not be verified as a repo root on
+   * this machine. ANY unverifiable entry puts the record here, even alongside
+   * one that resolved: a half-checkable claim is refused whole, so that
+   * everything that does get paired was checkable in full.
+   */
   unresolvableRepo: number;
   /** It named a resolvable repository, but no unit of work fell in the window. */
   noMatchingUnit: number;
@@ -538,8 +543,9 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
           const repos = new Set(keys.filter((r): r is string => r !== null));
           if (keys.some((k) => k === null) || repos.size === 0 || Number.isNaN(recordedAt)) {
             // Name the mistake: an absent `repos` is the operator forgetting a
-            // field, a `repos` naming nothing verifiable is a path basou cannot
-            // check. Only the first is what the record's own location explains.
+            // field, while a `repos` holding any path basou cannot check is a
+            // wrong path. Only the first is what the record's own location
+            // explains.
             if (named.length === 0) noRepos++;
             else unresolvableRepo++;
             continue;
@@ -738,7 +744,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
 
   // The tally is headed "By repository" and, under a scope, is read as being
   // about that repository. An undeterminable unit belongs to none, so it stays
-  // out of the tally there -- it is reported in full in its own section instead.
+  // out of the tally there -- it is listed in its own section instead.
   const talliedUnits = scope === null ? units : units.filter((u) => u.verdict !== "unknown");
   const repoKeys = [...new Set(talliedUnits.map((u) => u.repo))].sort();
   const repos: ReviewGapRepoSummary[] = repoKeys.map((repo) => {
