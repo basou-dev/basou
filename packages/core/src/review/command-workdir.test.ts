@@ -169,14 +169,11 @@ describe("deriveCommandWorkdir — what the grammar accepts", () => {
     expect(shell("git log --grep=fix#12 --oneline")).toEqual({ kind: "cwd" });
   });
 
-  it("keeps a cd first when only blanks and assignments precede it", () => {
-    // A leading newline, a doubled separator and a bare assignment are not
-    // commands, so none of them means "something already ran somewhere else".
+  it("keeps a cd first when only blank lines and assignments precede it", () => {
+    // A blank line and a bare assignment are not commands, so neither means
+    // "something already ran somewhere else". (A leading `;` is NOT this case:
+    // bash rejects the whole program, which is covered under `shell_syntax`.)
     expect(shell("\ncd /repos/beta && git commit -m x")).toEqual({
-      kind: "target",
-      path: "/repos/beta",
-    });
-    expect(shell(";cd /repos/beta && git commit -m x")).toEqual({
       kind: "target",
       path: "/repos/beta",
     });
@@ -229,6 +226,7 @@ describe("deriveCommandWorkdir — one refusal per rule", () => {
     ["unsupported_cd_form", "an empty target", 'cd "" && git commit -m x'],
     ["unexpanded_variable", "an unexpanded variable", "cd $ROOT && git commit -m x"],
     ["glob", "a glob", "cd /repos/* && git commit -m x"],
+    ["glob", "a brace expansion", "cd /repos/{alpha,beta} && git commit -m x"],
     ["tilde_user", "another account's home", "cd ~alice/app && git commit -m x"],
     ["quoted_tilde", "a quoted tilde, which bash does not expand", 'cd "~/app" && git commit -m x'],
     ["directory_stack", "pushd", "pushd /other && git commit -m x"],
@@ -252,6 +250,128 @@ describe("deriveCommandWorkdir — one refusal per rule", () => {
     expect(reason(shell("cd ../beta && git commit -m x", "projects/alpha"))).toBe(
       "unresolvable_relative",
     );
+  });
+});
+
+/**
+ * Every case here is one where the grammar used to answer `cwd` or `target`
+ * with confidence and bash disagreed. They are grouped because they share a
+ * failure shape rather than a rule: the grammar treated something it had not
+ * modelled as if it were harmless.
+ */
+describe("deriveCommandWorkdir — shapes that must not reach a confident answer", () => {
+  it("does not read a redirection as part of the cd target", () => {
+    // `cd /tmp>/dev/null` is `cd /tmp` with stdout redirected, not a cd to a
+    // directory whose name contains `>`.
+    expect(shell("cd /repos/beta>/dev/null && git commit -m x")).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+    // A redirection may also sit between the command and its operand.
+    expect(shell("cd>/dev/null /repos/beta && git commit -m x")).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+    // A quoted redirection TARGET is still a target, not a second operand.
+    expect(shell('cd /repos/beta >"/dev/null" && git commit -m x')).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+    // `>|` is one redirection operator; its `|` starts no pipeline.
+    expect(shell("cd /repos/beta >| /dev/null && git commit -m x")).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+  });
+
+  it("applies quoting per character, not per word", () => {
+    // The `?` is unquoted even though the word contains quotes, so the shell
+    // globbed it and what it became is not in the text.
+    expect(reason(shell('cd /repos/bet?"" && git commit -m x'))).toBe("glob");
+    // The NAME of an assignment is unquoted even though its value is not, so
+    // this is an assignment prefix and the `cd` behind it is the command.
+    expect(shell('FOO="x" cd /repos/beta && git commit -m x')).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+    // A `$` inside single quotes is literal, so it disqualifies nothing.
+    expect(shell("cd '/repos/$literal' && git commit -m x")).toEqual({
+      kind: "target",
+      path: "/repos/$literal",
+    });
+  });
+
+  it("refuses a compound command instead of assuming its cd did not run", () => {
+    for (const script of [
+      "if cd /other; then git commit -m x; fi",
+      "time cd /other",
+      "while cd /other; do git commit -m x; done",
+      "{ cd /other; git commit -m x; }",
+      "! cd /other",
+    ]) {
+      expect(reason(shell(script))).toBe("compound_command");
+    }
+  });
+
+  it("refuses a cd reached through `command` or `builtin`", () => {
+    // `command cd /other` moves the shell exactly as a bare `cd` does.
+    expect(reason(shell("command cd /other && git commit -m x"))).toBe("indirect_execution");
+    expect(reason(shell("builtin cd /other && git commit -m x"))).toBe("indirect_execution");
+  });
+
+  it("refuses `$'…'`, whose value is not its text", () => {
+    expect(reason(shell("$'cd' /other && git commit -m x"))).toBe("dollar_quote");
+    expect(reason(shell('$"cd" /other && git commit -m x'))).toBe("dollar_quote");
+  });
+
+  it("refuses an assignment to the shell state that cd itself reads", () => {
+    // bash goes to /tmp here; this process's `HOME` is a different machine's.
+    expect(reason(shell("HOME=/tmp\ncd ~ && git commit -m x"))).toBe("shell_state_assignment");
+    // With CDPATH set, a relative `cd` does not resolve against cwd at all.
+    expect(reason(shell("CDPATH=/ cd repos && git commit -m x"))).toBe("shell_state_assignment");
+    expect(reason(shell("OLDPWD=/tmp\ncd /other && git commit -m x"))).toBe(
+      "shell_state_assignment",
+    );
+    // An unrelated assignment is still just an assignment.
+    expect(shell("LC_ALL=C cd /repos/beta && git commit -m x")).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+  });
+
+  it("refuses a carriage return rather than reading it as a line ending", () => {
+    // bash makes `\r` part of the operand, so the cd fails and the commit runs
+    // in cwd — the opposite of what the line looks like.
+    expect(reason(shell("cd /other\r\ngit commit -m x"))).toBe("carriage_return");
+  });
+
+  it("refuses a program bash would not run at all", () => {
+    for (const script of [
+      ";cd /other && git commit -m x", // nothing to the left of `;`
+      "&& cd /other", // nothing to the left of `&&`
+      "cd /other &&", // nothing to the right of `&&`
+      "cd /other |", // nothing to the right of `|`
+      "cd /other ;; git commit -m x", // `;;` outside a case
+      "cd /other >", // a redirection with no target
+    ]) {
+      expect(reason(shell(script))).toBe("shell_syntax");
+    }
+    // A trailing `;` is not the same thing: bash accepts it.
+    expect(shell("cd /repos/beta && git commit -m x;")).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+  });
+
+  it("refuses a package manager that relocates its child", () => {
+    // `pnpm -C <repo> exec git commit` commits in <repo>; the captured cwd is
+    // wherever pnpm was invoked from.
+    expect(reason(shell("pnpm -C /other exec git commit -m x"))).toBe("chdir_option");
+    expect(
+      reason(deriveCommandWorkdir("pnpm", ["-C", "/other", "exec", "git", "commit"], CWD)),
+    ).toBe("chdir_option");
+    expect(reason(shell("npm --prefix /other run release"))).toBe("chdir_option");
+    expect(reason(shell("yarn --cwd /other build"))).toBe("chdir_option");
   });
 });
 
@@ -312,8 +432,17 @@ describe("deriveCommandWorkdir — quoting decides what is an operator", () => {
     });
   });
 
-  it("does not treat a quoted `--` as the `cd --` marker", () => {
-    expect(reason(shell("cd '--' /other && git commit -m x"))).toBe("unsupported_cd_form");
+  it("still reads `--` and `-C` after the shell has removed their quotes", () => {
+    // Quoting hides an operator from the SHELL, never from the program the
+    // shell then hands the word to: `cd '--' /x` reaches cd as `cd -- /x`, and
+    // `git "-C" /x` reaches git as `git -C /x`.
+    expect(shell("cd '--' /other && git commit -m x")).toEqual({
+      kind: "target",
+      path: "/other",
+    });
+    expect(reason(shell('git "-C" /other commit -m x'))).toBe("chdir_option");
+    // …and `cd "-"` is `cd -`, which goes to $OLDPWD, not to a directory named `-`.
+    expect(reason(shell('cd "-" && git commit -m x'))).toBe("unsupported_cd_form");
   });
 
   it("joins quoted and unquoted parts of one word", () => {

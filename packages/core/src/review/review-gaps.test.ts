@@ -751,10 +751,11 @@ describe("normalizeRepoPath (realpath resolution)", () => {
       { id: SES("AM1"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
       [cmd(SES("AM1"), "codex-import", "2026-05-09T09:30:00.000Z", ["-c", "git diff"], alpha)],
     );
-    // A commit whose `cd` sits inside a command substitution: bash ran it in the
-    // subshell, so this commit did NOT land in alpha. Crediting cwd would pair it
-    // with the review above and manufacture a `candidate` — a review of alpha
-    // presented as covering work basou cannot place.
+    // A commit behind two `cd`s: bash ran it in the second, so it landed in
+    // neither alpha (the cwd) nor `/first` (what the old regex matched). With no
+    // reading available that is certainly right, the only answer that is
+    // certainly not wrong is none — and binding it to alpha would pair it with
+    // the review above and manufacture a `candidate`.
     await placeSession(
       paths,
       { id: SES("AM2"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
@@ -763,7 +764,7 @@ describe("normalizeRepoPath (realpath resolution)", () => {
           SES("AM2"),
           "claude-code-import",
           "2026-05-09T10:05:00.000Z",
-          ["-c", "echo $(cd /elsewhere && pwd) && git commit -m x"],
+          ["-c", "cd /first && cd /second && git commit -m x"],
           alpha,
         ),
       ],
