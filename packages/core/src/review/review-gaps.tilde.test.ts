@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * `~/...` is a documented spelling for a record's `repos`, and it is the one the
- * help text and the README example use. Covering it needs `homedir()` to point
+ * `~/...` is a documented spelling for a record's `repos`, and it is the one
+ * `basou review record --help` uses in its own example. Covering it needs `homedir()` to point
  * somewhere a fixture may create a repository, so it lives in its own file: the
  * mock is module-wide, and the rest of the suite must keep the real home.
  *
@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * every other test stayed green.
  */
 let home: string | undefined;
+let previousHome: string | undefined;
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof os>();
   return { ...actual, homedir: () => process.env.BASOU_TEST_HOME ?? actual.homedir() };
@@ -20,10 +21,15 @@ vi.mock("node:os", async (importOriginal) => {
 
 beforeEach(async () => {
   home = await realpath(await mkdtemp(join(os.tmpdir(), "basou-rg-home-")));
+  previousHome = process.env.BASOU_TEST_HOME;
   process.env.BASOU_TEST_HOME = home;
 });
 afterEach(async () => {
-  process.env.BASOU_TEST_HOME = undefined;
+  // Assigning `undefined` would store the STRING "undefined" and discard any
+  // value that was already there.
+  if (previousHome === undefined) delete process.env.BASOU_TEST_HOME;
+  else process.env.BASOU_TEST_HOME = previousHome;
+  previousHome = undefined;
   if (home !== undefined) {
     await rm(home, { recursive: true, force: true });
     home = undefined;

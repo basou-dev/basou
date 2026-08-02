@@ -685,9 +685,10 @@ describe("normalizeRepoPath (realpath resolution)", () => {
     await mkRepo(repoDir);
     await mkdir(join(repoDir, "packages"), { recursive: true });
 
-    // The whole point of the strict check: normalizeRepoPath ACCEPTS all three
-    // of these (its string fallback exists for captured data), so a writer that
-    // reused it would store keys no commit can ever match.
+    // The whole point of the strict check: normalizeRepoPath ACCEPTS the two
+    // below (its string fallback exists for captured data), so a writer that
+    // reused it would store keys no commit can ever match. The subdirectory is
+    // rejected by both, and is here for the cause it reports.
     expect(normalizeRepoPath("../myrepo")).not.toBeNull();
     expect(normalizeRepoPath(join(base, "myrepoo"))).not.toBeNull();
 

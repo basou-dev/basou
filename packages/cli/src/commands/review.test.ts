@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, readdir, readFile, realpath, rm, symlink } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,8 +20,11 @@ const FIXED_DATE = new Date("2026-06-29T03:00:00.000Z");
 const FIXED_NOW = new Date("2026-06-30T12:00:00.000Z");
 
 let tmpRepo: string | undefined;
+/** Temp dirs created by individual tests, removed with the fixture repo. */
+let extraTmp: string[] = [];
 
 beforeEach(async () => {
+  extraTmp = [];
   tmpRepo = await mkdtemp(join(tmpdir(), "basou-review-cli-test-"));
   await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: tmpRepo, env: ENV });
   await execFileAsync("git", ["config", "user.email", "test@example.com"], {
@@ -36,6 +39,8 @@ afterEach(async () => {
     await rm(tmpRepo, { recursive: true, force: true });
     tmpRepo = undefined;
   }
+  for (const dir of extraTmp) await rm(dir, { recursive: true, force: true });
+  extraTmp = [];
   process.exitCode = 0;
   vi.restoreAllMocks();
 });
@@ -133,11 +138,18 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
   it("rev-2b: repos and commits are persisted, and the text output names the repo count", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
-    // Named through a SYMLINK, so the spelling and what it resolves to are
-    // different strings. Passing the repo's own path would let an
-    // implementation that merely copied `repos` satisfy this.
-    const viaLink = join(dirname(repo), `link-${basename(repo)}`);
-    await symlink(repo, viaLink);
+    // A DIFFERENT repository from the one the command runs in, named through a
+    // SYMLINK. Both matter: pointing at the workspace repo would let an
+    // implementation that ignores `repos` and reports `repositoryRoot` pass,
+    // and naming it directly would let one that merely copies `repos` pass.
+    const reviewed = await realpath(await mkdtemp(join(tmpdir(), "basou-reviewed-")));
+    extraTmp.push(reviewed);
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: reviewed,
+      env: ENV,
+    });
+    const viaLink = join(repo, "link-to-reviewed");
+    await symlink(reviewed, viaLink);
     const input = JSON.stringify({
       reviewer: "codex",
       target: "working-tree",
@@ -153,8 +165,9 @@ describe("doRunReviewRecord (ad-hoc path)", () => {
     expect(review.commits).toEqual(["a1b2c3d"]);
     // ...and what it resolved to is recorded separately: basou's own
     // observation, and the stable binding key.
-    expect(review.repos_resolved).toEqual([repo]);
+    expect(review.repos_resolved).toEqual([reviewed]);
     expect(review.repos_resolved).not.toEqual(review.repos);
+    expect(review.repos_resolved).not.toEqual([repo]);
     // The repo count is echoed so the agent can see the record is bindable.
     expect(joinCalls(out)).toContain("1 repo");
   });
