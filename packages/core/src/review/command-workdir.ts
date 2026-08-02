@@ -337,10 +337,14 @@ function scanProgram(script: string): ScanResult {
     mask = "";
     started = false;
   };
-  /** Close the segment. `;`, `&&` and `|` need something to their left. */
+  /**
+   * Close the segment. A blank line is not a command and is simply skipped;
+   * every other separator needs something to its left or bash rejects the
+   * program.
+   */
   const endSegment = (separator: Separator): boolean => {
     endWord();
-    if (words.length === 0 && separator !== "newline") return false;
+    if (words.length === 0) return separator === "newline";
     segments.push(words);
     words = [];
     separators.push(separator);
@@ -440,12 +444,18 @@ function scanProgram(script: string): ScanResult {
         i += 2;
         continue;
       }
-      // `&>file` / `&>>file` redirect both streams; any other lone `&` is a
-      // background job, which splits the line into concurrent halves.
+      // `&>file` redirects both streams; any other lone `&` is a background
+      // job, which splits the line into concurrent halves.
+      //
+      // `&>>` is deliberately NOT read: bash 3.2 — which is what `/bin/bash`
+      // still is on macOS, where these commands were captured — rejects the
+      // whole program, while bash 4 accepts it as append-both. Reading it as a
+      // redirection would answer confidently for a line one of the two shells
+      // never ran. It falls through to `&>` followed by a second redirection
+      // operator, which has no target, and so abstains.
       if (n === 1 && script[i + 1] === ">") {
-        const op = script[i + 2] === ">" ? "&>>" : "&>";
-        pushRedirection(op);
-        i += op.length;
+        pushRedirection("&>");
+        i += 2;
         continue;
       }
       return { ok: false, reason: "background" };
@@ -459,16 +469,16 @@ function scanProgram(script: string): ScanResult {
     }
 
     if (c === ";") {
-      // `;;` belongs to `case`, which this grammar does not read, and is a
-      // syntax error anywhere else.
-      if (runLength(i, ";") >= 2) return { ok: false, reason: "shell_syntax" };
+      // `;;` needs no rule of its own: its second `;` has an empty segment to
+      // its left, which is already a syntax error (and `case`, where `;;` is
+      // legal, is refused as a compound command).
       if (!endSegment(";")) return { ok: false, reason: "shell_syntax" };
       i++;
       continue;
     }
 
     if (c === "\n") {
-      endSegment("newline");
+      if (!endSegment("newline")) return { ok: false, reason: "shell_syntax" };
       i++;
       continue;
     }

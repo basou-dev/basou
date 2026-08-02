@@ -183,10 +183,11 @@ describe("deriveCommandWorkdir — what the grammar accepts", () => {
     });
   });
 
-  it("still sees a pipeline around a cd that blanks pushed off index 0", () => {
-    // The `cd` is the first COMMAND but the second segment; the pipeline check
-    // must follow it rather than look at a fixed position.
-    expect(reason(shell("\ncd /other | cat"))).toBe("cd_in_pipeline");
+  it("still sees the pipeline around a cd that is not the first segment", () => {
+    // The `cd` is the first COMMAND but the second segment, because an
+    // assignment-only segment precedes it. The pipeline check must follow the
+    // cd rather than look at a fixed position.
+    expect(reason(shell("FOO=1; cd /other | cat"))).toBe("cd_in_pipeline");
   });
 
   it("strips a trailing separator without inventing an empty command", () => {
@@ -284,9 +285,19 @@ describe("deriveCommandWorkdir — shapes that must not reach a confident answer
     });
   });
 
+  it("does not read a quoted NAME as an assignment", () => {
+    // bash only sees `FOO=x` as an assignment when the name is unquoted;
+    // `"FOO"=x` is a command name, so what follows it are its arguments and no
+    // `cd` runs at all.
+    expect(shell('"FOO"=x cd /other && git commit -m y')).toEqual({ kind: "cwd" });
+  });
+
   it("applies quoting per character, not per word", () => {
     // The `?` is unquoted even though the word contains quotes, so the shell
-    // globbed it and what it became is not in the text.
+    // globbed it and what it became is not in the text. The quoted part has to
+    // carry characters of its own — an empty `""` leaves the mask all-unquoted
+    // and would pass whether the mask is read per character or per word.
+    expect(reason(shell('cd /repos/bet?"a" && git commit -m x'))).toBe("glob");
     expect(reason(shell('cd /repos/bet?"" && git commit -m x'))).toBe("glob");
     // The NAME of an assignment is unquoted even though its value is not, so
     // this is an assignment prefix and the `cd` behind it is the command.
@@ -353,6 +364,10 @@ describe("deriveCommandWorkdir — shapes that must not reach a confident answer
       "cd /other |", // nothing to the right of `|`
       "cd /other ;; git commit -m x", // `;;` outside a case
       "cd /other >", // a redirection with no target
+      // `&>>` is a syntax error in bash 3.2 (what `/bin/bash` is on macOS) and
+      // append-both in bash 4. Answering for either would answer for a line the
+      // other never ran.
+      "cd /other &>>/dev/null",
     ]) {
       expect(reason(shell(script))).toBe("shell_syntax");
     }
