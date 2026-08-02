@@ -248,6 +248,28 @@ describe("renderReviewGaps", () => {
     expect(out).not.toContain("no captured unit of work fell within the window");
   });
 
+  it("does not print the success line when work could not be placed at all", () => {
+    const base = summaryOf([]);
+    const unknown = gapUnit({ repo: "(unknown)", verdict: "unknown", commitCount: 3 });
+    const out = renderReviewGaps({ ...base, gaps: [], unknowns: [unknown] });
+    // A zero that means "stopped looking" must not read like a zero that means
+    // "nothing was missed".
+    expect(out).not.toContain("✅");
+    expect(out).toContain("could not be placed in a repository at all");
+    expect(out).toContain("Undeterminable");
+  });
+
+  it("keeps the success line when there is genuinely nothing outstanding", () => {
+    const out = renderReviewGaps(summaryOf([]));
+    expect(out).toContain("✅");
+  });
+
+  it("reports pairings it could not check", () => {
+    const out = renderReviewGaps({ ...summaryOf([gapUnit()]), refusedPairings: 2 });
+    expect(out).toContain("2 pairings between a recorded review and captured work");
+    expect(out).toContain("never verified");
+  });
+
   it("does not assert the missing-`repos` cause for a record that had one", () => {
     const out = renderReviewGaps(summaryOf([gapUnit()], { noMatchingUnit: 1 }));
     expect(out).toContain("1 recorded review changed nothing");

@@ -39,11 +39,28 @@ All notable changes to **basou** are recorded here. The project follows
 
   Where the target's meaning is not in the captured text, it abstains instead of
   inventing a key: `cd -` is `$OLDPWD`, `~user` is another account's home, an
-  unexpanded `$VAR` held whatever it held at the time, and a relative target is
-  meaningless when the importer recorded no working directory. Each of those
-  used to produce a literal key that two unrelated sessions could share, and a
-  shared key is exactly how a false candidate appears. An unexpanded variable is
-  now rejected anywhere in a path, not only in its last segment.
+  unexpanded `$VAR` held whatever it held at the time, bare `cd` is `$HOME`, and
+  no path at all can be derived when the importer recorded no working directory
+  — both importers write `.` in that case, and keying it literally made every
+  such command from every session share one key. Each of these used to produce a
+  key two unrelated sessions could share, and a shared key is exactly how a false
+  candidate appears. An unexpanded variable is now rejected anywhere in a path
+  rather than only in its last segment, but only for a path that could not be
+  verified: a directory that realpath confirms is a real directory even if its
+  name contains a `$`.
+
+  `cd` is recognised only in command position — the start of an argument, or
+  after a shell separator. Scanning for the characters anywhere matched text
+  that never ran a command, so `git commit -m 'docs: explain cd && behavior'`
+  turned a perfectly derivable commit into an abstention.
+
+- Work that `basou review-gaps` cannot place is no longer hidden by `--repo`,
+  and no longer sits under a success line. An abstention belongs to no
+  repository, so a scope cannot attribute it — but suppressing it made a scoped
+  report show zero gaps, zero undeterminable units and a green line for work the
+  tool had simply stopped being able to examine. A count that falls because the
+  tool stopped looking is the same false reassurance as a count that falls
+  because a claim was believed.
 
 - `basou review-gaps` reports pairings it could not check. A recorded review
   that landed on one unit of work while being refused against another used to

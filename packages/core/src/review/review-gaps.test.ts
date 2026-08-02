@@ -125,6 +125,15 @@ async function setup(): Promise<BasouPaths> {
   return ensureBasouDirectory(getWorkDir());
 }
 
+describe("SES fixture guard", () => {
+  it("rejects an id containing a character Crockford base32 excludes", () => {
+    // A fixture id with `I` was rejected as malformed, so its session silently
+    // vanished and the test it anchored proved nothing.
+    expect(() => SES("PI")).toThrow(/non-ULID character/);
+    expect(() => SES("PK")).not.toThrow();
+  });
+});
+
 describe("normalizeRepoKey", () => {
   it("collapses a workspace-view-routed path to the same key as the direct path", () => {
     expect(normalizeRepoKey("/home/u/projects/foo-workspace/foo-planning")).toBe("foo-planning");
@@ -1290,6 +1299,154 @@ describe("findReviewGaps — record key provenance", () => {
     expect(s.unattachedSelfReports.total).toBe(0);
     // ...but the pairing it could not be checked against is still reported.
     expect(s.refusedPairings).toBe(1);
+  });
+
+  it("does not let two missing-cwd sessions share the key `.`", async () => {
+    const paths = await setup();
+    // Both importers write "." when no directory was captured. Keyed literally,
+    // an unrelated review and an unrelated commit pair as a CANDIDATE and the
+    // gap count falls to zero.
+    await placeSession(
+      paths,
+      { id: SES("QA"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [cmd(SES("QA"), "codex-import", "2026-05-09T09:30:00.000Z", ["-c", "git diff"], ".")],
+    );
+    await placeSession(
+      paths,
+      { id: SES("QB"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("QB"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          ".",
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.candidates).toHaveLength(0);
+    expect(s.gaps).toHaveLength(0);
+    expect(s.unknowns).toHaveLength(1);
+  });
+
+  it("keeps a verified path whose real name contains a `$`", async () => {
+    const paths = await setup();
+    // The `$` heuristic exists for unexpanded variables. A directory realpath
+    // confirmed is a real directory, whatever its name.
+    const odd = join(getRoot(), "acme$cash");
+    await mkdir(join(odd, ".git"), { recursive: true });
+    await placeSession(
+      paths,
+      { id: SES("QC"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("QC"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          odd,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.unknowns).toHaveLength(0);
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.repo).toBe("acme$cash");
+  });
+
+  it("still rejects an unexpanded variable that no directory backs", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("QD"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("QD"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", 'cd "$ROOT/app" && git commit -m x'],
+          getRoot(),
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(0);
+    expect(s.unknowns).toHaveLength(1);
+  });
+
+  it("does not mistake the characters `cd &&` inside a commit message for a directory change", async () => {
+    const paths = await setup();
+    const live = join(getRoot(), "alpha");
+    await mkdir(join(live, ".git"), { recursive: true });
+    for (const [i, line] of [
+      "git commit -m 'docs: explain cd && behavior'",
+      "git add docs-cd && git commit -m x",
+    ].entries()) {
+      await placeSession(
+        paths,
+        {
+          id: SES(`Q${i}`),
+          source: "claude-code-import",
+          startedAt: "2026-05-09T10:00:00.000Z",
+        },
+        [cmd(SES(`Q${i}`), "claude-code-import", "2026-05-09T10:05:00.000Z", ["-c", line], live)],
+      );
+    }
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // Both commits are perfectly derivable: they ran in `live`.
+    expect(s.unknowns).toHaveLength(0);
+    expect(s.gaps).toHaveLength(2);
+    expect(s.gaps.every((u) => u.repo === "alpha")).toBe(true);
+  });
+
+  it("abstains on a genuine bare `cd &&`", async () => {
+    const paths = await setup();
+    const live = join(getRoot(), "alpha");
+    await mkdir(join(live, ".git"), { recursive: true });
+    await placeSession(
+      paths,
+      { id: SES("QE"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("QE"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "cd && git commit -m x"],
+          live,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(0);
+    expect(s.unknowns).toHaveLength(1);
+  });
+
+  it("reports undeterminable work even under a repo scope", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("QF"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("QF"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "cd ../app && git commit -m x"],
+          ".",
+        ),
+      ],
+    );
+
+    // Suppressing these under a scope produced zero gaps, zero unknowns and a
+    // success line for work the tool could not place.
+    const scoped = await findReviewGaps({ paths, nowIso: NOW, scope: ["alpha"] });
+    expect(scoped.unknowns).toHaveLength(1);
   });
 
   it("refuses to key a record from a relative path", async () => {

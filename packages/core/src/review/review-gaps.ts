@@ -244,11 +244,6 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
   // expand a leading ~ so the same repo recorded as `~/projects/x` and
   // `/Users/u/projects/x` collapses to one binding key (the events capture both).
   if (s.startsWith("~/")) s = homedir() + s.slice(1);
-  // An unexpanded variable ANYWHERE makes this a template, not a location:
-  // `$ROOT/app` held different values in different sessions, so keying it
-  // literally would collapse unrelated repositories onto one key. Checking only
-  // the final segment missed exactly that shape.
-  if (s.includes("$")) return null;
 
   // Prefer the on-disk truth: realpath follows the view's symlink so ANY view
   // name (not only `*-workspace`) collapses to the real repo path. Only absolute
@@ -276,7 +271,13 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
     .pop();
   if (seg === undefined) return null;
   // the view dir itself is not a repo; an unexpanded shell var is not a repo
-  if (/-workspace$/.test(seg) || seg.includes("$")) return null;
+  // An unexpanded variable makes this a template, not a location: `$ROOT/app`
+  // held different values in different sessions, so keying it literally would
+  // collapse unrelated repositories onto one key. Checked over the WHOLE path,
+  // since the variable is usually a leading segment -- but only here, in the
+  // fallback: a path that realpath verified is a real directory, even if its
+  // name happens to contain a `$`.
+  if (/-workspace$/.test(seg) || s.includes("$")) return null;
   return s;
 }
 
@@ -428,18 +429,16 @@ function commandRepoWithProvenance(
  * how a shell resolves it against the logical path it was given.
  */
 function commandRepoPath(args: string[], cwd: string): string | null {
-  const line = args.join(" ");
-  // `cd &&` with no argument means $HOME, which the capture does not record.
-  if (/\bcd\s*&&/.test(line)) return null;
-  const cd = line.match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
-  if (!cd?.[1]) return cwd;
-  const target = stripQuotes(cd[1].trim());
-  // Forms whose meaning lives outside the captured text. `-` is $OLDPWD;
-  // `~user` is another account's home; an unexpanded `$VAR` is whatever it held
-  // at the time. Resolving any of them against cwd would mint a key -- `<cwd>/-`
-  // -- that two unrelated sessions can share, and a shared key here produces a
-  // false CANDIDATE. Abstain instead: an underivable repo becomes `unknown`.
-  if (target === "-" || target.includes("$")) return null;
+  const cd = findCdTarget(args);
+  // Bare `cd` means $HOME, which the capture does not record.
+  if (cd.bare) return null;
+  if (cd.target === null) return absoluteOrNull(cwd);
+  const target = stripQuotes(cd.target.trim());
+  // Forms whose meaning lives outside the captured text. `-` is $OLDPWD and
+  // `~user` is another account's home; resolving either against cwd would mint
+  // a key -- `<cwd>/-` -- that two unrelated sessions can share, and a shared
+  // key is how a false CANDIDATE appears.
+  if (target === "-") return null;
   if (target.startsWith("~") && !target.startsWith("~/")) return null;
   if (target.startsWith("~/") || isAbsolute(target)) return target;
   // A relative target is only meaningful against an ABSOLUTE captured cwd. The
@@ -448,6 +447,37 @@ function commandRepoPath(args: string[], cwd: string): string | null {
   // happens to run in -- crediting the work to a repository next door.
   if (!isAbsolute(cwd)) return null;
   return resolve(cwd, target);
+}
+
+/**
+ * A captured path is usable only if it names an absolute location. `.` is what
+ * both importers write when no working directory was recorded, and keying it
+ * literally would make every such command -- from unrelated sessions and
+ * unrelated repositories -- share one key.
+ */
+function absoluteOrNull(p: string): string | null {
+  const s = stripQuotes(p.trim());
+  return s.startsWith("~/") || isAbsolute(s) ? s : null;
+}
+
+/**
+ * Find a `cd` that actually runs, scanning each argument separately and only in
+ * COMMAND POSITION -- the start of an argument, or after a shell separator.
+ *
+ * Scanning the joined line for `cd` anywhere matched text that never ran a
+ * command: `git commit -m 'docs: explain cd && behavior'` and
+ * `git add docs-cd && git commit` both contain the characters, and treating
+ * them as a directory change turned a perfectly derivable commit into
+ * `unknown`. Word-boundary alone does not help -- there is a boundary after the
+ * hyphen in `docs-cd`.
+ */
+function findCdTarget(args: string[]): { bare: boolean; target: string | null } {
+  for (const arg of args) {
+    if (/(?:^|[;&|])\s*cd\s*&&/.test(arg)) return { bare: true, target: null };
+    const m = arg.match(/(?:^|[;&|])\s*cd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
+    if (m?.[1] !== undefined) return { bare: false, target: m[1] };
+  }
+  return { bare: false, target: null };
 }
 
 /** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
@@ -729,28 +759,22 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       });
     }
   }
-
-  // Observed commits whose repo/time could not be derived become explicit
-  // `unknown` units (an abstention, never a clear). They cannot be attributed to
-  // a scoped repo, so they are reported only when no `--repo` scope is applied.
-  if (scope === null) {
-    for (const [sessionId, times] of unknownCommits) {
-      const valid = times.filter((t): t is number => t !== null).sort((a, b) => a - b);
-      const first = valid[0] ?? null;
-      const last = valid[valid.length - 1] ?? null;
-      if (last !== null) newestCommit = newestCommit === null ? last : Math.max(newestCommit, last);
-      units.push({
-        repo: "(unknown)",
-        sessionId,
-        commitCount: times.length,
-        firstCommitAt: first === null ? null : new Date(first).toISOString(),
-        lastCommitAt: last === null ? null : new Date(last).toISOString(),
-        verdict: "unknown",
-        reviews: [],
-        // No repo key, so nothing a record's `repos` could bind to.
-        selfReports: [],
-      });
-    }
+  for (const [sessionId, times] of unknownCommits) {
+    const valid = times.filter((t): t is number => t !== null).sort((a, b) => a - b);
+    const first = valid[0] ?? null;
+    const last = valid[valid.length - 1] ?? null;
+    if (last !== null) newestCommit = newestCommit === null ? last : Math.max(newestCommit, last);
+    units.push({
+      repo: "(unknown)",
+      sessionId,
+      commitCount: times.length,
+      firstCommitAt: first === null ? null : new Date(first).toISOString(),
+      lastCommitAt: last === null ? null : new Date(last).toISOString(),
+      verdict: "unknown",
+      reviews: [],
+      // No repo key, so nothing a record's `repos` could bind to.
+      selfReports: [],
+    });
   }
 
   // Everything pooled resolved to a live repository root. A record that reached

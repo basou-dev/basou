@@ -216,7 +216,15 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
   lines.push(`# Review-trail gaps (${scope})`);
   lines.push("");
 
-  if (summary.gaps.length === 0) {
+  if (summary.gaps.length === 0 && summary.unknowns.length > 0) {
+    // Never the green line while work exists that could not be placed at all:
+    // a zero that means "stopped looking" must not read as a zero that means
+    // "nothing was missed".
+    const n = summary.unknowns.reduce((sum, u) => sum + u.commitCount, 0);
+    lines.push(
+      `⚠️ No unit of work was found without a review trail — but ${n} captured commit${n === 1 ? "" : "s"} could not be placed in a repository at all, so ${n === 1 ? "it was" : "they were"} never checked (see below).`,
+    );
+  } else if (summary.gaps.length === 0) {
     lines.push("✅ Within the captured range, no unit of work landed without a review trail.");
   } else {
     lines.push(`⚠️ Units of work that landed without a review trail: ${summary.gaps.length}`);
@@ -235,7 +243,7 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
   if (summary.unknowns.length > 0) {
     const n = summary.unknowns.reduce((sum, u) => sum + u.commitCount, 0);
     lines.push(
-      `## Undeterminable (${summary.unknowns.length} unit${summary.unknowns.length === 1 ? "" : "s"} / ${n} commit${n === 1 ? "" : "s"}) — repo or timestamp could not be derived from capture; verdict withheld (not a clear)`,
+      `## Undeterminable (${summary.unknowns.length} unit${summary.unknowns.length === 1 ? "" : "s"} / ${n} commit${n === 1 ? "" : "s"}) — repo or timestamp could not be derived from capture; verdict withheld (not a clear). Belongs to no repository, so this is listed in full even under --repo`,
     );
     lines.push("");
   }
