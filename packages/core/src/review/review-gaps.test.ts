@@ -731,6 +731,111 @@ describe("normalizeRepoPath (realpath resolution)", () => {
       "/home/u/projects/dev-view/myrepo",
     );
   });
+
+  it("rejects an unexpanded variable anywhere in the path, not only in its last segment", () => {
+    // `$ROOT/app` is not a path. Keyed by its spelling, two sessions with
+    // different `$ROOT` values would share one binding key.
+    expect(normalizeRepoPath("/srv/$NAME/app")).toBeNull();
+    expect(normalizeRepoPath("$ROOT/app")).toBeNull();
+    expect(normalizeRepoPath("/srv/$NAME")).toBeNull();
+  });
+
+  it("abstains on a commit whose line cannot be read, instead of crediting cwd", async () => {
+    const base = getRoot();
+    const alpha = join(base, "alpha");
+    await mkRepo(alpha);
+    const paths = await ensureBasouDirectory(join(base, ".store"));
+    // A review that genuinely examined alpha's diff.
+    await placeSession(
+      paths,
+      { id: SES("AM1"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [cmd(SES("AM1"), "codex-import", "2026-05-09T09:30:00.000Z", ["-c", "git diff"], alpha)],
+    );
+    // A commit whose `cd` sits inside a command substitution: bash ran it in the
+    // subshell, so this commit did NOT land in alpha. Crediting cwd would pair it
+    // with the review above and manufacture a `candidate` — a review of alpha
+    // presented as covering work basou cannot place.
+    await placeSession(
+      paths,
+      { id: SES("AM2"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("AM2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "echo $(cd /elsewhere && pwd) && git commit -m x"],
+          alpha,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.candidates).toHaveLength(0);
+    expect(s.unknowns).toHaveLength(1);
+    expect(s.unknowns[0]?.repo).toBe("(unknown)");
+  });
+
+  it("follows a `cd` separated by `;`, which used to be credited to cwd", async () => {
+    const base = getRoot();
+    const alpha = join(base, "alpha");
+    const beta = join(base, "beta");
+    await mkRepo(alpha);
+    await mkRepo(beta);
+    const paths = await ensureBasouDirectory(join(base, ".store"));
+    await placeSession(
+      paths,
+      { id: SES("SC1"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("SC1"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", `cd ${beta}; git commit -m x`],
+          alpha,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps.map((u) => u.repo)).toEqual(["beta"]);
+  });
+
+  it("keys a relative `cd` by where it actually landed, not by its spelling", async () => {
+    const base = getRoot();
+    // ONE session, one line — `cd ../app` — run twice from two different cwds,
+    // so it landed in two different repositories. Units are keyed by
+    // (session, repo): keyed by the SPELLING the two commits collapse into a
+    // single unit of two commits, which is the collision. Resolved against cwd
+    // they are the two separate one-commit units they always were.
+    for (const side of ["left", "right"]) {
+      await mkRepo(join(base, side, "app"));
+      await mkdir(join(base, side, "here"), { recursive: true });
+    }
+    const paths = await ensureBasouDirectory(join(base, ".store"));
+    await placeSession(
+      paths,
+      { id: SES("RC1"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("RC1"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "cd ../app && git commit -m x"],
+          join(base, "left", "here"),
+        ),
+        cmd(
+          SES("RC1"),
+          "claude-code-import",
+          "2026-05-09T10:15:00.000Z",
+          ["-c", "cd ../app && git commit -m y"],
+          join(base, "right", "here"),
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.unknowns).toHaveLength(0);
+    expect(s.gaps).toHaveLength(2);
+    expect(s.gaps.map((u) => u.commitCount)).toEqual([1, 1]);
+    expect(s.gaps.map((u) => u.repo)).toEqual(["app", "app"]);
+  });
 });
 
 /**
