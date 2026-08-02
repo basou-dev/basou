@@ -271,13 +271,8 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
     .pop();
   if (seg === undefined) return null;
   // the view dir itself is not a repo; an unexpanded shell var is not a repo
-  // An unexpanded variable makes this a template, not a location: `$ROOT/app`
-  // held different values in different sessions, so keying it literally would
-  // collapse unrelated repositories onto one key. Checked over the WHOLE path,
-  // since the variable is usually a leading segment -- but only here, in the
-  // fallback: a path that realpath verified is a real directory, even if its
-  // name happens to contain a `$`.
-  if (/-workspace$/.test(seg) || s.includes("$")) return null;
+  // the view dir itself is not a repo; an unexpanded shell var is not a repo
+  if (/-workspace$/.test(seg) || seg.includes("$")) return null;
   return s;
 }
 
@@ -396,134 +391,37 @@ function inspectCommand(args: string[]): { files: string[]; examinedDiff: boolea
  * Repo a command effectively ran in, with whether that key was RESOLVED against
  * the disk or produced by the string fallback.
  *
- * The provenance cannot be recovered from the key afterwards. A fallback key is
- * not necessarily a path that fails to resolve: collapsing a `*-workspace`
- * segment out of `/x/foo-workspace/bar` yields `/x/bar`, which may well exist.
- * Asking "does this key resolve?" would then answer yes about a key that was
- * guessed from a directory NAME, so the question has to be answered where the
- * key is made.
+ * The provenance cannot be recovered from the key afterwards: the string
+ * fallback can land on a path that exists (collapsing `*-workspace` out of
+ * `/x/foo-workspace/bar` gives `/x/bar`), so asking "does this key resolve?"
+ * would answer yes about a key that was guessed from a directory name.
+ *
+ * How the path itself is derived is deliberately unchanged from before this
+ * change: deciding which directory a captured shell line really ran in needs a
+ * narrow, explicitly-abstaining grammar, and that is its own piece of work.
  */
 function commandRepoWithProvenance(
   args: string[],
   cwd: string,
 ): { key: string | null; resolved: boolean } {
   const raw = commandRepoPath(args, cwd);
-  if (raw === null) return { key: null, resolved: false };
   return { key: normalizeRepoPath(raw), resolved: resolveRepoRoot(raw) !== null };
 }
 
-/**
- * The path a command effectively ran in, as an absolute location wherever the
- * capture allows one.
- *
- * An explicit `cd <target> &&` wins over cwd — and wins EVEN WHEN the target
- * resolves to nothing: the command ran there, so it must not be silently
- * re-credited to the session's cwd (which could falsely bind an unrelated repo
- * and clear a real gap).
- *
- * A RELATIVE target is joined to the captured cwd, which is the base the shell
- * used. Left relative it would key as its own literal spelling, so `cd ../app`
- * run beside two different repositories would collapse to one key and pair
- * their work — the failure being a false `candidate`, the exact verdict this
- * surfacer must never produce by accident. `..` is folded textually, matching
- * how a shell resolves it against the logical path it was given.
- */
-function commandRepoPath(args: string[], cwd: string): string | null {
-  const cd = findCdTarget(args);
-  // Bare `cd` means $HOME, which the capture does not record.
-  if (cd.bare) return null;
-  if (cd.target === null) return absoluteOrNull(cwd);
-  const target = stripQuotes(cd.target.trim());
-  // Forms whose meaning lives outside the captured text. `-` is $OLDPWD and
-  // `~user` is another account's home; resolving either against cwd would mint
-  // a key -- `<cwd>/-` -- that two unrelated sessions can share, and a shared
-  // key is how a false CANDIDATE appears.
-  if (target === "-") return null;
-  if (target.startsWith("~") && !target.startsWith("~/")) return null;
-  if (target.startsWith("~/") || isAbsolute(target)) return target;
-  // A relative target is only meaningful against an ABSOLUTE captured cwd. The
-  // importers fall back to "." when the shell's directory was not recorded, and
-  // joining to that would resolve against whatever directory `review-gaps`
-  // happens to run in -- crediting the work to a repository next door.
-  if (!isAbsolute(cwd)) return null;
-  return resolve(cwd, target);
-}
-
-/**
- * A captured path is usable only if it names an absolute location. `.` is what
- * both importers write when no working directory was recorded, and keying it
- * literally would make every such command -- from unrelated sessions and
- * unrelated repositories -- share one key.
- */
-function absoluteOrNull(p: string): string | null {
-  const s = stripQuotes(p.trim());
-  return s.startsWith("~/") || isAbsolute(s) ? s : null;
-}
-
-/**
- * Find a `cd` that actually runs.
- *
- * This decides which repository a command is credited to, so both directions of
- * error are costly: missing a real `cd` attributes work to the wrong repository,
- * and matching text that never ran does the same. A regex cannot tell the two
- * apart, because whether a separator is a separator depends on quoting -- the
- * `;` in `git commit -m 'docs; cd /elsewhere && ...'` runs nothing. So the line
- * is scanned once, tracking quote state, and `cd` is recognised only at a
- * command position outside quotes: the start, or after an unquoted `;`, `&`,
- * `|`, `(`, `{` or newline. A newline is a separator too -- a captured script is
- * often several lines, and treating only punctuation as a separator missed
- * every `cd` that began a line.
- */
-function findCdTarget(args: string[]): { bare: boolean; target: string | null } {
-  for (const arg of args) {
-    const found = scanForCd(arg);
-    if (found !== null) return found;
-  }
-  return { bare: false, target: null };
-}
-
-const COMMAND_SEPARATORS = new Set([";", "&", "|", "(", "{", "\n", "\r"]);
-/** `cd` must be a whole word: `cdx` and `docs-cd` are not it. */
-const WORD_CHAR = /[A-Za-z0-9_-]/;
-
-function scanForCd(line: string): { bare: boolean; target: string | null } | null {
-  let i = 0;
-  let atCommandStart = true;
-  while (i < line.length) {
-    const ch = line[i] as string;
-    if (ch === "'" || ch === '"') {
-      // Nothing inside a quoted span is a command position, and nothing in it
-      // separates commands. An unterminated quote swallows the rest.
-      const close = line.indexOf(ch, i + 1);
-      i = close === -1 ? line.length : close + 1;
-      atCommandStart = false;
-      continue;
-    }
-    if (COMMAND_SEPARATORS.has(ch)) {
-      atCommandStart = true;
-      i += 1;
-      continue;
-    }
-    if (ch === " " || ch === "\t") {
-      i += 1;
-      continue;
-    }
-    if (atCommandStart && line.startsWith("cd", i) && !WORD_CHAR.test(line[i + 2] ?? " ")) {
-      const rest = line.slice(i + 2);
-      if (/^\s*&&/.test(rest)) return { bare: true, target: null };
-      const m = rest.match(/^\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
-      if (m?.[1] !== undefined) return { bare: false, target: m[1] };
-    }
-    atCommandStart = false;
-    i += 1;
-  }
-  return null;
+/** The path a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
+function commandRepoPath(args: string[], cwd: string): string {
+  // An explicit `cd <target> &&` wins over cwd — and wins EVEN WHEN the target
+  // resolves to null (a non-repo dir): the command ran there, so it must not be
+  // silently re-credited to the session's cwd (which could falsely bind an
+  // unrelated repo and clear a real gap). Fall back to cwd only when there was
+  // no explicit `cd`.
+  const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
+  return cd?.[1] ?? cwd;
 }
 
 /** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
 function commandRepo(args: string[], cwd: string): string | null {
-  const raw = commandRepoPath(args, cwd);
-  return raw === null ? null : normalizeRepoPath(raw);
+  return normalizeRepoPath(commandRepoPath(args, cwd));
 }
 
 /** True when a captured command exited non-zero (a failure is not evidence / not landed work). */

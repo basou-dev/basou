@@ -1154,109 +1154,6 @@ describe("findReviewGaps — record key provenance", () => {
     expect(s.unattachedSelfReports.unverifiableUnit).toBe(1);
   });
 
-  it("resolves a relative `cd` target against the captured cwd", async () => {
-    const paths = await setup();
-    // Two sessions each running `cd ../app`, from different places. Left as the
-    // literal spelling both would key `../app` and their work would pair.
-    const x = join(getRoot(), "x");
-    const y = join(getRoot(), "y");
-    await mkdir(join(x, "app", ".git"), { recursive: true });
-    await mkdir(join(y, "app", ".git"), { recursive: true });
-    await mkdir(join(x, "here"), { recursive: true });
-    await mkdir(join(y, "here"), { recursive: true });
-    await placeSession(
-      paths,
-      { id: SES("PE"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
-      [
-        cmd(
-          SES("PE"),
-          "codex-import",
-          "2026-05-09T09:30:00.000Z",
-          ["-c", "cd ../app && git diff"],
-          join(x, "here"),
-        ),
-      ],
-    );
-    await placeSession(
-      paths,
-      { id: SES("PF"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("PF"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "cd ../app && git commit -m x"],
-          join(y, "here"),
-        ),
-      ],
-    );
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    // The review examined x/app; the commit landed in y/app. Keying both as
-    // `../app` would call this a candidate — the one verdict this must never
-    // reach by accident.
-    expect(s.candidates).toHaveLength(0);
-    expect(s.gaps).toHaveLength(1);
-    expect(s.gaps[0]?.verdict).toBe("omission");
-  });
-
-  it("abstains on a relative `cd` when the captured cwd is not absolute", async () => {
-    const paths = await setup();
-    // The importers write `cwd: "."` when the shell's directory was not
-    // recorded. Joining to that would resolve against whatever directory
-    // review-gaps happens to run in, crediting the work to a repository next
-    // door to the operator's terminal.
-    await placeSession(
-      paths,
-      { id: SES("PG"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("PG"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "cd ../app && git commit -m x"],
-          ".",
-        ),
-      ],
-    );
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.gaps).toHaveLength(0);
-    expect(s.unknowns).toHaveLength(1);
-    expect(s.unknowns[0]?.verdict).toBe("unknown");
-  });
-
-  it("abstains on shell-special `cd` forms rather than minting a shared key", async () => {
-    const paths = await setup();
-    const base = getRoot();
-    // `-` is $OLDPWD, `$VAR` held different values per session, `~user` is
-    // another account. Keyed literally, two unrelated sessions would share
-    // `<cwd>/-` or `$ROOT/app` and produce a false candidate.
-    for (const [i, target] of ["-", "$ROOT/app", "~someone/app"].entries()) {
-      await placeSession(
-        paths,
-        {
-          id: SES(`H${i}`),
-          source: "claude-code-import",
-          startedAt: "2026-05-09T10:00:00.000Z",
-        },
-        [
-          cmd(
-            SES(`H${i}`),
-            "claude-code-import",
-            "2026-05-09T10:05:00.000Z",
-            ["-c", `cd ${target} && git commit -m x`],
-            base,
-          ),
-        ],
-      );
-    }
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.gaps).toHaveLength(0);
-    expect(s.unknowns).toHaveLength(3);
-  });
-
   it("reports a refused pairing even when the record attached to another unit", async () => {
     const paths = await setup();
     const live = join(getRoot(), "bar");
@@ -1301,132 +1198,6 @@ describe("findReviewGaps — record key provenance", () => {
     expect(s.refusedPairings).toBe(1);
   });
 
-  it("does not let two missing-cwd sessions share the key `.`", async () => {
-    const paths = await setup();
-    // Both importers write "." when no directory was captured. Keyed literally,
-    // an unrelated review and an unrelated commit pair as a CANDIDATE and the
-    // gap count falls to zero.
-    await placeSession(
-      paths,
-      { id: SES("QA"), source: "codex-import", startedAt: "2026-05-09T09:00:00.000Z" },
-      [cmd(SES("QA"), "codex-import", "2026-05-09T09:30:00.000Z", ["-c", "git diff"], ".")],
-    );
-    await placeSession(
-      paths,
-      { id: SES("QB"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("QB"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "git commit -m x"],
-          ".",
-        ),
-      ],
-    );
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.candidates).toHaveLength(0);
-    expect(s.gaps).toHaveLength(0);
-    expect(s.unknowns).toHaveLength(1);
-  });
-
-  it("keeps a verified path whose real name contains a `$`", async () => {
-    const paths = await setup();
-    // The `$` heuristic exists for unexpanded variables. A directory realpath
-    // confirmed is a real directory, whatever its name.
-    const odd = join(getRoot(), "acme$cash");
-    await mkdir(join(odd, ".git"), { recursive: true });
-    await placeSession(
-      paths,
-      { id: SES("QC"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("QC"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "git commit -m x"],
-          odd,
-        ),
-      ],
-    );
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.unknowns).toHaveLength(0);
-    expect(s.gaps).toHaveLength(1);
-    expect(s.gaps[0]?.repo).toBe("acme$cash");
-  });
-
-  it("still rejects an unexpanded variable that no directory backs", async () => {
-    const paths = await setup();
-    await placeSession(
-      paths,
-      { id: SES("QD"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("QD"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", 'cd "$ROOT/app" && git commit -m x'],
-          getRoot(),
-        ),
-      ],
-    );
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.gaps).toHaveLength(0);
-    expect(s.unknowns).toHaveLength(1);
-  });
-
-  it("does not mistake the characters `cd &&` inside a commit message for a directory change", async () => {
-    const paths = await setup();
-    const live = join(getRoot(), "alpha");
-    await mkdir(join(live, ".git"), { recursive: true });
-    for (const [i, line] of [
-      "git commit -m 'docs: explain cd && behavior'",
-      "git add docs-cd && git commit -m x",
-    ].entries()) {
-      await placeSession(
-        paths,
-        {
-          id: SES(`Q${i}`),
-          source: "claude-code-import",
-          startedAt: "2026-05-09T10:00:00.000Z",
-        },
-        [cmd(SES(`Q${i}`), "claude-code-import", "2026-05-09T10:05:00.000Z", ["-c", line], live)],
-      );
-    }
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    // Both commits are perfectly derivable: they ran in `live`.
-    expect(s.unknowns).toHaveLength(0);
-    expect(s.gaps).toHaveLength(2);
-    expect(s.gaps.every((u) => u.repo === "alpha")).toBe(true);
-  });
-
-  it("abstains on a genuine bare `cd &&`", async () => {
-    const paths = await setup();
-    const live = join(getRoot(), "alpha");
-    await mkdir(join(live, ".git"), { recursive: true });
-    await placeSession(
-      paths,
-      { id: SES("QE"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("QE"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "cd && git commit -m x"],
-          live,
-        ),
-      ],
-    );
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.gaps).toHaveLength(0);
-    expect(s.unknowns).toHaveLength(1);
-  });
-
   it("reports undeterminable work even under a repo scope", async () => {
     const paths = await setup();
     await placeSession(
@@ -1437,8 +1208,9 @@ describe("findReviewGaps — record key provenance", () => {
           SES("QF"),
           "claude-code-import",
           "2026-05-09T10:05:00.000Z",
-          ["-c", "cd ../app && git commit -m x"],
-          ".",
+          ["-c", "git commit -m x"],
+          // a workspace view ROOT is not a repository, so the commit cannot be placed
+          "/home/u/projects/foo-workspace",
         ),
       ],
     );
@@ -1447,62 +1219,6 @@ describe("findReviewGaps — record key provenance", () => {
     // success line for work the tool could not place.
     const scoped = await findReviewGaps({ paths, nowIso: NOW, scope: ["alpha"] });
     expect(scoped.unknowns).toHaveLength(1);
-  });
-
-  it("finds a `cd` that begins a line of a multi-line script", async () => {
-    const paths = await setup();
-    const a = join(getRoot(), "repo-a");
-    const b = join(getRoot(), "repo-b");
-    await mkdir(join(a, ".git"), { recursive: true });
-    await mkdir(join(b, ".git"), { recursive: true });
-    // Both importers keep the whole script in one argument. Treating only
-    // punctuation as a separator missed every `cd` that began a line, and the
-    // command was then credited to the cwd -- a wrong repository, not an
-    // abstention.
-    await placeSession(
-      paths,
-      { id: SES("RA"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("RA"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "echo ready\ncd " + b + " && git commit -m x"],
-          a,
-        ),
-      ],
-    );
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.gaps).toHaveLength(1);
-    expect(s.gaps[0]?.repo).toBe("repo-b");
-  });
-
-  it("ignores a separator that only appears inside a quoted string", async () => {
-    const paths = await setup();
-    const a = join(getRoot(), "repo-a");
-    const b = join(getRoot(), "repo-b");
-    await mkdir(join(a, ".git"), { recursive: true });
-    await mkdir(join(b, ".git"), { recursive: true });
-    // The `;` is inside a commit message, so the shell never changes directory.
-    // Reading it as a separator attributed repo-a's work to repo-b.
-    await placeSession(
-      paths,
-      { id: SES("RB"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
-      [
-        cmd(
-          SES("RB"),
-          "claude-code-import",
-          "2026-05-09T10:05:00.000Z",
-          ["-c", "git commit -m 'docs; cd " + b + " && behavior'"],
-          a,
-        ),
-      ],
-    );
-
-    const s = await findReviewGaps({ paths, nowIso: NOW });
-    expect(s.gaps).toHaveLength(1);
-    expect(s.gaps[0]?.repo).toBe("repo-a");
   });
 
   it("keeps a scoped report's tally and footer about the scoped repository", async () => {
@@ -1532,7 +1248,7 @@ describe("findReviewGaps — record key provenance", () => {
           "claude-code-import",
           "2026-05-09T11:30:00.000Z",
           ["-c", "git commit -m y"],
-          ".",
+          "/home/u/projects/foo-workspace",
         ),
       ],
     );

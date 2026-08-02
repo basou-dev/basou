@@ -31,33 +31,6 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Fixed
 
-- `basou review-gaps` resolves a relative `cd` target against the captured
-  working directory instead of keying it by its own spelling. `cd ../app` run
-  beside two different repositories used to collapse to one key, so a review of
-  one repository could be cited as a **candidate** for a commit in the other —
-  the one verdict this surfacer must never reach by accident.
-
-  Where the target's meaning is not in the captured text, it abstains instead of
-  inventing a key: `cd -` is `$OLDPWD`, `~user` is another account's home, an
-  unexpanded `$VAR` held whatever it held at the time, bare `cd` is `$HOME`, and
-  no path at all can be derived when the importer recorded no working directory
-  — both importers write `.` in that case, and keying it literally made every
-  such command from every session share one key. Each of these used to produce a
-  key two unrelated sessions could share, and a shared key is exactly how a false
-  candidate appears. An unexpanded variable is now rejected anywhere in a path
-  rather than only in its last segment, but only for a path that could not be
-  verified: a directory that realpath confirms is a real directory even if its
-  name contains a `$`.
-
-  `cd` is recognised only in command position, found by scanning the captured
-  line once while tracking quote state. A regex could not do this: whether a
-  separator separates depends on quoting, so `git commit -m 'docs; cd /elsewhere
-  && ...'` read as a directory change and attributed the work to the wrong
-  repository, while `git commit -m 'docs: explain cd && behavior'` turned a
-  derivable commit into an abstention. A newline separates commands too — a
-  captured script is usually several lines, and matching only punctuation missed
-  every `cd` that began one.
-
 - Work that `basou review-gaps` cannot place is no longer hidden by `--repo`,
   and no longer sits under a success line. An abstention belongs to no
   repository, so a scope cannot attribute it — but suppressing it made a scoped
