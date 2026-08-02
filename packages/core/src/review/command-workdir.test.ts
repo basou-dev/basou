@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { type CommandWorkdir, deriveCommandWorkdir } from "./command-workdir.js";
 
-const CWD = "/Users/dev/projects/alpha";
+const CWD = "/Users/u/projects/alpha";
 
 /** A captured shell line, in the shape both importers record (`bash -c <program>`). */
 function shell(script: string, cwd = CWD): CommandWorkdir {
@@ -72,13 +72,13 @@ describe("deriveCommandWorkdir — the mis-attributions this grammar exists to s
 describe("deriveCommandWorkdir — the two shapes carried over from #183", () => {
   it("resolves a relative cd against cwd, so two sessions do not share one key", () => {
     // The same spelling beside two different repositories is two directories.
-    expect(shell("cd ../beta && git commit -m x", "/Users/dev/projects/alpha")).toEqual({
+    expect(shell("cd ../beta && git commit -m x", "/Users/u/projects/alpha")).toEqual({
       kind: "target",
-      path: "/Users/dev/projects/beta",
+      path: "/Users/u/projects/beta",
     });
-    expect(shell("cd ../beta && git commit -m x", "/Users/dev/work/alpha")).toEqual({
+    expect(shell("cd ../beta && git commit -m x", "/Users/u/work/alpha")).toEqual({
       kind: "target",
-      path: "/Users/dev/work/beta",
+      path: "/Users/u/work/beta",
     });
   });
 
@@ -240,6 +240,8 @@ describe("deriveCommandWorkdir — one refusal per rule", () => {
     // git accepts a short option fused to its value, and so must this.
     ["chdir_option", "`git -C` with no separator", "git -C/other commit -m x"],
     ["chdir_option", "`make -C`", "make -C /other build"],
+    // GNU make reads `-sC /other` as `-s` clustered with `-C /other`.
+    ["chdir_option", "a clustered `make -sC`", "make -sC /other build"],
   ];
   for (const [expected, what, script] of cases) {
     it(`refuses ${what} with \`${expected}\``, () => {
@@ -376,6 +378,58 @@ describe("deriveCommandWorkdir — shapes that must not reach a confident answer
       kind: "target",
       path: "/repos/beta",
     });
+  });
+
+  it("does not let a zero-width quote hide that a word was quoted", () => {
+    // `FOO""=x` is not an assignment and `2''>` is not an fd prefix: bash keeps
+    // the lexical fact that the word was quoted even though the quotes carry no
+    // characters. Both used to leave a `cd` looking like the command.
+    expect(shell('FOO""=x cd /other; git commit -m y')).toEqual({ kind: "cwd" });
+    expect(shell("2''>/dev/null cd /other; git commit -m y")).toEqual({ kind: "cwd" });
+    // The quoting has to be in the NAME to matter — a quoted VALUE is fine.
+    expect(shell('FOO=""x cd /other && git commit -m y')).toEqual({
+      kind: "target",
+      path: "/other",
+    });
+  });
+
+  it("reads bash's other assignment-prefix forms", () => {
+    // `A+=x` and `A[0]=x` are assignments, so the `cd` behind them is the
+    // command rather than one of their arguments.
+    expect(shell("A+=x cd /other && git commit -m y")).toEqual({
+      kind: "target",
+      path: "/other",
+    });
+    expect(shell("A[0]=x cd /other && git commit -m y")).toEqual({
+      kind: "target",
+      path: "/other",
+    });
+  });
+
+  it("refuses an expansion in command position", () => {
+    // `CMD=cd; $CMD /other` runs the cd builtin; what a command word expands to
+    // is not in the text.
+    expect(reason(shell("CMD=cd; $CMD /other && git commit -m y"))).toBe("unexpanded_variable");
+    // …and an expansion among the operands of a program that HAS a chdir option
+    // may be hiding one.
+    expect(reason(shell("git $OPTS commit -m y"))).toBe("unexpanded_variable");
+    // A QUOTED expansion stays one word, so it cannot split into `-C <path>`;
+    // `git commit -m "$MSG"` must stay readable.
+    expect(shell('git commit -m "$MSG"')).toEqual({ kind: "cwd" });
+    // An expansion in the operands of a program with no chdir option at all.
+    expect(shell("echo $HOME")).toEqual({ kind: "cwd" });
+  });
+
+  it("refuses an assignment that points a program at another repository", () => {
+    // No `cd` and no recognised option: `GIT_DIR` alone relocates the commit.
+    expect(reason(shell("GIT_DIR=/other/.git git commit -m y"))).toBe("shell_state_assignment");
+    expect(reason(shell("GIT_WORK_TREE=/other git commit -m y"))).toBe("shell_state_assignment");
+  });
+
+  it("refuses `trap`, which schedules a cd to run later", () => {
+    // The `cd` looks like inert quoted text, but the DEBUG trap runs it before
+    // every later command.
+    expect(reason(shell("trap 'cd /other' DEBUG; git commit -m y"))).toBe("indirect_execution");
   });
 
   it("refuses a package manager that relocates its child", () => {

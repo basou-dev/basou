@@ -29,7 +29,7 @@ All notable changes to **basou** are recorded here. The project follows
   wherever it appears, not only in its final segment.
 
   This trades reach for truthfulness, and the trade is visible: on a real store
-  of 17,263 captured commands, 28.6% of all commands and 86.8% of `git commit`
+  of 17,264 captured commands, 28.6% of all commands and 86.7% of `git commit`
   lines are now reported as undeterminable, mostly for command substitution and
   heredocs. Widening the grammar is safe to do later — every shape it does not
   accept today is already reported as unread, so accepting more can only move

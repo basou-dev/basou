@@ -26,13 +26,20 @@ import { basename, isAbsolute, resolve } from "node:path";
  * reported as unread, so accepting more can only move lines out of `ambiguous`,
  * never silently change an answer that was already given.
  *
- * KNOWN ASSUMPTION, deliberately taken: when a `cd` is separated from what
- * follows by `;` or a newline rather than `&&`, this reads the `cd` as having
- * succeeded. With `&&` that is guaranteed — the later command ran, so the `cd`
- * returned 0 — but with `;` a failed `cd` leaves the rest running in cwd. The
- * captured `;`/newline form is the common one (a multi-line script whose first
- * line is the `cd`), and issue #184 lists `cd /other; git commit` among the
- * lines that must stop being credited to cwd, so it is accepted.
+ * KNOWN ASSUMPTION, deliberately taken: whenever a `;` or a newline appears
+ * anywhere after the `cd`, this reads the `cd` as having succeeded.
+ *
+ * `&&` alone would prove it — the later command ran, so the `cd` returned 0 —
+ * but only for the commands that stay control-dependent on it. A single later
+ * `;` ends that dependency: in `cd /missing && :; git commit`, bash skips the
+ * `:` and runs the commit in cwd. So the assumption covers `cd X; cmd`,
+ * `cd X<newline>cmd`, and `cd X && cmd; cmd` alike — only a line whose
+ * separators are all `&&` is free of it.
+ *
+ * It is taken because the `;`/newline form is the common captured one (a
+ * multi-line script whose first line is the `cd`) and because issue #184 lists
+ * `cd /other; git commit` among the lines that must stop being credited to cwd.
+ * Operator ruling, 2026-08-03: keep it.
  */
 
 /** Why the grammar refused to name a directory. One per rule, so a test cannot pass for the wrong reason. */
@@ -73,7 +80,7 @@ export type CommandWorkdirAmbiguity =
   | "cd_in_pipeline"
   /** A `cd` form outside the grammar (`cd`, `cd -`, options, several operands). */
   | "unsupported_cd_form"
-  /** An assignment to shell state `cd` itself reads (`HOME`, `CDPATH`, `PWD`, `OLDPWD`). */
+  /** An assignment that relocates the work (`HOME`, `CDPATH`, `GIT_DIR`, `GIT_WORK_TREE`, …). */
   | "shell_state_assignment"
   /** The target still holds an unexpanded `$`, so its text is not its value. */
   | "unexpanded_variable"
@@ -119,7 +126,9 @@ const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh"]);
  * because they always chdir, but because whether they did is not readable.
  *
  * `command` and `builtin` are here because they run the `cd` builtin itself:
- * `command cd /other` moves the shell exactly as `cd /other` does.
+ * `command cd /other` moves the shell exactly as `cd /other` does. `trap` is
+ * here because it SCHEDULES code — `trap 'cd /other' DEBUG` moves the shell
+ * before every later command, and its `cd` looks like inert quoted text.
  */
 const INDIRECT_EXECUTORS = new Set([
   ".",
@@ -143,6 +152,7 @@ const INDIRECT_EXECUTORS = new Set([
   "su",
   "sudo",
   "timeout",
+  "trap",
   "xargs",
   "zsh",
 ]);
@@ -181,11 +191,21 @@ const SHELL_KEYWORDS = new Set([
 ]);
 
 /**
- * Shell state that `cd` itself reads. An assignment to any of these changes
- * where the same `cd` text lands, and this grammar carries the importer's
- * environment, not the captured one.
+ * Variables whose assignment moves the work, either by changing where a `cd`
+ * lands (`HOME`, `CDPATH`, and the state `cd -` reads) or by pointing a program
+ * at another repository outright (`GIT_DIR`, `GIT_WORK_TREE`). The second kind
+ * needs no `cd` and no recognised option: `GIT_DIR=/other/.git git commit`
+ * commits in `/other` from anywhere.
  */
-const CD_STATE_VARIABLES = new Set(["CDPATH", "HOME", "OLDPWD", "PWD"]);
+const RELOCATING_VARIABLES = new Set([
+  "CDPATH",
+  "GIT_COMMON_DIR",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "HOME",
+  "OLDPWD",
+  "PWD",
+]);
 
 /**
  * Options that relocate a specific program's work without a `cd`. Keyed by
@@ -223,6 +243,12 @@ type Word = {
   text: string;
   /** One character per `text` character: `n` unquoted, `s` single-quoted, `d` double-quoted. */
   mask: string;
+  /**
+   * `text` offsets at which a quoted region OPENED, including empty ones.
+   * `FOO""=x` is not an assignment and `2''>` is not an fd prefix, but their
+   * quotes contribute no characters, so the mask alone cannot see them.
+   */
+  quoteOpens: readonly number[];
   /** A redirection operator (`>`, `2>&`, `&>>`, …), which is syntax rather than an operand. */
   redirection?: true;
 };
@@ -256,7 +282,11 @@ export function deriveCommandWorkdir(
   // A direct exec: there is no shell to interpret a `cd`, so the only way this
   // ran elsewhere is the program itself relocating its child.
   if (INDIRECT_EXECUTORS.has(program)) return ambiguous("indirect_execution");
-  const words: Word[] = args.map((text) => ({ text, mask: "n".repeat(text.length) }));
+  const words: Word[] = args.map((text) => ({
+    text,
+    mask: "n".repeat(text.length),
+    quoteOpens: [],
+  }));
   if (hasChdirOption(program, words)) return ambiguous("chdir_option");
   return { kind: "cwd" };
 }
@@ -278,7 +308,7 @@ function readShellProgram(script: string, cwd: string): CommandWorkdir {
     // both retune the `cd` that follows.
     for (const word of words.slice(0, start ?? words.length)) {
       const name = assignmentName(word);
-      if (name !== undefined && CD_STATE_VARIABLES.has(name)) {
+      if (name !== undefined && RELOCATING_VARIABLES.has(name)) {
         return ambiguous("shell_state_assignment");
       }
     }
@@ -293,11 +323,24 @@ function readShellProgram(script: string, cwd: string): CommandWorkdir {
       continue;
     }
     rank++;
+    // `CMD=cd; $CMD /other` runs the `cd` builtin. What a word in command
+    // position expands to is not in the text, so which program ran is unknown —
+    // and "unknown program" must not fall through to "nothing moved".
+    if (hasLiveDollar(head)) return ambiguous("unexpanded_variable");
     if (SHELL_KEYWORDS.has(head.text)) return ambiguous("compound_command");
     const name = basename(head.text);
     if (DIRECTORY_STACK.has(name)) return ambiguous("directory_stack");
     if (INDIRECT_EXECUTORS.has(name)) return ambiguous("indirect_execution");
-    if (hasChdirOption(name, words.slice(start + 1))) return ambiguous("chdir_option");
+    const operands = words.slice(start + 1);
+    if (hasChdirOption(name, operands)) return ambiguous("chdir_option");
+    // `git $OPTS commit` may be hiding a `-C`. Only an UNQUOTED expansion is
+    // treated this way: word splitting is what lets one word become `-C` plus
+    // its value, and a quoted `"$MSG"` stays a single word no matter what is in
+    // it. That keeps `git commit -m "$MSG"` readable, at the cost of not
+    // catching a quoted expansion holding a fused `-C/other`.
+    if (CHDIR_OPTIONS.has(name) && operands.some((w) => hasUnquoted(w, /\$/))) {
+      return ambiguous("unexpanded_variable");
+    }
   }
 
   if (cds.length === 0) return { kind: "cwd" };
@@ -329,12 +372,14 @@ function scanProgram(script: string): ScanResult {
   let words: Word[] = [];
   let text = "";
   let mask = "";
+  let quoteOpens: number[] = [];
   let started = false; // a word is open (possibly empty, e.g. `cd ""`)
 
   const endWord = (): void => {
-    if (started) words.push({ text, mask });
+    if (started) words.push({ text, mask, quoteOpens });
     text = "";
     mask = "";
+    quoteOpens = [];
     started = false;
   };
   /**
@@ -357,13 +402,13 @@ function scanProgram(script: string): ScanResult {
   };
   /** Emit a redirection operator, first discarding an `2`-style fd prefix. */
   const pushRedirection = (op: string): void => {
-    if (started && /^\d+$/.test(text) && !mask.includes("s") && !mask.includes("d")) {
+    if (started && /^\d+$/.test(text) && !/[sd]/.test(mask) && quoteOpens.length === 0) {
       text = "";
       mask = "";
       started = false;
     }
     endWord();
-    words.push({ text: op, mask: "n".repeat(op.length), redirection: true });
+    words.push({ text: op, mask: "n".repeat(op.length), quoteOpens: [], redirection: true });
   };
 
   let i = 0;
@@ -376,6 +421,7 @@ function scanProgram(script: string): ScanResult {
       const close = script.indexOf("'", i + 1);
       if (close === -1) return { ok: false, reason: "unterminated_quote" };
       const body = script.slice(i + 1, close);
+      quoteOpens.push(text.length);
       text += body;
       mask += "s".repeat(body.length);
       started = true;
@@ -386,6 +432,7 @@ function scanProgram(script: string): ScanResult {
     if (c === '"') {
       let j = i + 1;
       let closed = false;
+      quoteOpens.push(text.length);
       while (j < script.length) {
         const d = script[j] as string;
         if (d === '"') {
@@ -527,22 +574,32 @@ function stripRedirections(words: readonly Word[]): Word[] | null {
   return out;
 }
 
-const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// bash's assignment prefixes: `NAME=`, the append form `NAME+=`, and the array
+// element form `NAME[subscript]=`. All three run the command that follows them,
+// so missing one turns a `cd` into an argument of a command that never existed.
+const ASSIGNMENT_PREFIX = /^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?\+?=/;
 
 /**
- * The variable a `NAME=value` prefix assigns, if this word is one. The NAME
- * must be unquoted for the shell to read it as an assignment (`FOO="x"` is one,
- * `"FOO"=x` is not) — but the value's quoting does not matter.
+ * The variable a `NAME=value` prefix assigns, if this word is one.
+ *
+ * The NAME must be unquoted for the shell to read the word as an assignment at
+ * all: `FOO="x"` is one and `"FOO"=x` is not. Quoting is checked through
+ * {@link quotedBefore} rather than the mask alone, because `FOO""=x` also is
+ * not one and its quotes contribute no characters to the mask.
  */
 function assignmentName(word: Word): string | undefined {
   if (word.redirection === true) return undefined;
-  const eq = word.text.indexOf("=");
-  if (eq <= 0) return undefined;
-  const name = word.text.slice(0, eq);
-  if (!NAME.test(name)) return undefined;
-  if (word.mask.slice(0, eq).includes("s") || word.mask.slice(0, eq).includes("d"))
-    return undefined;
-  return name;
+  const match = ASSIGNMENT_PREFIX.exec(word.text);
+  if (match?.[1] === undefined) return undefined;
+  const upToEquals = match[0].length - 1;
+  if (quotedBefore(word, upToEquals)) return undefined;
+  return match[1];
+}
+
+/** Whether any quoting touched the word at or before `index`, empty quotes included. */
+function quotedBefore(word: Word, index: number): boolean {
+  if (/[sd]/.test(word.mask.slice(0, index))) return true;
+  return word.quoteOpens.some((at) => at <= index);
 }
 
 /** Index of the command word, skipping the `NAME=value` prefixes that precede it. */
@@ -556,9 +613,10 @@ function firstNonAssignment(words: readonly Word[]): number | undefined {
 
 /**
  * Whether this program was given an option that moves its work to another
- * directory. All spellings count, because all of them work: `git -C /other`,
- * `git -C/other`, `git --git-dir=/other/.git`, and `git "-C" /other` — the
- * shell removes the quotes before git ever sees the word.
+ * directory. Every spelling counts, because every one of them works:
+ * `git -C /other`, `git -C/other`, `git --git-dir=/other/.git`, the clustered
+ * `make -sC /other`, and `git "-C" /other` — the shell removes the quotes
+ * before git ever sees the word.
  */
 function hasChdirOption(program: string, operands: readonly Word[]): boolean {
   const options = CHDIR_OPTIONS.get(program);
@@ -568,9 +626,15 @@ function hasChdirOption(program: string, operands: readonly Word[]): boolean {
     if (options.has(word.text)) return true;
     const eq = word.text.indexOf("=");
     if (eq > 0 && options.has(word.text.slice(0, eq))) return true;
-    // A short option carrying its value with no separator (`-C/other`).
-    const short = word.text.slice(0, 2);
-    return short.length === 2 && word.text.length > 2 && short !== "--" && options.has(short);
+    if (word.text.startsWith("--") || !word.text.startsWith("-")) return false;
+    // A short option carrying its value with no separator (`-C/other`), or
+    // clustered with other short options (`make -sC /other`). Both are real
+    // spellings, and both used to read as an ordinary argument.
+    for (const option of options) {
+      if (option.length !== 2 || option.startsWith("--")) continue;
+      if (word.text.includes(option.slice(1), 1)) return true;
+    }
+    return false;
   });
 }
 
