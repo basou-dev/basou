@@ -461,23 +461,63 @@ function absoluteOrNull(p: string): string | null {
 }
 
 /**
- * Find a `cd` that actually runs, scanning each argument separately and only in
- * COMMAND POSITION -- the start of an argument, or after a shell separator.
+ * Find a `cd` that actually runs.
  *
- * Scanning the joined line for `cd` anywhere matched text that never ran a
- * command: `git commit -m 'docs: explain cd && behavior'` and
- * `git add docs-cd && git commit` both contain the characters, and treating
- * them as a directory change turned a perfectly derivable commit into
- * `unknown`. Word-boundary alone does not help -- there is a boundary after the
- * hyphen in `docs-cd`.
+ * This decides which repository a command is credited to, so both directions of
+ * error are costly: missing a real `cd` attributes work to the wrong repository,
+ * and matching text that never ran does the same. A regex cannot tell the two
+ * apart, because whether a separator is a separator depends on quoting -- the
+ * `;` in `git commit -m 'docs; cd /elsewhere && ...'` runs nothing. So the line
+ * is scanned once, tracking quote state, and `cd` is recognised only at a
+ * command position outside quotes: the start, or after an unquoted `;`, `&`,
+ * `|`, `(`, `{` or newline. A newline is a separator too -- a captured script is
+ * often several lines, and treating only punctuation as a separator missed
+ * every `cd` that began a line.
  */
 function findCdTarget(args: string[]): { bare: boolean; target: string | null } {
   for (const arg of args) {
-    if (/(?:^|[;&|])\s*cd\s*&&/.test(arg)) return { bare: true, target: null };
-    const m = arg.match(/(?:^|[;&|])\s*cd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
-    if (m?.[1] !== undefined) return { bare: false, target: m[1] };
+    const found = scanForCd(arg);
+    if (found !== null) return found;
   }
   return { bare: false, target: null };
+}
+
+const COMMAND_SEPARATORS = new Set([";", "&", "|", "(", "{", "\n", "\r"]);
+/** `cd` must be a whole word: `cdx` and `docs-cd` are not it. */
+const WORD_CHAR = /[A-Za-z0-9_-]/;
+
+function scanForCd(line: string): { bare: boolean; target: string | null } | null {
+  let i = 0;
+  let atCommandStart = true;
+  while (i < line.length) {
+    const ch = line[i] as string;
+    if (ch === "'" || ch === '"') {
+      // Nothing inside a quoted span is a command position, and nothing in it
+      // separates commands. An unterminated quote swallows the rest.
+      const close = line.indexOf(ch, i + 1);
+      i = close === -1 ? line.length : close + 1;
+      atCommandStart = false;
+      continue;
+    }
+    if (COMMAND_SEPARATORS.has(ch)) {
+      atCommandStart = true;
+      i += 1;
+      continue;
+    }
+    if (ch === " " || ch === "\t") {
+      i += 1;
+      continue;
+    }
+    if (atCommandStart && line.startsWith("cd", i) && !WORD_CHAR.test(line[i + 2] ?? " ")) {
+      const rest = line.slice(i + 2);
+      if (/^\s*&&/.test(rest)) return { bare: true, target: null };
+      const m = rest.match(/^\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
+      if (m?.[1] !== undefined) return { bare: false, target: m[1] };
+    }
+    atCommandStart = false;
+    i += 1;
+  }
+  return null;
 }
 
 /** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
@@ -763,7 +803,12 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
     const valid = times.filter((t): t is number => t !== null).sort((a, b) => a - b);
     const first = valid[0] ?? null;
     const last = valid[valid.length - 1] ?? null;
-    if (last !== null) newestCommit = newestCommit === null ? last : Math.max(newestCommit, last);
+    // Under a scope the footer speaks for the scoped repo, and an undeterminable
+    // commit belongs to no repo: it must be listed as a caveat without silently
+    // becoming that repo's "newest captured commit".
+    if (last !== null && scope === null) {
+      newestCommit = newestCommit === null ? last : Math.max(newestCommit, last);
+    }
     units.push({
       repo: "(unknown)",
       sessionId,
@@ -788,9 +833,13 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
   const recentFirst = (a: ReviewGapUnit, b: ReviewGapUnit): number =>
     (Date.parse(b.lastCommitAt ?? "") || 0) - (Date.parse(a.lastCommitAt ?? "") || 0);
 
-  const repoKeys = [...new Set(units.map((u) => u.repo))].sort();
+  // The tally is headed "By repository" and, under a scope, is read as being
+  // about that repository. An undeterminable unit belongs to none, so it stays
+  // out of the tally there -- it is reported in full in its own section instead.
+  const talliedUnits = scope === null ? units : units.filter((u) => u.verdict !== "unknown");
+  const repoKeys = [...new Set(talliedUnits.map((u) => u.repo))].sort();
   const repos: ReviewGapRepoSummary[] = repoKeys.map((repo) => {
-    const us = units.filter((u) => u.repo === repo);
+    const us = talliedUnits.filter((u) => u.repo === repo);
     return {
       repo,
       units: us.length,

@@ -49,10 +49,14 @@ All notable changes to **basou** are recorded here. The project follows
   verified: a directory that realpath confirms is a real directory even if its
   name contains a `$`.
 
-  `cd` is recognised only in command position — the start of an argument, or
-  after a shell separator. Scanning for the characters anywhere matched text
-  that never ran a command, so `git commit -m 'docs: explain cd && behavior'`
-  turned a perfectly derivable commit into an abstention.
+  `cd` is recognised only in command position, found by scanning the captured
+  line once while tracking quote state. A regex could not do this: whether a
+  separator separates depends on quoting, so `git commit -m 'docs; cd /elsewhere
+  && ...'` read as a directory change and attributed the work to the wrong
+  repository, while `git commit -m 'docs: explain cd && behavior'` turned a
+  derivable commit into an abstention. A newline separates commands too — a
+  captured script is usually several lines, and matching only punctuation missed
+  every `cd` that began one.
 
 - Work that `basou review-gaps` cannot place is no longer hidden by `--repo`,
   and no longer sits under a success line. An abstention belongs to no
@@ -61,6 +65,11 @@ All notable changes to **basou** are recorded here. The project follows
   tool had simply stopped being able to examine. A count that falls because the
   tool stopped looking is the same false reassurance as a count that falls
   because a claim was believed.
+
+  For the same reason it stays out of that report's other numbers: under a
+  scope, an undeterminable unit is listed in full in its own section but does
+  not become a row in a tally headed "By repository", nor the scoped report's
+  "newest captured commit".
 
 - `basou review-gaps` reports pairings it could not check. A recorded review
   that landed on one unit of work while being refused against another used to

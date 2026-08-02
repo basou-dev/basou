@@ -1449,6 +1449,103 @@ describe("findReviewGaps — record key provenance", () => {
     expect(scoped.unknowns).toHaveLength(1);
   });
 
+  it("finds a `cd` that begins a line of a multi-line script", async () => {
+    const paths = await setup();
+    const a = join(getRoot(), "repo-a");
+    const b = join(getRoot(), "repo-b");
+    await mkdir(join(a, ".git"), { recursive: true });
+    await mkdir(join(b, ".git"), { recursive: true });
+    // Both importers keep the whole script in one argument. Treating only
+    // punctuation as a separator missed every `cd` that began a line, and the
+    // command was then credited to the cwd -- a wrong repository, not an
+    // abstention.
+    await placeSession(
+      paths,
+      { id: SES("RA"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("RA"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "echo ready\ncd " + b + " && git commit -m x"],
+          a,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.repo).toBe("repo-b");
+  });
+
+  it("ignores a separator that only appears inside a quoted string", async () => {
+    const paths = await setup();
+    const a = join(getRoot(), "repo-a");
+    const b = join(getRoot(), "repo-b");
+    await mkdir(join(a, ".git"), { recursive: true });
+    await mkdir(join(b, ".git"), { recursive: true });
+    // The `;` is inside a commit message, so the shell never changes directory.
+    // Reading it as a separator attributed repo-a's work to repo-b.
+    await placeSession(
+      paths,
+      { id: SES("RB"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("RB"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m 'docs; cd " + b + " && behavior'"],
+          a,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.repo).toBe("repo-a");
+  });
+
+  it("keeps a scoped report's tally and footer about the scoped repository", async () => {
+    const paths = await setup();
+    const alpha = join(getRoot(), "alpha");
+    await mkdir(join(alpha, ".git"), { recursive: true });
+    await placeSession(
+      paths,
+      { id: SES("RC"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("RC"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          alpha,
+        ),
+      ],
+    );
+    // A later, unrelated commit that cannot be placed at all.
+    await placeSession(
+      paths,
+      { id: SES("RD"), source: "claude-code-import", startedAt: "2026-05-09T11:00:00.000Z" },
+      [
+        cmd(
+          SES("RD"),
+          "claude-code-import",
+          "2026-05-09T11:30:00.000Z",
+          ["-c", "git commit -m y"],
+          ".",
+        ),
+      ],
+    );
+
+    const scoped = await findReviewGaps({ paths, nowIso: NOW, scope: ["alpha"] });
+    // Listed as a caveat...
+    expect(scoped.unknowns).toHaveLength(1);
+    // ...without becoming a row in a tally headed "By repository", or the
+    // scoped report's "newest captured commit".
+    expect(scoped.repos.map((r) => r.repo)).toEqual(["alpha"]);
+    expect(scoped.newestCommitAt).toBe("2026-05-09T10:05:00.000Z");
+  });
+
   it("refuses to key a record from a relative path", async () => {
     const paths = await setup();
     // Both spellings would collapse to the literal key `../app`, binding a
