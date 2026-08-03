@@ -40,6 +40,17 @@ import { basename, isAbsolute, resolve } from "node:path";
  * multi-line script whose first line is the `cd`) and because issue #184 lists
  * `cd /other; git commit` among the lines that must stop being credited to cwd.
  * Operator ruling, 2026-08-03: keep it.
+ *
+ * KNOWN LIMIT, and the reason none of this makes a confident answer safe: the
+ * floor below reads the SHAPE of a word, not what it means. `chdir /x` moves zsh
+ * and dash, `noglob cd /x` moves zsh, and `find … -execdir git commit ';'`
+ * commits elsewhere in every shell — each of them an ordinary program name here,
+ * each answered `cwd`. `PATH=/missing git commit` is the same class from the
+ * other side: the command word is a perfectly ordinary `git`, and it is the
+ * assignment in front of it that means no commit ran at all, in any shell.
+ * Which names, which options and which variables are special is still an
+ * enumerated list, and still one list per shell for as long as the recorded
+ * executor is not observed at all (#191). See #192.
  */
 
 /** Why the grammar refused to name a directory. One per rule, so a test cannot pass for the wrong reason. */
@@ -70,6 +81,8 @@ export type CommandWorkdirAmbiguity =
   | "carriage_return"
   /** The program is not valid shell, so reasoning about what it did is reasoning about nothing. */
   | "shell_syntax"
+  /** A redirection whose target the grammar cannot read (`2>&foo`, `> *`, `> $UNSET`): whether the shell could open it decides whether the command ran at all. */
+  | "unreadable_redirection"
   /** A compound command or shell keyword (`if`, `for`, `time`, `{`): control flow this grammar does not model. */
   | "compound_command"
   /** More than one `cd`: the effective directory depends on order and success. */
@@ -82,6 +95,8 @@ export type CommandWorkdirAmbiguity =
   | "unsupported_cd_form"
   /** An assignment that relocates the work (`HOME`, `CDPATH`, `GIT_DIR`, `GIT_WORK_TREE`, …). */
   | "shell_state_assignment"
+  /** An assignment whose VALUE is not its text (`A=${CDPATH:=/}`): an expansion inside it can set another variable, including one that relocates the work. */
+  | "unreadable_assignment_value"
   /** The target still holds an unexpanded `$`, so its text is not its value. */
   | "unexpanded_variable"
   /** The target is a glob or a brace expansion: what it became is not recoverable. */
@@ -97,7 +112,11 @@ export type CommandWorkdirAmbiguity =
   /** Execution through another program (`sh -c`, `env`, `xargs`, …), which may run its child elsewhere. */
   | "indirect_execution"
   /** An explicit chdir option (`git -C`, `pnpm -C`, …), which moves the work without a `cd`. */
-  | "chdir_option";
+  | "chdir_option"
+  /** A command-position word shaped like `NAME+=…` or `NAME[…`: it may be an assignment prefix, so the command may be the next word, or it may be the command itself. */
+  | "assignment_or_command"
+  /** A command-position word that is not a shape this grammar recognises. The floor: what is not positively read is not answered for. */
+  | "unrecognized_command_word";
 
 /**
  * Where a captured command ran. Three outcomes, because two were the bug: with
@@ -129,9 +148,13 @@ const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh"]);
  * `command cd /other` moves the shell exactly as `cd /other` does. `trap` is
  * here because it SCHEDULES code — `trap 'cd /other' DEBUG` moves the shell
  * before every later command, and its `cd` looks like inert quoted text.
+ * `alias` is here for the same reason from the other direction: it changes what
+ * a later word in command position means, so `alias X='cd /other'; X` moves the
+ * shell while every word on that line reads as inert.
  */
 const INDIRECT_EXECUTORS = new Set([
   ".",
+  "alias",
   "bash",
   "builtin",
   "chroot",
@@ -260,6 +283,8 @@ type ScanResult =
   | { ok: true; segments: Word[][]; separators: Separator[] }
   | { ok: false; reason: CommandWorkdirAmbiguity };
 
+type StripResult = { ok: true; words: Word[] } | { ok: false; reason: CommandWorkdirAmbiguity };
+
 /**
  * The directory a captured `command_executed` event ran in.
  *
@@ -280,7 +305,12 @@ export function deriveCommandWorkdir(
     return readShellProgram(script, cwd);
   }
   // A direct exec: there is no shell to interpret a `cd`, so the only way this
-  // ran elsewhere is the program itself relocating its child.
+  // ran elsewhere is the program itself relocating its child. The floor still
+  // applies — a word that is not a program name is not answered for here either.
+  // `deriveCommandWorkdir("../", ["git", "commit"], cwd)` is the shape that
+  // matters: all four shells exit 126 on it and no commit runs, while
+  // `review-gaps` sees `git commit` among the args and would credit cwd.
+  if (!isPlainCommandHead(command)) return ambiguous("unrecognized_command_word");
   if (INDIRECT_EXECUTORS.has(program)) return ambiguous("indirect_execution");
   const words: Word[] = args.map((text) => ({
     text,
@@ -301,20 +331,48 @@ function readShellProgram(script: string, cwd: string): CommandWorkdir {
   // is not a command and must not push a leading `cd` out of first place.
   let rank = 0;
   for (const [index, segment] of scan.segments.entries()) {
-    const words = stripRedirections(segment);
-    if (words === null) return ambiguous("shell_syntax"); // a redirection with no target
+    const stripped = stripRedirections(segment);
+    if (!stripped.ok) return ambiguous(stripped.reason);
+    const words = stripped.words;
     const start = firstNonAssignment(words);
     // An assignment prefix, and a segment that is nothing but assignments, can
     // both retune the `cd` that follows.
     for (const word of words.slice(0, start ?? words.length)) {
       const name = assignmentName(word);
-      if (name !== undefined && RELOCATING_VARIABLES.has(name)) {
-        return ambiguous("shell_state_assignment");
-      }
+      if (name === undefined) continue;
+      if (RELOCATING_VARIABLES.has(name)) return ambiguous("shell_state_assignment");
+      // The VALUE is read as well, because an expansion inside it can assign to
+      // a SECOND variable that the name check never sees: `A=${CDPATH:=/}` sets
+      // CDPATH, and a later `cd repos` then lands outside cwd entirely. A
+      // segment of nothing but assignments reaches no command word either, so
+      // the floor below never gets a chance to refuse it. Rather than enumerate
+      // the expansion forms that assign — `${V:=…}`, `${V=…}`, and whatever a
+      // later shell adds — an unreadable value is refused outright.
+      if (hasLiveDollar(word)) return ambiguous("unreadable_assignment_value");
+      // A `~user` in the value can stop the line before the `cd`: measured,
+      // `A=~nosuchuser cd /x` aborts zsh with "no such user or named directory"
+      // and never runs the `cd`, while bash, dash and ksh assign the text
+      // literally and carry on. Only this form fails — `A=~` and `A=~/bin` are
+      // read by every shell — so the refusal stays as narrow as the one `cd`
+      // already applies to its own operand. (A tilde after a `:`, as in a
+      // PATH-style value, is not read here; the common shape carries a `$` and
+      // is refused above.)
+      if (assignmentValueHasTildeUser(word, name.length)) return ambiguous("tilde_user");
     }
     if (start === undefined) continue; // blank segment, or assignments only
     const head = words[start];
     if (head === undefined) continue;
+    // A word shaped like `NAME+=…` or `NAME[…` in command position is either an
+    // assignment prefix — in which case the command is the NEXT word, and a
+    // `cd` there moved the segment — or it is the command itself, in which case
+    // nothing moved. Which one depends on the shell: bash and ksh run the
+    // command behind both forms, dash finds neither word, and zsh takes `A[1]=`
+    // but rejects `A[0]=` because its arrays are 1-based. For the `NAME[…` form
+    // it can depend on the filesystem too, since a pathname expansion in
+    // command position reaches the same shape (`c[d]` becomes `cd` where
+    // /usr/bin/cd exists). The two readings disagree about whether the command
+    // after it ran at all, so neither may be claimed.
+    if (looksLikeAssignmentPrefix(head)) return ambiguous("assignment_or_command");
     // Quoting is gone by the time the shell picks the command: `'cd' /x` is a
     // `cd`, and `git "-C" /x` is `git -C /x`.
     if (head.text === "cd") {
@@ -328,6 +386,13 @@ function readShellProgram(script: string, cwd: string): CommandWorkdir {
     // and "unknown program" must not fall through to "nothing moved".
     if (hasLiveDollar(head)) return ambiguous("unexpanded_variable");
     if (SHELL_KEYWORDS.has(head.text)) return ambiguous("compound_command");
+    // The floor. Everything above names a shape this grammar knows; this asks
+    // whether the word is a program name or path at all, and refuses when it is
+    // not. Without it the rule is "answer unless the word matches something on
+    // a list of refusals", and a list of shell shapes is never finished: each
+    // review round has found another entry missing from it, and every miss is a
+    // confident answer that is wrong. Inverted, a miss costs reach instead.
+    if (!isPlainCommandHead(head.text)) return ambiguous("unrecognized_command_word");
     const name = basename(head.text);
     if (DIRECTORY_STACK.has(name)) return ambiguous("directory_stack");
     if (INDIRECT_EXECUTORS.has(name)) return ambiguous("indirect_execution");
@@ -491,20 +556,15 @@ function scanProgram(script: string): ScanResult {
         i += 2;
         continue;
       }
-      // `&>file` redirects both streams; any other lone `&` is a background
-      // job, which splits the line into concurrent halves.
-      //
-      // `&>>` is deliberately NOT read: bash 3.2 — which is what `/bin/bash`
-      // still is on macOS, where these commands were captured — rejects the
-      // whole program, while bash 4 accepts it as append-both. Reading it as a
-      // redirection would answer confidently for a line one of the two shells
-      // never ran. It falls through to `&>` followed by a second redirection
-      // operator, which has no target, and so abstains.
-      if (n === 1 && script[i + 1] === ">") {
-        pushRedirection("&>");
-        i += 2;
-        continue;
-      }
+      // A lone `&` is a background job, which splits the line into concurrent
+      // halves, and `&>` is not the exception it looks like: it redirects both
+      // streams in bash and zsh, but dash and ksh read the `&` as backgrounding
+      // the command and the `>` as a redirection of what follows. That is not a
+      // cosmetic difference — the backgrounded `cd` runs in a subshell, so its
+      // directory dies with it and everything after the `&&` runs in cwd.
+      // Measured with `cd /x &>/dev/null && touch RAN`: the file lands in /x
+      // under bash and zsh and in cwd under dash and ksh. Reading it either way
+      // is a confident wrong directory for the other pair.
       return { ok: false, reason: "background" };
     }
 
@@ -555,10 +615,20 @@ function scanProgram(script: string): ScanResult {
 
 /**
  * Drop redirections and their targets so the remaining words are the command
- * and its operands. Null when a redirection has no target, which is a syntax
- * error rather than a command that ran somewhere.
+ * and its operands.
+ *
+ * The target is READ rather than discarded, because whether the shell could
+ * open it decides whether the command ran at all — and a command that never ran
+ * has no directory to report. `cd /x 2>&foo` is a bad descriptor in bash, dash
+ * and ksh, which run nothing, while zsh reads the word as a file and runs the
+ * `cd`. `cd /x > log.*` with two files matching is an "ambiguous redirect" in
+ * bash, which runs nothing, while zsh truncates both through multios and dash
+ * and ksh create the literal name. `> $UNSET` runs nothing anywhere.
+ *
+ * The floor cannot cover these: it only looks at words in command position, and
+ * a redirection target is not one.
  */
-function stripRedirections(words: readonly Word[]): Word[] | null {
+function stripRedirections(words: readonly Word[]): StripResult {
   const out: Word[] = [];
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
@@ -568,16 +638,108 @@ function stripRedirections(words: readonly Word[]): Word[] | null {
       continue;
     }
     const target = words[i + 1];
-    if (target === undefined || target.redirection === true) return null;
+    // A redirection with no target is a syntax error: bash runs none of the
+    // program, so there is no command to place anywhere.
+    if (target === undefined || target.redirection === true) {
+      return { ok: false, reason: "shell_syntax" };
+    }
+    if (!isReadableRedirectionTarget(word.text, target)) {
+      return { ok: false, reason: "unreadable_redirection" };
+    }
     i++; // the redirection consumes its target
   }
-  return out;
+  return { ok: true, words: out };
 }
 
-// bash's assignment prefixes: `NAME=`, the append form `NAME+=`, and the array
-// element form `NAME[subscript]=`. All three run the command that follows them,
-// so missing one turns a `cd` into an argument of a command that never existed.
-const ASSIGNMENT_PREFIX = /^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?\+?=/;
+/** `>&` and `<&` duplicate a descriptor; their operand is not a filename. */
+const FD_DUP_OPERATORS = new Set([">&", "<&"]);
+
+/**
+ * What may follow `>&`: a descriptor number, and nothing else.
+ *
+ * Closing a descriptor (`2>&-`) is left out although all four shells accept it,
+ * because a close changes what a LATER redirection on the same line does and
+ * this reads each redirection independently rather than carrying descriptor
+ * state. Measured, `1>&- 2>&1 && touch RAN` runs nothing in bash, zsh, dash or
+ * ksh: the second redirection duplicates the descriptor the first one closed.
+ * Accepting the close and not the consequence is how that line came to answer
+ * `cwd`.
+ *
+ * The move form (`2>&1-`) is left out too: measured, dash rejects it and runs
+ * nothing while bash, zsh and ksh perform the move.
+ */
+const FD_DUP_TARGET = /^\d+$/;
+
+/**
+ * Whether the shell would certainly have opened this redirection.
+ *
+ * The question asked of a redirection target is narrower than the one asked of a
+ * `cd` target: not WHERE it points, only whether the shell could open it, since
+ * that is what decides whether the command ran. So a target only has to be
+ * readable as ONE word. `> "$SP/build.log"` is one word whatever `$SP` holds,
+ * and whether that file could then be opened is a fact about the filesystem —
+ * `cd /x > /absent/f && git commit` runs nothing in bash — which this grammar
+ * has never claimed to read, with or without an expansion in the way.
+ *
+ * What it refuses is a target that may not be one word: an UNQUOTED expansion or
+ * glob can become several words or none, and that is where the shells diverge —
+ * "ambiguous redirect" and nothing runs in bash and zsh, the first match in dash
+ * and ksh.
+ */
+function isReadableRedirectionTarget(operator: string, target: Word): boolean {
+  if (FD_DUP_OPERATORS.has(operator)) return FD_DUP_TARGET.test(target.text);
+  // `> ""` names no file, so the shell opens nothing and the command does not run.
+  if (target.text.length === 0) return false;
+  return !hasUnquoted(target, /[$*?[{]/);
+}
+
+// `NAME=`, the one assignment prefix every shell here agrees on.
+const ASSIGNMENT_PREFIX = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+
+// The START of the append form `NAME+=` and of the array element form
+// `NAME[subscript]=`, which the shells do not agree on. Deliberately only the
+// start: matching a subscript in full means matching balanced brackets and
+// arithmetic, which is the shell-parser this grammar refuses to become — and a
+// regex that tries and stops at the first `]` reads `A[1+A[0]]=x` as an
+// ordinary command and confidently answers cwd for a segment that moved. Once
+// a word begins this way there is nothing further worth deciding, because the
+// answer is a refusal either way. See {@link looksLikeAssignmentPrefix}.
+const AMBIGUOUS_ASSIGNMENT_START = /^[A-Za-z_][A-Za-z0-9_]*(\[|\+=)/;
+
+/**
+ * A word in command position that is a program name or a path to one: `git`,
+ * `node_modules/.bin/biome`, `/usr/bin/env`, `./script.sh`, `~/bin/tool`.
+ *
+ * This is an allowlist on purpose. The characters left out are the ones that
+ * make a word mean something other than "run this program" — `[` and `=` and
+ * `$` and quotes and non-ASCII names, each of which some shell reads as an
+ * assignment, a glob, an expansion, or nothing at all. Rather than enumerate
+ * those readings, which is the enumeration that keeps turning out to be
+ * incomplete, anything outside this shape is refused.
+ */
+const PLAIN_COMMAND_HEAD = /^(?:~\/|\/|\.{1,2}\/)?[A-Za-z0-9_.+-]+(?:\/[A-Za-z0-9_.+-]+)*$/;
+
+/**
+ * Whether a word in command position is a program name or a path to one.
+ *
+ * {@link PLAIN_COMMAND_HEAD} decides the characters; this adds the one thing a
+ * character class cannot express, which is that a word naming a DIRECTORY is
+ * not naming a program. A trailing `/` and a last segment of `.` or `..` are
+ * directories by spelling alone — no filesystem needed — and every shell here
+ * refuses to execute one (exit 126), which means the `&&` after it never runs.
+ * Answering `cwd` for such a line is a confident answer about work that did not
+ * happen.
+ *
+ * A bare `.` is the exception, and not because it is safe: it is the `source`
+ * builtin rather than a path, so it goes on to be refused by name as an
+ * indirect executor, which is the more precise reason of the two.
+ */
+function isPlainCommandHead(text: string): boolean {
+  if (!PLAIN_COMMAND_HEAD.test(text)) return false;
+  if (text === ".") return true;
+  const last = text.slice(text.lastIndexOf("/") + 1);
+  return last !== "." && last !== "..";
+}
 
 /**
  * The variable a `NAME=value` prefix assigns, if this word is one.
@@ -594,6 +756,40 @@ function assignmentName(word: Word): string | undefined {
   const upToEquals = match[0].length - 1;
   if (quotedBefore(word, upToEquals)) return undefined;
   return match[1];
+}
+
+/**
+ * Whether this word in command position might be an assignment prefix rather
+ * than the command — the `NAME+=…` and `NAME[…` shapes, as opposed to the
+ * portable `NAME=`, which every shell here agrees is a prefix.
+ *
+ * Only the shape's start is examined, so `A[1+A[0]]=x` and the word-split
+ * `A[1` of `A[1 + 1]=x` are both caught. This over-reaches onto words no shell
+ * reads as an assignment (`A[[0]=x`) and onto a pathname expansion that lands
+ * in command position (`c[d]`); both are cases where what ran is equally
+ * unreadable, so the same refusal is the right answer.
+ *
+ * The same quoting rule applies as for {@link assignmentName}: a quoted NAME is
+ * not an assignment in any shell, so the word is an ordinary command and no
+ * such question arises.
+ */
+function looksLikeAssignmentPrefix(word: Word): boolean {
+  if (word.redirection === true) return false;
+  const match = AMBIGUOUS_ASSIGNMENT_START.exec(word.text);
+  if (match === null) return false;
+  return !quotedBefore(word, match[0].length - 1);
+}
+
+/**
+ * Whether an assignment's value begins with an unquoted `~user`, the one tilde
+ * form that can fail. `~` and `~/…` resolve in every shell; `~name` is a lookup
+ * that zsh treats as fatal.
+ */
+function assignmentValueHasTildeUser(word: Word, nameLength: number): boolean {
+  const at = nameLength + 1; // just past `NAME=`
+  if (word.text[at] !== "~" || word.mask[at] !== "n") return false;
+  const next = word.text[at + 1];
+  return next !== undefined && next !== "/";
 }
 
 /** Whether any quoting touched the word at or before `index`, empty quotes included. */

@@ -7,6 +7,70 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Fixed
 
+- `basou review-gaps` now answers only for a command it positively recognises.
+  Deciding which repository a captured command ran in was a list of shapes to
+  refuse — a substitution, a heredoc, a second `cd`, and so on — with a
+  confident answer for everything else. A list of shell shapes is never
+  finished, and every entry missing from it was not a missing refusal but a
+  wrong repository, which is the one verdict this surfacer must never reach by
+  accident. Four review rounds each found another: a `cd` inside `$(…)`, an
+  assignment prefix bash reads and dash does not, a subscript with brackets
+  inside it, a non-ASCII variable name, an `alias` that rewrites what a later
+  word means.
+
+  The rule is inverted. A word in command position must be a program name or a
+  path to one — `git`, `node_modules/.bin/biome`, `/usr/bin/env`, `./script.sh`,
+  `~/bin/tool` — and anything else is refused. Characters that make a word mean
+  something other than "run this program" (`[`, `=`, `$`, quotes, non-ASCII
+  names) are simply outside the shape, so a reading nobody enumerated costs
+  reach rather than correctness. `alias` joins the programs already refused for
+  changing what later words mean, alongside `trap` and `eval`.
+
+  Three places the same question is asked outside command position are answered
+  the same way. An assignment's VALUE is now read as well as its name, because an
+  expansion inside it can assign to a second variable: `A=${CDPATH:=/}` sets
+  `CDPATH`, after which a later `cd repos` does not resolve against the working
+  directory at all — measured, bash, zsh and dash all land under the new
+  `CDPATH`. A `~user` in a value is refused for the same reason from the other
+  direction: it aborts zsh before the `cd` ever runs.
+
+  A redirection's target is read rather than discarded, because whether the shell
+  could open it decides whether the command ran at all: `2>&foo` is a bad
+  descriptor in bash, dash and ksh, while zsh takes it as a filename and runs the
+  command. A target only has to be readable as ONE word, so `> "$SP/build.log"`
+  stays readable and an unquoted glob or expansion does not. Closing a descriptor
+  is refused although every shell accepts it, because a close changes what a later
+  redirection does and each one is read independently: `1>&- 2>&1 && …` runs
+  nothing in any of the four shells. `&>` is refused outright — bash and zsh read
+  it as redirecting both streams, dash and ksh read the `&` as backgrounding the
+  command, and a backgrounded `cd` does not move the shell at all, so the old
+  answer was a wrong repository for half the shells.
+
+  Finally, a word that names a DIRECTORY by spelling alone — a trailing `/`, or a
+  last segment of `.` or `..` — is no longer a program name: no shell will
+  execute a directory, so the `&&` after it never ran, and `cwd` was a confident
+  answer about work that did not happen. That floor now also applies to a
+  directly executed program, not only to words inside a shell line.
+
+  Measured across the 17,904 captured shell commands in the workspace this was
+  built against, 778 of them carrying a `git commit`: 12,704 answered confidently
+  before and 12,700 after, no answer changed, and every one of the 115
+  commit-bearing answers is kept. The four withdrawn are assignments whose value
+  only READS a variable (`rc=$?`), which cannot be told from one that assigns
+  without enumerating the expansion forms that do. Other known losses go the same
+  way: `[` is the test builtin and `:` does nothing at all, so neither can move
+  the shell, but admitting them means keeping a list of the builtins that are
+  safe, which is the kind of list this exists to stop depending on.
+
+  What this does NOT do is stop depending on the recorded executor. Both
+  importers write `command: "bash"` for every captured shell command without
+  observing it, and codex in fact runs its commands through `/bin/zsh -lc`. A
+  word can pass as a plain program name and still move the shell in the shell
+  that actually ran it: `chdir /x` moves zsh and dash while bash and ksh run
+  nothing, and `noglob cd /x` and `repeat 1 cd /x` move zsh alone. The inversion
+  closed the enumeration of word SHAPES; which words MEAN what is still a list,
+  and it is still a list per shell.
+
 - `basou review-gaps` no longer credits a commit to a repository it can only
   guess at. Deciding which repository a captured command ran in was one regex
   looking for `cd <target> &&`, with the session's working directory as the

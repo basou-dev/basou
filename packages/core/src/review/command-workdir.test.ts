@@ -140,7 +140,7 @@ describe("deriveCommandWorkdir — what the grammar accepts", () => {
       kind: "target",
       path: "/repos/beta",
     });
-    expect(shell("cd /repos/beta &>/dev/null && git commit -m x")).toEqual({
+    expect(shell("cd /repos/beta >> /dev/null && git commit -m x")).toEqual({
       kind: "target",
       path: "/repos/beta",
     });
@@ -287,11 +287,75 @@ describe("deriveCommandWorkdir — shapes that must not reach a confident answer
     });
   });
 
+  it("refuses a redirection whose target may not be one word", () => {
+    // Whether the shell could open the target decides whether the command ran at
+    // all, and a command that did not run has no directory. `2>&foo` is a bad
+    // descriptor in bash, dash and ksh, which run nothing, while zsh reads the
+    // word as a file and runs the `cd`.
+    expect(reason(shell("cd /repos/beta 2>&foo && git commit -m x"))).toBe(
+      "unreadable_redirection",
+    );
+    // A descriptor move: measured, dash rejects `2>&1-` and runs nothing while
+    // bash, zsh and ksh perform the move and run the `cd`.
+    expect(reason(shell("cd /repos/beta 2>&1- && git commit -m x"))).toBe("unreadable_redirection");
+    // Closing a descriptor is refused even though all four shells accept it,
+    // because a close changes what a LATER redirection does and this grammar
+    // reads each one independently. Measured, `1>&- 2>&1 && touch RAN` creates
+    // nothing in any of the four: the second redirection duplicates the
+    // descriptor the first closed, and the command after `&&` never runs. The
+    // close itself is the readable half; accepting it and not the consequence is
+    // what answered `cwd` here.
+    expect(reason(shell("1>&- 2>&1 && git commit -m x"))).toBe("unreadable_redirection");
+    expect(reason(shell("cd /repos/beta 2>&- && git commit -m x"))).toBe("unreadable_redirection");
+    // An unquoted glob or expansion may become several words or none, and that is
+    // where the shells part company: with two files matching `log.*`, bash calls
+    // it an ambiguous redirect and runs nothing, zsh writes to both, and dash and
+    // ksh do not glob a redirection target at all and create the literal name.
+    expect(reason(shell("cd /repos/beta > log.* && git commit -m x"))).toBe(
+      "unreadable_redirection",
+    );
+    expect(reason(shell("cd /repos/beta > $OUT && git commit -m x"))).toBe(
+      "unreadable_redirection",
+    );
+    // `> ""` names no file, and every shell measured runs nothing.
+    expect(reason(shell('cd /repos/beta > "" && git commit -m x'))).toBe("unreadable_redirection");
+    // What stays readable: a plain descriptor, and a QUOTED expansion, which is
+    // one word whatever it holds. Whether that file could then be opened is a
+    // fact about the filesystem, which this grammar never claimed to read — with
+    // or without an expansion in the way.
+    expect(shell("cd /repos/beta 2>&1 && git commit -m x")).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+    expect(shell('cd /repos/beta > "$SP/build.log" 2>&1 && git commit -m x')).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+  });
+
+  it("refuses `&>`, which is a redirection in two shells and a background job in two", () => {
+    // bash and zsh read `&>file` as redirecting both streams. dash and ksh read
+    // the `&` as backgrounding the command and the `>` as redirecting what
+    // follows — and a backgrounded `cd` runs in a subshell, so its directory dies
+    // with it and everything after the `&&` runs in cwd. Measured with
+    // `cd /x &>/dev/null && touch RAN`: the file lands in /x under bash and zsh
+    // and in cwd under dash and ksh. This used to answer `target /x` for all
+    // four, which is a wrong repository for half of them.
+    expect(reason(shell("cd /repos/beta &>/dev/null && git commit -m x"))).toBe("background");
+    // `&>>` splits the same way, and additionally splits bash 3.2 from bash 4.
+    expect(reason(shell("cd /repos/beta &>>/dev/null && git commit -m x"))).toBe("background");
+  });
+
   it("does not read a quoted NAME as an assignment", () => {
     // bash only sees `FOO=x` as an assignment when the name is unquoted;
     // `"FOO"=x` is a command name, so what follows it are its arguments and no
-    // `cd` runs at all.
-    expect(shell('"FOO"=x cd /other && git commit -m y')).toEqual({ kind: "cwd" });
+    // `cd` runs at all. That much is settled — the point is that the `cd` is
+    // NOT the command. Which directory to name is then a second question, and
+    // the answer is none: `FOO=x` is not a program name this grammar reads, so
+    // it reaches the floor. (bash agrees it is not one — `command not found`,
+    // after which the `&&` means the commit never ran either, so the `cwd` this
+    // once returned was a confident answer about a command that did not run.)
+    expect(reason(shell('"FOO"=x cd /other && git commit -m y'))).toBe("unrecognized_command_word");
   });
 
   it("applies quoting per character, not per word", () => {
@@ -352,6 +416,63 @@ describe("deriveCommandWorkdir — shapes that must not reach a confident answer
     });
   });
 
+  it("refuses an assignment whose value it cannot read", () => {
+    // The rule above looks at the NAME being assigned; an expansion in the VALUE
+    // can assign to a second variable it never sees. With `CDPATH` unset,
+    // `A=${CDPATH:=<dir>}` sets it, and the `cd repos` after it stops resolving
+    // against cwd at all: measured, bash, zsh and dash all land under the new
+    // CDPATH rather than under cwd. (ksh was measured doing both, depending on
+    // the target — which is itself a reason not to answer.) The grammar answered
+    // `<cwd>/repos`.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion, which is the subject of the test
+    expect(reason(shell("A=${CDPATH:=/}\ncd repos && git commit -m x"))).toBe(
+      "unreadable_assignment_value",
+    );
+    // The same value as a prefix rather than a segment of its own. A segment that
+    // is nothing but assignments is why the floor cannot cover this: such a
+    // segment reaches no word in command position at all.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion, which is the subject of the test
+    expect(reason(shell("A=${CDPATH:=/} :\ncd repos && git commit -m x"))).toBe(
+      "unreadable_assignment_value",
+    );
+    // A literal value is still read, and so is a `$` the shell does not expand.
+    expect(shell("SP=/tmp/scratch\ncd /repos/beta && git commit -m x")).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+    expect(shell("A='$HOME' cd /repos/beta && git commit -m x")).toEqual({
+      kind: "target",
+      path: "/repos/beta",
+    });
+    // The accepted cost: a value that only READS a variable is refused too,
+    // because telling the two apart means enumerating the expansions that assign
+    // — `${V=…}`, `${V:=…}`, and whatever a later shell adds — which is the
+    // enumeration this grammar exists to stop depending on. Measured on the
+    // corpus this was built against: four events, none carrying a `git commit`.
+    expect(reason(shell("cd /repos/beta && pnpm test; rc=$?; echo done"))).toBe(
+      "unreadable_assignment_value",
+    );
+  });
+
+  it("refuses a `~user` in an assignment value, which stops zsh before the cd", () => {
+    // Measured: `A=~nosuchuser cd /x && touch RAN` creates nothing in zsh, which
+    // aborts with "no such user or named directory", while bash, dash and ksh
+    // assign the text literally and run the `cd`. The grammar answered
+    // `target /x` for all four, zsh included.
+    expect(reason(shell("A=~nosuchuser_9x cd /other && git commit -m y"))).toBe("tilde_user");
+    // Only that form fails. `~` and `~/…` resolve in every shell, so they stay
+    // readable and the refusal matches the one `cd` already applies to its own
+    // operand.
+    expect(shell("A=~/bin cd /other && git commit -m y")).toEqual({
+      kind: "target",
+      path: "/other",
+    });
+    expect(shell("A=~ cd /other && git commit -m y")).toEqual({
+      kind: "target",
+      path: "/other",
+    });
+  });
+
   it("refuses a carriage return rather than reading it as a line ending", () => {
     // bash makes `\r` part of the operand, so the cd fails and the commit runs
     // in cwd — the opposite of what the line looks like.
@@ -366,10 +487,6 @@ describe("deriveCommandWorkdir — shapes that must not reach a confident answer
       "cd /other |", // nothing to the right of `|`
       "cd /other ;; git commit -m x", // `;;` outside a case
       "cd /other >", // a redirection with no target
-      // `&>>` is a syntax error in bash 3.2 (what `/bin/bash` is on macOS) and
-      // append-both in bash 4. Answering for either would answer for a line the
-      // other never ran.
-      "cd /other &>>/dev/null",
     ]) {
       expect(reason(shell(script))).toBe("shell_syntax");
     }
@@ -384,7 +501,13 @@ describe("deriveCommandWorkdir — shapes that must not reach a confident answer
     // `FOO""=x` is not an assignment and `2''>` is not an fd prefix: bash keeps
     // the lexical fact that the word was quoted even though the quotes carry no
     // characters. Both used to leave a `cd` looking like the command.
-    expect(shell('FOO""=x cd /other; git commit -m y')).toEqual({ kind: "cwd" });
+    //
+    // `FOO""=x` then reaches the floor, because `FOO=x` is not a program name
+    // this grammar reads. Here that costs a correct answer — the `;` lets the
+    // commit run, and it ran in cwd — which is the price of the floor not
+    // knowing that bash would have failed to find the command. Measured across
+    // the corpus this was built against, that price came to zero events.
+    expect(reason(shell('FOO""=x cd /other; git commit -m y'))).toBe("unrecognized_command_word");
     expect(shell("2''>/dev/null cd /other; git commit -m y")).toEqual({ kind: "cwd" });
     // The quoting has to be in the NAME to matter — a quoted VALUE is fine.
     expect(shell('FOO=""x cd /other && git commit -m y')).toEqual({
@@ -393,17 +516,102 @@ describe("deriveCommandWorkdir — shapes that must not reach a confident answer
     });
   });
 
-  it("reads bash's other assignment-prefix forms", () => {
-    // `A+=x` and `A[0]=x` are assignments, so the `cd` behind them is the
-    // command rather than one of their arguments.
-    expect(shell("A+=x cd /other && git commit -m y")).toEqual({
+  it("refuses a command-position word that might be an assignment prefix", () => {
+    // Either the word is a prefix, and the `cd` after it moved the segment, or
+    // it is the command, and nothing moved. Which one is a property of the
+    // shell, and the shell is not knowable here: the importers write `bash` for
+    // every captured command without observing it. Measured out of band on one
+    // host — bash and ksh run the command behind both forms, dash finds neither
+    // word, zsh takes `A[1]=` but rejects `A[0]=` — and NOT re-verified by this
+    // test, which exercises the grammar only.
+    expect(reason(shell("A[0]=x cd /other && git commit -m y"))).toBe("assignment_or_command");
+    expect(reason(shell("A+=x cd /other && git commit -m y"))).toBe("assignment_or_command");
+
+    // Only the start of the shape is matched, so a subscript this grammar
+    // cannot parse does not slip through as an ordinary command. Reading these
+    // as commands answered `cwd` while bash, zsh and ksh all ran the `cd`.
+    expect(reason(shell("A[1+A[0]]=x cd /other && git commit -m y"))).toBe("assignment_or_command");
+    expect(reason(shell("A[1 + 1]=x cd /other && git commit -m y"))).toBe("assignment_or_command");
+
+    // The same refusal covers two shapes no shell reads as an assignment: a
+    // malformed one, and a pathname expansion landing in command position.
+    // What ran is equally unreadable in both. (`c[d]` is a glob over the
+    // CURRENT DIRECTORY, not over PATH: it becomes `cd` only when run from a
+    // directory that holds a file named `cd`, such as /usr/bin.)
+    expect(reason(shell("A[[0]=x cd /other && git commit -m y"))).toBe("assignment_or_command");
+    expect(reason(shell("c[d] /other && git commit -m y"))).toBe("assignment_or_command");
+
+    // The portable `NAME=` form is a prefix in every shell here, so it keeps
+    // its answer and the abstention stays narrow.
+    expect(shell("A=x cd /other && git commit -m y")).toEqual({ kind: "target", path: "/other" });
+    expect(reason(shell("FOO=1 A[0]=x cd /other && git commit -m y"))).toBe(
+      "assignment_or_command",
+    );
+  });
+
+  it("refuses a command word it cannot positively recognise", () => {
+    // The floor under every other rule here. What reaches it is whatever the
+    // named rules did not think of — and each review round has found another
+    // such shape, every one of them previously answered confidently and wrong.
+    //
+    // A non-ASCII assignment name is one: zsh and ksh run the `cd` behind
+    // `é[1]=x` and behind the portable `é=x`, while the name patterns above
+    // match ASCII only. Neither is caught by a rule that names it; both are
+    // caught by not being a program name.
+    expect(reason(shell("é[1]=x cd /other && git commit -m y"))).toBe("unrecognized_command_word");
+    expect(reason(shell("é=x cd /other && git commit -m y"))).toBe("unrecognized_command_word");
+
+    // `[` is the test builtin and cannot move the shell, so refusing it costs
+    // reach and buys nothing — but it is refused anyway, because admitting it
+    // means keeping a list of the builtins that are safe, which is the kind of
+    // list this floor exists to stop depending on. Measured cost on the corpus
+    // this was built against: zero.
+    expect(reason(shell("cd /other && [ -f x ] && git commit -m y"))).toBe(
+      "unrecognized_command_word",
+    );
+
+    // A quoted NAME is not an assignment in any shell, so it is an ordinary
+    // command word — and the floor still asks whether it is a program name.
+    expect(reason(shell('"A"[0]=x cd /other && git commit -m y'))).toBe(
+      "unrecognized_command_word",
+    );
+
+    // The floor must not swallow the shapes the grammar does read: a bare
+    // program, a path to one, and a `cd` with a literal target.
+    expect(shell("cd /repos/beta && node_modules/.bin/biome check .")).toEqual({
       kind: "target",
-      path: "/other",
+      path: "/repos/beta",
     });
-    expect(shell("A[0]=x cd /other && git commit -m y")).toEqual({
-      kind: "target",
-      path: "/other",
-    });
+    expect(shell("~/bin/tool --flag")).toEqual({ kind: "cwd" });
+    expect(shell("./script.sh && git commit -m y")).toEqual({ kind: "cwd" });
+    expect(shell("/usr/bin/true && git commit -m y")).toEqual({ kind: "cwd" });
+
+    // An alias rewrites what a later command word means, so a line that reads
+    // as inert can still have moved: `alias Y='cd /other'; Y` does.
+    expect(reason(shell("alias Y='cd /other'\nY && git commit -m y"))).toBe("indirect_execution");
+  });
+
+  it("refuses a command word that names a directory", () => {
+    // A trailing `/`, and a last segment of `.` or `..`, name a directory by
+    // spelling alone, and no shell will execute a directory: measured in bash,
+    // zsh, dash and ksh, all four run nothing, so the `&&` after it never
+    // happens. Each of these answered `cwd` — a confident answer about work that
+    // did not take place.
+    for (const script of [
+      "/usr/ && git commit -m x",
+      "../ && git commit -m x",
+      ".. && git commit -m x",
+      "bin/. && git commit -m x",
+    ]) {
+      expect(reason(shell(script))).toBe("unrecognized_command_word");
+    }
+    // A bare `.` is the `source` builtin rather than a path, so it keeps the more
+    // precise reason of the two.
+    expect(reason(shell(". ./env.sh && git commit -m x"))).toBe("indirect_execution");
+    // Where reading spelling alone stops: whether a path WITHOUT a trailing slash
+    // is a directory is a fact about the filesystem. `/usr && git commit` runs
+    // nothing in any of the four shells, and this still answers cwd for it.
+    expect(shell("/usr && git commit -m x")).toEqual({ kind: "cwd" });
   });
 
   it("refuses an expansion in command position", () => {
@@ -455,6 +663,22 @@ describe("deriveCommandWorkdir — invocations that are not a shell program", ()
 
   it("says cwd for a direct exec", () => {
     expect(deriveCommandWorkdir("git", ["log", "--oneline", "-5"], CWD)).toEqual({ kind: "cwd" });
+  });
+
+  it("applies the floor to a direct exec too", () => {
+    // There is no shell here to read a `cd`, but the executable still has to be
+    // a program name. `../` is a directory: all four shells exit 126 on it and
+    // nothing runs, while `review-gaps` sees the `git commit` in the args and
+    // would credit it to cwd. The floor was previously only reached through the
+    // shell path, so this shape walked straight past it.
+    expect(reason(deriveCommandWorkdir("../", ["git", "commit"], CWD))).toBe(
+      "unrecognized_command_word",
+    );
+    expect(reason(deriveCommandWorkdir("FOO=x", ["git", "commit"], CWD))).toBe(
+      "unrecognized_command_word",
+    );
+    // A real captured executable still answers: a bare name, and a path to one.
+    expect(deriveCommandWorkdir("/opt/homebrew/bin/pnpm", ["build"], CWD)).toEqual({ kind: "cwd" });
   });
 
   it("refuses a direct exec that relocates its own work", () => {
