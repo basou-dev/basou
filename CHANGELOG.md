@@ -3,6 +3,38 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- `basou review-gaps` no longer credits a commit to a repository it can only
+  guess at. Deciding which repository a captured command ran in was one regex
+  looking for `cd <target> &&`, with the session's working directory as the
+  answer whenever it did not match — so a construct the regex could not read
+  became a WRONG repository rather than an admission of ignorance. Ten such
+  mis-attributions were confirmed against bash: a second `cd`, a `cd` inside
+  `$(…)` or a subshell, a `cd` written inside a commit message's escaped quote
+  or after a `#`, a backslash-escaped path, a `cd` separated by `;` instead of
+  `&&`, `cd -- <path>`, `sh -c 'cd …'`, and `env -C`.
+
+  A wrong repository is the expensive error here: it can manufacture a
+  `candidate`, the one verdict this surfacer must never reach by accident. So
+  the regex is replaced by a deliberately narrow accepted grammar — not a shell
+  parser — whose result can say "I cannot read this". Lines it does not accept
+  become `unknown`, which `review-gaps` already reports honestly, instead of
+  being attributed somewhere plausible. Two further collisions go with it: a
+  relative `cd ../app` is now resolved against the working directory rather than
+  keyed by its spelling, which had let the same line run beside two different
+  repositories collapse onto one key; and an unexpanded `$` disqualifies a path
+  wherever it appears, not only in its final segment.
+
+  This trades reach for truthfulness, and the trade is visible: on a real store
+  of 17,264 captured commands, 28.6% of all commands and 86.7% of `git commit`
+  lines are now reported as undeterminable, mostly for command substitution and
+  heredocs. Widening the grammar is safe to do later — every shape it does not
+  accept today is already reported as unread, so accepting more can only move
+  lines out of `unknown`, never silently change an answer already given.
+
 ## 0.36.0 — 2026-08-02
 
 ### Added

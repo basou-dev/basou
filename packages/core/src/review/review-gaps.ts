@@ -4,6 +4,7 @@ import { basename, isAbsolute, join } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
+import { deriveCommandWorkdir } from "./command-workdir.js";
 
 /**
  * Review-gap surfacer: a read-only, advisory check for the "external
@@ -277,7 +278,7 @@ export function normalizeRepoPath(p: string | null | undefined): string | null {
     .pop();
   if (seg === undefined) return null;
   // the view dir itself is not a repo; an unexpanded shell var is not a repo
-  if (/-workspace$/.test(seg) || seg.includes("$")) return null;
+  if (/-workspace$/.test(seg) || s.includes("$")) return null;
   return s;
 }
 
@@ -400,33 +401,37 @@ function inspectCommand(args: string[]): { files: string[]; examinedDiff: boolea
  * fallback can land on a path that exists (collapsing `*-workspace` out of
  * `/x/foo-workspace/bar` gives `/x/bar`), so asking "does this key resolve?"
  * would answer yes about a key that was guessed from a directory name.
- *
- * How the path itself is derived is deliberately unchanged from before this
- * change: deciding which directory a captured shell line really ran in needs a
- * narrow, explicitly-abstaining grammar, and that is its own piece of work.
  */
 function commandRepoWithProvenance(
+  command: string,
   args: string[],
   cwd: string,
 ): { key: string | null; resolved: boolean } {
-  const raw = commandRepoPath(args, cwd);
+  const raw = commandRepoPath(command, args, cwd);
+  if (raw === null) return { key: null, resolved: false };
   return { key: normalizeRepoPath(raw), resolved: resolveRepoRoot(raw) !== null };
 }
 
-/** The path a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
-function commandRepoPath(args: string[], cwd: string): string {
-  // An explicit `cd <target> &&` wins over cwd — and wins EVEN WHEN the target
-  // resolves to null (a non-repo dir): the command ran there, so it must not be
-  // silently re-credited to the session's cwd (which could falsely bind an
-  // unrelated repo and clear a real gap). Fall back to cwd only when there was
-  // no explicit `cd`.
-  const cd = args.join(" ").match(/\bcd\s+("[^"]+"|'[^']+'|[^\s&]+)\s*&&/);
-  return cd?.[1] ?? cwd;
+/**
+ * The path a command effectively ran in, or null when the captured line cannot
+ * be read with certainty.
+ *
+ * An explicit `cd <target>` wins over cwd — and wins EVEN WHEN the target
+ * resolves to null (a non-repo dir): the command ran there, so it must not be
+ * silently re-credited to the session's cwd, which could falsely bind an
+ * unrelated repo and clear a real gap. cwd is used only when the grammar
+ * established that nothing moved; when it cannot tell, the answer is null and
+ * the caller abstains.
+ */
+function commandRepoPath(command: string, args: string[], cwd: string): string | null {
+  const workdir = deriveCommandWorkdir(command, args, cwd);
+  if (workdir.kind === "ambiguous") return null;
+  return workdir.kind === "target" ? workdir.path : cwd;
 }
 
-/** Repo a command effectively ran in: an explicit `cd <repo> &&` wins over cwd. */
-function commandRepo(args: string[], cwd: string): string | null {
-  return normalizeRepoPath(commandRepoPath(args, cwd));
+/** Repo a command effectively ran in; null when it could not be read. */
+function commandRepo(command: string, args: string[], cwd: string): string | null {
+  return normalizeRepoPath(commandRepoPath(command, args, cwd));
 }
 
 /** True when a captured command exited non-zero (a failure is not evidence / not landed work). */
@@ -572,7 +577,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
           // Bind to the repo the command actually ran in (an explicit `cd <repo>`
           // wins over cwd), symmetric with commit derivation, so `cd other &&
           // git diff` is not credited to the session's starting cwd.
-          const repo = commandRepo(ev.args, ev.cwd);
+          const repo = commandRepo(ev.command, ev.args, ev.cwd);
           if (repo === null) continue;
           const ins = inspectCommand(ev.args);
           const slot = reviewRepos.get(repo) ?? { examinedDiff: false, files: new Set() };
@@ -585,7 +590,11 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
 
         // committing (code-author) session: collect git-commit events
         if (!ev.args.join(" ").includes("git commit")) continue;
-        const { key: repo, resolved: keyResolved } = commandRepoWithProvenance(ev.args, ev.cwd);
+        const { key: repo, resolved: keyResolved } = commandRepoWithProvenance(
+          ev.command,
+          ev.args,
+          ev.cwd,
+        );
         if (repo === null || Number.isNaN(at)) {
           // Surface as unknown rather than silently dropping an observed commit.
           const list = unknownCommits.get(entry.sessionId) ?? [];
