@@ -56,8 +56,10 @@ export type ClaudeTranscriptToPayloadOptions = {
  * than mapping one-to-one:
  *
  * - `session_started` / `session_ended` from the first / last timestamped record.
- * - `command_executed` from each `Bash` tool use, recorded as `bash -c "<cmd>"`
- *   (the transcript carries the shell line, not a parsed argv).
+ * - `command_executed` from each `Bash` tool use, recorded as `["-c", <cmd>]`
+ *   with a NULL executor and a NULL outcome: the transcript carries the shell
+ *   line and nothing about what ran it or how it ended (#191). Only `<cmd>`
+ *   was observed; the `-c` is basou's framing of "this is a shell program".
  * - `file_changed` from each `Edit` / `Write` / `NotebookEdit` tool use.
  * - `decision_recorded` from each `AskUserQuestion` tool use, but ONLY when the
  *   recorded answer is a confirmed SELECTION — it exactly matches an option the
@@ -157,7 +159,10 @@ export function claudeTranscriptToImportPayload(
       }
     }
 
-    const cwd = readString(record.cwd) ?? workingDir ?? ".";
+    // `.` used to be the last resort here, which recorded a relative path that
+    // resolves to wherever a later READER happens to stand — a directory nobody
+    // observed. An unresolved working directory is null instead.
+    const cwd = readString(record.cwd) ?? workingDir ?? null;
     for (const item of toolUses(record)) {
       const name = readString(item.name);
       const input = isObject(item.input) ? item.input : undefined;
@@ -332,14 +337,21 @@ function commandExecutedEvent(
   occurredAt: string,
   sessionId: PrefixedId<"ses">,
   command: string,
-  cwd: string,
+  cwd: string | null,
 ): Event {
   return {
     ...baseEvent(occurredAt, sessionId),
     type: "command_executed",
-    command: "bash",
+    // The transcript records the Bash tool's command STRING and nothing about
+    // what ran it. `command: "bash"` used to be written here, which put an
+    // unobserved executor inside the hash chain; null says what is true. `-c`
+    // is kept so the line still reads as a shell program rather than an argv,
+    // which is the one bit readers need (#191).
+    command: null,
     args: ["-c", command],
     cwd,
+    // The transcript records no outcome, so this is UNKNOWN rather than a
+    // signal termination or a success.
     exit_code: null,
     duration_ms: 0,
   };

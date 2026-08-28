@@ -57,7 +57,10 @@ export type CodexRolloutToPayloadOptions = {
  * provenance-level events from the rollout's message-level records:
  *
  * - `session_started` / `session_ended` from the first / last timestamped record.
- * - `command_executed` from each shell execution, recorded as `bash -c "<cmd>"`.
+ * - `command_executed` from each shell execution, recorded as `["-c", <cmd>]`
+ *   with a NULL executor: the rollout carries the shell line, never what ran
+ *   it, and codex in fact runs through `/bin/zsh -lc` (#191). The `-c` is
+ *   basou's framing of "this is a shell program"; only `<cmd>` was observed.
  *   Codex has written these two different ways, and BOTH are read (an operator's
  *   `~/.codex/sessions` holds a mix across a CLI upgrade):
  *     - one `function_call` named `exec_command` per command, with JSON
@@ -221,7 +224,7 @@ export function codexRolloutToImportPayload(
             ts,
             placeholderSessionId,
             command.cmd,
-            command.workdir ?? workingDir ?? ".",
+            scriptedCommandCwd(command.workdir, workingDir),
             {
               exitCode: null,
               durationMs,
@@ -237,7 +240,7 @@ export function codexRolloutToImportPayload(
 
     const command = readExecCommand(payload.arguments);
     if (command === undefined) continue;
-    const cwd = command.workdir ?? workingDir ?? ".";
+    const cwd = scriptedCommandCwd(command.workdir, workingDir);
     const output = readCallId(payload.call_id, outputsByCallId);
     const execTsMs = Date.parse(ts);
     if (Number.isFinite(execTsMs)) engagementTsMs.push(execTsMs);
@@ -409,13 +412,20 @@ function commandExecutedEvent(
   occurredAt: string,
   sessionId: PrefixedId<"ses">,
   command: string,
-  cwd: string,
+  cwd: string | null,
   outcome: { exitCode: number | null; durationMs: number },
 ): Event {
   return {
     ...baseEvent(occurredAt, sessionId),
     type: "command_executed",
-    command: "bash",
+    // `command: "bash"` used to be written here and was WRONG, not merely
+    // unobserved: codex runs its commands through `/bin/zsh -lc`. The rollout
+    // carries no per-call shell to read, and the environment block's
+    // `environments.local.shell` describes the environment rather than what ran
+    // a given command — so writing `zsh` would be a better-informed guess, not
+    // an observation. null is what was actually observed about the executor
+    // (#191). `-c` is kept so the line still reads as a shell program.
+    command: null,
     args: ["-c", command],
     cwd,
     exit_code: outcome.exitCode,
@@ -472,8 +482,16 @@ const TOOL_CALL_PREFIX = "tools.";
 /** The scripted tool that runs a shell command. */
 const EXEC_TOOL = "exec_command";
 
-/** One shell execution read out of a script. */
-type ScriptedCommand = { cmd: string; workdir: string | undefined };
+/**
+ * One shell execution read out of a script.
+ *
+ * `workdir` has three states, because two of them used to be one: `undefined`
+ * means the call named no directory (so the session's applies), while `null`
+ * means it named one the scan could not read. Conflating them would either
+ * credit the command to the session's directory — a directory it may not have
+ * run in — or drop the evidence that it ran at all.
+ */
+type ScriptedCommand = { cmd: string; workdir: string | null | undefined };
 
 /** What a script was found to do: its resolvable commands and how many tools it called at all. */
 type ScriptScan = {
@@ -500,11 +518,18 @@ type ScriptScan = {
  * else would mean running the script. A call is SKIPPED (not guessed) when `cmd`
  * is passed by variable or shorthand (`{ cmd }`, `{ cmd: line }`), built by an
  * expression (`{ cmd: "git " + verb }`), given twice, or accompanied by a spread
- * (`{ ...job, cmd: "…" }`): JS lets a spread supply `cmd` or `workdir` invisibly,
- * so even when the text names a command the directory it ran in may not be there.
+ * (`{ ...job, cmd: "…" }`): JS lets a spread supply `cmd` invisibly, so the text
+ * naming a command is not enough to know which command ran.
  * An interpolation inside a template literal (`${…}`) is kept verbatim: a visible
  * placeholder is more honest than inventing the value or dropping the evidence
  * that a command ran.
+ *
+ * An unreadable `workdir` no longer costs the whole call. It used to: a call
+ * whose `cmd` was a plain literal was discarded outright because its directory
+ * was passed by variable, which threw away an observed command to avoid
+ * misplacing it. The command is kept and its directory recorded as unknown
+ * (`workdir: null`) — the event shape can now say that, so the reader abstains
+ * on the directory instead of the importer abstaining on the command.
  *
  * Nothing here throws: a pathological script must cost one skipped record, never
  * the import.
@@ -674,6 +699,22 @@ function findObjectEnd(script: string, start: number): number {
  */
 function readExecArguments(literal: string): ScriptedCommand | undefined {
   const values = new Map<string, string | undefined>();
+  // A `workdir` the scan reached but could not resolve to text. Tracked
+  // separately from "no workdir at all", which the session's directory answers.
+  let workdirUnreadable = false;
+  // Whether each key's readable literal is still the one JS would use — i.e. no
+  // spread has appeared AFTER it. A spread can supply either key invisibly, so
+  // it invalidates whatever was read before it; an explicit property written
+  // after a spread wins over it, because the later property always does.
+  // Reading a spread as unconditionally fatal (which this did) discarded a
+  // command whose `cmd` was a plain literal sitting right after the spread —
+  // observed, readable, and thrown away to avoid misplacing its directory.
+  // Now only the directory is lost, and `cwd: null` says so.
+  const survivesSpread = { cmd: false, workdir: false };
+  // Whether any spread appeared at all. Without one, a `workdir` that is simply
+  // ABSENT still means "the session's directory", which is not the same answer
+  // as "a spread may have supplied one I cannot see".
+  let sawSpread = false;
   let i = 1; // past the opening brace
   while (i < literal.length) {
     const at = skipWhitespaceAndComments(literal, i);
@@ -684,8 +725,17 @@ function readExecArguments(literal: string): ScriptedCommand | undefined {
       i = at + 1;
       continue;
     }
-    // A spread hands the decision to JS: which value wins is not in the text.
-    if (literal.startsWith("...", at)) return undefined;
+    // A spread hands the decision to JS: whatever it supplies overrides every
+    // property written BEFORE it, and nothing written after it.
+    if (literal.startsWith("...", at)) {
+      sawSpread = true;
+      survivesSpread.cmd = false;
+      survivesSpread.workdir = false;
+      const next = skipToPropertyEnd(literal, at);
+      if (next === -1) return undefined;
+      i = next;
+      continue;
+    }
     let key: string;
     let afterKey: number;
     if (ch === '"' || ch === "'") {
@@ -702,7 +752,8 @@ function readExecArguments(literal: string): ScriptedCommand | undefined {
     if (colon === -1) return undefined;
     if (literal[colon] !== ":") {
       // Shorthand (`{ cmd }`): the value lives in a variable, not the text.
-      if (key === "cmd" || key === "workdir") return undefined;
+      if (key === "cmd") return undefined;
+      if (key === "workdir") workdirUnreadable = true;
       i = colon;
       const next = skipToPropertyEnd(literal, colon);
       if (next === -1) return undefined;
@@ -727,24 +778,62 @@ function readExecArguments(literal: string): ScriptedCommand | undefined {
       if (terminator === "," || terminator === "}") {
         value = decoded.length > 0 ? decoded : undefined;
         afterValue = after;
-      } else if (key === "cmd" || key === "workdir") {
+      } else if (key === "cmd") {
         return undefined;
+      } else if (key === "workdir") {
+        workdirUnreadable = true;
       }
-    } else if (key === "cmd" || key === "workdir") {
+    } else if (key === "cmd") {
       return undefined; // a variable / expression / object: not resolvable
+    } else if (key === "workdir") {
+      workdirUnreadable = true;
     }
     if (key === "cmd" || key === "workdir") {
       // Given twice, JS keeps the last; rather than pick, treat it as unresolvable.
-      if (values.has(key)) return undefined;
-      values.set(key, value);
+      if (values.has(key)) {
+        if (key === "cmd") return undefined;
+        workdirUnreadable = true;
+      } else {
+        values.set(key, value);
+        // A readable literal here is, for now, the value JS would use. A later
+        // spread clears this again.
+        if (value !== undefined) survivesSpread[key] = true;
+      }
     }
     const next = skipToPropertyEnd(literal, afterValue);
     if (next === -1) return undefined;
     i = next;
   }
   const cmd = values.get("cmd");
-  if (cmd === undefined) return undefined;
-  return { cmd, workdir: values.get("workdir") };
+  // The command must be readable AND still be the value JS would use.
+  if (cmd === undefined || !survivesSpread.cmd) return undefined;
+  return { cmd, workdir: resolveScriptedWorkdir() };
+
+  /** Three outcomes, and the third is why this is not a one-liner. */
+  function resolveScriptedWorkdir(): string | null | undefined {
+    // Present in the text but unreadable (a variable, an expression, given twice).
+    if (workdirUnreadable) return null;
+    // Present, readable, and no spread came after it.
+    if (values.has("workdir") && survivesSpread.workdir) return values.get("workdir");
+    // Not present as text, but a spread could have supplied one invisibly.
+    if (sawSpread) return null;
+    // Genuinely absent: the session's directory answers, as it always has.
+    return undefined;
+  }
+}
+
+/**
+ * The directory a scripted command ran in: its own `workdir` when readable, the
+ * session's when the call named none, unknown when it named one that could not
+ * be read. `??` cannot express this — it treats "unreadable" and "absent" alike,
+ * and the whole point is that they are different answers.
+ */
+function scriptedCommandCwd(
+  workdir: string | null | undefined,
+  sessionCwd: string | undefined,
+): string | null {
+  if (workdir === null) return null;
+  return workdir ?? sessionCwd ?? null;
 }
 
 /** Index of the `,` or closing `}` that ends the property containing `at`, or -1. */

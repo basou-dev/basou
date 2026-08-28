@@ -240,3 +240,111 @@ describe("reimportPreservingId — hash chain", () => {
     });
   });
 });
+
+describe("reimportPreservingId — the content key survives a change in how a field is derived", () => {
+  // The break this guards against, in full: `derivedEventContentKey` used to
+  // include `command_executed.command`. The importers used to write an
+  // unobserved `"bash"` there and now write `null`, so a session imported before
+  // that change re-derived into events whose keys no longer matched their own
+  // prior counterparts. Nothing crashed — the prior events simply went
+  // unconsumed, `droppedPriorDerived` tripped, and the re-import was REFUSED.
+  // Workspace-wide, every session whose native log kept growing would have
+  // stopped being re-imported, and a refusal reads exactly like "nothing new".
+  function commandEvent(
+    suffix: string,
+    occurredAt: string,
+    command: string | null,
+    script: string,
+    cwd: string | null = "/srv/example-project",
+  ): PayloadEvent {
+    return {
+      schema_version: "0.1.0",
+      id: `evt_01HXABCDEF1234567890ABCE${suffix}`,
+      session_id: INPUT_SES_ID,
+      occurred_at: occurredAt,
+      source: "codex-import",
+      type: "command_executed",
+      command,
+      args: ["-c", script],
+      cwd,
+      exit_code: null,
+      duration_ms: 0,
+    } as PayloadEvent;
+  }
+
+  it("re-imports a session whose commands were recorded with the OLD executor value", async () => {
+    const paths = await setupPaths();
+    // Imported when the adapter still wrote the executor it had not observed.
+    const priorSession = await importSessionFromJson(
+      paths,
+      makeManifest(),
+      makePayload([
+        makeEvent("W1", "session_started", "2026-05-04T09:00:00+09:00"),
+        commandEvent("W2", "2026-05-04T09:01:00+09:00", "bash", "git status"),
+        makeEvent("W3", "session_ended", "2026-05-04T09:02:00+09:00"),
+      ]),
+      {},
+    );
+    const sessionId = priorSession.sessionId;
+
+    // The same source log, grown by one command, re-derived by the adapter as it
+    // behaves now: the executor was never observed, so it is null.
+    const outcome = await reimportPreservingId(
+      paths,
+      makeManifest(),
+      sessionId,
+      makePayload([
+        makeEvent("W1", "session_started", "2026-05-04T09:00:00+09:00"),
+        commandEvent("W2", "2026-05-04T09:01:00+09:00", null, "git status"),
+        commandEvent("W4", "2026-05-04T09:03:00+09:00", null, "git commit -m x"),
+        makeEvent("W5", "session_ended", "2026-05-04T09:04:00+09:00"),
+      ]),
+    );
+
+    expect(outcome.status).toBe("reimported");
+    if (outcome.status !== "reimported") throw new Error("unreachable");
+    expect(outcome.eventCount).toBe(4);
+    // The unchanged command kept its id, which is the whole point of the key:
+    // cross-session `linked_events` references stay valid across a re-import.
+    expect(outcome.reusedIdCount).toBeGreaterThan(0);
+    expect(await verifyEventsChain(paths, sessionId)).toEqual({
+      status: "verified",
+      eventCount: 4,
+    });
+  });
+
+  it("still tells two same-instant commands apart by the directory they ran in", async () => {
+    // `cwd` stays in the key because it does the work `command` never did: one
+    // scripted record can run several commands, and they share its timestamp.
+    const paths = await setupPaths();
+    const priorSession = await importSessionFromJson(
+      paths,
+      makeManifest(),
+      makePayload([
+        makeEvent("X1", "session_started", "2026-05-04T09:00:00+09:00"),
+        commandEvent("X2", "2026-05-04T09:01:00+09:00", null, "git status", "/srv/a"),
+        commandEvent("X3", "2026-05-04T09:01:00+09:00", null, "git status", "/srv/b"),
+        makeEvent("X4", "session_ended", "2026-05-04T09:02:00+09:00"),
+      ]),
+      {},
+    );
+    const sessionId = priorSession.sessionId;
+    const outcome = await reimportPreservingId(
+      paths,
+      makeManifest(),
+      sessionId,
+      makePayload([
+        makeEvent("X1", "session_started", "2026-05-04T09:00:00+09:00"),
+        commandEvent("X2", "2026-05-04T09:01:00+09:00", null, "git status", "/srv/a"),
+        commandEvent("X3", "2026-05-04T09:01:00+09:00", null, "git status", "/srv/b"),
+        commandEvent("X5", "2026-05-04T09:03:00+09:00", null, "git commit -m x", "/srv/a"),
+        makeEvent("X6", "session_ended", "2026-05-04T09:04:00+09:00"),
+      ]),
+    );
+    expect(outcome.status).toBe("reimported");
+    if (outcome.status !== "reimported") throw new Error("unreachable");
+    // Both same-instant commands matched their own counterpart, so neither was
+    // dropped and the re-import was not refused.
+    expect(outcome.eventCount).toBe(5);
+  });
+});

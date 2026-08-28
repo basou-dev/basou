@@ -749,3 +749,87 @@ describe("deriveCommandWorkdir — quoting decides what is an operator", () => {
     expect(shell("cd '>' && git commit -m x")).toEqual({ kind: "target", path: `${CWD}/>` });
   });
 });
+
+describe("an unobserved executor and an unknown cwd (the fields the format freeze made nullable)", () => {
+  // `command: null` is what an imported command now carries: the source log
+  // records the shell LINE, never what ran it (#191). The whole point of the
+  // change is that this must not cost the answer, because it is the shape 99.7%
+  // of the captured store is in.
+  it("reads a null-executor `-c` line exactly as it read `bash -c`", () => {
+    for (const script of [
+      "cd /other && git commit -m x",
+      "git commit -m x",
+      "cd ../beta && git commit -m x",
+      "cd $DIR && git commit -m x",
+      "(cd /other && git commit -m x)",
+      "cd /a && cd /b && git commit -m x",
+    ]) {
+      expect(deriveCommandWorkdir(null, ["-c", script], CWD)).toEqual(
+        deriveCommandWorkdir("bash", ["-c", script], CWD),
+      );
+    }
+  });
+
+  it("refuses a null-executor argv that is not a `-c` shell line", () => {
+    // With no executor there is nothing to recognise as a program, so a plain
+    // argv cannot be placed at all — it must not fall through to `cwd` the way a
+    // recognised direct exec does.
+    expect(reason(deriveCommandWorkdir(null, ["git", "commit", "-m", "x"], CWD))).toBe(
+      "unsupported_invocation",
+    );
+    expect(reason(deriveCommandWorkdir(null, [], CWD))).toBe("unsupported_invocation");
+    expect(reason(deriveCommandWorkdir(null, ["-lc", "git commit -m x"], CWD))).toBe(
+      "unsupported_invocation",
+    );
+    // `-c` with anything other than exactly one operand is not the shape either.
+    expect(reason(deriveCommandWorkdir(null, ["-c"], CWD))).toBe("unsupported_invocation");
+    expect(reason(deriveCommandWorkdir(null, ["-c", "git log", "extra"], CWD))).toBe(
+      "unsupported_invocation",
+    );
+  });
+
+  it("abstains on a relative `cd` when the cwd was never recorded", () => {
+    // An unknown cwd is nothing to resolve against — the same position a
+    // relative cwd was already in, and for the same reason.
+    expect(reason(deriveCommandWorkdir(null, ["-c", "cd ../beta && git commit -m x"], null))).toBe(
+      "unresolvable_relative",
+    );
+    expect(reason(deriveCommandWorkdir(null, ["-c", "cd beta && git commit -m x"], null))).toBe(
+      "unresolvable_relative",
+    );
+  });
+
+  it("still answers an ABSOLUTE `cd` when the cwd was never recorded", () => {
+    // The target does not depend on where the shell started, so an unknown cwd
+    // costs nothing here. Losing this would throw away readable evidence.
+    expect(deriveCommandWorkdir(null, ["-c", "cd /other && git commit -m x"], null)).toEqual({
+      kind: "target",
+      path: "/other",
+    });
+  });
+
+  it("reports a line that did not move the shell as `cwd` even when the cwd is unknown", () => {
+    // `kind: "cwd"` is a statement about the LINE (nothing moved), not a claim
+    // that the directory is known. The caller is what must abstain, and
+    // review-gaps does: it has no path to credit.
+    expect(deriveCommandWorkdir(null, ["-c", "git commit -m x"], null)).toEqual({ kind: "cwd" });
+  });
+
+  it("does not read a `-c` flag on a program that is not a shell", () => {
+    // The reason the executor is still consulted when it IS recorded: `-c` is a
+    // config flag elsewhere, and reading that string as a shell program would be
+    // reading someone else's text. `codex -c <config>` is a real captured shape,
+    // and the `cd` inside its config moved nothing — so the answer is the
+    // session's directory, NOT `/other`.
+    expect(deriveCommandWorkdir("codex", ["-c", "cd /other && git commit"], CWD)).toEqual({
+      kind: "cwd",
+    });
+    // Which is why a null executor may only ever mean "a shell whose name was
+    // not recorded": were it read as "any program", this same argv would be
+    // credited to `/other`.
+    expect(deriveCommandWorkdir(null, ["-c", "cd /other && git commit"], CWD)).toEqual({
+      kind: "target",
+      path: "/other",
+    });
+  });
+});

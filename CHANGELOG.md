@@ -3,6 +3,103 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **Breaking (event format):** `command_executed.command` and
+  `command_executed.cwd` are now nullable, and null means one thing in both, and
+  in `exit_code` beside them: basou did not observe the value.
+
+  The field that forced this was `command`. Both importers wrote the literal
+  string `bash` for every captured shell command without observing it, and for
+  codex it was not merely unverified but wrong — codex runs its commands through
+  `/bin/zsh -lc`. The value sits inside the hash chain and is covered by `basou
+  verify`, so an inference was carrying an integrity guarantee, which is the
+  inverse of what the trail is for. An imported command now records
+  `command: null`: the source log holds the shell LINE, never what ran it.
+
+  Nothing was written in its place. Codex's rollout does report
+  `environments.local.shell`, but that describes the environment rather than what
+  ran a given command, so writing `zsh` would have been a better-informed guess
+  rather than an observation. A sentinel string is impossible for the same reason
+  from the other side: `"unknown"` cannot be told apart from a real program name.
+
+  This costs no attribution. `review-gaps` takes exactly one bit from the
+  executor — "is this argv a shell program" — and an `args` of `["-c", script]`
+  carries that bit alone; the grammar that reads the script never asks which
+  shell ran it. Measured against the 18,096 captured commands in the workspace
+  this was built on, 18,049 of them imported: 12,850 confident answers before and
+  12,850 after, **no answer changed**, and all 135 commit-bearing answers kept.
+  A live-captured command keeps the executor `basou exec` / `basou run` actually
+  observed. What the unknown executor does still cost is unchanged and already
+  recorded as #192: which WORDS a shell treats specially is a per-shell list, and
+  that was equally true while the field claimed `bash`.
+
+  `cwd` became nullable to stop a second loss. A codex script that passes its
+  `workdir` by variable, by shorthand, or as an expression could not be recorded
+  at all — the command was readable, the directory was not, and an event had to
+  name one — so 15 observed commands were discarded to avoid misplacing them.
+  Such a command is now kept with `cwd: null`, and `review-gaps` abstains on the
+  directory instead of the importer abstaining on the command. The `.` that used
+  to be the last-resort working directory is gone with it: a relative path
+  resolves against wherever a later READER stands, which is a directory nobody
+  observed. It had never actually been written — 0 events in a store of 18,096.
+
+  One thing `args` asserts that was never observed is now documented rather than
+  changed, because it is load-bearing: on an imported event `args[0]` is the `-c`
+  basou adds to frame a script as a shell program, and only `args[1]` came from
+  the source log.
+
+### Fixed
+
+- `basou refresh` re-imports a session whose native log grew, instead of
+  refusing it. The key that matches a freshly-derived event to its counterpart in
+  the prior import included `command_executed.command`; when the importers
+  stopped writing an unobserved `"bash"` there and started writing `null`, every
+  historical event stopped matching its own re-derivation. The prior event went
+  unconsumed, and the re-import was refused for the whole session. Nothing
+  crashed and nothing was logged as wrong — a refusal to re-import reads exactly
+  like "nothing new to import", so capture would have gone stale across every
+  workspace, silently, as soon as a source log grew.
+
+  The key now holds only what the SOURCE record determines, never a value basou
+  infers from it. Dropping `command` costs no matching power: across the 18,049
+  imported `command_executed` events in the workspace this was built against it
+  held one single value, so it separated nothing. `cwd` stays, because it does
+  separate — a script that runs two commands from one record shares their
+  timestamp, and the directory is then the only thing between them.
+
+- The codex script scanner keeps a command written after a spread. It treated any
+  spread as making the command unreadable, but JavaScript resolves a later
+  property over a spread: `{...job, cmd: "git status"}` runs `git status`
+  whatever `job` holds. Only the directory is genuinely hidden, and the event can
+  now say so with `cwd: null`, so there is nothing left to trade. A spread that
+  comes AFTER the command still discards it, because there it can override it.
+
+- `basou review-gaps` no longer reports an unverified commit as landed work. A
+  captured command with no recorded exit code was read as "did not fail", so a
+  `git commit` whose outcome nobody observed was counted as work that landed, and
+  a `git diff` nobody watched succeed was counted as a review that happened.
+  `exit_code: null` now means UNKNOWN throughout — not a signal termination, not
+  a success.
+
+  A command whose outcome is unknown is still considered, because refusing it
+  would discard most of the trail: the claude-code transcript records no outcome
+  at all, and on this workspace 98 of the 110 commits `review-gaps` reports on
+  are in that state. What changes is that the report stops asserting they landed.
+  Each unit now carries how many of its commits ran without a recorded status,
+  and says so — while `commitCount` and the top-line gap count stay exactly as
+  they were, for the same reason a self-reported review cannot lower them: a
+  commit that cannot be verified must not be able to leave the report by being
+  unverifiable. A command observed to FAIL is still dropped.
+
+- `basou session show` no longer prints `exit=signal` for every command with no
+  exit code. A terminating signal is one cause of a null; a source that records
+  no outcome is the far more common one, and the line now reads `exit=unknown`.
+  A command with no observed executor prints `(executor unrecorded)` rather than
+  the string `null`.
+
 ## 0.37.0 — 2026-08-04
 
 ### Fixed

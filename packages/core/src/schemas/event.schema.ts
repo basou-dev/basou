@@ -85,16 +85,43 @@ const ApprovalExpiredEventSchema = BaseEventSchema.extend({
 
 // `command` is the spawned executable name only (e.g. "npm"); arguments are
 // kept in `args` to preserve quoting and avoid shell-injection round-trips.
-// `exit_code` is null when the child terminated by signal. `signal` records
-// the child's terminating signal; `received_signal` records what the parent
-// process received (SIGINT/SIGTERM) and forwarded as cancellation, so a
-// timeout (signal set, received_signal absent) can be distinguished from a
-// user interrupt (both set).
+// `signal` records the child's terminating signal; `received_signal` records
+// what the parent process received (SIGINT/SIGTERM) and forwarded as
+// cancellation, so a timeout (signal set, received_signal absent) can be
+// distinguished from a user interrupt (both set).
+//
+// Three fields are nullable, and null means the SAME thing in each: basou did
+// not observe the value. It never means a default, and never means the value
+// was something benign.
+//
+//   - `command`: null when the executor was not observed. A command imported
+//     from another tool's log is the usual case: the log records the shell
+//     LINE, not what ran it. Writing a plausible executable name here would put
+//     an inference inside the hash chain, under `basou verify`'s guarantee,
+//     which is the inverse of what the trail is for.
+//   - `cwd`: null when the directory could not be resolved. A source that
+//     names a working directory the reader cannot resolve (a variable, a
+//     shorthand) is recorded as unknown rather than as the session's directory,
+//     because a wrong directory can bind work to a repository it never touched.
+//   - `exit_code`: null when the outcome is UNKNOWN — the child terminated by
+//     signal, or the source never recorded it at all. Unknown is not success:
+//     a reader must not conclude from null that the command did what it said.
+//
+// A sentinel string ("unknown") is deliberately not used for `command` / `cwd`:
+// it cannot be told apart from a real program name or path, so it would be
+// indistinguishable from the fabrication it replaces.
+//
+// One thing `args` asserts that was NOT observed, stated here because the field
+// is frozen with it: an importer records a captured shell line as
+// `["-c", <script>]`, and only the script text was ever in the source log. The
+// `-c` is basou's framing of "this is a shell program, not an argv" — the one bit
+// a reader needs once `command` is null. So on an imported event, `args[0]` is
+// structure, and `args[1]` is the observation.
 const CommandExecutedEventSchema = BaseEventSchema.extend({
   type: z.literal("command_executed"),
-  command: z.string(),
+  command: z.string().nullable(),
   args: z.array(z.string()),
-  cwd: z.string(),
+  cwd: z.string().nullable(),
   exit_code: z.number().int().nullable(),
   signal: z.string().nullable().optional(),
   received_signal: z.string().nullable().optional(),

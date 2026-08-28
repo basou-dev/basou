@@ -85,7 +85,9 @@ describe("claudeTranscriptToImportPayload", () => {
 
     const command = payload.events[1];
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
-    expect(command.command).toBe("bash");
+    // The transcript says nothing about what ran the line, so the executor is
+    // recorded as unobserved rather than as a plausible `bash`.
+    expect(command.command).toBeNull();
     expect(command.args).toEqual(["-c", "npm test"]);
     expect(command.cwd).toBe(CWD);
     expect(command.exit_code).toBeNull();

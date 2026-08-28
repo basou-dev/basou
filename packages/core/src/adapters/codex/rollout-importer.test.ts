@@ -131,7 +131,9 @@ describe("codexRolloutToImportPayload", () => {
 
     const command = payload.events[1];
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
-    expect(command.command).toBe("bash");
+    // The rollout carries no per-call shell, and codex in fact runs through
+    // `/bin/zsh -lc`, so `bash` was wrong rather than merely unobserved.
+    expect(command.command).toBeNull();
     expect(command.args).toEqual(["-c", "npm test"]);
     // workdir from the call arguments wins over the session cwd.
     expect(command.cwd).toBe(`${CWD}/pkg`);
@@ -615,6 +617,121 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
     // Nothing observable ran, so the session carries no provenance worth
     // importing — the same verdict as a rollout with no tool calls at all.
     expect(transform(records)).toBeNull();
+  });
+
+  it("keeps a readable command whose workdir is not readable, recording the directory as unknown", () => {
+    // This used to discard the whole call: `cmd` is a plain literal and was
+    // observed, but the directory came from a variable, and the only way to
+    // record a command was to name a directory for it. 15 real commands were
+    // lost to that. `cwd: null` says what is true about the directory and keeps
+    // what is true about the command.
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `const dir = "${CWD}/pkg"; await tools.exec_command({ cmd: "npm test", workdir: dir });`,
+      ),
+      // Shorthand, an expression, and a duplicate are the same problem.
+      scriptCall(
+        "2026-07-31T00:00:02.000Z",
+        "call_2",
+        `const workdir = "${CWD}"; await tools.exec_command({ cmd: "git status", workdir });`,
+      ),
+      scriptCall(
+        "2026-07-31T00:00:03.000Z",
+        "call_3",
+        `await tools.exec_command({ cmd: "git log", workdir: "${CWD}" + "/pkg" });`,
+      ),
+      scriptCall(
+        "2026-07-31T00:00:04.000Z",
+        "call_4",
+        `await tools.exec_command({ cmd: "git diff", workdir: "${CWD}", workdir: "${CWD}/pkg" });`,
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const commands = payload.events.filter((e) => e.type === "command_executed");
+    expect(
+      commands.map((e) => (e.type === "command_executed" ? [e.args[1], e.cwd] : null)),
+    ).toEqual([
+      ["npm test", null],
+      ["git status", null],
+      ["git log", null],
+      ["git diff", null],
+    ]);
+  });
+
+  it("still discards a call whose COMMAND is unreadable, workdir or not", () => {
+    // The asymmetry is the point: an unknown directory is a field the event can
+    // express, an unknown command is not — there would be nothing to record.
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        `const cmd = "ls"; await tools.exec_command({ cmd, workdir: "${CWD}" });`,
+      ),
+      // A spread AFTER the explicit `cmd` can still override it, so the text
+      // naming one proves nothing about which command ran.
+      scriptCall(
+        "2026-07-31T00:00:02.000Z",
+        "call_2",
+        `await tools.exec_command({ cmd: "git status", ...job });`,
+      ),
+    ];
+    expect(transform(records)).toBeNull();
+  });
+
+  it("reads a command written AFTER a spread, because the later property is the one JS uses", () => {
+    // Measured against a real object literal: `{...job, cmd: "git status"}` has
+    // cmd === "git status" whatever `job` holds, because the explicit property
+    // comes last. Discarding this call threw away an observed command to avoid
+    // misplacing its directory — and the directory is now expressible as null,
+    // so there is nothing left to trade.
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'await tools.exec_command({ ...job, cmd: "git status" });',
+      ),
+      // Both explicit and both after the spread: the directory is known too.
+      scriptCall(
+        "2026-07-31T00:00:02.000Z",
+        "call_2",
+        `await tools.exec_command({ ...job, cmd: "git log", workdir: "${CWD}/pkg" });`,
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const commands = payload.events.filter((e) => e.type === "command_executed");
+    expect(
+      commands.map((e) => (e.type === "command_executed" ? [e.args[1], e.cwd] : null)),
+    ).toEqual([
+      // The spread could still have carried a `workdir`, so that stays unknown…
+      ["git status", null],
+      // …but an explicit one written after it wins, exactly as JS resolves it.
+      ["git log", `${CWD}/pkg`],
+    ]);
+  });
+
+  it("keeps the session cwd when a call names NO workdir, which is not the same as an unreadable one", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-07-31T00:00:00.000Z"),
+      scriptCall(
+        "2026-07-31T00:00:01.000Z",
+        "call_1",
+        'await tools.exec_command({ cmd: "git status" });',
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events.find((e) => e.type === "command_executed");
+    expect(command?.type === "command_executed" ? command.cwd : "missing").toBe(CWD);
   });
 
   it("does not read a non-script custom tool as a program, even when its body quotes an exec call", () => {

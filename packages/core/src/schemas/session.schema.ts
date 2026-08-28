@@ -65,8 +65,10 @@ const SessionSourceSchema = z.looseObject({
 const InvocationSchema = z.looseObject({
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
-  // Nullable to record signal-terminated runs where the child has no exit
-  // code; the same nullability is mirrored in CommandExecutedEventSchema.
+  // Nullable because the outcome may be UNKNOWN: a signal-terminated run has no
+  // exit code, and an imported session's source may never record one. Unknown
+  // is not success. The same nullability and the same meaning are mirrored in
+  // CommandExecutedEventSchema.
   exit_code: z.number().int().nullable(),
 });
 
