@@ -494,8 +494,13 @@ function eventVariantSummary(ev: Event): string {
   switch (ev.type) {
     case "command_executed": {
       const argsPart = ev.args.length > 0 ? ` ${ev.args.join(" ")}` : "";
-      const exitPart = ev.exit_code === null ? "exit=signal" : `exit=${ev.exit_code}`;
-      return `${ev.command}${argsPart} (${exitPart}, ${ev.duration_ms}ms)`;
+      // A null field is an absent OBSERVATION, and each one is named as such
+      // rather than given a plausible-looking stand-in. `exit=signal` used to be
+      // printed for every null, which asserted a terminating signal for the far
+      // more common case of a source that never recorded an outcome at all.
+      const executorPart = ev.command ?? "(executor unrecorded)";
+      const exitPart = ev.exit_code === null ? "exit=unknown" : `exit=${ev.exit_code}`;
+      return `${executorPart}${argsPart} (${exitPart}, ${ev.duration_ms}ms)`;
     }
     case "git_snapshot":
       return `branch=${ev.branch} dirty=${ev.dirty}`;

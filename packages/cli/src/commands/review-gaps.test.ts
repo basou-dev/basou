@@ -139,6 +139,7 @@ function gapUnit(overrides: Partial<ReviewGapUnit> = {}): ReviewGapUnit {
     verdict: "omission",
     reviews: [],
     selfReports: [],
+    commitsWithUnobservedOutcome: 0,
     ...overrides,
   };
 }
@@ -393,5 +394,30 @@ describe("renderReviewGaps", () => {
     const out = renderReviewGaps(summaryOf([gapUnit({ selfReports: many })]));
     expect(out).toContain("+3 more");
     expect(out).not.toContain("r5");
+  });
+});
+
+describe("renderReviewGaps — the unobserved-outcome caveat", () => {
+  it("labels a unit whose commits have no recorded exit status, without lowering the count", () => {
+    const out = renderReviewGaps(
+      summaryOf([gapUnit({ commitCount: 2, commitsWithUnobservedOutcome: 2 })]),
+    );
+    expect(out).toContain("2 commits");
+    expect(out).toContain("exited with no recorded status — landing assumed, not observed");
+    // The caveat is added to the gap, never traded for it.
+    expect(out).toContain("no bound cross-model review");
+    expect(out).toContain("Units of work that landed without a review trail: 1");
+  });
+
+  it("says how many when only SOME of a unit's commits are unverified", () => {
+    const out = renderReviewGaps(
+      summaryOf([gapUnit({ commitCount: 3, commitsWithUnobservedOutcome: 1 })]),
+    );
+    expect(out).toContain("1 of them exited with no recorded status");
+  });
+
+  it("stays silent when every commit's outcome WAS observed", () => {
+    const out = renderReviewGaps(summaryOf([gapUnit({ commitsWithUnobservedOutcome: 0 })]));
+    expect(out).not.toContain("no recorded status");
   });
 });

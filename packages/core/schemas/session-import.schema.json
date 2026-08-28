@@ -685,7 +685,14 @@
                 "const": "command_executed"
               },
               "command": {
-                "type": "string"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "args": {
                 "type": "array",
@@ -694,7 +701,14 @@
                 }
               },
               "cwd": {
-                "type": "string"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "exit_code": {
                 "anyOf": [

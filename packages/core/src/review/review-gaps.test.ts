@@ -72,8 +72,9 @@ function cmd(
   source: string,
   occurredAt: string,
   args: string[],
-  cwd: string,
-  exitCode = 0,
+  cwd: string | null,
+  exitCode: number | null = 0,
+  command: string | null = null,
 ): string {
   evtSeq++;
   return JSON.stringify({
@@ -83,7 +84,7 @@ function cmd(
     occurred_at: occurredAt,
     source,
     type: "command_executed",
-    command: "bash",
+    command,
     args,
     cwd,
     exit_code: exitCode,
@@ -1459,5 +1460,158 @@ describe("findReviewGaps — record key provenance", () => {
     const s = await findReviewGaps({ paths, nowIso: NOW });
     expect(s.gaps[0]?.selfReports).toHaveLength(1);
     expect(s.unattachedSelfReports.noRepos).toBe(0);
+  });
+});
+
+describe("findReviewGaps — an unobserved outcome is not a success (the exit_code freeze)", () => {
+  it("counts a commit whose exit code was never recorded, and says so", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("V1"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        // The shape every claude-code import is in: the transcript records no
+        // outcome at all, so exit_code is null = unknown.
+        cmd(
+          SES("V1"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          ALPHA,
+          null,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    // Still surfaced: refusing it would hide most of the trail, and an
+    // unconfirmed commit is the direction a gap surfacer must err in.
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.commitCount).toBe(1);
+    // …but not asserted as landed work.
+    expect(s.gaps[0]?.commitsWithUnobservedOutcome).toBe(1);
+  });
+
+  it("does not label a commit that was OBSERVED to succeed", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("V2"), source: "terminal", startedAt: "2026-05-09T10:00:00.000Z" },
+      [cmd(SES("V2"), "terminal", "2026-05-09T10:05:00.000Z", ["-c", "git commit -m x"], ALPHA, 0)],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.commitCount).toBe(1);
+    expect(s.gaps[0]?.commitsWithUnobservedOutcome).toBe(0);
+  });
+
+  it("still drops a commit OBSERVED to fail — a failure is not landed work", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("V3"), source: "terminal", startedAt: "2026-05-09T10:00:00.000Z" },
+      [cmd(SES("V3"), "terminal", "2026-05-09T10:05:00.000Z", ["-c", "git commit -m x"], ALPHA, 1)],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(0);
+    expect(s.candidates).toHaveLength(0);
+    expect(s.unknowns).toHaveLength(0);
+  });
+
+  it("counts the unobserved commits of a mixed unit, without lowering commitCount", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("V4"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("V4"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m a"],
+          ALPHA,
+          null,
+        ),
+        cmd(
+          SES("V4"),
+          "claude-code-import",
+          "2026-05-09T10:06:00.000Z",
+          ["-c", "git commit -m b"],
+          ALPHA,
+          0,
+        ),
+        cmd(
+          SES("V4"),
+          "claude-code-import",
+          "2026-05-09T10:07:00.000Z",
+          ["-c", "git commit -m c"],
+          ALPHA,
+          null,
+        ),
+        // An observed failure never joins the unit at all.
+        cmd(
+          SES("V4"),
+          "claude-code-import",
+          "2026-05-09T10:08:00.000Z",
+          ["-c", "git commit -m d"],
+          ALPHA,
+          128,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.commitCount).toBe(3);
+    expect(s.gaps[0]?.commitsWithUnobservedOutcome).toBe(2);
+  });
+});
+
+describe("findReviewGaps — a cwd that was never recorded", () => {
+  it("abstains rather than crediting a repo, and surfaces the commit as unknown", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("N1"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        // A codex script whose workdir came from a variable: the command was
+        // observed, the directory was not.
+        cmd(
+          SES("N1"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          null,
+          null,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps).toHaveLength(0);
+    expect(s.candidates).toHaveLength(0);
+    // Reported, not dropped: the commit is real, its repository is not known.
+    expect(s.unknowns).toHaveLength(1);
+    expect(s.unknowns[0]?.repo).toBe("(unknown)");
+    expect(s.unknowns[0]?.commitCount).toBe(1);
+  });
+
+  it("still answers when the line names an ABSOLUTE directory of its own", async () => {
+    const paths = await setup();
+    await placeSession(
+      paths,
+      { id: SES("N2"), source: "claude-code-import", startedAt: "2026-05-09T10:00:00.000Z" },
+      [
+        cmd(
+          SES("N2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", `cd ${ALPHA} && git commit -m x`],
+          null,
+          null,
+        ),
+      ],
+    );
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.unknowns).toHaveLength(0);
+    expect(s.gaps).toHaveLength(1);
+    expect(s.gaps[0]?.repo).toBe("alpha");
   });
 });

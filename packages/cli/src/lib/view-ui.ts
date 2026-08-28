@@ -559,6 +559,7 @@ export const VIEW_HTML = `<!doctype html>
   function eventSummary(ev) {
     if (ev.type === 'command_executed') {
       var cmd = (ev.args && ev.args.length) ? ev.args.join(' ') : ev.command;
+      if (cmd === null || cmd === undefined) cmd = '(command unrecorded)';
       var ex = (ev.exit_code === null || ev.exit_code === undefined) ? '' : ' (exit ' + ev.exit_code + ')';
       return cmd + ex;
     }

@@ -124,7 +124,12 @@ export type CommandWorkdirAmbiguity =
  * became cwd.
  */
 export type CommandWorkdir =
-  /** It ran in the session's cwd, and the grammar read enough of the line to be sure. */
+  /**
+   * The line did not move the shell, and the grammar read enough of it to be
+   * sure — so it ran in the session's cwd, WHATEVER that was. This says nothing
+   * about the cwd being known: a captured event whose `cwd` is null still gets
+   * this answer, and the caller then has a read line and no directory to name.
+   */
   | { kind: "cwd" }
   /** It ran in this absolute path (`~` expanded, relative resolved against cwd). */
   | { kind: "target"; path: string }
@@ -288,19 +293,39 @@ type StripResult = { ok: true; words: Word[] } | { ok: false; reason: CommandWor
 /**
  * The directory a captured `command_executed` event ran in.
  *
- * `command` is consulted, not just `args`: both importers record shell lines as
- * `bash -c <program>`, but `-c` is a flag on other programs too (`codex -c
- * <config>` is a real captured shape), and reading that config string as a
- * shell program would be reading someone else's text.
+ * `command` is consulted, not just `args`: an importer records shell lines as
+ * `-c <program>`, but `-c` is a flag on other programs too (`codex -c <config>`
+ * is a real captured shape), and reading that config string as a shell program
+ * would be reading someone else's text.
+ *
+ * `command` may be null, which means the executor was never observed (#191).
+ * That is the common case for an imported command and it does NOT cost the
+ * answer: the only thing this grammar takes from the executor is the one bit
+ * "is this argv a shell program", and `args` of exactly `["-c", script]` carries
+ * that bit on its own — no shell writes an argv of that shape for anything else,
+ * and the reading of the script below never asks which shell ran it. What the
+ * unknown executor does cost is stated in the KNOWN LIMIT above: which WORDS a
+ * shell treats specially is a per-shell list, and that was already true when the
+ * field said `bash` without having observed it.
+ *
+ * `cwd` may be null for the same reason. A null cwd cannot answer "it ran in the
+ * session's directory", so the two outcomes that rest on it — `kind: "cwd"` and
+ * resolving a relative target — abstain instead.
  */
 export function deriveCommandWorkdir(
-  command: string,
+  command: string | null,
   args: readonly string[],
-  cwd: string,
+  cwd: string | null,
 ): CommandWorkdir {
+  const script = args.length === 2 && args[0] === "-c" ? args[1] : undefined;
+  if (command === null) {
+    // An unobserved executor with a `-c` argv is a shell line whose shell is
+    // unknown; anything else is an argv this grammar cannot place at all.
+    if (script === undefined) return ambiguous("unsupported_invocation");
+    return readShellProgram(script, cwd);
+  }
   const program = basename(command);
   if (SHELLS.has(program)) {
-    const script = args.length === 2 && args[0] === "-c" ? args[1] : undefined;
     if (script === undefined) return ambiguous("unsupported_invocation");
     return readShellProgram(script, cwd);
   }
@@ -322,7 +347,7 @@ export function deriveCommandWorkdir(
 }
 
 /** Read a `bash -c` program: reject what cannot be read, then look for a single leading `cd`. */
-function readShellProgram(script: string, cwd: string): CommandWorkdir {
+function readShellProgram(script: string, cwd: string | null): CommandWorkdir {
   const scan = scanProgram(script);
   if (!scan.ok) return ambiguous(scan.reason);
 
@@ -851,7 +876,7 @@ function hasLiveDollar(word: Word): boolean {
 }
 
 /** The one accepted `cd` shape: exactly one operand, optionally behind `--`. */
-function readCdTarget(operands: readonly Word[], cwd: string): CommandWorkdir {
+function readCdTarget(operands: readonly Word[], cwd: string | null): CommandWorkdir {
   let operand: Word | undefined;
   let afterEndOfOptions = false;
   // `--` is the shell's own end-of-options marker and reaches `cd` with its
@@ -892,8 +917,9 @@ function readCdTarget(operands: readonly Word[], cwd: string): CommandWorkdir {
   if (!isAbsolute(target)) {
     // Resolved against cwd rather than kept as text: the same `cd ../app` run
     // beside two different repositories is two directories, and keying it by
-    // its spelling collapsed them onto one.
-    if (!isAbsolute(cwd)) return ambiguous("unresolvable_relative");
+    // its spelling collapsed them onto one. An unknown cwd is nothing to resolve
+    // against, exactly like a relative one.
+    if (cwd === null || !isAbsolute(cwd)) return ambiguous("unresolvable_relative");
     target = resolve(cwd, target);
   }
   return { kind: "target", path: target };

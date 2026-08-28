@@ -92,6 +92,15 @@ export type ReviewGapUnit = {
    * a self-reported gap is still a gap.
    */
   selfReports: SelfReportedReview[];
+  /**
+   * How many of this unit's commits ran with no recorded exit code, so that the
+   * commit landing is assumed rather than observed.
+   *
+   * A caveat, never an input to `verdict`: lowering the count would mean an
+   * unverifiable commit could quietly leave the report, which is the same hole
+   * a self-report must not open. `commitCount` still counts every commit.
+   */
+  commitsWithUnobservedOutcome: number;
 };
 
 /** Recorded reviews that reached no unit of work, broken down by cause. */
@@ -403,9 +412,9 @@ function inspectCommand(args: string[]): { files: string[]; examinedDiff: boolea
  * would answer yes about a key that was guessed from a directory name.
  */
 function commandRepoWithProvenance(
-  command: string,
+  command: string | null,
   args: string[],
-  cwd: string,
+  cwd: string | null,
 ): { key: string | null; resolved: boolean } {
   const raw = commandRepoPath(command, args, cwd);
   if (raw === null) return { key: null, resolved: false };
@@ -422,21 +431,46 @@ function commandRepoWithProvenance(
  * unrelated repo and clear a real gap. cwd is used only when the grammar
  * established that nothing moved; when it cannot tell, the answer is null and
  * the caller abstains.
+ *
+ * A `kind: "cwd"` answer over a null cwd abstains too: the grammar established
+ * that the line did not move the shell, but the event never recorded WHERE the
+ * shell was, so there is no directory to credit.
  */
-function commandRepoPath(command: string, args: string[], cwd: string): string | null {
+function commandRepoPath(
+  command: string | null,
+  args: string[],
+  cwd: string | null,
+): string | null {
   const workdir = deriveCommandWorkdir(command, args, cwd);
   if (workdir.kind === "ambiguous") return null;
   return workdir.kind === "target" ? workdir.path : cwd;
 }
 
 /** Repo a command effectively ran in; null when it could not be read. */
-function commandRepo(command: string, args: string[], cwd: string): string | null {
+function commandRepo(command: string | null, args: string[], cwd: string | null): string | null {
   return normalizeRepoPath(commandRepoPath(command, args, cwd));
 }
 
-/** True when a captured command exited non-zero (a failure is not evidence / not landed work). */
-function commandFailed(exitCode: number | null): boolean {
-  return exitCode !== null && exitCode !== 0;
+/**
+ * What a captured command's recorded outcome establishes.
+ *
+ * Three values, because `exit_code === null` is not a fourth spelling of
+ * success: it means the outcome was never observed (the source recorded none, or
+ * the child died by signal). A boolean `commandFailed` collapsed `unknown` into
+ * "did not fail", so an unobserved `git commit` was counted as landed work and an
+ * unobserved `git diff` as a review that happened.
+ *
+ * `unknown` does not stop the command being considered — refusing it would
+ * discard most of the trail, since the claude-code transcript records no outcome
+ * at all — but it must never be reported as established. The caller counts it so
+ * the report can say which of its evidence is unverified, exactly as it does for
+ * a self-reported review: the caveat is added, the gap count is not lowered.
+ */
+type CommandOutcome = "succeeded" | "failed" | "unknown";
+
+function commandOutcome(exitCode: number | null): CommandOutcome {
+  if (exitCode === null) return "unknown";
+  return exitCode === 0 ? "succeeded" : "failed";
 }
 
 /** Changed files named inline on the commit's command (`git add A B`); heuristic. */
@@ -456,6 +490,8 @@ type CommitRec = {
   files: string[];
   /** The key came from resolving the path on disk, not from the string fallback. */
   keyResolved: boolean;
+  /** The command's exit code was recorded, so "this commit landed" is observed rather than assumed. */
+  outcomeObserved: boolean;
 };
 type ReviewRec = {
   sessionId: string;
@@ -569,8 +605,11 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
           continue;
         }
         if (ev.type !== "command_executed") continue;
-        // A failed command is neither review evidence nor landed work.
-        if (commandFailed(ev.exit_code)) continue;
+        // A command observed to FAIL is neither review evidence nor landed work.
+        // One whose outcome was never observed is still considered — dropping it
+        // would discard most of the trail — but it is carried as unverified.
+        const outcome = commandOutcome(ev.exit_code);
+        if (outcome === "failed") continue;
         const at = Date.parse(ev.occurred_at);
 
         if (isReview) {
@@ -604,7 +643,13 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         }
         const byRepo = workUnits.get(entry.sessionId) ?? new Map<string, CommitRec[]>();
         const list = byRepo.get(repo) ?? [];
-        list.push({ repo, at, files: commitFiles(ev.args), keyResolved });
+        list.push({
+          repo,
+          at,
+          files: commitFiles(ev.args),
+          keyResolved,
+          outcomeObserved: outcome === "succeeded",
+        });
         byRepo.set(repo, list);
         workUnits.set(entry.sessionId, byRepo);
       }
@@ -709,6 +754,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         // Attached after the verdict is computed, and deliberately not an input
         // to it: a record must never move a unit out of `gaps`.
         selfReports: selfBound.map((r) => toSelfReportedReview(r, r.at > earliest)),
+        commitsWithUnobservedOutcome: commits.filter((c) => !c.outcomeObserved).length,
         reviews: cited.map((r) => ({
           sessionId: r.sessionId,
           examinedDiff: r.repos.get(repoPath)?.examinedDiff ?? false,
@@ -738,6 +784,9 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       reviews: [],
       // No repo key, so nothing a record's `repos` could bind to.
       selfReports: [],
+      // These commits were never placed in a repository, so the per-commit
+      // outcome is not tracked for them; the unit is already a caveat.
+      commitsWithUnobservedOutcome: 0,
     });
   }
 

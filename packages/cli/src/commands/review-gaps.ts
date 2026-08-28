@@ -182,14 +182,28 @@ function selfReportSuffix(u: ReviewGapUnit, stillCounted: boolean): string {
   return ` · self-reported by ${parts.join("; ")} — ${stillCounted ? "unverified, still counted" : "unverified"}`;
 }
 
+/**
+ * States how many of a unit's commits ran with no recorded exit code, so the
+ * report never says "this work landed" on the strength of an outcome nobody
+ * observed. Like a self-report this only LABELS: the commit count above it is
+ * unchanged, because a commit that cannot be verified must not be able to leave
+ * the report by being unverifiable.
+ */
+function unobservedOutcomeSuffix(u: ReviewGapUnit): string {
+  const n = u.commitsWithUnobservedOutcome;
+  if (n === 0) return "";
+  const scope = n === u.commitCount ? "" : `${n} of them `;
+  return ` · ${scope}exited with no recorded status — landing assumed, not observed`;
+}
+
 function unitLine(u: ReviewGapUnit, now: Date): string {
   const when = relAge(u.lastCommitAt, now);
   const head = `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"})`;
   if (u.verdict === "near_unbound") {
     const ids = u.reviews.map((r) => r.sessionId.slice(0, 14)).join(", ");
-    return `${head} — a nearby review exists, but the diff / changed files were not examined [${ids}]${selfReportSuffix(u, true)}`;
+    return `${head} — a nearby review exists, but the diff / changed files were not examined [${ids}]${selfReportSuffix(u, true)}${unobservedOutcomeSuffix(u)}`;
   }
-  return `${head} — no bound cross-model review${selfReportSuffix(u, true)}`;
+  return `${head} — no bound cross-model review${selfReportSuffix(u, true)}${unobservedOutcomeSuffix(u)}`;
 }
 
 function candidateLine(u: ReviewGapUnit, now: Date): string {
@@ -200,7 +214,7 @@ function candidateLine(u: ReviewGapUnit, now: Date): string {
   // A record bound here counts as attached, so it is absent from the unattached
   // diagnostic; without this suffix it would exist only in --json and the claim
   // would be silently missing from the report the operator actually reads.
-  return `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) — review trace: ${cite}${selfReportSuffix(u, false)}`;
+  return `- ${u.repo} ${when} (${u.commitCount} commit${u.commitCount === 1 ? "" : "s"}) — review trace: ${cite}${selfReportSuffix(u, false)}${unobservedOutcomeSuffix(u)}`;
 }
 
 /**

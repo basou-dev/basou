@@ -371,12 +371,28 @@ export type ReimportResult =
  * robust to record reordering between imports (a positional match is not).
  * `session_started` / `session_ended` are matched by role instead (a session has
  * exactly one of each, and `session_ended`'s occurred_at moves as the log grows).
+ *
+ * The key holds only what the SOURCE record determines, never a value basou
+ * infers from it. `command_executed.command` is the counterexample that forced
+ * the rule: it was in this key, and when the importers stopped writing an
+ * unobserved `"bash"` and started writing `null`, every historical event stopped
+ * matching its own re-derivation — the prior event went unconsumed,
+ * `droppedPriorDerived` tripped, and `reimportPreservingId` refused every session
+ * whose source log had GROWN. Capture would have gone stale workspace-wide, and
+ * silently, because a refusal to re-import reads exactly like "nothing new".
+ *
+ * Dropping it costs no matching power: across the 18,049 imported
+ * `command_executed` events in the workspace this was built against, `command`
+ * held one single value, so it separated nothing. `cwd` stays because it does
+ * separate — a script that runs two commands from one record shares their
+ * timestamp, and the directory is then the only thing between them (one such
+ * pair is present in that same store).
  */
 function derivedEventContentKey(event: Event): string {
   const base = `${event.type} ${event.occurred_at}`;
   switch (event.type) {
     case "command_executed":
-      return `${base} ${event.command} ${event.args.join("")} ${event.cwd}`;
+      return `${base} ${event.args.join("")} ${event.cwd}`;
     case "file_changed":
       return `${base} ${event.path} ${event.change_type}`;
     case "decision_recorded":
