@@ -141,6 +141,14 @@ discuss the test plan than have you guess.
 8. (Once npm publish is enabled:) `pnpm -r publish --access public`.
    See [docs/release-checklist.md](docs/release-checklist.md) for the
    dry-run + tarball verification step that should run before this.
+9. **Merge the docs-site bump PR the release workflow opened, and read the
+   version back off the live site.** The workflow opens that PR on its own but
+   nobody merges it on its own, and an unmerged one is invisible: the release
+   looks complete from every angle except the site. That happened with `0.36.0`
+   -- the PR sat open and basou.dev served the previous version for two days,
+   and it was only noticed because the NEXT release's PR happened to overwrite
+   the same files. A release is not done until the published version, the
+   GitHub release, and the site all say the same thing.
 
 ## Security policy
 

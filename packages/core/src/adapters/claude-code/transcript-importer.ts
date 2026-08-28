@@ -350,8 +350,12 @@ function commandExecutedEvent(
     command: null,
     args: ["-c", command],
     cwd,
-    // The transcript records no outcome, so this is UNKNOWN rather than a
-    // signal termination or a success.
+    // UNKNOWN rather than a signal termination or a success. NOT because the
+    // transcript is silent about the outcome -- it is not. A failed Bash tool
+    // result carries `is_error: true` and its text begins `Exit code N`, so the
+    // code is recoverable for the commands that failed (measured: 66 of 2,636
+    // tool results across twelve transcripts). Reading it is its own change and
+    // has not been made, so nothing is claimed here yet.
     exit_code: null,
     duration_ms: 0,
   };

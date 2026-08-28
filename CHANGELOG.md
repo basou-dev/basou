@@ -3,7 +3,7 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
-## Unreleased
+## 0.38.0 — 2026-08-28
 
 ### Changed
 
@@ -85,9 +85,11 @@ All notable changes to **basou** are recorded here. The project follows
   a success.
 
   A command whose outcome is unknown is still considered, because refusing it
-  would discard most of the trail: the claude-code transcript records no outcome
-  at all, and on this workspace 98 of the 110 commits `review-gaps` reports on
-  are in that state. What changes is that the report stops asserting they landed.
+  would discard most of the trail: no exit code reaches the event today, and on
+  this workspace 98 of the 110 commits `review-gaps` reports on are in that
+  state. (A claude-code transcript does carry a failure signal on a tool result,
+  and the numeric code with it; reading it is filed as separate work, so for now
+  those commands arrive here as unknown.) What changes is that the report stops asserting they landed.
   Each unit now carries how many of its commits ran without a recorded status,
   and says so — while `commitCount` and the top-line gap count stay exactly as
   they were, for the same reason a self-reported review cannot lower them: a
