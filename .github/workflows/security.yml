@@ -18,7 +18,7 @@ jobs:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Install gitleaks
@@ -35,7 +35,7 @@ jobs:
     name: Planning-doc identifier leak
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Scan for internal identifiers
         shell: bash
         run: |
@@ -65,7 +65,7 @@ jobs:
     name: Absolute path leak
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Scan for real /Users/<username> paths
         shell: bash
         run: |
@@ -86,7 +86,7 @@ jobs:
     name: Step N cleanup watch (informational)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Count Step N residue
         shell: bash
         run: |
@@ -113,7 +113,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Need full history so git log base..head can resolve commits
           # between the PR base and head; the default depth=1 would fail.
@@ -155,7 +155,7 @@ jobs:
     name: Dependency vulnerability audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         # pnpm version is read from the `packageManager` field of the
         # workspace root package.json; the action errors out if both
