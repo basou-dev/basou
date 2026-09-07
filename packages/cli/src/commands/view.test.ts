@@ -17,21 +17,24 @@ const FIXED_DATE = new Date("2026-05-09T03:00:00.000Z");
 
 let tmpRepo: string | undefined;
 let codexRoot: string | undefined;
+let claudeRoot: string | undefined;
 
 beforeEach(async () => {
   tmpRepo = await mkdtemp(join(tmpdir(), "basou-view-test-"));
   codexRoot = await mkdtemp(join(tmpdir(), "basou-view-codex-"));
+  claudeRoot = await mkdtemp(join(tmpdir(), "basou-view-claude-"));
   await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: tmpRepo, env: ENV });
   await execFileAsync("git", ["config", "user.email", "t@e.com"], { cwd: tmpRepo, env: ENV });
   await execFileAsync("git", ["config", "user.name", "t"], { cwd: tmpRepo, env: ENV });
 });
 
 afterEach(async () => {
-  for (const dir of [tmpRepo, codexRoot]) {
+  for (const dir of [tmpRepo, codexRoot, claudeRoot]) {
     if (dir !== undefined) await rm(dir, { recursive: true, force: true });
   }
   tmpRepo = undefined;
   codexRoot = undefined;
+  claudeRoot = undefined;
   process.exitCode = 0;
   vi.restoreAllMocks();
 });
@@ -39,6 +42,21 @@ afterEach(async () => {
 function getCodexRoot(): string {
   if (codexRoot === undefined) throw new Error("codexRoot not initialized");
   return codexRoot;
+}
+
+function getClaudeRoot(): string {
+  if (claudeRoot === undefined) throw new Error("claudeRoot not initialized");
+  return claudeRoot;
+}
+
+/**
+ * The adapter roots every portfolio `--check` test must inject. The
+ * capture-coverage report scans the native log trees, so without these it
+ * would walk the developer's real ~/.claude and ~/.codex and its output would
+ * depend on the machine it runs on.
+ */
+function hermeticLogRoots(): Pick<ViewContext, "claudeProjectsDir" | "codexSessionsDir"> {
+  return { claudeProjectsDir: getClaudeRoot(), codexSessionsDir: getCodexRoot() };
 }
 
 async function setupInitedRepo(): Promise<string> {
@@ -536,6 +554,7 @@ describe("basou view safety preflight", () => {
         {
           cwd: root,
           openBrowser: () => {},
+          ...hermeticLogRoots(),
           onListening: () => {
             listened = true;
           },
@@ -547,6 +566,69 @@ describe("basou view safety preflight", () => {
     } finally {
       process.exitCode = 0;
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("--check reports capture coverage in portfolio mode", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "basou-pf-coverage-")));
+    const ws = await initWorkspaceAt(root, WS_ID_A, "ws");
+    // One rollout started in the workspace (attributed) and one started in a
+    // directory no registered workspace declares (the coverage gap).
+    const stray = join(root, "unregistered");
+    for (const [id, cwd] of [
+      ["cx-in", ws],
+      ["cx-out", stray],
+    ]) {
+      const dir = join(getCodexRoot(), "2026", "09", "07");
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, `rollout-${id}.jsonl`),
+        `${JSON.stringify({ type: "session_meta", payload: { id, cwd } })}\n`,
+      );
+    }
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+    try {
+      await doRunView(
+        { port: 0, workspace: [ws], check: true },
+        { cwd: root, openBrowser: () => {}, ...hermeticLogRoots() },
+      );
+      const out = logs.join("\n");
+      expect(out).toContain("Capture coverage: 1 of 2 source log(s)");
+      expect(out).toContain(stray);
+      // Coverage is informational: only safety findings set the exit code.
+      expect(process.exitCode).not.toBe(1);
+    } finally {
+      process.exitCode = 0;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("--check omits capture coverage in single-workspace mode", async () => {
+    // From inside ONE workspace every other workspace's logs look uncaptured,
+    // so the coverage question is only meaningful across the whole registry.
+    const repo = await setupInitedRepo();
+    const dir = join(getCodexRoot(), "2026", "09", "07");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "rollout-cx-out.jsonl"),
+      `${JSON.stringify({ type: "session_meta", payload: { id: "cx-out", cwd: "/elsewhere" } })}\n`,
+    );
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+    try {
+      await doRunView(
+        { port: 0, check: true },
+        { cwd: repo, openBrowser: () => {}, ...hermeticLogRoots() },
+      );
+      expect(logs.join("\n")).toContain("Portfolio safety:");
+      expect(logs.join("\n")).not.toContain("Capture coverage");
+    } finally {
+      process.exitCode = 0;
     }
   });
 

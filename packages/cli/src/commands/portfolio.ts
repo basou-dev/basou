@@ -81,7 +81,7 @@ export function registerPortfolioCommand(program: Command): void {
     // it never runs a preflight (the scope boundary vs `view --check` holds).
     .option(
       "--check",
-      "moved: the redundancy/footprint safety preflight is `basou view --portfolio --check` (this prints that pointer and exits)",
+      "moved: the redundancy/footprint preflight and the capture-coverage report are `basou view --portfolio --check` (this prints that pointer and exits)",
     )
     .option("-v, --verbose", "Show error causes")
     .action(async (action: string | undefined, opts: PortfolioCommandOptions) => {
@@ -113,7 +113,7 @@ export async function runPortfolioCommand(
 ): Promise<void> {
   if (options.check === true) {
     console.error(
-      "`basou portfolio` is a read-only listing; it has no safety preflight.\nRun `basou view --portfolio --check` for the redundancy/footprint check.",
+      "`basou portfolio` is a read-only listing; it has no preflight.\nRun `basou view --portfolio --check` for the redundancy/footprint check and the capture-coverage report.",
     );
     process.exitCode = 1;
     return;
@@ -213,7 +213,7 @@ export function renderPortfolioList(result: PortfolioListResult): string {
   }
   lines.push("");
   lines.push(
-    "Note: read-only listing of ~/.basou/portfolio.yaml. Run `basou view --portfolio` for the cross-workspace GUI, or `basou view --portfolio --check` for the redundancy/footprint safety preflight.",
+    "Note: read-only listing of ~/.basou/portfolio.yaml. Run `basou view --portfolio` for the cross-workspace GUI, or `basou view --portfolio --check` for the redundancy/footprint preflight and the capture-coverage report (which session logs no registered workspace imports).",
   );
   return lines.join("\n");
 }

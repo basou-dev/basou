@@ -3,6 +3,41 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou view --portfolio --check` now reports **capture coverage**: which
+  native session logs on this machine are imported by no registered workspace.
+
+  Both importers attribute a source log by its own recorded `cwd` and require
+  that `cwd` to equal a declared source root; a log matching nothing is dropped.
+  The Codex path dropped it before it became an import candidate, so it appeared
+  in no skip counter and raised no warning — silent. Dropping is usually right
+  (a sibling workspace's log must not be imported here), and that is exactly why
+  the drop could not be reported from inside one workspace: only the whole
+  registry can tell "no workspace imports this" from "not this one". So it is
+  reported once, across every registered workspace's roots.
+
+  The report groups unattributed logs by recorded `cwd` and separates the two
+  cases, which have opposite remedies. `no_declared_root` is usually a real
+  project nobody registered — declare it and the provenance starts flowing;
+  a scratch directory, a temp path, or a GUI tool's own working directory has no
+  repo to declare and is expected to stay there. `below_declared_root` is a
+  `cwd` inside a declared root that does not equal it, so the exact-match rule
+  drops provenance already declared; nothing the owner can declare fixes it, and
+  it is listed first.
+
+  Coverage is read-only and never gates. It does not set the exit code and does
+  not gate a `--portfolio` start, because uncaptured provenance is a coverage
+  gap, not a write risk — unlike the footprint / overlap findings beside it. It
+  runs in portfolio mode only, and mirrors the importers' own reading rules:
+  flat per-project `*.jsonl` for Claude Code (nested subagent transcripts are
+  not imported, so they are not counted), the whole date-nested tree for Codex,
+  and verbatim path comparison with no canonicalization, so a symlinked spelling
+  the importer misses is reported as missed rather than silently matched. Each
+  log is streamed only as far as its first recorded `cwd`.
+
 ## 0.38.0 — 2026-08-28
 
 ### Changed

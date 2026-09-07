@@ -140,3 +140,32 @@ source-root repo the master aggregates), which would show a duplicate card.
 Redundancy is registry hygiene, not a write risk: it is reported by `--check`
 (non-zero exit) but does **not** gate a `--portfolio` start. The fix is to
 register only the planning master and drop the view / member entry.
+
+Capture coverage. `basou view --portfolio --check` also reports which native
+session logs on this machine are imported by **no** registered workspace. Both
+importers attribute a source log by its own recorded `cwd` and require that
+`cwd` to **equal** a declared source root; a log matching nothing is dropped,
+and the drop is invisible from inside any single workspace — dropping a sibling
+workspace's log is correct there, so only the whole registry can tell "no
+workspace imports this" from "not this one". The report groups the unattributed
+logs by recorded `cwd` and separates two cases:
+
+- `no_declared_root` — the `cwd` is under no declared root of any registered
+  workspace. Usually a real project nobody registered: declare it (in
+  `~/.basou/portfolio.yaml`, or in a workspace's `import.source_roots`) and its
+  provenance starts flowing. A scratch directory, a temp path, or a GUI tool's
+  own working directory has no repo to declare and is expected to stay here.
+- `below_declared_root` — the `cwd` sits **inside** a declared root without
+  equalling it, so the exact-match rule drops provenance the owner already
+  declared. Nothing the owner can declare fixes it; it is a report on the rule
+  itself and is listed first.
+
+Coverage is read-only (it opens source logs to read their `cwd` and writes
+nothing) and **never** gates: it does not set the exit code and does not gate a
+`--portfolio` start, because uncaptured provenance is a coverage gap, not a
+write risk. It runs in portfolio mode only, and reads the log trees with the
+same rules the importers use — flat per-project `*.jsonl` for Claude Code
+(nested subagent transcripts are not imported, so they are not counted), the
+whole date-nested tree for Codex, and verbatim path comparison with no
+canonicalization (a symlinked spelling the importer misses is reported as
+missed).

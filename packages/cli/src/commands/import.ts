@@ -184,8 +184,14 @@ export async function runImportCodex(
  * manifest's `import.source_roots` (resolved against the repo root), else the
  * repository root alone. The result is de-duplicated, so a root listed twice
  * (or equal to the repo root) is scanned once.
+ *
+ * Exported so the capture-coverage check derives a workspace's roots through
+ * the SAME function the import guard uses: coverage claims "import would not
+ * take this session log", and that claim is only true while both sides resolve
+ * roots identically (verbatim `resolve`, no realpath — a symlinked spelling
+ * that import misses must be reported as missed, not silently canonicalized).
  */
-function resolveSourceRoots(args: {
+export function resolveSourceRoots(args: {
   projectFlags: string[];
   manifest: Manifest;
   repoRoot: string;
