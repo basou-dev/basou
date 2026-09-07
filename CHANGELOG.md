@@ -5,8 +5,54 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- **Breaking (behaviour):** `basou refresh` and `basou run codex` no longer
+  render the workspace's orientation into `~/.codex/AGENTS.md` unless the
+  workspace's manifest opts in with `channels.codex: true`, and never when it
+  declares `policies.confidential: true`.
+
+  That file is user-global: Codex auto-loads it at startup for every project on
+  the machine. So the render, which was unconditional, put the last-refreshed
+  workspace's position — its latest decisions with their rationale, its open
+  tracks, its changed-file paths — into the context of the next Codex session
+  of *any* other workspace, and the file held it until another workspace's
+  refresh overwrote it. Across workspaces that must never mix, that is a leak in
+  both directions, and it was silent: nothing about it appeared on the
+  `--json` result at all.
+
+  Writing is now a per-workspace declaration. A workspace that declares nothing
+  writes nothing (default off). `policies.confidential: true` outranks the
+  opt-in — it states that the workspace's provenance must not persist where
+  another workspace's tool reads it, so a second declaration in the same file
+  cannot re-enable the render. A top-level `confidential` is rejected rather
+  than ignored, because a safety key that is not honoured must fail loudly.
+  Whichever way it goes, the outcome is
+  stated: a `codex channel: skipped (...)` line for humans, and a new
+  `codexChannel` field on the `refresh --json` result (`written` with the
+  action, or `skipped` with the reason). `--dry-run` behaves as before and
+  renders nothing. The face path stays hard-coded — the gate decides whether a
+  workspace writes, not where.
+
+  The gate governs writing only; it cannot keep a block another workspace
+  already rendered out of this one's Codex. That is what `basou channel clear`
+  is for.
+
 ### Added
 
+- `basou channel clear codex` removes the basou:orientation block from
+  `~/.codex/AGENTS.md` on the spot, leaving any other content of the file
+  intact — the manual remedy when a block from another workspace is found in
+  the user-global face. It writes no `.basou-bak`: the block is being removed
+  because it should not be on the machine, and a backup would park a copy
+  beside the file. `--dry-run` reports without writing; `--json` emits the
+  result. (The protocol block in `~/.claude/CLAUDE.md` keeps its own verb,
+  `basou protocol unsync`.)
+- Manifest: `channels.codex` (boolean, default off) and `policies.confidential`
+  (boolean, default off) — the example in `docs/spec/schemas.md` §4.1, the
+  notes in §4.2. `policies:` was reserved by the spec for this class of key.
+  `policies.confidential` governs the orientation render into
+  `~/.codex/AGENTS.md` today; it does not yet govern `basou protocol sync`.
 - `basou view --portfolio --check` now reports **capture coverage**: which
   native session logs on this machine are imported by no registered workspace.
 
@@ -50,6 +96,15 @@ All notable changes to **basou** are recorded here. The project follows
   by both importers and counted as uncaptured with no directory to name, so the
   report never says "OK" about a log it could not place. Each log is streamed
   only as far as its first recorded `cwd`.
+
+### Fixed
+
+- `.basou-bak` no longer preserves basou's own block as the "pre-basou
+  original". When basou created a face file that did not exist, the first write
+  took no backup, so the *next* write — whose existing content was basou's own
+  block — was backed up as the original and kept forever; a workspace's position
+  survived on disk after the block itself was removed. Creating a face now
+  records an empty backup, which says truthfully that there was no original.
 
 ## 0.38.0 — 2026-08-28
 

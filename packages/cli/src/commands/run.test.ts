@@ -61,7 +61,14 @@ function getTmpRepo(): string {
   return tmpRepo;
 }
 
-async function setupInitedRepo(): Promise<string> {
+/**
+ * Initialize the fixture workspace. The Codex context face is opt-in per
+ * workspace (off by default), so a launcher test that expects the pre-spawn
+ * render to write must declare it; `policies.confidential` outranks the opt-in.
+ */
+async function setupInitedRepo(
+  declare: { codexChannel?: boolean; confidential?: boolean } = {},
+): Promise<string> {
   const repo = getTmpRepo();
   const paths = await ensureBasouDirectory(repo);
   const manifest = createManifest({
@@ -69,6 +76,8 @@ async function setupInitedRepo(): Promise<string> {
     now: FIXED_DATE,
     workspaceId: FIXED_WS_ID,
   });
+  if (declare.codexChannel !== undefined) manifest.channels = { codex: declare.codexChannel };
+  if (declare.confidential === true) manifest.policies = { confidential: true };
   await writeManifest(paths, manifest);
   return repo;
 }
@@ -724,8 +733,8 @@ describe("runCodex", () => {
     expect(yaml).toContain("codex-adapter");
   });
 
-  it("renders this workspace's orientation into the overridden codex channel before spawn", async () => {
-    const repo = await setupInitedRepo();
+  it("renders this workspace's orientation into the overridden codex channel before spawn when opted in", async () => {
+    const repo = await setupInitedRepo({ codexChannel: true });
     // The launcher surfaces the LAST-rendered orientation (it does not refresh);
     // seed one so the pre-spawn render has something to push.
     await writeFile(basouPaths(repo).files.orientation, "# Orientation\n\nyou are right here\n");
@@ -747,7 +756,7 @@ describe("runCodex", () => {
   });
 
   it("launches even when there is no orientation to render (best-effort channel)", async () => {
-    const repo = await setupInitedRepo();
+    const repo = await setupInitedRepo({ codexChannel: true });
     // No orientation.md written → the pre-spawn render is a no-op, but the
     // launch must still proceed and the channel file is never created.
     const channelPath = join(repo, "codex-AGENTS.md");
@@ -764,6 +773,59 @@ describe("runCodex", () => {
     );
     expect(exitCode).toBe(0);
     await expect(access(channelPath)).rejects.toThrow();
+  });
+
+  it("does not render into the codex channel by default (no opt-in), and says so before spawn", async () => {
+    const repo = await setupInitedRepo();
+    await writeFile(basouPaths(repo).files.orientation, "# Orientation\n\nyou are right here\n");
+    const channelPath = join(repo, "codex-AGENTS.md");
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+    try {
+      const exitCode = await runCodex(
+        [],
+        { cwd: repo, snapshot: false },
+        {
+          runner: makeFakeRunner({ exit_code: 0 }),
+          now: () => FIXED_DATE,
+          resolveCodexCommand: codexResolve,
+          codexChannelPath: channelPath,
+        },
+      );
+      expect(exitCode).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    await expect(access(channelPath)).rejects.toThrow();
+    expect(logs.join("\n")).toContain("codex channel: skipped (this workspace has not opted in");
+  });
+
+  it("confidential outranks the opt-in for the launcher too", async () => {
+    const repo = await setupInitedRepo({ codexChannel: true, confidential: true });
+    await writeFile(basouPaths(repo).files.orientation, "# Orientation\n\nsecret position\n");
+    const channelPath = join(repo, "codex-AGENTS.md");
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+    try {
+      await runCodex(
+        [],
+        { cwd: repo, snapshot: false },
+        {
+          runner: makeFakeRunner({ exit_code: 0 }),
+          now: () => FIXED_DATE,
+          resolveCodexCommand: codexResolve,
+          codexChannelPath: channelPath,
+        },
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    await expect(access(channelPath)).rejects.toThrow();
+    expect(logs.join("\n")).toContain("codex channel: skipped (confidential workspace");
   });
 
   it("registers a `codex` subcommand under `run`", () => {

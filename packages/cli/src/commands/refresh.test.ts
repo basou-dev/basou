@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   access,
   mkdir,
@@ -80,7 +81,14 @@ function getCodexChannelPath(): string {
   return join(codexChannelDir, "AGENTS.md");
 }
 
-async function setupInitedRepo(): Promise<string> {
+/**
+ * Initialize the fixture workspace. The Codex context face is opt-in per
+ * workspace and off by default, so a test that expects the face to be written
+ * must say so here; `policies.confidential` outranks the opt-in.
+ */
+async function setupInitedRepo(
+  declare: { codexChannel?: boolean; confidential?: boolean } = {},
+): Promise<string> {
   const repo = await realpath(tmpRepo as string);
   const paths = await ensureBasouDirectory(repo);
   const manifest = createManifest({
@@ -88,8 +96,27 @@ async function setupInitedRepo(): Promise<string> {
     now: FIXED_DATE,
     workspaceId: FIXED_WS_ID,
   });
+  if (declare.codexChannel !== undefined) manifest.channels = { codex: declare.codexChannel };
+  if (declare.confidential === true) manifest.policies = { confidential: true };
   await writeManifest(paths, manifest);
   return repo;
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** Capture console.log lines for the duration of `fn`. */
+async function captureLog<T>(fn: () => Promise<T>): Promise<{ value: T; lines: string[] }> {
+  const lines: string[] = [];
+  const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+    lines.push(a.map(String).join(" "));
+  });
+  try {
+    return { value: await fn(), lines };
+  } finally {
+    spy.mockRestore();
+  }
 }
 
 async function writeClaudeTranscript(repo: string): Promise<void> {
@@ -249,8 +276,8 @@ describe("basou refresh", () => {
     await expect(access(paths.files.handoff)).rejects.toThrow();
   });
 
-  it("renders the regenerated orientation into the Codex context face", async () => {
-    const repo = await setupInitedRepo();
+  it("renders the regenerated orientation into the Codex context face when the manifest opts in", async () => {
+    const repo = await setupInitedRepo({ codexChannel: true });
     await writeCodexRollout(repo);
 
     await doRunRefresh({}, ctxFor(repo));
@@ -264,13 +291,78 @@ describe("basou refresh", () => {
     expect(channelBody).not.toContain("BASOU:PROTOCOLS:START");
   });
 
-  it("does not write the Codex context face under --dry-run", async () => {
-    const repo = await setupInitedRepo();
+  it("does not write the Codex context face under --dry-run, even when opted in", async () => {
+    const repo = await setupInitedRepo({ codexChannel: true });
     await writeCodexRollout(repo);
 
     await doRunRefresh({ dryRun: true }, ctxFor(repo));
 
     await expect(access(getCodexChannelPath())).rejects.toThrow();
+  });
+
+  it("leaves the Codex context face untouched by default (no opt-in), and says so", async () => {
+    const repo = await setupInitedRepo();
+    await writeCodexRollout(repo);
+    // Whatever is already in the user-global file — here, another workspace's
+    // block would be the realistic case — must survive byte for byte.
+    const prior = "# someone else's notes\n";
+    await writeFile(getCodexChannelPath(), prior);
+
+    const { value: result, lines } = await captureLog(() => doRunRefresh({}, ctxFor(repo)));
+
+    expect(await readFile(getCodexChannelPath(), "utf8")).toBe(prior);
+    expect(result.codexChannel).toEqual({ status: "skipped", reason: "not_enabled" });
+    expect(lines.join("\n")).toContain("codex channel: skipped (this workspace has not opted in");
+  });
+
+  it("confidential outranks the opt-in: the face's content hash is unchanged", async () => {
+    const repo = await setupInitedRepo({ codexChannel: true, confidential: true });
+    await writeCodexRollout(repo);
+    const prior =
+      "<!-- BASOU:ORIENTATION:START -->\nanother workspace\n<!-- BASOU:ORIENTATION:END -->\n";
+    await writeFile(getCodexChannelPath(), prior);
+    const before = sha256(await readFile(getCodexChannelPath(), "utf8"));
+
+    const { value: result, lines } = await captureLog(() => doRunRefresh({}, ctxFor(repo)));
+
+    expect(sha256(await readFile(getCodexChannelPath(), "utf8"))).toBe(before);
+    expect(result.codexChannel).toEqual({ status: "skipped", reason: "confidential" });
+    expect(lines.join("\n")).toContain("codex channel: skipped (confidential workspace");
+  });
+
+  it("--json states the channel outcome as a field, and still does not write by default", async () => {
+    const repo = await setupInitedRepo();
+    await writeCodexRollout(repo);
+
+    const { lines } = await captureLog(() => doRunRefresh({ json: true }, ctxFor(repo)));
+
+    expect(lines).toHaveLength(1); // the JSON result stays the sole stdout line
+    const parsed = JSON.parse(lines[0] ?? "{}") as { codexChannel?: unknown };
+    expect(parsed.codexChannel).toEqual({ status: "skipped", reason: "not_enabled" });
+    await expect(access(getCodexChannelPath())).rejects.toThrow();
+  });
+
+  it("--json reports a written face when opted in", async () => {
+    const repo = await setupInitedRepo({ codexChannel: true });
+    await writeCodexRollout(repo);
+
+    const { lines } = await captureLog(() => doRunRefresh({ json: true }, ctxFor(repo)));
+
+    const parsed = JSON.parse(lines[0] ?? "{}") as { codexChannel?: unknown };
+    expect(parsed.codexChannel).toEqual({ status: "written", action: "installed" });
+    expect(await readFile(getCodexChannelPath(), "utf8")).toContain("BASOU:ORIENTATION:START");
+  });
+
+  it("--dry-run reports the face as skipped for that reason under --json", async () => {
+    const repo = await setupInitedRepo({ codexChannel: true });
+    await writeCodexRollout(repo);
+
+    const { lines } = await captureLog(() =>
+      doRunRefresh({ json: true, dryRun: true }, ctxFor(repo)),
+    );
+
+    const parsed = JSON.parse(lines[0] ?? "{}") as { codexChannel?: unknown };
+    expect(parsed.codexChannel).toEqual({ status: "skipped", reason: "dry_run" });
   });
 
   it("aggregates manifest import.source_roots across sibling repos in one run", async () => {

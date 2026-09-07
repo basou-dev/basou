@@ -68,6 +68,27 @@ export type OrientationCounts = {
   suspectCount: number;
 };
 
+/**
+ * What `basou refresh` did about the Codex context face (`~/.codex/AGENTS.md`)
+ * after regenerating. Present so `--json` states it explicitly: the face is
+ * user-global, so whether this run wrote to it is a fact the caller must be
+ * able to read, not infer from the absence of a line.
+ */
+export type CodexChannelOutcome =
+  | { status: "written"; action: "installed" | "updated" | "unchanged" }
+  | {
+      status: "skipped";
+      /**
+       * `not_enabled` — the manifest declares no `channels.codex: true`;
+       * `confidential` — the manifest's `policies.confidential: true` outranks any opt-in;
+       * `dry_run` — nothing was regenerated, so nothing was rendered;
+       * `no_orientation` — there is no orientation.md yet;
+       * `error` — the render failed (detail carries the message).
+       */
+      reason: "not_enabled" | "confidential" | "dry_run" | "no_orientation" | "error";
+      detail?: string;
+    };
+
 /** Structured result of {@link refreshAll}. */
 export type RefreshResult = {
   claudeCode: ImportOutcome;
@@ -76,6 +97,8 @@ export type RefreshResult = {
   decisions: GenerateOutcome<{ decisionCount: number }>;
   orientation: GenerateOutcome<OrientationCounts>;
   dryRun: boolean;
+  /** Set by `basou refresh` (the CLI), which is the only caller that renders the face. */
+  codexChannel?: CodexChannelOutcome;
 };
 
 export type RefreshActionOptions = {

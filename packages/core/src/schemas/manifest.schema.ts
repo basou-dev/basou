@@ -145,6 +145,50 @@ const WorkspaceMetaSchema = z.looseObject({
 });
 
 /**
+ * Which user-global context faces this workspace may write to. A face is a file
+ * an AI tool auto-loads at startup for EVERY project on the machine
+ * (`~/.codex/AGENTS.md`), so anything rendered there is read by the next
+ * session of any other workspace too. Writing is therefore opt-in per
+ * workspace, default off; a workspace that never declares `channels.codex:
+ * true` never puts its position in a file another project's tool reads.
+ */
+const ChannelsSchema = z.looseObject({
+  /**
+   * Render this workspace's orientation into `~/.codex/AGENTS.md` on `basou
+   * refresh` / `basou run codex`. A boolean today; if a face ever needs
+   * per-block control this widens to `boolean | object`, which existing
+   * manifests keep parsing — so the boolean does not foreclose that.
+   */
+  codex: z.boolean().optional().meta({
+    description:
+      "Opt in to rendering this workspace's orientation into the user-global ~/.codex/AGENTS.md on `basou refresh` and `basou run codex`. Off when absent: that file is auto-loaded by Codex for every project on the machine, so nothing is written there unless the workspace says so.",
+  }),
+});
+
+/**
+ * Posture declarations about the workspace as a whole — the `policies:` slot
+ * §4.2 of the schema spec reserved for exactly this class of key.
+ */
+const PoliciesSchema = z.looseObject({
+  /**
+   * This workspace's provenance must not persist where another workspace's
+   * tool reads it. That is the GOAL the key states; what it gates today is one
+   * thing: rendering the orientation into the user-global `~/.codex/AGENTS.md`
+   * (`basou refresh` / `basou run codex`) — never, regardless of `channels`, so
+   * a confidential workspace cannot be re-enabled by a second declaration in
+   * the same file. It does not yet govern `basou protocol sync` (a global
+   * render, not a per-workspace one), and it gates writing only: it cannot keep
+   * another workspace's block out of this workspace's tool (see `basou channel
+   * clear`). Stated as a goal rather than as "never write" so that a transient
+   * render removed before anyone else can read it remains permissible.
+   */
+  confidential: z.boolean().optional().meta({
+    description:
+      "This workspace's provenance must not persist where another workspace's tool reads it. Today this means its orientation is never rendered into the user-global ~/.codex/AGENTS.md by `basou refresh` or `basou run codex`, regardless of `channels`. It does not yet govern `basou protocol sync`, and it gates writing only — it cannot keep another workspace's block out of this workspace's tool.",
+  }),
+});
+
+/**
  * Schema for `.basou/manifest.yaml`. The minimal manifest carries
  * schema_version, basou_version, workspace metadata, project info, enabled
  * capabilities, approval policy, adapter config, and git policy. The
@@ -161,7 +205,7 @@ const WorkspaceMetaSchema = z.looseObject({
  * fully type-checked and validated. {@link unknownManifestKeys} surfaces the
  * unrecognized top-level keys so preservation is not silent.
  */
-export const ManifestSchema = z.looseObject({
+const ManifestObjectSchema = z.looseObject({
   schema_version: SchemaVersionSchema,
   // Same forward-compatible format gate as schema_version (accept 0.x.y, gate a
   // higher major with an upgrade error) rather than a hard literal. `basou_version`
@@ -176,13 +220,34 @@ export const ManifestSchema = z.looseObject({
   git: GitConfigSchema,
   import: ImportConfigSchema.optional(),
   repos: z.array(RepoEntrySchema).min(1).optional(),
+  channels: ChannelsSchema.optional(),
+  policies: PoliciesSchema.optional(),
+});
+
+/**
+ * The manifest, plus one guard the loose object cannot express: a TOP-LEVEL
+ * `confidential` is refused. It belongs under `policies`, and because the
+ * object is loose, a stray top-level spelling would otherwise parse fine and be
+ * silently ignored — an operator would believe the workspace is protected while
+ * the face is still written. A safety key that is not honoured must fail
+ * loudly, not quietly.
+ */
+export const ManifestSchema = ManifestObjectSchema.superRefine((manifest, ctx) => {
+  if ("confidential" in manifest) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["confidential"],
+      message:
+        "`confidential` is declared under `policies` (policies.confidential: true). A top-level `confidential` is not honoured, so it is rejected rather than ignored.",
+    });
+  }
 });
 
 /** Inferred runtime type for {@link ManifestSchema}. */
 export type Manifest = z.infer<typeof ManifestSchema>;
 
 /** The declared top-level manifest keys, derived from the schema (no hardcoded drift). */
-const KNOWN_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(Object.keys(ManifestSchema.shape));
+const KNOWN_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(Object.keys(ManifestObjectSchema.shape));
 
 /**
  * The unrecognized TOP-LEVEL keys a parsed manifest carries — fields preserved by
