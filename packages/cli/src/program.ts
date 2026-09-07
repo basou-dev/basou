@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { Command } from "commander";
 import { registerApprovalCommand } from "./commands/approval.js";
+import { registerChannelCommand } from "./commands/channel.js";
 import { registerDecisionCommand } from "./commands/decision.js";
 import { registerDecisionsCommand } from "./commands/decisions.js";
 import { registerExecCommand } from "./commands/exec.js";
@@ -77,6 +78,7 @@ export function buildProgram(): Command {
   registerReviewGapsCommand(program);
   registerProjectCommand(program);
   registerProtocolCommand(program);
+  registerChannelCommand(program);
   registerHookCommand(program);
 
   return program;

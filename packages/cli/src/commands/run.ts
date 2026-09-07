@@ -35,6 +35,7 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
+import { decideCodexChannel, describeCodexChannelSkip } from "../lib/channel-policy.js";
 import { renderOrientationToCodexChannel } from "../lib/context-channel.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
@@ -734,7 +735,9 @@ async function resolveRepositoryRootForRun(cwd: string): Promise<string> {
  * way `basou orient` / `basou refresh` do (member -> planning master). It does
  * NOT re-import (a launcher is not a refresh); it surfaces whatever the last
  * refresh captured. Fully best-effort: any failure returns null so the launch
- * is never blocked. The `ctx.codexChannelPath` seam keeps tests off the real
+ * is never blocked — and because the write happens only after the manifest's
+ * opt-in is read successfully, a failure also means nothing was written (fail
+ * closed). The `ctx.codexChannelPath` seam keeps tests off the real
  * home-global file.
  */
 async function syncCodexOrientationChannelPreSpawn(
@@ -744,6 +747,12 @@ async function syncCodexOrientationChannelPreSpawn(
   try {
     const root = await resolveBasouRootForCommand(cwd, "run");
     const paths = basouPaths(root);
+    // The face is user-global, so the render is gated by THIS workspace's
+    // manifest exactly as `basou refresh` gates it: opt-in via channels.codex,
+    // never when confidential. A skip is said out loud before the child takes
+    // the TTY, so a launch that rendered nothing does not look like one that did.
+    const decision = decideCodexChannel(await readManifest(paths));
+    if (!decision.write) return describeCodexChannelSkip(decision.reason);
     const rendered = await renderOrientationToCodexChannel({
       orientationPath: paths.files.orientation,
       ...(ctx.codexChannelPath !== undefined ? { channelPath: ctx.codexChannelPath } : {}),

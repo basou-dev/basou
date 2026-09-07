@@ -145,6 +145,22 @@ const WorkspaceMetaSchema = z.looseObject({
 });
 
 /**
+ * Which user-global context faces this workspace may write to. A face is a file
+ * an AI tool auto-loads at startup for EVERY project on the machine
+ * (`~/.codex/AGENTS.md`), so anything rendered there is read by the next
+ * session of any other workspace too. Writing is therefore opt-in per
+ * workspace, default off; a workspace that never declares `channels.codex:
+ * true` never puts its position in a file another project's tool reads.
+ */
+const ChannelsSchema = z.looseObject({
+  /** Render this workspace's orientation into `~/.codex/AGENTS.md` on `basou refresh` / `basou run codex`. */
+  codex: z.boolean().optional().meta({
+    description:
+      "Opt in to rendering this workspace's orientation into the user-global ~/.codex/AGENTS.md on `basou refresh` and `basou run codex`. Off when absent: that file is auto-loaded by Codex for every project on the machine, so nothing is written there unless the workspace says so.",
+  }),
+});
+
+/**
  * Schema for `.basou/manifest.yaml`. The minimal manifest carries
  * schema_version, basou_version, workspace metadata, project info, enabled
  * capabilities, approval policy, adapter config, and git policy. The
@@ -176,6 +192,19 @@ export const ManifestSchema = z.looseObject({
   git: GitConfigSchema,
   import: ImportConfigSchema.optional(),
   repos: z.array(RepoEntrySchema).min(1).optional(),
+  channels: ChannelsSchema.optional(),
+  /**
+   * The workspace's provenance must never leave its own `.basou/`. When true,
+   * every path that writes to a user-global face is disabled for this
+   * workspace, regardless of `channels` — the flag outranks an opt-in, so a
+   * confidential workspace cannot be re-enabled by a second declaration. It
+   * gates writing only; it cannot stop this workspace's tool from READING what
+   * another workspace put in a shared face (see `basou channel clear`).
+   */
+  confidential: z.boolean().optional().meta({
+    description:
+      "When true, this workspace never writes to a user-global context face (~/.codex/AGENTS.md), regardless of `channels`. Gates writing only; it cannot keep another workspace's block out of this workspace's tool.",
+  }),
 });
 
 /** Inferred runtime type for {@link ManifestSchema}. */

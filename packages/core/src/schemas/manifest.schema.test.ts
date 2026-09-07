@@ -78,6 +78,26 @@ describe("ManifestSchema", () => {
     expect(ManifestSchema.safeParse(variant).success).toBe(true);
   });
 
+  it("accepts channels.codex and confidential, and treats both as known keys", () => {
+    const variant = { ...VALID_MANIFEST, channels: { codex: true }, confidential: true };
+    const parsed = ManifestSchema.parse(variant);
+    expect(parsed.channels?.codex).toBe(true);
+    expect(parsed.confidential).toBe(true);
+    // Known to this schema, so a read-modify-write does not flag them as strays.
+    expect(unknownManifestKeys(parsed)).toEqual([]);
+  });
+
+  it("leaves channels and confidential absent when undeclared (default off)", () => {
+    const parsed = ManifestSchema.parse(VALID_MANIFEST);
+    expect(parsed.channels).toBeUndefined();
+    expect(parsed.confidential).toBeUndefined();
+  });
+
+  it("rejects a non-boolean channels.codex", () => {
+    const variant = { ...VALID_MANIFEST, channels: { codex: "yes" } };
+    expect(() => ManifestSchema.parse(variant)).toThrow();
+  });
+
   it("accepts a manifest with no import block (backward compatible)", () => {
     expect("import" in VALID_MANIFEST).toBe(false);
     expect(ManifestSchema.safeParse(VALID_MANIFEST).success).toBe(true);

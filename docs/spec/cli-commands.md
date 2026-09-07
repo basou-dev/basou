@@ -44,6 +44,33 @@ For exact flags, subcommands, and arguments, see the generated reference linked
 above — it is regenerated from the CLI on every release, so it never drifts from
 the implementation.
 
+### User-global context faces (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`)
+
+Two files basou can write to are **user-global**: an AI tool auto-loads them at
+startup for **every** project on the machine, not just the workspace that
+wrote them. `basou refresh` and `basou run codex` render the workspace's
+orientation into `~/.codex/AGENTS.md` (the BASOU:ORIENTATION block); `basou
+protocol sync` renders the declared standing protocols into
+`~/.claude/CLAUDE.md` (the BASOU:PROTOCOLS block). Whatever is in those blocks
+is in the context of the next Codex / Claude Code session of any other
+workspace, including one whose work must never mix with this one's.
+
+The orientation render is therefore **opt-in per workspace and off by
+default**: `basou refresh` and `basou run codex` write the face only when the
+workspace's manifest declares `channels.codex: true`, and never when it
+declares `confidential: true` (which outranks the opt-in). A skipped render is
+always said — a `codex channel: skipped (...)` line, and a `codexChannel`
+field under `refresh --json` — so a run that wrote nothing cannot be read as
+one that did. `--dry-run` never renders. The face paths themselves stay
+hard-coded (a configurable path would let basou append to arbitrary files);
+the gate decides *whether* a workspace writes, not *where*.
+
+The gate governs writing only. It cannot keep a block another workspace
+already rendered out of this workspace's tool: `basou channel clear codex`
+removes the orientation block from `~/.codex/AGENTS.md` on the spot (leaving
+any other content of the file intact), and `basou protocol unsync` does the
+same for the protocol block in `~/.claude/CLAUDE.md`.
+
 ## §15.2 Commands considered but not implemented
 
 The following are intentionally **not** implemented. They are listed for

@@ -1,9 +1,25 @@
-import { assertBasouRootSafe, type BasouPaths, basouPaths, findErrorCode } from "@basou/core";
+import {
+  assertBasouRootSafe,
+  type BasouPaths,
+  basouPaths,
+  findErrorCode,
+  readManifest,
+} from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
+import {
+  type CodexChannelDecision,
+  decideCodexChannel,
+  describeCodexChannelSkip,
+} from "../lib/channel-policy.js";
 import { renderOrientationToCodexChannel } from "../lib/context-channel.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { loadPortfolioConfig } from "../lib/portfolio-config.js";
-import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
+import {
+  type CodexChannelOutcome,
+  type ImportOutcome,
+  type RefreshResult,
+  refreshAll,
+} from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import type { ImportContext } from "./import.js";
 import {
@@ -285,42 +301,72 @@ export async function doRunRefresh(
   ctx: RefreshContext,
 ): Promise<RefreshResult> {
   const { result, paths } = await computeRefresh(options, ctx);
-  // After a real refresh, push the just-regenerated orientation into the Codex
-  // context face so an interactive Codex auto-loads the current position. Skip
-  // under --dry-run (nothing was written). The write happens in both human and
-  // --json modes; only the human-readable status line is suppressed for --json
-  // so the JSON result stays the sole stdout line.
-  const channelLine =
-    options.dryRun === true ? null : await syncCodexOrientationChannel(paths, ctx.codexChannelPath);
+  // After a real refresh, the just-regenerated orientation MAY be pushed into
+  // the Codex context face so an interactive Codex auto-loads the current
+  // position. That face (~/.codex/AGENTS.md) is user-global — every project's
+  // Codex reads it — so the push is gated by this workspace's own manifest
+  // (`channels.codex: true`, and never when `confidential: true`), and the
+  // outcome is always stated: a skipped line for humans, a `codexChannel` field
+  // under --json. --dry-run regenerated nothing, so it renders nothing.
+  const channel =
+    options.dryRun === true
+      ? { outcome: { status: "skipped", reason: "dry_run" } as const, line: null }
+      : await syncCodexOrientationChannel(paths, ctx.codexChannelPath);
+  const reported: RefreshResult = { ...result, codexChannel: channel.outcome };
   if (options.json === true) {
-    console.log(JSON.stringify(result));
+    console.log(JSON.stringify(reported));
   } else {
     printRefreshSummary(result);
-    if (channelLine !== null) console.log(channelLine);
+    if (channel.line !== null) console.log(channel.line);
   }
-  return result;
+  return reported;
 }
 
 /**
- * Best-effort: render the just-regenerated orientation into the Codex context
- * face (~/.codex/AGENTS.md), which an interactive Codex auto-loads at startup —
- * Codex exposes no SessionStart hook, so this static channel is its only
- * vendor-neutral active orientation path. Returns a human-readable status line,
- * or null when there was nothing to render. Never throws: a channel failure
- * must not fail the refresh.
+ * Best-effort, and gated: render the just-regenerated orientation into the
+ * Codex context face (~/.codex/AGENTS.md) — which an interactive Codex
+ * auto-loads at startup for EVERY project — only when this workspace's manifest
+ * opts in and is not confidential. The decision is read from the manifest on
+ * every run rather than cached, so flipping the flag takes effect on the next
+ * refresh. An unreadable manifest cannot prove an opt-in, so it writes nothing
+ * (fail closed). Never throws: a channel failure must not fail the refresh.
+ * Returns the structured outcome plus the human status line (null when there
+ * is nothing worth a line — no orientation to render).
  */
 async function syncCodexOrientationChannel(
   paths: BasouPaths,
   channelPath?: string,
-): Promise<string | null> {
+): Promise<{ outcome: CodexChannelOutcome; line: string | null }> {
+  let decision: CodexChannelDecision;
+  try {
+    decision = decideCodexChannel(await readManifest(paths));
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      outcome: { status: "skipped", reason: "error", detail },
+      line: `codex channel: skipped (manifest unreadable, so the opt-in cannot be confirmed: ${detail})`,
+    };
+  }
+  if (!decision.write) {
+    return {
+      outcome: { status: "skipped", reason: decision.reason },
+      line: describeCodexChannelSkip(decision.reason),
+    };
+  }
   try {
     const rendered = await renderOrientationToCodexChannel({
       orientationPath: paths.files.orientation,
       ...(channelPath !== undefined ? { channelPath } : {}),
     });
-    return rendered === null ? null : rendered.line;
+    if (rendered === null)
+      return { outcome: { status: "skipped", reason: "no_orientation" }, line: null };
+    return { outcome: { status: "written", action: rendered.action }, line: rendered.line };
   } catch (error: unknown) {
-    return `codex channel skipped: ${error instanceof Error ? error.message : String(error)}`;
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      outcome: { status: "skipped", reason: "error", detail },
+      line: `codex channel skipped: ${detail}`,
+    };
   }
 }
 

@@ -35,6 +35,7 @@ describe("buildProgram", () => {
     expect(program.name()).toBe("basou");
     expect(program.commands.map((c) => c.name()).sort()).toEqual([
       "approval",
+      "channel",
       "decision",
       "decisions",
       "exec",

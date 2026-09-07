@@ -40,6 +40,12 @@ adapters:
 
 git:
   events_log: ignore  # default. opt-in to commit.
+
+channels:
+  codex: false  # default. opt-in: render this workspace's orientation into the
+                # user-global ~/.codex/AGENTS.md on `basou refresh` / `basou run codex`
+confidential: false  # default. when true, nothing is written to any user-global
+                     # face for this workspace, regardless of `channels`
 ```
 
 ## §4.2 Notes
@@ -50,6 +56,15 @@ git:
   for now and may be normalized in a later release.
 - The schema reserves room for `providers:` / `policies:` / `teams:` /
   `review_flows:` to extend in the future (currently unused).
+- `channels` and `confidential` decide whether this workspace may write to a
+  **user-global context face** — a file an AI tool auto-loads at startup for
+  every project on the machine (`~/.codex/AGENTS.md`). Anything rendered there
+  is in the context of the next session of any other workspace, so writing is
+  opt-in per workspace and off by default. `confidential: true` outranks
+  `channels.codex: true`: a workspace whose provenance must not leave its own
+  `.basou/` cannot be re-enabled by a second declaration. Both gate writing
+  only; they cannot keep another workspace's block out of this workspace's tool
+  — `basou channel clear codex` removes one that is already there.
 
 ---
 

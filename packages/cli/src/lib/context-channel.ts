@@ -191,6 +191,26 @@ export async function syncOrientationChannel(opts: {
 }
 
 /**
+ * Remove the orientation block from the Codex context face, leaving any other
+ * content of the file (a hand-written body, the protocol block) untouched. This
+ * is the operator's manual escape hatch: the face is user-global, so a block a
+ * different workspace rendered there is in the context of every Codex session
+ * on the machine until something overwrites or removes it. `target` overrides
+ * the locked path for tests only.
+ */
+export async function clearOrientationChannel(opts: {
+  target?: string;
+  dryRun?: boolean;
+}): Promise<{ removed: boolean }> {
+  return removeMarkerBlock({
+    target: opts.target ?? CODEX_TARGET_PATH,
+    markers: ORIENTATION_MARKERS,
+    fileLabel: "~/.codex/AGENTS.md",
+    ...(opts.dryRun === true ? { dryRun: true } : {}),
+  });
+}
+
+/**
  * Push an already-rendered orientation file into the Codex context face: read
  * `orientationPath`, and if present sync it into the channel. Returns the
  * resulting action plus a human status line, or null when there is no

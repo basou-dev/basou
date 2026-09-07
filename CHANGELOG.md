@@ -5,8 +5,46 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- **Breaking (behaviour):** `basou refresh` and `basou run codex` no longer
+  render the workspace's orientation into `~/.codex/AGENTS.md` unless the
+  workspace's manifest opts in with `channels.codex: true`, and never when it
+  declares `confidential: true`.
+
+  That file is user-global: Codex auto-loads it at startup for every project on
+  the machine. So the render, which was unconditional, put the last-refreshed
+  workspace's position — its latest decisions with their rationale, its open
+  tracks, its changed-file paths — into the context of the next Codex session
+  of *any* other workspace, and the file held it until another workspace's
+  refresh overwrote it. Across workspaces that must never mix, that is a leak in
+  both directions, and it was silent: nothing about it appeared on the
+  `--json` result at all.
+
+  Writing is now a per-workspace declaration. A workspace that declares nothing
+  writes nothing (default off). `confidential: true` outranks the opt-in, so a
+  workspace whose provenance must stay in its own `.basou/` cannot be
+  re-enabled by a second declaration. Whichever way it goes, the outcome is
+  stated: a `codex channel: skipped (...)` line for humans, and a new
+  `codexChannel` field on the `refresh --json` result (`written` with the
+  action, or `skipped` with the reason). `--dry-run` behaves as before and
+  renders nothing. The face path stays hard-coded — the gate decides whether a
+  workspace writes, not where.
+
+  The gate governs writing only; it cannot keep a block another workspace
+  already rendered out of this one's Codex. That is what `basou channel clear`
+  is for.
+
 ### Added
 
+- `basou channel clear codex` removes the basou:orientation block from
+  `~/.codex/AGENTS.md` on the spot, leaving any other content of the file
+  intact — the manual remedy when a block from another workspace is found in
+  the user-global face. `--dry-run` reports without writing; `--json` emits the
+  result. (The protocol block in `~/.claude/CLAUDE.md` keeps its own verb,
+  `basou protocol unsync`.)
+- Manifest: `channels.codex` (boolean, default off) and `confidential`
+  (boolean, default off), documented in `docs/spec/schemas.md` §4.1.
 - `basou view --portfolio --check` now reports **capture coverage**: which
   native session logs on this machine are imported by no registered workspace.
 

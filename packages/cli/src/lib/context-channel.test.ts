@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ORIENTATION_END, ORIENTATION_START, PROTOCOL_END, PROTOCOL_START } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { removeMarkerBlock, syncMarkerBlock, syncOrientationChannel } from "./context-channel.js";
+import {
+  clearOrientationChannel,
+  removeMarkerBlock,
+  syncMarkerBlock,
+  syncOrientationChannel,
+} from "./context-channel.js";
 
 let dir: string;
 let target: string;
@@ -148,5 +153,37 @@ describe("removeMarkerBlock", () => {
       fileLabel: "AGENTS.md",
     });
     expect(res.removed).toBe(false);
+  });
+});
+
+describe("clearOrientationChannel", () => {
+  it("removes only the orientation block, leaving a protocol block in place", async () => {
+    await syncMarkerBlock({
+      target,
+      markers: PROTOCOL_MARKERS,
+      block: "standing protocol\n",
+    });
+    await syncOrientationChannel({ body: "# Orientation\n\nposition\n", target });
+
+    const { removed } = await clearOrientationChannel({ target });
+
+    const body = await readFile(target, "utf8");
+    expect(removed).toBe(true);
+    expect(body).not.toContain(ORIENTATION_START);
+    expect(body).toContain(PROTOCOL_START);
+    expect(body).toContain("standing protocol");
+  });
+
+  it("reports removed=false on an absent target and writes nothing", async () => {
+    const { removed } = await clearOrientationChannel({ target });
+    expect(removed).toBe(false);
+  });
+
+  it("does not write under dry-run", async () => {
+    await syncOrientationChannel({ body: "# Orientation\n\nposition\n", target });
+    const before = await readFile(target, "utf8");
+    const { removed } = await clearOrientationChannel({ target, dryRun: true });
+    expect(removed).toBe(true);
+    expect(await readFile(target, "utf8")).toBe(before);
   });
 });
