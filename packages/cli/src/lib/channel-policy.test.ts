@@ -30,6 +30,16 @@ describe("decideCodexChannel", () => {
       expect(line).toContain("codex channel: skipped");
       expect(line).toContain("~/.codex/AGENTS.md");
     }
-    expect(describeCodexChannelSkip("not_enabled")).toContain("channels.codex: true");
+  });
+
+  it("states facts only: no imperative and no manifest key an agent could act on", () => {
+    // The reader is often an AI agent acting on tool output; a "set X: true"
+    // line is a one-edit recipe for re-enabling the leak the gate exists to stop.
+    for (const reason of ["not_enabled", "confidential"] as const) {
+      const line = describeCodexChannelSkip(reason);
+      expect(line).not.toContain("channels.codex");
+      expect(line).not.toContain("confidential:");
+      expect(line).not.toMatch(/\b(set|add|enable|declare)\b/);
+    }
   });
 });

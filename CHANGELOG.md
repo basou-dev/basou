@@ -40,11 +40,14 @@ All notable changes to **basou** are recorded here. The project follows
 - `basou channel clear codex` removes the basou:orientation block from
   `~/.codex/AGENTS.md` on the spot, leaving any other content of the file
   intact — the manual remedy when a block from another workspace is found in
-  the user-global face. `--dry-run` reports without writing; `--json` emits the
+  the user-global face. It writes no `.basou-bak`: the block is being removed
+  because it should not be on the machine, and a backup would park a copy
+  beside the file. `--dry-run` reports without writing; `--json` emits the
   result. (The protocol block in `~/.claude/CLAUDE.md` keeps its own verb,
   `basou protocol unsync`.)
 - Manifest: `channels.codex` (boolean, default off) and `confidential`
-  (boolean, default off), documented in `docs/spec/schemas.md` §4.1.
+  (boolean, default off) — the example in `docs/spec/schemas.md` §4.1, the
+  notes in §4.2.
 - `basou view --portfolio --check` now reports **capture coverage**: which
   native session logs on this machine are imported by no registered workspace.
 
@@ -88,6 +91,15 @@ All notable changes to **basou** are recorded here. The project follows
   by both importers and counted as uncaptured with no directory to name, so the
   report never says "OK" about a log it could not place. Each log is streamed
   only as far as its first recorded `cwd`.
+
+### Fixed
+
+- `.basou-bak` no longer preserves basou's own block as the "pre-basou
+  original". When basou created a face file that did not exist, the first write
+  took no backup, so the *next* write — whose existing content was basou's own
+  block — was backed up as the original and kept forever; a workspace's position
+  survived on disk after the block itself was removed. Creating a face now
+  records an empty backup, which says truthfully that there was no original.
 
 ## 0.38.0 — 2026-08-28
 

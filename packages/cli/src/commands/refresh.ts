@@ -328,10 +328,16 @@ export async function doRunRefresh(
  * auto-loads at startup for EVERY project — only when this workspace's manifest
  * opts in and is not confidential. The decision is read from the manifest on
  * every run rather than cached, so flipping the flag takes effect on the next
- * refresh. An unreadable manifest cannot prove an opt-in, so it writes nothing
- * (fail closed). Never throws: a channel failure must not fail the refresh.
- * Returns the structured outcome plus the human status line (null when there
- * is nothing worth a line — no orientation to render).
+ * refresh.
+ *
+ * The manifest read here cannot fail in practice: `computeRefresh` has already
+ * read the same file (via `resolveImportTarget`), and a manifest it rejects
+ * fails the whole refresh before this point — which also means nothing is
+ * written to the face. The catch below is kept as a guard against that ordering
+ * changing, not as a degrade path a user can reach. Never throws: a face
+ * failure (e.g. `~/.codex/` missing) must not fail the refresh. Returns the
+ * structured outcome plus the human status line (null when there is nothing
+ * worth a line — no orientation to render).
  */
 async function syncCodexOrientationChannel(
   paths: BasouPaths,
@@ -344,7 +350,7 @@ async function syncCodexOrientationChannel(
     const detail = error instanceof Error ? error.message : String(error);
     return {
       outcome: { status: "skipped", reason: "error", detail },
-      line: `codex channel: skipped (manifest unreadable, so the opt-in cannot be confirmed: ${detail})`,
+      line: `codex channel: skipped (manifest could not be re-read, so the opt-in cannot be confirmed: ${detail})`,
     };
   }
   if (!decision.write) {

@@ -74,13 +74,20 @@ function buildTargetBody(existing: string | null, block: string, markers: Marker
  * Back up the target's original content the first time basou modifies it.
  * Uses a single stable `<target>.basou-bak` and never overwrites it, so the
  * pre-basou original is preserved exactly once.
+ *
+ * When the target did not exist, the pre-basou original is NOTHING, and that is
+ * recorded as an empty backup rather than skipped. Skipping left the door open
+ * for the next write — whose `existing` is basou's own block — to be backed up
+ * as the "original" and kept forever, so a workspace's position survived on
+ * disk after the block itself was cleared. `readMarkdownFile` returns "" for an
+ * empty file (null only when absent), so the empty backup is honoured as
+ * "already taken" from then on.
  */
 async function backupOnce(target: string, existing: string | null): Promise<void> {
-  if (existing === null) return;
   const bak = `${target}.basou-bak`;
   const already = await readMarkdownFile(bak);
   if (already !== null) return;
-  await writeFileDurable(bak, existing);
+  await writeFileDurable(bak, existing ?? "");
 }
 
 /**
@@ -139,12 +146,17 @@ export function assertNoMarkerLine(body: string, markers: Markers): void {
   }
 }
 
-/** Remove a managed marker block from `target`. Returns whether anything changed. */
+/**
+ * Remove a managed marker block from `target`. Returns whether anything changed.
+ * `backup: false` skips the one-time `.basou-bak`: a caller whose purpose is to
+ * get a block OFF the machine must not leave a copy of it beside the target.
+ */
 export async function removeMarkerBlock(opts: {
   target: string;
   markers: Markers;
   fileLabel: string;
   dryRun?: boolean;
+  backup?: boolean;
 }): Promise<{ removed: boolean }> {
   const { target, markers, fileLabel } = opts;
   await assertNotSymlink(target);
@@ -160,7 +172,7 @@ export async function removeMarkerBlock(opts: {
       "The target changed during unsync; aborting so a concurrent edit is not overwritten. Re-run the command.",
     );
   }
-  await backupOnce(target, existing);
+  if (opts.backup !== false) await backupOnce(target, existing);
   await writeFileDurable(target, newBody);
   return { removed: true };
 }
@@ -195,8 +207,8 @@ export async function syncOrientationChannel(opts: {
  * content of the file (a hand-written body, the protocol block) untouched. This
  * is the operator's manual escape hatch: the face is user-global, so a block a
  * different workspace rendered there is in the context of every Codex session
- * on the machine until something overwrites or removes it. `target` overrides
- * the locked path for tests only.
+ * on the machine until something overwrites or removes it. No `.basou-bak` is
+ * written by this path. `target` overrides the locked path for tests only.
  */
 export async function clearOrientationChannel(opts: {
   target?: string;
@@ -205,7 +217,12 @@ export async function clearOrientationChannel(opts: {
   return removeMarkerBlock({
     target: opts.target ?? CODEX_TARGET_PATH,
     markers: ORIENTATION_MARKERS,
-    fileLabel: "~/.codex/AGENTS.md",
+    // Name the file actually acted on, so an error under the test seam does not
+    // point at the locked path.
+    fileLabel: opts.target ?? "~/.codex/AGENTS.md",
+    // The block is being removed because it should not be on this machine;
+    // preserving it in `.basou-bak` would defeat the command.
+    backup: false,
     ...(opts.dryRun === true ? { dryRun: true } : {}),
   });
 }

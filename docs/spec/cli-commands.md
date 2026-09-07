@@ -38,6 +38,9 @@ basou handoff generate     # generate or inspect .basou/handoff.md
 basou decisions generate   # generate or inspect .basou/decisions.md
 basou report generate      # generate a work report (stdout / --out / --json)
 basou orient               # show the current position (also writes .basou/orientation.md)
+
+# User-global context faces (files every project's AI tool auto-loads)
+basou channel clear codex  # remove basou's orientation block from ~/.codex/AGENTS.md
 ```
 
 For exact flags, subcommands, and arguments, see the generated reference linked
@@ -68,8 +71,12 @@ the gate decides *whether* a workspace writes, not *where*.
 The gate governs writing only. It cannot keep a block another workspace
 already rendered out of this workspace's tool: `basou channel clear codex`
 removes the orientation block from `~/.codex/AGENTS.md` on the spot (leaving
-any other content of the file intact), and `basou protocol unsync` does the
-same for the protocol block in `~/.claude/CLAUDE.md`.
+any other content of the file intact, and writing no `.basou-bak` — the block
+is being removed because it should not be on the machine), and `basou protocol
+unsync` does the same for the protocol block in `~/.claude/CLAUDE.md`. When
+basou creates a face file that did not exist, it records an empty `.basou-bak`
+so that no later write can preserve basou's own block as the "pre-basou
+original".
 
 ## §15.2 Commands considered but not implemented
 

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ORIENTATION_END, ORIENTATION_START } from "@basou/core";
@@ -93,6 +93,23 @@ describe("basou channel clear codex", () => {
       removed: true,
       dry_run: false,
     });
+  });
+
+  it("leaves no .basou-bak behind: the removed block is gone from the machine, not parked beside the file", async () => {
+    await writeFile(target, `${ORIENTATION_START}\nleaked position\n${ORIENTATION_END}\n`);
+
+    await doRunChannelClear("codex", { target, json: true });
+
+    await expect(access(`${target}.basou-bak`)).rejects.toThrow();
+    expect(await readFile(target, "utf8")).not.toContain("leaked position");
+  });
+
+  it("names the file it acted on in a malformed-markers error, not the locked path", async () => {
+    // Start marker only: the block cannot be parsed, so removal refuses.
+    await writeFile(target, `${ORIENTATION_START}\nno end marker\n`);
+
+    await expect(doRunChannelClear("codex", { target })).rejects.toThrow(target);
+    await expect(doRunChannelClear("codex", { target })).rejects.not.toThrow("~/.codex/AGENTS.md");
   });
 
   it("rejects an unknown face with a pointer to `protocol unsync`, exit code 1", async () => {

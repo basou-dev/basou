@@ -799,7 +799,7 @@ describe("runCodex", () => {
       spy.mockRestore();
     }
     await expect(access(channelPath)).rejects.toThrow();
-    expect(logs.join("\n")).toContain("codex channel: skipped (not enabled in manifest");
+    expect(logs.join("\n")).toContain("codex channel: skipped (this workspace has not opted in");
   });
 
   it("confidential outranks the opt-in for the launcher too", async () => {

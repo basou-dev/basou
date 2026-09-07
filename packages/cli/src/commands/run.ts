@@ -737,8 +737,9 @@ async function resolveRepositoryRootForRun(cwd: string): Promise<string> {
  * refresh captured. Fully best-effort: any failure returns null so the launch
  * is never blocked — and because the write happens only after the manifest's
  * opt-in is read successfully, a failure also means nothing was written (fail
- * closed). The `ctx.codexChannelPath` seam keeps tests off the real
- * home-global file.
+ * closed). A manifest the schema rejects never reaches this step at all: the
+ * launcher's own workspace resolution reads it first and fails the launch. The
+ * `ctx.codexChannelPath` seam keeps tests off the real home-global file.
  */
 async function syncCodexOrientationChannelPreSpawn(
   cwd: string,

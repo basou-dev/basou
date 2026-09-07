@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ORIENTATION_END, ORIENTATION_START, PROTOCOL_END, PROTOCOL_START } from "@basou/core";
@@ -156,7 +156,35 @@ describe("removeMarkerBlock", () => {
   });
 });
 
+describe("backupOnce via syncOrientationChannel", () => {
+  it("records an EMPTY backup when basou creates the face, so a later write never preserves basou's own block", async () => {
+    // First write: the face did not exist. The pre-basou original is nothing,
+    // and that is what the backup must say.
+    await syncOrientationChannel({ body: "# Orientation\n\nfirst\n", target });
+    expect(await readFile(`${target}.basou-bak`, "utf8")).toBe("");
+
+    // Second write: `existing` is now basou's own first block. Before the fix
+    // this became the "original" and was kept forever.
+    await syncOrientationChannel({ body: "# Orientation\n\nsecond\n", target });
+    expect(await readFile(`${target}.basou-bak`, "utf8")).toBe("");
+  });
+});
+
 describe("clearOrientationChannel", () => {
+  it("never writes a .basou-bak, even when none exists yet", async () => {
+    // A face basou created before the empty-backup rule existed: block present,
+    // no backup file. Clearing must not leave a copy of the block beside it.
+    await writeFile(
+      target,
+      `${ORIENTATION_START}\n# Orientation\n\nposition\n${ORIENTATION_END}\n`,
+    );
+
+    const { removed } = await clearOrientationChannel({ target });
+
+    expect(removed).toBe(true);
+    await expect(access(`${target}.basou-bak`)).rejects.toThrow();
+  });
+
   it("removes only the orientation block, leaving a protocol block in place", async () => {
     await syncMarkerBlock({
       target,

@@ -312,7 +312,7 @@ describe("basou refresh", () => {
 
     expect(await readFile(getCodexChannelPath(), "utf8")).toBe(prior);
     expect(result.codexChannel).toEqual({ status: "skipped", reason: "not_enabled" });
-    expect(lines.join("\n")).toContain("codex channel: skipped (not enabled in manifest");
+    expect(lines.join("\n")).toContain("codex channel: skipped (this workspace has not opted in");
   });
 
   it("confidential outranks the opt-in: the face's content hash is unchanged", async () => {

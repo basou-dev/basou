@@ -28,12 +28,21 @@ export function decideCodexChannel(
   return { write: false, reason: "not_enabled" };
 }
 
-/** The one-line status printed when the channel was not written, and why. */
+/**
+ * The one-line status printed when the channel was not written, and why.
+ *
+ * Both lines are statements of fact, deliberately without an imperative or a
+ * key name. The reader of `refresh` output is often an AI agent acting on tool
+ * output, and an instruction such as "set channels.codex: true" is a one-edit
+ * recipe for re-enabling exactly the leak the default-off gate exists to stop —
+ * with a manifest diff that then reads as operator intent. Where the opt-in is
+ * documented is a fact; how to flip it is not this line's job.
+ */
 export function describeCodexChannelSkip(reason: CodexChannelSkipReason): string {
   switch (reason) {
     case "confidential":
       return "codex channel: skipped (confidential workspace — nothing is written to the user-global ~/.codex/AGENTS.md)";
     case "not_enabled":
-      return "codex channel: skipped (not enabled in manifest — set channels.codex: true to render this workspace's orientation into the user-global ~/.codex/AGENTS.md)";
+      return "codex channel: skipped (this workspace has not opted in; the user-global ~/.codex/AGENTS.md is left untouched — see docs/spec/schemas.md §4.2)";
   }
 }
