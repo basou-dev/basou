@@ -11,6 +11,7 @@ import {
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { loadPortfolioConfig, type PortfolioWorkspace } from "../lib/portfolio-config.js";
+import { checkPortfolioCoverage, formatCoverageReport } from "../lib/portfolio-coverage.js";
 import { checkPortfolioSafety, formatSafetyReport } from "../lib/portfolio-safety.js";
 import {
   type RemoteUrlResolver,
@@ -31,7 +32,11 @@ export type ViewOptions = {
   portfolio?: boolean;
   /** Ad-hoc workspace paths (repeatable); resolved against the cwd. Implies portfolio mode. */
   workspace?: string[];
-  /** Run the portfolio safety preflight and exit (no server). */
+  /**
+   * Run the read-only preflight and exit (no server): the portfolio safety
+   * check always, plus the capture-coverage report in portfolio mode. Only
+   * safety findings set the exit code; coverage is informational.
+   */
   check?: boolean;
   /** Skip the portfolio safety preflight on start (not recommended). */
   skipSafetyCheck?: boolean;
@@ -95,7 +100,10 @@ export function registerViewCommand(program: Command): void {
       "Workspace repo path to include (repeatable; implies portfolio mode; resolved against the cwd)",
       collectPath,
     )
-    .option("--check", "Run the portfolio safety preflight and exit (no server)")
+    .option(
+      "--check",
+      "Run the read-only preflight and exit (no server): the portfolio safety check, plus — in portfolio mode — a capture-coverage report of session logs no registered workspace imports",
+    )
     .option("--skip-safety-check", "Skip the portfolio safety preflight on start (not recommended)")
     .option("-v, --verbose", "Show error causes")
     .action(async (options: ViewOptions) => {
@@ -122,15 +130,37 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
   const cwd = ctx.cwd ?? process.cwd();
   const workspaceFlags = options.workspace ?? [];
   const isPortfolio = workspaceFlags.length > 0 || options.portfolio === true;
+  // `--portfolio` alone loads every entry of ~/.basou/portfolio.yaml; adding
+  // `--workspace` replaces the registry with the named paths.
+  const isWholeRegistry = options.portfolio === true && workspaceFlags.length === 0;
 
   const deps = isPortfolio
     ? await buildPortfolioDeps(workspaceFlags, ctx, cwd)
     : await buildSingleDeps(ctx, cwd);
 
-  // --check: run the read-only safety preflight and exit (no server).
+  // --check: run the read-only preflight(s) and exit (no server).
   if (options.check === true) {
     const result = await checkPortfolioSafety(deps.workspaces);
     for (const line of formatSafetyReport(result)) console.log(line);
+    // Capture coverage runs only when the workspace set IS the registry —
+    // `--portfolio` with no `--workspace` flag. The report's claim is "no
+    // REGISTERED workspace imports this", and only the whole registry can tell
+    // that from "not this one": with ad-hoc `--workspace` paths
+    // `buildPortfolioDeps` replaces the registry, so every other registered
+    // workspace's logs would be reported as imported by nothing. Single mode is
+    // excluded for the same reason. Reported after the safety report and never
+    // touching the exit code — a coverage gap is provenance not collected, not
+    // a write risk.
+    if (isWholeRegistry) {
+      const coverage = await checkPortfolioCoverage(deps.workspaces, {
+        ...(ctx.claudeProjectsDir !== undefined
+          ? { claudeProjectsDir: ctx.claudeProjectsDir }
+          : {}),
+        ...(ctx.codexSessionsDir !== undefined ? { codexSessionsDir: ctx.codexSessionsDir } : {}),
+      });
+      console.log("");
+      for (const line of formatCoverageReport(coverage)) console.log(line);
+    }
     if (result.findings.length > 0) process.exitCode = 1;
     return;
   }

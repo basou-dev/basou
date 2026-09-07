@@ -3,6 +3,54 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- `basou view --portfolio --check` now reports **capture coverage**: which
+  native session logs on this machine are imported by no registered workspace.
+
+  Both importers attribute a source log by its own recorded `cwd` and require
+  that `cwd` to equal a declared source root; a log matching nothing is dropped.
+  The Codex path dropped it before it became an import candidate, so it appeared
+  in no skip counter and raised no warning — silent. Dropping is usually right
+  (a sibling workspace's log must not be imported here), and that is exactly why
+  the drop could not be reported from inside one workspace: only the whole
+  registry can tell "no workspace imports this" from "not this one". It
+  therefore runs for `--portfolio` alone; an ad-hoc `--workspace` list replaces
+  the registry, so a registry-wide claim would be false against it.
+
+  The report groups unattributed logs by recorded `cwd` and separates three
+  cases, whose remedies differ. `no_declared_root` is under no declared root of
+  any registered workspace — usually a project nobody registered; a scratch
+  path, a temp path, or a GUI tool's own working directory has no repo to
+  declare and stays there by design. `below_declared_root` sits inside a
+  declared root without equalling it, so the exact-match rule drops it: the
+  enclosing declaration does not cover it, while declaring that subdirectory
+  itself does capture it. `dir_not_listed` (Claude Code only) has a `cwd` that
+  IS declared, but the transcript sits in a per-project directory no declared
+  root encodes to, so the importer never lists the file.
+
+  Only `import.source_roots` starts capture. Registering a path in
+  `~/.basou/portfolio.yaml` imports nothing by itself, because `basou import`
+  resolves the git toplevel and asserts an initialized `.basou/` before reading
+  a log; an entry failing either test contributes no declared roots and is
+  reported separately as inert, so registering a directory cannot move the
+  coverage number without capturing a log.
+
+  Coverage is read-only and never gates. It does not set the exit code and does
+  not gate a `--portfolio` start, because uncaptured provenance is a coverage
+  gap, not a write risk — unlike the footprint / overlap findings beside it.
+  Every attribution decision runs through the importers' own guards, shared
+  rather than re-derived: `resolveSourceRoots` against the git toplevel (the
+  spelling `resolveImportTarget` passes), `readRolloutMeta` for a rollout's
+  `cwd`, and `encodeProjectDir` for which transcript directories the Claude
+  importer will list. Claude's listing is flat, so nested subagent transcripts —
+  which no import reads — are not counted. A log with no usable `cwd` is dropped
+  by both importers and counted as uncaptured with no directory to name, so the
+  report never says "OK" about a log it could not place. Each log is streamed
+  only as far as its first recorded `cwd`.
+
 ## 0.38.0 — 2026-08-28
 
 ### Changed
