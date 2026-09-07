@@ -50,6 +50,36 @@ pnpm --filter @basou/cli  publish --dry-run --access public --no-git-checks
 pnpm --filter @basou/sdk  publish --dry-run --access public --no-git-checks
 ```
 
+### The workflow's own dry-run, and the window it runs in
+
+`release.yml` also accepts a `workflow_dispatch` with `dry_run: true`,
+which exercises the real thing — `verify`, the tarball pack, and the
+npm OIDC handshake — without publishing:
+
+```bash
+gh workflow run release.yml --ref main -f dry_run=true
+```
+
+**It only passes while `main`'s version is bumped but not yet
+published.** The dry-run branch still calls `pnpm publish --dry-run`,
+which asks the registry, so once that version exists on npm the run
+fails with:
+
+```text
+npm error You cannot publish over the previously published versions: 0.38.0.
+```
+
+That is exactly how the 2026-09-04 attempt failed: it ran against a
+`main` still sitting at the already-published `0.38.0`. Everything
+before the registry check had passed, so the failure said nothing about
+the workflow's health. The verified-good run is 2026-09-07 against
+`main` at `0.39.0` with npm at `0.38.0` — all four jobs green, nothing
+published, the two release-creating jobs skipped.
+
+So the window is: **after the bump lands on `main`, before the tag is
+pushed.** Outside it there is no way to smoke-test the workflow at all,
+which makes this a use-it-or-lose-it step in every release.
+
 ### Captured dry-run output (`0.3.1`)
 
 | Package        | Tarball size | Unpacked size | Files | Notes                                  |
