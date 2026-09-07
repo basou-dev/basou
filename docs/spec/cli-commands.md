@@ -147,25 +147,46 @@ importers attribute a source log by its own recorded `cwd` and require that
 `cwd` to **equal** a declared source root; a log matching nothing is dropped,
 and the drop is invisible from inside any single workspace — dropping a sibling
 workspace's log is correct there, so only the whole registry can tell "no
-workspace imports this" from "not this one". The report groups the unattributed
-logs by recorded `cwd` and separates two cases:
+workspace imports this" from "not this one". It therefore runs only for
+`--portfolio` with no `--workspace` flag: an ad-hoc `--workspace` list replaces
+the registry, so a registry-wide claim would be false against it.
+
+The report groups the unattributed logs by recorded `cwd` and separates three
+cases, whose remedies differ:
 
 - `no_declared_root` — the `cwd` is under no declared root of any registered
-  workspace. Usually a real project nobody registered: declare it (in
-  `~/.basou/portfolio.yaml`, or in a workspace's `import.source_roots`) and its
-  provenance starts flowing. A scratch directory, a temp path, or a GUI tool's
-  own working directory has no repo to declare and is expected to stay here.
+  workspace. Usually a project nobody registered. A scratch directory, a temp
+  path, or a GUI tool's own working directory has no repo to declare and is
+  expected to stay here.
 - `below_declared_root` — the `cwd` sits **inside** a declared root without
-  equalling it, so the exact-match rule drops provenance the owner already
-  declared. Nothing the owner can declare fixes it; it is a report on the rule
-  itself and is listed first.
+  equalling it, so the exact-match rule drops it: the enclosing declaration does
+  not cover it. Declaring that subdirectory itself as a further
+  `import.source_roots` entry does capture it.
+- `dir_not_listed` — Claude Code only. The `cwd` **is** a declared root, but the
+  transcript sits in a per-project directory that no declared root encodes to,
+  and the importer only ever lists `encodeProjectDir(root)` directories, so the
+  file is never read. Usually a sign that the workspace is registered under a
+  different path spelling than the sessions ran in.
+
+Only `import.source_roots` starts capture. Registering a path in
+`~/.basou/portfolio.yaml` adds a workspace to this view and imports nothing by
+itself: `basou import` resolves the git toplevel and asserts an initialized
+`.basou/` before reading a log. A registered entry that fails either test
+therefore contributes **no** declared roots and is reported separately as inert,
+so registering a directory can never move the coverage number without capturing
+a log.
 
 Coverage is read-only (it opens source logs to read their `cwd` and writes
 nothing) and **never** gates: it does not set the exit code and does not gate a
 `--portfolio` start, because uncaptured provenance is a coverage gap, not a
-write risk. It runs in portfolio mode only, and reads the log trees with the
-same rules the importers use — flat per-project `*.jsonl` for Claude Code
-(nested subagent transcripts are not imported, so they are not counted), the
-whole date-nested tree for Codex, and verbatim path comparison with no
-canonicalization (a symlinked spelling the importer misses is reported as
-missed).
+write risk. Every attribution decision runs through the importers' own guards,
+shared rather than re-derived — `resolveSourceRoots` for the roots (against the
+git toplevel, as `resolveImportTarget` passes it), `readRolloutMeta` for a
+rollout's `cwd` (so a rollout whose first record is not a usable `session_meta`
+is reported as uncaptured, not attributed to a `cwd` appearing later in the
+file), and `encodeProjectDir` for which transcript directories the Claude
+importer will list. Claude's per-project listing is flat, so nested subagent
+transcripts are not imported and are not counted. A log carrying no usable `cwd`
+is dropped by both importers and is counted as uncaptured — just with no
+directory to name — so the report never says "OK" on the strength of a log it
+could not place.

@@ -1,10 +1,10 @@
 import { createReadStream, type Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { readManifest } from "@basou/core";
-import { resolveSourceRoots } from "../commands/import.js";
+import { basouPaths, readManifest, resolveRepositoryRoot } from "@basou/core";
+import { encodeProjectDir, readRolloutMeta, resolveSourceRoots } from "../commands/import.js";
 import type { WorkspaceEntry } from "./view-server.js";
 
 /**
@@ -14,20 +14,22 @@ import type { WorkspaceEntry } from "./view-server.js";
 export type CoverageSource = "claude-code" | "codex";
 
 /**
- * Why a source log's cwd matched no registered workspace. The distinction is
- * the whole point of the check, because the two have opposite remedies:
+ * Why the importers would not take a source log. The kinds are separated
+ * because their remedies differ, and coverage must not describe one as another:
  *
- * - `below_declared_root`: the cwd sits INSIDE a declared source root but is
- *   not equal to it. The owner already declared this repo and the provenance is
- *   still dropped, because both import guards compare the recorded cwd to a
- *   source root verbatim. Nothing the owner can declare fixes this — it is a
- *   report on the exact-match rule itself.
+ * - `below_declared_root`: the cwd sits INSIDE a declared source root without
+ *   equalling it, so the exact-match rule drops it. The enclosing declaration
+ *   does not cover it; declaring the subdirectory itself as a further
+ *   `import.source_roots` entry does.
+ * - `dir_not_listed`: Claude Code only. The cwd IS a declared root, but the
+ *   transcript sits in a per-project directory that no declared root encodes
+ *   to, and the importer only ever lists `encodeProjectDir(root)` directories —
+ *   so the file is never read despite its cwd matching.
  * - `no_declared_root`: the cwd is under no declared root of any registered
- *   workspace. Usually a real project nobody registered (declare it and the
- *   provenance starts flowing); sometimes a scratch or GUI working directory
- *   with no repo to declare, which is expected to stay unattributed.
+ *   workspace. Usually a project nobody registered; sometimes a scratch or GUI
+ *   working directory with no repo to declare, which stays here by design.
  */
-export type UnattributedKind = "below_declared_root" | "no_declared_root";
+export type UnattributedKind = "below_declared_root" | "dir_not_listed" | "no_declared_root";
 
 /** Source logs sharing one recorded cwd that no registered workspace imports. */
 export type UnattributedGroup = {
@@ -42,19 +44,40 @@ export type UnattributedGroup = {
   declaredRoot?: string;
 };
 
+/** Why a registered portfolio entry contributes no declared roots at all. */
+export type InertReason = "not_a_git_repo" | "no_store" | "unreadable_store";
+
+/**
+ * A registered workspace that cannot import anything, so it claims no roots.
+ * Registration alone never causes capture: `basou import` resolves the git
+ * toplevel and asserts an initialized `.basou/` before it reads a single log.
+ * Counting such an entry's own path as a declared root would let registering a
+ * directory move the coverage number without capturing one extra log.
+ */
+export type InertWorkspace = {
+  path: string;
+  reason: InertReason;
+};
+
 export type CoverageResult = {
   /** Source logs seen across both adapter trees. */
   logsScanned: number;
-  /** Logs whose cwd equals a source root of some registered workspace. */
+  /** Logs both guards would take: their cwd equals a declared root AND import lists the file. */
   attributed: number;
-  /** Unattributed logs, grouped by cwd; `below_declared_root` first, then by size. */
+  /** Logs import would not take, grouped by recorded cwd. */
   groups: UnattributedGroup[];
-  /** Logs that recorded no cwd at all, so they cannot be placed either way. */
-  cwdMissing: number;
-  /** Logs that could not be read (permissions, vanished mid-scan). */
+  /**
+   * Logs import would not take AND coverage cannot place: no usable cwd to name
+   * (a Claude transcript that records none, or a rollout whose first record is
+   * not a usable `session_meta`). Uncaptured like the groups, just ungroupable.
+   */
+  unplaceable: number;
+  /** Logs that could not be read (permissions, vanished mid-scan) — verdict unknown. */
   unreadable: number;
   /** Adapter trees that were absent — nothing was scanned for them. */
   absentTrees: string[];
+  /** Registered entries that import cannot run in, so they declare nothing. */
+  inertWorkspaces: InertWorkspace[];
 };
 
 /** Injectable seams so tests need no real `~/.claude` / `~/.codex`. */
@@ -65,14 +88,18 @@ export type CoverageContext = {
   codexSessionsDir?: string;
 };
 
-/** Total unattributed logs across every group. */
-export function unattributedTotal(result: CoverageResult): number {
-  return result.groups.reduce((sum, g) => sum + g.logs, 0);
+/**
+ * Logs no registered workspace would import. Includes {@link
+ * CoverageResult.unplaceable}: both importers drop a log with no usable cwd, so
+ * leaving it out would report those logs as captured.
+ */
+export function uncapturedTotal(result: CoverageResult): number {
+  return result.groups.reduce((sum, g) => sum + g.logs, 0) + result.unplaceable;
 }
 
 /**
  * Report which native session logs on this machine are imported by NO
- * registered workspace — the blind spot behind both import guards.
+ * registered workspace — the blind spot behind the import guards.
  *
  * Both importers attribute a source log by its own recorded cwd and require
  * that cwd to EQUAL a declared source root; a log that matches nothing is
@@ -82,6 +109,13 @@ export function unattributedTotal(result: CoverageResult): number {
  * workspace at all" is only answerable across the whole registry. So it is
  * answered here, once, against every registered workspace's roots.
  *
+ * Every attribution decision runs through the importers' OWN guards, shared
+ * rather than re-derived: {@link resolveSourceRoots} for the roots, {@link
+ * readRolloutMeta} for a rollout's cwd, {@link encodeProjectDir} for which
+ * transcript directories the Claude importer will even list. Coverage claims
+ * "import would not take this log", and that claim is only checkable while both
+ * sides apply the same rules.
+ *
  * Read-only and non-gating: it opens source logs to read their cwd and writes
  * nothing. Unlike the safety preflight it never blocks a portfolio start —
  * uncaptured provenance is a coverage gap, not a write risk.
@@ -90,90 +124,135 @@ export async function checkPortfolioCoverage(
   workspaces: ReadonlyArray<WorkspaceEntry>,
   ctx: CoverageContext = {},
 ): Promise<CoverageResult> {
-  const declaredRoots = await collectDeclaredRoots(workspaces);
+  const { roots, inertWorkspaces } = await collectDeclaredRoots(workspaces);
+  // The per-project directories the Claude importer would list, for any
+  // declared root. A transcript outside all of them is never read.
+  const listedDirs = new Set([...roots].map((root) => encodeProjectDir(root)));
   const claudeProjectsDir = ctx.claudeProjectsDir ?? join(homedir(), ".claude", "projects");
   const codexSessionsDir = ctx.codexSessionsDir ?? join(homedir(), ".codex", "sessions");
 
-  const tally = new Tally(declaredRoots);
+  const tally = new Tally(roots);
   const absentTrees: string[] = [];
 
   const claudeFiles = await listClaudeTranscripts(claudeProjectsDir);
   if (claudeFiles === undefined) absentTrees.push(claudeProjectsDir);
-  else for (const file of claudeFiles) await tally.add(file, "claude-code", claudeTranscriptCwd);
+  else {
+    for (const file of claudeFiles) {
+      await tally.add(
+        file,
+        "claude-code",
+        claudeTranscriptCwd,
+        listedDirs.has(basename(dirname(file))),
+      );
+    }
+  }
 
   const codexFiles = await listCodexRollouts(codexSessionsDir);
   if (codexFiles === undefined) absentTrees.push(codexSessionsDir);
-  else for (const file of codexFiles) await tally.add(file, "codex", codexRolloutCwd);
+  else {
+    // The Codex importer walks the whole sessions tree, so every rollout is
+    // listed; its only guard is the `session_meta` shape, applied by the reader.
+    for (const file of codexFiles) await tally.add(file, "codex", codexRolloutCwd, true);
+  }
 
-  return tally.finish(absentTrees);
+  return tally.finish(absentTrees, inertWorkspaces);
 }
 
 /**
- * Every path some registered workspace would import from, resolved exactly as
- * the importers resolve it: the manifest's `import.source_roots` against the
- * repo root, else the repo root alone. An entry whose manifest is missing or
- * unreadable falls back to its own root — the same fallback
- * {@link resolveSourceRoots} applies — so an uninitialized portfolio entry
- * still claims its own directory rather than claiming nothing.
+ * Every path some registered workspace would import from, derived the way
+ * `basou import` derives it: resolve the git toplevel of the entry, require a
+ * readable `.basou/` there, then apply {@link resolveSourceRoots} to that
+ * manifest against that toplevel.
+ *
+ * The toplevel matters. `basou import` starts from `resolveRepositoryRoot(cwd)`,
+ * so a portfolio entry registered by a symlinked (or otherwise non-toplevel)
+ * spelling imports under the toplevel spelling. Deriving roots from the
+ * registered spelling instead would invert coverage for that whole workspace:
+ * the symlinked spelling silently matched, the real one reported as missed.
+ *
+ * An entry import cannot run in claims NO roots and is reported as inert
+ * instead, because registration by itself captures nothing.
  */
 async function collectDeclaredRoots(
   workspaces: ReadonlyArray<WorkspaceEntry>,
-): Promise<Set<string>> {
+): Promise<{ roots: Set<string>; inertWorkspaces: InertWorkspace[] }> {
   const roots = new Set<string>();
+  const inertWorkspaces: InertWorkspace[] = [];
   for (const ws of workspaces) {
+    let importRoot: string;
+    try {
+      importRoot = await resolveRepositoryRoot(ws.repoRoot);
+    } catch {
+      inertWorkspaces.push({ path: ws.repoRoot, reason: "not_a_git_repo" });
+      continue;
+    }
     let resolved: string[];
     try {
-      const manifest = await readManifest(ws.paths);
+      const manifest = await readManifest(basouPaths(importRoot));
       resolved = resolveSourceRoots({
         projectFlags: [],
         manifest,
-        repoRoot: ws.repoRoot,
-        cwd: ws.repoRoot,
+        repoRoot: importRoot,
+        cwd: importRoot,
       });
-    } catch {
-      resolved = [ws.repoRoot];
+    } catch (error: unknown) {
+      const absent = error instanceof Error && error.message === "YAML file not found";
+      inertWorkspaces.push({
+        path: ws.repoRoot,
+        reason: absent ? "no_store" : "unreadable_store",
+      });
+      continue;
     }
     for (const root of resolved) roots.add(root);
   }
-  return roots;
+  return { roots, inertWorkspaces };
 }
 
 /** Accumulates one scan; `finish` orders the groups for reporting. */
 class Tally {
   private readonly groups = new Map<string, { logs: number; sources: Set<CoverageSource> }>();
+  private readonly kinds = new Map<string, UnattributedKind>();
   private attributed = 0;
   private scanned = 0;
-  private cwdMissing = 0;
+  private unplaceable = 0;
   private unreadable = 0;
 
   constructor(private readonly declaredRoots: Set<string>) {}
 
+  /**
+   * Record one source log. `listedByImport` is whether the importer would even
+   * read this file (the Claude directory guard); a cwd match on a file import
+   * never lists is not capture.
+   */
   async add(
     file: string,
     source: CoverageSource,
     readCwd: (file: string) => Promise<string | undefined | null>,
+    listedByImport: boolean,
   ): Promise<void> {
     this.scanned++;
-    let cwd: string | undefined | null;
-    try {
-      cwd = await readCwd(file);
-    } catch {
-      this.unreadable++;
-      return;
-    }
-    // `null` = the file could not be read; `undefined` = read fine, recorded no cwd.
+    // `null` = the file could not be read; `undefined` = read fine, but carries
+    // no cwd the importer could use.
+    const cwd = await readCwd(file);
     if (cwd === null) {
       this.unreadable++;
       return;
     }
     if (cwd === undefined) {
-      this.cwdMissing++;
+      this.unplaceable++;
       return;
     }
-    if (this.declaredRoots.has(cwd)) {
+    const declared = this.declaredRoots.has(cwd);
+    if (declared && listedByImport) {
       this.attributed++;
       return;
     }
+    const kind: UnattributedKind = declared
+      ? "dir_not_listed"
+      : enclosingRoot(cwd, this.declaredRoots) !== undefined
+        ? "below_declared_root"
+        : "no_declared_root";
+    this.kinds.set(cwd, kind);
     const group = this.groups.get(cwd);
     if (group === undefined) this.groups.set(cwd, { logs: 1, sources: new Set([source]) });
     else {
@@ -182,32 +261,38 @@ class Tally {
     }
   }
 
-  finish(absentTrees: string[]): CoverageResult {
+  finish(absentTrees: string[], inertWorkspaces: InertWorkspace[]): CoverageResult {
     const groups: UnattributedGroup[] = [];
     for (const [cwd, { logs, sources }] of this.groups) {
-      const declaredRoot = enclosingRoot(cwd, this.declaredRoots);
+      const kind = this.kinds.get(cwd) ?? "no_declared_root";
+      const declaredRoot =
+        kind === "below_declared_root" ? enclosingRoot(cwd, this.declaredRoots) : undefined;
       groups.push({
         cwd,
         logs,
         sources: [...sources].sort(),
-        kind: declaredRoot === undefined ? "no_declared_root" : "below_declared_root",
+        kind,
         ...(declaredRoot !== undefined ? { declaredRoot } : {}),
       });
     }
-    // `below_declared_root` first (declared yet still dropped — the sharper
-    // finding), then by size, then by cwd so the report is deterministic.
+    // The two kinds that name a declared root come first (a declaration is in
+    // place and provenance is still dropped), then by size, then by cwd so the
+    // report is deterministic.
+    const rank = (k: UnattributedKind): number =>
+      k === "dir_not_listed" ? 0 : k === "below_declared_root" ? 1 : 2;
     groups.sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === "below_declared_root" ? -1 : 1;
+      if (a.kind !== b.kind) return rank(a.kind) - rank(b.kind);
       if (a.logs !== b.logs) return b.logs - a.logs;
-      return a.cwd.localeCompare(b.cwd);
+      return a.cwd < b.cwd ? -1 : a.cwd > b.cwd ? 1 : 0;
     });
     return {
       logsScanned: this.scanned,
       attributed: this.attributed,
       groups,
-      cwdMissing: this.cwdMissing,
+      unplaceable: this.unplaceable,
       unreadable: this.unreadable,
       absentTrees,
+      inertWorkspaces,
     };
   }
 }
@@ -224,32 +309,47 @@ function enclosingRoot(cwd: string, roots: Set<string>): string | undefined {
   return undefined;
 }
 
+/** Whether `entry` is a directory, following a symlink the importer would follow. */
+async function isDirEntry(parent: string, entry: Dirent): Promise<boolean> {
+  if (entry.isDirectory()) return true;
+  // The importer reaches a per-project directory with a plain `readdir(path)`,
+  // which follows symlinks. Judging by `isDirectory()` alone would drop a
+  // symlinked project directory from the scan entirely — its transcripts would
+  // land in no counter at all and the reported denominator would be wrong.
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return (await stat(join(parent, entry.name))).isDirectory();
+  } catch {
+    return false; // dangling or unreadable link: nothing to scan
+  }
+}
+
 /**
- * The Claude transcripts the importer would consider: the top-level `*.jsonl`
- * of every per-project directory. Deliberately NOT recursive — the importer's
- * own listing is a flat `readdir`, so nested subagent transcripts are not
- * imported and must not be counted as uncaptured. Returns undefined when the
- * tree itself is absent.
+ * The Claude transcripts the importer would consider LISTING: the top-level
+ * `*.jsonl` of every per-project directory. Deliberately NOT recursive — the
+ * importer's own listing is a flat `readdir`, so nested subagent transcripts
+ * are not imported and must not be counted as uncaptured. Whether a given
+ * directory is actually listed is decided by the caller via
+ * {@link encodeProjectDir}. Returns undefined when the tree itself is absent.
  */
 async function listClaudeTranscripts(projectsRoot: string): Promise<string[] | undefined> {
-  let dirs: string[];
+  let entries: Dirent[];
   try {
-    dirs = (await readdir(projectsRoot, { withFileTypes: true }))
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
+    entries = await readdir(projectsRoot, { withFileTypes: true });
   } catch {
     return undefined;
   }
   const files: string[] = [];
-  for (const dir of dirs) {
-    const full = join(projectsRoot, dir);
-    let entries: string[];
+  for (const entry of entries) {
+    if (!(await isDirEntry(projectsRoot, entry))) continue;
+    const full = join(projectsRoot, entry.name);
+    let names: string[];
     try {
-      entries = await readdir(full);
+      names = await readdir(full);
     } catch {
       continue; // a project dir vanished or is unreadable; the rest still scan
     }
-    for (const name of entries) {
+    for (const name of names) {
       if (name.endsWith(".jsonl")) files.push(join(full, name));
     }
   }
@@ -288,20 +388,16 @@ async function listCodexRollouts(sessionsRoot: string): Promise<string[] | undef
 }
 
 /**
- * Read a source log's cwd by streaming it and stopping at the first line that
- * carries one — the same "first record with a cwd" rule both importers use.
- * Streaming matters: these logs run to hundreds of megabytes in aggregate,
- * while the cwd is in the opening records, so a scan costs a few kilobytes per
- * file. No byte cap is imposed, because a cap would make coverage claim "no
- * cwd" for a log the importer reads fine.
+ * A Claude transcript's cwd: the first record that carries one, which is
+ * exactly `firstTranscriptCwd`'s rule in the importer. Streamed and stopped at
+ * that record, so a scan costs a few kilobytes of a log that may run to
+ * hundreds of megabytes. No byte cap is imposed, because a cap would make
+ * coverage claim "no cwd" for a log the importer reads fine.
  *
- * Returns the cwd, `undefined` when the log carried none, or `null` when the
- * file could not be read.
+ * Returns the cwd, `undefined` when the transcript carries none (the importer
+ * drops it too), or `null` when the file could not be read.
  */
-async function firstCwd(
-  file: string,
-  pick: (record: Record<string, unknown>) => string | undefined,
-): Promise<string | undefined | null> {
+async function claudeTranscriptCwd(file: string): Promise<string | undefined | null> {
   const stream = createReadStream(file, { encoding: "utf8" });
   const lines = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
   try {
@@ -311,11 +407,11 @@ async function firstCwd(
       try {
         record = JSON.parse(line);
       } catch {
-        continue; // a malformed line is skipped, as in the importers
+        continue; // a malformed line is skipped, as in the importer
       }
       if (typeof record !== "object" || record === null || Array.isArray(record)) continue;
-      const cwd = pick(record as Record<string, unknown>);
-      if (cwd !== undefined) return cwd;
+      const cwd = (record as Record<string, unknown>).cwd;
+      if (typeof cwd === "string" && cwd.length > 0) return cwd;
     }
     return undefined;
   } catch {
@@ -326,26 +422,38 @@ async function firstCwd(
   }
 }
 
-/** Claude transcripts carry `cwd` at the top level of a record. */
-function claudeTranscriptCwd(file: string): Promise<string | undefined | null> {
-  return firstCwd(file, (record) => {
-    const cwd = record.cwd;
-    return typeof cwd === "string" && cwd.length > 0 ? cwd : undefined;
-  });
-}
-
-/** Codex rollouts carry `cwd` inside the `session_meta` record's payload. */
-function codexRolloutCwd(file: string): Promise<string | undefined | null> {
-  return firstCwd(file, (record) => {
-    const payload = record.payload;
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
-    const cwd = (payload as Record<string, unknown>).cwd;
-    return typeof cwd === "string" && cwd.length > 0 ? cwd : undefined;
-  });
+/**
+ * A Codex rollout's cwd, read through the importer's own {@link readRolloutMeta}
+ * so the guard is identical: the FIRST non-empty record must be a `session_meta`
+ * carrying a non-empty `id` and `cwd`. Anything else is a rollout the Codex
+ * import never treats as a candidate, and is reported as unplaceable rather
+ * than attributed to whatever cwd happens to appear later in the file.
+ *
+ * `readRolloutMeta` swallows read errors, so an unreadable rollout arrives here
+ * as `undefined` rather than `null`; it is counted as uncaptured either way.
+ */
+async function codexRolloutCwd(file: string): Promise<string | undefined | null> {
+  const meta = await readRolloutMeta(file);
+  return meta === undefined ? undefined : meta.cwd;
 }
 
 /** How many unattributed cwds to name before collapsing the rest into a count. */
 const GROUP_LIST_CAP = 10;
+
+/**
+ * The trailing clause on a group's line. Only the two kinds that involve a
+ * declaration say anything: `no_declared_root` is the plain case and the closing
+ * remedy line already covers it.
+ */
+function groupNote(group: UnattributedGroup): string {
+  if (group.kind === "below_declared_root") {
+    return ` — inside declared root ${group.declaredRoot}, and the recorded cwd must EQUAL a source root`;
+  }
+  if (group.kind === "dir_not_listed") {
+    return " — this cwd IS a declared root, but the transcript's per-project directory is not one import lists";
+  }
+  return "";
+}
 
 /**
  * Human-readable coverage lines for `basou view --portfolio --check`. Never
@@ -353,38 +461,41 @@ const GROUP_LIST_CAP = 10;
  * outcome, and the number is only actionable once the owner reads the paths.
  */
 export function formatCoverageReport(result: CoverageResult): string[] {
+  const lines: string[] = [];
   if (result.logsScanned === 0) {
     const where =
       result.absentTrees.length > 0
         ? ` (no source logs found: ${result.absentTrees.join(", ")})`
         : "";
-    return [`Capture coverage: nothing to check — no native session logs on this machine${where}.`];
+    lines.push(
+      `Capture coverage: nothing to check — no native session logs on this machine${where}.`,
+    );
+    return [...lines, ...inertLines(result)];
   }
 
-  const total = unattributedTotal(result);
+  const total = uncapturedTotal(result);
   const caveats: string[] = [];
-  if (result.cwdMissing > 0) caveats.push(`${result.cwdMissing} recorded no cwd`);
-  if (result.unreadable > 0) caveats.push(`${result.unreadable} unreadable`);
+  if (result.unreadable > 0) caveats.push(`${result.unreadable} unreadable, verdict unknown`);
   if (result.absentTrees.length > 0) caveats.push(`not scanned: ${result.absentTrees.join(", ")}`);
   const caveat = caveats.length > 0 ? ` (${caveats.join("; ")})` : "";
 
-  if (total === 0) {
-    return [
-      `Capture coverage: OK. ${result.logsScanned} source log(s) scanned, all attributed to a registered workspace${caveat}.`,
-    ];
+  // "OK" only when every log scanned is one import would take. Saying it while
+  // some log was unreadable, or carried no usable cwd, would report a log as
+  // captured on the strength of not having been placed.
+  if (total === 0 && result.unreadable === 0) {
+    lines.push(
+      `Capture coverage: OK. ${result.logsScanned} source log(s) scanned, all imported by a registered workspace${caveat}.`,
+    );
+    return [...lines, ...inertLines(result)];
   }
 
   const pct = Math.round((total / result.logsScanned) * 100);
-  const lines = [
+  lines.push(
     `Capture coverage: ${total} of ${result.logsScanned} source log(s) (${pct}%) are imported by no registered workspace${caveat}:`,
-  ];
+  );
   for (const g of result.groups.slice(0, GROUP_LIST_CAP)) {
     const via = g.sources.join("+");
-    const note =
-      g.kind === "below_declared_root"
-        ? ` — inside declared root ${g.declaredRoot}, dropped because the recorded cwd must EQUAL a source root`
-        : "";
-    lines.push(`  ${String(g.logs).padStart(4)}  ${g.cwd} (${via})${note}`);
+    lines.push(`  ${String(g.logs).padStart(4)}  ${g.cwd} (${via})${groupNote(g)}`);
   }
   const rest = result.groups.length - GROUP_LIST_CAP;
   if (rest > 0) {
@@ -393,13 +504,45 @@ export function formatCoverageReport(result: CoverageResult): string[] {
       `  … +${rest} more working director${rest === 1 ? "y" : "ies"} (${restLogs} log(s))`,
     );
   }
+  if (result.unplaceable > 0) {
+    lines.push(
+      `  ${String(result.unplaceable).padStart(4)}  (no directory to name: the log records no cwd import can use, so import drops it)`,
+    );
+  }
   if (result.groups.some((g) => g.kind === "below_declared_root")) {
     lines.push(
-      "A cwd inside a declared root is provenance you already declared and are still losing; report it rather than working around it.",
+      "A cwd inside a declared root is dropped by the exact-match rule: the enclosing declaration does not cover it. Declaring that subdirectory itself as a further import.source_roots entry captures it.",
+    );
+  }
+  if (result.groups.some((g) => g.kind === "dir_not_listed")) {
+    lines.push(
+      "A transcript whose cwd IS declared but whose per-project directory no declared root encodes to is never listed by the importer. Check that the workspace is registered by the same path spelling the sessions ran in.",
     );
   }
   lines.push(
-    "Register the project in ~/.basou/portfolio.yaml (or add it to a workspace's import.source_roots) to start capturing it. A scratch directory, a temp path, or a GUI tool's own working directory has no repo to declare and is expected to stay here.",
+    "Register the project in a workspace's import.source_roots to start capturing it (registering a path in ~/.basou/portfolio.yaml alone imports nothing — it only adds the workspace to this view). A scratch directory, a temp path, or a GUI tool's own working directory has no repo to declare and is expected to stay here.",
   );
+  return [...lines, ...inertLines(result)];
+}
+
+/**
+ * Registered entries import cannot run in. Reported separately from the log
+ * counts because they are a registry fact, not a log: they explain why a path
+ * the owner believes is registered captures nothing.
+ */
+function inertLines(result: CoverageResult): string[] {
+  if (result.inertWorkspaces.length === 0) return [];
+  const detail: Record<InertReason, string> = {
+    not_a_git_repo: "not a git repository",
+    no_store: "no .basou store (never initialized)",
+    unreadable_store: "the .basou manifest is unreadable",
+  };
+  const n = result.inertWorkspaces.length;
+  const lines = [
+    `Capture coverage: ${n} registered entr${n === 1 ? "y" : "ies"} import cannot run in, so ${n === 1 ? "it declares" : "they declare"} no source roots:`,
+  ];
+  for (const ws of result.inertWorkspaces) {
+    lines.push(`  ${ws.path} — ${detail[ws.reason]}`);
+  }
   return lines;
 }

@@ -187,9 +187,11 @@ export async function runImportCodex(
  *
  * Exported so the capture-coverage check derives a workspace's roots through
  * the SAME function the import guard uses: coverage claims "import would not
- * take this session log", and that claim is only true while both sides resolve
- * roots identically (verbatim `resolve`, no realpath — a symlinked spelling
- * that import misses must be reported as missed, not silently canonicalized).
+ * take this session log", and that claim only holds while both sides resolve
+ * roots identically. Note that identical resolution needs the same INPUT too —
+ * `resolveImportTarget` passes the git toplevel, so a caller that passes some
+ * other spelling of the repo (a symlink, a subdirectory) gets a different root
+ * set than the import it is trying to mirror.
  */
 export function resolveSourceRoots(args: {
   projectFlags: string[];
@@ -603,8 +605,14 @@ async function classifyReimport(
  * transcripts were under a `-`-encoded directory while we looked for an
  * underscore-preserving one, so the whole project was silently skipped as
  * "no source logs". Matching the full rule keeps those projects discoverable.
+ *
+ * Exported because this encoding is a SECOND Claude-side import guard beside
+ * the cwd equality one: the importer only ever lists the transcripts sitting in
+ * `encodeProjectDir(root)` for a declared root. The capture-coverage check has
+ * to apply it too, or it reports a transcript as captured that import never
+ * lists.
  */
-function encodeProjectDir(projectPath: string): string {
+export function encodeProjectDir(projectPath: string): string {
   return projectPath.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
@@ -819,8 +827,15 @@ async function findRolloutFiles(sessionsRoot: string): Promise<string[]> {
  * project cwd and session id, without parsing the whole — usually large — log.
  * Returns `undefined` for any file whose first record is not a usable
  * `session_meta`, so the caller can skip it.
+ *
+ * Exported so the capture-coverage check reads a rollout through the SAME
+ * guard the Codex import uses. A looser reader (any record's `payload.cwd`,
+ * anywhere in the file) makes coverage claim a rollout is captured that import
+ * never treats as a candidate.
  */
-async function readRolloutMeta(file: string): Promise<{ id: string; cwd: string } | undefined> {
+export async function readRolloutMeta(
+  file: string,
+): Promise<{ id: string; cwd: string } | undefined> {
   const firstLine = await readFirstLine(file);
   if (firstLine === undefined) return undefined;
   let parsed: unknown;

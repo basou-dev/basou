@@ -569,14 +569,22 @@ describe("basou view safety preflight", () => {
     }
   });
 
-  it("--check reports capture coverage in portfolio mode", async () => {
+  it("--check reports capture coverage against the whole registry", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "basou-pf-coverage-")));
-    const ws = await initWorkspaceAt(root, WS_ID_A, "ws");
-    // One rollout started in the workspace (attributed) and one started in a
-    // directory no registered workspace declares (the coverage gap).
+    await mkdir(join(root, "ws"), { recursive: true });
+    await mkdir(join(root, "other"), { recursive: true });
+    const ws = await initWorkspaceAt(join(root, "ws"), WS_ID_A, "ws");
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: ws, env: ENV });
+    // A SECOND registered workspace, so "no registered workspace imports this"
+    // is distinguishable from "not the one workspace in the fixture".
+    const other = await initWorkspaceAt(join(root, "other"), WS_ID_B, "other");
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: other, env: ENV });
+    const config = join(root, "portfolio.yaml");
+    await writeFile(config, `version: 1\nworkspaces:\n  - path: ${ws}\n  - path: ${other}\n`);
     const stray = join(root, "unregistered");
     for (const [id, cwd] of [
-      ["cx-in", ws],
+      ["cx-ws", ws],
+      ["cx-other", other],
       ["cx-out", stray],
     ]) {
       const dir = join(getCodexRoot(), "2026", "09", "07");
@@ -592,12 +600,15 @@ describe("basou view safety preflight", () => {
     });
     try {
       await doRunView(
-        { port: 0, workspace: [ws], check: true },
-        { cwd: root, openBrowser: () => {}, ...hermeticLogRoots() },
+        { port: 0, portfolio: true, check: true },
+        { cwd: root, openBrowser: () => {}, portfolioConfigPath: config, ...hermeticLogRoots() },
       );
       const out = logs.join("\n");
-      expect(out).toContain("Capture coverage: 1 of 2 source log(s)");
+      // Both registered workspaces' rollouts are attributed; only the stray one
+      // is a gap. A single-workspace fixture could not tell these apart.
+      expect(out).toContain("Capture coverage: 1 of 3 source log(s)");
       expect(out).toContain(stray);
+      expect(out).not.toContain(other);
       // Coverage is informational: only safety findings set the exit code.
       expect(process.exitCode).not.toBe(1);
     } finally {
@@ -606,9 +617,37 @@ describe("basou view safety preflight", () => {
     }
   });
 
+  it("--check omits capture coverage for ad-hoc --workspace paths", async () => {
+    // `--workspace` REPLACES the registry, so a registry-wide claim would be
+    // false there: every other registered workspace's logs would be reported as
+    // imported by nothing.
+    const root = await realpath(await mkdtemp(join(tmpdir(), "basou-pf-adhoc-")));
+    await mkdir(join(root, "ws"), { recursive: true });
+    const ws = await initWorkspaceAt(join(root, "ws"), WS_ID_A, "ws");
+    const dir = join(getCodexRoot(), "2026", "09", "07");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "rollout-cx-out.jsonl"),
+      `${JSON.stringify({ type: "session_meta", payload: { id: "cx-out", cwd: "/elsewhere" } })}\n`,
+    );
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+    try {
+      await doRunView(
+        { port: 0, workspace: [ws], check: true },
+        { cwd: root, openBrowser: () => {}, ...hermeticLogRoots() },
+      );
+      expect(logs.join("\n")).toContain("Portfolio safety:");
+      expect(logs.join("\n")).not.toContain("Capture coverage");
+    } finally {
+      process.exitCode = 0;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("--check omits capture coverage in single-workspace mode", async () => {
-    // From inside ONE workspace every other workspace's logs look uncaptured,
-    // so the coverage question is only meaningful across the whole registry.
     const repo = await setupInitedRepo();
     const dir = join(getCodexRoot(), "2026", "09", "07");
     await mkdir(dir, { recursive: true });

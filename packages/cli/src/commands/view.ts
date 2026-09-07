@@ -130,6 +130,9 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
   const cwd = ctx.cwd ?? process.cwd();
   const workspaceFlags = options.workspace ?? [];
   const isPortfolio = workspaceFlags.length > 0 || options.portfolio === true;
+  // `--portfolio` alone loads every entry of ~/.basou/portfolio.yaml; adding
+  // `--workspace` replaces the registry with the named paths.
+  const isWholeRegistry = options.portfolio === true && workspaceFlags.length === 0;
 
   const deps = isPortfolio
     ? await buildPortfolioDeps(workspaceFlags, ctx, cwd)
@@ -139,12 +142,16 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
   if (options.check === true) {
     const result = await checkPortfolioSafety(deps.workspaces);
     for (const line of formatSafetyReport(result)) console.log(line);
-    // Capture coverage runs only in portfolio mode, because "no workspace
-    // imports this session log" cannot be answered from one workspace: from
-    // inside a single workspace every sibling's logs look uncaptured. It is
-    // reported after the safety report and never touches the exit code — a
-    // coverage gap is provenance not collected, not a write risk.
-    if (deps.mode === "portfolio") {
+    // Capture coverage runs only when the workspace set IS the registry —
+    // `--portfolio` with no `--workspace` flag. The report's claim is "no
+    // REGISTERED workspace imports this", and only the whole registry can tell
+    // that from "not this one": with ad-hoc `--workspace` paths
+    // `buildPortfolioDeps` replaces the registry, so every other registered
+    // workspace's logs would be reported as imported by nothing. Single mode is
+    // excluded for the same reason. Reported after the safety report and never
+    // touching the exit code — a coverage gap is provenance not collected, not
+    // a write risk.
+    if (isWholeRegistry) {
       const coverage = await checkPortfolioCoverage(deps.workspaces, {
         ...(ctx.claudeProjectsDir !== undefined
           ? { claudeProjectsDir: ctx.claudeProjectsDir }
