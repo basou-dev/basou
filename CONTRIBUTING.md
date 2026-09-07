@@ -137,18 +137,49 @@ discuss the test plan than have you guess.
    build && pnpm typecheck && pnpm test && pnpm lint`.
 5. Commit as `basou: Release vX.Y.Z (<headline>)`.
 6. `git tag -a vX.Y.Z -m "..."` with a short summary.
-7. Push the branch and the tag.
-8. (Once npm publish is enabled:) `pnpm -r publish --access public`.
-   See [docs/release-checklist.md](docs/release-checklist.md) for the
-   dry-run + tarball verification step that should run before this.
-9. **Merge the docs-site bump PR the release workflow opened, and read the
-   version back off the live site.** The workflow opens that PR on its own but
-   nobody merges it on its own, and an unmerged one is invisible: the release
-   looks complete from every angle except the site. That happened with `0.36.0`
-   -- the PR sat open and basou.dev served the previous version for two days,
-   and it was only noticed because the NEXT release's PR happened to overwrite
-   the same files. A release is not done until the published version, the
-   GitHub release, and the site all say the same thing.
+7. Push the branch and land the bump on `main` (through a PR, like any
+   other change).
+8. **Smoke-test the release workflow while the dry-run window is open** —
+   once, from `main`, before the tag is pushed:
+
+   ```bash
+   gh workflow run release.yml --ref main -f dry_run=true
+   ```
+
+   This runs `verify`, packs each tarball, and completes the npm OIDC
+   handshake without publishing anything. It only passes inside that
+   window: `pnpm publish --dry-run` still asks the registry, so as soon
+   as `main`'s version exists on npm the run fails with `You cannot
+   publish over the previously published versions: X.Y.Z`. That is how
+   the 2026-09-04 attempt failed — it ran against a `main` still at the
+   already-published `0.38.0`, and every step before the registry check
+   had passed. There is no way to smoke-test the workflow outside the
+   window, so run it here or not at all.
+9. Push the tag.
+10. (Once npm publish is enabled:) `pnpm -r publish --access public`.
+    See [docs/release-checklist.md](docs/release-checklist.md) for the
+    dry-run + tarball verification step that should run before this.
+11. **Merge the docs-site bump PR the release workflow opened, and read the
+    version back off the live site.** The workflow opens that PR on its own but
+    nobody merges it on its own, and an unmerged one is invisible: the release
+    looks complete from every angle except the site. That happened with `0.36.0`
+    -- the PR sat open and basou.dev served the previous version for two days,
+    and it was only noticed because the NEXT release's PR happened to overwrite
+    the same files. A release is not done until the published version, the
+    GitHub release, and the site all say the same thing.
+
+    That job can also fail on a registry propagation race: it retries the
+    install four times over about a minute, and npm's CDN sometimes takes
+    longer than that to serve the version just published. `0.39.0` failed
+    this way with `ERR_PNPM_NO_MATCHING_VERSION ... The latest release of
+    @basou/cli is "0.38.0"` while the publish jobs beside it had all
+    succeeded. Publishing is already done at that point, so the remedy is
+    to re-run the failed job once the registry answers -- never to re-tag:
+
+    ```bash
+    npm view @basou/cli@X.Y.Z version   # wait until this answers
+    gh run rerun <run-id> --failed
+    ```
 
 ## Security policy
 
