@@ -19,7 +19,7 @@ export type ChannelClearOptions = {
  * AGENTS.md` for Codex — so a block one workspace rendered there sits in the
  * context of every other workspace's next session until it is overwritten or
  * removed. Rendering is opt-in per workspace (`channels.codex: true` in the
- * manifest, never when `confidential: true`); `clear` is the manual escape
+ * manifest, never when `policies.confidential: true`); `clear` is the manual escape
  * hatch for a block that is already there.
  */
 export function registerChannelCommand(program: Command): void {

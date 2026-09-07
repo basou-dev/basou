@@ -78,19 +78,30 @@ describe("ManifestSchema", () => {
     expect(ManifestSchema.safeParse(variant).success).toBe(true);
   });
 
-  it("accepts channels.codex and confidential, and treats both as known keys", () => {
-    const variant = { ...VALID_MANIFEST, channels: { codex: true }, confidential: true };
+  it("accepts channels.codex and policies.confidential, and treats both as known keys", () => {
+    const variant = {
+      ...VALID_MANIFEST,
+      channels: { codex: true },
+      policies: { confidential: true },
+    };
     const parsed = ManifestSchema.parse(variant);
     expect(parsed.channels?.codex).toBe(true);
-    expect(parsed.confidential).toBe(true);
+    expect(parsed.policies?.confidential).toBe(true);
     // Known to this schema, so a read-modify-write does not flag them as strays.
     expect(unknownManifestKeys(parsed)).toEqual([]);
   });
 
-  it("leaves channels and confidential absent when undeclared (default off)", () => {
+  it("leaves channels and policies absent when undeclared (default off)", () => {
     const parsed = ManifestSchema.parse(VALID_MANIFEST);
     expect(parsed.channels).toBeUndefined();
-    expect(parsed.confidential).toBeUndefined();
+    expect(parsed.policies).toBeUndefined();
+  });
+
+  it("refuses a TOP-LEVEL confidential instead of silently ignoring a safety key", () => {
+    // The loose object would otherwise accept it and the face would still be
+    // written while the operator believes the workspace is protected.
+    const variant = { ...VALID_MANIFEST, confidential: true };
+    expect(() => ManifestSchema.parse(variant)).toThrow(/policies\.confidential/);
   });
 
   it("rejects a non-boolean channels.codex", () => {

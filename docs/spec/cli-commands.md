@@ -61,7 +61,7 @@ workspace, including one whose work must never mix with this one's.
 The orientation render is therefore **opt-in per workspace and off by
 default**: `basou refresh` and `basou run codex` write the face only when the
 workspace's manifest declares `channels.codex: true`, and never when it
-declares `confidential: true` (which outranks the opt-in). A skipped render is
+declares `policies.confidential: true` (which outranks the opt-in). A skipped render is
 always said — a `codex channel: skipped (...)` line, and a `codexChannel`
 field under `refresh --json` — so a run that wrote nothing cannot be read as
 one that did. `--dry-run` never renders. The face paths themselves stay

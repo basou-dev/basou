@@ -10,8 +10,9 @@ export type CodexChannelSkipReason = "not_enabled" | "confidential";
  * the machine, so whatever one workspace writes there is in the context of the
  * next Codex session of ANY other workspace. Writing is therefore opt-in per
  * workspace (`channels.codex: true` in the manifest) and off by default, and
- * `confidential: true` outranks the opt-in — a workspace whose provenance must
- * never leave its own store cannot be re-enabled by a second declaration.
+ * `policies.confidential: true` outranks the opt-in — a workspace whose
+ * provenance must not persist where another workspace's tool reads it cannot
+ * be re-enabled by a second declaration in the same file.
  *
  * This decides writing only. It cannot keep a shared face's existing content
  * out of this workspace's tool; `basou channel clear codex` is for that.
@@ -21,9 +22,9 @@ export type CodexChannelDecision =
   | { write: false; reason: CodexChannelSkipReason };
 
 export function decideCodexChannel(
-  manifest: Pick<Manifest, "channels" | "confidential">,
+  manifest: Pick<Manifest, "channels" | "policies">,
 ): CodexChannelDecision {
-  if (manifest.confidential === true) return { write: false, reason: "confidential" };
+  if (manifest.policies?.confidential === true) return { write: false, reason: "confidential" };
   if (manifest.channels?.codex === true) return { write: true };
   return { write: false, reason: "not_enabled" };
 }

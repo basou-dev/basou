@@ -84,7 +84,7 @@ function getCodexChannelPath(): string {
 /**
  * Initialize the fixture workspace. The Codex context face is opt-in per
  * workspace and off by default, so a test that expects the face to be written
- * must say so here; `confidential` outranks the opt-in.
+ * must say so here; `policies.confidential` outranks the opt-in.
  */
 async function setupInitedRepo(
   declare: { codexChannel?: boolean; confidential?: boolean } = {},
@@ -97,7 +97,7 @@ async function setupInitedRepo(
     workspaceId: FIXED_WS_ID,
   });
   if (declare.codexChannel !== undefined) manifest.channels = { codex: declare.codexChannel };
-  if (declare.confidential === true) manifest.confidential = true;
+  if (declare.confidential === true) manifest.policies = { confidential: true };
   await writeManifest(paths, manifest);
   return repo;
 }

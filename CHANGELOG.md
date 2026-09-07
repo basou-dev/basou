@@ -10,7 +10,7 @@ All notable changes to **basou** are recorded here. The project follows
 - **Breaking (behaviour):** `basou refresh` and `basou run codex` no longer
   render the workspace's orientation into `~/.codex/AGENTS.md` unless the
   workspace's manifest opts in with `channels.codex: true`, and never when it
-  declares `confidential: true`.
+  declares `policies.confidential: true`.
 
   That file is user-global: Codex auto-loads it at startup for every project on
   the machine. So the render, which was unconditional, put the last-refreshed
@@ -22,9 +22,12 @@ All notable changes to **basou** are recorded here. The project follows
   `--json` result at all.
 
   Writing is now a per-workspace declaration. A workspace that declares nothing
-  writes nothing (default off). `confidential: true` outranks the opt-in, so a
-  workspace whose provenance must stay in its own `.basou/` cannot be
-  re-enabled by a second declaration. Whichever way it goes, the outcome is
+  writes nothing (default off). `policies.confidential: true` outranks the
+  opt-in — it states that the workspace's provenance must not persist where
+  another workspace's tool reads it, so a second declaration in the same file
+  cannot re-enable the render. A top-level `confidential` is rejected rather
+  than ignored, because a safety key that is not honoured must fail loudly.
+  Whichever way it goes, the outcome is
   stated: a `codex channel: skipped (...)` line for humans, and a new
   `codexChannel` field on the `refresh --json` result (`written` with the
   action, or `skipped` with the reason). `--dry-run` behaves as before and
@@ -45,9 +48,11 @@ All notable changes to **basou** are recorded here. The project follows
   beside the file. `--dry-run` reports without writing; `--json` emits the
   result. (The protocol block in `~/.claude/CLAUDE.md` keeps its own verb,
   `basou protocol unsync`.)
-- Manifest: `channels.codex` (boolean, default off) and `confidential`
+- Manifest: `channels.codex` (boolean, default off) and `policies.confidential`
   (boolean, default off) — the example in `docs/spec/schemas.md` §4.1, the
-  notes in §4.2.
+  notes in §4.2. `policies:` was reserved by the spec for this class of key.
+  `policies.confidential` governs the orientation render into
+  `~/.codex/AGENTS.md` today; it does not yet govern `basou protocol sync`.
 - `basou view --portfolio --check` now reports **capture coverage**: which
   native session logs on this machine are imported by no registered workspace.
 

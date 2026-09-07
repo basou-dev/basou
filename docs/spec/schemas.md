@@ -44,8 +44,10 @@ git:
 channels:
   codex: false  # default. opt-in: render this workspace's orientation into the
                 # user-global ~/.codex/AGENTS.md on `basou refresh` / `basou run codex`
-confidential: false  # default. when true, nothing is written to any user-global
-                     # face for this workspace, regardless of `channels`
+
+policies:
+  confidential: false  # default. when true, this workspace's orientation is never
+                       # rendered into ~/.codex/AGENTS.md, regardless of `channels`
 ```
 
 ## §4.2 Notes
@@ -54,17 +56,26 @@ confidential: false  # default. when true, nothing is written to any user-global
   detection is currently limited.
 - `capabilities.enabled` is heterogeneous in granularity; it is kept as-is
   for now and may be normalized in a later release.
-- The schema reserves room for `providers:` / `policies:` / `teams:` /
-  `review_flows:` to extend in the future (currently unused).
-- `channels` and `confidential` decide whether this workspace may write to a
-  **user-global context face** — a file an AI tool auto-loads at startup for
-  every project on the machine (`~/.codex/AGENTS.md`). Anything rendered there
-  is in the context of the next session of any other workspace, so writing is
-  opt-in per workspace and off by default. `confidential: true` outranks
-  `channels.codex: true`: a workspace whose provenance must not leave its own
-  `.basou/` cannot be re-enabled by a second declaration. Both gate writing
-  only; they cannot keep another workspace's block out of this workspace's tool
-  — `basou channel clear codex` removes one that is already there.
+- The schema reserves room for `providers:` / `teams:` / `review_flows:` to
+  extend in the future (currently unused). `policies:` was reserved for the
+  same purpose and is now in use (below).
+- `channels.codex` decides whether this workspace may render its orientation
+  into a **user-global context face** — a file an AI tool auto-loads at startup
+  for every project on the machine (`~/.codex/AGENTS.md`). Anything rendered
+  there is in the context of the next session of any other workspace, so the
+  render is opt-in per workspace and off by default. The value is a boolean
+  today; if a face ever needs per-block control it widens to `boolean |
+  object`, which existing manifests keep parsing.
+- `policies.confidential` states a goal: this workspace's provenance must not
+  persist where another workspace's tool reads it. What it gates today is one
+  thing — the orientation render into `~/.codex/AGENTS.md`, never, regardless
+  of `channels.codex`, so a confidential workspace cannot be re-enabled by a
+  second declaration in the same file. It does not yet govern `basou protocol
+  sync` (a global render, not a per-workspace one), and it gates writing only:
+  it cannot keep another workspace's block out of this workspace's tool —
+  `basou channel clear codex` removes one that is already there. A top-level
+  `confidential` is **rejected**, not ignored: a safety key that is not
+  honoured must fail loudly.
 
 ---
 

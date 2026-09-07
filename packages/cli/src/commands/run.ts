@@ -750,7 +750,7 @@ async function syncCodexOrientationChannelPreSpawn(
     const paths = basouPaths(root);
     // The face is user-global, so the render is gated by THIS workspace's
     // manifest exactly as `basou refresh` gates it: opt-in via channels.codex,
-    // never when confidential. A skip is said out loud before the child takes
+    // never when policies.confidential. A skip is said out loud before the child takes
     // the TTY, so a launch that rendered nothing does not look like one that did.
     const decision = decideCodexChannel(await readManifest(paths));
     if (!decision.write) return describeCodexChannelSkip(decision.reason);

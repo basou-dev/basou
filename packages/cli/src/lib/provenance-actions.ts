@@ -80,7 +80,7 @@ export type CodexChannelOutcome =
       status: "skipped";
       /**
        * `not_enabled` — the manifest declares no `channels.codex: true`;
-       * `confidential` — the manifest's `confidential: true` outranks any opt-in;
+       * `confidential` — the manifest's `policies.confidential: true` outranks any opt-in;
        * `dry_run` — nothing was regenerated, so nothing was rendered;
        * `no_orientation` — there is no orientation.md yet;
        * `error` — the render failed (detail carries the message).

@@ -239,9 +239,15 @@
       },
       "additionalProperties": {}
     },
-    "confidential": {
-      "description": "When true, this workspace never writes to a user-global context face (~/.codex/AGENTS.md), regardless of `channels`. Gates writing only; it cannot keep another workspace's block out of this workspace's tool.",
-      "type": "boolean"
+    "policies": {
+      "type": "object",
+      "properties": {
+        "confidential": {
+          "description": "This workspace's provenance must not persist where another workspace's tool reads it. Today this means its orientation is never rendered into the user-global ~/.codex/AGENTS.md by `basou refresh` or `basou run codex`, regardless of `channels`. It does not yet govern `basou protocol sync`, and it gates writing only — it cannot keep another workspace's block out of this workspace's tool.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": {}
     }
   },
   "required": [

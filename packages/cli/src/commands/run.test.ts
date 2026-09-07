@@ -64,7 +64,7 @@ function getTmpRepo(): string {
 /**
  * Initialize the fixture workspace. The Codex context face is opt-in per
  * workspace (off by default), so a launcher test that expects the pre-spawn
- * render to write must declare it; `confidential` outranks the opt-in.
+ * render to write must declare it; `policies.confidential` outranks the opt-in.
  */
 async function setupInitedRepo(
   declare: { codexChannel?: boolean; confidential?: boolean } = {},
@@ -77,7 +77,7 @@ async function setupInitedRepo(
     workspaceId: FIXED_WS_ID,
   });
   if (declare.codexChannel !== undefined) manifest.channels = { codex: declare.codexChannel };
-  if (declare.confidential === true) manifest.confidential = true;
+  if (declare.confidential === true) manifest.policies = { confidential: true };
   await writeManifest(paths, manifest);
   return repo;
 }

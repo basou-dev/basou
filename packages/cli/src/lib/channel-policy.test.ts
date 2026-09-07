@@ -17,8 +17,10 @@ describe("decideCodexChannel", () => {
     expect(decideCodexChannel({ channels: { codex: true } })).toEqual({ write: true });
   });
 
-  it("lets confidential outrank the opt-in", () => {
-    expect(decideCodexChannel({ channels: { codex: true }, confidential: true })).toEqual({
+  it("lets policies.confidential outrank the opt-in", () => {
+    expect(
+      decideCodexChannel({ channels: { codex: true }, policies: { confidential: true } }),
+    ).toEqual({
       write: false,
       reason: "confidential",
     });

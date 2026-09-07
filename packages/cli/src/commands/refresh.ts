@@ -305,7 +305,7 @@ export async function doRunRefresh(
   // the Codex context face so an interactive Codex auto-loads the current
   // position. That face (~/.codex/AGENTS.md) is user-global — every project's
   // Codex reads it — so the push is gated by this workspace's own manifest
-  // (`channels.codex: true`, and never when `confidential: true`), and the
+  // (`channels.codex: true`, and never when `policies.confidential: true`), and the
   // outcome is always stated: a skipped line for humans, a `codexChannel` field
   // under --json. --dry-run regenerated nothing, so it renders nothing.
   const channel =
