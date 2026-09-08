@@ -13,8 +13,8 @@ import {
  * on 2026-09-08 against a record codex-cli 0.153.4 wrote to config.toml after
  * trusting a hooks.json entry with these fields (matcher, timeout, status
  * message, context limit): the reproduced hash matched the recorded one bit
- * for bit. The command path here is synthetic — the real one carried a local
- * home directory — so the expected hash below is the algorithm's output for
+ * for bit. The command path here is synthetic - the real one carried a local
+ * home directory - so the expected hash below is the algorithm's output for
  * this fixture, and the test guards the reproduction against drift.
  */
 const REAL = {
@@ -32,7 +32,7 @@ const REAL = {
 REAL.handler.command = REAL.command;
 
 describe("computeCodexHookIdentityHash", () => {
-  it("reproduces the hash Codex recorded for a real trusted hook", () => {
+  it("reproduces the pinned identity hash for the fixture handler", () => {
     const fields = commandHandlerFields(REAL.handler);
     if (fields === null) throw new Error("fixture");
     expect(
@@ -123,7 +123,7 @@ describe("codexHookStateKey / readCodexHookState", () => {
 
   it("matches a key whose path needs TOML escaping", () => {
     const odd = codexHookStateKey('/Users/example"quoted/.codex/hooks.json', "session_start", 0, 0);
-    const toml = `[hooks.state."/Users/exam\\"ple/.codex/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:x"\n`;
+    const toml = `[hooks.state."/Users/example\\"quoted/.codex/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:x"\n`;
     expect(readCodexHookState(toml, odd)).toEqual({
       kind: "found",
       state: { trustedHash: "sha256:x" },
