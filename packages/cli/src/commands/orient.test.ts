@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
@@ -131,7 +131,7 @@ async function setupInitedRepo(): Promise<string> {
 
 async function placeSession(
   repo: string,
-  fixture: { id: string; status?: string; source?: string },
+  fixture: { id: string; status?: string; source?: string; relatedFiles?: string[] },
 ): Promise<void> {
   const paths = basouPaths(repo);
   const sessionDir = join(paths.sessions, fixture.id);
@@ -148,7 +148,7 @@ async function placeSession(
       status: fixture.status ?? "completed",
       working_directory: "/tmp/fixture",
       invocation: { command: "echo", args: [], exit_code: 0 },
-      related_files: [],
+      related_files: fixture.relatedFiles ?? [],
       events_log: "events.jsonl",
     },
   });
@@ -308,6 +308,53 @@ describe("basou orient", () => {
     } finally {
       await rm(view, { recursive: true, force: true });
     }
+  });
+
+  // The position is handed to the agent session running in this workspace, so a
+  // name from ANOTHER registered workspace that reached the body through a
+  // recorded path travels with it. The advisory goes to stderr, never into the
+  // body it is reporting on.
+  it("warns on stderr when the position names another registered workspace", async () => {
+    const repo = await setupInitedRepo();
+    const other = join(dirname(repo), "beta-planning");
+    const portfolio = join(repo, "portfolio.yaml");
+    await writeFile(portfolio, `workspaces:\n  - path: ${repo}\n  - path: ${other}\n`);
+    await placeSession(repo, {
+      id: SES("F01"),
+      source: "claude-code-import",
+      relatedFiles: [join(other, "notes.md")],
+    });
+
+    const out = captureStdout();
+    const err = captureStderr();
+    await doRunOrient({}, { ...ctxFor(repo), portfolioConfigPath: portfolio });
+
+    expect(joinCalls(err)).toContain("names another registered workspace");
+    expect(joinCalls(err)).toContain("nothing was withheld");
+    // The warning stays out of the body, and the body is unchanged by it.
+    const body = await readFile(basouPaths(repo).files.orientation, "utf8");
+    expect(body).not.toContain("registered workspace");
+    expect(joinCalls(out)).not.toContain("registered workspace");
+  });
+
+  it("stays silent when the position names only this workspace", async () => {
+    const repo = await setupInitedRepo();
+    const portfolio = join(repo, "portfolio.yaml");
+    await writeFile(
+      portfolio,
+      `workspaces:\n  - path: ${repo}\n  - path: ${join(dirname(repo), "beta-planning")}\n`,
+    );
+    await placeSession(repo, {
+      id: SES("F02"),
+      source: "claude-code-import",
+      relatedFiles: [join(repo, "notes.md")],
+    });
+
+    captureStdout();
+    const err = captureStderr();
+    await doRunOrient({}, { ...ctxFor(repo), portfolioConfigPath: portfolio });
+
+    expect(joinCalls(err)).not.toContain("registered workspace");
   });
 
   it("register: wiring exposes 'orient' on the program", () => {

@@ -1,12 +1,18 @@
+import { dirname } from "node:path";
 import {
   assertBasouRootSafe,
   type BasouPaths,
   basouPaths,
   findErrorCode,
   readManifest,
+  readMarkdownFile,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import {
+  findForeignWorkspaceNames,
+  positionForeignWorkspaceWarning,
+} from "../lib/foreign-workspace-warn.js";
 import { loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
@@ -166,7 +172,7 @@ export async function doRunRefreshPortfolio(
   for (const ws of workspaces) {
     const label = ws.label ?? ws.path;
     try {
-      const { result } = await computeRefresh(
+      const { result, paths } = await computeRefresh(
         { ...options, portfolio: false },
         { ...ctx, cwd: ws.path },
       );
@@ -175,6 +181,7 @@ export async function doRunRefreshPortfolio(
         console.log(`\n## ${label} (${ws.path})`);
         printRefreshSummary(result);
       }
+      await warnIfPositionNamesOtherWorkspaces(paths, result, ctx);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       rollup.push({ label, path: ws.path, status: "failed", error: message });
@@ -301,7 +308,34 @@ export async function doRunRefresh(
     const line = await retiredChannelNotice(paths);
     if (line !== null) console.log(line);
   }
+  await warnIfPositionNamesOtherWorkspaces(paths, result, ctx);
   return reported;
+}
+
+/**
+ * Advisory content check on the position this refresh just regenerated: warn
+ * when it names another registered workspace. Read back from the file rather
+ * than threaded through the refresh result, so the check stays out of the JSON
+ * contract and nothing but this warning depends on it. Printed on stderr — it
+ * must not land inside the position it is reporting on, nor break `--json`.
+ * Silent under `--dry-run`, which regenerates nothing.
+ */
+async function warnIfPositionNamesOtherWorkspaces(
+  paths: BasouPaths,
+  result: RefreshResult,
+  ctx: RefreshContext,
+): Promise<void> {
+  if (result.orientation.status !== "generated") return;
+  const body = await readMarkdownFile(paths.files.orientation);
+  if (body === null) return;
+  const report = await findForeignWorkspaceNames({
+    text: body,
+    selfPath: dirname(paths.root),
+    configPath: ctx.portfolioConfigPath,
+  });
+  if (report !== null) {
+    console.error(positionForeignWorkspaceWarning(report, ".basou/orientation.md"));
+  }
 }
 
 /**

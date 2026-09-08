@@ -119,11 +119,11 @@ async function captureLog<T>(fn: () => Promise<T>): Promise<{ value: T; lines: s
   }
 }
 
-async function writeClaudeTranscript(repo: string): Promise<void> {
+async function writeClaudeTranscript(repo: string, editedFile?: string): Promise<void> {
   const encoded = repo.replace(/[^a-zA-Z0-9]/g, "-");
   const dir = join(getClaudeRoot(), encoded);
   await mkdir(dir, { recursive: true });
-  const records = [
+  const records: Record<string, unknown>[] = [
     {
       type: "user",
       timestamp: "2026-05-10T00:00:00.000Z",
@@ -138,6 +138,16 @@ async function writeClaudeTranscript(repo: string): Promise<void> {
       message: { content: [{ type: "tool_use", name: "Bash", input: { command: "npm test" } }] },
     },
   ];
+  if (editedFile !== undefined) {
+    records.push({
+      type: "assistant",
+      timestamp: "2026-05-10T00:00:02.000Z",
+      cwd: repo,
+      message: {
+        content: [{ type: "tool_use", name: "Edit", input: { file_path: editedFile } }],
+      },
+    });
+  }
   await writeFile(
     join(dir, "claude-sess-1.jsonl"),
     records.map((r) => JSON.stringify(r)).join("\n"),
@@ -363,6 +373,56 @@ describe("basou refresh", () => {
     await runRefresh({}, ctxFor(repo));
     expect(process.exitCode).toBe(1);
     expect(errSpy.mock.calls.flat().join(" ")).toContain("Workspace not initialized");
+  });
+});
+
+// A refresh regenerates the position; the position is then handed to the agent
+// session running in this workspace. The content check rides on the regenerate,
+// reads the file back, and reports on stderr so `--json` stays parseable.
+describe("basou refresh (foreign-workspace advisory)", () => {
+  async function setupWithForeignPath(): Promise<{ repo: string; portfolio: string }> {
+    const repo = await setupInitedRepo();
+    const other = join(dirname(repo), "beta-planning");
+    const portfolio = join(repo, "portfolio.yaml");
+    await writeFile(portfolio, `workspaces:\n  - path: ${repo}\n  - path: ${other}\n`);
+    await writeClaudeTranscript(repo, join(other, "notes.md"));
+    return { repo, portfolio };
+  }
+
+  it("warns when the regenerated position names another registered workspace", async () => {
+    const { repo, portfolio } = await setupWithForeignPath();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await captureLog(() => doRunRefresh({}, { ...ctxFor(repo), portfolioConfigPath: portfolio }));
+
+    const stderr = err.mock.calls.flat().join(" ");
+    expect(stderr).toContain("names another registered workspace");
+    expect(stderr).toContain("nothing was withheld");
+    // The advisory never lands in the file it is reporting on.
+    const body = await readFile(basouPaths(repo).files.orientation, "utf8");
+    expect(body).not.toContain("registered workspace");
+  });
+
+  it("stays silent under --dry-run, which regenerates no position", async () => {
+    const { repo, portfolio } = await setupWithForeignPath();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await captureLog(() =>
+      doRunRefresh({ dryRun: true }, { ...ctxFor(repo), portfolioConfigPath: portfolio }),
+    );
+
+    expect(err.mock.calls.flat().join(" ")).not.toContain("registered workspace");
+  });
+
+  it("stays silent when there is no portfolio registry", async () => {
+    const { repo } = await setupWithForeignPath();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await captureLog(() =>
+      doRunRefresh({}, { ...ctxFor(repo), portfolioConfigPath: join(repo, "absent.yaml") }),
+    );
+
+    expect(err.mock.calls.flat().join(" ")).not.toContain("registered workspace");
   });
 });
 

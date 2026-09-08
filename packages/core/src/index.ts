@@ -103,6 +103,8 @@ export { renderHandoff } from "./handoff/index.js";
 export type { IdPrefix, PrefixedId } from "./ids/ulid.js";
 export { ID_PREFIXES, isValidPrefixedId, prefixedUlid, ulid } from "./ids/ulid.js";
 export { parseDuration } from "./lib/duration.js";
+export type { ForeignWorkspaceHit } from "./lib/foreign-workspace-scan.js";
+export { scanForeignWorkspaceNames } from "./lib/foreign-workspace-scan.js";
 export { formatDurationMs } from "./lib/format-duration.js";
 export { resolveSessionId, resolveTaskId } from "./lib/id-resolver.js";
 export type { SanitizePathOptions, SanitizeRelatedFilesResult } from "./lib/path-sanitizer.js";

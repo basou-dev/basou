@@ -3,6 +3,40 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **A workspace's position and the standing-protocol block are now checked for
+  other workspaces' names.** 0.40.0 closed the Codex face in both directions,
+  which scoped *which* session receives a position; it left the *content* of
+  what is delivered unchecked. Two texts basou hands to an agent can name a
+  workspace other than the one reading them: a position, whose body is
+  assembled from recorded paths and captured decisions, and the
+  standing-protocol block, which `basou protocol sync` renders into the
+  user-global `~/.claude/CLAUDE.md` that every project on the machine loads.
+
+  `basou orient` and `basou refresh` now scan the position they just rendered,
+  and `basou protocol sync` scans the block before writing it, against the
+  workspaces registered in `~/.basou/portfolio.yaml`. A match prints one line
+  on **stderr** naming no workspace and quoting no match — only how many were
+  found and which lines to look at — so the warning cannot become the leak it
+  is reporting. Nothing is withheld, rewritten or refused: a name in a position
+  may be exactly what the operator meant, and refusing would stop the command
+  they run many times a day.
+
+  Matching is on paths and **directory names**, never on the portfolio's
+  display labels: a label is a product name, a product name appears throughout
+  its own workspace's documents, and a warning that fires on every line is one
+  nobody reads. Because basou's own convention pairs a `-planning` master with
+  a `-workspace` view, both spellings of a registered directory name count —
+  the paths that carry a workspace name in practice (a scratchpad directory
+  whose name encodes a session's `cwd`) carry the view spelling while the
+  registry holds the master. A missing, unreadable or empty registry is
+  silent, `--dry-run` regenerates no position and so warns about none, and
+  `basou hook session-start` renders the same body without warning: no one is
+  at a keyboard to read it, and the hook stays silent by contract.
+
 ## 0.40.0 — 2026-09-08
 
 ### Changed

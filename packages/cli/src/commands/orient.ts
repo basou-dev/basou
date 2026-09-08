@@ -14,6 +14,10 @@ import {
   printTaskSkip,
   renderCliError,
 } from "../lib/error-render.js";
+import {
+  findForeignWorkspaceNames,
+  positionForeignWorkspaceWarning,
+} from "../lib/foreign-workspace-warn.js";
 import { loadHostsConfig } from "../lib/hosts-config.js";
 import { probeStaleness, refreshAll } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
@@ -26,6 +30,8 @@ export type OrientContext = ImportContext & {
   nowProvider?: () => Date;
   /** Override path to the hosts registry (`~/.basou/hosts.yaml`). Injectable for tests. */
   hostsConfigPath?: string;
+  /** Override path to the portfolio registry (`~/.basou/portfolio.yaml`). Injectable for tests. */
+  portfolioConfigPath?: string;
 };
 
 /**
@@ -80,11 +86,37 @@ export async function doRunOrient(options: OrientOptions, ctx: OrientContext): P
   } else {
     console.log(result.body);
   }
+
+  // Content check, after the position is out: basou scopes WHICH session
+  // receives a position, but the body itself is assembled from recorded paths
+  // and captured decisions, either of which can carry another workspace's name.
+  // Warned on stderr (never in the body) so the warning does not itself travel
+  // to the session reading the position. `basou hook session-start` renders the
+  // same body and deliberately does NOT warn: nobody is at a keyboard to read
+  // it, and the hook's contract is to stay silent.
+  await warnIfPositionNamesOtherWorkspaces(result, ctx);
+}
+
+/** Print the advisory if the rendered position names other registered workspaces. */
+async function warnIfPositionNamesOtherWorkspaces(
+  result: RenderedOrientation,
+  ctx: OrientContext,
+): Promise<void> {
+  const report = await findForeignWorkspaceNames({
+    text: result.body,
+    selfPath: result.workspaceRoot,
+    configPath: ctx.portfolioConfigPath,
+  });
+  if (report !== null) {
+    console.error(positionForeignWorkspaceWarning(report, ".basou/orientation.md"));
+  }
 }
 
 /** What {@link renderOrientationForCwd} hands back: the body plus the counts the quiet line reports. */
 export type RenderedOrientation = {
   body: string;
+  /** The planning master this position belongs to (the repo owning `.basou/`). */
+  workspaceRoot: string;
   sessionCount: number;
   inFlightTaskCount: number;
   pendingApprovalsCount: number;
@@ -181,6 +213,7 @@ export async function renderOrientationForRoot(
 
   return {
     body: result.body,
+    workspaceRoot: repositoryRoot,
     sessionCount: result.sessionCount,
     inFlightTaskCount: result.inFlightTaskCount,
     pendingApprovalsCount: result.pendingApprovalsCount,
