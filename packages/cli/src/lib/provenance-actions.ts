@@ -69,25 +69,15 @@ export type OrientationCounts = {
 };
 
 /**
- * What `basou refresh` did about the Codex context face (`~/.codex/AGENTS.md`)
- * after regenerating. Present so `--json` states it explicitly: the face is
- * user-global, so whether this run wrote to it is a fact the caller must be
- * able to read, not infer from the absence of a line.
+ * The Codex face field on the refresh result. The user-global orientation render
+ * it once described is retired: a Codex session now gets the workspace's
+ * position from the SessionStart hook (`basou hook install codex`), which reads
+ * the session's own cwd and writes nothing. The field is kept for one release
+ * with this single value so a JSON consumer that read `codexChannel.status`
+ * sees the retirement rather than a missing key; it is removed in the release
+ * after.
  */
-export type CodexChannelOutcome =
-  | { status: "written"; action: "installed" | "updated" | "unchanged" }
-  | {
-      status: "skipped";
-      /**
-       * `not_enabled` — the manifest declares no `channels.codex: true`;
-       * `confidential` — the manifest's `policies.confidential: true` outranks any opt-in;
-       * `dry_run` — nothing was regenerated, so nothing was rendered;
-       * `no_orientation` — there is no orientation.md yet;
-       * `error` — the render failed (detail carries the message).
-       */
-      reason: "not_enabled" | "confidential" | "dry_run" | "no_orientation" | "error";
-      detail?: string;
-    };
+export type CodexChannelOutcome = { status: "retired" };
 
 /** Structured result of {@link refreshAll}. */
 export type RefreshResult = {
@@ -97,7 +87,7 @@ export type RefreshResult = {
   decisions: GenerateOutcome<{ decisionCount: number }>;
   orientation: GenerateOutcome<OrientationCounts>;
   dryRun: boolean;
-  /** Set by `basou refresh` (the CLI), which is the only caller that renders the face. */
+  /** The retired Codex face field (see {@link CodexChannelOutcome}); set by `basou refresh` (the CLI) on its JSON result. */
   codexChannel?: CodexChannelOutcome;
 };
 

@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,7 @@ import {
   appendChainedEvent as coreAppendChainedEvent,
   type DiffResult,
   finalizeSessionYaml,
+  findBasouSessionStartHook,
   type GitSnapshot,
   getDiff,
   getSnapshot,
@@ -35,10 +36,9 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
-import { decideCodexChannel, describeCodexChannelSkip } from "../lib/channel-policy.js";
-import { renderOrientationToCodexChannel } from "../lib/context-channel.js";
+import { describeCodexHookTrust } from "../lib/codex-hook-trust.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
-import { resolveBasouRootForCommand } from "../lib/repo-root.js";
+import { codexHookTrustFor, DEFAULT_CODEX_HOOKS_PATH } from "./hook.js";
 
 // Appends one event to the session's events.jsonl. The `sessionDir` argument
 // is retained for the test-injection seam (ctx.appendEvent); the production
@@ -54,7 +54,8 @@ type AdapterMetadata = { kind: SessionSourceKind; version: "0.1.0" };
  * The per-tool seams of {@link runTrackedTool}: how to find the executable, how
  * to attribute the session, an optional arg transform (e.g. codex injects an
  * env-policy flag), and an optional best-effort pre-spawn side effect (e.g.
- * codex re-renders the orientation context channel for this workspace).
+ * codex says whether the SessionStart hook that carries the position is
+ * registered).
  */
 type TrackedToolAdapter = {
   resolveCommand: ResolveCommandFn;
@@ -92,10 +93,13 @@ export type RunContext = {
   resolveCommand?: ResolveCommandFn;
   // Override the codex PATH lookup (the `basou run codex` twin of resolveCommand).
   resolveCodexCommand?: ResolveCommandFn;
-  // Override the Codex context-face path (defaults to the locked
-  // ~/.codex/AGENTS.md). Injectable for tests so the suite never writes to the
-  // real home-global file during a `basou run codex` pre-spawn channel render.
-  codexChannelPath?: string;
+  // Override the Codex user-global hooks file the pre-spawn check reads
+  // (defaults to ~/.codex/hooks.json). Injectable for tests so the suite never
+  // depends on the real home directory.
+  codexHooksPath?: string;
+  // Override the Codex config.toml read for the hook's trust record (defaults
+  // to ~/.codex/config.toml). Injectable for tests.
+  codexConfigPath?: string;
   // Override the git diff capability. Tests use this to force capability
   // failure deterministically without rewriting the git fixture state.
   getDiff?: GetDiffFn;
@@ -187,11 +191,11 @@ export function runClaudeCode(
 }
 
 /**
- * `basou run codex`: wrap the Codex CLI as a tracked session. Two grips beyond
- * plain tracking: it injects `-c shell_environment_policy.inherit=all` so Codex
- * tool calls can reach `basou` on PATH, and it re-renders this workspace's
- * orientation into the Codex context face (~/.codex/AGENTS.md) just before spawn
- * so the about-to-start interactive Codex auto-loads the current position.
+ * `basou run codex`: spawn Codex as a tracked session, injecting the env-policy
+ * flag so the child inherits the launcher's environment. The launcher writes
+ * nothing for orientation — a Codex session gets its workspace's position from
+ * the SessionStart hook, which reads the session's own cwd — so all it does
+ * before spawn is say when that hook is not registered.
  */
 export function runCodex(
   args: string[],
@@ -202,7 +206,7 @@ export function runCodex(
     resolveCommand: ctx.resolveCodexCommand ?? resolveCodexCommand,
     metadata: codexAdapterMetadata,
     transformArgs: (a) => ["-c", "shell_environment_policy.inherit=all", ...a],
-    preSpawn: syncCodexOrientationChannelPreSpawn,
+    preSpawn: noteCodexHookStatusPreSpawn,
   });
 }
 
@@ -340,8 +344,8 @@ async function runTrackedTool(
   process.on("exit", exitHandler);
   ctx.onExitHookInstalled?.(exitHandler);
 
-  // 9b. Tool-specific pre-spawn side effect (e.g. codex re-renders the
-  //     orientation context channel for this workspace). Best-effort: the
+  // 9b. Tool-specific pre-spawn side effect (e.g. codex reports whether the
+  //     SessionStart hook is registered). Best-effort: the
   //     adapter swallows its own failures; a returned status line is printed
   //     before the child takes over the TTY.
   if (adapter.preSpawn !== undefined) {
@@ -728,38 +732,29 @@ async function resolveRepositoryRootForRun(cwd: string): Promise<string> {
 }
 
 /**
- * `basou run codex` pre-spawn: re-render THIS workspace's already-generated
- * orientation into the Codex context face just before launch, so the about-to-
- * start interactive Codex auto-loads the current position even when the global
- * channel last reflected a different workspace. Resolves the workspace the same
- * way `basou orient` / `basou refresh` do (member -> planning master). It does
- * NOT re-import (a launcher is not a refresh); it surfaces whatever the last
- * refresh captured. Fully best-effort: any failure returns null so the launch
- * is never blocked — and because the write happens only after the manifest's
- * opt-in is read successfully, a failure also means nothing was written (fail
- * closed). A manifest the schema rejects never reaches this step at all: the
- * launcher's own workspace resolution reads it first and fails the launch. The
- * `ctx.codexChannelPath` seam keeps tests off the real home-global file.
+ * `basou run codex` pre-spawn: say whether the SessionStart hook that hands a
+ * Codex session its workspace's position will actually run. The launcher
+ * writes nothing — the hook reads the session's own cwd when Codex starts — so
+ * all it can do is tell the operator, before the child takes the TTY, that
+ * this session will start without a position and why: the hook is not
+ * registered, or it is registered but Codex has not trusted this exact handler
+ * (a new or changed hook is skipped until reviewed). A missing hooks file is
+ * "not registered"; an unreadable or malformed one returns null so the launch
+ * is never blocked and no guess is printed.
  */
-async function syncCodexOrientationChannelPreSpawn(
-  cwd: string,
-  ctx: RunContext,
-): Promise<string | null> {
+async function noteCodexHookStatusPreSpawn(_cwd: string, ctx: RunContext): Promise<string | null> {
+  const hooksPath = ctx.codexHooksPath ?? DEFAULT_CODEX_HOOKS_PATH;
+  let location: ReturnType<typeof findBasouSessionStartHook>;
   try {
-    const root = await resolveBasouRootForCommand(cwd, "run");
-    const paths = basouPaths(root);
-    // The face is user-global, so the render is gated by THIS workspace's
-    // manifest exactly as `basou refresh` gates it: opt-in via channels.codex,
-    // never when policies.confidential. A skip is said out loud before the child takes
-    // the TTY, so a launch that rendered nothing does not look like one that did.
-    const decision = decideCodexChannel(await readManifest(paths));
-    if (!decision.write) return describeCodexChannelSkip(decision.reason);
-    const rendered = await renderOrientationToCodexChannel({
-      orientationPath: paths.files.orientation,
-      ...(ctx.codexChannelPath !== undefined ? { channelPath: ctx.codexChannelPath } : {}),
-    });
-    return rendered === null ? null : rendered.line;
-  } catch {
-    return null;
+    location = findBasouSessionStartHook(JSON.parse(await readFile(hooksPath, "utf8")));
+  } catch (error: unknown) {
+    if (!(error instanceof Error && (error as { code?: string }).code === "ENOENT")) return null;
+    location = null;
   }
+  if (location === null) {
+    return "codex: the basou SessionStart hook is not registered, so this session starts without the workspace's position (`basou hook install codex` registers it once for every workspace)";
+  }
+  const trust = await codexHookTrustFor(hooksPath, location, ctx.codexConfigPath);
+  if (trust.status === "trusted" || trust.status === "unknown") return null;
+  return `codex: the basou SessionStart hook is registered but ${describeCodexHookTrust(trust)}, so this session starts without the workspace's position`;
 }

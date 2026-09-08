@@ -1,17 +1,26 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
+import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
+import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  doRunCodexHookInstall,
+  doRunCodexHookStatus,
+  doRunCodexHookUninstall,
   doRunHookInstall,
+  doRunHookSessionStart,
   doRunHookStatus,
   doRunHookStop,
   doRunHookUninstall,
   type HookInstallContext,
+  type HookSessionStartContext,
   type HookStopContext,
   parseMinEdits,
   readTranscriptBounded,
   runHookInstall,
+  runHookSessionStart,
 } from "./hook.js";
 
 /** A transcript line for one assistant message carrying N read-only Bash commands. */
@@ -584,5 +593,352 @@ describe("hook install/uninstall edge cases", () => {
     await doRunHookUninstall({ settings: settingsPath, dryRun: true });
     expect(await readFile(settingsPath, "utf8")).toBe(before);
     expect(logs.join("\n")).toContain("[dry-run]");
+  });
+});
+
+describe("doRunHookSessionStart (Codex SessionStart handler)", () => {
+  async function run(
+    stdin: unknown,
+    render: NonNullable<HookSessionStartContext["render"]>,
+  ): Promise<string> {
+    let out = "";
+    await doRunHookSessionStart({
+      readStdin: async () => (typeof stdin === "string" ? stdin : JSON.stringify(stdin)),
+      write: (text) => {
+        out += text;
+      },
+      render,
+    });
+    return out;
+  }
+
+  it("prints the position of the workspace at the payload's cwd, as plain text with one trailing newline", async () => {
+    const seen: string[] = [];
+    const out = await run(
+      { session_id: "s", cwd: "/ws/planning", hook_event_name: "SessionStart", source: "startup" },
+      async (cwd) => {
+        seen.push(cwd);
+        return { body: "# Orientation\n\nyou are here\n\n" };
+      },
+    );
+    expect(seen).toEqual(["/ws/planning"]);
+    expect(out).toBe("# Orientation\n\nyou are here\n");
+    // Plain text, not a hook JSON envelope: Codex adds plain stdout as developer context.
+    expect(out.startsWith("{")).toBe(false);
+  });
+
+  it("stays silent when the cwd is not a basou workspace (the renderer throws)", async () => {
+    const out = await run({ cwd: "/" }, async () => {
+      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou orient'.");
+    });
+    expect(out).toBe("");
+  });
+
+  it("stays silent on an empty, malformed, or cwd-less payload without calling the renderer", async () => {
+    let calls = 0;
+    const render = async () => {
+      calls++;
+      return { body: "x" };
+    };
+    expect(await run("", render)).toBe("");
+    expect(await run("{ not json", render)).toBe("");
+    expect(await run({ session_id: "s" }, render)).toBe("");
+    expect(await run({ cwd: "" }, render)).toBe("");
+    expect(await run([], render)).toBe("");
+    expect(calls).toBe(0);
+  });
+
+  it("stays silent when the rendered body is empty", async () => {
+    expect(await run({ cwd: "/ws" }, async () => ({ body: "   \n" }))).toBe("");
+  });
+
+  it("runHookSessionStart swallows a throwing stdin reader (fail-open)", async () => {
+    await expect(
+      runHookSessionStart({
+        readStdin: async () => {
+          throw new Error("boom");
+        },
+        write: () => {
+          throw new Error("must not be called");
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("hook install / uninstall / status codex", () => {
+  let dir: string;
+  let hooksPath: string;
+  let configPath: string;
+  let logs: string[];
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  const cliEntry = "/abs/basou/packages/cli/dist/index.js";
+  const ctx: HookInstallContext = { resolveCliEntry: () => cliEntry };
+  const expectedCmd = `node '${cliEntry}' hook session-start 2>/dev/null || true`;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "basou-hook-codex-"));
+    hooksPath = join(dir, "hooks.json");
+    configPath = join(dir, "config.toml");
+    logs = [];
+    logSpy = vi.spyOn(console, "log").mockImplementation((msg?: unknown) => {
+      logs.push(String(msg));
+    });
+  });
+  afterEach(async () => {
+    logSpy.mockRestore();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function readHooks(): Promise<Record<string, unknown>> {
+    return JSON.parse(await readFile(hooksPath, "utf8"));
+  }
+
+  it("installs the SessionStart hook into a non-existent hooks.json and says trust is still pending", async () => {
+    await doRunCodexHookInstall({ hooks: hooksPath }, ctx);
+    const file = (await readHooks()) as {
+      hooks: {
+        SessionStart: Array<{
+          matcher: string;
+          hooks: Array<{ command: string; timeout: number; additionalContextLimit: number }>;
+        }>;
+      };
+    };
+    expect(file.hooks.SessionStart).toHaveLength(1);
+    expect(file.hooks.SessionStart[0]?.matcher).toBe("startup|resume|clear");
+    expect(file.hooks.SessionStart[0]?.hooks[0]?.command).toBe(expectedCmd);
+    expect(file.hooks.SessionStart[0]?.hooks[0]?.timeout).toBe(30);
+    expect(file.hooks.SessionStart[0]?.hooks[0]?.additionalContextLimit).toBe(0);
+    expect(logs.join("\n")).toContain("Installed");
+    expect(logs.join("\n")).toContain("trust");
+  });
+
+  it("preserves a foreign SessionStart hook and other events, is idempotent, and backs up once", async () => {
+    await writeFile(
+      hooksPath,
+      `${JSON.stringify(
+        {
+          hooks: {
+            SessionStart: [
+              { matcher: "startup", hooks: [{ type: "command", command: "echo hi" }] },
+            ],
+            Stop: [{ hooks: [{ type: "command", command: "bye" }] }],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await doRunCodexHookInstall({ hooks: hooksPath }, ctx);
+    const file = (await readHooks()) as { hooks: { SessionStart: unknown[]; Stop: unknown[] } };
+    expect(file.hooks.SessionStart).toHaveLength(2);
+    expect(file.hooks.Stop).toHaveLength(1);
+    expect(await readFile(`${hooksPath}.basou-bak`, "utf8")).toContain("echo hi");
+
+    logs.length = 0;
+    await doRunCodexHookInstall({ hooks: hooksPath }, ctx);
+    expect(logs.join("\n")).toContain("already registered");
+  });
+
+  it("dry-run install does not write", async () => {
+    await doRunCodexHookInstall({ hooks: hooksPath, dryRun: true }, ctx);
+    await expect(readFile(hooksPath, "utf8")).rejects.toThrow();
+    expect(logs.join("\n")).toContain("[dry-run]");
+  });
+
+  it("status reports not registered, then untrusted, then trusted once config.toml records the matching hash", async () => {
+    await doRunCodexHookStatus({ hooks: hooksPath, codexConfig: configPath });
+    expect(logs.join("\n")).toContain("not registered");
+
+    logs.length = 0;
+    await doRunCodexHookInstall({ hooks: hooksPath }, ctx);
+    logs.length = 0;
+    await doRunCodexHookStatus({ hooks: hooksPath, codexConfig: configPath });
+    expect(logs.join("\n")).toContain("registered");
+    expect(logs.join("\n")).toContain("not yet trusted");
+
+    // Record the trust the way Codex does: the identity hash of what is installed,
+    // keyed by the file position.
+    const installed = (await readHooks()) as {
+      hooks: { SessionStart: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }> };
+    };
+    const handler = installed.hooks.SessionStart[0]?.hooks[0];
+    if (handler === undefined) throw new Error("fixture");
+    const { computeCodexHookIdentityHash, commandHandlerFields, codexHookStateKey } = await import(
+      "../lib/codex-hook-trust.js"
+    );
+    const fields = commandHandlerFields(handler);
+    if (fields === null) throw new Error("fixture");
+    const hash = computeCodexHookIdentityHash({
+      eventKey: "session_start",
+      matcher: installed.hooks.SessionStart[0]?.matcher,
+      handler: fields,
+    });
+    const key = codexHookStateKey(hooksPath, "session_start", 0, 0);
+    await writeFile(
+      configPath,
+      `model = "x"\n\n[hooks.state."${key}"]\ntrusted_hash = "${hash}"\n`,
+    );
+
+    logs.length = 0;
+    await doRunCodexHookStatus({ hooks: hooksPath, codexConfig: configPath });
+    expect(logs.join("\n")).toContain("trusted by Codex");
+    expect(logs.join("\n")).not.toContain("not yet trusted");
+
+    // A changed handler is "modified" against the recorded hash.
+    handler.timeout = 31;
+    await writeFile(hooksPath, `${JSON.stringify(installed, null, 2)}\n`);
+    logs.length = 0;
+    await doRunCodexHookStatus({ hooks: hooksPath, codexConfig: configPath });
+    expect(logs.join("\n")).toContain("does not match what basou computes");
+  });
+
+  it("uninstall removes the hook, prunes scaffold, and is a no-op when absent", async () => {
+    await doRunCodexHookInstall({ hooks: hooksPath }, ctx);
+    logs.length = 0;
+    await doRunCodexHookUninstall({ hooks: hooksPath });
+    expect(await readHooks()).toEqual({});
+    expect(logs.join("\n")).toContain("Removed");
+
+    logs.length = 0;
+    await doRunCodexHookUninstall({ hooks: hooksPath });
+    expect(logs.join("\n")).toContain("nothing removed");
+  });
+});
+
+describe("hook session-start against a real workspace (allowlist, no write)", () => {
+  const execFileAsync = promisify(execFile);
+  const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
+  let dir: string;
+  let repo: string;
+  let portfolioPath: string;
+
+  beforeEach(async () => {
+    dir = await realpath(await mkdtemp(join(tmpdir(), "basou-hook-ws-")));
+    repo = join(dir, "ws");
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init", "-q", repo], { env: ENV });
+    const paths = await ensureBasouDirectory(repo);
+    await writeManifest(
+      paths,
+      createManifest({
+        workspaceName: "ws",
+        now: new Date("2026-05-09T03:00:00.000Z"),
+        workspaceId: "ws_01HXABCDEF1234567890ABCDEF",
+      }),
+    );
+    portfolioPath = join(dir, "portfolio.yaml");
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function fire(cwd: string): Promise<string> {
+    let out = "";
+    await doRunHookSessionStart({
+      readStdin: async () => JSON.stringify({ session_id: "s", cwd, source: "startup" }),
+      write: (t) => {
+        out += t;
+      },
+      portfolioConfigPath: portfolioPath,
+    });
+    return out;
+  }
+
+  it("prints the position of a REGISTERED workspace and writes no orientation.md", async () => {
+    await writeFile(portfolioPath, `workspaces:\n  - path: ${JSON.stringify(repo)}\n`);
+    const out = await fire(repo);
+    expect(out).toContain("# Orientation");
+    expect(out.endsWith("\n")).toBe(true);
+    await expect(access(basouPaths(repo).files.orientation)).rejects.toThrow();
+  });
+
+  it("stays silent for a workspace that is NOT registered, even though it has a store", async () => {
+    await writeFile(portfolioPath, "workspaces:\n  - path: /somewhere/else\n");
+    expect(await fire(repo)).toBe("");
+    await expect(access(basouPaths(repo).files.orientation)).rejects.toThrow();
+  });
+
+  it("stays silent when there is no portfolio registry at all", async () => {
+    expect(await fire(repo)).toBe("");
+  });
+
+  it("stays silent for a directory that is not a git repository", async () => {
+    await writeFile(portfolioPath, `workspaces:\n  - path: ${JSON.stringify(repo)}\n`);
+    expect(await fire(dir)).toBe("");
+  });
+});
+
+describe("hook install / status codex: trust line, leftover face block, unchanged reinstall", () => {
+  let dir: string;
+  let hooksPath: string;
+  let configPath: string;
+  let facePath: string;
+  let logs: string[];
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  const cliEntry = "/abs/basou/packages/cli/dist/index.js";
+  const ctx: HookInstallContext = { resolveCliEntry: () => cliEntry };
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "basou-hook-codex2-"));
+    hooksPath = join(dir, "hooks.json");
+    configPath = join(dir, "config.toml");
+    facePath = join(dir, "AGENTS.md");
+    logs = [];
+    logSpy = vi.spyOn(console, "log").mockImplementation((msg?: unknown) => {
+      logs.push(String(msg));
+    });
+  });
+  afterEach(async () => {
+    logSpy.mockRestore();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("install ends with the Codex trust verdict", async () => {
+    await doRunCodexHookInstall(
+      { hooks: hooksPath, codexConfig: configPath, codexFace: facePath },
+      ctx,
+    );
+    expect(logs.join("\n")).toContain("Codex trust: not yet trusted");
+  });
+
+  it("install and status point at a leftover orientation block in the face, and stay quiet without one", async () => {
+    await writeFile(
+      facePath,
+      "# notes\n<!-- BASOU:ORIENTATION:START -->\nold position\n<!-- BASOU:ORIENTATION:END -->\n",
+    );
+    await doRunCodexHookInstall(
+      { hooks: hooksPath, codexConfig: configPath, codexFace: facePath },
+      ctx,
+    );
+    expect(logs.join("\n")).toContain("basou channel clear codex");
+    expect(logs.join("\n")).toContain("earlier basou");
+
+    logs.length = 0;
+    await doRunCodexHookStatus({ hooks: hooksPath, codexConfig: configPath, codexFace: facePath });
+    expect(logs.join("\n")).toContain("basou channel clear codex");
+
+    logs.length = 0;
+    await writeFile(facePath, "# notes only\n");
+    await doRunCodexHookStatus({ hooks: hooksPath, codexConfig: configPath, codexFace: facePath });
+    expect(logs.join("\n")).not.toContain("channel clear");
+  });
+
+  it("a reformat-only reinstall neither rewrites the file nor takes a backup nor asks to re-trust", async () => {
+    await doRunCodexHookInstall(
+      { hooks: hooksPath, codexConfig: configPath, codexFace: facePath },
+      ctx,
+    );
+    const canonical = JSON.parse(await readFile(hooksPath, "utf8")) as unknown;
+    const fourSpace = `${JSON.stringify(canonical, null, 4)}\n`;
+    await writeFile(hooksPath, fourSpace);
+    logs.length = 0;
+    await doRunCodexHookInstall(
+      { hooks: hooksPath, codexConfig: configPath, codexFace: facePath },
+      ctx,
+    );
+    expect(await readFile(hooksPath, "utf8")).toBe(fourSpace);
+    await expect(access(`${hooksPath}.basou-bak`)).rejects.toThrow();
+    expect(logs.join("\n")).toContain("already registered");
+    expect(logs.join("\n")).not.toContain("Updated");
   });
 });

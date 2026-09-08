@@ -1,19 +1,38 @@
-import { open, readFile, stat } from "node:fs/promises";
+import { open, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  buildSessionStartHookCommand,
   buildStopHookCommand,
   type ClaudeTranscriptRecord,
   DEFAULT_STOP_HOOK_MIN_EDITS,
   evaluateStopHook,
+  findBasouSessionStartHook,
   findBasouStopHookCommand,
+  ORIENTATION_END,
+  ORIENTATION_START,
+  parseMarkers,
+  readMarkdownFile,
+  removeSessionStartHook,
   removeStopHook,
+  upsertSessionStartHook,
   upsertStopHook,
 } from "@basou/core";
 import type { Command } from "commander";
+import {
+  codexHookStateKey,
+  commandHandlerFields,
+  computeCodexHookIdentityHash,
+  describeCodexHookTrust,
+  judgeCodexHookTrust,
+  readCodexHookState,
+} from "../lib/codex-hook-trust.js";
 import { assertNotSymlink, writeFileDurable } from "../lib/durable-write.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { DEFAULT_PORTFOLIO_CONFIG_PATH, loadPortfolioConfig } from "../lib/portfolio-config.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
+import { renderOrientationForRoot } from "./orient.js";
 
 /** Read at most this many trailing bytes of a transcript (keeps the per-turn hook bounded). */
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
@@ -57,21 +76,40 @@ export type HookStopContext = {
 };
 
 /**
- * Wire `basou hook` (Claude Code hook handlers) onto `program`.
+ * Wire `basou hook` (hook handlers for AI coding tools) onto `program`.
  *
- * Currently one handler: `basou hook stop`, a Stop-hook that nudges the agent
- * to capture a substantive session's decisions / next step before the turn
- * ends. It reads the Stop hook JSON payload on stdin and, when warranted,
- * emits a non-blocking `hookSpecificOutput.additionalContext` on stdout. It
- * NEVER blocks and NEVER fails the session: any error (bad stdin, unreadable
- * transcript) results in no output and a clean exit.
+ * Two handlers. `basou hook stop` is a Claude Code Stop-hook that nudges the
+ * agent to capture a substantive session's decisions / next step before the
+ * turn ends; it reads the Stop hook JSON payload on stdin and, when warranted,
+ * emits a non-blocking `hookSpecificOutput.additionalContext` on stdout.
+ * `basou hook session-start` is a Codex SessionStart hook that prints the
+ * position of the workspace Codex was opened in; Codex adds the hook's stdout
+ * to that session's context as developer text. Both are fail-open: any error
+ * (bad stdin, unreadable transcript, a cwd that is not a basou workspace)
+ * results in no output and a clean exit, so a hook never breaks a session.
+ *
+ * `install` / `uninstall` / `status` take an optional target: `claude`
+ * (default — the Stop hook in `~/.claude/settings.json`) or `codex` (the
+ * SessionStart hook in `~/.codex/hooks.json`).
  */
 export function registerHookCommand(program: Command): void {
   const hook = program
     .command("hook")
     .description(
-      "Claude Code hook handlers (read a hook payload on stdin, emit hook JSON on stdout)",
+      "Hook handlers for AI coding tools (Claude Code, Codex): read a hook payload on stdin, emit the tool's hook output on stdout",
     );
+
+  hook
+    .command("session-start")
+    .description(
+      "Codex SessionStart hook: print the current position of the workspace Codex was opened in " +
+        "(read from the payload's cwd) so Codex adds it to that session's context. Stays silent " +
+        "outside a basou workspace; never fails the session.",
+    )
+    .addHelpText("after", HOOK_SESSION_START_HELP)
+    .action(async () => {
+      await runHookSessionStart();
+    });
 
   hook
     .command("stop")
@@ -107,43 +145,123 @@ export function registerHookCommand(program: Command): void {
     });
 
   hook
-    .command("install")
+    .command("install [target]")
     .description(
-      "Register the Stop hook in ~/.claude/settings.json (reproducible, idempotent). " +
-        "Default is advisory capture-only; --block opts into in-turn enforcement, " +
-        "--require-review opts into the review gate.",
+      "Register a basou hook (reproducible, idempotent). Target `claude` (default): the Stop hook " +
+        "in ~/.claude/settings.json — advisory capture-only by default; --block opts into in-turn " +
+        "enforcement, --require-review into the review gate. Target `codex`: the SessionStart hook " +
+        "in ~/.codex/hooks.json, which hands each Codex session the position of the workspace it " +
+        "was opened in. Codex asks you to review and trust a new hook once before it runs.",
     )
-    .option("--block", "Register the blocking (opt-in enforcement) form instead of advisory")
-    .option("--require-review", "Register with the opt-in review gate enabled")
-    .option("--min-edits <n>", "Pass a custom file-edit threshold to the registered hook")
-    .option("--settings <path>", "Override the settings.json path (intended for tests)")
+    .option(
+      "--block",
+      "claude: register the blocking (opt-in enforcement) form instead of advisory",
+    )
+    .option("--require-review", "claude: register with the opt-in review gate enabled")
+    .option("--min-edits <n>", "claude: pass a custom file-edit threshold to the registered hook")
+    .option("--settings <path>", "claude: override the settings.json path (intended for tests)")
+    .option("--hooks <path>", "codex: override the hooks.json path (intended for tests)")
+    .option(
+      "--codex-config <path>",
+      "codex: override the Codex config.toml path (intended for tests)",
+    )
+    .option(
+      "--codex-face <path>",
+      "codex: override the user-global AGENTS.md checked for a leftover block (intended for tests)",
+    )
     .option("--dry-run", "Print what would change without writing")
     .option("-v, --verbose", "Show error causes")
-    .action(async (opts: RawHookInstallOptions) => {
-      await runHookInstall(opts);
+    .action(async (target: string | undefined, opts: RawHookInstallOptions) => {
+      await dispatchHookTarget(target, opts, {
+        claude: () => runHookInstall(opts),
+        codex: () => runCodexHookInstall(opts),
+      });
     });
 
   hook
-    .command("uninstall")
+    .command("uninstall [target]")
     .description(
-      "Remove the basou Stop hook from ~/.claude/settings.json (leaves other hooks intact)",
+      "Remove a basou hook, leaving other hooks intact. Target `claude` (default): the Stop hook " +
+        "in ~/.claude/settings.json. Target `codex`: the SessionStart hook in ~/.codex/hooks.json.",
     )
-    .option("--settings <path>", "Override the settings.json path (intended for tests)")
+    .option("--settings <path>", "claude: override the settings.json path (intended for tests)")
+    .option("--hooks <path>", "codex: override the hooks.json path (intended for tests)")
     .option("--dry-run", "Print what would change without writing")
     .option("-v, --verbose", "Show error causes")
-    .action(async (opts: RawHookInstallOptions) => {
-      await runHookUninstall(opts);
+    .action(async (target: string | undefined, opts: RawHookInstallOptions) => {
+      await dispatchHookTarget(target, opts, {
+        claude: () => runHookUninstall(opts),
+        codex: () => runCodexHookUninstall(opts),
+      });
     });
 
   hook
-    .command("status")
-    .description("Report whether the basou Stop hook is registered, and in which mode")
-    .option("--settings <path>", "Override the settings.json path (intended for tests)")
+    .command("status [target]")
+    .description(
+      "Report whether a basou hook is registered. Target `claude` (default): the Stop hook and its " +
+        "mode. Target `codex`: the SessionStart hook, and whether Codex has trusted it yet.",
+    )
+    .option("--settings <path>", "claude: override the settings.json path (intended for tests)")
+    .option("--hooks <path>", "codex: override the hooks.json path (intended for tests)")
+    .option(
+      "--codex-config <path>",
+      "codex: override the Codex config.toml path (intended for tests)",
+    )
     .option("-v, --verbose", "Show error causes")
-    .action(async (opts: RawHookInstallOptions) => {
-      await runHookStatus(opts);
+    .action(async (target: string | undefined, opts: RawHookInstallOptions) => {
+      await dispatchHookTarget(target, opts, {
+        claude: () => runHookStatus(opts),
+        codex: () => runCodexHookStatus(opts),
+      });
     });
 }
+
+/** The tools a basou hook can be registered with. `claude` is the default when the target is omitted. */
+export type HookTarget = "claude" | "codex";
+
+/**
+ * Route `install` / `uninstall` / `status` to the target's implementation. An
+ * unknown target is a usage error (exit 1); the message names the valid ones.
+ */
+async function dispatchHookTarget(
+  target: string | undefined,
+  options: { verbose?: boolean },
+  handlers: Record<HookTarget, () => Promise<void>>,
+): Promise<void> {
+  const resolved = target ?? "claude";
+  if (resolved !== "claude" && resolved !== "codex") {
+    renderCliError(
+      new Error(`Unknown hook target '${target}'. Targets: claude (default), codex.`),
+      { verbose: isVerbose(options) },
+    );
+    process.exitCode = 1;
+    return;
+  }
+  await handlers[resolved]();
+}
+
+const HOOK_SESSION_START_HELP = `
+Register this hook reproducibly with 'basou hook install codex' (it writes the
+correct node-path command into ~/.codex/hooks.json). 'basou hook uninstall codex'
+removes it; 'basou hook status codex' reports whether it is registered and
+whether Codex has trusted it.
+
+Codex runs the hook when a session starts and passes the session's cwd on stdin.
+basou resolves the workspace from that cwd (a member repo resolves to its
+planning master, a workspace view to its master) and prints the workspace's
+current position — the same text as 'basou orient' — which Codex adds to that
+session's context as developer text. The position is computed at that moment
+from that cwd and stored nowhere: a Codex opened in another workspace gets that
+workspace's position, and one opened outside any basou workspace (or before the
+desktop app has bound a folder, when cwd is '/') gets nothing. That is how one
+user-global hook serves every workspace without any workspace's position ever
+being written where another workspace's session would read it.
+
+Codex trusts hooks by hash. A newly installed or changed hook is skipped until
+you review it: the interactive CLI asks at startup ("Hooks need review"), the
+desktop app lists it under Settings -> Hooks. Non-interactive 'codex exec' skips
+an untrusted hook silently.
+`;
 
 const HOOK_STOP_HELP = `
 Register this Stop hook reproducibly with 'basou hook install' (it writes the
@@ -260,6 +378,128 @@ export async function doRunHookStop(options: HookStopOptions, ctx: HookStopConte
   write(`${payloadJson}\n`);
 }
 
+export type HookSessionStartContext = {
+  /** Read the SessionStart payload on stdin to EOF. Injectable for tests. */
+  readStdin?: () => Promise<string>;
+  /** Sink for the hook's stdout. Defaults to `process.stdout.write`. Injectable for tests. */
+  write?: (text: string) => void;
+  /**
+   * Render the position for a cwd. Defaults to {@link renderRegisteredWorkspacePosition}:
+   * resolve the workspace, refuse one the operator has not registered, render
+   * without writing. Injectable for tests of the handler's own logic.
+   */
+  render?: (cwd: string) => Promise<{ body: string }>;
+  /** The operator's workspace registry (`~/.basou/portfolio.yaml`). Injectable for tests. */
+  portfolioConfigPath?: string;
+};
+
+/**
+ * The production renderer behind `basou hook session-start`.
+ *
+ * The hook is user-global: Codex runs it for every session on the machine,
+ * with whatever directory the session was opened in. Left to `basou orient`'s
+ * own rule, that would render the `.basou/` of ANY repository the user opens —
+ * including a clone whose author committed one (the default `basou init`
+ * ignore rules track the manifest and per-session metadata), turning a
+ * checked-in "next step" into developer context the model trusts more than the
+ * repository's own AGENTS.md. So the hook speaks only for a workspace the
+ * operator has registered in `~/.basou/portfolio.yaml`: the resolved root (a
+ * member repo resolves to its planning master, a view to its master) must be
+ * one of the registered paths. That file is the operator's own allowlist, and
+ * nothing inside a repository can add to it. An unregistered workspace — a
+ * clone, or a greenfield `basou init` not yet registered — gets silence.
+ *
+ * The render does not write `.basou/orientation.md`: a session-start hook must
+ * not leave a file in a repository it only read, and a workspace whose store is
+ * read-only must still get its position.
+ */
+export async function renderRegisteredWorkspacePosition(
+  cwd: string,
+  portfolioConfigPath: string = DEFAULT_PORTFOLIO_CONFIG_PATH,
+): Promise<{ body: string }> {
+  const root = await resolveBasouRootForCommand(cwd, "hook session-start", {
+    portfolioConfigPath,
+  });
+  if (!(await isRegisteredWorkspace(root, portfolioConfigPath))) {
+    throw new Error("The workspace is not registered in the portfolio; the hook stays silent.");
+  }
+  const rendered = await renderOrientationForRoot(root, {}, { cwd }, { write: false });
+  return { body: rendered.body };
+}
+
+/**
+ * Whether `root` is one of the workspaces registered in the portfolio, compared
+ * by realpath on both sides so a symlinked layout or a `~`-relative entry still
+ * matches. An absent or unreadable registry registers nothing.
+ */
+async function isRegisteredWorkspace(root: string, portfolioConfigPath: string): Promise<boolean> {
+  let entries: { path: string }[];
+  try {
+    entries = await loadPortfolioConfig(portfolioConfigPath);
+  } catch {
+    return false;
+  }
+  const rootReal = await realpath(root).catch(() => root);
+  for (const entry of entries) {
+    const entryReal = await realpath(entry.path).catch(() => null);
+    if (entryReal !== null && entryReal === rootReal) return true;
+  }
+  return false;
+}
+
+/**
+ * Programmatic entry for `basou hook session-start`. Fail-open by design: a
+ * SessionStart hook that throws, exits non-zero, or prints an error would put
+ * that error into every Codex session's context (or block the start), so ALL
+ * errors are swallowed and the process exits cleanly with no output.
+ */
+export async function runHookSessionStart(ctx: HookSessionStartContext = {}): Promise<void> {
+  try {
+    await doRunHookSessionStart(ctx);
+  } catch {
+    // Intentionally silent: never let a hook failure reach the session.
+  }
+}
+
+/**
+ * Read Codex's SessionStart payload, take its `cwd`, and print that workspace's
+ * position. Silent — by returning, not by printing — when the payload has no
+ * usable `cwd`, when the cwd is not inside a git repo (the desktop app opens a
+ * placeholder thread at `/` before a folder is chosen), when the repo is not a
+ * basou workspace, or when the workspace is not registered in the operator's
+ * portfolio: none of those is an error the session should hear about. The
+ * output is plain text; Codex adds plain stdout as developer context.
+ */
+export async function doRunHookSessionStart(ctx: HookSessionStartContext): Promise<void> {
+  const readStdin = ctx.readStdin ?? defaultReadStdin;
+  const write = ctx.write ?? ((text) => void process.stdout.write(text));
+  const render =
+    ctx.render ??
+    ((cwd: string) => renderRegisteredWorkspacePosition(cwd, ctx.portfolioConfigPath));
+
+  const raw = await readStdin();
+  if (raw.trim().length === 0) return;
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (typeof payload !== "object" || payload === null) return;
+  const cwd = (payload as Record<string, unknown>).cwd;
+  if (typeof cwd !== "string" || cwd.length === 0) return;
+
+  let body: string;
+  try {
+    body = (await render(cwd)).body;
+  } catch {
+    return; // not a workspace (or unreadable) => stay silent
+  }
+  if (body.trim().length === 0) return;
+  write(`${body.replace(/\s+$/, "")}\n`);
+}
+
 /** Parse a JSONL transcript into records, skipping blank and malformed lines. */
 function parseTranscript(transcript: string): ClaudeTranscriptRecord[] {
   const records: ClaudeTranscriptRecord[] = [];
@@ -345,6 +585,12 @@ type RawHookInstallOptions = {
   requireReview?: boolean;
   minEdits?: string;
   settings?: string;
+  /** codex: override the hooks.json path (tests). */
+  hooks?: string;
+  /** codex: override the config.toml path read for trust state (tests). */
+  codexConfig?: string;
+  /** codex: override the user-global AGENTS.md checked for a leftover block (tests). */
+  codexFace?: string;
   dryRun?: boolean;
   verbose?: boolean;
 };
@@ -354,6 +600,9 @@ export type HookInstallOptions = {
   requireReview?: boolean;
   minEdits?: number;
   settings?: string;
+  hooks?: string;
+  codexConfig?: string;
+  codexFace?: string;
   dryRun?: boolean;
   verbose?: boolean;
 };
@@ -384,6 +633,9 @@ function normalizeInstallOptions(raw: RawHookInstallOptions): HookInstallOptions
   if (raw.block === true) out.block = true;
   if (raw.requireReview === true) out.requireReview = true;
   if (raw.settings !== undefined) out.settings = raw.settings;
+  if (raw.hooks !== undefined) out.hooks = raw.hooks;
+  if (raw.codexConfig !== undefined) out.codexConfig = raw.codexConfig;
+  if (raw.codexFace !== undefined) out.codexFace = raw.codexFace;
   if (raw.dryRun === true) out.dryRun = true;
   if (raw.verbose === true) out.verbose = true;
   if (raw.minEdits !== undefined) {
@@ -572,4 +824,265 @@ function describeHookMode(tiers: { block: boolean; review: boolean }): string {
   const enforcement = tiers.block ? "blocking (opt-in enforcement)" : "advisory (non-blocking)";
   const gates = tiers.review ? "capture + review" : "capture";
   return `${enforcement}, ${gates}`;
+}
+
+// --- codex: SessionStart hook install / uninstall / status ------------------
+//
+// The Codex twin of the Claude Stop hook management above, against
+// `~/.codex/hooks.json`. Same safety posture: parse, apply a pure transform from
+// core that touches only basou's entry, write back durably with a one-time
+// backup and an optimistic-concurrency recheck.
+
+/**
+ * Codex's user-global AGENTS.md — the face a basou of 0.39 or before rendered
+ * the orientation into. Retiring the writer did not remove what it wrote, so
+ * `hook install codex` and `hook status codex` look for a leftover block and
+ * name the command that removes it.
+ */
+export const DEFAULT_CODEX_FACE_PATH = join(homedir(), ".codex", "AGENTS.md");
+
+const LEFTOVER_FACE_NOTE = (label: string): string =>
+  `${label} still carries an orientation block rendered by an earlier basou (0.39 or before); every Codex session on this machine reads it. \`basou channel clear codex\` removes it.`;
+
+/** Whether the face still holds a BASOU:ORIENTATION block (well-formed or not). Never throws. */
+async function faceHasLeftoverOrientationBlock(facePath: string): Promise<boolean> {
+  try {
+    const existing = await readMarkdownFile(facePath);
+    if (existing === null) return false;
+    const section = parseMarkers(existing, { start: ORIENTATION_START, end: ORIENTATION_END });
+    return section.kind !== "no_markers";
+  } catch {
+    return false;
+  }
+}
+
+/** Canonical location of the Codex user-global hooks file. */
+export const DEFAULT_CODEX_HOOKS_PATH = join(homedir(), ".codex", "hooks.json");
+
+/** Canonical location of the Codex user config, where hook trust is recorded. */
+export const DEFAULT_CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
+
+/** Read hooks.json: `{ raw, parsed }`. Absent or empty => raw null; invalid JSON => throws. */
+async function readHooksFile(path: string): Promise<{ raw: string | null; parsed: unknown }> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (error: unknown) {
+    if (error instanceof Error && (error as { code?: string }).code === "ENOENT") {
+      return { raw: null, parsed: undefined };
+    }
+    throw error;
+  }
+  if (raw.trim().length === 0) return { raw, parsed: undefined };
+  try {
+    return { raw, parsed: JSON.parse(raw) };
+  } catch (error: unknown) {
+    throw new Error("The Codex hooks.json is not valid JSON. Fix it (or remove it) and retry.", {
+      cause: error,
+    });
+  }
+}
+
+/**
+ * What the operator must still do after an install: Codex trusts hooks by hash
+ * and skips a new or changed one until reviewed. Said on every install and on
+ * `status`, because non-interactive `codex exec` skips silently and the desktop
+ * app has been reported not to prompt.
+ */
+const CODEX_TRUST_NOTE =
+  "Codex reviews a new or changed hook once before running it: start `codex` in a terminal and trust it when asked (desktop app: Settings -> Hooks). Until then the hook is skipped silently.";
+
+export async function runCodexHookInstall(
+  options: RawHookInstallOptions,
+  ctx: HookInstallContext = {},
+): Promise<void> {
+  try {
+    await doRunCodexHookInstall(normalizeInstallOptions(options), ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunCodexHookInstall(
+  options: HookInstallOptions,
+  ctx: HookInstallContext = {},
+): Promise<void> {
+  const hooksPath = options.hooks ?? DEFAULT_CODEX_HOOKS_PATH;
+  const cliEntry = (ctx.resolveCliEntry ?? resolveCliEntry)();
+  const command = buildSessionStartHookCommand({ cliEntry });
+
+  await assertNotSymlink(hooksPath);
+  const { raw, parsed } = await readHooksFile(hooksPath);
+  const { hooksFile, action } = upsertSessionStartHook(parsed, command);
+  const newBody = `${JSON.stringify(hooksFile, null, 2)}\n`;
+
+  // `unchanged` means the installed handler already carries the canonical
+  // fields — Codex's trust hash is unaffected — so nothing is written even when
+  // the file's formatting differs from what basou would emit: a reformat would
+  // take a backup and announce an update the operator would then be told to
+  // re-trust, for a hook Codex still trusts.
+  if (action === "unchanged" || (raw !== null && newBody === raw)) {
+    console.log("The basou Codex SessionStart hook is already registered; no change.");
+    await reportCodexHookState(hooksPath, hooksFile, options);
+    return;
+  }
+  if (options.dryRun === true) {
+    console.log(
+      `[dry-run] Would ${action === "installed" ? "install" : "update"} the basou Codex SessionStart hook in ${hooksPath}.`,
+    );
+    return;
+  }
+
+  const recheck = await readHooksFile(hooksPath);
+  if (recheck.raw !== raw) {
+    throw new Error(
+      "The hooks.json changed during install; aborting so a concurrent edit is not overwritten. Re-run 'basou hook install codex'.",
+    );
+  }
+  await backupSettingsOnce(hooksPath, raw);
+  await writeFileDurable(hooksPath, newBody);
+  console.log(
+    `${action === "installed" ? "Installed" : "Updated"} the basou Codex SessionStart hook in ${hooksPath}.`,
+  );
+  await reportCodexHookState(hooksPath, hooksFile, options);
+}
+
+/**
+ * What the operator needs to know right after an install or on `status`: has
+ * Codex trusted this exact handler yet (a new or changed hook is skipped until
+ * reviewed, silently under non-interactive `codex exec`), and does the
+ * user-global face still carry a block an earlier basou left there.
+ */
+async function reportCodexHookState(
+  hooksPath: string,
+  hooksFile: unknown,
+  options: HookInstallOptions,
+): Promise<void> {
+  const location = findBasouSessionStartHook(hooksFile);
+  if (location !== null) {
+    const trust = await codexHookTrustFor(hooksPath, location, options.codexConfig);
+    console.log(`Codex trust: ${describeCodexHookTrust(trust)}.`);
+    if (trust.status === "untrusted" || trust.status === "modified") console.log(CODEX_TRUST_NOTE);
+  }
+  const facePath = options.codexFace ?? DEFAULT_CODEX_FACE_PATH;
+  if (await faceHasLeftoverOrientationBlock(facePath)) {
+    console.log(LEFTOVER_FACE_NOTE(options.codexFace ?? "~/.codex/AGENTS.md"));
+  }
+}
+
+export async function runCodexHookUninstall(options: RawHookInstallOptions): Promise<void> {
+  try {
+    await doRunCodexHookUninstall(normalizeInstallOptions(options));
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunCodexHookUninstall(options: HookInstallOptions): Promise<void> {
+  const hooksPath = options.hooks ?? DEFAULT_CODEX_HOOKS_PATH;
+
+  await assertNotSymlink(hooksPath);
+  const { raw, parsed } = await readHooksFile(hooksPath);
+  if (raw === null) {
+    console.log("No hooks.json; nothing to remove.");
+    return;
+  }
+  const { hooksFile, action } = removeSessionStartHook(parsed);
+  if (action === "absent") {
+    console.log("No basou Codex SessionStart hook found; nothing removed.");
+    return;
+  }
+  const newBody = `${JSON.stringify(hooksFile, null, 2)}\n`;
+
+  if (options.dryRun === true) {
+    console.log("[dry-run] Would remove the basou Codex SessionStart hook from hooks.json.");
+    return;
+  }
+  const recheck = await readHooksFile(hooksPath);
+  if (recheck.raw !== raw) {
+    throw new Error(
+      "The hooks.json changed during uninstall; aborting so a concurrent edit is not overwritten. Re-run 'basou hook uninstall codex'.",
+    );
+  }
+  await backupSettingsOnce(hooksPath, raw);
+  await writeFileDurable(hooksPath, newBody);
+  console.log("Removed the basou Codex SessionStart hook from hooks.json.");
+}
+
+export async function runCodexHookStatus(options: RawHookInstallOptions): Promise<void> {
+  try {
+    await doRunCodexHookStatus(normalizeInstallOptions(options));
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+export async function doRunCodexHookStatus(options: HookInstallOptions): Promise<void> {
+  const hooksPath = options.hooks ?? DEFAULT_CODEX_HOOKS_PATH;
+  const { parsed } = await readHooksFile(hooksPath);
+  const location = findBasouSessionStartHook(parsed);
+  if (location === null) {
+    console.log(
+      "basou Codex SessionStart hook: not registered. Run 'basou hook install codex' to register it.",
+    );
+    const facePath = options.codexFace ?? DEFAULT_CODEX_FACE_PATH;
+    if (await faceHasLeftoverOrientationBlock(facePath)) {
+      console.log(LEFTOVER_FACE_NOTE(options.codexFace ?? "~/.codex/AGENTS.md"));
+    }
+    return;
+  }
+  const matcher = location.matcher ?? "(every source)";
+  console.log(
+    `basou Codex SessionStart hook: registered in ${hooksPath} (matcher: ${matcher}); speaks only for workspaces registered in ~/.basou/portfolio.yaml.`,
+  );
+  await reportCodexHookState(hooksPath, parsed, options);
+}
+
+/**
+ * Codex's own verdict on the installed handler, read from `config.toml` and
+ * compared against the hash Codex would compute for what is in hooks.json.
+ * Never throws: an unreadable config or a handler shape the hash cannot cover
+ * reports `unknown` with the reason.
+ */
+export async function codexHookTrustFor(
+  hooksPath: string,
+  location: {
+    groupIndex: number;
+    handlerIndex: number;
+    matcher: string | undefined;
+    handler: Record<string, unknown>;
+  },
+  configPath: string | undefined,
+): Promise<ReturnType<typeof judgeCodexHookTrust>> {
+  const fields = commandHandlerFields(location.handler);
+  if (fields === null)
+    return { status: "unknown", detail: "the installed handler is not a command hook" };
+  let configToml: string;
+  try {
+    configToml = await readFile(configPath ?? DEFAULT_CODEX_CONFIG_PATH, "utf8");
+  } catch (error: unknown) {
+    if (error instanceof Error && (error as { code?: string }).code === "ENOENT") {
+      return { status: "untrusted" }; // no config at all => Codex has recorded no trust
+    }
+    return {
+      status: "unknown",
+      detail: `could not read ${configPath ?? DEFAULT_CODEX_CONFIG_PATH}`,
+    };
+  }
+  const key = codexHookStateKey(
+    hooksPath,
+    "session_start",
+    location.groupIndex,
+    location.handlerIndex,
+  );
+  const state = readCodexHookState(configToml, key);
+  const current = computeCodexHookIdentityHash({
+    eventKey: "session_start",
+    matcher: location.matcher,
+    handler: fields,
+  });
+  return judgeCodexHookTrust(state, current);
 }

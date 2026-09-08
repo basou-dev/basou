@@ -42,12 +42,11 @@ git:
   events_log: ignore  # default. opt-in to commit.
 
 channels:
-  codex: false  # default. opt-in: render this workspace's orientation into the
-                # user-global ~/.codex/AGENTS.md on `basou refresh` / `basou run codex`
+  codex: false  # RETIRED — parsed for compatibility, has no effect (see §4.2)
 
 policies:
-  confidential: false  # default. when true, this workspace's orientation is never
-                       # rendered into ~/.codex/AGENTS.md, regardless of `channels`
+  confidential: false  # default. a posture: this workspace's provenance must not
+                       # persist where another workspace's tool reads it (see §4.2)
 ```
 
 ## §4.2 Notes
@@ -59,23 +58,30 @@ policies:
 - The schema reserves room for `providers:` / `teams:` / `review_flows:` to
   extend in the future (currently unused). `policies:` was reserved for the
   same purpose and is now in use (below).
-- `channels.codex` decides whether this workspace may render its orientation
-  into a **user-global context face** — a file an AI tool auto-loads at startup
-  for every project on the machine (`~/.codex/AGENTS.md`). Anything rendered
-  there is in the context of the next session of any other workspace, so the
-  render is opt-in per workspace and off by default. The value is a boolean
-  today; if a face ever needs per-block control it widens to `boolean |
-  object`, which existing manifests keep parsing.
+- `channels.codex` is **retired** and ignored. Until 0.39 it opted the
+  workspace into rendering its orientation into a **user-global context face**
+  — `~/.codex/AGENTS.md`, a file Codex auto-loads at startup for every project
+  on the machine — so whatever one workspace wrote there sat in the context of
+  every other workspace's next session. Nothing renders into that file any
+  more. A Codex session receives the workspace's position from Codex's
+  **SessionStart hook** (`basou hook install codex`, a one-time, user-global
+  registration): Codex runs the hook when a session starts and passes the
+  session's own `cwd`; basou resolves the workspace from that `cwd` and prints
+  its position, which Codex adds to that session's context. The position is
+  computed at that moment and stored nowhere, so one hook serves every
+  workspace while no workspace's position is ever written where another
+  workspace's session reads it. The key stays parsed so an existing manifest
+  keeps loading, and `basou refresh` says once that it is ignored; `basou
+  channel clear codex` removes a block an older basou left in the face.
 - `policies.confidential` states a goal: this workspace's provenance must not
-  persist where another workspace's tool reads it. What it gates today is one
-  thing — the orientation render into `~/.codex/AGENTS.md`, never, regardless
-  of `channels.codex`, so a confidential workspace cannot be re-enabled by a
-  second declaration in the same file. It does not yet govern `basou protocol
-  sync` (a global render, not a per-workspace one), and it gates writing only:
-  it cannot keep another workspace's block out of this workspace's tool —
-  `basou channel clear codex` removes one that is already there. A top-level
-  `confidential` is **rejected**, not ignored: a safety key that is not
-  honoured must fail loudly.
+  persist where another workspace's tool reads it. The one writer it gated —
+  the retired orientation render — is gone, so today it gates nothing; basou
+  has no per-workspace path that writes a position anywhere another
+  workspace's tool reads. The key is kept and honoured as a declaration: a
+  future writer to a shared surface must consult it before it ships. It does
+  not govern `basou protocol sync` (a global render of operator-authored
+  protocols, not a per-workspace one). A top-level `confidential` is still
+  **rejected**, not ignored: a safety key that is not honoured must fail loudly.
 
 ---
 

@@ -4,11 +4,34 @@ import { join } from "node:path";
 import { ORIENTATION_END, ORIENTATION_START } from "@basou/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { syncOrientationChannel } from "../lib/context-channel.js";
+import { assertNoMarkerLine, syncMarkerBlock } from "../lib/context-channel.js";
 import { doRunChannelClear, registerChannelCommand, runChannelClear } from "./channel.js";
 
 let dir: string;
 let target: string;
+
+const ORIENTATION_MARKERS = { start: ORIENTATION_START, end: ORIENTATION_END };
+
+/**
+ * The retired orientation writer, reproduced here as a test shim: these cases
+ * were written against it and still describe `syncMarkerBlock` +
+ * `assertNoMarkerLine` (append / replace / refuse-malformed / CAS / symlink /
+ * dry-run / one-time backup) through the same body. basou itself no longer
+ * writes an orientation block anywhere.
+ */
+async function syncOrientationChannel(opts: {
+  body: string;
+  target: string;
+  dryRun?: boolean;
+}): Promise<{ action: "installed" | "updated" | "unchanged" }> {
+  assertNoMarkerLine(opts.body, ORIENTATION_MARKERS);
+  return syncMarkerBlock({
+    target: opts.target,
+    markers: ORIENTATION_MARKERS,
+    block: `${opts.body.replace(/\s+$/, "")}\n`,
+    ...(opts.dryRun === true ? { dryRun: true } : {}),
+  });
+}
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "basou-channel-cmd-"));

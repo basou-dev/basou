@@ -12,10 +12,16 @@ import {
   ensureBasouDirectory,
   type ProcessRunner,
   type RunResult,
+  upsertSessionStartHook,
   writeManifest,
 } from "@basou/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  codexHookStateKey,
+  commandHandlerFields,
+  computeCodexHookIdentityHash,
+} from "../lib/codex-hook-trust.js";
 import { type RunContext, registerRunCommand, runClaudeCode, runCodex } from "./run.js";
 
 const execFileAsync = promisify(execFile);
@@ -64,7 +70,8 @@ function getTmpRepo(): string {
 /**
  * Initialize the fixture workspace. The Codex context face is opt-in per
  * workspace (off by default), so a launcher test that expects the pre-spawn
- * render to write must declare it; `policies.confidential` outranks the opt-in.
+ * write (a basou of 0.39 or before) had to declare it; the keys are still parsed, so
+ * a test can declare them to prove they no longer cause a write.
  */
 async function setupInitedRepo(
   declare: { codexChannel?: boolean; confidential?: boolean } = {},
@@ -706,8 +713,8 @@ describe("runClaudeCode", () => {
 describe("runCodex", () => {
   const codexResolve = async (): Promise<{ command: string }> => ({ command: "codex" });
 
-  // codexChannelPath is ALWAYS overridden in these tests so the pre-spawn
-  // channel render never touches the real ~/.codex/AGENTS.md.
+  // codexHooksPath is ALWAYS overridden in these tests so the pre-spawn hook
+  // check never reads the real ~/.codex/hooks.json.
   it("records a codex-adapter session and injects the env-policy flag into the child argv", async () => {
     const repo = await setupInitedRepo();
     const runner = makeFakeRunner({ exit_code: 0 });
@@ -718,7 +725,7 @@ describe("runCodex", () => {
         runner,
         now: () => FIXED_DATE,
         resolveCodexCommand: codexResolve,
-        codexChannelPath: join(repo, "codex-AGENTS.md"),
+        codexHooksPath: join(repo, "no-such-hooks.json"),
       },
     );
     expect(exitCode).toBe(0);
@@ -733,52 +740,8 @@ describe("runCodex", () => {
     expect(yaml).toContain("codex-adapter");
   });
 
-  it("renders this workspace's orientation into the overridden codex channel before spawn when opted in", async () => {
+  it("says before spawn that the SessionStart hook is not registered, and still launches", async () => {
     const repo = await setupInitedRepo({ codexChannel: true });
-    // The launcher surfaces the LAST-rendered orientation (it does not refresh);
-    // seed one so the pre-spawn render has something to push.
-    await writeFile(basouPaths(repo).files.orientation, "# Orientation\n\nyou are right here\n");
-    const channelPath = join(repo, "codex-AGENTS.md");
-    const runner = makeFakeRunner({ exit_code: 0 });
-    await runCodex(
-      [],
-      { cwd: repo, snapshot: false },
-      {
-        runner,
-        now: () => FIXED_DATE,
-        resolveCodexCommand: codexResolve,
-        codexChannelPath: channelPath,
-      },
-    );
-    const channel = await readFile(channelPath, "utf8");
-    expect(channel).toContain("BASOU:ORIENTATION:START");
-    expect(channel).toContain("you are right here");
-  });
-
-  it("launches even when there is no orientation to render (best-effort channel)", async () => {
-    const repo = await setupInitedRepo({ codexChannel: true });
-    // No orientation.md written → the pre-spawn render is a no-op, but the
-    // launch must still proceed and the channel file is never created.
-    const channelPath = join(repo, "codex-AGENTS.md");
-    const runner = makeFakeRunner({ exit_code: 0 });
-    const exitCode = await runCodex(
-      [],
-      { cwd: repo, snapshot: false },
-      {
-        runner,
-        now: () => FIXED_DATE,
-        resolveCodexCommand: codexResolve,
-        codexChannelPath: channelPath,
-      },
-    );
-    expect(exitCode).toBe(0);
-    await expect(access(channelPath)).rejects.toThrow();
-  });
-
-  it("does not render into the codex channel by default (no opt-in), and says so before spawn", async () => {
-    const repo = await setupInitedRepo();
-    await writeFile(basouPaths(repo).files.orientation, "# Orientation\n\nyou are right here\n");
-    const channelPath = join(repo, "codex-AGENTS.md");
     const logs: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
       logs.push(a.map(String).join(" "));
@@ -791,21 +754,59 @@ describe("runCodex", () => {
           runner: makeFakeRunner({ exit_code: 0 }),
           now: () => FIXED_DATE,
           resolveCodexCommand: codexResolve,
-          codexChannelPath: channelPath,
+          codexHooksPath: join(repo, "no-such-hooks.json"),
         },
       );
       expect(exitCode).toBe(0);
     } finally {
       spy.mockRestore();
     }
-    await expect(access(channelPath)).rejects.toThrow();
-    expect(logs.join("\n")).toContain("codex channel: skipped (this workspace has not opted in");
+    expect(logs.join("\n")).toContain("SessionStart hook is not registered");
+    // The launcher no longer writes a face file anywhere near the repo.
+    await expect(access(join(repo, "codex-AGENTS.md"))).rejects.toThrow();
   });
 
-  it("confidential outranks the opt-in for the launcher too", async () => {
-    const repo = await setupInitedRepo({ codexChannel: true, confidential: true });
-    await writeFile(basouPaths(repo).files.orientation, "# Orientation\n\nsecret position\n");
-    const channelPath = join(repo, "codex-AGENTS.md");
+  it("does not let an unreadable hooks.json block or misreport the launch", async () => {
+    const repo = await setupInitedRepo();
+    const hooksPath = join(repo, "hooks.json");
+    await writeFile(hooksPath, "{ not json");
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+    let exitCode = -1;
+    try {
+      exitCode = await runCodex(
+        [],
+        { cwd: repo, snapshot: false },
+        {
+          runner: makeFakeRunner({ exit_code: 0 }),
+          now: () => FIXED_DATE,
+          resolveCodexCommand: codexResolve,
+          codexHooksPath: hooksPath,
+        },
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(exitCode).toBe(0);
+    expect(logs.join("\n")).not.toContain("SessionStart hook");
+  });
+
+  it("registers a `codex` subcommand under `run`", () => {
+    const program = new Command();
+    registerRunCommand(program);
+    const run = program.commands.find((c) => c.name() === "run");
+    const subs = run?.commands.map((c) => c.name()) ?? [];
+    expect(subs).toEqual(expect.arrayContaining(["claude-code", "codex"]));
+  });
+});
+
+describe("runCodex pre-spawn: trust of the registered SessionStart hook", () => {
+  const codexResolve = async (): Promise<{ command: string }> => ({ command: "codex" });
+
+  async function launchWith(hooksPath: string, configPath: string): Promise<string[]> {
+    const repo = await setupInitedRepo();
     const logs: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
       logs.push(a.map(String).join(" "));
@@ -818,21 +819,56 @@ describe("runCodex", () => {
           runner: makeFakeRunner({ exit_code: 0 }),
           now: () => FIXED_DATE,
           resolveCodexCommand: codexResolve,
-          codexChannelPath: channelPath,
+          codexHooksPath: hooksPath,
+          codexConfigPath: configPath,
         },
       );
     } finally {
       spy.mockRestore();
     }
-    await expect(access(channelPath)).rejects.toThrow();
-    expect(logs.join("\n")).toContain("codex channel: skipped (confidential workspace");
+    return logs;
+  }
+
+  it("says the hook is registered but not trusted when Codex holds no trust record", async () => {
+    const repo = getTmpRepo();
+    const hooksPath = join(repo, "hooks.json");
+    const { hooksFile } = upsertSessionStartHook(
+      undefined,
+      "node /x/packages/cli/dist/index.js hook session-start",
+    );
+    await writeFile(hooksPath, `${JSON.stringify(hooksFile, null, 2)}\n`);
+    const logs = await launchWith(hooksPath, join(repo, "no-config.toml"));
+    expect(logs.join("\n")).toContain("registered but not yet trusted");
   });
 
-  it("registers a `codex` subcommand under `run`", () => {
-    const program = new Command();
-    registerRunCommand(program);
-    const run = program.commands.find((c) => c.name() === "run");
-    const subs = run?.commands.map((c) => c.name()) ?? [];
-    expect(subs).toEqual(expect.arrayContaining(["claude-code", "codex"]));
+  it("stays quiet when Codex's trust record matches the installed handler", async () => {
+    const repo = getTmpRepo();
+    const hooksPath = join(repo, "hooks.json");
+    const configPath = join(repo, "config.toml");
+    const { hooksFile } = upsertSessionStartHook(
+      undefined,
+      "node /x/packages/cli/dist/index.js hook session-start",
+    );
+    await writeFile(hooksPath, `${JSON.stringify(hooksFile, null, 2)}\n`);
+    const groups = (
+      hooksFile.hooks as {
+        SessionStart: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }>;
+      }
+    ).SessionStart;
+    const handler = groups[0]?.hooks[0];
+    if (handler === undefined) throw new Error("fixture");
+    const fields = commandHandlerFields(handler);
+    if (fields === null) throw new Error("fixture");
+    const hash = computeCodexHookIdentityHash({
+      eventKey: "session_start",
+      matcher: groups[0]?.matcher,
+      handler: fields,
+    });
+    await writeFile(
+      configPath,
+      `[hooks.state."${codexHookStateKey(hooksPath, "session_start", 0, 0)}"]\ntrusted_hash = "${hash}"\n`,
+    );
+    const logs = await launchWith(hooksPath, configPath);
+    expect(logs.join("\n")).not.toContain("SessionStart hook");
   });
 });

@@ -82,9 +82,9 @@ function getCodexChannelPath(): string {
 }
 
 /**
- * Initialize the fixture workspace. The Codex context face is opt-in per
- * workspace and off by default, so a test that expects the face to be written
- * must say so here; `policies.confidential` outranks the opt-in.
+ * Initialize the fixture workspace. `channels.codex` and `policies.confidential`
+ * are still parsed (the keys were shipped), so the fixture can declare them to
+ * prove that neither makes a refresh write the user-global Codex face.
  */
 async function setupInitedRepo(
   declare: { codexChannel?: boolean; confidential?: boolean } = {},
@@ -220,7 +220,6 @@ function ctxFor(repo: string) {
     cwd: repo,
     claudeProjectsDir: getClaudeRoot(),
     codexSessionsDir: getCodexRoot(),
-    codexChannelPath: getCodexChannelPath(),
   };
 }
 
@@ -276,93 +275,63 @@ describe("basou refresh", () => {
     await expect(access(paths.files.handoff)).rejects.toThrow();
   });
 
-  it("renders the regenerated orientation into the Codex context face when the manifest opts in", async () => {
+  // The face used to be written on opt-in; it is retired. Whatever a manifest
+  // still says — nothing, the old opt-in, or the confidential veto — the file's
+  // content hash is unchanged after a refresh. One fixture per case: the helper
+  // initializes the single temp repo once.
+  for (const [label, declare] of [
+    ["no declaration", {}],
+    ["the old channels.codex opt-in", { codexChannel: true }],
+    ["the opt-in plus policies.confidential", { codexChannel: true, confidential: true }],
+  ] as const) {
+    it(`writes nothing to the user-global Codex face with ${label}`, async () => {
+      const repo = await setupInitedRepo(declare);
+      await writeCodexRollout(repo);
+      const prior =
+        "<!-- BASOU:ORIENTATION:START -->\nanother workspace\n<!-- BASOU:ORIENTATION:END -->\n";
+      await writeFile(getCodexChannelPath(), prior);
+      const before = sha256(await readFile(getCodexChannelPath(), "utf8"));
+
+      const { value: result } = await captureLog(() => doRunRefresh({}, ctxFor(repo)));
+
+      expect(sha256(await readFile(getCodexChannelPath(), "utf8"))).toBe(before);
+      expect(result.codexChannel).toEqual({ status: "retired" });
+    });
+  }
+
+  it("says the opt-in is retired when the manifest still declares it, without telling the reader to flip a key", async () => {
     const repo = await setupInitedRepo({ codexChannel: true });
     await writeCodexRollout(repo);
-
-    await doRunRefresh({}, ctxFor(repo));
-
-    // The locked ~/.codex/AGENTS.md is overridden to a temp path in tests; it
-    // should carry the orientation block (and only the orientation block — the
-    // protocol channel is a separate command).
-    const channelBody = await readFile(getCodexChannelPath(), "utf8");
-    expect(channelBody).toContain("BASOU:ORIENTATION:START");
-    expect(channelBody).toContain("# Orientation");
-    expect(channelBody).not.toContain("BASOU:PROTOCOLS:START");
+    const { lines } = await captureLog(() => doRunRefresh({}, ctxFor(repo)));
+    expect(lines.join("\n")).toContain("codex channel: retired");
+    expect(lines.join("\n")).toContain("SessionStart hook");
+    expect(lines.join("\n")).not.toMatch(/set channels\.codex/);
   });
 
-  it("does not write the Codex context face under --dry-run, even when opted in", async () => {
-    const repo = await setupInitedRepo({ codexChannel: true });
+  it("says nothing about the channel for channels.codex: false, which never did anything", async () => {
+    const repo = await setupInitedRepo({ codexChannel: false });
     await writeCodexRollout(repo);
-
-    await doRunRefresh({ dryRun: true }, ctxFor(repo));
-
-    await expect(access(getCodexChannelPath())).rejects.toThrow();
+    const { lines } = await captureLog(() => doRunRefresh({}, ctxFor(repo)));
+    expect(lines.join("\n")).not.toContain("codex channel");
   });
 
-  it("leaves the Codex context face untouched by default (no opt-in), and says so", async () => {
+  it("says nothing about the channel when the manifest never declared it", async () => {
     const repo = await setupInitedRepo();
     await writeCodexRollout(repo);
-    // Whatever is already in the user-global file — here, another workspace's
-    // block would be the realistic case — must survive byte for byte.
-    const prior = "# someone else's notes\n";
-    await writeFile(getCodexChannelPath(), prior);
-
-    const { value: result, lines } = await captureLog(() => doRunRefresh({}, ctxFor(repo)));
-
-    expect(await readFile(getCodexChannelPath(), "utf8")).toBe(prior);
-    expect(result.codexChannel).toEqual({ status: "skipped", reason: "not_enabled" });
-    expect(lines.join("\n")).toContain("codex channel: skipped (this workspace has not opted in");
+    const { lines } = await captureLog(() => doRunRefresh({}, ctxFor(repo)));
+    expect(lines.join("\n")).not.toContain("codex channel");
   });
 
-  it("confidential outranks the opt-in: the face's content hash is unchanged", async () => {
-    const repo = await setupInitedRepo({ codexChannel: true, confidential: true });
-    await writeCodexRollout(repo);
-    const prior =
-      "<!-- BASOU:ORIENTATION:START -->\nanother workspace\n<!-- BASOU:ORIENTATION:END -->\n";
-    await writeFile(getCodexChannelPath(), prior);
-    const before = sha256(await readFile(getCodexChannelPath(), "utf8"));
-
-    const { value: result, lines } = await captureLog(() => doRunRefresh({}, ctxFor(repo)));
-
-    expect(sha256(await readFile(getCodexChannelPath(), "utf8"))).toBe(before);
-    expect(result.codexChannel).toEqual({ status: "skipped", reason: "confidential" });
-    expect(lines.join("\n")).toContain("codex channel: skipped (confidential workspace");
-  });
-
-  it("--json states the channel outcome as a field, and still does not write by default", async () => {
-    const repo = await setupInitedRepo();
-    await writeCodexRollout(repo);
-
-    const { lines } = await captureLog(() => doRunRefresh({ json: true }, ctxFor(repo)));
-
-    expect(lines).toHaveLength(1); // the JSON result stays the sole stdout line
-    const parsed = JSON.parse(lines[0] ?? "{}") as { codexChannel?: unknown };
-    expect(parsed.codexChannel).toEqual({ status: "skipped", reason: "not_enabled" });
-    await expect(access(getCodexChannelPath())).rejects.toThrow();
-  });
-
-  it("--json reports a written face when opted in", async () => {
+  it("--json carries the retired channel as a field and stays the sole stdout line", async () => {
     const repo = await setupInitedRepo({ codexChannel: true });
     await writeCodexRollout(repo);
 
     const { lines } = await captureLog(() => doRunRefresh({ json: true }, ctxFor(repo)));
 
+    expect(lines).toHaveLength(1);
     const parsed = JSON.parse(lines[0] ?? "{}") as { codexChannel?: unknown };
-    expect(parsed.codexChannel).toEqual({ status: "written", action: "installed" });
-    expect(await readFile(getCodexChannelPath(), "utf8")).toContain("BASOU:ORIENTATION:START");
-  });
-
-  it("--dry-run reports the face as skipped for that reason under --json", async () => {
-    const repo = await setupInitedRepo({ codexChannel: true });
-    await writeCodexRollout(repo);
-
-    const { lines } = await captureLog(() =>
-      doRunRefresh({ json: true, dryRun: true }, ctxFor(repo)),
-    );
-
-    const parsed = JSON.parse(lines[0] ?? "{}") as { codexChannel?: unknown };
-    expect(parsed.codexChannel).toEqual({ status: "skipped", reason: "dry_run" });
+    expect(parsed.codexChannel).toEqual({ status: "retired" });
+    await expect(access(getCodexChannelPath())).rejects.toThrow();
   });
 
   it("aggregates manifest import.source_roots across sibling repos in one run", async () => {
@@ -529,7 +498,6 @@ describe("basou refresh (workspace view)", () => {
           cwd: view,
           claudeProjectsDir: getClaudeRoot(),
           codexSessionsDir: getCodexRoot(),
-          codexChannelPath: getCodexChannelPath(),
           nowProvider: () => FIXED_DATE,
         },
       );

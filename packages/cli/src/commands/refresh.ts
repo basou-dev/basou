@@ -6,20 +6,9 @@ import {
   readManifest,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
-import {
-  type CodexChannelDecision,
-  decideCodexChannel,
-  describeCodexChannelSkip,
-} from "../lib/channel-policy.js";
-import { renderOrientationToCodexChannel } from "../lib/context-channel.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { loadPortfolioConfig } from "../lib/portfolio-config.js";
-import {
-  type CodexChannelOutcome,
-  type ImportOutcome,
-  type RefreshResult,
-  refreshAll,
-} from "../lib/provenance-actions.js";
+import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import type { ImportContext } from "./import.js";
 import {
@@ -88,12 +77,6 @@ export type RefreshContext = ImportContext & {
   nowProvider?: () => Date;
   /** Portfolio config path for `--portfolio`; defaults to `~/.basou/portfolio.yaml`. Injectable for tests. */
   portfolioConfigPath?: string;
-  /**
-   * Override the Codex context-face path (defaults to the locked
-   * `~/.codex/AGENTS.md`). Injectable for tests so the suite never writes to the
-   * real home-global file.
-   */
-  codexChannelPath?: string;
 };
 
 /**
@@ -105,7 +88,9 @@ export function registerRefreshCommand(program: Command): void {
   program
     .command("refresh")
     .description(
-      "Import all adapters for the project and regenerate handoff + decisions in one step",
+      "Import all adapters for the project and regenerate handoff + decisions in one step. " +
+        "Writes only inside the workspace's .basou/ — never to a user-global file another project's tool reads " +
+        "(a Codex session gets the position from the SessionStart hook; see `basou hook install codex`).",
     )
     .option(
       "--project <path>",
@@ -301,78 +286,38 @@ export async function doRunRefresh(
   ctx: RefreshContext,
 ): Promise<RefreshResult> {
   const { result, paths } = await computeRefresh(options, ctx);
-  // After a real refresh, the just-regenerated orientation MAY be pushed into
-  // the Codex context face so an interactive Codex auto-loads the current
-  // position. That face (~/.codex/AGENTS.md) is user-global — every project's
-  // Codex reads it — so the push is gated by this workspace's own manifest
-  // (`channels.codex: true`, and never when `policies.confidential: true`), and the
-  // outcome is always stated: a skipped line for humans, a `codexChannel` field
-  // under --json. --dry-run regenerated nothing, so it renders nothing.
-  const channel =
-    options.dryRun === true
-      ? { outcome: { status: "skipped", reason: "dry_run" } as const, line: null }
-      : await syncCodexOrientationChannel(paths, ctx.codexChannelPath);
-  const reported: RefreshResult = { ...result, codexChannel: channel.outcome };
+  // Nothing is written to the user-global Codex face (~/.codex/AGENTS.md) any
+  // more: a position reaches Codex through the SessionStart hook, which computes
+  // it from the session's own cwd at session start and stores nothing. The
+  // `codexChannel` field stays on the JSON result for one release so a consumer
+  // that read it learns the channel is retired rather than seeing the key vanish,
+  // and a manifest that still declares the retired opt-in is told, once per
+  // refresh, that the declaration no longer does anything.
+  const reported: RefreshResult = { ...result, codexChannel: { status: "retired" } };
   if (options.json === true) {
     console.log(JSON.stringify(reported));
   } else {
     printRefreshSummary(result);
-    if (channel.line !== null) console.log(channel.line);
+    const line = await retiredChannelNotice(paths);
+    if (line !== null) console.log(line);
   }
   return reported;
 }
 
 /**
- * Best-effort, and gated: render the just-regenerated orientation into the
- * Codex context face (~/.codex/AGENTS.md) — which an interactive Codex
- * auto-loads at startup for EVERY project — only when this workspace's manifest
- * opts in and is not confidential. The decision is read from the manifest on
- * every run rather than cached, so flipping the flag takes effect on the next
- * refresh.
- *
- * The manifest read here cannot fail in practice: `computeRefresh` has already
- * read the same file (via `resolveImportTarget`), and a manifest it rejects
- * fails the whole refresh before this point — which also means nothing is
- * written to the face. The catch below is kept as a guard against that ordering
- * changing, not as a degrade path a user can reach. Never throws: a face
- * failure (e.g. `~/.codex/` missing) must not fail the refresh. Returns the
- * structured outcome plus the human status line (null when there is nothing
- * worth a line — no orientation to render).
+ * The one line a workspace still declaring `channels.codex` gets. It states the
+ * fact (the declaration is ignored) and where the position now comes from; it
+ * does not tell the reader to edit the manifest. Silent for a workspace that
+ * never declared the key, or declared it false (which never did anything). Best-effort: an unreadable manifest here — which
+ * `computeRefresh` would already have failed on — yields no line.
  */
-async function syncCodexOrientationChannel(
-  paths: BasouPaths,
-  channelPath?: string,
-): Promise<{ outcome: CodexChannelOutcome; line: string | null }> {
-  let decision: CodexChannelDecision;
+async function retiredChannelNotice(paths: BasouPaths): Promise<string | null> {
   try {
-    decision = decideCodexChannel(await readManifest(paths));
-  } catch (error: unknown) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return {
-      outcome: { status: "skipped", reason: "error", detail },
-      line: `codex channel: skipped (manifest could not be re-read, so the opt-in cannot be confirmed: ${detail})`,
-    };
-  }
-  if (!decision.write) {
-    return {
-      outcome: { status: "skipped", reason: decision.reason },
-      line: describeCodexChannelSkip(decision.reason),
-    };
-  }
-  try {
-    const rendered = await renderOrientationToCodexChannel({
-      orientationPath: paths.files.orientation,
-      ...(channelPath !== undefined ? { channelPath } : {}),
-    });
-    if (rendered === null)
-      return { outcome: { status: "skipped", reason: "no_orientation" }, line: null };
-    return { outcome: { status: "written", action: rendered.action }, line: rendered.line };
-  } catch (error: unknown) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return {
-      outcome: { status: "skipped", reason: "error", detail },
-      line: `codex channel skipped: ${detail}`,
-    };
+    const manifest = await readManifest(paths);
+    if (manifest.channels?.codex !== true) return null;
+    return "codex channel: retired — the manifest's channels.codex is ignored; a Codex session now receives this workspace's position from the SessionStart hook (see `basou hook status codex`), and nothing is written to the user-global ~/.codex/AGENTS.md";
+  } catch {
+    return null;
   }
 }
 

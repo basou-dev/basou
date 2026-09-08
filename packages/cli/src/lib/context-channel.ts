@@ -12,11 +12,16 @@ import { assertNotSymlink, writeFileDurable } from "./durable-write.js";
 
 /**
  * The "context channel": basou renders marker-delimited managed blocks into the
- * files each AI coding tool auto-loads at session start. This is the vendor-
- * neutral generalization of the protocol channel — the standing-protocol block
- * (Claude Code's SessionStart hook is just its dynamic, Claude-specific
- * counterpart) plus the orientation block, which is how a "where am I" reaches a
- * vendor that exposes no active SessionStart hook of its own.
+ * files an AI coding tool auto-loads at session start. Today that is the
+ * standing-protocol block in Claude Code's user-global CLAUDE.md (see
+ * `protocols-config`). The orientation block that used to be rendered into
+ * Codex's user-global AGENTS.md is retired: that file is read by every project's
+ * Codex, so whatever one workspace wrote there sat in the context of every other
+ * workspace's next session. A position now reaches Codex through its
+ * SessionStart hook (`basou hook install codex`), which computes it from the
+ * session's own cwd and stores nothing. What remains here for that face is the
+ * ability to REMOVE a block an older basou left behind (`basou channel clear
+ * codex`).
  *
  * Face paths are HARD-CODED, never config-driven, for the same reason the
  * protocol target is locked: a config-supplied path would let basou append to
@@ -24,19 +29,14 @@ import { assertNotSymlink, writeFileDurable } from "./durable-write.js";
  */
 
 /**
- * Codex's user-global AGENTS.md. Codex auto-loads it at startup and exposes no
- * SessionStart-equivalent hook, so this static channel is the only vendor-
- * neutral active path by which orientation can reach an interactive Codex.
- * (Claude Code's locked target lives in protocols-config as DEFAULT_TARGET_PATH;
- * a face registry can fold both together once a second channel needs the list.)
+ * Codex's user-global AGENTS.md. Codex auto-loads it at startup for every
+ * project on the machine. basou no longer writes to it; the path is kept so
+ * `basou channel clear codex` can remove an orientation block rendered there by
+ * an earlier basou (0.39 or before).
  */
 export const CODEX_TARGET_PATH = join(homedir(), ".codex", "AGENTS.md");
 
 const ORIENTATION_MARKERS: Markers = { start: ORIENTATION_START, end: ORIENTATION_END };
-
-/** Note rendered atop the orientation block so a reader knows it is regenerated, not hand-edited. */
-const ORIENTATION_MANAGED_NOTE =
-  "<!-- Managed by basou: 'basou refresh' regenerates everything between the BASOU:ORIENTATION markers with the workspace's current position. This block is transient — it changes every refresh; do not edit it. -->";
 
 export type BlockSyncAction = "installed" | "updated" | "unchanged";
 export type BlockSyncResult = { action: BlockSyncAction };
@@ -95,7 +95,7 @@ async function backupOnce(target: string, existing: string | null): Promise<void
  * touching only the bytes between `markers`. Append-if-absent / replace-if-
  * present / refuse-if-malformed, with a one-time `<target>.basou-bak` of the
  * pre-basou original and an optimistic-concurrency recheck before writing.
- * Shared by the protocol channel and the orientation channel.
+ * Used by the protocol channel; the retired orientation channel used it too.
  */
 export async function syncMarkerBlock(opts: {
   target: string;
@@ -133,8 +133,8 @@ export async function syncMarkerBlock(opts: {
 /**
  * Refuse a block body that contains a marker line. A marker inside the body
  * would be mistaken for the block delimiter on the next parse and corrupt the
- * managed block, so both the protocol channel (operator-authored sources) and
- * the orientation channel (machine-generated body) screen for it first.
+ * managed block, so the protocol channel (operator-authored sources) screens
+ * for it before writing.
  */
 export function assertNoMarkerLine(body: string, markers: Markers): void {
   for (const line of body.split(/\r?\n/)) {
@@ -178,37 +178,13 @@ export async function removeMarkerBlock(opts: {
 }
 
 /**
- * Render the current orientation body into the Codex context face
- * (~/.codex/AGENTS.md). This is the floor of the Codex adapter: a vendor-neutral
- * "where am I" reaches Codex, which exposes no SessionStart hook. `target` is
- * overridable for tests only; default is the locked {@link CODEX_TARGET_PATH}.
- *
- * The orientation body is machine-generated, so it should never contain a
- * marker line; a defensive scan refuses rather than corrupting the block on the
- * next parse (callers run this best-effort so a refuse never fails the refresh).
- */
-export async function syncOrientationChannel(opts: {
-  body: string;
-  target?: string;
-  dryRun?: boolean;
-}): Promise<BlockSyncResult> {
-  assertNoMarkerLine(opts.body, ORIENTATION_MARKERS);
-  const block = `${ORIENTATION_MANAGED_NOTE}\n\n${opts.body.replace(/\s+$/, "")}\n`;
-  return syncMarkerBlock({
-    target: opts.target ?? CODEX_TARGET_PATH,
-    markers: ORIENTATION_MARKERS,
-    block,
-    ...(opts.dryRun === true ? { dryRun: true } : {}),
-  });
-}
-
-/**
  * Remove the orientation block from the Codex context face, leaving any other
- * content of the file (a hand-written body, the protocol block) untouched. This
- * is the operator's manual escape hatch: the face is user-global, so a block a
- * different workspace rendered there is in the context of every Codex session
- * on the machine until something overwrites or removes it. No `.basou-bak` is
- * written by this path. `target` overrides the locked path for tests only.
+ * content of the file (a hand-written body, the protocol block) untouched. The
+ * face is user-global, so a block an earlier basou (0.39 or before) rendered there is in the
+ * context of every Codex session on the machine until something removes it —
+ * nothing in basou overwrites it any more, so this is the way it leaves. No
+ * `.basou-bak` is written by this path. `target` overrides the locked path for
+ * tests only.
  */
 export async function clearOrientationChannel(opts: {
   target?: string;
@@ -225,29 +201,4 @@ export async function clearOrientationChannel(opts: {
     backup: false,
     ...(opts.dryRun === true ? { dryRun: true } : {}),
   });
-}
-
-/**
- * Push an already-rendered orientation file into the Codex context face: read
- * `orientationPath`, and if present sync it into the channel. Returns the
- * resulting action plus a human status line, or null when there is no
- * orientation to render. Throws on a real channel failure — callers decide
- * whether that is a skip (best-effort). The shared body behind both
- * `basou refresh` and the `basou run codex` pre-spawn step; `channelPath`
- * overrides the locked target for tests.
- */
-export async function renderOrientationToCodexChannel(opts: {
-  orientationPath: string;
-  channelPath?: string;
-}): Promise<{ action: BlockSyncAction; line: string } | null> {
-  const body = await readMarkdownFile(opts.orientationPath);
-  if (body === null) return null;
-  const { action } = await syncOrientationChannel({
-    body,
-    ...(opts.channelPath !== undefined ? { target: opts.channelPath } : {}),
-  });
-  return {
-    action,
-    line: `codex channel: orientation ${action} in ${opts.channelPath ?? "~/.codex/AGENTS.md"}`,
-  };
 }

@@ -17,16 +17,16 @@ export type ChannelClearOptions = {
  * Wire `basou channel` onto `program`. A context face is a file an AI coding
  * tool auto-loads at startup for EVERY project on the machine — `~/.codex/
  * AGENTS.md` for Codex — so a block one workspace rendered there sits in the
- * context of every other workspace's next session until it is overwritten or
- * removed. Rendering is opt-in per workspace (`channels.codex: true` in the
- * manifest, never when `policies.confidential: true`); `clear` is the manual escape
- * hatch for a block that is already there.
+ * context of every other workspace's next session until it is removed. basou
+ * no longer renders into that face (a Codex session gets its position from the
+ * SessionStart hook instead); `clear` removes a block an earlier basou (0.39 or before) left
+ * there.
  */
 export function registerChannelCommand(program: Command): void {
   const channel = program
     .command("channel")
     .description(
-      "Manage the user-global context faces basou renders into — files every project's AI tool auto-loads (~/.codex/AGENTS.md)",
+      "Manage the user-global context faces an AI tool auto-loads for every project (~/.codex/AGENTS.md): remove what an earlier basou rendered there",
     );
 
   channel
@@ -36,7 +36,7 @@ export function registerChannelCommand(program: Command): void {
       "the face to clear: `codex` (the basou:orientation block in ~/.codex/AGENTS.md)",
     )
     .description(
-      "Remove basou's block from a user-global context face, so no workspace's position is left in a file that another project's tool reads",
+      "Remove the orientation block an older basou rendered into a user-global context face, so no workspace's position is left in a file that another project's tool reads",
     )
     .option("--dry-run", "Report whether a block would be removed without writing")
     .option("--json", "Output the result as JSON")
@@ -98,7 +98,7 @@ export async function doRunChannelClear(
     console.log(`[dry-run] Would remove the basou:orientation block from ${label}.`);
   } else {
     console.log(
-      `Removed the basou:orientation block from ${label}. Nothing basou wrote remains in that file; the next opted-in \`basou refresh\` renders it again.`,
+      `Removed the basou:orientation block from ${label}. Nothing basou wrote remains in that file, and nothing renders it again.`,
     );
   }
   return result;

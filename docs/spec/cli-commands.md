@@ -39,8 +39,15 @@ basou decisions generate   # generate or inspect .basou/decisions.md
 basou report generate      # generate a work report (stdout / --out / --json)
 basou orient               # show the current position (also writes .basou/orientation.md)
 
+# Hooks (handlers an AI tool runs at its own lifecycle points)
+basou hook install [claude|codex]    # register the Claude Code Stop hook (default) or the
+                                     #   Codex SessionStart hook, once, in the tool's user config
+basou hook status [claude|codex]     # is it registered (codex: and has Codex trusted it yet)
+basou hook uninstall [claude|codex]
+basou hook stop | session-start      # the handlers themselves — the tool invokes them, not you
+
 # User-global context faces (files every project's AI tool auto-loads)
-basou channel clear codex  # remove basou's orientation block from ~/.codex/AGENTS.md
+basou channel clear codex  # remove an orientation block an older basou left in ~/.codex/AGENTS.md
 ```
 
 For exact flags, subcommands, and arguments, see the generated reference linked
@@ -49,34 +56,64 @@ the implementation.
 
 ### User-global context faces (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`)
 
-Two files basou can write to are **user-global**: an AI tool auto-loads them at
-startup for **every** project on the machine, not just the workspace that
-wrote them. `basou refresh` and `basou run codex` render the workspace's
-orientation into `~/.codex/AGENTS.md` (the BASOU:ORIENTATION block); `basou
-protocol sync` renders the declared standing protocols into
-`~/.claude/CLAUDE.md` (the BASOU:PROTOCOLS block). Whatever is in those blocks
-is in the context of the next Codex / Claude Code session of any other
-workspace, including one whose work must never mix with this one's.
+Two files an AI tool auto-loads at startup are **user-global**: they are read
+for **every** project on the machine, not just the workspace that wrote them.
+Whatever is in them is in the context of the next Codex / Claude Code session
+of any other workspace, including one whose work must never mix with this
+one's. basou therefore writes to exactly one of them, with one kind of content:
 
-The orientation render is therefore **opt-in per workspace and off by
-default**: `basou refresh` and `basou run codex` write the face only when the
-workspace's manifest declares `channels.codex: true`, and never when it
-declares `policies.confidential: true` (which outranks the opt-in). A skipped render is
-always said — a `codex channel: skipped (...)` line, and a `codexChannel`
-field under `refresh --json` — so a run that wrote nothing cannot be read as
-one that did. `--dry-run` never renders. The face paths themselves stay
-hard-coded (a configurable path would let basou append to arbitrary files);
-the gate decides *whether* a workspace writes, not *where*.
+- `~/.claude/CLAUDE.md` — `basou protocol sync` renders the operator's declared
+  **standing protocols** (the BASOU:PROTOCOLS block). Protocols are
+  operator-authored and global by design; keep workspace-specific facts —
+  names, paths, positions — out of them, because every workspace's sessions
+  read them.
+- `~/.codex/AGENTS.md` — **nothing, from this release on.** Until 0.39 `basou refresh` and
+  `basou run codex` could render the workspace's orientation there (opt-in via
+  the now-retired `channels.codex`). That put one workspace's position in every
+  other workspace's Codex. `basou channel clear codex` removes a block an older
+  basou left there, writing no `.basou-bak` (the block is being removed because
+  it should not be on the machine).
 
-The gate governs writing only. It cannot keep a block another workspace
-already rendered out of this workspace's tool: `basou channel clear codex`
-removes the orientation block from `~/.codex/AGENTS.md` on the spot (leaving
-any other content of the file intact, and writing no `.basou-bak` — the block
-is being removed because it should not be on the machine), and `basou protocol
-unsync` does the same for the protocol block in `~/.claude/CLAUDE.md`. When
-basou creates a face file that did not exist, it records an empty `.basou-bak`
-so that no later write can preserve basou's own block as the "pre-basou
-original".
+**How a position reaches Codex instead: the SessionStart hook.** `basou hook
+install codex` registers, once, in the user-global `~/.codex/hooks.json`, a
+SessionStart hook that runs `basou hook session-start`. Codex runs it when a
+session starts and hands it the session's `cwd` on stdin; basou resolves the
+workspace from that `cwd` (a member repo to its planning master, a view to its
+master) and prints the workspace's position — the same text as `basou orient`
+— which Codex adds to **that session's** context as developer text. The
+position is computed at that moment and stored nowhere: a Codex opened in
+another workspace gets that workspace's position, and one opened outside any
+basou workspace (or before the desktop app has bound a folder, when `cwd` is
+`/`) gets nothing. One hook, every workspace, no shared file. It is the same
+shape as a Claude Code SessionStart hook that runs `basou orient` (which a
+Claude Code user registers by hand in `~/.claude/settings.json`; basou does not
+install one). It works in the Codex CLI, the desktop app, and the IDE
+extension, which share the hooks system.
+
+The hook speaks only for a workspace **registered in `~/.basou/portfolio.yaml`**
+(the resolved root must be a registered path; a member repo resolves to its
+planning master first). That file is the operator's allowlist and nothing in a
+repository can add to it, so a cloned repository that happens to carry a
+committed `.basou/` gets nothing — without the gate, a user-global hook would
+render any repository's store, and a checked-in "next step" would arrive as
+developer context. Register a new workspace (`basou portfolio` lists what is
+registered) before expecting the hook to speak for it. The hook writes nothing:
+unlike `basou orient` it does not refresh `.basou/orientation.md`.
+
+Codex trusts hooks by hash and skips a new or changed one until you review it:
+the interactive CLI asks at startup ("Hooks need review"), the desktop app
+lists it under Settings → Hooks; non-interactive `codex exec` skips an
+untrusted hook silently. `basou hook status codex` (and the end of `basou hook
+install codex`) reports whether the hook is registered and whether Codex has
+trusted it, by reproducing Codex's identity hash for the installed handler and
+comparing it with the record in `~/.codex/config.toml`; a record it cannot read
+is reported as unknown. `basou run codex` says before launch when the hook is
+not registered or not trusted. Both `install` and `status` also say when
+`~/.codex/AGENTS.md` still carries an orientation block an earlier basou
+rendered, and name `basou channel clear codex`.
+
+The face paths stay hard-coded: a configurable path would let basou append to
+arbitrary files.
 
 ## §15.2 Commands considered but not implemented
 
