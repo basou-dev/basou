@@ -108,7 +108,9 @@ async function warnIfPositionNamesOtherWorkspaces(
     configPath: ctx.portfolioConfigPath,
   });
   if (report !== null) {
-    console.error(positionForeignWorkspaceWarning(report, ".basou/orientation.md"));
+    console.error(
+      positionForeignWorkspaceWarning(report, basouPaths(result.workspaceRoot).files.orientation),
+    );
   }
 }
 

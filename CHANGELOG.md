@@ -16,26 +16,39 @@ All notable changes to **basou** are recorded here. The project follows
   standing-protocol block, which `basou protocol sync` renders into the
   user-global `~/.claude/CLAUDE.md` that every project on the machine loads.
 
-  `basou orient` and `basou refresh` now scan the position they just rendered,
-  and `basou protocol sync` scans the block before writing it, against the
-  workspaces registered in `~/.basou/portfolio.yaml`. A match prints one line
-  on **stderr** naming no workspace and quoting no match — only how many were
-  found and which lines to look at — so the warning cannot become the leak it
-  is reporting. Nothing is withheld, rewritten or refused: a name in a position
-  may be exactly what the operator meant, and refusing would stop the command
-  they run many times a day.
+  `basou orient`, `basou refresh` and the view server's refresh route scan the
+  position they just rendered, and `basou protocol sync` scans the block it is
+  about to write, against the workspaces registered in
+  `~/.basou/portfolio.yaml`. A match prints one line on **stderr** naming no
+  workspace and quoting no match — only how many were found, which lines to
+  look at, and which position file those line numbers belong to — so the
+  warning cannot become the leak it is reporting. Nothing is withheld,
+  rewritten or refused: a name in a position may be exactly what the operator
+  meant, and refusing would stop the command they run many times a day.
 
   Matching is on paths and **directory names**, never on the portfolio's
   display labels: a label is a product name, a product name appears throughout
   its own workspace's documents, and a warning that fires on every line is one
-  nobody reads. Because basou's own convention pairs a `-planning` master with
-  a `-workspace` view, both spellings of a registered directory name count —
-  the paths that carry a workspace name in practice (a scratchpad directory
-  whose name encodes a session's `cwd`) carry the view spelling while the
-  registry holds the master. A missing, unreadable or empty registry is
-  silent, `--dry-run` regenerates no position and so warns about none, and
-  `basou hook session-start` renders the same body without warning: no one is
-  at a keyboard to read it, and the hook stays silent by contract.
+  nobody reads. Three spellings of a registered directory name count — its own,
+  the `-planning` / `-workspace` sibling basou's convention pairs it with, and
+  the all-non-alphanumerics-to-`-` encoding an agent tool uses for a
+  per-project directory, which is how a workspace name reaches a position in
+  practice (a scratchpad path carrying a session's `cwd`). A registered name
+  nested inside the scanning workspace's own is deliberately not reported:
+  on a line naming the self the two cannot be told apart, and this design would
+  rather miss such a name than warn on every line.
+
+  **What is not checked.** Only the basou-managed block of `~/.claude/CLAUDE.md`
+  is scanned, not the rest of that file: basou renders nothing there and does
+  not inspect the operator's own prose, so a name written outside the markers
+  is not reported. Matching is a case-sensitive substring test on directory
+  spellings, so a workspace referred to any other way — a product name, a
+  client's name, a paraphrase — is not seen. `basou hook session-start` renders
+  the same position body without warning: no one is at a keyboard to read it,
+  and the hook stays silent by contract. A missing, unreadable or empty
+  registry is silent, and `basou refresh --dry-run` regenerates no position and
+  so warns about none (`basou protocol sync --dry-run` does warn: previewing is
+  when the operator wants to hear it).
 
 ## 0.40.0 — 2026-09-08
 

@@ -414,6 +414,28 @@ describe("basou refresh (foreign-workspace advisory)", () => {
     expect(err.mock.calls.flat().join(" ")).not.toContain("registered workspace");
   });
 
+  // One `--portfolio` run scans every registered workspace in a row; an
+  // advisory that named no file would be unactionable across fifteen of them.
+  it("cites the scanned workspace's position file by full path", async () => {
+    const { repo, portfolio } = await setupWithForeignPath();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await captureLog(() => doRunRefresh({}, { ...ctxFor(repo), portfolioConfigPath: portfolio }));
+
+    expect(err.mock.calls.flat().join(" ")).toContain(basouPaths(repo).files.orientation);
+  });
+
+  it("keeps --json parseable with the advisory present", async () => {
+    const { repo, portfolio } = await setupWithForeignPath();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { lines } = await captureLog(() =>
+      doRunRefresh({ json: true }, { ...ctxFor(repo), portfolioConfigPath: portfolio }),
+    );
+
+    expect(() => JSON.parse(lines.join("\n"))).not.toThrow();
+  });
+
   it("stays silent when there is no portfolio registry", async () => {
     const { repo } = await setupWithForeignPath();
     const err = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -70,13 +70,22 @@ describe("scanForeignWorkspaceNames", () => {
     expect(scan(text)).toEqual([]);
   });
 
+  // The self's view spelling must be excluded even when a registry entry is
+  // written that way: without the paired spelling the view name would not be
+  // recognized as the self's and every line naming it would report.
   it("excludes every spelling of the scanning workspace, including its view", () => {
     const text = [
       `- ${ALPHA}/x.md`,
       "- ~/projects/alpha-planning/y.md",
       "- /private/tmp/claude-501/-home-tester-projects-alpha-workspace/scratchpad/z.md",
     ].join("\n");
-    expect(scan(text)).toEqual([]);
+    const hits = scanForeignWorkspaceNames({
+      text,
+      workspacePaths: [`${HOME}/projects/alpha-workspace`],
+      selfPath: ALPHA,
+      homedir: HOME,
+    });
+    expect(hits).toEqual([]);
   });
 
   it("reports several foreign workspaces in registry order", () => {
@@ -114,6 +123,66 @@ describe("scanForeignWorkspaceNames", () => {
     });
     expect(hits).toHaveLength(1);
     expect(hits[0]?.tokens).toEqual([`${HOME}/ai`, "~/ai"]);
+  });
+
+  // The encoding an agent tool uses for a per-project directory replaces EVERY
+  // non-alphanumeric character, so a workspace name carrying `_` or `.` reaches
+  // a recorded path under a spelling its own name does not contain.
+  it("finds a workspace whose name reaches a path in its encoded spelling", () => {
+    const hits = scanForeignWorkspaceNames({
+      text: "- /private/tmp/claude-501/-home-tester-projects-delta-two-workspace/s/n.md",
+      workspacePaths: [`${HOME}/projects/delta_two-planning`],
+      selfPath: ALPHA,
+      homedir: HOME,
+    });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.tokens).toContain("delta-two-workspace");
+  });
+
+  it("gives a solo repo the view spelling the convention would create", () => {
+    const hits = scanForeignWorkspaceNames({
+      text: "- /private/tmp/claude-501/-home-tester-projects-omicron-workspace/s/n.md",
+      workspacePaths: [`${HOME}/projects/omicron`],
+      selfPath: ALPHA,
+      homedir: HOME,
+    });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.tokens).toContain("omicron-workspace");
+  });
+
+  // A registered name nested inside the self's own cannot be told apart from
+  // the self on a line that names the self, and warning on every such line is
+  // the failure this whole design is built to avoid.
+  it("does not report a registered name nested inside the scanning workspace's own", () => {
+    const self = `${HOME}/projects/atlas-planning`;
+    const hits = scanForeignWorkspaceNames({
+      text: [`- ${self}/x.md`, "- atlas-planning is this workspace"].join("\n"),
+      workspacePaths: [`${HOME}/projects/atlas`],
+      selfPath: self,
+      homedir: HOME,
+    });
+    expect(hits).toEqual([]);
+  });
+
+  it("does not report a registered directory name that is a substring of the self's", () => {
+    const self = `${HOME}/projects/nimart-planning`;
+    const hits = scanForeignWorkspaceNames({
+      text: [`- ${self}/x.md`, "- nimart-planning again"].join("\n"),
+      workspacePaths: [`${HOME}/work/art-planning`],
+      selfPath: self,
+      homedir: HOME,
+    });
+    expect(hits).toEqual([]);
+  });
+
+  it("ignores a trailing separator on the scanning workspace's path", () => {
+    const hits = scanForeignWorkspaceNames({
+      text: `- ${ALPHA}/x.md`,
+      workspacePaths: [ALPHA],
+      selfPath: `${ALPHA}/`,
+      homedir: HOME,
+    });
+    expect(hits).toEqual([]);
   });
 
   it("returns nothing for empty input", () => {

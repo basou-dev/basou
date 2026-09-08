@@ -158,17 +158,18 @@ export async function doRunProtocolSync(
   const sources = await readProtocolSources(entries);
   const block = buildBlock(sources);
 
-  // Content check (advisory), before the write and also under --dry-run: this
-  // block is the one thing basou still renders into a USER-GLOBAL file, and it
-  // reads no manifest, so nothing else in the pipeline would notice a standing
-  // protocol that names one workspace. Warned on stderr; the block is written
-  // either way, because a standing protocol naming a workspace can be exactly
-  // what the operator meant.
+  // Content check (advisory): this block is the one thing basou still renders
+  // into a USER-GLOBAL file, and it reads no manifest, so nothing else in the
+  // pipeline would notice a standing protocol that names one workspace. The
+  // block is written either way — a standing protocol naming a workspace can be
+  // exactly what the operator meant — but the warning is printed only once the
+  // sync has actually gone through, so a run that failed and wrote nothing does
+  // not claim the name reached the file. Under `--dry-run` it still prints:
+  // previewing is when the operator wants to hear it.
   const foreign = await findForeignWorkspaceNames({
     text: block,
     configPath: ctx.portfolioConfigPath,
   });
-  if (foreign !== null) console.error(protocolForeignWorkspaceWarning(foreign));
 
   // The shared channel helper owns the symlink guard, append/replace, backup,
   // and optimistic-concurrency recheck; the install-vs-update verb it returns
@@ -180,6 +181,8 @@ export async function doRunProtocolSync(
     block,
     ...(options.dryRun === true ? { dryRun: true } : {}),
   });
+
+  if (foreign !== null) console.error(protocolForeignWorkspaceWarning(foreign));
 
   if (result.action === "unchanged") {
     console.log(`The basou:protocols block is already up to date (${entries.length} protocol(s)).`);

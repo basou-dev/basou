@@ -22,6 +22,7 @@ import {
   tryRemoteUrl,
 } from "@basou/core";
 import type { ImportContext } from "../commands/import.js";
+import { warnIfPositionNamesOtherWorkspaces } from "./foreign-workspace-warn.js";
 import {
   importClaudeCode,
   importCodex,
@@ -328,6 +329,14 @@ async function handleWorkspacePost(
     const result = await runExclusive(() =>
       refreshAll({ options: actionOptions, ctx: ws.importCtx, paths: ws.paths, nowIso }),
     );
+    // Same advisory the CLI's refresh prints, on the server's stderr: this route
+    // regenerates the position a session is later handed, so it is a writer of
+    // the delivered text like any other. It cannot reach the browser without
+    // putting the finding into a response body, which is not what an advisory
+    // that must not carry names should do.
+    if (result.orientation.status === "generated") {
+      await warnIfPositionNamesOtherWorkspaces({ paths: ws.paths });
+    }
     sendJson(res, 200, result);
     return true;
   }

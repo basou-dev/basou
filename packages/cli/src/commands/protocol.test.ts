@@ -251,6 +251,24 @@ describe("basou protocol sync (foreign-workspace advisory)", () => {
     expect(joinCalls(err)).toBe("");
   });
 
+  // The warning says the name reaches the user-global file, so it must not be
+  // printed by a run that failed before writing anything.
+  it("does not warn when the sync fails and writes nothing", async () => {
+    captureStdout();
+    const err = captureStderr();
+    await writeFile(sourcePath, "## Review protocol\n\nAlways check beta-planning first.\n");
+    await writeFile(targetPath, `prose\n${PROTOCOL_START}\nbody\n`);
+
+    await expect(
+      doRunProtocolSync(
+        { config: configPath, target: targetPath },
+        { portfolioConfigPath: portfolioPath },
+      ),
+    ).rejects.toThrow(/malformed/);
+
+    expect(joinCalls(err)).toBe("");
+  });
+
   it("stays silent when there is no portfolio registry", async () => {
     captureStdout();
     const err = captureStderr();

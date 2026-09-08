@@ -13,8 +13,8 @@ import { basename, normalize, sep } from "node:path";
  * is already scoped — but neither inspects the CONTENT it delivers. A position
  * that mentions another workspace by name, or a standing protocol that names
  * one engagement, carries that name into a session that has no business seeing
- * it. This helper is the read-only primitive both warnings use; it never
- * rewrites or withholds the text.
+ * it. This is the read-only primitive both warnings use; it never rewrites or
+ * withholds the text.
  *
  * Matching is on PATHS AND DIRECTORY NAMES, never on the portfolio's display
  * labels. A label is a product name ("basou"), and a product name legitimately
@@ -23,9 +23,18 @@ import { basename, normalize, sep } from "node:path";
  * to attribute: it is how the operator's own filesystem distinguishes the
  * workspaces.
  *
+ * Matching is LEXICAL and case-sensitive: a plain substring test per line, with
+ * no filesystem access. Two consequences the caller owns. It must canonicalize
+ * the paths it passes (resolve symlinks and aliases) if it wants an aliased
+ * spelling to be recognized — the CLI helper does. And a path written in a case
+ * the filesystem would accept but the record does not use is not matched;
+ * recorded paths preserve the case they were created with, so this costs
+ * nothing in practice.
+ *
  * The bias is toward NOT crying wolf. Only names derived from a registered
- * workspace path count; anything derived from the scanning workspace's OWN path
- * is excluded, and a directory name too short to attribute is dropped.
+ * workspace path count; any spelling that also occurs inside the scanning
+ * workspace's OWN names is excluded, and a directory name too short to
+ * attribute is dropped.
  */
 
 /**
@@ -45,6 +54,11 @@ export type ForeignWorkspaceHit = {
   lines: number[];
 };
 
+/** Drop a trailing separator so `/a/b/` and `/a/b` produce the same names. */
+function stripTrailingSep(p: string): string {
+  return p.length > 1 && p.endsWith(sep) ? p.slice(0, -sep.length) : p;
+}
+
 /**
  * Expand a leading `~` / `~/` to `home`. Registered paths arrive absolute, but
  * text under scan spells home-relative paths either way, so both are generated.
@@ -56,28 +70,41 @@ function toTildePath(absPath: string, home: string): string | null {
 }
 
 /**
- * The name spellings that stand for one workspace root: its absolute path, its
- * `~`-relative path, its directory name, and — because basou's own convention
- * pairs a `-planning` master with a `-workspace` view — the sibling spelling of
- * that directory name. The sibling matters: the recorded paths that leak a
- * workspace name in practice (a scratchpad directory whose name encodes a
- * session's cwd) carry the VIEW spelling, while the portfolio registers the
- * MASTER.
+ * How an agent tool encodes a directory path into a single directory name:
+ * EVERY non-alphanumeric character becomes `-`, not just the separator. basou's
+ * own Claude Code adapter derives its per-project log directory this way, and
+ * the same encoding names the scratchpad directories that carry a session's cwd
+ * — the paths through which a workspace name reaches a position in practice. A
+ * workspace whose directory name contains `_` or `.` therefore appears in those
+ * paths under a spelling its own name does not contain.
  */
+function encodedSpelling(name: string): string {
+  return name.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+/**
+ * The directory-name spellings that stand for one workspace directory. basou's
+ * convention pairs a `-planning` master with a `-workspace` view, so a
+ * registered master also answers to its view's name (and the other way round);
+ * a solo repo answers to its own name and to the view name the convention would
+ * give it. Each spelling is also emitted in its encoded form.
+ */
+function directoryNameSpellings(dir: string): string[] {
+  const paired = /^(.+)-(planning|workspace)$/.exec(dir);
+  const plain =
+    paired !== null
+      ? [`${paired[1]}-planning`, `${paired[1]}-workspace`]
+      : [dir, `${dir}-workspace`];
+  return [...plain, ...plain.map(encodedSpelling)];
+}
+
+/** Every spelling that stands for one workspace root: paths and directory names. */
 function nameTokensFor(workspacePath: string, home: string): string[] {
-  const abs = normalize(workspacePath);
-  const dir = basename(abs);
+  const abs = stripTrailingSep(normalize(workspacePath));
   const tokens = new Set<string>([abs]);
   const tilde = toTildePath(abs, home);
   if (tilde !== null) tokens.add(tilde);
-  if (dir.length >= MIN_TOKEN_LENGTH) {
-    tokens.add(dir);
-    const paired = /^(.+)-(planning|workspace)$/.exec(dir);
-    if (paired !== null) {
-      tokens.add(`${paired[1]}-planning`);
-      tokens.add(`${paired[1]}-workspace`);
-    }
-  }
+  for (const name of directoryNameSpellings(basename(abs))) tokens.add(name);
   return [...tokens].filter((t) => t.length >= MIN_TOKEN_LENGTH);
 }
 
@@ -86,17 +113,20 @@ function nameTokensFor(workspacePath: string, home: string): string[] {
  * scanning.
  *
  * - `workspacePaths` are the registered workspace roots (absolute; the caller
- *   reads them from the portfolio registry).
- * - `selfPath` is the workspace whose text this is. Every spelling derived from
- *   it is excluded, so a workspace naming ITSELF — which its position does on
- *   nearly every line — never reports. Omit it (a user-global text such as the
- *   standing-protocol block belongs to no single workspace) and every
- *   registered workspace counts as foreign.
+ *   reads them from the portfolio registry and canonicalizes them).
+ * - `selfPath` is the workspace whose text this is. Any spelling that occurs
+ *   inside one of its own names is excluded, so a workspace naming ITSELF —
+ *   which its position does on nearly every line — never reports, and neither
+ *   does a shorter registered name nested inside the self's (a solo `atlas`
+ *   registered alongside `atlas-planning` would otherwise fire on every line
+ *   the self's own path appears on). The cost is deliberate: a nested name is
+ *   indistinguishable from the self's, and this design would rather miss it
+ *   than warn on every line. Omit `selfPath` for a user-global text that
+ *   belongs to no single workspace (the standing-protocol block) and every
+ *   registered workspace counts.
  *
- * Matching is a case-sensitive substring test per line, so a name embedded in a
- * longer string — an encoded path, a URL — is still found. Returns one entry per
- * named workspace, in the order the paths were given; an empty array means
- * nothing was found.
+ * Returns one entry per named workspace, in the order the paths were given; an
+ * empty array means nothing was found.
  */
 export function scanForeignWorkspaceNames(input: {
   text: string;
@@ -107,14 +137,15 @@ export function scanForeignWorkspaceNames(input: {
   if (input.text.length === 0 || input.workspacePaths.length === 0) return [];
 
   const home = input.homedir ?? osHomedir();
-  const own =
-    input.selfPath === undefined ? new Set<string>() : new Set(nameTokensFor(input.selfPath, home));
+  const own = input.selfPath === undefined ? [] : nameTokensFor(input.selfPath, home);
 
   const lines = input.text.split("\n");
   const hits: ForeignWorkspaceHit[] = [];
 
   for (const workspacePath of input.workspacePaths) {
-    const tokens = nameTokensFor(workspacePath, home).filter((t) => !own.has(t));
+    const tokens = nameTokensFor(workspacePath, home).filter(
+      (token) => !own.some((ownToken) => ownToken.includes(token)),
+    );
     if (tokens.length === 0) continue;
 
     const matched = new Set<string>();
