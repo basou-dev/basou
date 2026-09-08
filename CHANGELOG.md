@@ -22,8 +22,8 @@ All notable changes to **basou** are recorded here. The project follows
   `~/.basou/portfolio.yaml`. A match prints one line on **stderr** naming no
   workspace and quoting no match — only how many were found, which lines to
   look at, and which position file those line numbers belong to — so the
-  warning cannot become the leak it is reporting. Nothing is withheld,
-  rewritten or refused: a name in a position may be exactly what the operator
+  warning cannot become the leak it is reporting. On these commands nothing is
+  withheld, rewritten or refused: a name in a position may be exactly what the operator
   meant, and refusing would stop the command they run many times a day.
 
   Matching is on paths and **directory names**, never on the portfolio's
@@ -43,12 +43,25 @@ All notable changes to **basou** are recorded here. The project follows
   not inspect the operator's own prose, so a name written outside the markers
   is not reported. Matching is a case-sensitive substring test on directory
   spellings, so a workspace referred to any other way — a product name, a
-  client's name, a paraphrase — is not seen. `basou hook session-start` renders
-  the same position body without warning: no one is at a keyboard to read it,
-  and the hook stays silent by contract. A missing, unreadable or empty
+  client's name, a paraphrase — is not seen. `basou hook session-start` prints no warning either
+  (no one is at a keyboard to read it), but it does not hand over a position
+  that names another workspace: see the next entry. A missing, unreadable or empty
   registry is silent, and `basou refresh --dry-run` regenerates no position and
   so warns about none (`basou protocol sync --dry-run` does warn: previewing is
   when the operator wants to hear it).
+
+- **`basou hook session-start` withholds a position that names another
+  registered workspace.** The hook is the one path where a position goes
+  straight into a session's context with no one reading stderr, so the advisory
+  the interactive commands print cannot do its job there. Instead the hook
+  stays silent — the same outcome as an unregistered workspace — and the next
+  `basou refresh` or `basou orient` says which lines are responsible. With
+  this, a session receives only its own workspace's position (0.40.0) and never
+  one that carries another workspace's name, on both faces: Codex through the
+  installed hook, and Claude Code when its SessionStart hook runs `basou hook
+  session-start` in place of `basou orient` (the handler reads only the
+  payload's `cwd`, which both tools send; `basou orient` itself keeps printing,
+  with the advisory, because it is also the command a person runs).
 
 ## 0.40.0 — 2026-09-08
 

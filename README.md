@@ -85,13 +85,13 @@ re-derived from scratch each time you sit back down.
   rationale and rejected alternatives) or the terminal next step.
 - `basou handoff generate` — a regenerated, hand-editable summary for the
   next session or a teammate.
-- `basou hook install codex` — hand every Codex session (CLI, desktop app,
-  IDE) the position of the workspace it was opened in, at session start.
-  The hook computes the position from that session's own directory, speaks
-  only for workspaces you have registered in `~/.basou/portfolio.yaml`, and
-  stores nothing — so one registration serves every workspace and no
-  workspace's position is ever written into a file another project's tool
-  reads.
+- `basou hook install codex` — hand a Codex session (CLI, desktop app, IDE)
+  the position of the workspace it was opened in, at session start. The hook
+  computes the position from that session's own directory, speaks only for
+  workspaces you have registered in `~/.basou/portfolio.yaml`, withholds a
+  position that names another registered workspace, and stores nothing — so
+  one registration serves every workspace and no workspace's position, or
+  name, reaches a session that is not its own.
 
 Capture is deterministic and does not depend on a runtime LLM — an agent
 hands Basou structured decisions and Basou writes them; the trail is yours,

@@ -92,8 +92,9 @@ export async function doRunOrient(options: OrientOptions, ctx: OrientContext): P
   // and captured decisions, either of which can carry another workspace's name.
   // Warned on stderr (never in the body) so the warning does not itself travel
   // to the session reading the position. `basou hook session-start` renders the
-  // same body and deliberately does NOT warn: nobody is at a keyboard to read
-  // it, and the hook's contract is to stay silent.
+  // same body and does not warn — nobody is at a keyboard to read it — but it
+  // withholds a position that names another workspace, because its stdout
+  // becomes the session's context. Here a person is reading: print, and warn.
   await warnIfPositionNamesOtherWorkspaces(result, ctx);
 }
 

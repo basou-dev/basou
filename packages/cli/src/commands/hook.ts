@@ -30,6 +30,7 @@ import {
 } from "../lib/codex-hook-trust.js";
 import { assertNotSymlink, writeFileDurable } from "../lib/durable-write.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { findForeignWorkspaceNames } from "../lib/foreign-workspace-warn.js";
 import { DEFAULT_PORTFOLIO_CONFIG_PATH, loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import { renderOrientationForRoot } from "./orient.js";
@@ -102,9 +103,10 @@ export function registerHookCommand(program: Command): void {
   hook
     .command("session-start")
     .description(
-      "Codex SessionStart hook: print the current position of the workspace Codex was opened in " +
-        "(read from the payload's cwd) so Codex adds it to that session's context. Stays silent " +
-        "outside a basou workspace; never fails the session.",
+      "SessionStart hook (Codex; Claude Code too): print the current position of the workspace the " +
+        "session was opened in (read from the payload's cwd) so the tool adds it to that session's " +
+        "context. Stays silent outside a registered basou workspace, and when the position names " +
+        "another registered workspace; never fails the session.",
     )
     .addHelpText("after", HOOK_SESSION_START_HELP)
     .action(async () => {
@@ -256,6 +258,18 @@ workspace's position, and one opened outside any basou workspace (or before the
 desktop app has bound a folder, when cwd is '/') gets nothing. That is how one
 user-global hook serves every workspace without any workspace's position ever
 being written where another workspace's session would read it.
+
+The hook stays silent in one more case: when the position it would print names
+ANOTHER registered workspace (a recorded path under it, a captured decision that
+mentions it). 'basou orient' and 'basou refresh' report that as a stderr
+advisory the operator can read; a hook has no reader for stderr and its stdout
+becomes the session's trusted context, so it withholds the position instead.
+Run 'basou refresh' to see which lines are responsible.
+
+Claude Code's SessionStart hook sends the same kind of payload (a JSON object
+with 'cwd') and adds stdout to context the same way, so a Claude Code user may
+register this command in ~/.claude/settings.json in place of 'basou orient' to
+get both gates. basou does not install that one.
 
 Codex trusts hooks by hash. A newly installed or changed hook is skipped until
 you review it: the interactive CLI asks at startup ("Hooks need review"), the
@@ -424,6 +438,22 @@ export async function renderRegisteredWorkspacePosition(
     throw new Error("The workspace is not registered in the portfolio; the hook stays silent.");
   }
   const rendered = await renderOrientationForRoot(root, {}, { cwd }, { write: false });
+  // Second gate, on the CONTENT. The position is assembled from recorded paths
+  // and captured decisions, and either can carry another registered
+  // workspace's name. On the commands an operator runs that is a stderr
+  // advisory they can read and act on; here nobody reads stderr, and the body
+  // is about to become another tool's trusted context. So the hook withholds
+  // the position rather than hand a foreign name to the session: silence, the
+  // same outcome as an unregistered workspace. The next `basou refresh` or
+  // `basou orient` says which lines are responsible.
+  const foreign = await findForeignWorkspaceNames({
+    text: rendered.body,
+    selfPath: root,
+    configPath: portfolioConfigPath,
+  });
+  if (foreign !== null) {
+    throw new Error("The position names another registered workspace; the hook stays silent.");
+  }
   return { body: rendered.body };
 }
 
@@ -462,13 +492,14 @@ export async function runHookSessionStart(ctx: HookSessionStartContext = {}): Pr
 }
 
 /**
- * Read Codex's SessionStart payload, take its `cwd`, and print that workspace's
+ * Read the SessionStart payload, take its `cwd`, and print that workspace's
  * position. Silent — by returning, not by printing — when the payload has no
  * usable `cwd`, when the cwd is not inside a git repo (the desktop app opens a
  * placeholder thread at `/` before a folder is chosen), when the repo is not a
- * basou workspace, or when the workspace is not registered in the operator's
- * portfolio: none of those is an error the session should hear about. The
- * output is plain text; Codex adds plain stdout as developer context.
+ * basou workspace, when the workspace is not registered in the operator's
+ * portfolio, or when its position names another registered workspace: none of
+ * those is an error the session should hear about. The output is plain text;
+ * Codex, and Claude Code, add plain stdout to the session's context.
  */
 export async function doRunHookSessionStart(ctx: HookSessionStartContext): Promise<void> {
   const readStdin = ctx.readStdin ?? defaultReadStdin;

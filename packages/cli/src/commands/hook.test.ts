@@ -1,9 +1,24 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
+import {
+  basouPaths,
+  createManifest,
+  ensureBasouDirectory,
+  writeManifest,
+  writeYamlFile,
+} from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   doRunCodexHookInstall,
@@ -865,6 +880,75 @@ describe("hook session-start against a real workspace (allowlist, no write)", ()
   it("stays silent for a directory that is not a git repository", async () => {
     await writeFile(portfolioPath, `workspaces:\n  - path: ${JSON.stringify(repo)}\n`);
     expect(await fire(dir)).toBe("");
+  });
+
+  /** A completed session whose recorded files are `relatedFiles` — what the position lists as recent files. */
+  async function placeSession(relatedFiles: string[]): Promise<void> {
+    const paths = basouPaths(repo);
+    const id = "ses_01HXABCDEF1234567890ABCF01";
+    const sessionDir = join(paths.sessions, id);
+    await mkdir(sessionDir, { recursive: true });
+    await writeYamlFile(join(sessionDir, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: {
+        id,
+        label: "fixture",
+        task_id: null,
+        workspace_id: "ws_01HXABCDEF1234567890ABCDEF",
+        source: { kind: "claude-code-import", version: "0.1.0" },
+        started_at: "2026-05-08T11:00:00+09:00",
+        status: "completed",
+        working_directory: repo,
+        invocation: { command: "echo", args: [], exit_code: 0 },
+        related_files: relatedFiles,
+        events_log: "events.jsonl",
+      },
+    });
+  }
+
+  // The second gate: a position that names another registered workspace is
+  // withheld, not handed over. On `orient` / `refresh` the same finding is a
+  // stderr advisory; here nobody reads stderr and the body would become the
+  // session's trusted context, so silence is the only outcome that keeps the
+  // name out.
+  it("stays silent when the position names another registered workspace", async () => {
+    const other = join(dir, "beta-planning");
+    await writeFile(
+      portfolioPath,
+      `workspaces:\n  - path: ${JSON.stringify(repo)}\n  - path: ${JSON.stringify(other)}\n`,
+    );
+    await placeSession([join(other, "notes.md")]);
+    expect(await fire(repo)).toBe("");
+    await expect(access(basouPaths(repo).files.orientation)).rejects.toThrow();
+  });
+
+  // A registry may also list the workspace's own view (`basou view --check`
+  // calls that `redundant`). It is another spelling of the self, not a foreign
+  // workspace, so a file recorded through the view must not silence the hook.
+  it("still prints when the registry also lists the workspace's own view", async () => {
+    const view = join(dir, "ws-workspace");
+    await mkdir(view);
+    await symlink(repo, join(view, "ws"));
+    await writeFile(
+      portfolioPath,
+      `workspaces:\n  - path: ${JSON.stringify(repo)}\n  - path: ${JSON.stringify(view)}\n`,
+    );
+    await placeSession([join(view, "ws", "notes.md")]);
+    const out = await fire(repo);
+    expect(out).toContain("# Orientation");
+    expect(out).toContain("notes.md");
+  });
+
+  it("still prints when other workspaces are registered but the position names none", async () => {
+    const other = join(dir, "beta-planning");
+    await writeFile(
+      portfolioPath,
+      `workspaces:\n  - path: ${JSON.stringify(repo)}\n  - path: ${JSON.stringify(other)}\n`,
+    );
+    await placeSession([join(repo, "notes.md")]);
+    const out = await fire(repo);
+    expect(out).toContain("# Orientation");
+    expect(out).toContain("notes.md");
   });
 });
 

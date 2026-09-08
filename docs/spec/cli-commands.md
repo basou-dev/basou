@@ -100,6 +100,18 @@ developer context. Register a new workspace (`basou portfolio` lists what is
 registered) before expecting the hook to speak for it. The hook writes nothing:
 unlike `basou orient` it does not refresh `.basou/orientation.md`.
 
+The hook also stays silent when the position it would print **names another
+registered workspace** — a recorded path under one, a captured decision that
+mentions one. `basou orient` and `basou refresh` report that finding as a stderr
+advisory the operator can read and act on; a hook has no reader for stderr and
+its stdout becomes the session's trusted context, so it withholds the position
+instead — the same outcome as an unregistered workspace. The next `basou
+refresh` says which lines are responsible. Claude Code's SessionStart hook
+sends the same kind of payload (a JSON object with `cwd`) and adds stdout to
+context the same way, so a Claude Code user may register `basou hook
+session-start` in `~/.claude/settings.json` in place of `basou orient` to get
+both gates; basou does not install that one.
+
 Codex trusts hooks by hash and skips a new or changed one until you review it:
 the interactive CLI asks at startup ("Hooks need review"), the desktop app
 lists it under Settings → Hooks; non-interactive `codex exec` skips an
