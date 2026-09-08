@@ -145,23 +145,23 @@ const WorkspaceMetaSchema = z.looseObject({
 });
 
 /**
- * Which user-global context faces this workspace may write to. A face is a file
- * an AI tool auto-loads at startup for EVERY project on the machine
- * (`~/.codex/AGENTS.md`), so anything rendered there is read by the next
- * session of any other workspace too. Writing is therefore opt-in per
- * workspace, default off; a workspace that never declares `channels.codex:
- * true` never puts its position in a file another project's tool reads.
+ * Context faces this workspace may write to. Loose so a newer version's key
+ * survives a read-modify-write.
+ *
+ * `codex` is RETIRED and ignored. It once opted the workspace into rendering
+ * its orientation into the user-global `~/.codex/AGENTS.md`, a file Codex
+ * auto-loads for every project on the machine — so whatever one workspace wrote
+ * there sat in the context of every other workspace's next session. A position
+ * now reaches Codex through its SessionStart hook (`basou hook install codex`),
+ * which computes it from the session's own cwd and stores nothing; there is no
+ * longer any write to opt into. The key is still parsed so an existing manifest
+ * keeps loading, and `basou refresh` says once that it is ignored.
  */
 const ChannelsSchema = z.looseObject({
-  /**
-   * Render this workspace's orientation into `~/.codex/AGENTS.md` on `basou
-   * refresh` / `basou run codex`. A boolean today; if a face ever needs
-   * per-block control this widens to `boolean | object`, which existing
-   * manifests keep parsing — so the boolean does not foreclose that.
-   */
+  /** Retired (see above). Parsed for compatibility; has no effect. */
   codex: z.boolean().optional().meta({
     description:
-      "Opt in to rendering this workspace's orientation into the user-global ~/.codex/AGENTS.md on `basou refresh` and `basou run codex`. Off when absent: that file is auto-loaded by Codex for every project on the machine, so nothing is written there unless the workspace says so.",
+      "Retired and ignored. It used to opt this workspace into rendering its orientation into the user-global ~/.codex/AGENTS.md; nothing is written there any more — a Codex session receives the workspace's position from the SessionStart hook (`basou hook install codex`).",
   }),
 });
 
@@ -172,15 +172,15 @@ const ChannelsSchema = z.looseObject({
 const PoliciesSchema = z.looseObject({
   /**
    * This workspace's provenance must not persist where another workspace's
-   * tool reads it. That is the GOAL the key states; what it gates today is one
-   * thing: rendering the orientation into the user-global `~/.codex/AGENTS.md`
-   * (`basou refresh` / `basou run codex`) — never, regardless of `channels`, so
-   * a confidential workspace cannot be re-enabled by a second declaration in
-   * the same file. It does not yet govern `basou protocol sync` (a global
-   * render, not a per-workspace one), and it gates writing only: it cannot keep
-   * another workspace's block out of this workspace's tool (see `basou channel
-   * clear`). Stated as a goal rather than as "never write" so that a transient
-   * render removed before anyone else can read it remains permissible.
+   * tool reads it. That is the GOAL the key states. The one writer it used to
+   * gate — the orientation render into the user-global `~/.codex/AGENTS.md` —
+   * is retired, so today the key gates nothing: basou has no per-workspace path
+   * that writes a position anywhere another workspace's tool reads. It is kept,
+   * parsed, and honoured as a declaration, so a future writer to a shared
+   * surface must consult it before it ships (`basou protocol sync`, a global
+   * render rather than a per-workspace one, does not consult it). A top-level
+   * `confidential` is still refused rather than ignored, for the same reason it
+   * always was: a safety key that is not honoured must fail loudly.
    */
   confidential: z.boolean().optional().meta({
     description:

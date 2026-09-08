@@ -35,14 +35,27 @@ export {
 } from "./adapters/claude-code/index.js";
 export type {
   CodexCommandLookup,
+  CodexHooksFile,
   CodexRolloutRecord,
   CodexRolloutToPayloadOptions,
+  SessionStartHookLocation,
+  SessionStartHookRemoval,
+  SessionStartHookUpsert,
 } from "./adapters/codex/index.js";
 export {
+  buildSessionStartHookCommand,
   CODEX_IMPORT_SOURCE,
   codexAdapterMetadata,
   codexRolloutToImportPayload,
+  findBasouSessionStartHook,
+  isBasouSessionStartHookCommand,
+  removeSessionStartHook,
   resolveCodexCommand,
+  SESSION_START_HOOK_CONTEXT_LIMIT,
+  SESSION_START_HOOK_MATCHER,
+  SESSION_START_HOOK_STATUS_MESSAGE,
+  SESSION_START_HOOK_TIMEOUT_SECONDS,
+  upsertSessionStartHook,
 } from "./adapters/codex/index.js";
 export type { ApprovalLocation, LoadedApproval } from "./approval/index.js";
 export { enumerateApprovals, isLazyExpired, loadApproval } from "./approval/index.js";

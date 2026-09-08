@@ -71,6 +71,39 @@ export async function runOrient(options: OrientOptions, ctx: OrientContext = {})
  * native errors are attached as `cause` for verbose surfacing.
  */
 export async function doRunOrient(options: OrientOptions, ctx: OrientContext): Promise<void> {
+  const result = await renderOrientationForCwd(options, ctx);
+
+  if (options.quiet === true) {
+    console.log(
+      `Generated .basou/orientation.md (sessions: ${result.sessionCount}, in-flight tasks: ${result.inFlightTaskCount}, pending approvals: ${result.pendingApprovalsCount}, suspect: ${result.suspectCount})`,
+    );
+  } else {
+    console.log(result.body);
+  }
+}
+
+/** What {@link renderOrientationForCwd} hands back: the body plus the counts the quiet line reports. */
+export type RenderedOrientation = {
+  body: string;
+  sessionCount: number;
+  inFlightTaskCount: number;
+  pendingApprovalsCount: number;
+  suspectCount: number;
+};
+
+/**
+ * Resolve the workspace from `cwd`, render its current position, and write
+ * `.basou/orientation.md` — everything `basou orient` does except print. Shared
+ * with the Codex SessionStart hook handler (`basou hook session-start`), which
+ * needs the same position for the `cwd` Codex hands it but must decide for
+ * itself what to do with it (print it as developer context, or stay silent).
+ * Throws exactly as `orient` does: a non-git `cwd`, a repo with no workspace,
+ * an unreadable store.
+ */
+export async function renderOrientationForCwd(
+  options: OrientOptions,
+  ctx: OrientContext,
+): Promise<RenderedOrientation> {
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveBasouRootForCommand(cwd, "orient");
   const paths = basouPaths(repositoryRoot);
@@ -130,13 +163,13 @@ export async function doRunOrient(options: OrientOptions, ctx: OrientContext): P
   // file (no GENERATED markers — there is no hand-edited region to preserve).
   await writeMarkdownFile(paths.files.orientation, `${result.body}\n`);
 
-  if (options.quiet === true) {
-    console.log(
-      `Generated .basou/orientation.md (sessions: ${result.sessionCount}, in-flight tasks: ${result.inFlightTaskCount}, pending approvals: ${result.pendingApprovalsCount}, suspect: ${result.suspectCount})`,
-    );
-  } else {
-    console.log(result.body);
-  }
+  return {
+    body: result.body,
+    sessionCount: result.sessionCount,
+    inFlightTaskCount: result.inFlightTaskCount,
+    pendingApprovalsCount: result.pendingApprovalsCount,
+    suspectCount: result.suspectCount,
+  };
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

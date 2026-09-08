@@ -4,16 +4,39 @@ import { join } from "node:path";
 import { ORIENTATION_END, ORIENTATION_START, PROTOCOL_END, PROTOCOL_START } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  assertNoMarkerLine,
   clearOrientationChannel,
   removeMarkerBlock,
   syncMarkerBlock,
-  syncOrientationChannel,
 } from "./context-channel.js";
 
 let dir: string;
 let target: string;
 
 const PROTOCOL_MARKERS = { start: PROTOCOL_START, end: PROTOCOL_END };
+
+const ORIENTATION_MARKERS = { start: ORIENTATION_START, end: ORIENTATION_END };
+
+/**
+ * The retired orientation writer, reproduced here as a test shim: these cases
+ * were written against it and still describe `syncMarkerBlock` +
+ * `assertNoMarkerLine` (append / replace / refuse-malformed / CAS / symlink /
+ * dry-run / one-time backup) through the same body. basou itself no longer
+ * writes an orientation block anywhere.
+ */
+async function syncOrientationChannel(opts: {
+  body: string;
+  target: string;
+  dryRun?: boolean;
+}): Promise<{ action: "installed" | "updated" | "unchanged" }> {
+  assertNoMarkerLine(opts.body, ORIENTATION_MARKERS);
+  return syncMarkerBlock({
+    target: opts.target,
+    markers: ORIENTATION_MARKERS,
+    block: `${opts.body.replace(/\s+$/, "")}\n`,
+    ...(opts.dryRun === true ? { dryRun: true } : {}),
+  });
+}
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "basou-channel-test-"));
@@ -31,7 +54,6 @@ describe("syncOrientationChannel", () => {
     const body = await readFile(target, "utf8");
     expect(body.startsWith(ORIENTATION_START)).toBe(true);
     expect(body).toContain(ORIENTATION_END);
-    expect(body).toContain("Managed by basou");
     expect(body).toContain("you are here");
   });
 

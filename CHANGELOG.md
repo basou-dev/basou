@@ -3,6 +3,70 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **Breaking (behaviour):** basou no longer writes a workspace's orientation
+  into the user-global `~/.codex/AGENTS.md`. `basou refresh` and `basou run
+  codex` do not render it, under any manifest declaration. The manifest key
+  `channels.codex` is **retired**: still parsed so existing manifests load,
+  but ignored, and `basou refresh` says so once when a manifest still declares
+  it. `policies.confidential` is kept as a declaration but gates nothing today.
+
+  That file is read by Codex for every project on the machine, so the opt-in
+  gate 0.39.0 added closed only the write side: a block one opted-in workspace
+  rendered was still in the context of every other workspace's next Codex
+  session until something removed it. The position now travels a path that
+  has no shared file at all (below), so there is nothing left to gate.
+
+  `basou refresh --json` keeps the `codexChannel` field for one release with
+  the single value `{ "status": "retired" }`, so a consumer that read it sees
+  the retirement rather than a missing key; the field is removed in the next
+  release. `basou channel clear codex` stays, to remove a block an older basou
+  left in the face.
+
+### Added
+
+- **`basou hook install codex`** registers, once, in the user-global
+  `~/.codex/hooks.json`, a Codex **SessionStart hook** that runs `basou hook
+  session-start`. Codex runs it when a session starts and hands it the
+  session's `cwd`; basou resolves the workspace from that `cwd` and prints the
+  workspace's position — the same text as `basou orient` — which Codex adds to
+  **that session's** context as developer text.
+
+  The position is computed at that moment and stored nowhere. A Codex opened
+  in another workspace gets that workspace's position; one opened outside any
+  basou workspace, or before the desktop app has bound a folder (its `cwd` is
+  then `/`), gets nothing, silently. One hook serves every workspace while no
+  workspace's position is ever written where another workspace's session reads
+  it. The handler is fail-open: any error — an unreadable payload, a `cwd`
+  that is not a workspace — exits cleanly with no output, so a hook never
+  breaks or pollutes a session. Verified end to end on codex-cli 0.153.4 in
+  both the CLI and the desktop app: the hook's stdout appears in the session
+  as a developer message.
+
+  The registered handler sets `additionalContextLimit: 0`, because Codex
+  otherwise truncates hook output past roughly 2,500 tokens to a head-and-tail
+  preview — and a position's open tracks and next step sit at the end. Its
+  matcher is `startup|resume|clear`; `compact` is left out so a ~10 KB
+  position is not re-injected after every compaction.
+
+  Codex trusts hooks by hash and skips a new or changed one until you review
+  it once (the CLI asks at startup; the desktop app lists it under Settings →
+  Hooks; non-interactive `codex exec` skips silently). **`basou hook status
+  codex`** reports whether the hook is registered and whether Codex has trusted
+  it, by reproducing Codex's identity hash for the installed handler and
+  comparing it with the record Codex keeps in `~/.codex/config.toml`.
+  **`basou hook uninstall codex`** removes the hook and leaves every other hook
+  in the file intact. `basou hook install` / `uninstall` / `status` without a
+  target keep their meaning (the Claude Code Stop hook).
+- `basou run codex` says before launch when the SessionStart hook is not
+  registered, so a session that starts without a position does not look like
+  one that has it.
+- Docs: `basou refresh --help`, `basou protocol sync --help`, the CLI catalog
+  and README now say which files are user-global and what that means.
+
 ## 0.39.0 — 2026-09-08
 
 ### Changed

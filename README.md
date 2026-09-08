@@ -85,6 +85,11 @@ re-derived from scratch each time you sit back down.
   rationale and rejected alternatives) or the terminal next step.
 - `basou handoff generate` — a regenerated, hand-editable summary for the
   next session or a teammate.
+- `basou hook install codex` — hand every Codex session (CLI, desktop app,
+  IDE) the position of the workspace it was opened in, at session start.
+  The hook computes the position from that session's own directory and stores
+  nothing, so one registration serves every workspace and no workspace's
+  position is ever written into a file another project's tool reads.
 
 Capture is deterministic and does not depend on a runtime LLM — an agent
 hands Basou structured decisions and Basou writes them; the trail is yours,
@@ -149,6 +154,10 @@ cat .basou/handoff.md
 #    local web UI (localhost only, no authentication)
 basou refresh
 basou view
+
+# 6. Have Codex load the position at the start of every session (one-time;
+#    Codex asks you to review and trust the new hook once)
+basou hook install codex
 ```
 
 For a step-by-step walkthrough with failure modes and sample output, see

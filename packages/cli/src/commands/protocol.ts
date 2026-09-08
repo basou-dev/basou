@@ -39,7 +39,11 @@ export function registerProtocolCommand(program: Command): void {
 
   protocol
     .command("sync")
-    .description("Render declared protocols into the global CLAUDE.md (creates/updates the block)")
+    .description(
+      "Render declared protocols into ~/.claude/CLAUDE.md (creates/updates the block). That file is user-global: " +
+        "Claude Code auto-loads it for every project on the machine, so what the protocols say is in the context of " +
+        "every workspace's sessions — keep workspace-specific facts out of them.",
+    )
     .option("--config <path>", "Path to protocols.yaml (default ~/.basou/protocols.yaml)")
     .option("--target <path>", "Override the target file (intended for tests)")
     .option("--dry-run", "Print what would change without writing")

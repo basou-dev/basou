@@ -233,7 +233,7 @@
       "type": "object",
       "properties": {
         "codex": {
-          "description": "Opt in to rendering this workspace's orientation into the user-global ~/.codex/AGENTS.md on `basou refresh` and `basou run codex`. Off when absent: that file is auto-loaded by Codex for every project on the machine, so nothing is written there unless the workspace says so.",
+          "description": "Retired and ignored. It used to opt this workspace into rendering its orientation into the user-global ~/.codex/AGENTS.md; nothing is written there any more — a Codex session receives the workspace's position from the SessionStart hook (`basou hook install codex`).",
           "type": "boolean"
         }
       },
