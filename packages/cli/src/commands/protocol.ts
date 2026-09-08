@@ -4,6 +4,10 @@ import type { Command } from "commander";
 import { assertNoMarkerLine, removeMarkerBlock, syncMarkerBlock } from "../lib/context-channel.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import {
+  findForeignWorkspaceNames,
+  protocolForeignWorkspaceWarning,
+} from "../lib/foreign-workspace-warn.js";
+import {
   DEFAULT_PROTOCOLS_CONFIG_PATH,
   DEFAULT_TARGET_PATH,
   loadProtocolsConfig,
@@ -24,6 +28,12 @@ export type ProtocolCommonOptions = {
 };
 
 export type ProtocolSyncOptions = ProtocolCommonOptions & { dryRun?: boolean };
+
+/** Injection seam for `protocol sync` (tests only; the command passes nothing). */
+export type ProtocolSyncContext = {
+  /** Override path to the portfolio registry (`~/.basou/portfolio.yaml`). */
+  portfolioConfigPath?: string;
+};
 
 /**
  * Wire `basou protocol` (sync / list / unsync) onto `program`. The command
@@ -137,13 +147,29 @@ function buildBlock(sources: { entry: ProtocolEntry; content: string }[]): strin
   return `${MANAGED_NOTE}\n\n${sections.join("\n\n")}\n`;
 }
 
-export async function doRunProtocolSync(options: ProtocolSyncOptions): Promise<void> {
+export async function doRunProtocolSync(
+  options: ProtocolSyncOptions,
+  ctx: ProtocolSyncContext = {},
+): Promise<void> {
   const configPath = options.config ?? DEFAULT_PROTOCOLS_CONFIG_PATH;
   const target = options.target ?? DEFAULT_TARGET_PATH;
 
   const entries = await loadProtocolsConfig(configPath);
   const sources = await readProtocolSources(entries);
   const block = buildBlock(sources);
+
+  // Content check (advisory): this block is the one thing basou still renders
+  // into a USER-GLOBAL file, and it reads no manifest, so nothing else in the
+  // pipeline would notice a standing protocol that names one workspace. The
+  // block is written either way — a standing protocol naming a workspace can be
+  // exactly what the operator meant — but the warning is printed only once the
+  // sync has actually gone through, so a run that failed and wrote nothing does
+  // not claim the name reached the file. Under `--dry-run` it still prints:
+  // previewing is when the operator wants to hear it.
+  const foreign = await findForeignWorkspaceNames({
+    text: block,
+    configPath: ctx.portfolioConfigPath,
+  });
 
   // The shared channel helper owns the symlink guard, append/replace, backup,
   // and optimistic-concurrency recheck; the install-vs-update verb it returns
@@ -155,6 +181,8 @@ export async function doRunProtocolSync(options: ProtocolSyncOptions): Promise<v
     block,
     ...(options.dryRun === true ? { dryRun: true } : {}),
   });
+
+  if (foreign !== null) console.error(protocolForeignWorkspaceWarning(foreign));
 
   if (result.action === "unchanged") {
     console.log(`The basou:protocols block is already up to date (${entries.length} protocol(s)).`);

@@ -35,6 +35,10 @@ function captureStdout(): ReturnType<typeof vi.spyOn> {
   return vi.spyOn(console, "log").mockImplementation(() => undefined);
 }
 
+function captureStderr(): ReturnType<typeof vi.spyOn> {
+  return vi.spyOn(console, "error").mockImplementation(() => undefined);
+}
+
 function joinCalls(spy: ReturnType<typeof vi.spyOn>): string {
   return spy.mock.calls.map((args) => args.map(String).join(" ")).join("\n");
 }
@@ -189,6 +193,93 @@ describe("basou protocol list", () => {
     const stdout = joinCalls(out);
     expect(stdout).toContain("Declared protocols (1)");
     expect(stdout).toContain("not installed");
+  });
+});
+
+// The protocol block is the one thing basou still renders into a USER-GLOBAL
+// file, and it reads no manifest: a standing protocol that names one workspace
+// reaches every workspace's sessions. The advisory says so; it does not refuse.
+describe("basou protocol sync (foreign-workspace advisory)", () => {
+  let portfolioPath: string;
+
+  beforeEach(async () => {
+    portfolioPath = join(dir, "portfolio.yaml");
+    await writeFile(portfolioPath, `workspaces:\n  - path: ${join(dir, "beta-planning")}\n`);
+  });
+
+  it("warns when the block names a registered workspace, and writes it anyway", async () => {
+    captureStdout();
+    const err = captureStderr();
+    await writeFile(sourcePath, "## Review protocol\n\nAlways check beta-planning first.\n");
+
+    await doRunProtocolSync(
+      { config: configPath, target: targetPath },
+      { portfolioConfigPath: portfolioPath },
+    );
+
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("the protocol block names a registered workspace");
+    expect(stderr).toContain("nothing was withheld");
+    expect(stderr).not.toContain("beta-planning");
+    const body = await readFile(targetPath, "utf8");
+    expect(body).toContain("Always check beta-planning first.");
+  });
+
+  it("warns under --dry-run too, when nothing is written", async () => {
+    captureStdout();
+    const err = captureStderr();
+    await writeFile(sourcePath, "## Review protocol\n\nAlways check beta-planning first.\n");
+
+    await doRunProtocolSync(
+      { config: configPath, target: targetPath, dryRun: true },
+      { portfolioConfigPath: portfolioPath },
+    );
+
+    expect(joinCalls(err)).toContain("the protocol block names a registered workspace");
+    await expect(readFile(targetPath, "utf8")).rejects.toThrow();
+  });
+
+  it("stays silent for a protocol that names no registered workspace", async () => {
+    captureStdout();
+    const err = captureStderr();
+
+    await doRunProtocolSync(
+      { config: configPath, target: targetPath },
+      { portfolioConfigPath: portfolioPath },
+    );
+
+    expect(joinCalls(err)).toBe("");
+  });
+
+  // The warning says the name reaches the user-global file, so it must not be
+  // printed by a run that failed before writing anything.
+  it("does not warn when the sync fails and writes nothing", async () => {
+    captureStdout();
+    const err = captureStderr();
+    await writeFile(sourcePath, "## Review protocol\n\nAlways check beta-planning first.\n");
+    await writeFile(targetPath, `prose\n${PROTOCOL_START}\nbody\n`);
+
+    await expect(
+      doRunProtocolSync(
+        { config: configPath, target: targetPath },
+        { portfolioConfigPath: portfolioPath },
+      ),
+    ).rejects.toThrow(/malformed/);
+
+    expect(joinCalls(err)).toBe("");
+  });
+
+  it("stays silent when there is no portfolio registry", async () => {
+    captureStdout();
+    const err = captureStderr();
+    await writeFile(sourcePath, "## Review protocol\n\nAlways check beta-planning first.\n");
+
+    await doRunProtocolSync(
+      { config: configPath, target: targetPath },
+      { portfolioConfigPath: join(dir, "absent.yaml") },
+    );
+
+    expect(joinCalls(err)).toBe("");
   });
 });
 
