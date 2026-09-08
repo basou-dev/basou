@@ -818,7 +818,12 @@ export async function doRunCodexHookInstall(
   const { hooksFile, action } = upsertSessionStartHook(parsed, command);
   const newBody = `${JSON.stringify(hooksFile, null, 2)}\n`;
 
-  if (raw !== null && newBody === raw) {
+  // `unchanged` means the installed handler already carries the canonical
+  // fields — Codex's trust hash is unaffected — so nothing is written even when
+  // the file's formatting differs from what basou would emit: a reformat would
+  // take a backup and announce an update the operator would then be told to
+  // re-trust, for a hook Codex still trusts.
+  if (action === "unchanged" || (raw !== null && newBody === raw)) {
     console.log("The basou Codex SessionStart hook is already registered; no change.");
     return;
   }

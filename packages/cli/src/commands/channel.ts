@@ -19,14 +19,14 @@ export type ChannelClearOptions = {
  * AGENTS.md` for Codex — so a block one workspace rendered there sits in the
  * context of every other workspace's next session until it is removed. basou
  * no longer renders into that face (a Codex session gets its position from the
- * SessionStart hook instead); `clear` removes a block a basou before 0.40 left
+ * SessionStart hook instead); `clear` removes a block an earlier basou (0.39 or before) left
  * there.
  */
 export function registerChannelCommand(program: Command): void {
   const channel = program
     .command("channel")
     .description(
-      "Manage the user-global context faces basou renders into — files every project's AI tool auto-loads (~/.codex/AGENTS.md)",
+      "Manage the user-global context faces an AI tool auto-loads for every project (~/.codex/AGENTS.md): remove what an earlier basou rendered there",
     );
 
   channel

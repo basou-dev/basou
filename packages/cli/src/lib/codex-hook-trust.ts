@@ -104,41 +104,83 @@ export type CodexHookState = {
   enabled?: boolean | undefined;
 };
 
+/**
+ * What the config held for one handler: no record at all (`absent`), a record
+ * basou could read (`found`), or a `[hooks.state]` table for this handler that
+ * basou could not read (`unreadable`) — reported as such rather than as
+ * "untrusted", because Codex may well trust it.
+ */
+export type CodexHookStateLookup =
+  | { kind: "absent" }
+  | { kind: "found"; state: CodexHookState }
+  | { kind: "unreadable"; detail: string };
+
 /** Escape a string the way TOML writes a basic (double-quoted) key or value. */
 function tomlBasicString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+/** Drop a trailing `# comment` from a TOML line, respecting quoted strings. */
+function stripTomlComment(line: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote !== null) {
+      if (ch === "\\" && quote === '"') i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "#") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
 /**
  * Read one handler's trust record out of a Codex `config.toml`. Deliberately
- * not a TOML parser: it looks for the table header
- * `[hooks.state."<key>"]` and reads the plain `key = value` lines that follow
- * it, up to the next table header. That is the shape Codex writes; anything
- * more exotic (an inline table, a dotted key elsewhere) returns null, and the
- * caller says "unknown" rather than guessing.
+ * not a TOML parser: it looks for the table header `[hooks.state."<key>"]`
+ * (basic or literal-quoted key, an optional trailing comment) and reads the
+ * plain `key = value` lines that follow it, up to the next table header. That
+ * is the shape Codex writes. A `hooks.state` table that names this handler in
+ * some shape the scanner does not understand is reported as `unreadable`, so
+ * the caller can say "unknown" instead of guessing.
  */
-export function readCodexHookState(configToml: string, key: string): CodexHookState | null {
-  const header = `[hooks.state.${tomlBasicString(key)}]`;
+export function readCodexHookState(configToml: string, key: string): CodexHookStateLookup {
+  const basicHeader = `[hooks.state.${tomlBasicString(key)}]`;
+  const literalHeader = key.includes("'") ? null : `[hooks.state.'${key}']`;
   const lines = configToml.split(/\r?\n/);
-  const start = lines.findIndex((l) => l.trim() === header);
-  if (start < 0) return null;
+  const start = lines.findIndex((raw) => {
+    const l = stripTomlComment(raw).trim();
+    return l === basicHeader || (literalHeader !== null && l === literalHeader);
+  });
+  if (start < 0) {
+    const mentioned = lines.some((raw) => raw.includes("hooks.state") && raw.includes(key));
+    return mentioned
+      ? { kind: "unreadable", detail: "config.toml names this hook in a shape basou cannot read" }
+      : { kind: "absent" };
+  }
   const state: CodexHookState = {};
   for (let i = start + 1; i < lines.length; i++) {
-    const line = lines[i]?.trim() ?? "";
+    const line = stripTomlComment(lines[i] ?? "").trim();
     if (line.startsWith("[")) break;
     const m = /^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.+)$/.exec(line);
     if (m === null) continue;
     const [, k, rawValue] = m;
     const v = (rawValue ?? "").trim();
     if (k === "trusted_hash") {
-      const str = /^"((?:[^"\\]|\\.)*)"$/.exec(v);
-      if (str?.[1] !== undefined) state.trustedHash = str[1].replace(/\\(.)/g, "$1");
+      const basic = /^"((?:[^"\\]|\\.)*)"$/.exec(v);
+      const literal = /^'([^']*)'$/.exec(v);
+      if (basic?.[1] !== undefined) state.trustedHash = basic[1].replace(/\\(.)/g, "$1");
+      else if (literal?.[1] !== undefined) state.trustedHash = literal[1];
+      else return { kind: "unreadable", detail: "trusted_hash is not a quoted string" };
     } else if (k === "enabled") {
       if (v === "true") state.enabled = true;
       else if (v === "false") state.enabled = false;
+      else return { kind: "unreadable", detail: "enabled is not a boolean" };
     }
   }
-  return state;
+  return { kind: "found", state };
 }
 
 export type CodexHookTrust =
@@ -152,13 +194,16 @@ export type CodexHookTrust =
  * Codex's verdict for an installed handler, derived the way Codex derives it:
  * no state record → untrusted (review pending); a record whose hash matches →
  * trusted; a record whose hash differs → modified since trusted (review
- * required again); `enabled = false` → disabled by the operator.
+ * required again); `enabled = false` → disabled by the operator; a record
+ * basou could not read → unknown, never a guess.
  */
 export function judgeCodexHookTrust(
-  state: CodexHookState | null,
+  lookup: CodexHookStateLookup,
   currentHash: string,
 ): CodexHookTrust {
-  if (state === null) return { status: "untrusted" };
+  if (lookup.kind === "unreadable") return { status: "unknown", detail: lookup.detail };
+  if (lookup.kind === "absent") return { status: "untrusted" };
+  const { state } = lookup;
   if (state.enabled === false) return { status: "disabled" };
   if (state.trustedHash === undefined) return { status: "untrusted" };
   return state.trustedHash === currentHash ? { status: "trusted" } : { status: "modified" };
@@ -171,7 +216,7 @@ export function describeCodexHookTrust(trust: CodexHookTrust): string {
     case "untrusted":
       return "not yet trusted by Codex (review pending — it is skipped until you trust it)";
     case "modified":
-      return "changed since Codex trusted it (review required again — it is skipped until re-trusted)";
+      return "Codex's trust record does not match what basou computes for the installed hook — the hook changed since it was trusted, or Codex changed its hashing (review it again in Codex; it is skipped until re-trusted)";
     case "disabled":
       return "disabled in the Codex config (enabled = false)";
     case "unknown":

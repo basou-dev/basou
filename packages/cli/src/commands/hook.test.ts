@@ -787,7 +787,7 @@ describe("hook install / uninstall / status codex", () => {
     await writeFile(hooksPath, `${JSON.stringify(installed, null, 2)}\n`);
     logs.length = 0;
     await doRunCodexHookStatus({ hooks: hooksPath, codexConfig: configPath });
-    expect(logs.join("\n")).toContain("changed since Codex trusted it");
+    expect(logs.join("\n")).toContain("does not match what basou computes");
   });
 
   it("uninstall removes the hook, prunes scaffold, and is a no-op when absent", async () => {

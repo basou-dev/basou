@@ -87,7 +87,7 @@ export type RefreshResult = {
   decisions: GenerateOutcome<{ decisionCount: number }>;
   orientation: GenerateOutcome<OrientationCounts>;
   dryRun: boolean;
-  /** Set by `basou refresh` (the CLI), which is the only caller that renders the face. */
+  /** The retired Codex face field (see {@link CodexChannelOutcome}); set by `basou refresh` (the CLI) on its JSON result. */
   codexChannel?: CodexChannelOutcome;
 };
 

@@ -67,7 +67,7 @@ one's. basou therefore writes to exactly one of them, with one kind of content:
   operator-authored and global by design; keep workspace-specific facts —
   names, paths, positions — out of them, because every workspace's sessions
   read them.
-- `~/.codex/AGENTS.md` — **nothing, since 0.40.** Until 0.39 `basou refresh` and
+- `~/.codex/AGENTS.md` — **nothing, from this release on.** Until 0.39 `basou refresh` and
   `basou run codex` could render the workspace's orientation there (opt-in via
   the now-retired `channels.codex`). That put one workspace's position in every
   other workspace's Codex. `basou channel clear codex` removes a block an older
@@ -84,10 +84,11 @@ master) and prints the workspace's position — the same text as `basou orient`
 position is computed at that moment and stored nowhere: a Codex opened in
 another workspace gets that workspace's position, and one opened outside any
 basou workspace (or before the desktop app has bound a folder, when `cwd` is
-`/`) gets nothing. One hook, every workspace, no shared file. This is the same
-shape as the Claude Code SessionStart hook that runs `basou orient`. It works
-in the Codex CLI, the desktop app, and the IDE extension, which share the hooks
-system.
+`/`) gets nothing. One hook, every workspace, no shared file. It is the same
+shape as a Claude Code SessionStart hook that runs `basou orient` (which a
+Claude Code user registers by hand in `~/.claude/settings.json`; basou does not
+install one). It works in the Codex CLI, the desktop app, and the IDE
+extension, which share the hooks system.
 
 Codex trusts hooks by hash and skips a new or changed one until you review it:
 the interactive CLI asks at startup ("Hooks need review"), the desktop app

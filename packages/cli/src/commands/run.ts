@@ -187,11 +187,11 @@ export function runClaudeCode(
 }
 
 /**
- * `basou run codex`: wrap the Codex CLI as a tracked session. Two grips beyond
- * plain tracking: it injects `-c shell_environment_policy.inherit=all` so Codex
- * tool calls can reach `basou` on PATH, and it re-renders this workspace's
- * orientation into the Codex context face (~/.codex/AGENTS.md) just before spawn
- * so the about-to-start interactive Codex auto-loads the current position.
+ * `basou run codex`: spawn Codex as a tracked session, injecting the env-policy
+ * flag so the child inherits the launcher's environment. The launcher writes
+ * nothing for orientation — a Codex session gets its workspace's position from
+ * the SessionStart hook, which reads the session's own cwd — so all it does
+ * before spawn is say when that hook is not registered.
  */
 export function runCodex(
   args: string[],

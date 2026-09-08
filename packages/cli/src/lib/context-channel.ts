@@ -32,7 +32,7 @@ import { assertNotSymlink, writeFileDurable } from "./durable-write.js";
  * Codex's user-global AGENTS.md. Codex auto-loads it at startup for every
  * project on the machine. basou no longer writes to it; the path is kept so
  * `basou channel clear codex` can remove an orientation block rendered there by
- * a basou before 0.40.
+ * an earlier basou (0.39 or before).
  */
 export const CODEX_TARGET_PATH = join(homedir(), ".codex", "AGENTS.md");
 
@@ -95,7 +95,7 @@ async function backupOnce(target: string, existing: string | null): Promise<void
  * touching only the bytes between `markers`. Append-if-absent / replace-if-
  * present / refuse-if-malformed, with a one-time `<target>.basou-bak` of the
  * pre-basou original and an optimistic-concurrency recheck before writing.
- * Shared by the protocol channel and the orientation channel.
+ * Used by the protocol channel; the retired orientation channel used it too.
  */
 export async function syncMarkerBlock(opts: {
   target: string;
@@ -133,8 +133,8 @@ export async function syncMarkerBlock(opts: {
 /**
  * Refuse a block body that contains a marker line. A marker inside the body
  * would be mistaken for the block delimiter on the next parse and corrupt the
- * managed block, so both the protocol channel (operator-authored sources) and
- * the orientation channel (machine-generated body) screen for it first.
+ * managed block, so the protocol channel (operator-authored sources) screens
+ * for it before writing.
  */
 export function assertNoMarkerLine(body: string, markers: Markers): void {
   for (const line of body.split(/\r?\n/)) {
@@ -180,7 +180,7 @@ export async function removeMarkerBlock(opts: {
 /**
  * Remove the orientation block from the Codex context face, leaving any other
  * content of the file (a hand-written body, the protocol block) untouched. The
- * face is user-global, so a block a basou before 0.40 rendered there is in the
+ * face is user-global, so a block an earlier basou (0.39 or before) rendered there is in the
  * context of every Codex session on the machine until something removes it —
  * nothing in basou overwrites it any more, so this is the way it leaves. No
  * `.basou-bak` is written by this path. `target` overrides the locked path for

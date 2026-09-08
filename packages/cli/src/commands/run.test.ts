@@ -65,7 +65,7 @@ function getTmpRepo(): string {
 /**
  * Initialize the fixture workspace. The Codex context face is opt-in per
  * workspace (off by default), so a launcher test that expects the pre-spawn
- * write (a basou before 0.40) had to declare it; the keys are still parsed, so
+ * write (a basou of 0.39 or before) had to declare it; the keys are still parsed, so
  * a test can declare them to prove they no longer cause a write.
  */
 async function setupInitedRepo(

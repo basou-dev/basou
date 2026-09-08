@@ -243,7 +243,7 @@
       "type": "object",
       "properties": {
         "confidential": {
-          "description": "This workspace's provenance must not persist where another workspace's tool reads it. Today this means its orientation is never rendered into the user-global ~/.codex/AGENTS.md by `basou refresh` or `basou run codex`, regardless of `channels`. It does not yet govern `basou protocol sync`, and it gates writing only — it cannot keep another workspace's block out of this workspace's tool.",
+          "description": "Posture: this workspace's provenance must not persist where another workspace's tool reads it. The one writer this used to gate — rendering the orientation into the user-global ~/.codex/AGENTS.md — is retired, so today the key gates nothing; it stays declared so a future writer to a shared surface must consult it. A top-level `confidential` is rejected rather than ignored.",
           "type": "boolean"
         }
       },

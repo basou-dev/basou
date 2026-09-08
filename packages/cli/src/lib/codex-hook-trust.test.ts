@@ -105,38 +105,75 @@ describe("codexHookStateKey / readCodexHookState", () => {
       "[other]",
       'trusted_hash = "sha256:not-a-hook"',
     ].join("\n");
-    expect(readCodexHookState(toml, key)).toEqual({ trustedHash: REAL.hash });
+    expect(readCodexHookState(toml, key)).toEqual({
+      kind: "found",
+      state: { trustedHash: REAL.hash },
+    });
     expect(
       readCodexHookState(
         toml,
         codexHookStateKey("/Users/me/.codex/hooks.json", "session_start", 1, 0),
       ),
-    ).toEqual({
-      trustedHash: "sha256:other",
-      enabled: false,
-    });
-    expect(readCodexHookState(toml, "/elsewhere:session_start:0:0")).toBeNull();
+    ).toEqual({ kind: "found", state: { trustedHash: "sha256:other", enabled: false } });
+    expect(readCodexHookState(toml, "/elsewhere:session_start:0:0")).toEqual({ kind: "absent" });
   });
 
   it("matches a key whose path needs TOML escaping", () => {
     const odd = codexHookStateKey('/Users/o"dd/.codex/hooks.json', "session_start", 0, 0);
     const toml = `[hooks.state."/Users/o\\"dd/.codex/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:x"\n`;
-    expect(readCodexHookState(toml, odd)).toEqual({ trustedHash: "sha256:x" });
+    expect(readCodexHookState(toml, odd)).toEqual({
+      kind: "found",
+      state: { trustedHash: "sha256:x" },
+    });
+  });
+
+  it("tolerates TOML comments and literal-quoted keys and values", () => {
+    const toml = [
+      `[hooks.state."${key}"] # basou`,
+      `trusted_hash = "${REAL.hash}" # ok`,
+      "",
+      "[hooks.state.'/Users/me/.codex/hooks.json:session_start:2:0']",
+      "trusted_hash = 'sha256:lit'",
+    ].join("\n");
+    expect(readCodexHookState(toml, key)).toEqual({
+      kind: "found",
+      state: { trustedHash: REAL.hash },
+    });
+    expect(
+      readCodexHookState(
+        toml,
+        codexHookStateKey("/Users/me/.codex/hooks.json", "session_start", 2, 0),
+      ),
+    ).toEqual({ kind: "found", state: { trustedHash: "sha256:lit" } });
+  });
+
+  it("reports a record it cannot read as unreadable, never as absent", () => {
+    const inline = `hooks.state = { "${key}" = { trusted_hash = "sha256:x" } }`;
+    expect(readCodexHookState(inline, key)).toMatchObject({ kind: "unreadable" });
+    const badValue = `[hooks.state."${key}"]\ntrusted_hash = 12345\n`;
+    expect(readCodexHookState(badValue, key)).toMatchObject({ kind: "unreadable" });
   });
 });
 
 describe("judgeCodexHookTrust / describeCodexHookTrust", () => {
-  it("maps Codex's states: none => untrusted, match => trusted, mismatch => modified, enabled=false => disabled", () => {
-    expect(judgeCodexHookTrust(null, "sha256:a")).toEqual({ status: "untrusted" });
-    expect(judgeCodexHookTrust({}, "sha256:a")).toEqual({ status: "untrusted" });
-    expect(judgeCodexHookTrust({ trustedHash: "sha256:a" }, "sha256:a")).toEqual({
+  const found = (state: { trustedHash?: string; enabled?: boolean }) =>
+    ({ kind: "found", state }) as const;
+
+  it("maps Codex's states: absent => untrusted, match => trusted, mismatch => modified, enabled=false => disabled, unreadable => unknown", () => {
+    expect(judgeCodexHookTrust({ kind: "absent" }, "sha256:a")).toEqual({ status: "untrusted" });
+    expect(judgeCodexHookTrust(found({}), "sha256:a")).toEqual({ status: "untrusted" });
+    expect(judgeCodexHookTrust(found({ trustedHash: "sha256:a" }), "sha256:a")).toEqual({
       status: "trusted",
     });
-    expect(judgeCodexHookTrust({ trustedHash: "sha256:b" }, "sha256:a")).toEqual({
+    expect(judgeCodexHookTrust(found({ trustedHash: "sha256:b" }), "sha256:a")).toEqual({
       status: "modified",
     });
-    expect(judgeCodexHookTrust({ trustedHash: "sha256:a", enabled: false }, "sha256:a")).toEqual({
-      status: "disabled",
+    expect(
+      judgeCodexHookTrust(found({ trustedHash: "sha256:a", enabled: false }), "sha256:a"),
+    ).toEqual({ status: "disabled" });
+    expect(judgeCodexHookTrust({ kind: "unreadable", detail: "why" }, "sha256:a")).toEqual({
+      status: "unknown",
+      detail: "why",
     });
   });
 
@@ -151,5 +188,6 @@ describe("judgeCodexHookTrust / describeCodexHookTrust", () => {
       expect(describeCodexHookTrust(t).length).toBeGreaterThan(0);
     }
     expect(describeCodexHookTrust({ status: "unknown", detail: "why" })).toContain("why");
+    expect(describeCodexHookTrust({ status: "modified" })).toContain("does not match");
   });
 });
