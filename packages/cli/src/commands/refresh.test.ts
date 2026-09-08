@@ -308,6 +308,13 @@ describe("basou refresh", () => {
     expect(lines.join("\n")).not.toMatch(/set channels\.codex/);
   });
 
+  it("says nothing about the channel for channels.codex: false, which never did anything", async () => {
+    const repo = await setupInitedRepo({ codexChannel: false });
+    await writeCodexRollout(repo);
+    const { lines } = await captureLog(() => doRunRefresh({}, ctxFor(repo)));
+    expect(lines.join("\n")).not.toContain("codex channel");
+  });
+
   it("says nothing about the channel when the manifest never declared it", async () => {
     const repo = await setupInitedRepo();
     await writeCodexRollout(repo);

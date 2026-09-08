@@ -36,8 +36,9 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
+import { describeCodexHookTrust } from "../lib/codex-hook-trust.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
-import { DEFAULT_CODEX_HOOKS_PATH } from "./hook.js";
+import { codexHookTrustFor, DEFAULT_CODEX_HOOKS_PATH } from "./hook.js";
 
 // Appends one event to the session's events.jsonl. The `sessionDir` argument
 // is retained for the test-injection seam (ctx.appendEvent); the production
@@ -96,6 +97,9 @@ export type RunContext = {
   // (defaults to ~/.codex/hooks.json). Injectable for tests so the suite never
   // depends on the real home directory.
   codexHooksPath?: string;
+  // Override the Codex config.toml read for the hook's trust record (defaults
+  // to ~/.codex/config.toml). Injectable for tests.
+  codexConfigPath?: string;
   // Override the git diff capability. Tests use this to force capability
   // failure deterministically without rewriting the git fixture state.
   getDiff?: GetDiffFn;
@@ -729,19 +733,28 @@ async function resolveRepositoryRootForRun(cwd: string): Promise<string> {
 
 /**
  * `basou run codex` pre-spawn: say whether the SessionStart hook that hands a
- * Codex session its workspace's position is registered. The launcher writes
- * nothing — the hook reads the session's own cwd when Codex starts — so all it
- * can do is tell the operator, before the child takes the TTY, that this
- * session will start without a position and how to change that. A missing
- * hooks file is "not registered"; an unreadable or malformed one returns null
- * so the launch is never blocked and no guess is printed.
+ * Codex session its workspace's position will actually run. The launcher
+ * writes nothing — the hook reads the session's own cwd when Codex starts — so
+ * all it can do is tell the operator, before the child takes the TTY, that
+ * this session will start without a position and why: the hook is not
+ * registered, or it is registered but Codex has not trusted this exact handler
+ * (a new or changed hook is skipped until reviewed). A missing hooks file is
+ * "not registered"; an unreadable or malformed one returns null so the launch
+ * is never blocked and no guess is printed.
  */
 async function noteCodexHookStatusPreSpawn(_cwd: string, ctx: RunContext): Promise<string | null> {
+  const hooksPath = ctx.codexHooksPath ?? DEFAULT_CODEX_HOOKS_PATH;
+  let location: ReturnType<typeof findBasouSessionStartHook>;
   try {
-    const raw = await readFile(ctx.codexHooksPath ?? DEFAULT_CODEX_HOOKS_PATH, "utf8");
-    if (findBasouSessionStartHook(JSON.parse(raw)) !== null) return null;
+    location = findBasouSessionStartHook(JSON.parse(await readFile(hooksPath, "utf8")));
   } catch (error: unknown) {
     if (!(error instanceof Error && (error as { code?: string }).code === "ENOENT")) return null;
+    location = null;
   }
-  return "codex: the basou SessionStart hook is not registered, so this session starts without the workspace's position (`basou hook install codex` registers it once for every workspace)";
+  if (location === null) {
+    return "codex: the basou SessionStart hook is not registered, so this session starts without the workspace's position (`basou hook install codex` registers it once for every workspace)";
+  }
+  const trust = await codexHookTrustFor(hooksPath, location, ctx.codexConfigPath);
+  if (trust.status === "trusted" || trust.status === "unknown") return null;
+  return `codex: the basou SessionStart hook is registered but ${describeCodexHookTrust(trust)}, so this session starts without the workspace's position`;
 }

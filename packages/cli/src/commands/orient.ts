@@ -106,6 +106,22 @@ export async function renderOrientationForCwd(
 ): Promise<RenderedOrientation> {
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveBasouRootForCommand(cwd, "orient");
+  return renderOrientationForRoot(repositoryRoot, options, ctx, { write: true });
+}
+
+/**
+ * Render the position of an already-resolved workspace root. `write: true`
+ * refreshes `.basou/orientation.md` (what `basou orient` does); `write: false`
+ * only computes the body — for a caller that runs at another tool's session
+ * start and must not leave a file behind in a repository it merely read, nor
+ * lose the position because that file could not be written.
+ */
+export async function renderOrientationForRoot(
+  repositoryRoot: string,
+  options: OrientOptions,
+  ctx: OrientContext,
+  behaviour: { write: boolean },
+): Promise<RenderedOrientation> {
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
@@ -161,7 +177,7 @@ export async function renderOrientationForCwd(
 
   // orientation.md is a transient, gitignored snapshot: overwrite the whole
   // file (no GENERATED markers — there is no hand-edited region to preserve).
-  await writeMarkdownFile(paths.files.orientation, `${result.body}\n`);
+  if (behaviour.write) await writeMarkdownFile(paths.files.orientation, `${result.body}\n`);
 
   return {
     body: result.body,

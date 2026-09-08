@@ -308,13 +308,13 @@ export async function doRunRefresh(
  * The one line a workspace still declaring `channels.codex` gets. It states the
  * fact (the declaration is ignored) and where the position now comes from; it
  * does not tell the reader to edit the manifest. Silent for a workspace that
- * never declared the key. Best-effort: an unreadable manifest here — which
+ * never declared the key, or declared it false (which never did anything). Best-effort: an unreadable manifest here — which
  * `computeRefresh` would already have failed on — yields no line.
  */
 async function retiredChannelNotice(paths: BasouPaths): Promise<string | null> {
   try {
     const manifest = await readManifest(paths);
-    if (manifest.channels?.codex === undefined) return null;
+    if (manifest.channels?.codex !== true) return null;
     return "codex channel: retired — the manifest's channels.codex is ignored; a Codex session now receives this workspace's position from the SessionStart hook (see `basou hook status codex`), and nothing is written to the user-global ~/.codex/AGENTS.md";
   } catch {
     return null;

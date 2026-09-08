@@ -87,9 +87,11 @@ re-derived from scratch each time you sit back down.
   next session or a teammate.
 - `basou hook install codex` — hand every Codex session (CLI, desktop app,
   IDE) the position of the workspace it was opened in, at session start.
-  The hook computes the position from that session's own directory and stores
-  nothing, so one registration serves every workspace and no workspace's
-  position is ever written into a file another project's tool reads.
+  The hook computes the position from that session's own directory, speaks
+  only for workspaces you have registered in `~/.basou/portfolio.yaml`, and
+  stores nothing — so one registration serves every workspace and no
+  workspace's position is ever written into a file another project's tool
+  reads.
 
 Capture is deterministic and does not depend on a runtime LLM — an agent
 hands Basou structured decisions and Basou writes them; the trail is yours,

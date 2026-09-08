@@ -1,4 +1,4 @@
-import { open, readFile, stat } from "node:fs/promises";
+import { open, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,10 @@ import {
   evaluateStopHook,
   findBasouSessionStartHook,
   findBasouStopHookCommand,
+  ORIENTATION_END,
+  ORIENTATION_START,
+  parseMarkers,
+  readMarkdownFile,
   removeSessionStartHook,
   removeStopHook,
   upsertSessionStartHook,
@@ -26,7 +30,9 @@ import {
 } from "../lib/codex-hook-trust.js";
 import { assertNotSymlink, writeFileDurable } from "../lib/durable-write.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
-import { renderOrientationForCwd } from "./orient.js";
+import { DEFAULT_PORTFOLIO_CONFIG_PATH, loadPortfolioConfig } from "../lib/portfolio-config.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
+import { renderOrientationForRoot } from "./orient.js";
 
 /** Read at most this many trailing bytes of a transcript (keeps the per-turn hook bounded). */
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
@@ -155,6 +161,14 @@ export function registerHookCommand(program: Command): void {
     .option("--min-edits <n>", "claude: pass a custom file-edit threshold to the registered hook")
     .option("--settings <path>", "claude: override the settings.json path (intended for tests)")
     .option("--hooks <path>", "codex: override the hooks.json path (intended for tests)")
+    .option(
+      "--codex-config <path>",
+      "codex: override the Codex config.toml path (intended for tests)",
+    )
+    .option(
+      "--codex-face <path>",
+      "codex: override the user-global AGENTS.md checked for a leftover block (intended for tests)",
+    )
     .option("--dry-run", "Print what would change without writing")
     .option("-v, --verbose", "Show error causes")
     .action(async (target: string | undefined, opts: RawHookInstallOptions) => {
@@ -369,9 +383,69 @@ export type HookSessionStartContext = {
   readStdin?: () => Promise<string>;
   /** Sink for the hook's stdout. Defaults to `process.stdout.write`. Injectable for tests. */
   write?: (text: string) => void;
-  /** Render the position for a cwd. Defaults to {@link renderOrientationForCwd}. Injectable for tests. */
+  /**
+   * Render the position for a cwd. Defaults to {@link renderRegisteredWorkspacePosition}:
+   * resolve the workspace, refuse one the operator has not registered, render
+   * without writing. Injectable for tests of the handler's own logic.
+   */
   render?: (cwd: string) => Promise<{ body: string }>;
+  /** The operator's workspace registry (`~/.basou/portfolio.yaml`). Injectable for tests. */
+  portfolioConfigPath?: string;
 };
+
+/**
+ * The production renderer behind `basou hook session-start`.
+ *
+ * The hook is user-global: Codex runs it for every session on the machine,
+ * with whatever directory the session was opened in. Left to `basou orient`'s
+ * own rule, that would render the `.basou/` of ANY repository the user opens —
+ * including a clone whose author committed one (the default `basou init`
+ * ignore rules track the manifest and per-session metadata), turning a
+ * checked-in "next step" into developer context the model trusts more than the
+ * repository's own AGENTS.md. So the hook speaks only for a workspace the
+ * operator has registered in `~/.basou/portfolio.yaml`: the resolved root (a
+ * member repo resolves to its planning master, a view to its master) must be
+ * one of the registered paths. That file is the operator's own allowlist, and
+ * nothing inside a repository can add to it. An unregistered workspace — a
+ * clone, or a greenfield `basou init` not yet registered — gets silence.
+ *
+ * The render does not write `.basou/orientation.md`: a session-start hook must
+ * not leave a file in a repository it only read, and a workspace whose store is
+ * read-only must still get its position.
+ */
+export async function renderRegisteredWorkspacePosition(
+  cwd: string,
+  portfolioConfigPath: string = DEFAULT_PORTFOLIO_CONFIG_PATH,
+): Promise<{ body: string }> {
+  const root = await resolveBasouRootForCommand(cwd, "hook session-start", {
+    portfolioConfigPath,
+  });
+  if (!(await isRegisteredWorkspace(root, portfolioConfigPath))) {
+    throw new Error("The workspace is not registered in the portfolio; the hook stays silent.");
+  }
+  const rendered = await renderOrientationForRoot(root, {}, { cwd }, { write: false });
+  return { body: rendered.body };
+}
+
+/**
+ * Whether `root` is one of the workspaces registered in the portfolio, compared
+ * by realpath on both sides so a symlinked layout or a `~`-relative entry still
+ * matches. An absent or unreadable registry registers nothing.
+ */
+async function isRegisteredWorkspace(root: string, portfolioConfigPath: string): Promise<boolean> {
+  let entries: { path: string }[];
+  try {
+    entries = await loadPortfolioConfig(portfolioConfigPath);
+  } catch {
+    return false;
+  }
+  const rootReal = await realpath(root).catch(() => root);
+  for (const entry of entries) {
+    const entryReal = await realpath(entry.path).catch(() => null);
+    if (entryReal !== null && entryReal === rootReal) return true;
+  }
+  return false;
+}
 
 /**
  * Programmatic entry for `basou hook session-start`. Fail-open by design: a
@@ -391,19 +465,17 @@ export async function runHookSessionStart(ctx: HookSessionStartContext = {}): Pr
  * Read Codex's SessionStart payload, take its `cwd`, and print that workspace's
  * position. Silent — by returning, not by printing — when the payload has no
  * usable `cwd`, when the cwd is not inside a git repo (the desktop app opens a
- * placeholder thread at `/` before a folder is chosen), or when the repo is not
- * a basou workspace: none of those is an error the session should hear about.
- * The output is plain text; Codex adds plain stdout as developer context.
+ * placeholder thread at `/` before a folder is chosen), when the repo is not a
+ * basou workspace, or when the workspace is not registered in the operator's
+ * portfolio: none of those is an error the session should hear about. The
+ * output is plain text; Codex adds plain stdout as developer context.
  */
 export async function doRunHookSessionStart(ctx: HookSessionStartContext): Promise<void> {
   const readStdin = ctx.readStdin ?? defaultReadStdin;
   const write = ctx.write ?? ((text) => void process.stdout.write(text));
   const render =
     ctx.render ??
-    (async (cwd: string) => {
-      const rendered = await renderOrientationForCwd({}, { cwd });
-      return { body: rendered.body };
-    });
+    ((cwd: string) => renderRegisteredWorkspacePosition(cwd, ctx.portfolioConfigPath));
 
   const raw = await readStdin();
   if (raw.trim().length === 0) return;
@@ -517,6 +589,8 @@ type RawHookInstallOptions = {
   hooks?: string;
   /** codex: override the config.toml path read for trust state (tests). */
   codexConfig?: string;
+  /** codex: override the user-global AGENTS.md checked for a leftover block (tests). */
+  codexFace?: string;
   dryRun?: boolean;
   verbose?: boolean;
 };
@@ -528,6 +602,7 @@ export type HookInstallOptions = {
   settings?: string;
   hooks?: string;
   codexConfig?: string;
+  codexFace?: string;
   dryRun?: boolean;
   verbose?: boolean;
 };
@@ -560,6 +635,7 @@ function normalizeInstallOptions(raw: RawHookInstallOptions): HookInstallOptions
   if (raw.settings !== undefined) out.settings = raw.settings;
   if (raw.hooks !== undefined) out.hooks = raw.hooks;
   if (raw.codexConfig !== undefined) out.codexConfig = raw.codexConfig;
+  if (raw.codexFace !== undefined) out.codexFace = raw.codexFace;
   if (raw.dryRun === true) out.dryRun = true;
   if (raw.verbose === true) out.verbose = true;
   if (raw.minEdits !== undefined) {
@@ -757,6 +833,29 @@ function describeHookMode(tiers: { block: boolean; review: boolean }): string {
 // core that touches only basou's entry, write back durably with a one-time
 // backup and an optimistic-concurrency recheck.
 
+/**
+ * Codex's user-global AGENTS.md — the face a basou of 0.39 or before rendered
+ * the orientation into. Retiring the writer did not remove what it wrote, so
+ * `hook install codex` and `hook status codex` look for a leftover block and
+ * name the command that removes it.
+ */
+export const DEFAULT_CODEX_FACE_PATH = join(homedir(), ".codex", "AGENTS.md");
+
+const LEFTOVER_FACE_NOTE = (label: string): string =>
+  `${label} still carries an orientation block rendered by an earlier basou (0.39 or before); every Codex session on this machine reads it. \`basou channel clear codex\` removes it.`;
+
+/** Whether the face still holds a BASOU:ORIENTATION block (well-formed or not). Never throws. */
+async function faceHasLeftoverOrientationBlock(facePath: string): Promise<boolean> {
+  try {
+    const existing = await readMarkdownFile(facePath);
+    if (existing === null) return false;
+    const section = parseMarkers(existing, { start: ORIENTATION_START, end: ORIENTATION_END });
+    return section.kind !== "no_markers";
+  } catch {
+    return false;
+  }
+}
+
 /** Canonical location of the Codex user-global hooks file. */
 export const DEFAULT_CODEX_HOOKS_PATH = join(homedir(), ".codex", "hooks.json");
 
@@ -825,6 +924,7 @@ export async function doRunCodexHookInstall(
   // re-trust, for a hook Codex still trusts.
   if (action === "unchanged" || (raw !== null && newBody === raw)) {
     console.log("The basou Codex SessionStart hook is already registered; no change.");
+    await reportCodexHookState(hooksPath, hooksFile, options);
     return;
   }
   if (options.dryRun === true) {
@@ -845,7 +945,30 @@ export async function doRunCodexHookInstall(
   console.log(
     `${action === "installed" ? "Installed" : "Updated"} the basou Codex SessionStart hook in ${hooksPath}.`,
   );
-  console.log(CODEX_TRUST_NOTE);
+  await reportCodexHookState(hooksPath, hooksFile, options);
+}
+
+/**
+ * What the operator needs to know right after an install or on `status`: has
+ * Codex trusted this exact handler yet (a new or changed hook is skipped until
+ * reviewed, silently under non-interactive `codex exec`), and does the
+ * user-global face still carry a block an earlier basou left there.
+ */
+async function reportCodexHookState(
+  hooksPath: string,
+  hooksFile: unknown,
+  options: HookInstallOptions,
+): Promise<void> {
+  const location = findBasouSessionStartHook(hooksFile);
+  if (location !== null) {
+    const trust = await codexHookTrustFor(hooksPath, location, options.codexConfig);
+    console.log(`Codex trust: ${describeCodexHookTrust(trust)}.`);
+    if (trust.status === "untrusted" || trust.status === "modified") console.log(CODEX_TRUST_NOTE);
+  }
+  const facePath = options.codexFace ?? DEFAULT_CODEX_FACE_PATH;
+  if (await faceHasLeftoverOrientationBlock(facePath)) {
+    console.log(LEFTOVER_FACE_NOTE(options.codexFace ?? "~/.codex/AGENTS.md"));
+  }
 }
 
 export async function runCodexHookUninstall(options: RawHookInstallOptions): Promise<void> {
@@ -905,14 +1028,17 @@ export async function doRunCodexHookStatus(options: HookInstallOptions): Promise
     console.log(
       "basou Codex SessionStart hook: not registered. Run 'basou hook install codex' to register it.",
     );
+    const facePath = options.codexFace ?? DEFAULT_CODEX_FACE_PATH;
+    if (await faceHasLeftoverOrientationBlock(facePath)) {
+      console.log(LEFTOVER_FACE_NOTE(options.codexFace ?? "~/.codex/AGENTS.md"));
+    }
     return;
   }
   const matcher = location.matcher ?? "(every source)";
-  const trust = await codexHookTrustFor(hooksPath, location, options.codexConfig);
   console.log(
-    `basou Codex SessionStart hook: registered in ${hooksPath} (matcher: ${matcher}); ${describeCodexHookTrust(trust)}.`,
+    `basou Codex SessionStart hook: registered in ${hooksPath} (matcher: ${matcher}); speaks only for workspaces registered in ~/.basou/portfolio.yaml.`,
   );
-  if (trust.status === "untrusted" || trust.status === "modified") console.log(CODEX_TRUST_NOTE);
+  await reportCodexHookState(hooksPath, parsed, options);
 }
 
 /**
@@ -921,7 +1047,7 @@ export async function doRunCodexHookStatus(options: HookInstallOptions): Promise
  * Never throws: an unreadable config or a handler shape the hash cannot cover
  * reports `unknown` with the reason.
  */
-async function codexHookTrustFor(
+export async function codexHookTrustFor(
   hooksPath: string,
   location: {
     groupIndex: number;

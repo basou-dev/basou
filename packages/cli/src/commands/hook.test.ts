@@ -1,6 +1,9 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
+import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
+import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   doRunCodexHookInstall,
@@ -800,5 +803,142 @@ describe("hook install / uninstall / status codex", () => {
     logs.length = 0;
     await doRunCodexHookUninstall({ hooks: hooksPath });
     expect(logs.join("\n")).toContain("nothing removed");
+  });
+});
+
+describe("hook session-start against a real workspace (allowlist, no write)", () => {
+  const execFileAsync = promisify(execFile);
+  const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
+  let dir: string;
+  let repo: string;
+  let portfolioPath: string;
+
+  beforeEach(async () => {
+    dir = await realpath(await mkdtemp(join(tmpdir(), "basou-hook-ws-")));
+    repo = join(dir, "ws");
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init", "-q", repo], { env: ENV });
+    const paths = await ensureBasouDirectory(repo);
+    await writeManifest(
+      paths,
+      createManifest({
+        workspaceName: "ws",
+        now: new Date("2026-05-09T03:00:00.000Z"),
+        workspaceId: "ws_01HXABCDEF1234567890ABCDEF",
+      }),
+    );
+    portfolioPath = join(dir, "portfolio.yaml");
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function fire(cwd: string): Promise<string> {
+    let out = "";
+    await doRunHookSessionStart({
+      readStdin: async () => JSON.stringify({ session_id: "s", cwd, source: "startup" }),
+      write: (t) => {
+        out += t;
+      },
+      portfolioConfigPath: portfolioPath,
+    });
+    return out;
+  }
+
+  it("prints the position of a REGISTERED workspace and writes no orientation.md", async () => {
+    await writeFile(portfolioPath, `workspaces:\n  - path: ${JSON.stringify(repo)}\n`);
+    const out = await fire(repo);
+    expect(out).toContain("# Orientation");
+    expect(out.endsWith("\n")).toBe(true);
+    await expect(access(basouPaths(repo).files.orientation)).rejects.toThrow();
+  });
+
+  it("stays silent for a workspace that is NOT registered, even though it has a store", async () => {
+    await writeFile(portfolioPath, "workspaces:\n  - path: /somewhere/else\n");
+    expect(await fire(repo)).toBe("");
+    await expect(access(basouPaths(repo).files.orientation)).rejects.toThrow();
+  });
+
+  it("stays silent when there is no portfolio registry at all", async () => {
+    expect(await fire(repo)).toBe("");
+  });
+
+  it("stays silent for a directory that is not a git repository", async () => {
+    await writeFile(portfolioPath, `workspaces:\n  - path: ${JSON.stringify(repo)}\n`);
+    expect(await fire(dir)).toBe("");
+  });
+});
+
+describe("hook install / status codex: trust line, leftover face block, unchanged reinstall", () => {
+  let dir: string;
+  let hooksPath: string;
+  let configPath: string;
+  let facePath: string;
+  let logs: string[];
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  const cliEntry = "/abs/basou/packages/cli/dist/index.js";
+  const ctx: HookInstallContext = { resolveCliEntry: () => cliEntry };
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "basou-hook-codex2-"));
+    hooksPath = join(dir, "hooks.json");
+    configPath = join(dir, "config.toml");
+    facePath = join(dir, "AGENTS.md");
+    logs = [];
+    logSpy = vi.spyOn(console, "log").mockImplementation((msg?: unknown) => {
+      logs.push(String(msg));
+    });
+  });
+  afterEach(async () => {
+    logSpy.mockRestore();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("install ends with the Codex trust verdict", async () => {
+    await doRunCodexHookInstall(
+      { hooks: hooksPath, codexConfig: configPath, codexFace: facePath },
+      ctx,
+    );
+    expect(logs.join("\n")).toContain("Codex trust: not yet trusted");
+  });
+
+  it("install and status point at a leftover orientation block in the face, and stay quiet without one", async () => {
+    await writeFile(
+      facePath,
+      "# notes\n<!-- BASOU:ORIENTATION:START -->\nold position\n<!-- BASOU:ORIENTATION:END -->\n",
+    );
+    await doRunCodexHookInstall(
+      { hooks: hooksPath, codexConfig: configPath, codexFace: facePath },
+      ctx,
+    );
+    expect(logs.join("\n")).toContain("basou channel clear codex");
+    expect(logs.join("\n")).toContain("earlier basou");
+
+    logs.length = 0;
+    await doRunCodexHookStatus({ hooks: hooksPath, codexConfig: configPath, codexFace: facePath });
+    expect(logs.join("\n")).toContain("basou channel clear codex");
+
+    logs.length = 0;
+    await writeFile(facePath, "# notes only\n");
+    await doRunCodexHookStatus({ hooks: hooksPath, codexConfig: configPath, codexFace: facePath });
+    expect(logs.join("\n")).not.toContain("channel clear");
+  });
+
+  it("a reformat-only reinstall neither rewrites the file nor takes a backup nor asks to re-trust", async () => {
+    await doRunCodexHookInstall(
+      { hooks: hooksPath, codexConfig: configPath, codexFace: facePath },
+      ctx,
+    );
+    const canonical = JSON.parse(await readFile(hooksPath, "utf8")) as unknown;
+    const fourSpace = `${JSON.stringify(canonical, null, 4)}\n`;
+    await writeFile(hooksPath, fourSpace);
+    logs.length = 0;
+    await doRunCodexHookInstall(
+      { hooks: hooksPath, codexConfig: configPath, codexFace: facePath },
+      ctx,
+    );
+    expect(await readFile(hooksPath, "utf8")).toBe(fourSpace);
+    await expect(access(`${hooksPath}.basou-bak`)).rejects.toThrow();
+    expect(logs.join("\n")).toContain("already registered");
+    expect(logs.join("\n")).not.toContain("Updated");
   });
 });

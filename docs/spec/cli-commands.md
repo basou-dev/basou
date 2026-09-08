@@ -90,12 +90,27 @@ Claude Code user registers by hand in `~/.claude/settings.json`; basou does not
 install one). It works in the Codex CLI, the desktop app, and the IDE
 extension, which share the hooks system.
 
+The hook speaks only for a workspace **registered in `~/.basou/portfolio.yaml`**
+(the resolved root must be a registered path; a member repo resolves to its
+planning master first). That file is the operator's allowlist and nothing in a
+repository can add to it, so a cloned repository that happens to carry a
+committed `.basou/` gets nothing — without the gate, a user-global hook would
+render any repository's store, and a checked-in "next step" would arrive as
+developer context. Register a new workspace (`basou portfolio` lists what is
+registered) before expecting the hook to speak for it. The hook writes nothing:
+unlike `basou orient` it does not refresh `.basou/orientation.md`.
+
 Codex trusts hooks by hash and skips a new or changed one until you review it:
 the interactive CLI asks at startup ("Hooks need review"), the desktop app
 lists it under Settings → Hooks; non-interactive `codex exec` skips an
-untrusted hook silently. `basou hook status codex` reports whether the hook is
-registered and whether Codex has trusted it (it reads the trust record Codex
-keeps in `~/.codex/config.toml`).
+untrusted hook silently. `basou hook status codex` (and the end of `basou hook
+install codex`) reports whether the hook is registered and whether Codex has
+trusted it, by reproducing Codex's identity hash for the installed handler and
+comparing it with the record in `~/.codex/config.toml`; a record it cannot read
+is reported as unknown. `basou run codex` says before launch when the hook is
+not registered or not trusted. Both `install` and `status` also say when
+`~/.codex/AGENTS.md` still carries an orientation block an earlier basou
+rendered, and name `basou channel clear codex`.
 
 The face paths stay hard-coded: a configurable path would let basou append to
 arbitrary files.

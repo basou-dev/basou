@@ -17,6 +17,11 @@ import {
 } from "@basou/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  codexHookStateKey,
+  commandHandlerFields,
+  computeCodexHookIdentityHash,
+} from "../lib/codex-hook-trust.js";
 import { type RunContext, registerRunCommand, runClaudeCode, runCodex } from "./run.js";
 
 const execFileAsync = promisify(execFile);
@@ -761,35 +766,6 @@ describe("runCodex", () => {
     await expect(access(join(repo, "codex-AGENTS.md"))).rejects.toThrow();
   });
 
-  it("stays quiet before spawn when the SessionStart hook is registered", async () => {
-    const repo = await setupInitedRepo();
-    const hooksPath = join(repo, "hooks.json");
-    const { hooksFile } = upsertSessionStartHook(
-      undefined,
-      "node /x/packages/cli/dist/index.js hook session-start",
-    );
-    await writeFile(hooksPath, `${JSON.stringify(hooksFile, null, 2)}\n`);
-    const logs: string[] = [];
-    const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
-      logs.push(a.map(String).join(" "));
-    });
-    try {
-      await runCodex(
-        [],
-        { cwd: repo, snapshot: false },
-        {
-          runner: makeFakeRunner({ exit_code: 0 }),
-          now: () => FIXED_DATE,
-          resolveCodexCommand: codexResolve,
-          codexHooksPath: hooksPath,
-        },
-      );
-    } finally {
-      spy.mockRestore();
-    }
-    expect(logs.join("\n")).not.toContain("SessionStart hook");
-  });
-
   it("does not let an unreadable hooks.json block or misreport the launch", async () => {
     const repo = await setupInitedRepo();
     const hooksPath = join(repo, "hooks.json");
@@ -823,5 +799,76 @@ describe("runCodex", () => {
     const run = program.commands.find((c) => c.name() === "run");
     const subs = run?.commands.map((c) => c.name()) ?? [];
     expect(subs).toEqual(expect.arrayContaining(["claude-code", "codex"]));
+  });
+});
+
+describe("runCodex pre-spawn: trust of the registered SessionStart hook", () => {
+  const codexResolve = async (): Promise<{ command: string }> => ({ command: "codex" });
+
+  async function launchWith(hooksPath: string, configPath: string): Promise<string[]> {
+    const repo = await setupInitedRepo();
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+    try {
+      await runCodex(
+        [],
+        { cwd: repo, snapshot: false },
+        {
+          runner: makeFakeRunner({ exit_code: 0 }),
+          now: () => FIXED_DATE,
+          resolveCodexCommand: codexResolve,
+          codexHooksPath: hooksPath,
+          codexConfigPath: configPath,
+        },
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    return logs;
+  }
+
+  it("says the hook is registered but not trusted when Codex holds no trust record", async () => {
+    const repo = getTmpRepo();
+    const hooksPath = join(repo, "hooks.json");
+    const { hooksFile } = upsertSessionStartHook(
+      undefined,
+      "node /x/packages/cli/dist/index.js hook session-start",
+    );
+    await writeFile(hooksPath, `${JSON.stringify(hooksFile, null, 2)}\n`);
+    const logs = await launchWith(hooksPath, join(repo, "no-config.toml"));
+    expect(logs.join("\n")).toContain("registered but not yet trusted");
+  });
+
+  it("stays quiet when Codex's trust record matches the installed handler", async () => {
+    const repo = getTmpRepo();
+    const hooksPath = join(repo, "hooks.json");
+    const configPath = join(repo, "config.toml");
+    const { hooksFile } = upsertSessionStartHook(
+      undefined,
+      "node /x/packages/cli/dist/index.js hook session-start",
+    );
+    await writeFile(hooksPath, `${JSON.stringify(hooksFile, null, 2)}\n`);
+    const groups = (
+      hooksFile.hooks as {
+        SessionStart: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }>;
+      }
+    ).SessionStart;
+    const handler = groups[0]?.hooks[0];
+    if (handler === undefined) throw new Error("fixture");
+    const fields = commandHandlerFields(handler);
+    if (fields === null) throw new Error("fixture");
+    const hash = computeCodexHookIdentityHash({
+      eventKey: "session_start",
+      matcher: groups[0]?.matcher,
+      handler: fields,
+    });
+    await writeFile(
+      configPath,
+      `[hooks.state."${codexHookStateKey(hooksPath, "session_start", 0, 0)}"]\ntrusted_hash = "${hash}"\n`,
+    );
+    const logs = await launchWith(hooksPath, configPath);
+    expect(logs.join("\n")).not.toContain("SessionStart hook");
   });
 });
