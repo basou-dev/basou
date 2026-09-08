@@ -9,13 +9,16 @@ import {
 } from "./codex-hook-trust.js";
 
 /**
- * A real trust record. On 2026-09-08 codex-cli 0.153.4 wrote exactly this hash
- * to config.toml after trusting a hooks.json entry with exactly these fields;
- * the test pins that basou reproduces Codex's identity hash bit for bit.
+ * Pins the reproduction of Codex's identity hash. The algorithm was verified
+ * on 2026-09-08 against a record codex-cli 0.153.4 wrote to config.toml after
+ * trusting a hooks.json entry with these fields (matcher, timeout, status
+ * message, context limit): the reproduced hash matched the recorded one bit
+ * for bit. The command path here is synthetic — the real one carried a local
+ * home directory — so the expected hash below is the algorithm's output for
+ * this fixture, and the test guards the reproduction against drift.
  */
 const REAL = {
-  command:
-    "/private/tmp/claude-501/-Users-takashi-matsuyama-projects-basou-workspace/5a05f29e-fd1d-4949-bfd8-6a2c0781680a/scratchpad/desktop-verify/canary-hook.sh",
+  command: "/Users/example/.codex/hooks/basou-canary.sh",
   matcher: "startup|resume|clear",
   handler: {
     type: "command",
@@ -24,7 +27,7 @@ const REAL = {
     statusMessage: "basou canary (temporary verification hook)",
     additionalContextLimit: 0,
   },
-  hash: "sha256:d759aefcb791f4ec1e6c426bdb242cc2f0e577329233ce627106dcd2e66a4fc1",
+  hash: "sha256:05ec130b85049e1c54ebbe2857ae5f0f9306584d7fc176b6e18bfd85d9b1cf76",
 };
 REAL.handler.command = REAL.command;
 
@@ -83,10 +86,10 @@ describe("computeCodexHookIdentityHash", () => {
 });
 
 describe("codexHookStateKey / readCodexHookState", () => {
-  const key = codexHookStateKey("/Users/me/.codex/hooks.json", "session_start", 0, 0);
+  const key = codexHookStateKey("/Users/example/.codex/hooks.json", "session_start", 0, 0);
 
   it("builds the position-based key Codex uses", () => {
-    expect(key).toBe("/Users/me/.codex/hooks.json:session_start:0:0");
+    expect(key).toBe("/Users/example/.codex/hooks.json:session_start:0:0");
   });
 
   it("reads trusted_hash (and enabled) from the matching [hooks.state] table only", () => {
@@ -98,7 +101,7 @@ describe("codexHookStateKey / readCodexHookState", () => {
       `[hooks.state."${key}"]`,
       `trusted_hash = "${REAL.hash}"`,
       "",
-      '[hooks.state."/Users/me/.codex/hooks.json:session_start:1:0"]',
+      '[hooks.state."/Users/example/.codex/hooks.json:session_start:1:0"]',
       'trusted_hash = "sha256:other"',
       "enabled = false",
       "",
@@ -112,15 +115,15 @@ describe("codexHookStateKey / readCodexHookState", () => {
     expect(
       readCodexHookState(
         toml,
-        codexHookStateKey("/Users/me/.codex/hooks.json", "session_start", 1, 0),
+        codexHookStateKey("/Users/example/.codex/hooks.json", "session_start", 1, 0),
       ),
     ).toEqual({ kind: "found", state: { trustedHash: "sha256:other", enabled: false } });
     expect(readCodexHookState(toml, "/elsewhere:session_start:0:0")).toEqual({ kind: "absent" });
   });
 
   it("matches a key whose path needs TOML escaping", () => {
-    const odd = codexHookStateKey('/Users/o"dd/.codex/hooks.json', "session_start", 0, 0);
-    const toml = `[hooks.state."/Users/o\\"dd/.codex/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:x"\n`;
+    const odd = codexHookStateKey('/Users/exam"ple/.codex/hooks.json', "session_start", 0, 0);
+    const toml = `[hooks.state."/Users/exam\\"ple/.codex/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:x"\n`;
     expect(readCodexHookState(toml, odd)).toEqual({
       kind: "found",
       state: { trustedHash: "sha256:x" },
@@ -132,7 +135,7 @@ describe("codexHookStateKey / readCodexHookState", () => {
       `[hooks.state."${key}"] # basou`,
       `trusted_hash = "${REAL.hash}" # ok`,
       "",
-      "[hooks.state.'/Users/me/.codex/hooks.json:session_start:2:0']",
+      "[hooks.state.'/Users/example/.codex/hooks.json:session_start:2:0']",
       "trusted_hash = 'sha256:lit'",
     ].join("\n");
     expect(readCodexHookState(toml, key)).toEqual({
@@ -142,7 +145,7 @@ describe("codexHookStateKey / readCodexHookState", () => {
     expect(
       readCodexHookState(
         toml,
-        codexHookStateKey("/Users/me/.codex/hooks.json", "session_start", 2, 0),
+        codexHookStateKey("/Users/example/.codex/hooks.json", "session_start", 2, 0),
       ),
     ).toEqual({ kind: "found", state: { trustedHash: "sha256:lit" } });
   });
