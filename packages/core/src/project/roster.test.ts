@@ -27,12 +27,12 @@ describe("summarizeRosterDrift", () => {
       repos: [
         { path: ".", visibility: "private" },
         { path: "../takuhon", visibility: "public" },
-        { path: "../takashimatsuyama-bio", visibility: "public" },
+        { path: "../bio", visibility: "public" },
       ],
       sourceRoots: [".", "../takuhon"], // bio declared but not captured
     });
     expect(s.ok).toBe(false);
-    expect(s.gaps.map((g) => g.path)).toEqual(["../takashimatsuyama-bio"]);
+    expect(s.gaps.map((g) => g.path)).toEqual(["../bio"]);
     expect(s.gaps[0]?.visibility).toBe("public");
     expect(s.matched).toEqual([".", "../takuhon"]);
   });
@@ -111,13 +111,13 @@ describe("reconcileSourceRoots", () => {
       repos: [
         { path: ".", visibility: "private" },
         { path: "../takuhon", visibility: "public" },
-        { path: "../takashimatsuyama-bio", visibility: "public" },
+        { path: "../bio", visibility: "public" },
       ],
       sourceRoots: [".", "../takuhon"], // bio declared but not captured
     });
     expect(r.unchanged).toBe(false);
-    expect(r.added).toEqual(["../takashimatsuyama-bio"]);
-    expect(r.next).toEqual([".", "../takuhon", "../takashimatsuyama-bio"]);
+    expect(r.added).toEqual(["../bio"]);
+    expect(r.next).toEqual([".", "../takuhon", "../bio"]);
   });
 
   it("is unchanged when every declared repo is already captured", () => {

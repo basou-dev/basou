@@ -112,14 +112,14 @@ describe("basou project check", () => {
       repos: [
         { path: ".", visibility: "private" },
         { path: "../takuhon", visibility: "public" },
-        { path: "../takashimatsuyama-bio", visibility: "public" },
+        { path: "../bio", visibility: "public" },
       ],
       sourceRoots: [".", "../takuhon"],
     });
     vi.spyOn(console, "log").mockImplementation(() => {});
     const s = await doRunProjectCheck({}, { cwd: repo() });
     expect(s.roster.ok).toBe(false);
-    expect(s.roster.gaps.map((g) => g.path)).toEqual(["../takashimatsuyama-bio"]);
+    expect(s.roster.gaps.map((g) => g.path)).toEqual(["../bio"]);
   });
 
   it("is ok when every declared repo is captured (the view is extra, not a gap)", async () => {
