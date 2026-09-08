@@ -22,8 +22,8 @@ All notable changes to **basou** are recorded here. The project follows
   `~/.basou/portfolio.yaml`. A match prints one line on **stderr** naming no
   workspace and quoting no match — only how many were found, which lines to
   look at, and which position file those line numbers belong to — so the
-  warning cannot become the leak it is reporting. Nothing is withheld,
-  rewritten or refused: a name in a position may be exactly what the operator
+  warning cannot become the leak it is reporting. On these commands nothing is
+  withheld, rewritten or refused: a name in a position may be exactly what the operator
   meant, and refusing would stop the command they run many times a day.
 
   Matching is on paths and **directory names**, never on the portfolio's

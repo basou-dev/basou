@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -911,6 +920,23 @@ describe("hook session-start against a real workspace (allowlist, no write)", ()
     await placeSession([join(other, "notes.md")]);
     expect(await fire(repo)).toBe("");
     await expect(access(basouPaths(repo).files.orientation)).rejects.toThrow();
+  });
+
+  // A registry may also list the workspace's own view (`basou view --check`
+  // calls that `redundant`). It is another spelling of the self, not a foreign
+  // workspace, so a file recorded through the view must not silence the hook.
+  it("still prints when the registry also lists the workspace's own view", async () => {
+    const view = join(dir, "ws-workspace");
+    await mkdir(view);
+    await symlink(repo, join(view, "ws"));
+    await writeFile(
+      portfolioPath,
+      `workspaces:\n  - path: ${JSON.stringify(repo)}\n  - path: ${JSON.stringify(view)}\n`,
+    );
+    await placeSession([join(view, "ws", "notes.md")]);
+    const out = await fire(repo);
+    expect(out).toContain("# Orientation");
+    expect(out).toContain("notes.md");
   });
 
   it("still prints when other workspaces are registered but the position names none", async () => {

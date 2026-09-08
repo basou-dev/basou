@@ -492,13 +492,14 @@ export async function runHookSessionStart(ctx: HookSessionStartContext = {}): Pr
 }
 
 /**
- * Read Codex's SessionStart payload, take its `cwd`, and print that workspace's
+ * Read the SessionStart payload, take its `cwd`, and print that workspace's
  * position. Silent — by returning, not by printing — when the payload has no
  * usable `cwd`, when the cwd is not inside a git repo (the desktop app opens a
  * placeholder thread at `/` before a folder is chosen), when the repo is not a
- * basou workspace, or when the workspace is not registered in the operator's
- * portfolio: none of those is an error the session should hear about. The
- * output is plain text; Codex adds plain stdout as developer context.
+ * basou workspace, when the workspace is not registered in the operator's
+ * portfolio, or when its position names another registered workspace: none of
+ * those is an error the session should hear about. The output is plain text;
+ * Codex, and Claude Code, add plain stdout to the session's context.
  */
 export async function doRunHookSessionStart(ctx: HookSessionStartContext): Promise<void> {
   const readStdin = ctx.readStdin ?? defaultReadStdin;

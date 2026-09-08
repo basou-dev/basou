@@ -7,14 +7,16 @@ import { basename, normalize, sep } from "node:path";
  *
  * Why this exists: basou hands a workspace's position to the session running in
  * it (Claude Code reads `.basou/orientation.md`; a Codex session receives the
- * same body through the SessionStart hook), and `basou protocol sync` renders
+ * same body through the SessionStart hook, unless this scan finds a foreign
+ * name), and `basou protocol sync` renders
  * the operator's standing protocols into the user-global instructions file that
  * every project on the machine loads. Both are delivery channels whose PLUMBING
  * is already scoped — but neither inspects the CONTENT it delivers. A position
  * that mentions another workspace by name, or a standing protocol that names
  * one engagement, carries that name into a session that has no business seeing
- * it. This is the read-only primitive both warnings use; it never rewrites or
- * withholds the text.
+ * it. This is the read-only primitive the warnings and the hook's gate share:
+ * it reports and never rewrites the text. What a caller does with a hit — warn,
+ * or withhold — is the caller's.
  *
  * Matching is on PATHS AND DIRECTORY NAMES, never on the portfolio's display
  * labels. A label is a product name ("basou"), and a product name legitimately
@@ -109,6 +111,22 @@ function nameTokensFor(workspacePath: string, home: string): string[] {
 }
 
 /**
+ * Whether a registered root is another spelling of the scanning workspace: its
+ * view, its master, an alias. Two roots that share a directory-name spelling
+ * are one workspace by the convention this scanner already encodes, so such an
+ * entry is skipped WHOLE — its absolute path included. Dropping only the shared
+ * names would leave the path, which a position prints raw for any file recorded
+ * through the view, and the workspace would then be reported as foreign to
+ * itself.
+ */
+function isSpellingOfSelf(workspacePath: string, selfPath: string): boolean {
+  const own = new Set(directoryNameSpellings(basename(stripTrailingSep(normalize(selfPath)))));
+  return directoryNameSpellings(basename(stripTrailingSep(normalize(workspacePath)))).some((s) =>
+    own.has(s),
+  );
+}
+
+/**
  * Report the registered workspaces named in `text`, excluding the one doing the
  * scanning.
  *
@@ -121,9 +139,11 @@ function nameTokensFor(workspacePath: string, home: string): string[] {
  *   registered alongside `atlas-planning` would otherwise fire on every line
  *   the self's own path appears on). The cost is deliberate: a nested name is
  *   indistinguishable from the self's, and this design would rather miss it
- *   than warn on every line. Omit `selfPath` for a user-global text that
- *   belongs to no single workspace (the standing-protocol block) and every
- *   registered workspace counts.
+ *   than warn on every line. A registered entry that shares a directory-name
+ *   spelling with the self — its view, an alias — is another spelling of the
+ *   self and is skipped whole, absolute path included. Omit `selfPath` for a
+ *   user-global text that belongs to no single workspace (the standing-protocol
+ *   block) and every registered workspace counts.
  *
  * Returns one entry per named workspace, in the order the paths were given; an
  * empty array means nothing was found.
@@ -143,6 +163,7 @@ export function scanForeignWorkspaceNames(input: {
   const hits: ForeignWorkspaceHit[] = [];
 
   for (const workspacePath of input.workspacePaths) {
+    if (input.selfPath !== undefined && isSpellingOfSelf(workspacePath, input.selfPath)) continue;
     const tokens = nameTokensFor(workspacePath, home).filter(
       (token) => !own.some((ownToken) => ownToken.includes(token)),
     );

@@ -175,6 +175,36 @@ describe("scanForeignWorkspaceNames", () => {
     expect(hits).toEqual([]);
   });
 
+  // A registry may list the self's view as well as its master. The view's NAME
+  // is already one of the self's spellings, but its absolute PATH is not inside
+  // any self token, so on its own it would survive and report the workspace as
+  // foreign to itself on every line recorded through the view.
+  it("skips a registered entry that is another spelling of the self, path included", () => {
+    const view = `${HOME}/projects/alpha-workspace`;
+    const hits = scanForeignWorkspaceNames({
+      text: [`- ${view}/alpha-planning/notes.md`, "- ~/projects/alpha-workspace/x.md"].join("\n"),
+      workspacePaths: [view, BETA],
+      selfPath: ALPHA,
+      homedir: HOME,
+    });
+    expect(hits).toEqual([]);
+  });
+
+  it("still reports a foreign workspace whose name merely nests inside the self's", () => {
+    // `favorites-planning` is not a spelling of `my-favorites-planning`; only
+    // its name tokens are dropped as nested, its path stays detectable.
+    const self = `${HOME}/projects/my-favorites-planning`;
+    const other = `${HOME}/work/favorites-planning`;
+    const hits = scanForeignWorkspaceNames({
+      text: `- ${other}/notes.md`,
+      workspacePaths: [other],
+      selfPath: self,
+      homedir: HOME,
+    });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.tokens).toEqual([other]);
+  });
+
   it("ignores a trailing separator on the scanning workspace's path", () => {
     const hits = scanForeignWorkspaceNames({
       text: `- ${ALPHA}/x.md`,
