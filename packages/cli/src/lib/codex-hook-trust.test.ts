@@ -122,7 +122,7 @@ describe("codexHookStateKey / readCodexHookState", () => {
   });
 
   it("matches a key whose path needs TOML escaping", () => {
-    const odd = codexHookStateKey('/Users/exam"ple/.codex/hooks.json', "session_start", 0, 0);
+    const odd = codexHookStateKey('/Users/example"quoted/.codex/hooks.json', "session_start", 0, 0);
     const toml = `[hooks.state."/Users/exam\\"ple/.codex/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:x"\n`;
     expect(readCodexHookState(toml, odd)).toEqual({
       kind: "found",
