@@ -22,10 +22,36 @@ import { normalize, sep } from "node:path";
  * The filter is on the RENDERED view only. The trail keeps every recorded path
  * exactly as it was written: what a session touched stays answerable, and only
  * the summary handed to an agent drops paths that are noise in it.
+ *
+ * Being under a temp root is NOT on its own enough to drop a path. A workspace
+ * can legitimately live under one — a checkout in `/tmp`, and every test
+ * fixture that builds a workspace with `mkdtemp` — and dropping its files would
+ * empty the very summary this is meant to keep useful. What identifies a scratch
+ * directory is the ENCODED WORKING DIRECTORY in its name: a segment that began
+ * life as an absolute path, so it starts with the separator turned into a dash
+ * and carries a dash for every one after it. A directory named that way is
+ * machinery, never something a person created.
  */
 
 /** Temp roots to treat as transient, before per-platform aliasing. */
 const TEMP_ROOTS = ["/tmp", "/var/tmp"];
+
+/**
+ * Dashes an encoded absolute path must carry to be recognized as one. The
+ * encoding turns every separator into a dash, so even a shallow path
+ * (`/home/u/x`) yields three. The floor keeps an ordinary directory that merely
+ * starts with a dash from being mistaken for an encoded one.
+ */
+const MIN_ENCODED_DASHES = 3;
+
+/**
+ * Whether `segment` is a working directory an agent tool encoded into a single
+ * directory name: it starts where the leading separator was, and carries one
+ * dash per separator that followed.
+ */
+function isEncodedWorkingDirectory(segment: string): boolean {
+  return segment.startsWith("-") && segment.split("-").length - 1 >= MIN_ENCODED_DASHES;
+}
 
 /**
  * A temp root and the spelling the platform also answers to. macOS resolves
@@ -41,9 +67,9 @@ function withPrivateAlias(root: string): string[] {
 }
 
 /**
- * Whether `filePath` is inside a temp root — an agent's per-session scratch
- * directory, or anything else under `/tmp`, `/var/tmp` or the platform temp
- * directory.
+ * Whether `filePath` is an agent's per-session scratch path: under a temp root
+ * (`/tmp`, `/var/tmp`, or the platform temp directory) AND carrying an encoded
+ * working directory in one of the segments below that root.
  *
  * Only ABSOLUTE paths qualify. A recorded path that is repo-relative or
  * `~`-prefixed has already been placed by the path sanitizer, which means it is
@@ -53,7 +79,9 @@ function withPrivateAlias(root: string): string[] {
 export function isTransientToolPath(filePath: string, temp: string = tmpdir()): boolean {
   const candidate = normalize(filePath);
   if (!candidate.startsWith(sep)) return false;
-  return [...TEMP_ROOTS, temp]
+  const root = [...TEMP_ROOTS, temp]
     .flatMap(withPrivateAlias)
-    .some((root) => candidate === root || candidate.startsWith(root + sep));
+    .find((r) => candidate === r || candidate.startsWith(r + sep));
+  if (root === undefined) return false;
+  return candidate.slice(root.length).split(sep).some(isEncodedWorkingDirectory);
 }

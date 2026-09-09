@@ -19,18 +19,34 @@ describe("isTransientToolPath", () => {
   });
 
   it("matches the platform temp directory in either spelling", () => {
-    expect(isTransientToolPath(`${TEMP}/build-abc/out.txt`, TEMP)).toBe(true);
-    expect(isTransientToolPath(`/private${TEMP}/build-abc/out.txt`, TEMP)).toBe(true);
+    const tail = "claude-501/-home-tester-projects-beta-workspace/ab/scratchpad/n.md";
+    expect(isTransientToolPath(`${TEMP}/${tail}`, TEMP)).toBe(true);
+    expect(isTransientToolPath(`/private${TEMP}/${tail}`, TEMP)).toBe(true);
   });
 
-  it("matches the fixed temp roots and their private aliases", () => {
-    for (const p of ["/tmp/x", "/private/tmp/x", "/var/tmp/x", "/private/var/tmp/x"]) {
-      expect(isTransientToolPath(p, TEMP)).toBe(true);
+  it("matches under the fixed temp roots and their private aliases", () => {
+    const tail = "claude-501/-home-tester-projects-beta-workspace/x";
+    for (const root of ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"]) {
+      expect(isTransientToolPath(`${root}/${tail}`, TEMP)).toBe(true);
     }
   });
 
-  it("matches a temp root itself, not just paths under it", () => {
-    expect(isTransientToolPath("/tmp", TEMP)).toBe(true);
+  // Being under a temp root is not enough. A workspace can live under one — a
+  // checkout in /tmp, and every test fixture built with mkdtemp — and emptying
+  // its summary would defeat the purpose of the summary.
+  it("keeps a workspace that merely lives under a temp root", () => {
+    expect(isTransientToolPath("/tmp/my-checkout/src/index.ts", TEMP)).toBe(false);
+    expect(isTransientToolPath(`${TEMP}/basou-test-a1b2/beta-planning/notes.md`, TEMP)).toBe(false);
+    expect(isTransientToolPath("/tmp", TEMP)).toBe(false);
+    expect(isTransientToolPath(`${TEMP}/build-abc/out.txt`, TEMP)).toBe(false);
+  });
+
+  // The encoded name is an absolute path with every separator turned into a
+  // dash, so a directory that merely starts with one is not mistaken for it.
+  it("does not mistake a dash-prefixed directory for an encoded working directory", () => {
+    expect(isTransientToolPath("/tmp/-scratch/x.md", TEMP)).toBe(false);
+    expect(isTransientToolPath("/tmp/-a-b/x.md", TEMP)).toBe(false);
+    expect(isTransientToolPath("/tmp/-a-b-c/x.md", TEMP)).toBe(true);
   });
 
   // The paths a position exists to report: the sanitizer has already made them
@@ -44,11 +60,14 @@ describe("isTransientToolPath", () => {
   it("keeps an absolute path outside every temp root", () => {
     expect(isTransientToolPath("/home/tester/projects/alpha-planning/x.md", TEMP)).toBe(false);
     expect(isTransientToolPath("/etc/hosts", TEMP)).toBe(false);
+    // An encoded name outside a temp root is not a scratch path either.
+    expect(isTransientToolPath("/home/tester/-home-tester-projects-x/n.md", TEMP)).toBe(false);
   });
 
   // A sibling whose name merely starts with a temp root's name is not under it.
   it("does not match a sibling of a temp root by prefix", () => {
-    expect(isTransientToolPath("/tmpfoo/x", TEMP)).toBe(false);
-    expect(isTransientToolPath("/var/tmpfoo/x", TEMP)).toBe(false);
+    const tail = "claude-501/-home-tester-projects-beta-workspace/x";
+    expect(isTransientToolPath(`/tmpfoo/${tail}`, TEMP)).toBe(false);
+    expect(isTransientToolPath(`/var/tmpfoo/${tail}`, TEMP)).toBe(false);
   });
 });

@@ -81,11 +81,18 @@ All notable changes to **basou** are recorded here. The project follows
 
   The filter is on the rendered view only. The trail keeps every recorded path
   exactly as written, so what a session touched stays answerable; only the
-  summaries handed to an agent drop paths that are noise in them. Matching is
-  on `/tmp`, `/var/tmp` and the platform temp directory (each also matched
-  through the `/private` alias macOS resolves them by); a repo-relative or
-  `~`-prefixed path is never dropped, because the sanitizer only spells a path
-  that way when it is inside the workspace or the home directory.
+  summaries handed to an agent drop paths that are noise in them.
+
+  A path is dropped only when it is under a temp root (`/tmp`, `/var/tmp` or
+  the platform temp directory, each also matched through the `/private` alias
+  macOS resolves them by) **and** one of its segments is an encoded working
+  directory — a name that began as an absolute path, so it starts where the
+  leading separator was and carries a dash for every separator after it. Being
+  under a temp root is not on its own enough: a workspace can legitimately live
+  under one, and emptying its summary would defeat the summary. A
+  repo-relative or `~`-prefixed path is never dropped either, because the
+  sanitizer only spells a path that way when it is inside the workspace or the
+  home directory.
 
 ## 0.40.0 — 2026-09-08
 
