@@ -241,6 +241,19 @@ markers** and is **gitignored**: the whole file is overwritten on every run
 the current position rather than a committed artifact. `basou orient` also prints
 the body to stdout (the primary surface); `--quiet` writes the file only.
 
+**A filtered view of the files, not a complete one.** The recent-files line and
+the recent-activity digest omit **per-session scratch paths** — a path under a
+temp root whose directory name is a working directory an agent tool encoded
+into one segment. Such a path is a temp file that outlives nothing and can
+crowd out every real file in the line. The count that was left out is printed
+with the line, because the session label carries a file count minted at import
+over the unfiltered set. The same omission applies to `handoff.md`'s recently
+changed files. **The trail is complete**: `basou session show`, `basou session
+list` and `basou report` report every recorded path, and nothing is removed
+from `session.yaml`. Note this matters beyond presentation now that basou's own
+foreign-workspace check scans the rendered position text (§10.7 is an input to
+that gate, not only a human surface).
+
 **Runs no import.** `basou orient` reflects already-captured state and never
 triggers an import, so the freshness section is an honest staleness signal rather
 than an always-"just now" no-op (run `basou refresh` to re-import — which also

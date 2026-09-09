@@ -63,6 +63,44 @@ All notable changes to **basou** are recorded here. The project follows
   payload's `cwd`, which both tools send; `basou orient` itself keeps printing,
   with the advisory, because it is also the command a person runs).
 
+- **A position and a handoff no longer list per-session scratch paths.** An
+  agent tool gives each session a scratch directory under a temp root and names
+  it after the session's own working directory, every non-alphanumeric
+  character replaced. Files written there are recorded like any other, and
+  because such a path is under neither the working directory nor the home
+  directory the path sanitizer keeps it verbatim — so a summary can fill with
+  temp files that outlive nothing. On the store this was measured against, 27
+  of the 109 sessions that record files carry at least one, and `basou report`'s
+  changed-files section shows nothing else at all.
+
+  This is a **noise filter, not a containment measure**, and it should not be
+  read as one. The encoded name in those directories also appears in paths the
+  filter deliberately leaves alone — an agent's own per-project directory under
+  the home directory — so dropping the temp-root ones closes no route by
+  itself. What keeps a workspace's name out of another workspace's session is
+  the registry-based check on the rendered text and the hook that withholds a
+  position on a hit (both above); this change only stops those summaries from
+  being crowded out.
+
+  Dropped from the position's recent-files line, its recent-activity digest and
+  its out-of-root advisory, and from the handoff's "Recently changed files". The
+  position now says how many it left out (`(+3 scratch omitted)`), because the
+  session label carries a file count minted at import over the unfiltered set —
+  without the note a shorter list would read as a contradiction, and "this
+  session touched nothing" would be indistinguishable from "everything it
+  touched was scratch". `basou report`, `basou session show` and `session list`
+  are unchanged and still show everything.
+
+  The filter is on the rendered view only; the trail keeps every recorded path
+  exactly as written. A path is dropped only when it is under a temp root
+  (`/tmp`, `/var/tmp` or the platform temp directory, each also matched through
+  the `/private` alias macOS resolves them by) **and** one of its segments is an
+  encoded working directory — a name that began as an absolute path, so it
+  starts where the leading separator was and carries a dash for every separator
+  after it. Being under a temp root is not on its own enough: a workspace can
+  legitimately live under one, and emptying its summary would defeat the
+  summary.
+
 ## 0.40.0 — 2026-09-08
 
 ### Changed

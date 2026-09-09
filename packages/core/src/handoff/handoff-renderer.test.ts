@@ -260,6 +260,25 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain(`from ${SHORT(id)}..${SHORT(id)}`);
   });
 
+  // Same drop as the position: a scratch path is a temp file that says nothing
+  // about where the work stands, and its directory name carries a workspace name.
+  it("omits per-session scratch paths from Recently changed files", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("X09"),
+      relatedFiles: [
+        "src/kept.ts",
+        "/private/tmp/claude-501/-home-tester-projects-beta-workspace/ab/scratchpad/n.md",
+      ],
+      startedAt: "2026-05-08T12:00:00+09:00",
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    const recentSection = sliceSection(result.body, "## Recently changed files", "##");
+    expect(recentSection).toContain("- src/kept.ts");
+    expect(recentSection).not.toContain("scratchpad");
+    expect(recentSection).not.toContain("beta-workspace");
+  });
+
   it("case 3: Recently changed files shows only the most recent session's related_files", async () => {
     const paths = await setupPaths();
     // Older session — its unique files must NOT appear once a newer session

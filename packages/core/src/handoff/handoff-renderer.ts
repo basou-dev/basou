@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { enumerateApprovals } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
+import { isTransientToolPath } from "../lib/transient-paths.js";
 import {
   resolveViewLanguageFromPaths,
   type ViewLanguage,
@@ -285,7 +286,13 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   // session's related_files turned this into a whole-history dump once transcript
   // imports became the primary source, since each import carries a full day of
   // file changes.
-  const latestFiles = latestSession?.session.session.related_files ?? [];
+  // Per-session scratch paths are dropped: a temp file says nothing about where
+  // the work stands, and the directory name an agent tool gives it encodes the
+  // session's working directory, so listing one puts a workspace name into a
+  // summary that may be read elsewhere. The trail keeps the recorded paths.
+  const latestFiles = (latestSession?.session.session.related_files ?? []).filter(
+    (file) => !isTransientToolPath(file),
+  );
   const sortedFiles = [...new Set(latestFiles)].sort();
   const displayedFiles = sortedFiles.slice(0, limit);
   const overflow = Math.max(0, sortedFiles.length - limit);
