@@ -63,6 +63,30 @@ All notable changes to **basou** are recorded here. The project follows
   payload's `cwd`, which both tools send; `basou orient` itself keeps printing,
   with the advisory, because it is also the command a person runs).
 
+- **A position and a handoff no longer list per-session scratch paths.** An
+  agent tool gives each session a scratch directory under a temp root and names
+  it after the session's own working directory, every non-alphanumeric
+  character replaced — so the directory is called something like
+  `-Users-someone-projects-foo-workspace`. A file written there is recorded
+  like any other, and because the path is under neither the working directory
+  nor the home directory the path sanitizer keeps it verbatim.
+
+  Such a path says nothing about where the work stands, and it carries a
+  WORKSPACE NAME in its directory name: it is the route by which one
+  workspace's name reaches another workspace's position in practice, and
+  therefore the most common reason a position would now be withheld from the
+  SessionStart hook. Both renderers drop these paths — from the position's
+  recent-files line, its recent-activity digest and its out-of-root advisory
+  (which read one set), and from the handoff's "Recently changed files".
+
+  The filter is on the rendered view only. The trail keeps every recorded path
+  exactly as written, so what a session touched stays answerable; only the
+  summaries handed to an agent drop paths that are noise in them. Matching is
+  on `/tmp`, `/var/tmp` and the platform temp directory (each also matched
+  through the `/private` alias macOS resolves them by); a repo-relative or
+  `~`-prefixed path is never dropped, because the sanitizer only spells a path
+  that way when it is inside the workspace or the home directory.
+
 ## 0.40.0 — 2026-09-08
 
 ### Changed

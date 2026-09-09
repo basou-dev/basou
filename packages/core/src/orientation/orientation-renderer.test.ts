@@ -1652,6 +1652,53 @@ describe("renderOrientation (cross-project out-of-root files)", () => {
     expect(warnLine).toContain("~/zzz-not-a-project/blog.md");
   });
 
+  // A scratch directory an agent tool names after the session's own working
+  // directory carries a WORKSPACE NAME. It is also a temp file that says
+  // nothing about where the work stands, so the position drops it from both
+  // the recent-files line and the out-of-root advisory, which read one set.
+  it("omits per-session scratch paths from the files line and the advisory", async () => {
+    const paths = await setupPaths();
+    const repoRoot = getWorkDir();
+    await writeManifest(paths, createManifest({ workspaceName: "test-ws", sourceRoots: ["."] }));
+    await placeSession(paths, {
+      id: SES("X05"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T12:00:00+09:00",
+      workingDirectory: repoRoot,
+      relatedFiles: [
+        "src/in-repo.ts",
+        "/private/tmp/claude-501/-home-tester-projects-beta-workspace/ab/scratchpad/n.md",
+      ],
+    });
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("src/in-repo.ts");
+    expect(body).not.toContain("scratchpad");
+    expect(body).not.toContain("beta-workspace");
+    // The only remaining file is in-repo, so no advisory is warranted at all.
+    expect(body).not.toContain("outside source_roots");
+  });
+
+  it("does not count a dropped scratch path toward the overflow total", async () => {
+    const paths = await setupPaths();
+    const repoRoot = getWorkDir();
+    await writeManifest(paths, createManifest({ workspaceName: "test-ws", sourceRoots: ["."] }));
+    // Exactly the 10-file display cap, plus one scratch path. Were the scratch
+    // path counted, the line would report one overflowing file.
+    const inRepo = Array.from({ length: 10 }, (_, i) => `src/f${String(i).padStart(2, "0")}.ts`);
+    await placeSession(paths, {
+      id: SES("X06"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T12:00:00+09:00",
+      workingDirectory: repoRoot,
+      relatedFiles: [...inRepo, "/tmp/claude-501/-home-tester-projects-beta-workspace/x.md"],
+    });
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).not.toContain("more)");
+    expect(body).not.toContain("beta-workspace");
+  });
+
   it("skips a voided decision when picking the latest direction", async () => {
     const paths = await setupPaths();
     const sid = SES("V10");

@@ -4,6 +4,7 @@ import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { formatDurationMs } from "../lib/format-duration.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
 import { AGENT_INFRA_DIRS, classifyFilesBySourceRoot } from "../lib/source-root-scope.js";
+import { isTransientToolPath } from "../lib/transient-paths.js";
 import {
   resolveViewLanguageFromPaths,
   type ViewLanguage,
@@ -452,9 +453,19 @@ export async function summarizeOrientation(
         .map((d) => d.title);
       const notes = bucket?.notes ?? [];
       const hasIntent = decisionTitles.length > 0 || notes.length > 0;
+      // Same drop as the recent-files line below: a per-session scratch path is
+      // noise here and carries a workspace name in its directory name.
       const files = hasIntent
         ? []
-        : [...new Set(entry.session.session.related_files ?? [])].sort().slice(0, FILES_PER_DIGEST);
+        : [
+            ...new Set(
+              (entry.session.session.related_files ?? []).filter(
+                (file) => !isTransientToolPath(file),
+              ),
+            ),
+          ]
+            .sort()
+            .slice(0, FILES_PER_DIGEST);
       return {
         sessionId: entry.sessionId,
         label: entry.session.session.label ?? null,
@@ -568,7 +579,16 @@ export async function summarizeOrientation(
     sourceRoots = null;
   }
 
-  const latestFiles = latestEntry?.session.session.related_files ?? [];
+  // Per-session scratch directories are dropped from what the position
+  // reports. They say nothing about where the work stands, and the directory
+  // name an agent tool gives them encodes the session's own working directory —
+  // so listing one puts a WORKSPACE NAME into a position that another
+  // workspace's session may read. Filtering the set here covers both the recent
+  // files line and the out-of-root advisory below, which reads the same set.
+  // The trail keeps every recorded path; only this rendered view drops them.
+  const latestFiles = (latestEntry?.session.session.related_files ?? []).filter(
+    (file) => !isTransientToolPath(file),
+  );
   const uniqueFiles = new Set(latestFiles);
   const sortedFiles = [...uniqueFiles].sort();
   const displayed = sortedFiles.slice(0, limit);
