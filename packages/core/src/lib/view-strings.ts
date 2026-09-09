@@ -96,6 +96,8 @@ export type ViewStrings = {
     recentDecisionsLabel: string;
     recentNextStepLabel: string;
     recentChangedLabel: string;
+    /** Trails the recent-files line when scratch paths were left out of it. */
+    scratchOmitted: (count: number) => string;
     trackCloseInstruction: string;
     nextStepRecordedLabel: (age: string) => string;
     noteStaleNote: (activityAge: string) => string;
@@ -215,6 +217,7 @@ const EN: ViewStrings = {
     recentDecisionsLabel: "Decisions",
     recentNextStepLabel: "Next step",
     recentChangedLabel: "Changed",
+    scratchOmitted: (count) => `(+${count} scratch omitted)`,
     trackCloseInstruction:
       "When finished, close it with `basou decision void <decision_id>`. It stays listed here every time until closed.",
     nextStepRecordedLabel: (age) => `Next step (recorded, ${age})`,
@@ -331,6 +334,7 @@ const JA: ViewStrings = {
     recentDecisionsLabel: "判断",
     recentNextStepLabel: "次の起点",
     recentChangedLabel: "変更",
+    scratchOmitted: (count) => `(作業用一時ファイル ${count} 件は除外)`,
     trackCloseInstruction:
       "完了したら `basou decision void <decision_id>` で閉じてください。閉じるまで毎回ここに表示されます。",
     nextStepRecordedLabel: (age) => `次の起点 (記録済み, ${age})`,

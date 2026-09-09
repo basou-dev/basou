@@ -217,7 +217,13 @@ export type OrientationSummary = {
    * latest session is local (a federated host's source_roots are not loaded
    * here) and confidently has out-of-root edits.
    */
-  relatedFiles: { displayed: string[]; overflow: number; outOfRoot: string[] };
+  relatedFiles: {
+    displayed: string[];
+    overflow: number;
+    outOfRoot: string[];
+    /** Scratch paths left out of `displayed` (see `isTransientToolPath`). */
+    omitted: number;
+  };
   /** Tasks whose status is `planned` or `in_progress`. */
   inFlightTasks: InFlightTask[];
   /** Tasks whose status is `planned` ("where am I heading"). */
@@ -586,10 +592,14 @@ export async function summarizeOrientation(
   // workspace's session may read. Filtering the set here covers both the recent
   // files line and the out-of-root advisory below, which reads the same set.
   // The trail keeps every recorded path; only this rendered view drops them.
-  const latestFiles = (latestEntry?.session.session.related_files ?? []).filter(
-    (file) => !isTransientToolPath(file),
-  );
+  const recordedFiles = latestEntry?.session.session.related_files ?? [];
+  const latestFiles = recordedFiles.filter((file) => !isTransientToolPath(file));
   const uniqueFiles = new Set(latestFiles);
+  // What the filter took out, reported next to what it left in: the session
+  // label carries a file count minted at import over the UNFILTERED set, so a
+  // bare shorter list would read as a contradiction. It also separates "this
+  // session touched nothing" from "everything it touched was scratch".
+  const omittedFiles = new Set(recordedFiles).size - uniqueFiles.size;
   const sortedFiles = [...uniqueFiles].sort();
   const displayed = sortedFiles.slice(0, limit);
   const overflow = Math.max(0, uniqueFiles.size - limit);
@@ -641,7 +651,7 @@ export async function summarizeOrientation(
     openTracks,
     latestNote,
     recentDirection,
-    relatedFiles: { displayed, overflow, outOfRoot },
+    relatedFiles: { displayed, overflow, outOfRoot, omitted: omittedFiles },
     inFlightTasks,
     plannedTasks,
     pendingApprovals,
@@ -785,11 +795,17 @@ function formatOrientationBody(
       `- ${t.common.latestDecisionLabel}: (no decisions recorded yet; capture with \`basou decision capture\`)`,
     );
   }
-  if (summary.relatedFiles.displayed.length > 0) {
-    const shown = summary.relatedFiles.displayed.join(", ");
-    const more =
-      summary.relatedFiles.overflow > 0 ? ` (... +${summary.relatedFiles.overflow} more)` : "";
-    lines.push(`- ${t.common.recentFilesLabel}: ${shown}${more}`);
+  if (summary.relatedFiles.displayed.length > 0 || summary.relatedFiles.omitted > 0) {
+    const parts: string[] = [];
+    if (summary.relatedFiles.displayed.length > 0) {
+      const more =
+        summary.relatedFiles.overflow > 0 ? ` (... +${summary.relatedFiles.overflow} more)` : "";
+      parts.push(`${summary.relatedFiles.displayed.join(", ")}${more}`);
+    }
+    if (summary.relatedFiles.omitted > 0) {
+      parts.push(t.orientation.scratchOmitted(summary.relatedFiles.omitted));
+    }
+    lines.push(`- ${t.common.recentFilesLabel}: ${parts.join(" ")}`);
     if (summary.relatedFiles.outOfRoot.length > 0) {
       // Cross-project boundary crossing: the latest session edited files
       // outside this project's source_roots. Flag it so a resuming agent does

@@ -66,33 +66,40 @@ All notable changes to **basou** are recorded here. The project follows
 - **A position and a handoff no longer list per-session scratch paths.** An
   agent tool gives each session a scratch directory under a temp root and names
   it after the session's own working directory, every non-alphanumeric
-  character replaced — so the directory is called something like
-  `-Users-someone-projects-foo-workspace`. A file written there is recorded
-  like any other, and because the path is under neither the working directory
-  nor the home directory the path sanitizer keeps it verbatim.
+  character replaced. Files written there are recorded like any other, and
+  because such a path is under neither the working directory nor the home
+  directory the path sanitizer keeps it verbatim — so a summary can fill with
+  temp files that outlive nothing. On the store this was measured against, 27
+  of the 109 sessions that record files carry at least one, and `basou report`'s
+  changed-files section shows nothing else at all.
 
-  Such a path says nothing about where the work stands, and it carries a
-  WORKSPACE NAME in its directory name: it is the route by which one
-  workspace's name reaches another workspace's position in practice, and
-  therefore the most common reason a position would now be withheld from the
-  SessionStart hook. Both renderers drop these paths — from the position's
-  recent-files line, its recent-activity digest and its out-of-root advisory
-  (which read one set), and from the handoff's "Recently changed files".
+  This is a **noise filter, not a containment measure**, and it should not be
+  read as one. The encoded name in those directories also appears in paths the
+  filter deliberately leaves alone — an agent's own per-project directory under
+  the home directory — so dropping the temp-root ones closes no route by
+  itself. What keeps a workspace's name out of another workspace's session is
+  the registry-based check on the rendered text and the hook that withholds a
+  position on a hit (both above); this change only stops those summaries from
+  being crowded out.
 
-  The filter is on the rendered view only. The trail keeps every recorded path
-  exactly as written, so what a session touched stays answerable; only the
-  summaries handed to an agent drop paths that are noise in them.
+  Dropped from the position's recent-files line, its recent-activity digest and
+  its out-of-root advisory, and from the handoff's "Recently changed files". The
+  position now says how many it left out (`(+3 scratch omitted)`), because the
+  session label carries a file count minted at import over the unfiltered set —
+  without the note a shorter list would read as a contradiction, and "this
+  session touched nothing" would be indistinguishable from "everything it
+  touched was scratch". `basou report`, `basou session show` and `session list`
+  are unchanged and still show everything.
 
-  A path is dropped only when it is under a temp root (`/tmp`, `/var/tmp` or
-  the platform temp directory, each also matched through the `/private` alias
-  macOS resolves them by) **and** one of its segments is an encoded working
-  directory — a name that began as an absolute path, so it starts where the
-  leading separator was and carries a dash for every separator after it. Being
-  under a temp root is not on its own enough: a workspace can legitimately live
-  under one, and emptying its summary would defeat the summary. A
-  repo-relative or `~`-prefixed path is never dropped either, because the
-  sanitizer only spells a path that way when it is inside the workspace or the
-  home directory.
+  The filter is on the rendered view only; the trail keeps every recorded path
+  exactly as written. A path is dropped only when it is under a temp root
+  (`/tmp`, `/var/tmp` or the platform temp directory, each also matched through
+  the `/private` alias macOS resolves them by) **and** one of its segments is an
+  encoded working directory — a name that began as an absolute path, so it
+  starts where the leading separator was and carries a dash for every separator
+  after it. Being under a temp root is not on its own enough: a workspace can
+  legitimately live under one, and emptying its summary would defeat the
+  summary.
 
 ## 0.40.0 — 2026-09-08
 

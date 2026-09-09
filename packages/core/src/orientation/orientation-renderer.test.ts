@@ -925,7 +925,7 @@ describe("summarizeOrientation", () => {
     expect(summary.latestDecision).toBeNull();
     expect(summary.decisionCount).toBe(0);
     expect(summary.latestNote).toBeNull();
-    expect(summary.relatedFiles).toEqual({ displayed: [], overflow: 0, outOfRoot: [] });
+    expect(summary.relatedFiles).toEqual({ displayed: [], overflow: 0, outOfRoot: [], omitted: 0 });
     expect(summary.inFlightTasks).toEqual([]);
     expect(summary.plannedTasks).toEqual([]);
     expect(summary.pendingApprovals).toEqual([]);
@@ -996,6 +996,7 @@ describe("summarizeOrientation", () => {
       displayed: ["src/a.ts", "src/b.ts"],
       overflow: 0,
       outOfRoot: [],
+      omitted: 0,
     });
     expect(summary.inFlightTasks).toEqual([
       { id: TASK("T01"), title: "ship portfolio MVP", status: "in_progress", linkedSessions: 3 },
@@ -1677,6 +1678,48 @@ describe("renderOrientation (cross-project out-of-root files)", () => {
     expect(body).not.toContain("beta-workspace");
     // The only remaining file is in-repo, so no advisory is warranted at all.
     expect(body).not.toContain("outside source_roots");
+  });
+
+  // The session label carries a file count minted at import over the unfiltered
+  // set, so a silently shorter list would read as a contradiction. The note also
+  // separates "touched nothing" from "everything touched was scratch".
+  it("reports how many scratch paths it left out, alongside the ones it kept", async () => {
+    const paths = await setupPaths();
+    const repoRoot = getWorkDir();
+    await writeManifest(paths, createManifest({ workspaceName: "test-ws", sourceRoots: ["."] }));
+    await placeSession(paths, {
+      id: SES("X07"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T12:00:00+09:00",
+      workingDirectory: repoRoot,
+      relatedFiles: [
+        "src/kept.ts",
+        "/private/tmp/claude-501/-home-tester-projects-beta-workspace/a/scratchpad/one.md",
+        "/private/tmp/claude-501/-home-tester-projects-beta-workspace/a/scratchpad/two.md",
+      ],
+    });
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("src/kept.ts");
+    expect(body).toContain("(+2 scratch omitted)");
+    expect(body).not.toContain("beta-workspace");
+  });
+
+  it("still names the files line when every recorded file was scratch", async () => {
+    const paths = await setupPaths();
+    const repoRoot = getWorkDir();
+    await writeManifest(paths, createManifest({ workspaceName: "test-ws", sourceRoots: ["."] }));
+    await placeSession(paths, {
+      id: SES("X08"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T12:00:00+09:00",
+      workingDirectory: repoRoot,
+      relatedFiles: ["/tmp/claude-501/-home-tester-projects-beta-workspace/a/scratchpad/only.md"],
+    });
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("(+1 scratch omitted)");
+    expect(body).not.toContain("beta-workspace");
   });
 
   it("does not count a dropped scratch path toward the overflow total", async () => {

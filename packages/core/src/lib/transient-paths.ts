@@ -12,12 +12,17 @@ import { normalize, sep } from "node:path";
  * session's working directory nor the home directory, so the path sanitizer
  * keeps it verbatim.
  *
- * Two consequences follow, and both are why this filter exists. Such a path
- * says nothing about where the work stands — it is a temp file that outlives
- * nothing. And it carries a WORKSPACE NAME in its directory name, so a
- * position listing one hands that name to whatever session reads the position.
- * That is the route by which one workspace's name reaches another workspace's
- * position in practice.
+ * Such a path says nothing about where the work stands: it is a temp file that
+ * outlives nothing, and on a real store it can crowd out every real file in a
+ * summary. That is what this filter is for — noise, not safety.
+ *
+ * It is NOT a containment measure, and must not be described as one. The same
+ * encoded name appears in paths this filter deliberately leaves alone (an
+ * agent's own per-project directory under the home directory, which the path
+ * sanitizer spells with a leading `~`), so removing the temp-root ones closes
+ * no route on its own. What keeps a workspace's name out of another
+ * workspace's session is the registry-based scan the CLI runs over the
+ * rendered text, and the hook that withholds a position on a hit.
  *
  * The filter is on the RENDERED view only. The trail keeps every recorded path
  * exactly as it was written: what a session touched stays answerable, and only
