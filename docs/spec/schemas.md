@@ -220,18 +220,42 @@ Events written by the import paths additionally carry an optional top-level
 | Review | `review_recorded` | self-reported record that an adversarial / second-opinion review ran. Emitted by `basou review record`. `reviewer` + `target` are required; `repos` (the repository paths reviewed) is what lets `basou review-gaps` bind the record to a unit of work, since the record itself lands in the planning repo. |
 | Adapter | `adapter_output` | adapter output (summary only; raw kept separately) |
 
-## §7.3 Extension rules (no breaking changes)
+## §7.3 Extension rules (additive by default; breaking changes are gated)
 
 - New event types may be added; required-field changes to existing types are
   forbidden.
 - Adding optional fields to existing types is allowed.
-- Changing a field's meaning is forbidden (introduce a new type instead).
-- When `schema_version` is bumped, a migration script must be provided.
+- Widening a required field's domain (e.g. making it nullable) is a BREAKING
+  change to the event format. It is allowed only with a `schema_version` bump
+  and a stated read rule — never silently, because a reader cannot otherwise
+  tell which convention a stored value follows.
+- Narrowing a field's meaning is forbidden: a value that already exists on disk
+  must keep meaning what it meant (introduce a new type or a new field
+  instead). A bump may only ASSIGN a meaning to a value the field could not
+  hold before.
+- When `schema_version` is bumped, the change must ship a **read rule** — how a
+  reader interprets documents written under the previous version — implemented
+  once in code, not only in prose. On-disk documents are never rewritten: that
+  would break the tamper-evidence chain (§8), and re-deriving cannot recover
+  what a source never reported. A migration script is therefore the exception,
+  not the rule, and is required only when a bump cannot be expressed as a read
+  rule.
+- `schema_version` is per document, not workspace-wide, and so is each
+  published schema's `$id` version. Bumping one format must not move the `$id`
+  of the formats that did not change, and a document's `$id` version always
+  equals the `schema_version` its writers stamp.
 
 ### Event `schema_version` 0.2.0 — `command_executed.duration_ms`
 
 Events written from this release carry `schema_version: "0.2.0"`. Every other
 `.basou/` document stays at `0.1.0`, because those formats did not change.
+
+One published artifact moved without its version moving:
+`session-import.schema.json` embeds the event union, so its bytes now allow a
+null duration, while its own envelope still stamps — and its importer still
+requires — `schema_version: "0.1.0"`. That is the intended decomposition: an
+import payload is an envelope around events that carry their own versions, and
+the envelope's shape did not change.
 
 `duration_ms` became nullable, joining `command`, `cwd` and `exit_code` under
 one rule: **null means basou did not observe the value.** `0` now means the
@@ -242,7 +266,13 @@ host's rollouts), so folding that into "unrecorded" discarded the one thing the
 source did say.
 
 The migration is a read rule, not a rewrite: **on a `0.1.0` event, read
-`duration_ms: 0` as unobserved.** That is the limit of what the version can
+`duration_ms: 0` as unobserved.** The rule has exactly one implementation,
+`readObservedDuration(event)` in `@basou/core`, and every reader of the field
+inside basou goes through it — `basou stats`, `basou session show`,
+`basou report` and `basou view` — so it cannot hold in one surface and lapse in
+another. A consumer outside this repository should apply the same branch.
+
+That is the limit of what the version can
 tell a reader: `command` and `cwd` became nullable in 0.38.0 without a bump, so
 `0.1.0` does not distinguish a basou that fabricated `bash` from one that
 recorded null. The bump keeps that list from growing. Nothing on disk is rewritten — rewriting

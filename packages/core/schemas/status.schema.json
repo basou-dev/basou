@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://basou.dev/schemas/0.2.0/status.schema.json",
+  "$id": "https://basou.dev/schemas/0.1.0/status.schema.json",
   "title": "Basou Status",
   "description": "The `.basou/status.json` workspace status snapshot.",
   "type": "object",

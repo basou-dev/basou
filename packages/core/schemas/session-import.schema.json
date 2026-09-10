@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://basou.dev/schemas/0.2.0/session-import.schema.json",
+  "$id": "https://basou.dev/schemas/0.1.0/session-import.schema.json",
   "title": "Basou Session Import Payload",
   "description": "The portable session payload consumed by `basou session import`.",
   "type": "object",

@@ -491,7 +491,7 @@ export const VIEW_HTML = `<!doctype html>
         timeRows.push(kvrow('model working', fmtDur(t.machineActiveTimeMs) + '  (model compute, subset of active; Codex turn duration on ' + machineSessions + ' of ' + t.sessionCount + ' sessions; not wall-clock-deduped)'));
       }
       timeRows.push(kvrow('span', fmtDur(t.sessionSpanMs) + (t.openSessionCount > 0 ? '  (' + t.openSessionCount + ' open)' : '')));
-      timeRows.push(kvrow('command', fmtDur(t.commandTimeMs) + (t.commandTimeReliable ? '' : '  (some sessions report 0)')));
+      timeRows.push(kvrow('command', fmtDur(t.commandTimeMs) + (t.commandTimeReliable ? '' : '  (some sessions had no duration observed)')));
       detail.appendChild(el('table', { class: 'kv' }, [el('tbody', {}, timeRows)]));
       if (d.bySource && d.bySource.length) {
         detail.appendChild(el('h3', { text: 'By source' }));

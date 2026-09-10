@@ -35,6 +35,14 @@ All notable changes to **basou** are recorded here. The project follows
   events already written keep validating. Every other `.basou/` document stays
   at `0.1.0` because those formats did not change.
 
+  For `@basou/sdk` and `@basou/core` consumers: `CommandExecutedEvent.duration_ms`
+  is now `number | null`, so a `number` is no longer guaranteed by the type.
+  Read it through the exported `readObservedDuration(event)` rather than the
+  field, which applies the version rule below. `BASOU_SDK_VERSION` is unchanged
+  at `0.3.0` (the read-only facade's shape did not move). `@basou/core` also
+  replaces the single `JSON_SCHEMA_VERSION` export with the per-document
+  `JSON_SCHEMA_VERSIONS` map.
+
   Three writers now record null where they recorded `0`: the Claude Code
   importer (a transcript reports no timing), the Codex importer for a scripted
   program that made several tool calls (the program's single wall time belongs
@@ -46,20 +54,33 @@ All notable changes to **basou** are recorded here. The project follows
 - **`basou stats` decides whether a session's command time is reliable from the
   session, not from its source kind.** `availability.commandTime` was
   `source.kind !== "claude-code-import"`, which reported every Codex session as
-  timed. It is now true when the session actually recorded a duration, like the
-  three availability flags next to it. Measured on one store: Codex sessions
-  went from 0.4% of commands carrying a duration (2026-05) to 53.1% (2026-08)
-  as the vendor's log format changed, so the same source kind is sometimes
-  timed and sometimes not.
+  timed. It is now true when the session actually observed a duration — or ran
+  no commands, where 0ms is the truth — like the three availability flags next
+  to it. Measured on one host's rollouts (2026-09-10, re-imported through the
+  new importer): the share of Codex commands carrying an observed duration fell
+  from 100.0% in 2026-05 to 56.1% in 2026-08 as the vendor's log format
+  changed, so the same source kind is sometimes timed and sometimes not.
+
+  The flag is not a `commandTimeMs > 0` test. A sum cannot separate "no
+  duration was observed" from "every observed duration was zero", which is the
+  one distinction this release exists to record: of the same 36,532 commands,
+  91.7% carry an observed duration but only 18.8% a non-zero one.
 
 ### Added
 
 - **The published JSON Schema says what null means.** `command_executed`'s
   `command`, `cwd`, `exit_code` and `duration_ms` carry descriptions in the
   emitted schema, so a reader outside this repository can tell an absent
-  observation from a value. The schema `$id` moves with the format version
-  (`https://basou.dev/schemas/0.2.0/event.schema.json`), so the URL that describes the nullable
-  duration is not the URL that described the non-nullable one.
+  observation from a value. The event schema's `$id` moves with its format
+  version (`https://basou.dev/schemas/0.2.0/event.schema.json`), so the URL that
+  describes the nullable duration is not the URL that described the
+  non-nullable one.
+
+  `$id` versions are now per document rather than workspace-wide. The seven
+  formats that did not change keep their `0.1.0` URLs, and each document's
+  published `$id` agrees with the `schema_version` its writers stamp — `status`
+  was briefly serving an `$id` of `0.2.0` alongside a `schema_version` const of
+  `0.1.0`.
 
 ## 0.41.0 — 2026-09-09
 

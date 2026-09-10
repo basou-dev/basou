@@ -16,6 +16,7 @@ import {
   type RechainResult,
   readAllEvents,
   readManifest,
+  readObservedDuration,
   readYamlFile,
   rechainSessionInPlace,
   resolveSessionId,
@@ -419,7 +420,8 @@ function printSessionShowText(
 /**
  * One-line work summary for `session show`: output volume + action counts +
  * time proxies, reusing the same per-session computation as `basou stats`.
- * `command n/a (import)` flags sources whose shell time is unrecorded.
+ * `command n/a (no duration observed)` flags a session that ran commands none
+ * of which was timed; a session that ran none reports its truthful 0ms.
  */
 function formatSessionWork(session: Session, events: Event[], now: Date): string {
   const w = sessionWorkStatsFromEvents(session.session.id, session.session, events, now);
@@ -435,7 +437,7 @@ function formatSessionWork(session: Session, events: Event[], now: Date): string
   parts.push(
     w.availability.commandTime
       ? `command ${formatDurationMs(w.commandTimeMs)}`
-      : "command n/a (import)",
+      : "command n/a (no duration observed)",
   );
   return parts.join(", ");
 }
@@ -501,7 +503,10 @@ function eventVariantSummary(ev: Event): string {
       // more common case of a source that never recorded an outcome at all.
       const executorPart = ev.command ?? "(executor unrecorded)";
       const exitPart = ev.exit_code === null ? "exit=unknown" : `exit=${ev.exit_code}`;
-      const durationPart = ev.duration_ms === null ? "duration=unknown" : `${ev.duration_ms}ms`;
+      // Read through the shared rule, not off the field: on a 0.1.0 event a
+      // stored 0 cannot be told apart from "not observed".
+      const observedDuration = readObservedDuration(ev);
+      const durationPart = observedDuration === null ? "duration=unknown" : `${observedDuration}ms`;
       return `${executorPart}${argsPart} (${exitPart}, ${durationPart})`;
     }
     case "git_snapshot":

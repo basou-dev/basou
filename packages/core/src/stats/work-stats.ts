@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { Event } from "../schemas/event.schema.js";
+import { readObservedDuration } from "../schemas/observed-duration.js";
 import type {
   Session,
   SessionMetrics,
@@ -50,8 +51,11 @@ export type MeasureAvailability = {
   /** Always true (started_at + now bound the span). */
   span: boolean;
   /**
-   * `commandTimeMs` reflects real shell time. False for `claude-code-import`,
-   * whose transcript carries no per-command duration (recorded as 0).
+   * `commandTimeMs` is a real measurement: this session either recorded at
+   * least one observed duration, or ran no commands at all (0ms is then the
+   * truth). False when it ran commands and none of them was timed — a Claude
+   * Code transcript carries no per-command duration, and codex stopped
+   * reporting one for many calls.
    */
   commandTime: boolean;
   /** At least one active interval could be measured (stored or event-derived). */
@@ -133,7 +137,8 @@ export type SourceWorkStats = {
   decisionCount: number;
   eventCount: number;
   tokens: TokenTotals;
-  /** Every session of this kind reports real command time. */
+  /** Every session of this kind has a real `commandTimeMs` (see
+   * {@link MeasureAvailability.commandTime}); one untimed session clears it. */
   commandTimeReliable: boolean;
   /** At least one session of this kind captured token totals. */
   tokensAvailable: boolean;
@@ -191,7 +196,8 @@ export type WorkStatsTotals = {
   decisionCount: number;
   eventCount: number;
   tokens: TokenTotals;
-  /** No `claude-code-import` sessions present, so command time is workspace-wide real. */
+  /** Every session's `commandTimeMs` is a real measurement, so the workspace
+   * total is too (see {@link MeasureAvailability.commandTime}). */
   commandTimeReliable: boolean;
   tokensAvailable: boolean;
   /** At least one session captured model compute time (`machine_active_time_ms`). */
@@ -242,8 +248,9 @@ const STATUS_ORDER: readonly SessionStatus[] = [
  *   produced few tool calls is still counted; idle gaps over `ACTIVE_GAP_CAP_MS`
  *   (5 min) are not credited. Live sessions and pre-v2 imports lack that signal
  *   and fall back to the action-event stream (`activeTimeBasis: "events"`).
- * - `sessionSpanMs` overcounts (includes idle) and `commandTimeMs` is
- *   shell-execution only (0 for `claude-code-import`); both are kept as context.
+ * - `sessionSpanMs` overcounts (includes idle) and `commandTimeMs` counts only
+ *   the shell time a source actually reported (nothing for `claude-code-import`,
+ *   whose transcript carries no timing); both are kept as context.
  *
  * The per-day view buckets the union intervals by `timeZone` (logs are UTC, so
  * a billing day needs an explicit zone). A union interval crossing local
@@ -325,6 +332,7 @@ export function sessionWorkStatsFromEvents(
   eventsUnreadable = false,
 ): SessionWorkStats {
   let commandCount = 0;
+  let timedCommandCount = 0;
   let fileChangedCount = 0;
   let decisionCount = 0;
   let commandTimeMs = 0;
@@ -334,8 +342,13 @@ export function sessionWorkStatsFromEvents(
     if (Number.isFinite(t)) timestamps.push(t);
     if (ev.type === "command_executed") {
       commandCount++;
-      // null = not observed; it contributes nothing rather than reading as 0ms.
-      commandTimeMs += ev.duration_ms ?? 0;
+      // Read through the version-aware rule, never off the field: an
+      // unobserved duration contributes nothing rather than reading as 0ms.
+      const observed = readObservedDuration(ev);
+      if (observed !== null) {
+        timedCommandCount++;
+        commandTimeMs += observed;
+      }
     } else if (ev.type === "file_changed") {
       fileChangedCount++;
     } else if (ev.type === "decision_recorded") {
@@ -370,10 +383,18 @@ export function sessionWorkStatsFromEvents(
       span: true,
       // Derived from what this session actually recorded, like its three
       // siblings below. A source kind cannot answer this: codex sessions went
-      // from 0.4% of commands carrying a duration (2026-05) to 53.1%
-      // (2026-08) as the vendor's log format changed, so the same kind is
-      // sometimes timed and sometimes not.
-      commandTime: commandTimeMs > 0,
+      // from 100.0% of commands carrying an observed duration (2026-05) to
+      // 56.1% (2026-08) as the vendor's log format changed, so the same kind
+      // is sometimes timed and sometimes not.
+      //
+      // Not `commandTimeMs > 0`: a sum cannot separate "no duration was
+      // observed" from "every observed duration was zero", which is the one
+      // distinction 0.2.0 exists to record (codex reports
+      // `Wall time: 0.0000 seconds` for most per-command calls). A session
+      // that ran no commands reports 0ms truthfully and stays reliable —
+      // otherwise every `basou note` / `decision capture` session would
+      // poison the AND-aggregated workspace total.
+      commandTime: commandCount === 0 || timedCommandCount > 0,
       activeTime: active.intervals.length > 0,
       tokens: hasTokens(tokens),
       machineActive: machineActiveTimeMs > 0,

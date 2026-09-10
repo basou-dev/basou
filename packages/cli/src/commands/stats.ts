@@ -134,7 +134,7 @@ function printStatsText(result: WorkStatsResult, bySource: boolean, byDay: boole
   );
   const cmdCaveat = t.commandTimeReliable
     ? ""
-    : "; some sessions (e.g. claude-code-import) report 0 shell time";
+    : "; some sessions ran commands with no duration observed, so this is a floor";
   console.log(
     `  Command:         ${formatDurationMs(t.commandTimeMs)}  (real shell execution${cmdCaveat})`,
   );

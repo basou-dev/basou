@@ -10,7 +10,7 @@ import * as ajvFormats from "ajv-formats";
 const addFormats = ajvFormats.default as unknown as (ajv: Ajv2020) => void;
 
 import { describe, expect, it } from "vitest";
-import { buildJsonSchemas, JSON_SCHEMA_VERSION, serializeJsonSchema } from "./json-schema.js";
+import { buildJsonSchemas, JSON_SCHEMA_VERSIONS, serializeJsonSchema } from "./json-schema.js";
 
 const schemasDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "schemas");
 const artifacts = buildJsonSchemas();
@@ -42,11 +42,38 @@ describe("buildJsonSchemas", () => {
   it("heads every artifact with the draft dialect, a versioned $id, title, and description", () => {
     for (const { name, schema } of artifacts) {
       expect(schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
-      expect(schema.$id).toBe(
-        `https://basou.dev/schemas/${JSON_SCHEMA_VERSION}/${name}.schema.json`,
-      );
+      const version = JSON_SCHEMA_VERSIONS[name as keyof typeof JSON_SCHEMA_VERSIONS];
+      expect(version).toBeTypeOf("string");
+      expect(schema.$id).toBe(`https://basou.dev/schemas/${version}/${name}.schema.json`);
       expect(typeof schema.title).toBe("string");
       expect(typeof schema.description).toBe("string");
+    }
+  });
+
+  it("versions each $id independently: only the event format moved to 0.2.0", () => {
+    const byName = new Map(artifacts.map((a) => [a.name, a.schema.$id]));
+    expect(byName.get("event")).toBe("https://basou.dev/schemas/0.2.0/event.schema.json");
+    for (const name of [
+      "approval",
+      "manifest",
+      "session",
+      "session-import",
+      "status",
+      "task",
+      "task-index",
+    ]) {
+      expect(byName.get(name)).toBe(`https://basou.dev/schemas/0.1.0/${name}.schema.json`);
+    }
+  });
+
+  it("keeps each $id version equal to the schema_version the document declares", () => {
+    // The concrete regression: `status` shipped an $id of 0.2.0 next to a
+    // `schema_version` const of 0.1.0, so the artifact contradicted its own URL.
+    for (const { name, schema } of artifacts) {
+      const declared = (schema as { properties?: { schema_version?: { const?: unknown } } })
+        .properties?.schema_version?.const;
+      if (typeof declared !== "string") continue;
+      expect(JSON_SCHEMA_VERSIONS[name as keyof typeof JSON_SCHEMA_VERSIONS]).toBe(declared);
     }
   });
 

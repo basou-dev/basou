@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://basou.dev/schemas/0.2.0/task.schema.json",
+  "$id": "https://basou.dev/schemas/0.1.0/task.schema.json",
   "title": "Basou Task",
   "description": "The YAML front matter of a `.basou/tasks/<id>.md` task document.",
   "type": "object",

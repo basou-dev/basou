@@ -72,7 +72,8 @@ export type ClaudeTranscriptToPayloadOptions = {
  *   decisions.md / orientation's latest-decision surface).
  *
  * Exit codes and per-command durations are not present in the transcript, so
- * `command_executed.exit_code` is `null` and `duration_ms` is `0`.
+ * `command_executed.exit_code` and `duration_ms` are both `null` — basou
+ * observed neither.
  *
  * Returns `null` when the transcript has no timestamped records, or no
  * observable command / file / decision action — such sessions carry no

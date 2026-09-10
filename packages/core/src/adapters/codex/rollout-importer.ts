@@ -977,15 +977,12 @@ function parseExitCode(output: string | undefined): number | null {
 }
 
 /**
- * Codex's output text reports wall-clock duration as `Wall time: X seconds` for
- * a per-command `exec_command` call and `Wall time X seconds` (no colon) for a
- * whole script, so the colon is optional here. Returns `0` (the schema floor)
- * when absent or non-finite, matching the Claude importer's missing-duration
- * default.
- */
-/**
  * Wall time from a tool output's outcome banner, or null when the banner does
  * not report one.
+ *
+ * Codex writes `Wall time: X seconds` for a per-command `exec_command` call and
+ * `Wall time X seconds` (no colon) for a whole script, so the colon is optional
+ * here.
  *
  * A reported `Wall time: 0.0000 seconds` returns 0, NOT null: codex prints that
  * for most non-scripted commands (measured 2026-09-10: 26,593 of 29,901 across
