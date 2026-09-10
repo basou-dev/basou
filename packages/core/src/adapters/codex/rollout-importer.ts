@@ -1024,11 +1024,14 @@ function parseExitCode(output: string | undefined): number | null {
  *   11.7x understatement, worst case 1,002 ms against 943,300 ms.
  *
  * What survives is the 1,839 `exec_command` banners whose output reports an
- * exit, plus the scripted path. The scripted banner is a different quantity: no
- * script call on this host declares `yield_time_ms` at all and none lands on a
- * yield boundary, so it is not censored the same way — it is the program's own
- * elapsed time, which is why the caller keeps it for a single-tool-call program
- * and drops it for a multi-call one.
+ * exit, plus the scripted path. The scripted banner is a different quantity.
+ * Scripted programs DO declare `yield_time_ms` (1,960 of 4,661 such calls,
+ * measured 2026-09-11), but the banner is not bounded by it: 0 of the 1,952
+ * comparable banners land within 30 ms of the declared yield, the median banner
+ * is 1.0% of it, and some exceed it outright (max 1.200x), which a clamp could
+ * not produce. None of the 4,661 outputs ever reported a still-running process
+ * either. So it is the program's own elapsed time, which is why the caller
+ * keeps it for a single-tool-call program and drops it for a multi-call one.
  */
 function parseWallTimeMs(output: string | undefined): number | null {
   if (output === undefined) return null;

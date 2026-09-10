@@ -89,10 +89,13 @@ All notable changes to **basou** are recorded here. The project follows
   still-running ones (99.9%) sit within 30 ms of it, against 24 of the 1,760
   exited ones (1.4%) — median duration/yield ratio 1.002 versus 0.259. Those 24
   are the residual: they exited within a whisker of the timeout, where the two
-  cannot be told apart. The scripted path is kept too — no script call declares
-  `yield_time_ms`, none lands on a yield boundary, and none of 5,327 ever
-  reported a still-running process, so its banner is the program's own elapsed
-  time rather than a wait.
+  cannot be told apart. The scripted path is kept too, on separate evidence:
+  its programs DO declare `yield_time_ms` (1,960 of 4,661 such calls), but the
+  banner is not bounded by it — 0 of the 1,952 comparable banners land within
+  30 ms of the declared yield, the median banner is 1.0% of it, and some exceed
+  it outright (max 1.200x) — and none of the 4,661 outputs ever reported a
+  still-running process. Its banner is the program's own elapsed time rather
+  than a wait that was cut short.
 
   Net effect on one host's 914 rollouts: 15.0% of derived commands carry an
   observed duration (1.5% for 2026-05, 56.0% for 2026-08), down from 18.8%

@@ -341,10 +341,14 @@ regardless. Two sources were writing `0` for something else entirely:
   from the clamp. basou records them as observed; they are 1.4% of the retained
   population and 0.07% of all derived commands.
 
-- The SCRIPTED path is a different quantity and is NOT censored the same way. No
-  script call on this host declares `yield_time_ms`, none lands on a yield
-  boundary, and none of 5,327 ever reported a still-running process, so its
-  banner is the program's own elapsed time. Its per-command `exit_code` is
+- The SCRIPTED path is a different quantity and is NOT censored the same way.
+  Its programs DO declare `yield_time_ms` — 1,960 of 4,661 such calls on this
+  host (measured 2026-09-11) — but the banner is not bounded by it: **0** of the
+  1,952 comparable banners land within 30 ms of the declared yield, the median
+  banner is 1.0% of it, and some exceed it outright (max 1.200x), which a clamp
+  could not produce. None of the 4,661 outputs ever reported a still-running
+  process either. So the scripted banner is the program's own elapsed time
+  rather than a wait that was cut short. Its per-command `exit_code` is
   nonetheless always `null`, because the format never carries one — the program
   would have to print it. So a scripted command can legitimately hold a duration
   with an unknown outcome; the gate above is specific to the `exec_command`
