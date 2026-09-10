@@ -13,7 +13,7 @@ import { TaskIndexSchema } from "./task-index.schema.js";
  * It tracks {@link SchemaVersionSchema} (the `schema_version` field), NOT the
  * npm package version, so the `$id` URLs stay stable while the package moves.
  */
-export const JSON_SCHEMA_VERSION = "0.1.0";
+export const JSON_SCHEMA_VERSION = "0.2.0";
 
 /** Base of every emitted schema's `$id`. The URL is a stable identifier; it
  * need not resolve (serving the schemas on basou.dev is a separate concern). */

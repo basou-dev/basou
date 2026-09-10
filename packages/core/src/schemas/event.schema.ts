@@ -11,6 +11,17 @@ import {
   TaskIdSchema,
 } from "./shared.schema.js";
 
+/**
+ * `schema_version` stamped on NEWLY WRITTEN events. Bumped to 0.2.0 when
+ * `command_executed.duration_ms` became nullable: on a 0.1.0 event a
+ * `duration_ms` of 0 cannot be told apart from "not observed", so a reader must
+ * treat 0 as unobserved there. Reading is unaffected — {@link SchemaVersionSchema}
+ * accepts any 0.x.y — so events already on disk keep validating and are never
+ * rewritten. Only EVENTS carry this version: the other `.basou/` documents did
+ * not change, so their `schema_version` stays 0.1.0.
+ */
+export const EVENT_SCHEMA_VERSION = "0.2.0" as const;
+
 // Common base every event variant extends. Each variant declares its own
 // `type: z.literal(...)` and adds variant-specific fields.
 const BaseEventSchema = z.object({
@@ -90,7 +101,7 @@ const ApprovalExpiredEventSchema = BaseEventSchema.extend({
 // cancellation, so a timeout (signal set, received_signal absent) can be
 // distinguished from a user interrupt (both set).
 //
-// Three fields are nullable, and null means the SAME thing in each: basou did
+// Four fields are nullable, and null means the SAME thing in each: basou did
 // not observe the value. It never means a default, and never means the value
 // was something benign.
 //
@@ -106,6 +117,13 @@ const ApprovalExpiredEventSchema = BaseEventSchema.extend({
 //   - `exit_code`: null when the outcome is UNKNOWN — the child terminated by
 //     signal, or the source never recorded it at all. Unknown is not success:
 //     a reader must not conclude from null that the command did what it said.
+//   - `duration_ms`: null when no duration was observed. A transcript that
+//     records no timing, a scripted program whose single reported wall time
+//     cannot be attributed to one of the several commands it ran, and a run
+//     interrupted before it could be measured all record null. 0 is reserved
+//     for a duration that WAS observed and was zero: Codex reports
+//     `Wall time: 0.0000 seconds` for most non-scripted commands, and folding
+//     that into "unrecorded" would discard the one thing the source did say.
 //
 // A sentinel string ("unknown") is deliberately not used for `command` / `cwd`:
 // it cannot be told apart from a real program name or path, so it would be
@@ -119,13 +137,25 @@ const ApprovalExpiredEventSchema = BaseEventSchema.extend({
 // structure, and `args[1]` is the observation.
 const CommandExecutedEventSchema = BaseEventSchema.extend({
   type: z.literal("command_executed"),
-  command: z.string().nullable(),
+  command: z.string().nullable().meta({
+    description:
+      "Spawned executable name. null means basou did not observe the executor - not a default, and not a benign value.",
+  }),
   args: z.array(z.string()),
-  cwd: z.string().nullable(),
-  exit_code: z.number().int().nullable(),
+  cwd: z.string().nullable().meta({
+    description:
+      "Working directory the command ran in. null means the directory could not be resolved; it is never the session's directory as a fallback.",
+  }),
+  exit_code: z.number().int().nullable().meta({
+    description:
+      "Child exit code. null means the outcome is unknown (signal-terminated, or never recorded by the source). null is not success.",
+  }),
   signal: z.string().nullable().optional(),
   received_signal: z.string().nullable().optional(),
-  duration_ms: z.number().int().nonnegative(),
+  duration_ms: z.number().int().nonnegative().nullable().meta({
+    description:
+      "Observed duration in milliseconds. null means no duration was observed; 0 means a duration that was observed and was zero. On a schema_version 0.1.0 event the two are indistinguishable, so read 0 there as unobserved.",
+  }),
 });
 
 const GitSnapshotEventSchema = BaseEventSchema.extend({

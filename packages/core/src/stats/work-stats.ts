@@ -334,7 +334,8 @@ export function sessionWorkStatsFromEvents(
     if (Number.isFinite(t)) timestamps.push(t);
     if (ev.type === "command_executed") {
       commandCount++;
-      commandTimeMs += ev.duration_ms;
+      // null = not observed; it contributes nothing rather than reading as 0ms.
+      commandTimeMs += ev.duration_ms ?? 0;
     } else if (ev.type === "file_changed") {
       fileChangedCount++;
     } else if (ev.type === "decision_recorded") {
@@ -367,7 +368,12 @@ export function sessionWorkStatsFromEvents(
     tokens,
     availability: {
       span: true,
-      commandTime: inner.source.kind !== "claude-code-import",
+      // Derived from what this session actually recorded, like its three
+      // siblings below. A source kind cannot answer this: codex sessions went
+      // from 0.4% of commands carrying a duration (2026-05) to 53.1%
+      // (2026-08) as the vendor's log format changed, so the same kind is
+      // sometimes timed and sometimes not.
+      commandTime: commandTimeMs > 0,
       activeTime: active.intervals.length > 0,
       tokens: hasTokens(tokens),
       machineActive: machineActiveTimeMs > 0,

@@ -1,5 +1,6 @@
 import { type PrefixedId, prefixedUlid } from "../../ids/ulid.js";
 import type { Event } from "../../schemas/event.schema.js";
+import { EVENT_SCHEMA_VERSION } from "../../schemas/event.schema.js";
 import type { Manifest } from "../../schemas/manifest.schema.js";
 import type { SessionImportPayload } from "../../schemas/session-import.schema.js";
 import {
@@ -211,9 +212,13 @@ export function codexRolloutToImportPayload(
       // The output reports ONE wall time for the whole program, so it is only
       // honest as a command duration when that program did exactly one thing:
       // a script that also searched the web or updated a plan would credit the
-      // command with time it did not spend. Anything else falls back to the
-      // schema floor (0 = unrecorded).
-      const durationMs = scan.toolCallCount === 1 ? parseWallTimeMs(output) : 0;
+      // command with time it did not spend. Anything else is recorded as NOT
+      // OBSERVED (null) for every command in the program: the wall time exists
+      // but belongs to the program, and splitting or duplicating it across the
+      // commands would put an inference inside the hash chain. Measured
+      // 2026-09-10: 970 of this host's 5,313 scripted calls (18.3%) are
+      // multi-call and lose their duration this way.
+      const durationMs = scan.toolCallCount === 1 ? parseWallTimeMs(output) : null;
       const scriptTsMs = Date.parse(ts);
       if (Number.isFinite(scriptTsMs)) engagementTsMs.push(scriptTsMs);
       for (const command of scan.commands) {
@@ -385,14 +390,14 @@ function baseEvent(
   occurredAt: string,
   sessionId: PrefixedId<"ses">,
 ): {
-  schema_version: "0.1.0";
+  schema_version: typeof EVENT_SCHEMA_VERSION;
   id: PrefixedId<"evt">;
   session_id: PrefixedId<"ses">;
   occurred_at: string;
   source: string;
 } {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: prefixedUlid("evt"),
     session_id: sessionId,
     occurred_at: occurredAt,
@@ -413,7 +418,7 @@ function commandExecutedEvent(
   sessionId: PrefixedId<"ses">,
   command: string,
   cwd: string | null,
-  outcome: { exitCode: number | null; durationMs: number },
+  outcome: { exitCode: number | null; durationMs: number | null },
 ): Event {
   return {
     ...baseEvent(occurredAt, sessionId),
@@ -978,12 +983,21 @@ function parseExitCode(output: string | undefined): number | null {
  * when absent or non-finite, matching the Claude importer's missing-duration
  * default.
  */
-function parseWallTimeMs(output: string | undefined): number {
-  if (output === undefined) return 0;
+/**
+ * Wall time from a tool output's outcome banner, or null when the banner does
+ * not report one.
+ *
+ * A reported `Wall time: 0.0000 seconds` returns 0, NOT null: codex prints that
+ * for most non-scripted commands (measured 2026-09-10: 26,593 of 29,901 across
+ * this host's rollouts), and folding it into "unrecorded" would discard the one
+ * thing the source did say about the duration.
+ */
+function parseWallTimeMs(output: string | undefined): number | null {
+  if (output === undefined) return null;
   const match = output.match(/Wall time:?\s*([\d.]+)\s*seconds/);
-  if (match?.[1] === undefined) return 0;
+  if (match?.[1] === undefined) return null;
   const seconds = Number.parseFloat(match[1]);
-  return Number.isFinite(seconds) ? Math.round(seconds * 1000) : 0;
+  return Number.isFinite(seconds) ? Math.round(seconds * 1000) : null;
 }
 
 /**

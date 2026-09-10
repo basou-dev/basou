@@ -83,7 +83,7 @@ function started(id: string, at: string): string {
 function ended(id: string, at: string): string {
   return line({ type: "session_ended", session_id: id, occurred_at: at });
 }
-function command(id: string, at: string, durationMs: number): string {
+function command(id: string, at: string, durationMs: number | null): string {
   return line({
     type: "command_executed",
     session_id: id,
@@ -176,6 +176,57 @@ describe("computeWorkStats", () => {
     expect(s?.tokens.output).toBe(800000);
     expect(s?.availability.tokens).toBe(true);
     expect(r.totals.commandTimeReliable).toBe(false);
+  });
+
+  it("derives commandTime from the events, not the source kind: a codex session whose commands carry no observed duration is not reliable", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDE9";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "codex-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") +
+        // Null = the source reported no wall time for these commands. Codex
+        // sessions went from 0.4% of commands carrying a duration (2026-05) to
+        // 53.1% (2026-08) as the vendor's log format changed, so the source
+        // kind cannot answer whether THIS session was timed.
+        command(id, "2026-05-10T00:01:00.000Z", null) +
+        command(id, "2026-05-10T00:02:00.000Z", null) +
+        ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW });
+    const s = r.sessions[0];
+    expect(s?.commandCount).toBe(2);
+    // Null contributes nothing rather than reading as 0ms.
+    expect(s?.commandTimeMs).toBe(0);
+    expect(s?.availability.commandTime).toBe(false);
+    expect(r.totals.commandTimeReliable).toBe(false);
+  });
+
+  it("keeps commandTime reliable when only SOME of a session's commands were timed", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDEA";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "codex-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") +
+        command(id, "2026-05-10T00:01:00.000Z", null) +
+        command(id, "2026-05-10T00:02:00.000Z", 250) +
+        ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW });
+    const s = r.sessions[0];
+    expect(s?.commandTimeMs).toBe(250);
+    expect(s?.availability.commandTime).toBe(true);
   });
 
   it("measures a running session (no ended_at) up to now and flags it open", async () => {

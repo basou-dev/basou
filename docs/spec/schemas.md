@@ -228,6 +228,44 @@ Events written by the import paths additionally carry an optional top-level
 - Changing a field's meaning is forbidden (introduce a new type instead).
 - When `schema_version` is bumped, a migration script must be provided.
 
+### Event `schema_version` 0.2.0 — `command_executed.duration_ms`
+
+Events written from this release carry `schema_version: "0.2.0"`. Every other
+`.basou/` document stays at `0.1.0`, because those formats did not change.
+
+`duration_ms` became nullable, joining `command`, `cwd` and `exit_code` under
+one rule: **null means basou did not observe the value.** `0` now means the
+opposite — a duration that WAS observed and was zero. The two used to be the
+same value, and that mattered: Codex reports `Wall time: 0.0000 seconds` for
+most non-scripted commands (measured 2026-09-10: 26,593 of 29,901 across one
+host's rollouts), so folding that into "unrecorded" discarded the one thing the
+source did say.
+
+The migration is a read rule, not a rewrite: **on a `0.1.0` event, read
+`duration_ms: 0` as unobserved.** That is the limit of what the version can
+tell a reader: `command` and `cwd` became nullable in 0.38.0 without a bump, so
+`0.1.0` does not distinguish a basou that fabricated `bash` from one that
+recorded null. The bump keeps that list from growing. Nothing on disk is rewritten — rewriting
+would break the tamper-evidence chain, and re-deriving cannot recover a
+duration the source never reported — and `schema_version` accepts any `0.x.y`,
+so events already written keep validating. The published JSON Schema `$id`
+moves with the version
+(`https://basou.dev/schemas/0.2.0/event.schema.json`), so the URL that
+describes the nullable field is not the URL that described the non-nullable
+one.
+
+Two neighbours deliberately did NOT change:
+
+- `session.metrics.machine_active_time_ms` is optional and is **never written
+  as 0**: an unrecorded model-compute time is an absent field, so absence
+  already carries the meaning null carries elsewhere. A `0` a reader may see
+  comes from the derived rollup (`basou stats`), which pairs it with
+  `availability.machineActive: false`.
+- A scripted program that made several tool calls records `null` for every
+  command it ran, rather than a split or duplicated wall time. The program's
+  single reported time belongs to the program; attributing it to one of the
+  commands would put an inference inside the hash chain.
+
 ## §7.4 `adapter_output` constraint (important)
 
 The `adapter_output` event **must not embed raw output** directly. Raw

@@ -10,6 +10,7 @@ import {
   basouPaths,
   classifyFilesBySourceRoot,
   createAdHocSessionWithEvent,
+  EVENT_SCHEMA_VERSION,
   type Event,
   findErrorCode,
   isValidPrefixedId,
@@ -656,7 +657,7 @@ function buildDecisionVoidedEvent(input: {
   supersededBy: PrefixedId<"decision"> | undefined;
 }): Event {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
@@ -988,7 +989,7 @@ function buildDecisionEvent(input: {
   rich: RichDecisionFields;
 }): Event {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://basou.dev/schemas/0.1.0/manifest.schema.json",
+  "$id": "https://basou.dev/schemas/0.2.0/manifest.schema.json",
   "title": "Basou Manifest",
   "description": "The `.basou/manifest.yaml` workspace manifest.",
   "type": "object",

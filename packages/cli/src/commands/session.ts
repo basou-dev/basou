@@ -5,6 +5,7 @@ import {
   appendEventToExistingSession,
   assertBasouRootSafe,
   basouPaths,
+  EVENT_SCHEMA_VERSION,
   type Event,
   enumerateSessionDirs,
   findErrorCode,
@@ -500,7 +501,8 @@ function eventVariantSummary(ev: Event): string {
       // more common case of a source that never recorded an outcome at all.
       const executorPart = ev.command ?? "(executor unrecorded)";
       const exitPart = ev.exit_code === null ? "exit=unknown" : `exit=${ev.exit_code}`;
-      return `${executorPart}${argsPart} (${exitPart}, ${ev.duration_ms}ms)`;
+      const durationPart = ev.duration_ms === null ? "duration=unknown" : `${ev.duration_ms}ms`;
+      return `${executorPart}${argsPart} (${exitPart}, ${durationPart})`;
     }
     case "git_snapshot":
       return `branch=${ev.branch} dirty=${ev.dirty}`;
@@ -894,7 +896,7 @@ export async function doRunSessionNote(
       sessionId: sesId,
       eventBuilder: (eventId) =>
         ({
-          schema_version: "0.1.0",
+          schema_version: EVENT_SCHEMA_VERSION,
           id: eventId,
           session_id: sesId,
           occurred_at: occurredAt,

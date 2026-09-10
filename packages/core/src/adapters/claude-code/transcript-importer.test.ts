@@ -91,7 +91,8 @@ describe("claudeTranscriptToImportPayload", () => {
     expect(command.args).toEqual(["-c", "npm test"]);
     expect(command.cwd).toBe(CWD);
     expect(command.exit_code).toBeNull();
-    expect(command.duration_ms).toBe(0);
+    // The transcript carries no timing at all, so the duration is UNOBSERVED.
+    expect(command.duration_ms).toBeNull();
 
     const edit = payload.events[2];
     if (edit?.type !== "file_changed") throw new Error("expected file_changed");

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  EVENT_SCHEMA_VERSION,
   EventSchema,
   type TaskArchivedEvent,
   type TaskDeletedEvent,
@@ -151,6 +152,42 @@ describe("EventSchema (happy paths)", () => {
 describe("EventSchema (rejections)", () => {
   it("rejects an unknown event type", () => {
     expect(EventSchema.safeParse({ ...BASE, type: "unknown_event" }).success).toBe(false);
+  });
+
+  it("accepts a null duration_ms (not observed) and a zero one (observed as zero)", () => {
+    const cmd = {
+      ...BASE,
+      schema_version: EVENT_SCHEMA_VERSION,
+      type: "command_executed" as const,
+      command: null,
+      args: ["-c", "sleep 0"],
+      cwd: "/tmp/example",
+      exit_code: null,
+    };
+    // null: no duration was reported by the source.
+    expect(EventSchema.safeParse({ ...cmd, duration_ms: null }).success).toBe(true);
+    // 0: the source DID report a duration and it was zero (codex prints
+    // `Wall time: 0.0000 seconds` for most non-scripted commands).
+    expect(EventSchema.safeParse({ ...cmd, duration_ms: 0 }).success).toBe(true);
+    // Still an integer domain otherwise.
+    expect(EventSchema.safeParse({ ...cmd, duration_ms: -1 }).success).toBe(false);
+  });
+
+  it("keeps reading events written before the bump, whose 0 duration is indistinguishable from unobserved", () => {
+    const parsed = EventSchema.safeParse({
+      ...BASE,
+      schema_version: "0.1.0",
+      type: "command_executed",
+      command: null,
+      args: ["-c", "ls"],
+      cwd: "/tmp/example",
+      exit_code: null,
+      duration_ms: 0,
+    });
+    expect(parsed.success).toBe(true);
+    // The bump is a WRITE-side change: nothing on disk is rewritten, and the
+    // version field is what tells a reader how to read this 0.
+    expect(EVENT_SCHEMA_VERSION).not.toBe("0.1.0");
   });
 
   it("rejects command_executed missing the required `command` field", () => {

@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { PrefixedId } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import type { Event } from "../schemas/event.schema.js";
+import { EVENT_SCHEMA_VERSION } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { SessionStatus } from "../schemas/session.schema.js";
 import { IsoTimestampSchema, SessionIdSchema, TaskIdSchema } from "../schemas/shared.schema.js";
@@ -628,7 +629,7 @@ function buildTaskCreatedEvent(input: {
   occurredAt: string;
 }): Event {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
@@ -648,7 +649,7 @@ function buildTaskStatusChangedEvent(input: {
   occurredAt: string;
 }): Event {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
@@ -707,7 +708,7 @@ function buildTaskReconciledEvent(input: {
   occurredAt: string;
 }): Event {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
@@ -728,7 +729,7 @@ function buildTaskDeletedEvent(input: {
   occurredAt: string;
 }): Event {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
@@ -747,7 +748,7 @@ function buildTaskArchivedEvent(input: {
   occurredAt: string;
 }): Event {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
@@ -768,7 +769,7 @@ function buildTaskLinkageRefreshedEvent(input: {
   occurredAt: string;
 }): Event {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,

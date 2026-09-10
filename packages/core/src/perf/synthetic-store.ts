@@ -15,6 +15,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { stringify } from "yaml";
 import { ulid } from "../ids/ulid.js";
+import { EVENT_SCHEMA_VERSION } from "../schemas/event.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 
 export type SyntheticStoreOptions = {
@@ -71,7 +72,7 @@ function buildEvents(
   const push = (event: Record<string, unknown>): void => {
     lines.push(
       JSON.stringify({
-        schema_version: "0.1.0",
+        schema_version: EVENT_SCHEMA_VERSION,
         id: id("evt", t),
         session_id: sessionId,
         occurred_at: occurredAt(),

@@ -13,6 +13,7 @@ import {
   codexAdapterMetadata,
   appendChainedEvent as coreAppendChainedEvent,
   type DiffResult,
+  EVENT_SCHEMA_VERSION,
   finalizeSessionYaml,
   findBasouSessionStartHook,
   type GitSnapshot,
@@ -281,7 +282,7 @@ async function runTrackedTool(
 
   // 6. session_started.
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_started",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -298,7 +299,7 @@ async function runTrackedTool(
   // 8. status_changed: initialized -> running.
   const runningAt = now().toISOString();
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_status_changed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -389,7 +390,7 @@ async function runTrackedTool(
 
   // 12. command_executed (parent received_signal vs child terminating signal).
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "command_executed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -443,7 +444,7 @@ async function runTrackedTool(
 
   // 17-18. status_changed: running -> final.
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_status_changed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -455,7 +456,7 @@ async function runTrackedTool(
 
   // 19. session_ended.
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_ended",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -527,7 +528,7 @@ async function tryAppendGitSnapshot(
   // than producing a session that looks successful but is actually missing
   // events.
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "git_snapshot",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -561,7 +562,7 @@ async function tryAppendFileChangedEvents(
   // are NOT a capability miss; let them propagate.
   for (const change of diff.changed_files) {
     await appendEvent(sessionDir, {
-      schema_version: "0.1.0",
+      schema_version: EVENT_SCHEMA_VERSION,
       type: "file_changed",
       id: prefixedUlid("evt"),
       session_id: sessionId,
@@ -679,7 +680,7 @@ async function finalizeSessionAsFailed(
   },
 ): Promise<void> {
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "command_executed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -691,10 +692,12 @@ async function finalizeSessionAsFailed(
     exit_code: null,
     signal: null,
     ...(ctx.signalReceived !== null ? { received_signal: ctx.signalReceived } : {}),
-    duration_ms: 0,
+    // Not observed: this event stands in for a run that ended before a duration
+    // could be measured, so 0 would claim a measured zero.
+    duration_ms: null,
   });
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_status_changed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -704,7 +707,7 @@ async function finalizeSessionAsFailed(
     to: "failed",
   });
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_ended",
     id: prefixedUlid("evt"),
     session_id: sessionId,

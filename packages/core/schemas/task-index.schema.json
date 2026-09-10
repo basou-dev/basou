@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://basou.dev/schemas/0.1.0/task-index.schema.json",
+  "$id": "https://basou.dev/schemas/0.2.0/task-index.schema.json",
   "title": "Basou Task Index",
   "description": "The `.basou/tasks/index.json` task lookup index.",
   "type": "object",

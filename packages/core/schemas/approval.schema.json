@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://basou.dev/schemas/0.1.0/approval.schema.json",
+  "$id": "https://basou.dev/schemas/0.2.0/approval.schema.json",
   "title": "Basou Approval",
   "description": "A `.basou/approvals/{pending,resolved}/<id>.yaml` approval record.",
   "type": "object",

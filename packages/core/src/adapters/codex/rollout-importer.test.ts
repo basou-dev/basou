@@ -174,7 +174,10 @@ describe("codexRolloutToImportPayload", () => {
     const command = payload.events[1];
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
     expect(command.exit_code).toBeNull();
-    expect(command.duration_ms).toBe(0);
+    // No paired output, so no wall time was ever reported: UNOBSERVED, not 0ms.
+    // Contrast the test above, where the output DOES report `Wall time: 0.0000`
+    // and the duration stays 0 because that zero was observed.
+    expect(command.duration_ms).toBeNull();
   });
 
   it("orders output even when records are not timestamp-sorted on disk", () => {
@@ -551,8 +554,10 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
     expect(second.cwd).toBe(CWD);
     // One wall time covers the whole script, so it is not credited to each
     // command (that would report 2s twice for a 2s script).
-    expect(first.duration_ms).toBe(0);
-    expect(second.duration_ms).toBe(0);
+    // One wall time for the whole program cannot be attributed to either
+    // command, so both record it as UNOBSERVED rather than as 0ms.
+    expect(first.duration_ms).toBeNull();
+    expect(second.duration_ms).toBeNull();
     expect(payload.session.label).toBe("codex 2026-07-31: 2 commands");
   });
 
@@ -853,7 +858,7 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
     expect(command.args).toEqual(["-c", "pwd"]);
     // Two tool calls ran, so the script's single wall time is not the command's.
-    expect(command.duration_ms).toBe(0);
+    expect(command.duration_ms).toBeNull();
   });
 
   it("ignores a call site that merely ends a longer identifier", () => {
@@ -922,7 +927,7 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
     const command = payload.events[1];
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
     // The 30s belong to the web search, not to `ls`.
-    expect(command.duration_ms).toBe(0);
+    expect(command.duration_ms).toBeNull();
   });
 
   it("reads both call formats in one rollout (a CLI upgrade mid-history)", () => {

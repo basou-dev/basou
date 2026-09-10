@@ -10,6 +10,7 @@ import {
   basouPaths,
   ChildProcessRunner,
   appendChainedEvent as coreAppendChainedEvent,
+  EVENT_SCHEMA_VERSION,
   finalizeSessionYaml,
   getSnapshot,
   overwriteYamlFile,
@@ -141,7 +142,7 @@ export async function runExec(
 
   // 5. session_started.
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_started",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -157,7 +158,7 @@ export async function runExec(
   // 7. status_changed: initialized -> running.
   const runningAt = now().toISOString();
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_status_changed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -243,7 +244,7 @@ export async function runExec(
 
   // 9. command_executed (with parent received_signal vs child terminating signal).
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "command_executed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -268,7 +269,7 @@ export async function runExec(
 
   // 11. status_changed: running -> final.
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_status_changed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -280,7 +281,7 @@ export async function runExec(
 
   // 12. session_ended.
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_ended",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -356,7 +357,7 @@ async function tryAppendGitSnapshot(
   // fails loudly instead of producing a session that looks successful but
   // has missing or partial events.
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "git_snapshot",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -440,7 +441,7 @@ async function finalizeSessionAsFailed(
   },
 ): Promise<void> {
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "command_executed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -452,10 +453,12 @@ async function finalizeSessionAsFailed(
     exit_code: null,
     signal: null,
     ...(ctx.signalReceived !== null ? { received_signal: ctx.signalReceived } : {}),
-    duration_ms: 0,
+    // Not observed: this event stands in for a run that ended before a duration
+    // could be measured, so 0 would claim a measured zero.
+    duration_ms: null,
   });
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_status_changed",
     id: prefixedUlid("evt"),
     session_id: sessionId,
@@ -465,7 +468,7 @@ async function finalizeSessionAsFailed(
     to: "failed",
   });
   await appendEvent(sessionDir, {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     type: "session_ended",
     id: prefixedUlid("evt"),
     session_id: sessionId,

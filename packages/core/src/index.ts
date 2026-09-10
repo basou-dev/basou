@@ -314,6 +314,7 @@ export {
   ApprovalStatusSchema,
   buildJsonSchemas,
   DecisionIdSchema,
+  EVENT_SCHEMA_VERSION,
   EventIdSchema,
   EventSchema,
   EventSourceSchema,

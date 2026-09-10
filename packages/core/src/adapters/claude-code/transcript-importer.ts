@@ -1,5 +1,6 @@
 import { type PrefixedId, prefixedUlid } from "../../ids/ulid.js";
 import type { Event } from "../../schemas/event.schema.js";
+import { EVENT_SCHEMA_VERSION } from "../../schemas/event.schema.js";
 import type { Manifest } from "../../schemas/manifest.schema.js";
 import type { SessionImportPayload } from "../../schemas/session-import.schema.js";
 import {
@@ -310,14 +311,14 @@ function baseEvent(
   occurredAt: string,
   sessionId: PrefixedId<"ses">,
 ): {
-  schema_version: "0.1.0";
+  schema_version: typeof EVENT_SCHEMA_VERSION;
   id: PrefixedId<"evt">;
   session_id: PrefixedId<"ses">;
   occurred_at: string;
   source: string;
 } {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: prefixedUlid("evt"),
     session_id: sessionId,
     occurred_at: occurredAt,
@@ -357,7 +358,9 @@ function commandExecutedEvent(
     // tool results across twelve transcripts). Reading it is its own change and
     // has not been made, so nothing is claimed here yet.
     exit_code: null,
-    duration_ms: 0,
+    // Not observed: a Bash tool result carries no timing at all, so 0 here would
+    // claim a measured duration of zero for every imported command.
+    duration_ms: null,
   };
 }
 

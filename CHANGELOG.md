@@ -3,6 +3,64 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **Breaking (event format):** A command's duration now says whether it was
+  observed.
+  `command_executed.duration_ms` is nullable, and events written from this
+  release carry `schema_version: "0.2.0"`. null means basou did not observe a
+  duration; `0` means a duration that *was* observed and was zero. The two used
+  to be the same value, and the difference is not academic: Codex reports
+  `Wall time: 0.0000 seconds` for most non-scripted commands (measured
+  2026-09-10: 26,593 of 29,901 across one host's rollouts), so reading every
+  `0` as "unrecorded" threw away the one thing the source did say — while a
+  Claude Code transcript, which carries no timing at all, was recorded with the
+  same `0`.
+
+  This completes the rule 0.38.0 introduced for `command`, `cwd` and
+  `exit_code`: null is an absent observation, never a default and never a
+  benign value. Until now the same event carried two conventions, one per
+  field.
+
+  The migration is a read rule, not a rewrite: on a `0.1.0` event, read
+  `duration_ms: 0` as unobserved. That is all the version can tell a reader:
+  0.38.0 made `command` and `cwd` nullable without bumping it, so a `0.1.0`
+  event does not say whether those fields were written by a basou that
+  fabricated `bash` or by one that recorded null. The bump stops the version
+  from carrying a third unanswerable question. Nothing on disk is rewritten — that would
+  break the tamper-evidence chain, and re-deriving cannot recover a duration
+  the source never reported — and `schema_version` accepts any `0.x.y`, so
+  events already written keep validating. Every other `.basou/` document stays
+  at `0.1.0` because those formats did not change.
+
+  Three writers now record null where they recorded `0`: the Claude Code
+  importer (a transcript reports no timing), the Codex importer for a scripted
+  program that made several tool calls (the program's single wall time belongs
+  to the program, and splitting or duplicating it across its commands would put
+  an inference inside the hash chain — 970 of one host's 5,313 scripted calls),
+  and the interrupted paths of `basou exec` / `basou run` (a run that ended
+  before a duration could be measured).
+
+- **`basou stats` decides whether a session's command time is reliable from the
+  session, not from its source kind.** `availability.commandTime` was
+  `source.kind !== "claude-code-import"`, which reported every Codex session as
+  timed. It is now true when the session actually recorded a duration, like the
+  three availability flags next to it. Measured on one store: Codex sessions
+  went from 0.4% of commands carrying a duration (2026-05) to 53.1% (2026-08)
+  as the vendor's log format changed, so the same source kind is sometimes
+  timed and sometimes not.
+
+### Added
+
+- **The published JSON Schema says what null means.** `command_executed`'s
+  `command`, `cwd`, `exit_code` and `duration_ms` carry descriptions in the
+  emitted schema, so a reader outside this repository can tell an absent
+  observation from a value. The schema `$id` moves with the format version
+  (`https://basou.dev/schemas/0.2.0/event.schema.json`), so the URL that describes the nullable
+  duration is not the URL that described the non-nullable one.
+
 ## 0.41.0 — 2026-09-09
 
 ### Added
