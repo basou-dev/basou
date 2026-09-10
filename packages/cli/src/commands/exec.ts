@@ -257,9 +257,13 @@ export async function runExec(
     exit_code: result.exit_code,
     ...(result.signal !== null ? { signal: result.signal } : {}),
     ...(signalReceived !== null ? { received_signal: signalReceived } : {}),
-    // A non-positive wall-clock difference is not an observation of a spawn:
-    // the only zeros this path has produced came from ENOENT, where the
-    // process never ran.
+    // Reached only when the child actually ran, so this is a real wall-clock
+    // difference across a spawn -- measured on this host, the cheapest spawn
+    // (`/usr/bin/true`) takes 0.9ms and 40 of 40 took over 0.5ms, so a
+    // non-positive value here is a clock anomaly rather than a fast command,
+    // and is recorded as unobserved rather than as a measured zero. A spawn
+    // that never ran (ENOENT) does not reach this line at all: the runner
+    // rejects and `finalizeSessionAsFailed` writes its own null.
     duration_ms: writeObservedDuration(result.duration_ms),
   });
 

@@ -19,7 +19,8 @@ import {
  * The bump does not change what any value already on disk means: `0` meant "not
  * observed" before and still does. What changes is that a writer now says so
  * with `null` instead of storing the floor, and never writes `0` at all. So the
- * read rule needs no version branch (see {@link readObservedDuration}), and the
+ * read rule needs no version branch (it lives in `observed-duration.ts` as
+ * `readObservedDuration`), and the
  * version is a statement about validation, not about interpretation.
  *
  * Reading is unaffected — {@link SchemaVersionSchema} accepts any 0.x.y — so

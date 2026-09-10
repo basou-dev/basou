@@ -421,9 +421,11 @@ function printSessionShowText(
  * One-line work summary for `session show`: output volume + action counts +
  * time proxies, reusing the same per-session computation as `basou stats`.
  * `command n/a (no duration observed)` flags a session that ran commands none
- * of which was timed, or whose event log could not be read; a session that ran
- * none reports its truthful 0ms. A session that timed only SOME of its commands
- * reports a floor and is not marked — see {@link MeasureAvailability.commandTime}.
+ * of which was timed; a session that ran none reports its truthful 0ms. (The
+ * incomplete-stream case that also clears the flag in `basou stats` cannot
+ * arise here: `session show` fails earlier, when it cannot read events.jsonl.)
+ * A session that timed only SOME of its commands reports a floor and is not
+ * marked, because one boolean cannot carry "all", "some" and "none".
  */
 function formatSessionWork(session: Session, events: Event[], now: Date): string {
   const w = sessionWorkStatsFromEvents(session.session.id, session.session, events, now);
@@ -505,8 +507,8 @@ function eventVariantSummary(ev: Event): string {
       // more common case of a source that never recorded an outcome at all.
       const executorPart = ev.command ?? "(executor unrecorded)";
       const exitPart = ev.exit_code === null ? "exit=unknown" : `exit=${ev.exit_code}`;
-      // Read through the shared rule, not off the field: on a 0.1.0 event a
-      // stored 0 cannot be told apart from "not observed".
+      // Read through the shared rule, not off the field: a stored 0 means
+      // unobserved on every version, just as null does.
       const observedDuration = readObservedDuration(ev);
       const durationPart = observedDuration === null ? "duration=unknown" : `${observedDuration}ms`;
       return `${executorPart}${argsPart} (${exitPart}, ${durationPart})`;

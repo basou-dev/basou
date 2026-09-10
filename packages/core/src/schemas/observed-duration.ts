@@ -35,11 +35,17 @@ export function readObservedDuration(ev: CommandExecutedEvent): number | null {
  * `null` when there was nothing to observe.
  *
  * The counterpart of {@link readObservedDuration}, so the two halves of the
- * convention live side by side. A non-positive measurement is not an
- * observation of a command: basou's own live capture takes the wall-clock
- * difference across a spawn, and the only zeros it has ever produced came from
- * a spawn that failed with ENOENT — the process never ran, so nothing was
- * timed. Every command that really did spawn measured milliseconds.
+ * convention live side by side.
+ *
+ * A non-positive measurement is not an observation of a command. basou's own
+ * live capture takes a wall-clock difference across a spawn, and a spawn costs
+ * real time: measured on one host, 40 of 40 `/usr/bin/true` spawns took over
+ * 0.5ms (minimum 0.9ms) and `/bin/sh -c :` took 2.4ms. So a zero or negative
+ * value here is a clock anomaly — the wall clock stepping backwards
+ * mid-command — not a command that ran instantly, and basou reports no
+ * duration it cannot back. The paths where nothing was timed at all (a spawn
+ * that failed before the child ran, a run interrupted early) write null
+ * directly and do not come through here.
  */
 export function writeObservedDuration(measuredMs: number | null): number | null {
   if (measuredMs === null || !Number.isFinite(measuredMs)) return null;

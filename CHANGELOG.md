@@ -50,9 +50,10 @@ All notable changes to **basou** are recorded here. The project follows
   to the program, and splitting or duplicating it across its commands would put
   an inference inside the hash chain — 958 of one host's 4,621 such calls,
   accounting for 3,015 of its 6,678 scripted command events), the Codex importer
-  for a `Wall time` banner that rounds to zero (see below), and `basou exec` /
-  `basou run` when a run ended before a duration could be measured or the spawn
-  itself failed.
+  for a `Wall time` banner it cannot read as the command's duration (see below),
+  and `basou exec` / `basou run` when a run ended before a duration could be
+  measured, the spawn itself failed, or the wall clock produced a non-positive
+  difference across a spawn that cannot cost zero.
 
 - **The Codex importer no longer treats a zero `Wall time` as a measured
   duration.** That banner reports the interval *codex* waited on the tool call,
@@ -75,16 +76,20 @@ All notable changes to **basou** are recorded here. The project follows
   `availability.commandTime` was `source.kind !== "claude-code-import"`, which
   reported every Codex session as timed. It is now true when the session
   observed a duration for at least one command — or ran none, where 0ms is the
-  truth — and false when its event log could not be read. Measured on one host's
-  rollouts, the share of Codex commands carrying an observed duration went from
-  1.7% in 2026-05 to 56.0% in 2026-08 as the vendor's log format changed, so the
-  same source kind is sometimes timed and sometimes not.
+  truth — and false when its event stream was incomplete (unreadable, or with
+  lines dropped as malformed / schema-invalid), since "ran no commands" is then
+  unbacked. Measured on one host's rollouts, the share of Codex commands
+  carrying an observed duration went from 1.5% in 2026-05 to 56.0% in 2026-08 as
+  the vendor's log format changed, so the same source kind is sometimes timed
+  and sometimes not.
 
   The flag says the total rests on at least one real observation. It does not
   say every command was timed: when only some were, `commandTimeMs` is a floor
-  and one boolean cannot carry "all", "some" and "none" (measured: 305 of 818
-  importable rollouts are partly timed, at 18.8% of commands overall). The
-  `basou stats` line now says "at least" rather than implying completeness.
+  and one boolean cannot carry "all", "some" and "none" (measured: 292 of 818
+  importable rollouts are partly timed, at 15.0% of commands overall). The
+  `basou stats` line now says "at least" rather than implying completeness, and
+  `--by-source` prints such a source as `>=<duration>` rather than `n/a`, which
+  was hiding milliseconds the workspace total already counted.
 
 ### Added
 

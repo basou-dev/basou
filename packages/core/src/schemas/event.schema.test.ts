@@ -154,7 +154,7 @@ describe("EventSchema (rejections)", () => {
     expect(EventSchema.safeParse({ ...BASE, type: "unknown_event" }).success).toBe(false);
   });
 
-  it("accepts a null duration_ms (not observed) and a zero one (observed as zero)", () => {
+  it("accepts a null duration_ms, and still accepts a zero one that writers no longer produce", () => {
     const cmd = {
       ...BASE,
       schema_version: EVENT_SCHEMA_VERSION,
@@ -164,16 +164,19 @@ describe("EventSchema (rejections)", () => {
       cwd: "/tmp/example",
       exit_code: null,
     };
-    // null: no duration was reported by the source.
+    // null: no duration was observed. This is what writers record.
     expect(EventSchema.safeParse({ ...cmd, duration_ms: null }).success).toBe(true);
-    // 0: the source DID report a duration and it was zero (codex prints
-    // `Wall time: 0.0000 seconds` for most non-scripted commands).
+    // 0 stays in the domain deliberately: 0.1.0 events carrying it are on disk
+    // and are never rewritten, and every line read from disk is validated
+    // against this schema, so narrowing would silently drop them (measured on
+    // one store: 19,592 events). A reader treats it as unobserved -- see
+    // `readObservedDuration` -- and no writer at 0.2.0 or above emits it.
     expect(EventSchema.safeParse({ ...cmd, duration_ms: 0 }).success).toBe(true);
     // Still an integer domain otherwise.
     expect(EventSchema.safeParse({ ...cmd, duration_ms: -1 }).success).toBe(false);
   });
 
-  it("keeps reading events written before the bump, whose 0 duration is indistinguishable from unobserved", () => {
+  it("keeps reading a pre-bump event whose 0 duration means the same thing it means now", () => {
     const parsed = EventSchema.safeParse({
       ...BASE,
       schema_version: "0.1.0",
@@ -185,8 +188,10 @@ describe("EventSchema (rejections)", () => {
       duration_ms: 0,
     });
     expect(parsed.success).toBe(true);
-    // The bump is a WRITE-side change: nothing on disk is rewritten, and the
-    // version field is what tells a reader how to read this 0.
+    // The bump is a WRITE-side change: nothing on disk is rewritten, and it
+    // redefines no value a reader may already hold. `0` meant "not observed"
+    // under 0.1.0 and still does, which is why the read rule carries no
+    // version branch.
     expect(EVENT_SCHEMA_VERSION).not.toBe("0.1.0");
   });
 

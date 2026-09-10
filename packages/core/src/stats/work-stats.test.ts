@@ -77,7 +77,7 @@ async function placeSession(
 function line(obj: Record<string, unknown>): string {
   return `${JSON.stringify({ schema_version: "0.1.0", id: evtId(), source: "codex-import", ...obj })}\n`;
 }
-/** A 0.2.0 event: `duration_ms: 0` there means an OBSERVED zero. */
+/** A 0.2.0 event: writers at this version record null, never 0. */
 function line020(obj: Record<string, unknown>): string {
   return line({ ...obj, schema_version: "0.2.0" });
 }
@@ -177,8 +177,8 @@ describe("computeWorkStats", () => {
         metrics: { output_tokens: 800000 },
       },
       // A transcript reports no timing, so the importer records null. Written
-      // under 0.1.0 the same absence was stored as `0`; the version-aware read
-      // rule reaches the same verdict for both, which is what the bump buys.
+      // under 0.1.0 the same absence was stored as `0`, and the read rule
+      // reaches the same verdict for both without consulting the version.
       started(id, "2026-05-10T00:00:00.000Z") +
         command020(id, "2026-05-10T00:01:00.000Z", null) +
         ended(id, "2026-05-10T00:05:00.000Z"),
@@ -204,11 +204,10 @@ describe("computeWorkStats", () => {
         endedAt: "2026-05-10T00:05:00.000Z",
       },
       started(id, "2026-05-10T00:00:00.000Z") +
-        // Null = the source reported no wall time for these commands. The
-        // share of codex commands carrying an OBSERVED duration fell from
-        // 100.0% (2026-05) to 56.1% (2026-08) as the vendor's log format
-        // changed, so the source kind cannot answer whether THIS session was
-        // timed.
+        // Null = the source reported no usable wall time for these commands.
+        // The share of codex commands carrying an observed duration is 1.5%
+        // for 2026-05 and 56.0% for 2026-08, so the source kind cannot answer
+        // whether THIS session was timed.
         command(id, "2026-05-10T00:01:00.000Z", null) +
         command(id, "2026-05-10T00:02:00.000Z", null) +
         ended(id, "2026-05-10T00:05:00.000Z"),
@@ -301,7 +300,7 @@ describe("computeWorkStats", () => {
 
   it("leaves a session that ran no commands reliable: 0ms is the truth there", async () => {
     // `basou note` / `decision capture` sessions record no command at all
-    // (measured 2026-09-10: 457 of one store's 853 sessions). Marking them
+    // (measured 2026-09-10: 466 of one store's 862 sessions). Marking them
     // unreliable would poison the AND-aggregated workspace total forever.
     const paths = await ensureBasouDirectory(getWorkDir());
     const id = "ses_01HXABCDEF1234567890ABCDED";

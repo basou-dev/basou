@@ -179,7 +179,7 @@ session:
 
 ```json
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "type": "<event_type>",
   "id": "evt_01HXEVTID...",
   "session_id": "ses_01HXSESSID...",
@@ -226,27 +226,36 @@ Events written by the import paths additionally carry an optional top-level
   forbidden.
 - Adding optional fields to existing types is allowed.
 - Widening a required field's domain (e.g. making it nullable) is a BREAKING
-  change to the event format. It is allowed only with a `schema_version` bump
-  and a stated read rule — never silently, because a reader cannot otherwise
-  tell which convention a stored value follows.
+  change to the event format. From 0.2.0 onward it requires a `schema_version`
+  bump and a stated read rule, because a reader cannot otherwise tell which
+  convention a stored value follows.
+
+  This rule postdates one widening it would have caught. 0.38.0 made
+  `command_executed.command` and `cwd` nullable with no bump, so a `0.1.0`
+  event does not say whether a `command` of `"bash"` was observed or was the
+  fabricated default an earlier basou wrote. **Read rule for that one:** on a
+  `0.1.0` event, a non-null `command` / `cwd` is only as trustworthy as the
+  `source` field makes it — the `claude-code-import` adapter fabricated `bash`
+  before 0.38.0. That ambiguity is on disk permanently and is the reason this
+  rule exists.
 - Redefining a value that already exists on disk is forbidden: it must keep
   meaning what it meant (introduce a new type or a new field instead). A bump
   may only ASSIGN a meaning to a value the field could not hold before. The
   0.2.0 bump below is the worked example: `null` is the newly possible value
   and gets the new meaning, while `0` keeps the "not observed" meaning it
   already had — which is why that bump needs no per-version read branch.
-- A widening must also name the SOURCE field it reads and say what that field
-  measures. A basou field may only claim what its source actually reported
-  about the thing the field names; a value the source cannot have measured (see
-  codex's `Wall time` below) is recorded as unobserved, not promoted to an
-  observation because the source emitted bytes.
 - When `schema_version` is bumped, the change must ship a **read rule** — how a
   reader interprets documents written under the previous version — implemented
-  once in code, not only in prose. On-disk documents are never rewritten: that
-  would break the tamper-evidence chain (§8), and re-deriving cannot recover
-  what a source never reported. A migration script is therefore the exception,
-  not the rule, and is required only when a bump cannot be expressed as a read
-  rule.
+  once in code, not only in prose. A migration script is the exception, not the
+  rule, and is required only when a bump cannot be expressed as a read rule.
+
+  Documents are never rewritten IN PLACE by a migration: that would break the
+  tamper-evidence chain (§8). They are, however, re-derived — `reimportPreservingId`
+  rewrites a session's `events.jsonl` and `session.yaml` atomically, with fresh
+  content and a fresh chain, whenever its source log has grown. So a stored
+  value can be replaced by re-derivation from the source, and cannot be
+  replaced by editing what is on disk. Neither path can recover what a source
+  never reported.
 - `schema_version` is per document, not workspace-wide, and so is each
   published schema's `$id` version. Bumping one format must not move the `$id`
   of the formats that did not change, and a document's `$id` version always
@@ -279,9 +288,11 @@ So the read rule carries no version branch:
 > **Read `duration_ms` as unobserved when it is `null` or `0`, on any version.**
 
 That rule has exactly one implementation, `readObservedDuration(event)` in
-`@basou/core` (re-exported from `@basou/sdk`), and every reader of the field
-inside basou goes through it — `basou stats`, `basou session show`,
-`basou report` and `basou view`. Its writing counterpart is
+`@basou/core` (re-exported from `@basou/sdk`), and both readers of the field
+inside basou go through it: the `basou stats` replay and `basou session show`.
+`basou report` and `basou view` never touch the field — they consume the
+duration total the stats replay produced, so they inherit the rule. Its writing
+counterpart is
 `writeObservedDuration(measuredMs)`, which turns a non-positive measurement
 into `null`. A consumer outside this repository needs only the one-line rule
 above.
@@ -293,21 +304,42 @@ regardless. Two sources were writing `0` for something else entirely:
 
 - A Claude Code transcript carries no timing at all. Every command imported
   from one was written as `0` under 0.1.0 and is written as `null` now.
-- Codex's `Wall time` banner reports the interval **codex** waited on the tool
-  call, clamped by the caller-supplied `yield_time_ms` — not the child
-  process's duration. Measured 2026-09-10 on one host's rollouts: `sleep 8`
-  reports 7.8757 s at `yield_time_ms: 9000` and 1.0018 s at
-  `yield_time_ms: 1000`, and 41.0% of all positive values fall in 0.99–1.01 s,
-  piled up on that default. At the other end the same artifact appears as a
-  banner rounding to 0 ms on 26,591 of 29,897 paired `exec_command` calls
-  (88.9%) — all 26,591 of which also carry `Process exited with code N`, so the
-  process demonstrably ran, on commands including `curl` over TCP. basou records
-  those as `null`.
+- Codex's `Wall time` banner on the per-command `exec_command` path reports the
+  interval **codex** waited on the tool call, bounded by the caller-supplied
+  `yield_time_ms` — not the child process's duration. Measured 2026-09-10 on one
+  host's rollouts: the banner never exceeds the yield it was given (`yield 1000`
+  → 2,857 calls, max 1.0214 s; `yield 30000` → max 30.0023 s; `yield 9000` → max
+  7.9111 s), 1,416 of the 3,153 positive values that declared a yield land
+  within 30 ms of it, and the control case is explicit — `sleep 8` reports
+  7.8757 s at `yield_time_ms: 9000` and 1.0018 s at 1000. A positive value is
+  therefore `min(duration, yield)`: right-censored, not measured.
 
-  A **positive** banner value is recorded as the source reported it. It is the
-  interval codex waited, which is not the same quantity as the command's
-  duration and, given the clamp, can fall well short of it. Recording what a
-  source said is basou's job; correcting it is not.
+  basou records `null` for two shapes of that banner, and keeps the rest:
+
+  - A banner rounding to **0 ms**, on 26,591 of 29,897 paired calls (88.9%).
+    All 26,591 also carry `Process exited with code N`, so the process
+    demonstrably ran, and four decimal places assert under 50 microseconds —
+    less than a `fork` + `exec` costs — on commands including `curl` over TCP.
+  - A **positive** banner whose output does not report that the process ENDED.
+    The duration is gated on the same token as `exit_code`: an output reading
+    `Process running with session ID N` means codex handed the turn back
+    mid-command, and recording its wall time would assert "outcome unknown" and
+    "duration observed" on the same event. 1,393 of the 3,232 positive
+    `exec_command` banners are this case; tracing the session id through the
+    follow-up polls, 1,237 of them demonstrably end later in the same log, and
+    their own banners sum to 19,597,309 ms against the 1,672,329 ms reported at
+    spawn — an 11.7x understatement, worst case 1,002 ms against 943,300 ms.
+
+  What survives on this path is the 1,839 banners whose output reports an exit.
+
+- The SCRIPTED path is a different quantity and is NOT censored the same way. No
+  script call on this host declares `yield_time_ms`, none lands on a yield
+  boundary, and none of 5,327 ever reported a still-running process, so its
+  banner is the program's own elapsed time. Its per-command `exit_code` is
+  nonetheless always `null`, because the format never carries one — the program
+  would have to print it. So a scripted command can legitimately hold a duration
+  with an unknown outcome; the gate above is specific to the `exec_command`
+  path, where a missing exit line means the process had not finished.
 
 The schema still ACCEPTS `0`, because 0.1.0 events carrying it are on disk and
 are never rewritten — rewriting would break the tamper-evidence chain (§8), and
@@ -341,7 +373,7 @@ content (`content`, `body`, `raw`, etc.) belongs in
 
 ```json
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "type": "adapter_output",
   "id": "evt_01HX...",
   "session_id": "ses_01HX...",

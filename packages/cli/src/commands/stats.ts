@@ -135,10 +135,11 @@ function printStatsText(result: WorkStatsResult, bySource: boolean, byDay: boole
   // Absence of this caveat does not mean the total is complete: a session that
   // timed some of its commands still clears the flag, so the workspace total is
   // a floor whenever ANY command went untimed. The flag cannot distinguish
-  // "all" from "some", hence "at least".
+  // "all" from "some", hence "at least". The false branch names both causes,
+  // because a session with an incomplete event stream clears it too.
   const cmdCaveat = t.commandTimeReliable
     ? "; at least, only durations the sources reported are counted"
-    : "; some sessions ran commands with no duration observed, so this is a floor";
+    : "; some sessions ran commands with no duration observed, or could not be read in full, so this is a floor";
   console.log(
     `  Command:         ${formatDurationMs(t.commandTimeMs)}  (real shell execution${cmdCaveat})`,
   );
@@ -165,7 +166,16 @@ function printStatsText(result: WorkStatsResult, bySource: boolean, byDay: boole
 }
 
 function describeSource(s: SourceWorkStats): string {
-  const cmd = s.commandTimeReliable ? formatDurationMs(s.commandTimeMs) : "n/a";
+  // `n/a` is reserved for "there is nothing to report". When some of this
+  // source's sessions were timed and some were not, the sum is a real floor,
+  // and printing `n/a` would hide milliseconds the workspace total above
+  // already counts (measured on one store: 2m 52s of codex-import time was
+  // invisible in the breakdown while inside the total).
+  const cmd = s.commandTimeReliable
+    ? formatDurationMs(s.commandTimeMs)
+    : s.commandTimeMs > 0
+      ? `>=${formatDurationMs(s.commandTimeMs)}`
+      : "n/a";
   const tokens = s.tokensAvailable ? `${formatInt(s.tokens.output)} out tok` : "no tokens";
   const machine = s.machineActiveAvailable
     ? `, model ${formatDurationMs(s.machineActiveTimeMs)}`

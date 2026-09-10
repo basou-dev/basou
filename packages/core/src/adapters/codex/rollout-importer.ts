@@ -253,10 +253,17 @@ export function codexRolloutToImportPayload(
     const output = readCallId(payload.call_id, outputsByCallId);
     const execTsMs = Date.parse(ts);
     if (Number.isFinite(execTsMs)) engagementTsMs.push(execTsMs);
+    const exitCode = parseExitCode(output);
     derived.push(
       commandExecutedEvent(ts, placeholderSessionId, command.cmd, cwd, {
-        exitCode: parseExitCode(output),
-        durationMs: parseWallTimeMs(output),
+        exitCode,
+        // The duration is gated on the SAME token as the exit code. When this
+        // output reports no exit ("Process running with session ID N", or no
+        // outcome line at all), codex handed the turn back while the child was
+        // still running, so its `Wall time` is the interval codex waited and
+        // not how long the command took. A wall-clock duration cannot have been
+        // observed without observing that the process ended.
+        durationMs: exitCode === null ? null : parseWallTimeMs(output),
       }),
     );
   }
@@ -988,25 +995,40 @@ function parseExitCode(output: string | undefined): number | null {
  * `Wall time X seconds` (no colon) for a whole script, so the colon is optional
  * here.
  *
- * A reported `Wall time: 0.0000 seconds` returns null, not 0. That banner is
- * the interval codex itself waited on the tool call, clamped by the
- * caller-supplied `yield_time_ms`, and not a measurement of the child process:
- * measured 2026-09-10 on this host's rollouts, `sleep 8` reports 7.8757 s at
- * `yield_time_ms: 9000` and 1.0018 s at `yield_time_ms: 1000`, and 41.0% of all
- * positive values fall in 0.99-1.01 s, piled up on that default. At the zero
- * end the same artifact shows up as a banner rounding to 0 ms, on 26,591 of
- * 29,897 paired `exec_command` calls (88.9%) — and all 26,591 also carry
- * `Process exited with code N`, so in every single case the process
- * demonstrably ran. Four decimal places assert under 50 microseconds,
- * which is less than a `fork` + `exec` costs, on commands including `curl` over
- * TCP and `find` across a tree. So the source did not report that the command
- * took no time; it reported that codex did not have to wait.
+ * On the `exec_command` path this banner is NOT the child process's duration.
+ * It is the interval codex itself waited on the tool call, bounded by the
+ * caller-supplied `yield_time_ms`. Measured 2026-09-10 over this host's
+ * rollouts: the banner never exceeds the yield it was given (yield 1000 ms ->
+ * 2,857 calls, max 1.0214 s, one borderline; yield 30000 -> max 30.0023 s;
+ * yield 9000 -> max 7.9111 s), 1,416 of the 3,153 positive values that declared
+ * a yield land within 30 ms of it, and the control case is explicit: `sleep 8`
+ * reports 7.8757 s at `yield_time_ms: 9000` and 1.0018 s at 1000. So a positive
+ * value is `min(duration, yield)` — right-censored, not measured.
  *
- * A positive value is recorded as the source reported it. It is the interval
- * codex waited, which is not the same quantity as the command's duration, and
- * the clamp above means it can fall well short of it. Recording what the source
- * said is basou's job; correcting it is not, and no basou-side arithmetic could
- * recover the difference.
+ * Two consequences, and the caller applies both:
+ *
+ * - A banner rounding to 0 ms is not a measurement. It appears on 26,591 of
+ *   29,897 paired `exec_command` calls (88.9%), and all 26,591 also carry
+ *   `Process exited with code N`, so the process demonstrably ran; four decimal
+ *   places assert under 50 microseconds, less than a `fork` + `exec` costs, on
+ *   commands including `curl` over TCP. This function returns null for those.
+ * - A positive value is only an observation when the output also reports that
+ *   the process ENDED. The `exec_command` caller therefore gates the duration
+ *   on the same token as the exit code (see the call site). Of 3,232 positive
+ *   `exec_command` banners, 1,393 come from an output reading `Process running
+ *   with session ID N` — codex handed the turn back mid-command — and recording
+ *   those would assert "outcome unknown" and "duration observed" on the same
+ *   event. Tracing the session id through the follow-up `write_stdin` polls,
+ *   1,237 of them demonstrably end later in the same log, and their banners sum
+ *   to 19,597,309 ms against the 1,672,329 ms the banner at spawn reported: an
+ *   11.7x understatement, worst case 1,002 ms against 943,300 ms.
+ *
+ * What survives is the 1,839 `exec_command` banners whose output reports an
+ * exit, plus the scripted path. The scripted banner is a different quantity: no
+ * script call on this host declares `yield_time_ms` at all and none lands on a
+ * yield boundary, so it is not censored the same way — it is the program's own
+ * elapsed time, which is why the caller keeps it for a single-tool-call program
+ * and drops it for a multi-call one.
  */
 function parseWallTimeMs(output: string | undefined): number | null {
   if (output === undefined) return null;

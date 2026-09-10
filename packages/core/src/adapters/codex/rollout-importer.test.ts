@@ -177,9 +177,51 @@ describe("codexRolloutToImportPayload", () => {
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
     expect(command.exit_code).toBeNull();
     // No paired output, so no wall time was ever reported: UNOBSERVED, not 0ms.
-    // Contrast the test above, where the output DOES report `Wall time: 0.0000`
-    // and the duration stays 0 because that zero was observed.
     expect(command.duration_ms).toBeNull();
+  });
+
+  it("drops a POSITIVE wall time when the output reports the process is still running", () => {
+    // The banner is codex's own wait, bounded by the caller's `yield_time_ms`,
+    // so a command handed back mid-run reports the timeout rather than its
+    // duration. Recording it would assert "outcome unknown" and "duration
+    // observed" on the same event; measured on one host, 1,393 of 3,232
+    // positive `exec_command` banners are this case, understating the commands
+    // that could be traced to their exit by 11.7x.
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      execCall("2026-05-10T00:00:01.000Z", "call_1", "sleep 20"),
+      execOutput(
+        "2026-05-10T00:00:02.000Z",
+        "call_1",
+        "Wall time: 1.0018 seconds\nProcess running with session ID 83750\nOutput:\n",
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.exit_code).toBeNull();
+    expect(command.duration_ms).toBeNull();
+  });
+
+  it("keeps a positive wall time when the output reports the process exited", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      execCall("2026-05-10T00:00:01.000Z", "call_1", "make build"),
+      execOutput(
+        "2026-05-10T00:00:02.000Z",
+        "call_1",
+        "Wall time: 2.5000 seconds\nProcess exited with code 0\nOutput:\n",
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.exit_code).toBe(0);
+    expect(command.duration_ms).toBe(2500);
   });
 
   it("orders output even when records are not timestamp-sorted on disk", () => {
