@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -222,11 +222,10 @@ describe("computeWorkStats", () => {
     expect(r.totals.commandTimeReliable).toBe(false);
   });
 
-  it("keeps commandTime reliable when EVERY command was observed at zero", async () => {
-    // The distinction 0.2.0 exists to record. Codex reports
-    // `Wall time: 0.0000 seconds` for most per-command calls, so a session
-    // whose every duration is an observed 0 has real command time of 0ms --
-    // `commandTimeMs > 0` would have called that unmeasured.
+  it("reads a stored 0 as unobserved on 0.2.0 too, so the rule needs no version branch", async () => {
+    // A 0.2.0 writer never emits 0, but if one appears -- an old re-import, a
+    // third-party writer -- it is not a duration a spawned process can have
+    // had, so it must not be certified as a measured 0ms.
     const paths = await ensureBasouDirectory(getWorkDir());
     const id = "ses_01HXABCDEF1234567890ABCDEB";
     await placeSession(
@@ -246,8 +245,8 @@ describe("computeWorkStats", () => {
     const s = r.sessions[0];
     expect(s?.commandCount).toBe(2);
     expect(s?.commandTimeMs).toBe(0);
-    expect(s?.availability.commandTime).toBe(true);
-    expect(r.totals.commandTimeReliable).toBe(true);
+    expect(s?.availability.commandTime).toBe(false);
+    expect(r.totals.commandTimeReliable).toBe(false);
   });
 
   it("reads a 0.1.0 zero as unobserved, so an old import does not claim a measured 0ms", async () => {
@@ -269,6 +268,35 @@ describe("computeWorkStats", () => {
     const s = r.sessions[0];
     expect(s?.commandTimeMs).toBe(0);
     expect(s?.availability.commandTime).toBe(false);
+  });
+
+  it("does NOT certify a session whose event log could not be read", async () => {
+    // It saw no commands because the log was unreadable, not because none ran,
+    // so 0ms measures nothing. Without this the same object would assert both
+    // `eventsUnreadable: true` and "this 0ms is real".
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDEE";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "codex-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") + ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    await chmod(join(paths.sessions, id, "events.jsonl"), 0o000);
+    try {
+      const r = await computeWorkStats({ paths, now: NOW, onSessionSkip: () => {} });
+      const s = r.sessions[0];
+      expect(s?.eventsUnreadable).toBe(true);
+      expect(s?.commandCount).toBe(0);
+      expect(s?.availability.commandTime).toBe(false);
+      expect(r.totals.commandTimeReliable).toBe(false);
+    } finally {
+      await chmod(join(paths.sessions, id, "events.jsonl"), 0o600);
+    }
   });
 
   it("leaves a session that ran no commands reliable: 0ms is the truth there", async () => {

@@ -421,7 +421,9 @@ function printSessionShowText(
  * One-line work summary for `session show`: output volume + action counts +
  * time proxies, reusing the same per-session computation as `basou stats`.
  * `command n/a (no duration observed)` flags a session that ran commands none
- * of which was timed; a session that ran none reports its truthful 0ms.
+ * of which was timed, or whose event log could not be read; a session that ran
+ * none reports its truthful 0ms. A session that timed only SOME of its commands
+ * reports a floor and is not marked — see {@link MeasureAvailability.commandTime}.
  */
 function formatSessionWork(session: Session, events: Event[], now: Date): string {
   const w = sessionWorkStatsFromEvents(session.session.id, session.session, events, now);

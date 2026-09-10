@@ -24,9 +24,11 @@
  * SDK API version, tracking the Basou SDK surface (not the npm package
  * version, which moves in lockstep with the monorepo). `0.2.0` was the first
  * release with a runtime read API; `0.3.0` adds `Workspace.renderReport`;
- * `0.1.0` was types-only.
+ * `0.4.0` re-exports `readObservedDuration` and carries the `duration_ms`
+ * nullability through the re-exported `CommandExecutedEvent`; `0.1.0` was
+ * types-only.
  */
-export const BASOU_SDK_VERSION = "0.3.0";
+export const BASOU_SDK_VERSION = "0.4.0";
 
 // Read types re-exported from @basou/core so consumers can type the values the
 // SDK returns without depending on @basou/core directly. These track the
@@ -65,6 +67,14 @@ export type {
   WorkStatsResult,
   WorkStatsTotals,
 } from "@basou/core";
+/**
+ * The read rule for `command_executed.duration_ms`, re-exported from
+ * `@basou/core` so a consumer of this facade can apply it without depending on
+ * core directly. The field is `number | null` and a stored `0` also means "not
+ * observed", so reading it off the event is wrong on both counts; this returns
+ * the duration that was actually observed, or null.
+ */
+export { readObservedDuration } from "@basou/core";
 export { AmbiguousIdError, BasouSdkError, WorkspaceNotFoundError } from "./errors.js";
 export {
   openWorkspace,

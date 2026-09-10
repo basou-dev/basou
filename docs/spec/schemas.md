@@ -229,10 +229,17 @@ Events written by the import paths additionally carry an optional top-level
   change to the event format. It is allowed only with a `schema_version` bump
   and a stated read rule — never silently, because a reader cannot otherwise
   tell which convention a stored value follows.
-- Narrowing a field's meaning is forbidden: a value that already exists on disk
-  must keep meaning what it meant (introduce a new type or a new field
-  instead). A bump may only ASSIGN a meaning to a value the field could not
-  hold before.
+- Redefining a value that already exists on disk is forbidden: it must keep
+  meaning what it meant (introduce a new type or a new field instead). A bump
+  may only ASSIGN a meaning to a value the field could not hold before. The
+  0.2.0 bump below is the worked example: `null` is the newly possible value
+  and gets the new meaning, while `0` keeps the "not observed" meaning it
+  already had — which is why that bump needs no per-version read branch.
+- A widening must also name the SOURCE field it reads and say what that field
+  measures. A basou field may only claim what its source actually reported
+  about the thing the field names; a value the source cannot have measured (see
+  codex's `Wall time` below) is recorded as unobserved, not promoted to an
+  observation because the source emitted bytes.
 - When `schema_version` is bumped, the change must ship a **read rule** — how a
   reader interprets documents written under the previous version — implemented
   once in code, not only in prose. On-disk documents are never rewritten: that
@@ -245,44 +252,74 @@ Events written by the import paths additionally carry an optional top-level
   of the formats that did not change, and a document's `$id` version always
   equals the `schema_version` its writers stamp.
 
+  Known consequence, not yet resolved: `session-import.schema.json` embeds the
+  event union, so its published bytes changed with the 0.2.0 event while its
+  own `$id` stayed at `0.1.0` (its envelope's format did not change, and its
+  importer still requires `schema_version: "0.1.0"`). A consumer holding the
+  earlier bytes of that URL will reject a payload basou now writes, with no
+  version signal that anything moved.
+
 ### Event `schema_version` 0.2.0 — `command_executed.duration_ms`
 
 Events written from this release carry `schema_version: "0.2.0"`. Every other
 `.basou/` document stays at `0.1.0`, because those formats did not change.
 
-One published artifact moved without its version moving:
-`session-import.schema.json` embeds the event union, so its bytes now allow a
-null duration, while its own envelope still stamps — and its importer still
-requires — `schema_version: "0.1.0"`. That is the intended decomposition: an
-import payload is an envelope around events that carry their own versions, and
-the envelope's shape did not change.
-
 `duration_ms` became nullable, joining `command`, `cwd` and `exit_code` under
-one rule: **null means basou did not observe the value.** `0` now means the
-opposite — a duration that WAS observed and was zero. The two used to be the
-same value, and that mattered: Codex reports `Wall time: 0.0000 seconds` for
-most non-scripted commands (measured 2026-09-10: 26,593 of 29,901 across one
-host's rollouts), so folding that into "unrecorded" discarded the one thing the
-source did say.
+one rule: **null means basou did not observe the value.** Widening a required
+field's domain is a breaking change to the format, which is what the bump
+records.
 
-The migration is a read rule, not a rewrite: **on a `0.1.0` event, read
-`duration_ms: 0` as unobserved.** The rule has exactly one implementation,
-`readObservedDuration(event)` in `@basou/core`, and every reader of the field
+**The bump does not change what any value already on disk means.** `0` meant
+"not observed" before it and still does. What changed is that a writer now says
+so with `null` instead of storing the floor, and **a writer at 0.2.0 or above
+never writes `0`**.
+
+So the read rule carries no version branch:
+
+> **Read `duration_ms` as unobserved when it is `null` or `0`, on any version.**
+
+That rule has exactly one implementation, `readObservedDuration(event)` in
+`@basou/core` (re-exported from `@basou/sdk`), and every reader of the field
 inside basou goes through it — `basou stats`, `basou session show`,
-`basou report` and `basou view` — so it cannot hold in one surface and lapse in
-another. A consumer outside this repository should apply the same branch.
+`basou report` and `basou view`. Its writing counterpart is
+`writeObservedDuration(measuredMs)`, which turns a non-positive measurement
+into `null`. A consumer outside this repository needs only the one-line rule
+above.
 
-That is the limit of what the version can
-tell a reader: `command` and `cwd` became nullable in 0.38.0 without a bump, so
-`0.1.0` does not distinguish a basou that fabricated `bash` from one that
-recorded null. The bump keeps that list from growing. Nothing on disk is rewritten — rewriting
-would break the tamper-evidence chain, and re-deriving cannot recover a
-duration the source never reported — and `schema_version` accepts any `0.x.y`,
-so events already written keep validating. The published JSON Schema `$id`
-moves with the version
-(`https://basou.dev/schemas/0.2.0/event.schema.json`), so the URL that
-describes the nullable field is not the URL that described the non-nullable
-one.
+`0` is not a duration a command can have had, whoever wrote it: a spawned
+process cannot run in under half a millisecond (`fork` + `exec` alone costs
+more), and the field is whole milliseconds, so anything faster rounds to `0`
+regardless. Two sources were writing `0` for something else entirely:
+
+- A Claude Code transcript carries no timing at all. Every command imported
+  from one was written as `0` under 0.1.0 and is written as `null` now.
+- Codex's `Wall time` banner reports the interval **codex** waited on the tool
+  call, clamped by the caller-supplied `yield_time_ms` — not the child
+  process's duration. Measured 2026-09-10 on one host's rollouts: `sleep 8`
+  reports 7.8757 s at `yield_time_ms: 9000` and 1.0018 s at
+  `yield_time_ms: 1000`, and 41.0% of all positive values fall in 0.99–1.01 s,
+  piled up on that default. At the other end the same artifact appears as a
+  banner rounding to 0 ms on 26,591 of 29,897 paired `exec_command` calls
+  (88.9%) — all 26,591 of which also carry `Process exited with code N`, so the
+  process demonstrably ran, on commands including `curl` over TCP. basou records
+  those as `null`.
+
+  A **positive** banner value is recorded as the source reported it. It is the
+  interval codex waited, which is not the same quantity as the command's
+  duration and, given the clamp, can fall well short of it. Recording what a
+  source said is basou's job; correcting it is not.
+
+The schema still ACCEPTS `0`, because 0.1.0 events carrying it are on disk and
+are never rewritten — rewriting would break the tamper-evidence chain (§8), and
+re-deriving cannot recover a duration the source never reported. Every line read
+from disk is validated against the event schema, and a violation is dropped with
+a `schema_violation` warning, so narrowing the domain would silently discard
+them (measured on one store: 19,592 such events). `schema_version` accepts any
+`0.x.y`, so events already written keep validating.
+
+The published JSON Schema `$id` moves with the version
+(`https://basou.dev/schemas/0.2.0/event.schema.json`), so the URL that describes
+the nullable field is not the URL that described the non-nullable one.
 
 Two neighbours deliberately did NOT change:
 

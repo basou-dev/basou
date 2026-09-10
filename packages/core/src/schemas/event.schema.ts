@@ -13,12 +13,19 @@ import {
 
 /**
  * `schema_version` stamped on NEWLY WRITTEN events. Bumped to 0.2.0 when
- * `command_executed.duration_ms` became nullable: on a 0.1.0 event a
- * `duration_ms` of 0 cannot be told apart from "not observed", so a reader must
- * treat 0 as unobserved there. Reading is unaffected — {@link SchemaVersionSchema}
- * accepts any 0.x.y — so events already on disk keep validating and are never
- * rewritten. Only EVENTS carry this version: the other `.basou/` documents did
- * not change, so their `schema_version` stays 0.1.0.
+ * `command_executed.duration_ms` became nullable, which widened the field's
+ * domain and so is a breaking change to the format.
+ *
+ * The bump does not change what any value already on disk means: `0` meant "not
+ * observed" before and still does. What changes is that a writer now says so
+ * with `null` instead of storing the floor, and never writes `0` at all. So the
+ * read rule needs no version branch (see {@link readObservedDuration}), and the
+ * version is a statement about validation, not about interpretation.
+ *
+ * Reading is unaffected — {@link SchemaVersionSchema} accepts any 0.x.y — so
+ * events already on disk keep validating and are never rewritten. Only EVENTS
+ * carry this version: the other `.basou/` documents did not change, so their
+ * `schema_version` stays 0.1.0.
  */
 export const EVENT_SCHEMA_VERSION = "0.2.0" as const;
 
@@ -119,11 +126,15 @@ const ApprovalExpiredEventSchema = BaseEventSchema.extend({
 //     a reader must not conclude from null that the command did what it said.
 //   - `duration_ms`: null when no duration was observed. A transcript that
 //     records no timing, a scripted program whose single reported wall time
-//     cannot be attributed to one of the several commands it ran, and a run
-//     interrupted before it could be measured all record null. 0 is reserved
-//     for a duration that WAS observed and was zero: Codex reports
-//     `Wall time: 0.0000 seconds` for most non-scripted commands, and folding
-//     that into "unrecorded" would discard the one thing the source did say.
+//     cannot be attributed to one of the several commands it ran, a source that
+//     reported a duration no spawned process can have had, and a run
+//     interrupted before it could be measured all record null.
+//
+//     A writer at 0.2.0 or above never records 0. A spawned process cannot run
+//     in under half a millisecond, so 0 is not a duration a command can have
+//     had; it survives only on 0.1.0 events, where it was the floor a writer
+//     stored when it had nothing to report. A reader treats 0 as unobserved on
+//     every version, which is why the read rule needs no version branch.
 //
 // A sentinel string ("unknown") is deliberately not used for `command` / `cwd`:
 // it cannot be told apart from a real program name or path, so it would be
@@ -152,9 +163,13 @@ const CommandExecutedEventSchema = BaseEventSchema.extend({
   }),
   signal: z.string().nullable().optional(),
   received_signal: z.string().nullable().optional(),
+  // Still accepts 0, because 0.1.0 events carrying it are on disk and are never
+  // rewritten; every line read from disk is validated against this schema, so
+  // narrowing the domain here would silently drop them. Writers at 0.2.0 and
+  // above do not produce it.
   duration_ms: z.number().int().nonnegative().nullable().meta({
     description:
-      "Observed duration in milliseconds. null means no duration was observed; 0 means a duration that was observed and was zero. On a schema_version 0.1.0 event the two are indistinguishable, so read 0 there as unobserved.",
+      "Observed duration in milliseconds, or null when no duration was observed. Read 0 as unobserved too, on any version: a spawned process cannot run in under half a millisecond, and under schema_version 0.1.0 a writer with nothing to report stored 0 as the floor. Writers at 0.2.0 and above record null instead and never write 0.",
   }),
 });
 

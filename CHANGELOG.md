@@ -11,60 +11,80 @@ All notable changes to **basou** are recorded here. The project follows
   observed.
   `command_executed.duration_ms` is nullable, and events written from this
   release carry `schema_version: "0.2.0"`. null means basou did not observe a
-  duration; `0` means a duration that *was* observed and was zero. The two used
-  to be the same value, and the difference is not academic: Codex reports
-  `Wall time: 0.0000 seconds` for most non-scripted commands (measured
-  2026-09-10: 26,593 of 29,901 across one host's rollouts), so reading every
-  `0` as "unrecorded" threw away the one thing the source did say — while a
-  Claude Code transcript, which carries no timing at all, was recorded with the
-  same `0`.
+  duration. Widening a required field's domain is a breaking change, which is
+  what the bump records.
 
   This completes the rule 0.38.0 introduced for `command`, `cwd` and
   `exit_code`: null is an absent observation, never a default and never a
   benign value. Until now the same event carried two conventions, one per
   field.
 
-  The migration is a read rule, not a rewrite: on a `0.1.0` event, read
-  `duration_ms: 0` as unobserved. That is all the version can tell a reader:
-  0.38.0 made `command` and `cwd` nullable without bumping it, so a `0.1.0`
-  event does not say whether those fields were written by a basou that
-  fabricated `bash` or by one that recorded null. The bump stops the version
-  from carrying a third unanswerable question. Nothing on disk is rewritten — that would
-  break the tamper-evidence chain, and re-deriving cannot recover a duration
-  the source never reported — and `schema_version` accepts any `0.x.y`, so
-  events already written keep validating. Every other `.basou/` document stays
-  at `0.1.0` because those formats did not change.
+  **The bump does not change what any value already on disk means.** `0` meant
+  "not observed" before and still does; what changed is that a writer now says
+  so with `null` instead of storing the floor, and a writer at 0.2.0 or above
+  never writes `0` at all. So the read rule needs no version branch:
 
-  For `@basou/sdk` and `@basou/core` consumers: `CommandExecutedEvent.duration_ms`
-  is now `number | null`, so a `number` is no longer guaranteed by the type.
-  Read it through the exported `readObservedDuration(event)` rather than the
-  field, which applies the version rule below. `BASOU_SDK_VERSION` is unchanged
-  at `0.3.0` (the read-only facade's shape did not move). `@basou/core` also
-  replaces the single `JSON_SCHEMA_VERSION` export with the per-document
-  `JSON_SCHEMA_VERSIONS` map.
+  > Read `duration_ms` as unobserved when it is `null` or `0`, on any version.
 
-  Three writers now record null where they recorded `0`: the Claude Code
-  importer (a transcript reports no timing), the Codex importer for a scripted
+  `0` is not a duration a command can have had, whoever wrote it: a spawned
+  process cannot run in under half a millisecond, and the field is whole
+  milliseconds, so anything faster rounds to `0` regardless. Nothing on disk is
+  rewritten — that would break the tamper-evidence chain, and re-deriving cannot
+  recover a duration the source never reported — and the schema still accepts
+  `0` so that the 19,592 such events measured on one store keep validating.
+  Every other `.basou/` document stays at `0.1.0` because those formats did not
+  change.
+
+  For `@basou/sdk` and `@basou/core` consumers:
+  `CommandExecutedEvent.duration_ms` is now `number | null`, so a `number` is no
+  longer guaranteed by the type. Read it through `readObservedDuration(event)`,
+  exported from `@basou/core` and re-exported from `@basou/sdk`, rather than off
+  the field — the field's `0` is not a duration.  `BASOU_SDK_VERSION` goes to
+  `0.4.0` (the facade gained that export, and the nullability reaches consumers
+  through its re-exported types). `@basou/core` also replaces the single
+  `JSON_SCHEMA_VERSION` export with the per-document `JSON_SCHEMA_VERSIONS` map.
+
+  Four writers now record null where they recorded `0`: the Claude Code importer
+  (a transcript reports no timing at all), the Codex importer for a scripted
   program that made several tool calls (the program's single wall time belongs
   to the program, and splitting or duplicating it across its commands would put
-  an inference inside the hash chain — 970 of one host's 5,313 scripted calls),
-  and the interrupted paths of `basou exec` / `basou run` (a run that ended
-  before a duration could be measured).
+  an inference inside the hash chain — 958 of one host's 4,621 such calls,
+  accounting for 3,015 of its 6,678 scripted command events), the Codex importer
+  for a `Wall time` banner that rounds to zero (see below), and `basou exec` /
+  `basou run` when a run ended before a duration could be measured or the spawn
+  itself failed.
 
-- **`basou stats` decides whether a session's command time is reliable from the
-  session, not from its source kind.** `availability.commandTime` was
-  `source.kind !== "claude-code-import"`, which reported every Codex session as
-  timed. It is now true when the session actually observed a duration — or ran
-  no commands, where 0ms is the truth — like the three availability flags next
-  to it. Measured on one host's rollouts (2026-09-10, re-imported through the
-  new importer): the share of Codex commands carrying an observed duration fell
-  from 100.0% in 2026-05 to 56.1% in 2026-08 as the vendor's log format
-  changed, so the same source kind is sometimes timed and sometimes not.
+- **The Codex importer no longer treats a zero `Wall time` as a measured
+  duration.** That banner reports the interval *codex* waited on the tool call,
+  clamped by the caller-supplied `yield_time_ms`, and not the child process's
+  duration. Measured 2026-09-10 on one host's rollouts: `sleep 8` reports
+  7.8757 s at `yield_time_ms: 9000` and 1.0018 s at `yield_time_ms: 1000`, and
+  41.0% of all positive values fall in 0.99–1.01 s, piled up on that default. At
+  the other end the same artifact appears as a banner rounding to 0 ms on 26,591
+  of 29,897 paired `exec_command` calls (88.9%) — all 26,591 of which also carry
+  `Process exited with code N`, so the process demonstrably ran, on commands
+  including `curl` over TCP. Those are now recorded as unobserved.
 
-  The flag is not a `commandTimeMs > 0` test. A sum cannot separate "no
-  duration was observed" from "every observed duration was zero", which is the
-  one distinction this release exists to record: of the same 36,532 commands,
-  91.7% carry an observed duration but only 18.8% a non-zero one.
+  A positive banner value is still recorded as the source reported it. It is the
+  interval codex waited, which is not the same quantity as the command's
+  duration and, given the clamp, can fall short of it. Recording what a source
+  said is basou's job; correcting it is not.
+
+- **`basou stats` decides whether a session's command time rests on a real
+  observation from the session, not from its source kind.**
+  `availability.commandTime` was `source.kind !== "claude-code-import"`, which
+  reported every Codex session as timed. It is now true when the session
+  observed a duration for at least one command — or ran none, where 0ms is the
+  truth — and false when its event log could not be read. Measured on one host's
+  rollouts, the share of Codex commands carrying an observed duration went from
+  1.7% in 2026-05 to 56.0% in 2026-08 as the vendor's log format changed, so the
+  same source kind is sometimes timed and sometimes not.
+
+  The flag says the total rests on at least one real observation. It does not
+  say every command was timed: when only some were, `commandTimeMs` is a floor
+  and one boolean cannot carry "all", "some" and "none" (measured: 305 of 818
+  importable rollouts are partly timed, at 18.8% of commands overall). The
+  `basou stats` line now says "at least" rather than implying completeness.
 
 ### Added
 

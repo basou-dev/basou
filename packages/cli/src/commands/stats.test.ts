@@ -179,8 +179,7 @@ describe("basou stats", () => {
     expect(out.join("\n")).toContain("no duration observed");
   });
 
-  it("does not caveat command time when every observed duration was zero", async () => {
-    // An observed 0 is a measurement: the total is real, not a floor.
+  it("caveats a stored 0 on either version: it is not a duration a command can have had", async () => {
     const repo = await setupInitedRepo();
     await placeSession(repo, {
       id: "ses_01HXABCDEF1234567890ABCDE9",
@@ -191,7 +190,24 @@ describe("basou stats", () => {
     });
     const out = captureStdout();
     await doRunStats({}, ctx(repo));
-    expect(out.join("\n")).not.toContain("no duration observed");
+    expect(out.join("\n")).toContain("no duration observed");
+  });
+
+  it("does not caveat command time when every command was timed", async () => {
+    const repo = await setupInitedRepo();
+    await placeSession(repo, {
+      id: "ses_01HXABCDEF1234567890ABCDEB",
+      source: "codex-import",
+      endedAt: "2026-05-10T00:05:00.000Z",
+      commands: [{ at: "2026-05-10T00:01:00.000Z", durationMs: 1500 }],
+      eventSchemaVersion: "0.2.0",
+    });
+    const out = captureStdout();
+    await doRunStats({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).not.toContain("no duration observed");
+    // But it still does not claim completeness: only what sources reported.
+    expect(text).toContain("at least");
   });
 
   it("--json emits a structured result", async () => {

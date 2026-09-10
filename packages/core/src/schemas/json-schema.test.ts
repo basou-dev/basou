@@ -10,6 +10,7 @@ import * as ajvFormats from "ajv-formats";
 const addFormats = ajvFormats.default as unknown as (ajv: Ajv2020) => void;
 
 import { describe, expect, it } from "vitest";
+import { EVENT_SCHEMA_VERSION } from "./event.schema.js";
 import { buildJsonSchemas, JSON_SCHEMA_VERSIONS, serializeJsonSchema } from "./json-schema.js";
 
 const schemasDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "schemas");
@@ -69,12 +70,35 @@ describe("buildJsonSchemas", () => {
   it("keeps each $id version equal to the schema_version the document declares", () => {
     // The concrete regression: `status` shipped an $id of 0.2.0 next to a
     // `schema_version` const of 0.1.0, so the artifact contradicted its own URL.
+    const checked: string[] = [];
     for (const { name, schema } of artifacts) {
       const declared = (schema as { properties?: { schema_version?: { const?: unknown } } })
         .properties?.schema_version?.const;
       if (typeof declared !== "string") continue;
+      checked.push(name);
       expect(JSON_SCHEMA_VERSIONS[name as keyof typeof JSON_SCHEMA_VERSIONS]).toBe(declared);
     }
+    // Pin WHICH documents this can check, so the guard cannot quietly shrink to
+    // covering nothing. Only these two pin `schema_version` to a literal; the
+    // rest publish it as a `0.x.y` pattern (or, for `event`, as a root `oneOf`
+    // with no top-level properties), so there is no declared value to compare.
+    expect(checked.sort()).toEqual(["status", "task-index"]);
+  });
+
+  it("versions every document it emits, with no unused entries either way", () => {
+    // The map and DOCUMENTS are hand-maintained in step; a name in one and not
+    // the other is either silently dead or a missing version waiting to happen.
+    expect(artifacts.map((a) => a.name).sort()).toEqual(Object.keys(JSON_SCHEMA_VERSIONS).sort());
+    for (const version of Object.values(JSON_SCHEMA_VERSIONS)) {
+      expect(version).toMatch(/^0\.\d+\.\d+$/);
+    }
+  });
+
+  it("ties the event document's version to the constant its writers stamp", () => {
+    // `event` is the only document whose version is wired to a named constant
+    // rather than a repeated literal, so this is the one case where the
+    // invariant holds by construction rather than by assertion.
+    expect(JSON_SCHEMA_VERSIONS.event).toBe(EVENT_SCHEMA_VERSION);
   });
 
   it("carries the ULID pattern on prefixed-id fields (metadata fidelity)", () => {

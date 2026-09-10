@@ -25,6 +25,7 @@ import {
   type Session,
   SessionSchema,
   sanitizeWorkingDirectory,
+  writeObservedDuration,
   writeYamlFile,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -256,7 +257,10 @@ export async function runExec(
     exit_code: result.exit_code,
     ...(result.signal !== null ? { signal: result.signal } : {}),
     ...(signalReceived !== null ? { received_signal: signalReceived } : {}),
-    duration_ms: result.duration_ms,
+    // A non-positive wall-clock difference is not an observation of a spawn:
+    // the only zeros this path has produced came from ENOENT, where the
+    // process never ran.
+    duration_ms: writeObservedDuration(result.duration_ms),
   });
 
   // 10. Optional post-execute git_snapshot (after command_executed so the

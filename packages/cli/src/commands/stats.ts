@@ -132,8 +132,12 @@ function printStatsText(result: WorkStatsResult, bySource: boolean, byDay: boole
   console.log(
     `  Span:            ${formatDurationMs(t.sessionSpanMs)}  (total elapsed${openPart})`,
   );
+  // Absence of this caveat does not mean the total is complete: a session that
+  // timed some of its commands still clears the flag, so the workspace total is
+  // a floor whenever ANY command went untimed. The flag cannot distinguish
+  // "all" from "some", hence "at least".
   const cmdCaveat = t.commandTimeReliable
-    ? ""
+    ? "; at least, only durations the sources reported are counted"
     : "; some sessions ran commands with no duration observed, so this is a floor";
   console.log(
     `  Command:         ${formatDurationMs(t.commandTimeMs)}  (real shell execution${cmdCaveat})`,

@@ -51,11 +51,16 @@ export type MeasureAvailability = {
   /** Always true (started_at + now bound the span). */
   span: boolean;
   /**
-   * `commandTimeMs` is a real measurement: this session either recorded at
-   * least one observed duration, or ran no commands at all (0ms is then the
-   * truth). False when it ran commands and none of them was timed — a Claude
-   * Code transcript carries no per-command duration, and codex stopped
-   * reporting one for many calls.
+   * `commandTimeMs` rests on at least one real observation: this session either
+   * observed a duration for at least one command, or ran no commands at all
+   * (0ms is then the truth). False when it ran commands and none was timed, and
+   * false when the event log could not be read.
+   *
+   * True does NOT mean every command was timed. When only some were,
+   * `commandTimeMs` is a FLOOR and this flag does not say so — one boolean
+   * cannot carry "all", "some" and "none". Measured 2026-09-10: 305 of 818
+   * importable codex rollouts are partly timed, at 18.8% of commands overall.
+   * Compare `commandCount` if the difference matters to the caller.
    */
   commandTime: boolean;
   /** At least one active interval could be measured (stored or event-derived). */
@@ -382,19 +387,21 @@ export function sessionWorkStatsFromEvents(
     availability: {
       span: true,
       // Derived from what this session actually recorded, like its three
-      // siblings below. A source kind cannot answer this: codex sessions went
-      // from 100.0% of commands carrying an observed duration (2026-05) to
-      // 56.1% (2026-08) as the vendor's log format changed, so the same kind
+      // siblings below. A source kind cannot answer this: the share of codex
+      // commands carrying an observed duration went from 1.7% (2026-05) to
+      // 56.0% (2026-08) as the vendor's log format changed, so the same kind
       // is sometimes timed and sometimes not.
       //
-      // Not `commandTimeMs > 0`: a sum cannot separate "no duration was
-      // observed" from "every observed duration was zero", which is the one
-      // distinction 0.2.0 exists to record (codex reports
-      // `Wall time: 0.0000 seconds` for most per-command calls). A session
+      // Not `commandTimeMs > 0`: a session whose every timed command really
+      // did run in under a millisecond would read as unmeasured. A session
       // that ran no commands reports 0ms truthfully and stays reliable —
-      // otherwise every `basou note` / `decision capture` session would
-      // poison the AND-aggregated workspace total.
-      commandTime: commandCount === 0 || timedCommandCount > 0,
+      // otherwise every `basou note` / `decision capture` session would poison
+      // the AND-aggregated workspace total (457 of one store's 853 sessions).
+      //
+      // An unreadable events.jsonl is NOT that case: it saw no commands
+      // because the log could not be read, so 0ms is not a measurement of
+      // anything and the flag must not certify it.
+      commandTime: !eventsUnreadable && (commandCount === 0 || timedCommandCount > 0),
       activeTime: active.intervals.length > 0,
       tokens: hasTokens(tokens),
       machineActive: machineActiveTimeMs > 0,

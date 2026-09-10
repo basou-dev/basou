@@ -2,6 +2,7 @@ import { type PrefixedId, prefixedUlid } from "../../ids/ulid.js";
 import type { Event } from "../../schemas/event.schema.js";
 import { EVENT_SCHEMA_VERSION } from "../../schemas/event.schema.js";
 import type { Manifest } from "../../schemas/manifest.schema.js";
+import { writeObservedDuration } from "../../schemas/observed-duration.js";
 import type { SessionImportPayload } from "../../schemas/session-import.schema.js";
 import {
   ACTIVE_GAP_CAP_MS,
@@ -216,8 +217,11 @@ export function codexRolloutToImportPayload(
       // OBSERVED (null) for every command in the program: the wall time exists
       // but belongs to the program, and splitting or duplicating it across the
       // commands would put an inference inside the hash chain. Measured
-      // 2026-09-10: 970 of this host's 5,313 scripted calls (18.3%) are
-      // multi-call and lose their duration this way.
+      // 2026-09-10 over this host's rollouts, on the same basis this branch
+      // uses (a `custom_tool_call` named `exec` that yielded at least one
+      // command): 958 of 4,621 such calls (20.7%) are multi-call. Because a
+      // multi-call program tends to run several commands, that is where 3,015
+      // of the 6,678 scripted command events (45.1%) lose their duration.
       const durationMs = scan.toolCallCount === 1 ? parseWallTimeMs(output) : null;
       const scriptTsMs = Date.parse(ts);
       if (Number.isFinite(scriptTsMs)) engagementTsMs.push(scriptTsMs);
@@ -977,24 +981,39 @@ function parseExitCode(output: string | undefined): number | null {
 }
 
 /**
- * Wall time from a tool output's outcome banner, or null when the banner does
- * not report one.
+ * Wall time from a tool output's outcome banner, or null when the banner
+ * reports nothing basou can treat as the command's duration.
  *
  * Codex writes `Wall time: X seconds` for a per-command `exec_command` call and
  * `Wall time X seconds` (no colon) for a whole script, so the colon is optional
  * here.
  *
- * A reported `Wall time: 0.0000 seconds` returns 0, NOT null: codex prints that
- * for most non-scripted commands (measured 2026-09-10: 26,593 of 29,901 across
- * this host's rollouts), and folding it into "unrecorded" would discard the one
- * thing the source did say about the duration.
+ * A reported `Wall time: 0.0000 seconds` returns null, not 0. That banner is
+ * the interval codex itself waited on the tool call, clamped by the
+ * caller-supplied `yield_time_ms`, and not a measurement of the child process:
+ * measured 2026-09-10 on this host's rollouts, `sleep 8` reports 7.8757 s at
+ * `yield_time_ms: 9000` and 1.0018 s at `yield_time_ms: 1000`, and 41.0% of all
+ * positive values fall in 0.99-1.01 s, piled up on that default. At the zero
+ * end the same artifact shows up as a banner rounding to 0 ms, on 26,591 of
+ * 29,897 paired `exec_command` calls (88.9%) — and all 26,591 also carry
+ * `Process exited with code N`, so in every single case the process
+ * demonstrably ran. Four decimal places assert under 50 microseconds,
+ * which is less than a `fork` + `exec` costs, on commands including `curl` over
+ * TCP and `find` across a tree. So the source did not report that the command
+ * took no time; it reported that codex did not have to wait.
+ *
+ * A positive value is recorded as the source reported it. It is the interval
+ * codex waited, which is not the same quantity as the command's duration, and
+ * the clamp above means it can fall well short of it. Recording what the source
+ * said is basou's job; correcting it is not, and no basou-side arithmetic could
+ * recover the difference.
  */
 function parseWallTimeMs(output: string | undefined): number | null {
   if (output === undefined) return null;
   const match = output.match(/Wall time:?\s*([\d.]+)\s*seconds/);
   if (match?.[1] === undefined) return null;
   const seconds = Number.parseFloat(match[1]);
-  return Number.isFinite(seconds) ? Math.round(seconds * 1000) : null;
+  return writeObservedDuration(Number.isFinite(seconds) ? seconds * 1000 : null);
 }
 
 /**

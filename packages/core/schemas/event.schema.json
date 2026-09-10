@@ -512,7 +512,7 @@
               "type": "null"
             }
           ],
-          "description": "Observed duration in milliseconds. null means no duration was observed; 0 means a duration that was observed and was zero. On a schema_version 0.1.0 event the two are indistinguishable, so read 0 there as unobserved."
+          "description": "Observed duration in milliseconds, or null when no duration was observed. Read 0 as unobserved too, on any version: a spawned process cannot run in under half a millisecond, and under schema_version 0.1.0 a writer with nothing to report stored 0 as the floor. Writers at 0.2.0 and above record null instead and never write 0."
         }
       },
       "required": [

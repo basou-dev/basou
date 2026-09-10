@@ -159,7 +159,9 @@ describe("codexRolloutToImportPayload", () => {
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
     expect(command.exit_code).toBe(-1);
     expect(command.cwd).toBe(CWD);
-    expect(command.duration_ms).toBe(0);
+    // `Wall time: 0.0000 seconds` is codex's own unwaited interval, not the
+    // child's duration -- and the exit code proves the child ran. Unobserved.
+    expect(command.duration_ms).toBeNull();
   });
 
   it("records a null exit code when the output has no completion line", () => {

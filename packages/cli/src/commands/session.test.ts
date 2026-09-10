@@ -210,6 +210,27 @@ const SESSION_STARTED_LINE = (sessionId: string, suffix: string, occurredAt: str
     source: "terminal-recording",
   })}\n`;
 
+const COMMAND_LINE = (
+  sessionId: string,
+  suffix: string,
+  occurredAt: string,
+  durationMs: number | null,
+  schemaVersion = "0.2.0",
+) =>
+  `${JSON.stringify({
+    schema_version: schemaVersion,
+    type: "command_executed",
+    id: EVT(suffix),
+    session_id: sessionId,
+    occurred_at: occurredAt,
+    source: "terminal-recording",
+    command: "bash",
+    args: ["-c", "ls"],
+    cwd: "/tmp/fixture",
+    exit_code: 0,
+    duration_ms: durationMs,
+  })}\n`;
+
 const SESSION_ENDED_LINE = (sessionId: string, suffix: string, occurredAt: string) =>
   `${JSON.stringify({
     schema_version: "0.1.0",
@@ -551,6 +572,66 @@ describe("doRunSessionShow", () => {
     const stdout = joinCalls(out);
     expect(stdout).toContain("Work:");
     expect(stdout).toContain("machine 12m");
+  });
+
+  it("case 11c: renders a duration only when one was observed, on either version", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("Y0D");
+    const events =
+      SESSION_STARTED_LINE(id, "D01", "2026-05-08T11:00:00+09:00") +
+      COMMAND_LINE(id, "D02", "2026-05-08T11:00:01+09:00", 1500) +
+      // A 0.2.0 writer never emits 0, and a stored 0 is not a duration a
+      // spawned process can have had -- unobserved, not "0ms".
+      COMMAND_LINE(id, "D03", "2026-05-08T11:00:02+09:00", 0) +
+      COMMAND_LINE(id, "D04", "2026-05-08T11:00:03+09:00", null) +
+      // The same stored 0 under the older version reads the same way, which is
+      // why the read rule carries no version branch.
+      COMMAND_LINE(id, "D05", "2026-05-08T11:00:04+09:00", 0, "0.1.0") +
+      SESSION_ENDED_LINE(id, "D06", "2026-05-08T11:00:30+09:00");
+    await createSession(repo, { id, endedAt: "2026-05-08T11:00:30+09:00", events });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("1500ms");
+    // Exactly one rendered duration; the three unobserved ones say so. The
+    // regex is anchored on the separator so "1500ms" cannot match it.
+    expect((stdout.match(/, \d+ms\)/g) ?? []).length).toBe(1);
+    expect((stdout.match(/duration=unknown/g) ?? []).length).toBe(3);
+    // One command was timed, so the total rests on a real observation and is
+    // rendered rather than marked unavailable (1500ms formats as "2s").
+    expect(stdout).toContain("command 2s");
+    expect(stdout).not.toContain("command n/a");
+  });
+
+  it("case 11d: says command time is unavailable when no command was timed", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("Y0N");
+    const events =
+      SESSION_STARTED_LINE(id, "N01", "2026-05-08T11:00:00+09:00") +
+      COMMAND_LINE(id, "N02", "2026-05-08T11:00:01+09:00", null) +
+      SESSION_ENDED_LINE(id, "N03", "2026-05-08T11:00:30+09:00");
+    await createSession(repo, { id, endedAt: "2026-05-08T11:00:30+09:00", events });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("command n/a (no duration observed)");
+    expect(stdout).not.toContain("(import)");
+  });
+
+  it("case 11e: a session that ran no commands reports its truthful 0s", async () => {
+    // `basou note` / `decision capture` sessions look like this; marking them
+    // unavailable would poison the AND-aggregated workspace total.
+    const repo = await setupInitedRepo();
+    const id = SES("Y0Z");
+    const events =
+      SESSION_STARTED_LINE(id, "Z01", "2026-05-08T11:00:00+09:00") +
+      SESSION_ENDED_LINE(id, "Z02", "2026-05-08T11:00:30+09:00");
+    await createSession(repo, { id, endedAt: "2026-05-08T11:00:30+09:00", events });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("command 0s");
+    expect(stdout).not.toContain("command n/a");
   });
 
   it("case 12: unique prefix hit resolves to the full ID", async () => {

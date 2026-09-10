@@ -314,7 +314,6 @@ export {
   ApprovalStatusSchema,
   buildJsonSchemas,
   DecisionIdSchema,
-  DURATION_OBSERVED_SINCE,
   EVENT_SCHEMA_VERSION,
   EventIdSchema,
   EventSchema,
@@ -340,6 +339,7 @@ export {
   TaskStatusSchema,
   unknownManifestKeys,
   WorkspaceIdSchema,
+  writeObservedDuration,
 } from "./schemas/index.js";
 export type {
   ActiveTimeBasis,
