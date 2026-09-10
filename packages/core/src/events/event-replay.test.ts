@@ -123,6 +123,53 @@ describe("replayEvents", () => {
     expect(warnings[0]).toMatchObject({ kind: "schema_violation", line: 2 });
   });
 
+  it("YIELDS a retired zero duration and warns: advisory, not a drop", async () => {
+    // The schema still accepts a 0, so the line is valid and the reader gets
+    // it (and treats the 0 as unobserved). The warning exists so the version
+    // bump is verifiable rather than a promise no code checks.
+    const cmd = JSON.stringify({
+      ...EVT_BASE,
+      schema_version: "0.2.0",
+      id: evtId("98"),
+      type: "command_executed",
+      command: "ls",
+      args: ["-la"],
+      cwd: "/tmp/example",
+      exit_code: 0,
+      duration_ms: 0,
+    });
+    const body = `${startedLine("01")}${cmd}\n${endedLine("03")}`;
+    await writeFile(join(sessionDir, "events.jsonl"), body);
+    const { warnings, onWarning } = captureWarnings();
+    const events = await readAllEvents(sessionDir, { onWarning });
+    expect(events.map((e) => e.type)).toEqual([
+      "session_started",
+      "command_executed",
+      "session_ended",
+    ]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ kind: "retired_zero_duration", line: 2 });
+  });
+
+  it("does not warn about a 0 on a pre-0.2.0 event: that was the floor a writer stored", async () => {
+    const cmd = JSON.stringify({
+      ...EVT_BASE,
+      id: evtId("97"),
+      type: "command_executed",
+      command: "ls",
+      args: ["-la"],
+      cwd: "/tmp/example",
+      exit_code: 0,
+      duration_ms: 0,
+    });
+    const body = `${startedLine("01")}${cmd}\n${endedLine("03")}`;
+    await writeFile(join(sessionDir, "events.jsonl"), body);
+    const { warnings, onWarning } = captureWarnings();
+    const events = await readAllEvents(sessionDir, { onWarning });
+    expect(events).toHaveLength(3);
+    expect(warnings).toHaveLength(0);
+  });
+
   it("rejects adapter_output with an unknown extra key (strict variant)", async () => {
     const adapterLine = `${JSON.stringify({
       ...EVT_BASE,

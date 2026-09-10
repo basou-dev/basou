@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { CommandExecutedEvent } from "./event.schema.js";
-import { readObservedDuration, writeObservedDuration } from "./observed-duration.js";
+import {
+  hasRetiredZeroDuration,
+  readObservedDuration,
+  writeObservedDuration,
+  ZERO_DURATION_RETIRED_SINCE,
+} from "./observed-duration.js";
 
 function commandEvent(schemaVersion: string, durationMs: number | null): CommandExecutedEvent {
   return {
@@ -65,5 +70,55 @@ describe("writeObservedDuration", () => {
     expect(writeObservedDuration(1500.6)).toBe(1501);
     expect(writeObservedDuration(0.4)).toBeNull();
     expect(writeObservedDuration(0.6)).toBe(1);
+  });
+});
+
+describe("writeObservedDuration (out of range)", () => {
+  it("records a value outside the schema's integer domain as unobserved", () => {
+    // 2^53 milliseconds is 285,000 years, so this is not a duration -- and
+    // letting it through failed validation deep inside a batch import and
+    // aborted the candidates behind it.
+    expect(writeObservedDuration(9007199254740992)).toBeNull();
+    expect(writeObservedDuration(1e21)).toBeNull();
+    expect(writeObservedDuration(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+});
+
+describe("hasRetiredZeroDuration", () => {
+  it("flags a zero on a version whose writers never produce one", () => {
+    expect(hasRetiredZeroDuration(commandEvent("0.2.0", 0))).toBe(true);
+    expect(hasRetiredZeroDuration(commandEvent("0.2.1", 0))).toBe(true);
+    expect(hasRetiredZeroDuration(commandEvent("0.10.0", 0))).toBe(true);
+  });
+
+  it("does not flag a zero on a pre-0.2.0 event: that was the floor a writer stored", () => {
+    expect(hasRetiredZeroDuration(commandEvent("0.1.0", 0))).toBe(false);
+    expect(hasRetiredZeroDuration(commandEvent("0.0.9", 0))).toBe(false);
+  });
+
+  it("does not flag null, a positive duration, or an unreadable version", () => {
+    expect(hasRetiredZeroDuration(commandEvent("0.2.0", null))).toBe(false);
+    expect(hasRetiredZeroDuration(commandEvent("0.2.0", 1500))).toBe(false);
+    // An unparseable version sorts below every parseable one, so it is not
+    // flagged: basou does not accuse an event whose version it cannot read.
+    expect(hasRetiredZeroDuration(commandEvent("garbage", 0))).toBe(false);
+    expect(hasRetiredZeroDuration(commandEvent("0.2", 0))).toBe(false);
+  });
+
+  it("ignores events that are not command_executed", () => {
+    const note = {
+      schema_version: "0.2.0",
+      id: "evt_01HXABCDEF1234567890ABCDEF",
+      session_id: "ses_01HXABCDEF1234567890ABCDEF",
+      occurred_at: "2026-09-10T00:00:00.000Z",
+      source: "human",
+      type: "note_added",
+      text: "hi",
+    } as unknown as Parameters<typeof hasRetiredZeroDuration>[0];
+    expect(hasRetiredZeroDuration(note)).toBe(false);
+  });
+
+  it("names the version the convention changed on", () => {
+    expect(ZERO_DURATION_RETIRED_SINCE).toBe("0.2.0");
   });
 });

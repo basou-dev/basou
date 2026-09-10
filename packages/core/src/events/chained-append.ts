@@ -2,6 +2,10 @@ import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
+import {
+  hasRetiredZeroDuration,
+  ZERO_DURATION_RETIRED_SINCE,
+} from "../schemas/observed-duration.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { acquireLock } from "../storage/lockfile.js";
 import { genesisHash, lineHash, serializeEventLine } from "./chain.js";
@@ -145,6 +149,7 @@ export async function appendChainedEventLocked(
   } catch (error: unknown) {
     throw new Error("Invalid Basou event payload", { cause: error });
   }
+  assertWritableEvent(validated);
   const tail = await inspectChainTail(paths, sessionId);
   const line = tail.chained
     ? serializeEventLine({ ...validated, prev_hash: tail.head })
@@ -176,4 +181,20 @@ export async function appendChainedEvent(
   } finally {
     await lock.release();
   }
+}
+
+/**
+ * Refuse to WRITE a `command_executed` whose `duration_ms` is `0` on a version
+ * where no writer produces one. The schema deliberately still accepts that
+ * value so the 0.1.0 events on disk keep validating, which leaves the write
+ * boundary as the only place the invariant can be enforced rather than merely
+ * asserted. Round-tripping a genuine 0.1.0 event through `session import` is
+ * unaffected: the check is scoped to the event's own version.
+ */
+function assertWritableEvent(event: Event): void {
+  if (!hasRetiredZeroDuration(event)) return;
+  throw new Error(
+    `Refusing to write command_executed with duration_ms: 0 at schema_version ${event.schema_version}: ` +
+      `0 is not a duration a command can have had, and writers at ${ZERO_DURATION_RETIRED_SINCE} and above record null`,
+  );
 }

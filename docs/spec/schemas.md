@@ -330,7 +330,16 @@ regardless. Two sources were writing `0` for something else entirely:
     their own banners sum to 19,597,309 ms against the 1,672,329 ms reported at
     spawn — an 11.7x understatement, worst case 1,002 ms against 943,300 ms.
 
-  What survives on this path is the 1,839 banners whose output reports an exit.
+  What survives on this path is the 1,839 banners whose output reports an exit,
+  and those are not censored: a process that exited did so inside the wait
+  window, so its banner is the duration rather than the timeout. Measured, the
+  contrast is sharp — of the positive banners that declared a yield, 1,392 of
+  the 1,393 "still running" ones (99.9%) sit within 30 ms of it with a
+  duration/yield ratio whose median is 1.002, while only 24 of the 1,760
+  "exited" ones (1.4%) do, at a median ratio of 0.259. **Residual:** those 24
+  exited within a whisker of the timeout, where the banner cannot be told apart
+  from the clamp. basou records them as observed; they are 1.4% of the retained
+  population and 0.07% of all derived commands.
 
 - The SCRIPTED path is a different quantity and is NOT censored the same way. No
   script call on this host declares `yield_time_ms`, none lands on a yield
@@ -341,9 +350,22 @@ regardless. Two sources were writing `0` for something else entirely:
   with an unknown outcome; the gate above is specific to the `exec_command`
   path, where a missing exit line means the process had not finished.
 
+**A writer at 0.2.0 or above never emits `0`, and that is enforced rather than
+promised.** The write boundary (`appendEvent`, `writeEventsBulk`,
+`appendChainedEvent`) refuses such an event, scoped to the event's own version
+so a genuine 0.1.0 event still round-trips through `basou session import`. The
+read path does not drop one — the line is valid and is yielded, and a reader
+treats the `0` as unobserved either way — but it emits an advisory
+`retired_zero_duration` replay warning, so a value that should not exist is
+visible instead of being silently reinterpreted. That matters for events
+arriving from elsewhere: another host reached through the federation reader, or
+a third party using this package's writers.
+
 The schema still ACCEPTS `0`, because 0.1.0 events carrying it are on disk and
-are never rewritten — rewriting would break the tamper-evidence chain (§8), and
-re-deriving cannot recover a duration the source never reported. Every line read
+are not rewritten in place — that would break the tamper-evidence chain (§8).
+(A session IS re-derived when its source log grows, and its events are then
+restamped at the current version; a session whose source is gone, or that has
+not grown, keeps its 0.1.0 lines indefinitely.) Every line read
 from disk is validated against the event schema, and a violation is dropped with
 a `schema_violation` warning, so narrowing the domain would silently discard
 them (measured on one store: 19,592 such events). `schema_version` accepts any

@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
+import { hasRetiredZeroDuration } from "../schemas/observed-duration.js";
 
 /**
  * Recoverable warning surfaced via {@link ReplayOptions.onWarning}. The replay
@@ -12,11 +13,18 @@ import { type Event, EventSchema } from "../schemas/event.schema.js";
  * the unterminated tail parsed as a complete event. The line is dropped
  * instead of yielded so consumers cannot accidentally observe a
  * partially-written record.
+ *
+ * `retired_zero_duration` is ADVISORY: the line is valid and IS yielded. It
+ * reports a `command_executed` carrying `duration_ms: 0` on an event version
+ * whose writers never produce one, which no basou writer can create (they are
+ * guarded) but a third party using this package's writers, or another host
+ * reached through the federation reader, could. See `hasRetiredZeroDuration`.
  */
 export type ReplayWarning =
   | { kind: "partial_trailing_line"; line: number }
   | { kind: "malformed_json"; line: number; cause: unknown }
-  | { kind: "schema_violation"; line: number; cause: unknown };
+  | { kind: "schema_violation"; line: number; cause: unknown }
+  | { kind: "retired_zero_duration"; line: number };
 
 export type ReplayOptions = {
   /**
@@ -138,6 +146,13 @@ function processLine(rawLine: string, lineNo: number, options: ReplayOptions): E
   if (!result.success) {
     options.onWarning?.({ kind: "schema_violation", line: lineNo, cause: result.error });
     return null;
+  }
+  // Advisory only: the event is valid and is yielded either way. A reader
+  // treats this 0 as unobserved regardless (readObservedDuration), so nothing
+  // downstream is wrong -- but the value should not exist at this version, and
+  // silently reinterpreting it would leave the version bump unverifiable.
+  if (hasRetiredZeroDuration(result.data)) {
+    options.onWarning?.({ kind: "retired_zero_duration", line: lineNo });
   }
   return result.data;
 }

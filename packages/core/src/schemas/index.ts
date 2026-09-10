@@ -33,7 +33,12 @@ export type { JsonSchemaArtifact } from "./json-schema.js";
 export { buildJsonSchemas, JSON_SCHEMA_VERSIONS, serializeJsonSchema } from "./json-schema.js";
 export type { Manifest } from "./manifest.schema.js";
 export { ManifestSchema, unknownManifestKeys } from "./manifest.schema.js";
-export { readObservedDuration, writeObservedDuration } from "./observed-duration.js";
+export {
+  hasRetiredZeroDuration,
+  readObservedDuration,
+  writeObservedDuration,
+  ZERO_DURATION_RETIRED_SINCE,
+} from "./observed-duration.js";
 export type {
   Session,
   SessionIntegrity,

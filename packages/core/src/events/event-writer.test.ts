@@ -104,6 +104,40 @@ describe("appendEvent", () => {
       }),
     ).rejects.toThrow("Invalid Basou event payload");
   });
+
+  it("refuses to write a duration_ms of 0 at a version whose writers never produce one", async () => {
+    // The schema still accepts that value so the 0.1.0 events on disk keep
+    // validating, which leaves this boundary as the only place the invariant
+    // can be enforced rather than merely asserted.
+    await expect(
+      appendEvent(sessionDir, {
+        ...BASE,
+        schema_version: "0.2.0",
+        type: "command_executed",
+        command: "ls",
+        args: ["-la"],
+        cwd: "/tmp/example",
+        exit_code: 0,
+        duration_ms: 0,
+      }),
+    ).rejects.toThrow(/duration_ms: 0 at schema_version 0\.2\.0/);
+  });
+
+  it("still round-trips a genuine 0.1.0 event carrying a 0", async () => {
+    // 19,592 such events exist on one store, and `session import` replays
+    // them; the guard is scoped to the event's own version.
+    await appendEvent(sessionDir, {
+      ...BASE,
+      type: "command_executed",
+      command: "ls",
+      args: ["-la"],
+      cwd: "/tmp/example",
+      exit_code: 0,
+      duration_ms: 0,
+    });
+    const content = await readFile(join(sessionDir, "events.jsonl"), "utf8");
+    expect(JSON.parse(content.trim()).duration_ms).toBe(0);
+  });
 });
 
 describe("writeEventsBulk", () => {

@@ -52,24 +52,51 @@ All notable changes to **basou** are recorded here. The project follows
   accounting for 3,015 of its 6,678 scripted command events), the Codex importer
   for a `Wall time` banner it cannot read as the command's duration (see below),
   and `basou exec` / `basou run` when a run ended before a duration could be
-  measured, the spawn itself failed, or the wall clock produced a non-positive
-  difference across a spawn that cannot cost zero.
+  measured, the spawn itself failed, or the wall clock produced a value that is
+  not a duration — non-positive across a spawn that cannot cost zero, or beyond
+  the field's integer domain, which used to fail validation deep inside a batch
+  import and abort the candidates behind it.
 
-- **The Codex importer no longer treats a zero `Wall time` as a measured
-  duration.** That banner reports the interval *codex* waited on the tool call,
-  clamped by the caller-supplied `yield_time_ms`, and not the child process's
-  duration. Measured 2026-09-10 on one host's rollouts: `sleep 8` reports
-  7.8757 s at `yield_time_ms: 9000` and 1.0018 s at `yield_time_ms: 1000`, and
-  41.0% of all positive values fall in 0.99–1.01 s, piled up on that default. At
-  the other end the same artifact appears as a banner rounding to 0 ms on 26,591
-  of 29,897 paired `exec_command` calls (88.9%) — all 26,591 of which also carry
-  `Process exited with code N`, so the process demonstrably ran, on commands
-  including `curl` over TCP. Those are now recorded as unobserved.
+- **The Codex importer no longer reads a `Wall time` banner as the command's
+  duration unless the command finished.** On the per-command `exec_command` path
+  that banner is the interval *codex* waited on the tool call, bounded by the
+  caller-supplied `yield_time_ms`, not the child process's duration. Measured
+  2026-09-10 on one host's rollouts: the banner never exceeds the yield it was
+  given (`yield 1000` → 2,857 calls, max 1.0214 s; `yield 30000` → max
+  30.0023 s; `yield 9000` → max 7.9111 s), and `sleep 8` reports 7.8757 s at
+  `yield_time_ms: 9000` against 1.0018 s at 1000. A positive value is therefore
+  `min(duration, yield)` — right-censored.
 
-  A positive banner value is still recorded as the source reported it. It is the
-  interval codex waited, which is not the same quantity as the command's
-  duration and, given the clamp, can fall short of it. Recording what a source
-  said is basou's job; correcting it is not.
+  Two shapes are now recorded as unobserved:
+
+  - A banner rounding to 0 ms, on 26,591 of 29,897 paired `exec_command` calls
+    (88.9%). All 26,591 also carry `Process exited with code N`, so the process
+    demonstrably ran, and four decimals assert under 50 microseconds — less
+    than a `fork` + `exec` costs — on commands including `curl` over TCP.
+  - A positive banner whose output does not report that the process ENDED. The
+    duration is gated on the same token as `exit_code`, because an output
+    reading `Process running with session ID N` means codex handed the turn back
+    mid-command; recording its wall time asserted "outcome unknown" and
+    "duration observed" on the same event. 1,393 of 3,232 positive banners are
+    this case, and for the 1,237 that demonstrably end later in the same log,
+    the banner at spawn understated their own later banners by 11.7x
+    (1,672,329 ms against 19,597,309 ms; worst case 1,002 ms against
+    943,300 ms).
+
+  The 1,839 `exec_command` banners whose output reports an exit are kept, and
+  those are not censored: a process that exited did so inside the wait window.
+  Measured, of the positive banners that declared a yield, 1,392 of the 1,393
+  still-running ones (99.9%) sit within 30 ms of it, against 24 of the 1,760
+  exited ones (1.4%) — median duration/yield ratio 1.002 versus 0.259. Those 24
+  are the residual: they exited within a whisker of the timeout, where the two
+  cannot be told apart. The scripted path is kept too — no script call declares
+  `yield_time_ms`, none lands on a yield boundary, and none of 5,327 ever
+  reported a still-running process, so its banner is the program's own elapsed
+  time rather than a wait.
+
+  Net effect on one host's 914 rollouts: 15.0% of derived commands carry an
+  observed duration (1.5% for 2026-05, 56.0% for 2026-08), down from 18.8%
+  before this gate and from 91.7% before the release.
 
 - **`basou stats` decides whether a session's command time rests on a real
   observation from the session, not from its source kind.**
@@ -92,6 +119,19 @@ All notable changes to **basou** are recorded here. The project follows
   was hiding milliseconds the workspace total already counted.
 
 ### Added
+
+- **The `0.2.0` invariant is now enforced, not just stated.** A writer at 0.2.0
+  or above never emits `duration_ms: 0`, and the write boundary (`appendEvent`,
+  `writeEventsBulk`, `appendChainedEvent`) now refuses one, scoped to the
+  event's own version so a genuine 0.1.0 event still round-trips through
+  `basou session import`. On the read side such a value is NOT dropped — the
+  line is valid and is yielded, and the read rule treats it as unobserved either
+  way — but replay emits a new advisory `retired_zero_duration` warning, so a
+  value that should not exist is visible rather than silently reinterpreted.
+  This matters for events written elsewhere: another host reached through the
+  federation reader, or a third party using `@basou/core`'s writers.
+  `ReplayWarning` gains that variant, and `@basou/core` exports
+  `hasRetiredZeroDuration` and `ZERO_DURATION_RETIRED_SINCE`.
 
 - **The published JSON Schema says what null means.** `command_executed`'s
   `command`, `cwd`, `exit_code` and `duration_ms` carry descriptions in the

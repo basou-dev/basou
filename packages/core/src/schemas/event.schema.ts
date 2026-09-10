@@ -24,7 +24,8 @@ import {
  * version is a statement about validation, not about interpretation.
  *
  * Reading is unaffected — {@link SchemaVersionSchema} accepts any 0.x.y — so
- * events already on disk keep validating and are never rewritten. Only EVENTS
+ * events already on disk keep validating, and are not rewritten in place (a
+ * session IS re-derived, and restamped, when its source log grows). Only EVENTS
  * carry this version: the other `.basou/` documents did not change, so their
  * `schema_version` stays 0.1.0.
  */

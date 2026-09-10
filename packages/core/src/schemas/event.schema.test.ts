@@ -167,7 +167,7 @@ describe("EventSchema (rejections)", () => {
     // null: no duration was observed. This is what writers record.
     expect(EventSchema.safeParse({ ...cmd, duration_ms: null }).success).toBe(true);
     // 0 stays in the domain deliberately: 0.1.0 events carrying it are on disk
-    // and are never rewritten, and every line read from disk is validated
+    // and are not rewritten in place, and every line read from disk is validated
     // against this schema, so narrowing would silently drop them (measured on
     // one store: 19,592 events). A reader treats it as unobserved -- see
     // `readObservedDuration` -- and no writer at 0.2.0 or above emits it.

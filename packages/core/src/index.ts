@@ -318,6 +318,7 @@ export {
   EventIdSchema,
   EventSchema,
   EventSourceSchema,
+  hasRetiredZeroDuration,
   IsoTimestampSchema,
   JSON_SCHEMA_VERSIONS,
   ManifestSchema,
@@ -340,6 +341,7 @@ export {
   unknownManifestKeys,
   WorkspaceIdSchema,
   writeObservedDuration,
+  ZERO_DURATION_RETIRED_SINCE,
 } from "./schemas/index.js";
 export type {
   ActiveTimeBasis,
