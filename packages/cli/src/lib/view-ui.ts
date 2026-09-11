@@ -450,6 +450,12 @@ export const VIEW_HTML = `<!doctype html>
     if (m > 0) return m + 'm ' + (sec < 10 ? '0' : '') + sec + 's';
     return sec + 's';
   }
+  // A floor under half a second renders as '>=0s' -- true of any total, and
+  // reading as a measured zero. Show those milliseconds instead.
+  function fmtFloor(ms) {
+    var coarse = fmtDur(ms);
+    return coarse === '0s' ? Math.round(ms || 0) + 'ms' : coarse;
+  }
   function kvrow(k, v) {
     return el('tr', {}, [el('td', { class: 'k', text: k }), el('td', { text: v })]);
   }
@@ -491,12 +497,12 @@ export const VIEW_HTML = `<!doctype html>
         timeRows.push(kvrow('model working', fmtDur(t.machineActiveTimeMs) + '  (model compute, subset of active; Codex turn duration on ' + machineSessions + ' of ' + t.sessionCount + ' sessions; not wall-clock-deduped)'));
       }
       timeRows.push(kvrow('span', fmtDur(t.sessionSpanMs) + (t.openSessionCount > 0 ? '  (' + t.openSessionCount + ' open)' : '')));
-      timeRows.push(kvrow('command', fmtDur(t.commandTimeMs) + (t.commandTimeReliable ? '' : '  (some sessions report 0)')));
+      timeRows.push(kvrow('command', fmtDur(t.commandTimeMs) + (t.commandTimeReliable ? '' : '  (floor: some sessions had no duration observed, or could not be read in full)')));
       detail.appendChild(el('table', { class: 'kv' }, [el('tbody', {}, timeRows)]));
       if (d.bySource && d.bySource.length) {
         detail.appendChild(el('h3', { text: 'By source' }));
         d.bySource.forEach(function (s) {
-          var cmd = s.commandTimeReliable ? fmtDur(s.commandTimeMs) : 'n/a';
+          var cmd = s.commandTimeReliable ? fmtDur(s.commandTimeMs) : (s.commandTimeMs > 0 ? '>=' + fmtFloor(s.commandTimeMs) : 'n/a');
           var machine = s.machineActiveAvailable ? ', model ' + fmtDur(s.machineActiveTimeMs) : '';
           detail.appendChild(el('div', { class: 'row' }, [
             el('span', { text: s.sourceKind + ': ' + s.sessionCount + ' sessions, ' + numfmt(s.tokens.output) + ' out tok, active ' + fmtDur(s.activeTimeMs) + machine + ', command ' + cmd })

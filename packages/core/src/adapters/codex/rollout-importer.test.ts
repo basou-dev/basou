@@ -159,7 +159,9 @@ describe("codexRolloutToImportPayload", () => {
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
     expect(command.exit_code).toBe(-1);
     expect(command.cwd).toBe(CWD);
-    expect(command.duration_ms).toBe(0);
+    // `Wall time: 0.0000 seconds` is codex's own unwaited interval, not the
+    // child's duration -- and the exit code proves the child ran. Unobserved.
+    expect(command.duration_ms).toBeNull();
   });
 
   it("records a null exit code when the output has no completion line", () => {
@@ -174,7 +176,52 @@ describe("codexRolloutToImportPayload", () => {
     const command = payload.events[1];
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
     expect(command.exit_code).toBeNull();
-    expect(command.duration_ms).toBe(0);
+    // No paired output, so no wall time was ever reported: UNOBSERVED, not 0ms.
+    expect(command.duration_ms).toBeNull();
+  });
+
+  it("drops a POSITIVE wall time when the output reports the process is still running", () => {
+    // The banner is codex's own wait, bounded by the caller's `yield_time_ms`,
+    // so a command handed back mid-run reports the timeout rather than its
+    // duration. Recording it would assert "outcome unknown" and "duration
+    // observed" on the same event; measured on one host, 1,393 of 3,232
+    // positive `exec_command` banners are this case, understating the commands
+    // that could be traced to their exit by 11.7x.
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      execCall("2026-05-10T00:00:01.000Z", "call_1", "sleep 20"),
+      execOutput(
+        "2026-05-10T00:00:02.000Z",
+        "call_1",
+        "Wall time: 1.0018 seconds\nProcess running with session ID 83750\nOutput:\n",
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.exit_code).toBeNull();
+    expect(command.duration_ms).toBeNull();
+  });
+
+  it("keeps a positive wall time when the output reports the process exited", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00:00.000Z"),
+      execCall("2026-05-10T00:00:01.000Z", "call_1", "make build"),
+      execOutput(
+        "2026-05-10T00:00:02.000Z",
+        "call_1",
+        "Wall time: 2.5000 seconds\nProcess exited with code 0\nOutput:\n",
+      ),
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+    const command = payload.events[1];
+    if (command?.type !== "command_executed") throw new Error("expected command_executed");
+    expect(command.exit_code).toBe(0);
+    expect(command.duration_ms).toBe(2500);
   });
 
   it("orders output even when records are not timestamp-sorted on disk", () => {
@@ -551,8 +598,10 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
     expect(second.cwd).toBe(CWD);
     // One wall time covers the whole script, so it is not credited to each
     // command (that would report 2s twice for a 2s script).
-    expect(first.duration_ms).toBe(0);
-    expect(second.duration_ms).toBe(0);
+    // One wall time for the whole program cannot be attributed to either
+    // command, so both record it as UNOBSERVED rather than as 0ms.
+    expect(first.duration_ms).toBeNull();
+    expect(second.duration_ms).toBeNull();
     expect(payload.session.label).toBe("codex 2026-07-31: 2 commands");
   });
 
@@ -853,7 +902,7 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
     expect(command.args).toEqual(["-c", "pwd"]);
     // Two tool calls ran, so the script's single wall time is not the command's.
-    expect(command.duration_ms).toBe(0);
+    expect(command.duration_ms).toBeNull();
   });
 
   it("ignores a call site that merely ends a longer identifier", () => {
@@ -922,7 +971,7 @@ describe("codexRolloutToImportPayload (scripted tool calls)", () => {
     const command = payload.events[1];
     if (command?.type !== "command_executed") throw new Error("expected command_executed");
     // The 30s belong to the web search, not to `ls`.
-    expect(command.duration_ms).toBe(0);
+    expect(command.duration_ms).toBeNull();
   });
 
   it("reads both call formats in one rollout (a CLI upgrade mid-history)", () => {

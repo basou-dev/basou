@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ApprovalSchema } from "./approval.schema.js";
-import { EventSchema } from "./event.schema.js";
+import { EVENT_SCHEMA_VERSION, EventSchema } from "./event.schema.js";
 import { ManifestSchema } from "./manifest.schema.js";
 import { SessionSchema } from "./session.schema.js";
 import { SessionImportPayloadSchema } from "./session-import.schema.js";
@@ -9,15 +9,36 @@ import { TaskSchema } from "./task.schema.js";
 import { TaskIndexSchema } from "./task-index.schema.js";
 
 /**
- * Schema version of the on-disk Basou v0.1 formats these JSON Schemas describe.
- * It tracks {@link SchemaVersionSchema} (the `schema_version` field), NOT the
- * npm package version, so the `$id` URLs stay stable while the package moves.
+ * `schema_version` of each on-disk format, keyed by artifact basename.
+ *
+ * Per document, not workspace-wide: the formats version independently, so one
+ * of them changing must not move the `$id` of the others. It tracks
+ * {@link SchemaVersionSchema} (the `schema_version` field a writer stamps on
+ * that document), NOT the npm package version, so a document's `$id` stays
+ * stable while the package moves.
+ *
+ * The version a document is listed under is the version its WRITERS stamp, so
+ * the published `$id` and the `schema_version` inside the same artifact always
+ * agree. `session-import` is the case worth naming: its envelope still stamps
+ * (and its importer still requires) `0.1.0`, while the events it carries are
+ * individually versioned and now include `0.2.0` ones — so the envelope's bytes
+ * changed without the envelope's own format changing.
  */
-export const JSON_SCHEMA_VERSION = "0.1.0";
+export const JSON_SCHEMA_VERSIONS = {
+  manifest: "0.1.0",
+  session: "0.1.0",
+  event: EVENT_SCHEMA_VERSION,
+  task: "0.1.0",
+  approval: "0.1.0",
+  status: "0.1.0",
+  "task-index": "0.1.0",
+  "session-import": "0.1.0",
+} as const satisfies Record<string, string>;
 
-/** Base of every emitted schema's `$id`. The URL is a stable identifier; it
- * need not resolve (serving the schemas on basou.dev is a separate concern). */
-const ID_BASE = `https://basou.dev/schemas/${JSON_SCHEMA_VERSION}`;
+/** Base of every emitted schema's `$id`, before the per-document version. The
+ * URL is a stable identifier; it need not resolve (serving the schemas on
+ * basou.dev is a separate concern). */
+const ID_BASE = "https://basou.dev/schemas";
 
 /** JSON Schema draft the artifacts target (what `z.toJSONSchema` emits). */
 const JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
@@ -28,7 +49,7 @@ const JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
  * format to the Zod schema that is its single source of truth.
  */
 const DOCUMENTS: ReadonlyArray<{
-  name: string;
+  name: keyof typeof JSON_SCHEMA_VERSIONS;
   schema: z.ZodType;
   title: string;
   description: string;
@@ -96,8 +117,9 @@ export type JsonSchemaArtifact = {
  * Build the published JSON Schema artifacts from the canonical Zod schemas.
  *
  * Pure: no disk or environment access. Each artifact is `z.toJSONSchema` of the
- * document schema, re-headed with a stable `$id` / `title` / `description` (the
- * draft `$schema` from zod is preserved). This is the single generator used by
+ * document schema, re-headed with an `$id` carrying that document's own
+ * {@link JSON_SCHEMA_VERSIONS} entry, plus `title` / `description` (the draft
+ * `$schema` from zod is preserved). This is the single generator used by
  * both the `gen:schemas` script (which writes the committed files) and the
  * drift-guard test (which asserts the committed files still match), so the two
  * can never disagree.
@@ -119,7 +141,7 @@ export function buildJsonSchemas(): JsonSchemaArtifact[] {
     const { $schema, ...rest } = generated;
     const schema: Record<string, unknown> = {
       $schema: typeof $schema === "string" ? $schema : JSON_SCHEMA_DIALECT,
-      $id: `${ID_BASE}/${doc.name}.schema.json`,
+      $id: `${ID_BASE}/${JSON_SCHEMA_VERSIONS[doc.name]}/${doc.name}.schema.json`,
       title: doc.title,
       description: doc.description,
       ...rest,

@@ -5,6 +5,7 @@ import {
   appendEventToExistingSession,
   assertBasouRootSafe,
   basouPaths,
+  EVENT_SCHEMA_VERSION,
   type Event,
   enumerateSessionDirs,
   findErrorCode,
@@ -15,6 +16,7 @@ import {
   type RechainResult,
   readAllEvents,
   readManifest,
+  readObservedDuration,
   readYamlFile,
   rechainSessionInPlace,
   resolveSessionId,
@@ -302,8 +304,14 @@ export async function doRunSessionShow(
     throw new Error("Failed to read session", { cause: error });
   }
 
+  // A dropped line means the stream is incomplete in a way replay cannot see,
+  // which the work summary needs to know before it calls a 0 the truth.
+  let eventsLostLines = 0;
   const events = await readAllEvents(sessionDir, {
-    onWarning: (w) => printReplayWarning(w, sessionId),
+    onWarning: (w) => {
+      if (w.kind === "malformed_json" || w.kind === "schema_violation") eventsLostLines++;
+      printReplayWarning(w, sessionId);
+    },
   });
 
   if (options.json === true) {
@@ -312,7 +320,7 @@ export async function doRunSessionShow(
   }
 
   const now = ctx.nowProvider?.() ?? new Date();
-  printSessionShowText(session, events, options, repositoryRoot, now);
+  printSessionShowText(session, events, options, repositoryRoot, now, eventsLostLines);
 }
 
 function suspectLabel(reason: string | null): string {
@@ -372,6 +380,7 @@ function printSessionShowText(
   options: SessionShowOptions,
   repositoryRoot: string,
   now: Date,
+  eventsLostLines: number,
 ): void {
   const s = session.session;
   console.log(`Session: ${s.id}  (status: ${s.status})`);
@@ -400,7 +409,7 @@ function printSessionShowText(
   }
 
   console.log("");
-  console.log(`Work:          ${formatSessionWork(session, events, now)}`);
+  console.log(`Work:          ${formatSessionWork(session, events, now, eventsLostLines)}`);
 
   if (events.length === 0) return;
 
@@ -418,10 +427,31 @@ function printSessionShowText(
 /**
  * One-line work summary for `session show`: output volume + action counts +
  * time proxies, reusing the same per-session computation as `basou stats`.
- * `command n/a (import)` flags sources whose shell time is unrecorded.
+ * `command n/a (no duration observed, or the stream was not read in full)`
+ * flags a session that ran commands none of which was timed, or whose stream
+ * lost a line to malformed JSON or a schema violation — "ran no commands" is
+ * unbacked when the stream was not read in full, and the rendered string names
+ * both causes because this surface cannot tell them apart. (The other
+ * incomplete case, an unreadable events.jsonl, cannot reach here: `session
+ * show` fails earlier.) A session that ran none and whose stream
+ * WAS read in full reports its truthful 0ms. A session that timed only SOME of
+ * its commands reports a floor and is not marked, because one boolean cannot
+ * carry "all", "some" and "none".
  */
-function formatSessionWork(session: Session, events: Event[], now: Date): string {
-  const w = sessionWorkStatsFromEvents(session.session.id, session.session, events, now);
+function formatSessionWork(
+  session: Session,
+  events: Event[],
+  now: Date,
+  eventsLostLines: number,
+): string {
+  const w = sessionWorkStatsFromEvents(
+    session.session.id,
+    session.session,
+    events,
+    now,
+    false,
+    eventsLostLines,
+  );
   const parts: string[] = [];
   if (w.tokens.output > 0) parts.push(`${w.tokens.output.toLocaleString("en-US")} output tokens`);
   parts.push(`${w.commandCount} cmd / ${w.fileChangedCount} files / ${w.decisionCount} dec`);
@@ -434,7 +464,7 @@ function formatSessionWork(session: Session, events: Event[], now: Date): string
   parts.push(
     w.availability.commandTime
       ? `command ${formatDurationMs(w.commandTimeMs)}`
-      : "command n/a (import)",
+      : "command n/a (no duration observed, or the stream was not read in full)",
   );
   return parts.join(", ");
 }
@@ -500,7 +530,11 @@ function eventVariantSummary(ev: Event): string {
       // more common case of a source that never recorded an outcome at all.
       const executorPart = ev.command ?? "(executor unrecorded)";
       const exitPart = ev.exit_code === null ? "exit=unknown" : `exit=${ev.exit_code}`;
-      return `${executorPart}${argsPart} (${exitPart}, ${ev.duration_ms}ms)`;
+      // Read through the shared rule, not off the field: a stored 0 means
+      // unobserved on every version, just as null does.
+      const observedDuration = readObservedDuration(ev);
+      const durationPart = observedDuration === null ? "duration=unknown" : `${observedDuration}ms`;
+      return `${executorPart}${argsPart} (${exitPart}, ${durationPart})`;
     }
     case "git_snapshot":
       return `branch=${ev.branch} dirty=${ev.dirty}`;
@@ -894,7 +928,7 @@ export async function doRunSessionNote(
       sessionId: sesId,
       eventBuilder: (eventId) =>
         ({
-          schema_version: "0.1.0",
+          schema_version: EVENT_SCHEMA_VERSION,
           id: eventId,
           session_id: sesId,
           occurred_at: occurredAt,

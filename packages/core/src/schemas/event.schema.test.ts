@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  EVENT_SCHEMA_VERSION,
   EventSchema,
   type TaskArchivedEvent,
   type TaskDeletedEvent,
@@ -151,6 +152,47 @@ describe("EventSchema (happy paths)", () => {
 describe("EventSchema (rejections)", () => {
   it("rejects an unknown event type", () => {
     expect(EventSchema.safeParse({ ...BASE, type: "unknown_event" }).success).toBe(false);
+  });
+
+  it("accepts a null duration_ms, and still accepts a zero one that writers no longer produce", () => {
+    const cmd = {
+      ...BASE,
+      schema_version: EVENT_SCHEMA_VERSION,
+      type: "command_executed" as const,
+      command: null,
+      args: ["-c", "sleep 0"],
+      cwd: "/tmp/example",
+      exit_code: null,
+    };
+    // null: no duration was observed. This is what writers record.
+    expect(EventSchema.safeParse({ ...cmd, duration_ms: null }).success).toBe(true);
+    // 0 stays in the domain deliberately: 0.1.0 events carrying it are on disk
+    // and are not rewritten in place, and every line read from disk is validated
+    // against this schema, so narrowing would silently drop them (measured on
+    // one store: 19,592 events). A reader treats it as unobserved -- see
+    // `readObservedDuration` -- and no writer at 0.2.0 or above emits it.
+    expect(EventSchema.safeParse({ ...cmd, duration_ms: 0 }).success).toBe(true);
+    // Still an integer domain otherwise.
+    expect(EventSchema.safeParse({ ...cmd, duration_ms: -1 }).success).toBe(false);
+  });
+
+  it("keeps reading a pre-bump event whose 0 duration means the same thing it means now", () => {
+    const parsed = EventSchema.safeParse({
+      ...BASE,
+      schema_version: "0.1.0",
+      type: "command_executed",
+      command: null,
+      args: ["-c", "ls"],
+      cwd: "/tmp/example",
+      exit_code: null,
+      duration_ms: 0,
+    });
+    expect(parsed.success).toBe(true);
+    // The bump is a WRITE-side change: nothing on disk is rewritten, and it
+    // redefines no value a reader may already hold. `0` meant "not observed"
+    // under 0.1.0 and still does, which is why the read rule carries no
+    // version branch.
+    expect(EVENT_SCHEMA_VERSION).not.toBe("0.1.0");
   });
 
   it("rejects command_executed missing the required `command` field", () => {

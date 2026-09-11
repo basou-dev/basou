@@ -50,13 +50,20 @@ a `basou_version`). This tracks the **on-disk format major**, which is
 **decoupled from the npm / product version**:
 
 - Shipping product `1.0.0` does **not** bump the format major. The format major
-  stays at `0` until the on-disk format itself changes incompatibly. Seeing
-  `schema_version: 0.x` on a `1.0`+ install is therefore expected — it means the
-  on-disk format has not changed incompatibly since `0.1`, not that the format
-  is unstable.
+  stays at `0`. Seeing `schema_version: 0.x` on a `1.0`+ install is therefore
+  expected and does not mean the format is unstable.
+- A MINOR bump within format major 0 can still be breaking, and one has
+  happened: `0.2.0` made `command_executed.duration_ms` nullable (see
+  [schemas §7.3](schemas.md#73-extension-rules-additive-by-default-breaking-changes-are-gated)).
+  So `0.x` does **not** by itself mean "nothing incompatible has changed since
+  `0.1`". Read the minor.
 - basou reads **format major 0**: it accepts any `0.x.y` `schema_version` and
   **gates** a higher / unknown major (`1.x.y`+) with an explicit "upgrade basou"
-  error rather than a cryptic field-level parse failure. Most durable records are
+  error rather than a cryptic field-level parse failure. That gate is
+  major-only, so it does not catch a breaking MINOR: a basou at 0.41.0 or
+  earlier rejects a `0.2.0` event with a null `duration_ms` and drops the line,
+  losing the whole event rather than reporting an upgrade. Hosts that share a
+  store through `~/.basou/hosts.yaml` should therefore be upgraded together. Most durable records are
   loose objects that preserve unknown fields, so a newer minor's additive fields
   survive a round-trip; a few event variants are intentionally strict (they
   reject unknown keys), so forward tolerance *within* major 0 is a design goal,

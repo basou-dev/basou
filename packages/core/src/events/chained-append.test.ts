@@ -119,6 +119,31 @@ describe("appendChainedEventLocked", () => {
     expect(second.prev_hash).toBe(lineHash(written[0] as string));
   });
 
+  it("refuses a retired zero, and accepts the same event at 0.1.0", async () => {
+    // This is the copy of the guard that covers `decision record`, `session
+    // note`, task attach, approval resolve and appendEventToExistingSession.
+    // Removing it used to leave the whole suite green.
+    const { paths } = await setup();
+    const cmd = (schemaVersion: string) =>
+      ({
+        schema_version: schemaVersion,
+        id: "evt_01HXABCDEF1234567890ABCEZ1",
+        session_id: SES_ID,
+        occurred_at: "2026-06-12T09:00:00+09:00",
+        source: "terminal-recording",
+        type: "command_executed",
+        command: "ls",
+        args: ["-la"],
+        cwd: "/tmp/example",
+        exit_code: 0,
+        duration_ms: 0,
+      }) as Event;
+    await expect(appendChainedEventLocked(paths, SES_ID, cmd("0.2.0"))).rejects.toThrow(
+      /duration_ms: 0 at schema_version 0\.2\.0/,
+    );
+    await expect(appendChainedEventLocked(paths, SES_ID, cmd("0.1.0"))).resolves.toBeDefined();
+  });
+
   it("appends a PLAIN unchained line onto a legacy unchained log", async () => {
     const { paths, eventsPath } = await setup();
     await writeFile(eventsPath, `${JSON.stringify(makeEvent("V1"))}\n`);

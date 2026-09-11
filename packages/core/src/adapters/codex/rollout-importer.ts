@@ -1,6 +1,8 @@
 import { type PrefixedId, prefixedUlid } from "../../ids/ulid.js";
 import type { Event } from "../../schemas/event.schema.js";
+import { EVENT_SCHEMA_VERSION } from "../../schemas/event.schema.js";
 import type { Manifest } from "../../schemas/manifest.schema.js";
+import { writeObservedDuration } from "../../schemas/observed-duration.js";
 import type { SessionImportPayload } from "../../schemas/session-import.schema.js";
 import {
   ACTIVE_GAP_CAP_MS,
@@ -211,9 +213,16 @@ export function codexRolloutToImportPayload(
       // The output reports ONE wall time for the whole program, so it is only
       // honest as a command duration when that program did exactly one thing:
       // a script that also searched the web or updated a plan would credit the
-      // command with time it did not spend. Anything else falls back to the
-      // schema floor (0 = unrecorded).
-      const durationMs = scan.toolCallCount === 1 ? parseWallTimeMs(output) : 0;
+      // command with time it did not spend. Anything else is recorded as NOT
+      // OBSERVED (null) for every command in the program: the wall time exists
+      // but belongs to the program, and splitting or duplicating it across the
+      // commands would put an inference inside the hash chain. Measured
+      // 2026-09-10 over this host's rollouts, on the same basis this branch
+      // uses (a `custom_tool_call` named `exec` that yielded at least one
+      // command): 958 of 4,621 such calls (20.7%) are multi-call. Because a
+      // multi-call program tends to run several commands, that is where 3,015
+      // of the 6,678 scripted command events (45.1%) lose their duration.
+      const durationMs = scan.toolCallCount === 1 ? parseWallTimeMs(output) : null;
       const scriptTsMs = Date.parse(ts);
       if (Number.isFinite(scriptTsMs)) engagementTsMs.push(scriptTsMs);
       for (const command of scan.commands) {
@@ -244,10 +253,17 @@ export function codexRolloutToImportPayload(
     const output = readCallId(payload.call_id, outputsByCallId);
     const execTsMs = Date.parse(ts);
     if (Number.isFinite(execTsMs)) engagementTsMs.push(execTsMs);
+    const exitCode = parseExitCode(output);
     derived.push(
       commandExecutedEvent(ts, placeholderSessionId, command.cmd, cwd, {
-        exitCode: parseExitCode(output),
-        durationMs: parseWallTimeMs(output),
+        exitCode,
+        // The duration is gated on the SAME token as the exit code. When this
+        // output reports no exit ("Process running with session ID N", or no
+        // outcome line at all), codex handed the turn back while the child was
+        // still running, so its `Wall time` is the interval codex waited and
+        // not how long the command took. A wall-clock duration cannot have been
+        // observed without observing that the process ended.
+        durationMs: exitCode === null ? null : parseWallTimeMs(output),
       }),
     );
   }
@@ -385,14 +401,14 @@ function baseEvent(
   occurredAt: string,
   sessionId: PrefixedId<"ses">,
 ): {
-  schema_version: "0.1.0";
+  schema_version: typeof EVENT_SCHEMA_VERSION;
   id: PrefixedId<"evt">;
   session_id: PrefixedId<"ses">;
   occurred_at: string;
   source: string;
 } {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: prefixedUlid("evt"),
     session_id: sessionId,
     occurred_at: occurredAt,
@@ -413,7 +429,7 @@ function commandExecutedEvent(
   sessionId: PrefixedId<"ses">,
   command: string,
   cwd: string | null,
-  outcome: { exitCode: number | null; durationMs: number },
+  outcome: { exitCode: number | null; durationMs: number | null },
 ): Event {
   return {
     ...baseEvent(occurredAt, sessionId),
@@ -972,18 +988,61 @@ function parseExitCode(output: string | undefined): number | null {
 }
 
 /**
- * Codex's output text reports wall-clock duration as `Wall time: X seconds` for
- * a per-command `exec_command` call and `Wall time X seconds` (no colon) for a
- * whole script, so the colon is optional here. Returns `0` (the schema floor)
- * when absent or non-finite, matching the Claude importer's missing-duration
- * default.
+ * Wall time from a tool output's outcome banner, or null when the banner
+ * reports nothing basou can treat as the command's duration.
+ *
+ * Codex writes `Wall time: X seconds` for a per-command `exec_command` call and
+ * `Wall time X seconds` (no colon) for a whole script, so the colon is optional
+ * here.
+ *
+ * On the `exec_command` path this banner is NOT the child process's duration.
+ * It is the interval codex itself waited on the tool call, bounded by the
+ * caller-supplied `yield_time_ms`. Measured 2026-09-11 over this host's
+ * rollouts: no banner from a process that EXITED exceeds the yield it was
+ * given, in any bucket (yield 1000 -> 1,498 exited calls, max 999 ms; 4000 ->
+ * 34, max 3,536 ms; 9000 -> 11, max 7,911 ms; 30000 -> 126, max 17,319 ms), and
+ * the control case is explicit: `sleep 8` reports 7.8757 s at
+ * `yield_time_ms: 9000` and 1.0018 s at 1000. Overshoot exists but belongs
+ * entirely to the other population -- 1,366 of the 3,153 positive banners that
+ * declared a yield exceed it, and every one of them had NOT exited, overrunning
+ * the timeout by a few milliseconds of overhead. So a positive banner from an
+ * unfinished call is `min(duration, yield)` plus overhead: right-censored, not
+ * measured.
+ *
+ * Two consequences, and the caller applies both:
+ *
+ * - A banner rounding to 0 ms is not a measurement. It appears on 26,591 of
+ *   29,897 paired `exec_command` calls (88.9%), and all 26,591 also carry
+ *   `Process exited with code N`, so the process demonstrably ran; four decimal
+ *   places assert under 50 microseconds, less than a `fork` + `exec` costs, on
+ *   commands including `curl` over TCP. This function returns null for those.
+ * - A positive value is only an observation when the output also reports that
+ *   the process ENDED. The `exec_command` caller therefore gates the duration
+ *   on the same token as the exit code (see the call site). Of 3,232 positive
+ *   `exec_command` banners, 1,393 come from an output reading `Process running
+ *   with session ID N` — codex handed the turn back mid-command — and recording
+ *   those would assert "outcome unknown" and "duration observed" on the same
+ *   event. Tracing the session id through the follow-up `write_stdin` polls,
+ *   1,237 of them demonstrably end later in the same log, and their banners sum
+ *   to 19,597,309 ms against the 1,672,329 ms the banner at spawn reported: an
+ *   11.7x understatement, worst case 1,002 ms against 943,300 ms.
+ *
+ * What survives is the 1,839 `exec_command` banners whose output reports an
+ * exit, plus the scripted path. The scripted banner is a different quantity.
+ * Scripted programs DO declare `yield_time_ms` (1,960 of 4,661 such calls,
+ * measured 2026-09-11), but the banner is not bounded by it: 0 of the 1,952
+ * comparable banners land within 30 ms of the declared yield, the median banner
+ * is 1.0% of it, and some exceed it outright (max 1.200x), which a clamp could
+ * not produce. None of the 4,661 outputs ever reported a still-running process
+ * either. So it is the program's own elapsed time, which is why the caller
+ * keeps it for a single-tool-call program and drops it for a multi-call one.
  */
-function parseWallTimeMs(output: string | undefined): number {
-  if (output === undefined) return 0;
+function parseWallTimeMs(output: string | undefined): number | null {
+  if (output === undefined) return null;
   const match = output.match(/Wall time:?\s*([\d.]+)\s*seconds/);
-  if (match?.[1] === undefined) return 0;
+  if (match?.[1] === undefined) return null;
   const seconds = Number.parseFloat(match[1]);
-  return Number.isFinite(seconds) ? Math.round(seconds * 1000) : 0;
+  return writeObservedDuration(Number.isFinite(seconds) ? seconds * 1000 : null);
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   assertBasouRootSafe,
   basouPaths,
   createAdHocSessionWithEvent,
+  EVENT_SCHEMA_VERSION,
   type Event,
   findErrorCode,
   type PrefixedId,
@@ -199,7 +200,7 @@ function buildNoteEvent(input: {
   body: string;
 }): Event {
   return {
-    schema_version: "0.1.0",
+    schema_version: EVENT_SCHEMA_VERSION,
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,

@@ -7,6 +7,7 @@ import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import { sanitizeWorkingDirectory } from "../lib/path-sanitizer.js";
 import type { Event } from "../schemas/event.schema.js";
+import { EVENT_SCHEMA_VERSION } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import {
   type Session,
@@ -229,7 +230,7 @@ export async function createAdHocSessionWithEvent(
       });
       const events: Event[] = [
         {
-          schema_version: "0.1.0",
+          schema_version: EVENT_SCHEMA_VERSION,
           id: startedEventId,
           session_id: sessionId,
           occurred_at: input.occurredAt,
@@ -237,7 +238,7 @@ export async function createAdHocSessionWithEvent(
           type: "session_started",
         },
         {
-          schema_version: "0.1.0",
+          schema_version: EVENT_SCHEMA_VERSION,
           id: statusToRunningEventId,
           session_id: sessionId,
           occurred_at: input.occurredAt,
@@ -248,7 +249,7 @@ export async function createAdHocSessionWithEvent(
         },
         ...targetEvents,
         {
-          schema_version: "0.1.0",
+          schema_version: EVENT_SCHEMA_VERSION,
           id: statusToCompletedEventId,
           session_id: sessionId,
           occurred_at: input.occurredAt,
@@ -258,7 +259,7 @@ export async function createAdHocSessionWithEvent(
           to: "completed",
         },
         {
-          schema_version: "0.1.0",
+          schema_version: EVENT_SCHEMA_VERSION,
           id: endedEventId,
           session_id: sessionId,
           occurred_at: input.occurredAt,

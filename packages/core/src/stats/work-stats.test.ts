@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -77,14 +77,25 @@ async function placeSession(
 function line(obj: Record<string, unknown>): string {
   return `${JSON.stringify({ schema_version: "0.1.0", id: evtId(), source: "codex-import", ...obj })}\n`;
 }
+/** A 0.2.0 event: writers at this version record null, never 0. */
+function line020(obj: Record<string, unknown>): string {
+  return line({ ...obj, schema_version: "0.2.0" });
+}
 function started(id: string, at: string): string {
   return line({ type: "session_started", session_id: id, occurred_at: at });
 }
 function ended(id: string, at: string): string {
   return line({ type: "session_ended", session_id: id, occurred_at: at });
 }
-function command(id: string, at: string, durationMs: number): string {
-  return line({
+function command(id: string, at: string, durationMs: number | null): string {
+  return line(commandFields(id, at, durationMs));
+}
+/** Same command, written by a 0.2.0 writer. */
+function command020(id: string, at: string, durationMs: number | null): string {
+  return line020(commandFields(id, at, durationMs));
+}
+function commandFields(id: string, at: string, durationMs: number | null): Record<string, unknown> {
+  return {
     type: "command_executed",
     session_id: id,
     occurred_at: at,
@@ -93,7 +104,7 @@ function command(id: string, at: string, durationMs: number): string {
     cwd: "/tmp/fixture",
     exit_code: 0,
     duration_ms: durationMs,
-  });
+  };
 }
 function fileChanged(id: string, at: string): string {
   return line({
@@ -153,7 +164,7 @@ describe("computeWorkStats", () => {
     expect(r.totals.tokensAvailable).toBe(true);
   });
 
-  it("flags claude-code-import: zero command time is not reliable, tokens still count", async () => {
+  it("flags claude-code-import: an untimed command is not reliable, tokens still count", async () => {
     const paths = await ensureBasouDirectory(getWorkDir());
     const id = "ses_01HXABCDEF1234567890ABCDE2";
     await placeSession(
@@ -165,8 +176,11 @@ describe("computeWorkStats", () => {
         endedAt: "2026-05-10T00:05:00.000Z",
         metrics: { output_tokens: 800000 },
       },
+      // A transcript reports no timing, so the importer records null. Written
+      // under 0.1.0 the same absence was stored as `0`, and the read rule
+      // reaches the same verdict for both without consulting the version.
       started(id, "2026-05-10T00:00:00.000Z") +
-        command(id, "2026-05-10T00:01:00.000Z", 0) +
+        command020(id, "2026-05-10T00:01:00.000Z", null) +
         ended(id, "2026-05-10T00:05:00.000Z"),
     );
     const r = await computeWorkStats({ paths, now: NOW });
@@ -176,6 +190,186 @@ describe("computeWorkStats", () => {
     expect(s?.tokens.output).toBe(800000);
     expect(s?.availability.tokens).toBe(true);
     expect(r.totals.commandTimeReliable).toBe(false);
+  });
+
+  it("derives commandTime from the events, not the source kind: a codex session whose commands carry no observed duration is not reliable", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDE9";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "codex-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") +
+        // Null = the source reported no usable wall time for these commands.
+        // The share of codex commands carrying an observed duration is 1.5%
+        // for 2026-05 and 56.0% for 2026-08, so the source kind cannot answer
+        // whether THIS session was timed.
+        command(id, "2026-05-10T00:01:00.000Z", null) +
+        command(id, "2026-05-10T00:02:00.000Z", null) +
+        ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW });
+    const s = r.sessions[0];
+    expect(s?.commandCount).toBe(2);
+    // Null contributes nothing rather than reading as 0ms.
+    expect(s?.commandTimeMs).toBe(0);
+    expect(s?.availability.commandTime).toBe(false);
+    expect(r.totals.commandTimeReliable).toBe(false);
+  });
+
+  it("reads a stored 0 as unobserved on 0.2.0 too, so the rule needs no version branch", async () => {
+    // A 0.2.0 writer never emits 0, but if one appears -- an old re-import, a
+    // third-party writer -- it is not a duration a spawned process can have
+    // had, so it must not be certified as a measured 0ms.
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDEB";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "codex-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") +
+        command020(id, "2026-05-10T00:01:00.000Z", 0) +
+        command020(id, "2026-05-10T00:02:00.000Z", 0) +
+        ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW });
+    const s = r.sessions[0];
+    expect(s?.commandCount).toBe(2);
+    expect(s?.commandTimeMs).toBe(0);
+    expect(s?.availability.commandTime).toBe(false);
+    expect(r.totals.commandTimeReliable).toBe(false);
+  });
+
+  it("reads a 0.1.0 zero as unobserved, so an old import does not claim a measured 0ms", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDEC";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "claude-code-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") +
+        command(id, "2026-05-10T00:01:00.000Z", 0) +
+        ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW });
+    const s = r.sessions[0];
+    expect(s?.commandTimeMs).toBe(0);
+    expect(s?.availability.commandTime).toBe(false);
+  });
+
+  it("does NOT certify a session whose event log could not be read", async () => {
+    // It saw no commands because the log was unreadable, not because none ran,
+    // so 0ms measures nothing. Without this the same object would assert both
+    // `eventsUnreadable: true` and "this 0ms is real".
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDEE";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "codex-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") + ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    await chmod(join(paths.sessions, id, "events.jsonl"), 0o000);
+    try {
+      const r = await computeWorkStats({ paths, now: NOW, onSessionSkip: () => {} });
+      const s = r.sessions[0];
+      expect(s?.eventsUnreadable).toBe(true);
+      expect(s?.commandCount).toBe(0);
+      expect(s?.availability.commandTime).toBe(false);
+      expect(r.totals.commandTimeReliable).toBe(false);
+    } finally {
+      await chmod(join(paths.sessions, id, "events.jsonl"), 0o600);
+    }
+  });
+
+  it("does NOT certify a session whose stream lost a line, even with no commands", async () => {
+    // The counting side of the same rule, one level up: computeWorkStats has to
+    // carry the replay's malformed / schema-invalid line count into the session
+    // stats. "Ran no commands" is a claim about the WHOLE stream, and a lost
+    // line means it was not read in full, so the 0ms is unbacked. Only the CLI
+    // surfaces tested this wiring; nothing pinned it here.
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDEF";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "codex-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") +
+        '{"schema_version":"0.2.0","type":"command_exec\n' +
+        ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW, onWarning: () => {} });
+    const s = r.sessions[0];
+    expect(s?.commandCount).toBe(0);
+    expect(s?.eventsUnreadable).toBe(false);
+    expect(s?.availability.commandTime).toBe(false);
+    expect(r.totals.commandTimeReliable).toBe(false);
+  });
+
+  it("leaves a session that ran no commands reliable: 0ms is the truth there", async () => {
+    // `basou note` / `decision capture` sessions record no command at all
+    // (measured 2026-09-10: 466 of one store's 862 sessions). Marking them
+    // unreliable would poison the AND-aggregated workspace total forever.
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDED";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "human",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:00:01.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") + ended(id, "2026-05-10T00:00:01.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW });
+    const s = r.sessions[0];
+    expect(s?.commandCount).toBe(0);
+    expect(s?.commandTimeMs).toBe(0);
+    expect(s?.availability.commandTime).toBe(true);
+    expect(r.totals.commandTimeReliable).toBe(true);
+  });
+
+  it("keeps commandTime reliable when only SOME of a session's commands were timed", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDEA";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "codex-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") +
+        command(id, "2026-05-10T00:01:00.000Z", null) +
+        command(id, "2026-05-10T00:02:00.000Z", 250) +
+        ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW });
+    const s = r.sessions[0];
+    expect(s?.commandTimeMs).toBe(250);
+    expect(s?.availability.commandTime).toBe(true);
   });
 
   it("measures a running session (no ended_at) up to now and flags it open", async () => {

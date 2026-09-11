@@ -1,6 +1,10 @@
 import { appendFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
+import {
+  hasRetiredZeroDuration,
+  ZERO_DURATION_RETIRED_SINCE,
+} from "../schemas/observed-duration.js";
 import { atomicReplace } from "../storage/atomic.js";
 import { chainEvents, serializeEventLine } from "./chain.js";
 
@@ -39,6 +43,7 @@ export async function appendEvent(sessionDir: string, event: unknown): Promise<v
   } catch (error: unknown) {
     throw new Error("Invalid Basou event payload", { cause: error });
   }
+  assertWritableEvent(validated);
   const line = `${serializeEventLine(validated)}\n`;
   try {
     await appendFile(join(sessionDir, "events.jsonl"), line, "utf8");
@@ -102,6 +107,7 @@ export async function writeEventsBulk(
   } catch (error: unknown) {
     throw new Error("Invalid Basou event payload", { cause: error });
   }
+  for (const event of validated) assertWritableEvent(event);
   const filePath = join(sessionDir, "events.jsonl");
 
   let body: string;
@@ -120,4 +126,20 @@ export async function writeEventsBulk(
     throw new Error("Failed to write events.jsonl", { cause: error });
   }
   return result;
+}
+
+/**
+ * Refuse to WRITE a `command_executed` whose `duration_ms` is `0` on a version
+ * where no writer produces one. The schema deliberately still accepts that
+ * value so the 0.1.0 events on disk keep validating, which leaves the write
+ * boundary as the only place the invariant can be enforced rather than merely
+ * asserted. Round-tripping a genuine 0.1.0 event through `session import` is
+ * unaffected: the check is scoped to the event's own version.
+ */
+export function assertWritableEvent(event: Event): void {
+  if (!hasRetiredZeroDuration(event)) return;
+  throw new Error(
+    `Refusing to write command_executed with duration_ms: 0 at schema_version ${event.schema_version}: ` +
+      `0 is not a duration a command can have had, and writers at ${ZERO_DURATION_RETIRED_SINCE} and above record null`,
+  );
 }

@@ -104,6 +104,40 @@ describe("appendEvent", () => {
       }),
     ).rejects.toThrow("Invalid Basou event payload");
   });
+
+  it("refuses to write a duration_ms of 0 at a version whose writers never produce one", async () => {
+    // The schema still accepts that value so the 0.1.0 events on disk keep
+    // validating, which leaves this boundary as the only place the invariant
+    // can be enforced rather than merely asserted.
+    await expect(
+      appendEvent(sessionDir, {
+        ...BASE,
+        schema_version: "0.2.0",
+        type: "command_executed",
+        command: "ls",
+        args: ["-la"],
+        cwd: "/tmp/example",
+        exit_code: 0,
+        duration_ms: 0,
+      }),
+    ).rejects.toThrow(/duration_ms: 0 at schema_version 0\.2\.0/);
+  });
+
+  it("still round-trips a genuine 0.1.0 event carrying a 0", async () => {
+    // 19,592 such events exist on one store, and `session import` replays
+    // them; the guard is scoped to the event's own version.
+    await appendEvent(sessionDir, {
+      ...BASE,
+      type: "command_executed",
+      command: "ls",
+      args: ["-la"],
+      cwd: "/tmp/example",
+      exit_code: 0,
+      duration_ms: 0,
+    });
+    const content = await readFile(join(sessionDir, "events.jsonl"), "utf8");
+    expect(JSON.parse(content.trim()).duration_ms).toBe(0);
+  });
 });
 
 describe("writeEventsBulk", () => {
@@ -176,5 +210,25 @@ describe("writeEventsBulk", () => {
     const content = await readFile(join(chainDir, "events.jsonl"), "utf8");
     const first = JSON.parse(content.trim()) as { prev_hash: string };
     expect(first.prev_hash).toBe(genesisHash(CHAIN_SES_ID));
+  });
+
+  it("refuses a batch containing a retired zero, and accepts the same batch at 0.1.0", async () => {
+    // Deleting the guard from this entry point used to leave the suite green,
+    // while this is the one that guards `session import` and the ad-hoc writers.
+    const cmd = (schemaVersion: string) =>
+      ({
+        ...BASE,
+        schema_version: schemaVersion,
+        type: "command_executed",
+        command: "ls",
+        args: ["-la"],
+        cwd: "/tmp/example",
+        exit_code: 0,
+        duration_ms: 0,
+      }) as Event;
+    await expect(writeEventsBulk(workDir, [cmd("0.2.0")])).rejects.toThrow(
+      /duration_ms: 0 at schema_version 0\.2\.0/,
+    );
+    await expect(writeEventsBulk(workDir, [cmd("0.1.0")])).resolves.not.toThrow();
   });
 });

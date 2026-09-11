@@ -1205,16 +1205,16 @@ describe("basou import codex — scoped re-import of a grown source", () => {
       },
     };
     // First import: the command is still running (no function_call_output yet),
-    // so its exit_code is null and duration is 0.
+    // so both its exit_code and its duration are unobserved (null).
     await writeRollout("codex-1", [meta, call]);
     await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
     const sid = (await listSessionDirs(repo))[0] as string;
-    type CmdEvent = StoredEvent & { exit_code: number | null; duration_ms: number };
+    type CmdEvent = StoredEvent & { exit_code: number | null; duration_ms: number | null };
     const cmdBefore = (await readEvents(repo, sid)).find(
       (e) => e.type === "command_executed",
     ) as CmdEvent;
     expect(cmdBefore.exit_code).toBeNull();
-    expect(cmdBefore.duration_ms).toBe(0);
+    expect(cmdBefore.duration_ms).toBeNull();
 
     // The command completes: its output is appended (file grows). Re-import must
     // refresh the outcome while keeping the same event id.

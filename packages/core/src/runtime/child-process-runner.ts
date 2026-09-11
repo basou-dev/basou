@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { performance } from "node:perf_hooks";
 
 import { findErrorCode } from "../storage/status.js";
 
@@ -52,6 +53,13 @@ export class ChildProcessRunner implements ProcessRunner {
     const captureMode = options.capture ?? "buffer";
 
     const started_at = new Date();
+    // Measure the duration on a monotonic sub-millisecond clock, NOT as a
+    // difference of the two wall-clock Dates. `getTime()` is whole
+    // milliseconds, so a real 0.8ms spawn landed on 0 or 1 depending only on
+    // where in the millisecond it started -- measured, 5 of 40 `/usr/bin/true`
+    // runs came out 0, and a 0 is recorded as "no duration observed". A
+    // command basou timed perfectly then reported as untimed.
+    const startedHrMs = performance.now();
 
     let child: ChildProcess;
     try {
@@ -158,7 +166,7 @@ export class ChildProcessRunner implements ProcessRunner {
           stderr,
           started_at: started_at.toISOString(),
           ended_at: ended_at.toISOString(),
-          duration_ms: ended_at.getTime() - started_at.getTime(),
+          duration_ms: Math.round(performance.now() - startedHrMs),
           pid: child.pid ?? null,
         });
       });

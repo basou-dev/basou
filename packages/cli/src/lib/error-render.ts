@@ -178,6 +178,23 @@ export function printReplayWarning(warning: ReplayWarning, sessionId: string): v
         `Warning: skipped invalid event at line ${warning.line} in ${short}/events.jsonl`,
       );
       break;
+    case "retired_zero_duration":
+      // Advisory: the line is VALID and was kept, so the wording says "kept"
+      // rather than "skipped" like its three siblings above.
+      console.error(
+        `Warning: kept an event with duration_ms: 0 at line ${warning.line} in ${short}/events.jsonl — ` +
+          `no writer at that schema_version emits one; reading it as unobserved`,
+      );
+      break;
+    default: {
+      // Exhaustiveness: a new ReplayWarning variant must not fall through
+      // silently, which is how `retired_zero_duration` shipped invisible.
+      const unhandled: never = warning;
+      console.error(
+        `Warning: unhandled replay warning in ${short}/events.jsonl: ${String((unhandled as { kind?: unknown }).kind)}`,
+      );
+      break;
+    }
   }
 }
 

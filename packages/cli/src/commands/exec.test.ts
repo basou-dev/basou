@@ -140,6 +140,38 @@ describe("runExec", () => {
     ]);
   });
 
+  it("writes a measured duration through to the event", async () => {
+    // Without this, replacing the write with a literal null keeps the suite
+    // green: every fake runner returns 0 and no other test reads the field.
+    const repo = await setupInitedRepo();
+    const exitCode = await runExec(
+      "node",
+      ["-e", "process.exit(0)"],
+      { cwd: repo, snapshot: false },
+      { runner: makeFakeRunner({ exit_code: 0, duration_ms: 1500 }), now: () => FIXED_DATE },
+    );
+    expect(exitCode).toBe(0);
+    const sessionId = await findOnlySessionId(repo);
+    const ce = JSON.parse((await readEventsLines(repo, sessionId))[2] ?? "{}");
+    expect(ce.duration_ms).toBe(1500);
+    expect(ce.schema_version).toBe("0.2.0");
+  });
+
+  it("writes a non-positive measurement as unobserved, never as a measured zero", async () => {
+    // A spawn costs real time (measured: 40 of 40 `/usr/bin/true` spawns took
+    // over 0.5ms), so 0 here is a clock anomaly rather than an instant command.
+    const repo = await setupInitedRepo();
+    await runExec(
+      "node",
+      ["-e", "process.exit(0)"],
+      { cwd: repo, snapshot: false },
+      { runner: makeFakeRunner({ exit_code: 0, duration_ms: 0 }), now: () => FIXED_DATE },
+    );
+    const sessionId = await findOnlySessionId(repo);
+    const ce = JSON.parse((await readEventsLines(repo, sessionId))[2] ?? "{}");
+    expect(ce.duration_ms).toBeNull();
+  });
+
   // 2
   it("marks session as failed when child exits non-zero", async () => {
     const repo = await setupInitedRepo();

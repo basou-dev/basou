@@ -5,6 +5,7 @@ import { type Event, EventSchema } from "../schemas/event.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { acquireLock } from "../storage/lockfile.js";
 import { genesisHash, lineHash, serializeEventLine } from "./chain.js";
+import { assertWritableEvent } from "./event-writer.js";
 
 /**
  * The chain state of an existing `events.jsonl`, as needed by the live append
@@ -145,6 +146,7 @@ export async function appendChainedEventLocked(
   } catch (error: unknown) {
     throw new Error("Invalid Basou event payload", { cause: error });
   }
+  assertWritableEvent(validated);
   const tail = await inspectChainTail(paths, sessionId);
   const line = tail.chained
     ? serializeEventLine({ ...validated, prev_hash: tail.head })

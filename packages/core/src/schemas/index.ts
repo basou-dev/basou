@@ -28,11 +28,17 @@ export type {
   TaskReconciledEvent,
   TaskStatusChangedEvent,
 } from "./event.schema.js";
-export { EventSchema } from "./event.schema.js";
+export { EVENT_SCHEMA_VERSION, EventSchema } from "./event.schema.js";
 export type { JsonSchemaArtifact } from "./json-schema.js";
-export { buildJsonSchemas, JSON_SCHEMA_VERSION, serializeJsonSchema } from "./json-schema.js";
+export { buildJsonSchemas, JSON_SCHEMA_VERSIONS, serializeJsonSchema } from "./json-schema.js";
 export type { Manifest } from "./manifest.schema.js";
 export { ManifestSchema, unknownManifestKeys } from "./manifest.schema.js";
+export {
+  hasRetiredZeroDuration,
+  readObservedDuration,
+  writeObservedDuration,
+  ZERO_DURATION_RETIRED_SINCE,
+} from "./observed-duration.js";
 export type {
   Session,
   SessionIntegrity,

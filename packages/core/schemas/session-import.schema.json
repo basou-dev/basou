@@ -692,7 +692,8 @@
                   {
                     "type": "null"
                   }
-                ]
+                ],
+                "description": "Spawned executable name. null means basou did not observe the executor - not a default, and not a benign value."
               },
               "args": {
                 "type": "array",
@@ -708,7 +709,8 @@
                   {
                     "type": "null"
                   }
-                ]
+                ],
+                "description": "Working directory the command ran in. null means the directory could not be resolved; it is never the session's directory as a fallback."
               },
               "exit_code": {
                 "anyOf": [
@@ -720,7 +722,8 @@
                   {
                     "type": "null"
                   }
-                ]
+                ],
+                "description": "Child exit code. null means the outcome is unknown (signal-terminated, or never recorded by the source). null is not success."
               },
               "signal": {
                 "anyOf": [
@@ -743,9 +746,17 @@
                 ]
               },
               "duration_ms": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 9007199254740991
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Observed duration in milliseconds, or null when no duration was observed. Read 0 as unobserved too, on any version: a spawned process cannot run in under half a millisecond, and under schema_version 0.1.0 a writer with nothing to report stored 0 as the floor. Writers at 0.2.0 and above record null instead and never write 0."
               }
             },
             "required": [

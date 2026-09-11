@@ -3,6 +3,168 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **Breaking (event format):** A command's duration now says whether it was
+  observed.
+  `command_executed.duration_ms` is nullable, and events written from this
+  release carry `schema_version: "0.2.0"`. null means basou did not observe a
+  duration. Widening a required field's domain is a breaking change, which is
+  what the bump records.
+
+  This completes the rule 0.38.0 introduced for `command`, `cwd` and
+  `exit_code`: null is an absent observation, never a default and never a
+  benign value. Until now the same event carried two conventions, one per
+  field.
+
+  **The bump does not change what any value already on disk means.** `0` meant
+  "not observed" before and still does; what changed is that a writer now says
+  so with `null` instead of storing the floor, and a writer at 0.2.0 or above
+  never writes `0` at all. So the read rule needs no version branch:
+
+  > Read `duration_ms` as unobserved when it is `null` or `0`, on any version.
+
+  `0` is not a duration a command can have had, whoever wrote it: a spawned
+  process cannot run in under half a millisecond, and the field is whole
+  milliseconds, so anything faster rounds to `0` regardless. No migration
+  rewrites anything on disk in place — that would break the tamper-evidence
+  chain, and `basou session rechain` is the one command that rewrites a log in
+  place, on request and by rebuilding the chain as it goes — though a session
+  whose source log grows is re-derived and restamped, which is how the stored
+  zeros drain away; re-deriving still cannot recover a duration the source
+  never reported. The schema still accepts `0` so that the 19,592 such events
+  measured on one store keep validating.
+  Every other `.basou/` document stays at `0.1.0` because those formats did not
+  change.
+
+  For `@basou/sdk` and `@basou/core` consumers:
+  `CommandExecutedEvent.duration_ms` is now `number | null`, so a `number` is no
+  longer guaranteed by the type. Read it through `readObservedDuration(event)`,
+  exported from `@basou/core` and re-exported from `@basou/sdk`, rather than off
+  the field — the field's `0` is not a duration.  `BASOU_SDK_VERSION` goes to
+  `0.4.0` (the facade gained that export, and the nullability reaches consumers
+  through its re-exported types). `@basou/core` also replaces the single
+  `JSON_SCHEMA_VERSION` export with the per-document `JSON_SCHEMA_VERSIONS` map.
+
+  Four writers now record null where they recorded `0`: the Claude Code importer
+  (a transcript reports no timing at all), the Codex importer for a scripted
+  program that made several tool calls (the program's single wall time belongs
+  to the program, and splitting or duplicating it across its commands would put
+  an inference inside the hash chain — 958 of one host's 4,621 such calls,
+  accounting for 3,015 of its 6,678 scripted command events), the Codex importer
+  for a `Wall time` banner it cannot read as the command's duration (see below),
+  and `basou exec` / `basou run` when a run ended before a duration could be
+  measured, the spawn itself failed, or the measurement came back as something
+  that is not a duration — non-positive across a spawn that cannot cost zero
+  (which is why the clock behind it is now monotonic rather than the wall
+  clock), or beyond the field's integer domain, which used to fail validation
+  deep inside a batch import and abort the candidates behind it.
+
+- **The Codex importer no longer reads a `Wall time` banner as the command's
+  duration unless the command finished.** On the per-command `exec_command` path
+  that banner is the interval *codex* waited on the tool call, bounded by the
+  caller-supplied `yield_time_ms`, not the child process's duration. Measured
+  2026-09-11 on one host's rollouts: no banner from a process that EXITED
+  exceeds the yield it was given, in any bucket (yield 1000 → 1,498 exited
+  calls, max 999 ms; 4000 → 34, max 3,536 ms; 9000 → 11, max 7,911 ms; 30000 →
+  126, max 17,319 ms), and `sleep 8` reports 7.8757 s at `yield_time_ms: 9000`
+  against 1.0018 s at 1000. Overshoot exists but only in the other population:
+  1,366 of the 3,153 positive banners that declared a yield exceed it, and every
+  one of them had NOT exited. A positive banner from an unfinished call is
+  therefore `min(duration, yield)` plus overhead — right-censored.
+
+  Two shapes are now recorded as unobserved:
+
+  - A banner rounding to 0 ms, on 26,591 of 29,897 paired `exec_command` calls
+    (88.9%). All 26,591 also carry `Process exited with code N`, so the process
+    demonstrably ran, and four decimals assert under 50 microseconds — less
+    than a `fork` + `exec` costs — on commands including `curl` over TCP.
+  - A positive banner whose output does not report that the process ENDED. The
+    duration is gated on the same token as `exit_code`, because an output
+    reading `Process running with session ID N` means codex handed the turn back
+    mid-command; recording its wall time asserted "outcome unknown" and
+    "duration observed" on the same event. 1,393 of 3,232 positive banners are
+    this case, and for the 1,237 that demonstrably end later in the same log,
+    the banner at spawn understated their own later banners by 11.7x
+    (1,672,329 ms against 19,597,309 ms; worst case 1,002 ms against
+    943,300 ms).
+
+  The 1,839 `exec_command` banners whose output reports an exit are kept, and
+  those are not censored: a process that exited did so inside the wait window.
+  Measured, of the positive banners that declared a yield, 1,392 of the 1,393
+  still-running ones (99.9%) sit within 30 ms of it, against 24 of the 1,760
+  exited ones (1.4%) — median duration/yield ratio 1.002 versus 0.259. Those 24
+  are the residual: they exited within a whisker of the timeout, where the two
+  cannot be told apart. The scripted path is kept too, on separate evidence:
+  its programs DO declare `yield_time_ms` (1,960 of 4,661 such calls), but the
+  banner is not bounded by it — 0 of the 1,952 comparable banners land within
+  30 ms of the declared yield, the median banner is 1.0% of it, and some exceed
+  it outright (max 1.200x) — and none of the 4,661 outputs ever reported a
+  still-running process. Its banner is the program's own elapsed time rather
+  than a wait that was cut short.
+
+  Net effect on one host's rollouts, on ONE metric throughout — the share of
+  derived commands carrying a duration basou will report: 15.1% after this gate
+  (1.5% for 2026-05, 56.0% for 2026-08), against 18.90% before it. That 18.90%
+  is v0.41.0's value and is unchanged by the commits in this release that
+  precede the gate: rewriting a never-reportable `0` as `null` moves no command
+  from timed to untimed, because the read rule already reported neither. The
+  large drop people may expect — from ~92% — comes
+  from counting the 26,591 stored zeros as observations, which is the
+  proposition this release denies, so it is not a like-for-like comparison and
+  is not claimed here.
+
+- **`basou stats` decides whether a session's command time rests on a real
+  observation from the session, not from its source kind.**
+  `availability.commandTime` was `source.kind !== "claude-code-import"`, which
+  reported every Codex session as timed. It is now true when the session
+  observed a duration for at least one command — or ran none, where 0ms is the
+  truth — and false when its event stream was incomplete (unreadable, or with
+  lines dropped as malformed / schema-invalid), since "ran no commands" is then
+  unbacked. Measured on one host's rollouts, the share of Codex commands
+  carrying an observed duration went from 1.5% in 2026-05 to 56.0% in 2026-08 as
+  the vendor's log format changed, so the same source kind is sometimes timed
+  and sometimes not.
+
+  The flag says the total rests on at least one real observation. It does not
+  say every command was timed: when only some were, `commandTimeMs` is a floor
+  and one boolean cannot carry "all", "some" and "none" (measured: 292 of 818
+  importable rollouts are partly timed, at 15.1% of commands overall). The
+  `basou stats` line now says "at least" rather than implying completeness, and
+  `--by-source` prints such a source as `>=<duration>` rather than `n/a`, which
+  was hiding milliseconds the workspace total already counted.
+
+### Added
+
+- **The `0.2.0` invariant is now enforced, not just stated.** A writer at 0.2.0
+  or above never emits `duration_ms: 0`, and the write boundary (`appendEvent`,
+  `writeEventsBulk`, `appendChainedEvent`) now refuses one, scoped to the
+  event's own version so a genuine 0.1.0 event still round-trips through
+  `basou session import`. On the read side such a value is NOT dropped — the
+  line is valid and is yielded, and the read rule treats it as unobserved either
+  way — but replay emits a new advisory `retired_zero_duration` warning, so a
+  value that should not exist is visible rather than silently reinterpreted.
+  This matters for events written elsewhere: another host reached through the
+  federation reader, or a third party using `@basou/core`'s writers.
+  `ReplayWarning` gains that variant, and `@basou/core` exports
+  `hasRetiredZeroDuration` and `ZERO_DURATION_RETIRED_SINCE`.
+
+- **The published JSON Schema says what null means.** `command_executed`'s
+  `command`, `cwd`, `exit_code` and `duration_ms` carry descriptions in the
+  emitted schema, so a reader outside this repository can tell an absent
+  observation from a value. The event schema's `$id` moves with its format
+  version (`https://basou.dev/schemas/0.2.0/event.schema.json`), so the URL that
+  describes the nullable duration is not the URL that described the
+  non-nullable one.
+
+  `$id` versions are now per document rather than workspace-wide. The seven
+  formats that did not change keep their `0.1.0` URLs, and each document's
+  published `$id` agrees with the `schema_version` its writers stamp — `status`
+  was briefly serving an `$id` of `0.2.0` alongside a `schema_version` const of
+  `0.1.0`.
+
 ## 0.41.0 — 2026-09-09
 
 ### Added

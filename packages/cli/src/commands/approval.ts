@@ -11,6 +11,7 @@ import {
   assertBasouRootSafe,
   type BasouPaths,
   basouPaths,
+  EVENT_SCHEMA_VERSION,
   type Event,
   enumerateApprovals,
   findErrorCode,
@@ -450,7 +451,7 @@ async function doRunApprovalResolve(
     if (decision === "approve") {
       const note = (options as ApprovalApproveOptions).note ?? null;
       await appendChainedEventLocked(paths, approval.session_id, {
-        schema_version: "0.1.0",
+        schema_version: EVENT_SCHEMA_VERSION,
         id: eventId,
         session_id: approval.session_id,
         occurred_at: occurredAt,
@@ -463,7 +464,7 @@ async function doRunApprovalResolve(
     } else {
       const reason = (options as ApprovalRejectOptions).reason;
       await appendChainedEventLocked(paths, approval.session_id, {
-        schema_version: "0.1.0",
+        schema_version: EVENT_SCHEMA_VERSION,
         id: eventId,
         session_id: approval.session_id,
         occurred_at: occurredAt,
