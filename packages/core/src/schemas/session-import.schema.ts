@@ -35,7 +35,9 @@ import {
 // unsupported versions emits a dedicated `Unsupported import schema_version`
 // message from the orchestrator; a literal here would short-circuit the
 // branch and turn every mismatched version into the generic
-// `Invalid import payload`.
+// `Invalid import payload`. The PUBLISHED artifact still pins the value as a
+// `const` (see SESSION_IMPORT_SCHEMA_VERSION), so the portable contract says
+// what the importer enforces without changing which error the importer emits.
 export const SessionInnerImportSchema = z
   .object({
     id: SessionIdSchema.optional(),
@@ -81,9 +83,24 @@ export const SessionInnerImportSchema = z
  * --format json`. The top level is `.strict()`; unknown keys at the outer
  * envelope are rejected.
  */
+/**
+ * The only import envelope version the importer accepts. The published JSON
+ * Schema pins it as a `const` and the runtime gate compares against it, so the
+ * portable contract and the implementation cannot drift: a third party who
+ * validates a payload against the published artifact gets the same answer the
+ * importer will give, instead of passing validation and being rejected at run
+ * time. Unrelated to the events INSIDE the envelope, which carry their own
+ * `schema_version` and are at 0.2.0.
+ */
+export const SESSION_IMPORT_SCHEMA_VERSION = "0.1.0" as const;
+
 export const SessionImportPayloadSchema = z
   .object({
-    schema_version: z.string(),
+    schema_version: z.string().meta({
+      const: SESSION_IMPORT_SCHEMA_VERSION,
+      description:
+        "Import envelope version. Must be exactly 0.1.0; any other value is rejected by the importer. This is the envelope's own version, not the version of the events it carries.",
+    }),
     session: SessionInnerImportSchema,
     events: z.array(EventSchema),
   })

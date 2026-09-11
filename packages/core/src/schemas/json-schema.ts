@@ -3,7 +3,10 @@ import { ApprovalSchema } from "./approval.schema.js";
 import { EVENT_SCHEMA_VERSION, EventSchema } from "./event.schema.js";
 import { ManifestSchema } from "./manifest.schema.js";
 import { SessionSchema } from "./session.schema.js";
-import { SessionImportPayloadSchema } from "./session-import.schema.js";
+import {
+  SESSION_IMPORT_SCHEMA_VERSION,
+  SessionImportPayloadSchema,
+} from "./session-import.schema.js";
 import { StatusSchema } from "./status.schema.js";
 import { TaskSchema } from "./task.schema.js";
 import { TaskIndexSchema } from "./task-index.schema.js";
@@ -32,7 +35,7 @@ export const JSON_SCHEMA_VERSIONS = {
   approval: "0.1.0",
   status: "0.1.0",
   "task-index": "0.1.0",
-  "session-import": "0.1.0",
+  "session-import": SESSION_IMPORT_SCHEMA_VERSION,
 } as const satisfies Record<string, string>;
 
 /** Base of every emitted schema's `$id`, before the per-document version. The
