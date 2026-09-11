@@ -24,6 +24,7 @@ import {
   readSessionYaml,
   reimportPreservingId,
   resolveRepositoryRoot,
+  SESSION_IMPORT_SCHEMA_VERSION,
   type Session,
   type SessionImportPayload,
   SessionImportPayloadSchema,
@@ -407,7 +408,7 @@ async function importDerivedSessions(
     if (!parsed.success) {
       throw new Error("Invalid import payload", { cause: parsed.error });
     }
-    if (parsed.data.schema_version !== "0.1.0") {
+    if (parsed.data.schema_version !== SESSION_IMPORT_SCHEMA_VERSION) {
       throw new Error(`Unsupported import schema_version: ${parsed.data.schema_version}`);
     }
     return parsed.data;

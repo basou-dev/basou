@@ -385,7 +385,14 @@ them (measured on one store: 19,592 such events). `schema_version` accepts any
 
 The published JSON Schema `$id` moves with the version
 (`https://basou.dev/schemas/0.2.0/event.schema.json`), so the URL that describes
-the nullable field is not the URL that described the non-nullable one.
+the nullable field is not the URL that described the non-nullable one. The
+artifact the old URL served is kept rather than replaced or removed: the bytes
+it describes are still on disk everywhere, and that URL was published as the
+canonical place to point a validator. Superseded artifacts live at
+`@basou/core/schemas/retired/<version>/<name>.schema.json` and keep serving at
+their own `$id`. Nothing regenerates them — the Zod source that produced them is
+gone — so they are frozen by construction, and a retired version may never equal
+a live one.
 
 **Backward consequence, stated plainly.** A basou at 0.41.0 or earlier REJECTS a
 `0.2.0` event whose `duration_ms` is null — its schema requires a number — and

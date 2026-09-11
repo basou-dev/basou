@@ -58,6 +58,7 @@ export type {
   SessionInnerImportInput,
 } from "./session-import.schema.js";
 export {
+  SESSION_IMPORT_SCHEMA_VERSION,
   SessionImportPayloadSchema,
   SessionInnerImportSchema,
 } from "./session-import.schema.js";

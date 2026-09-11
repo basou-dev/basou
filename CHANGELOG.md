@@ -165,6 +165,24 @@ All notable changes to **basou** are recorded here. The project follows
   was briefly serving an `$id` of `0.2.0` alongside a `schema_version` const of
   `0.1.0`.
 
+  **A superseded artifact is kept, not deleted.** When a document's `$id`
+  version moves, the bytes it used to describe are still on disk everywhere,
+  and the old URL is one basou published and told people to point a validator
+  at. The 0.1.0 event schema is therefore retained verbatim at
+  `@basou/core/schemas/retired/0.1.0/event.schema.json` and keeps serving at its
+  own `$id`, beside the 0.2.0 artifact. Nothing regenerates it — the Zod source
+  that produced it is gone — so it is frozen by construction.
+
+- **The published import envelope pins the one version its importer accepts.**
+  `session-import.schema.json` described `schema_version` as any string while
+  `basou session import` accepts exactly `0.1.0`, so a third party could
+  validate a payload against the published artifact, pass, and be rejected at
+  run time. Both sides now read `SESSION_IMPORT_SCHEMA_VERSION`, exported from
+  `@basou/core`. The envelope's version is unrelated to the version of the
+  events it carries, which is what moved to `0.2.0`; the runtime keeps emitting
+  its specific `Unsupported import schema_version` message rather than a generic
+  parse failure.
+
 ## 0.41.0 — 2026-09-09
 
 ### Added

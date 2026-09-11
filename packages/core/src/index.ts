@@ -325,6 +325,7 @@ export {
   RiskLevelSchema,
   readObservedDuration,
   SchemaVersionSchema,
+  SESSION_IMPORT_SCHEMA_VERSION,
   SessionIdSchema,
   SessionImportPayloadSchema,
   SessionInnerImportSchema,

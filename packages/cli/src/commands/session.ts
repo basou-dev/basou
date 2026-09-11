@@ -21,6 +21,7 @@ import {
   rechainSessionInPlace,
   resolveSessionId,
   resolveTaskId,
+  SESSION_IMPORT_SCHEMA_VERSION,
   type Session,
   SessionImportPayloadSchema,
   SessionSchema,
@@ -745,7 +746,7 @@ export async function doRunSessionImport(
     throw new Error("Invalid import payload", { cause: parsed.error });
   }
 
-  if (parsed.data.schema_version !== "0.1.0") {
+  if (parsed.data.schema_version !== SESSION_IMPORT_SCHEMA_VERSION) {
     throw new Error(`Unsupported import schema_version: ${parsed.data.schema_version}`);
   }
 

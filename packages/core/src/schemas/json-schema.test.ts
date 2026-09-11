@@ -79,10 +79,12 @@ describe("buildJsonSchemas", () => {
       expect(JSON_SCHEMA_VERSIONS[name as keyof typeof JSON_SCHEMA_VERSIONS]).toBe(declared);
     }
     // Pin WHICH documents this can check, so the guard cannot quietly shrink to
-    // covering nothing. Only these two pin `schema_version` to a literal; the
+    // covering nothing. Only these three pin `schema_version` to a literal; the
     // rest publish it as a `0.x.y` pattern (or, for `event`, as a root `oneOf`
     // with no top-level properties), so there is no declared value to compare.
-    expect(checked.sort()).toEqual(["status", "task-index"]);
+    // `session-import` joined them when the published envelope started pinning
+    // the one version its importer accepts.
+    expect(checked.sort()).toEqual(["session-import", "status", "task-index"]);
   });
 
   it("versions every document it emits, with no unused entries either way", () => {
@@ -132,6 +134,31 @@ describe("committed JSON Schema artifacts", () => {
     it(`schemas/${name}.schema.json is in sync with the Zod source`, () => {
       const committed = readFileSync(join(schemasDir, `${name}.schema.json`), "utf8");
       expect(committed).toBe(serializeJsonSchema(schema));
+    });
+  }
+});
+
+describe("retired JSON Schema artifacts", () => {
+  // A document whose `$id` version moves leaves bytes behind that the NEW
+  // artifact does not describe, and the old `$id` URL is one basou published
+  // and told people to point a validator at. So the superseded artifact is kept
+  // verbatim under `schemas/retired/<version>/` rather than deleted: the
+  // 0.1.0 event schema still describes every 0.1.0 event on disk, and nothing
+  // regenerates it (its Zod source is gone). These assertions are about
+  // identity and non-collision, never about content -- the bytes are frozen.
+  const retired = [{ name: "event", version: "0.1.0" }] as const;
+
+  for (const { name, version } of retired) {
+    it(`schemas/retired/${version}/${name}.schema.json declares the $id its path serves`, () => {
+      const raw = readFileSync(join(schemasDir, "retired", version, `${name}.schema.json`), "utf8");
+      const doc = JSON.parse(raw) as { $id?: string };
+      expect(doc.$id).toBe(`https://basou.dev/schemas/${version}/${name}.schema.json`);
+    });
+
+    it(`schemas/retired/${version}/${name}.schema.json does not collide with the live artifact`, () => {
+      // If a retired version equals the live one, two files claim one URL and
+      // the site's `$id`-keyed publish would have to pick a winner.
+      expect(JSON_SCHEMA_VERSIONS[name]).not.toBe(version);
     });
   }
 });
@@ -263,6 +290,18 @@ describe("emitted schemas validate real documents (ajv draft 2020-12)", () => {
       expect(validate(name, samples[name])).toBe(true);
     });
   }
+
+  it("rejects an import envelope whose schema_version the importer would reject", () => {
+    // The portable contract used to be weaker than the implementation: the
+    // published artifact said `schema_version: {type: string}` while the
+    // importer accepts exactly one value, so a third party could validate a
+    // payload against the published schema, pass, and be rejected at run time.
+    // Both now read SESSION_IMPORT_SCHEMA_VERSION.
+    const envelope = structuredClone(samples["session-import"]) as { schema_version: string };
+    expect(validate("session-import", envelope)).toBe(true);
+    envelope.schema_version = "0.2.0";
+    expect(validate("session-import", envelope)).toBe(false);
+  });
 
   it("accepts a manifest that omits the defaulted events_log (input-mode optional)", () => {
     const m = structuredClone(samples.manifest) as { git: { events_log?: string } };

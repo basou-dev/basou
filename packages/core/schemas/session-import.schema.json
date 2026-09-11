@@ -6,7 +6,9 @@
   "type": "object",
   "properties": {
     "schema_version": {
-      "type": "string"
+      "type": "string",
+      "const": "0.1.0",
+      "description": "Import envelope version. Must be exactly 0.1.0; any other value is rejected by the importer. This is the envelope's own version, not the version of the events it carries."
     },
     "session": {
       "type": "object",
