@@ -263,12 +263,25 @@ Events written by the import paths additionally carry an optional top-level
   of the formats that did not change, and a document's `$id` version always
   equals the `schema_version` its writers stamp.
 
-  Known consequence, not yet resolved: `session-import.schema.json` embeds the
-  event union, so its published bytes changed with the 0.2.0 event while its
-  own `$id` stayed at `0.1.0` (its envelope's format did not change, and its
-  importer still requires `schema_version: "0.1.0"`). A consumer holding the
-  earlier bytes of that URL will reject a payload basou now writes, with no
-  version signal that anything moved.
+  **The `$id` version tracks the format a document describes, not the byte
+  revision of the artifact that describes it.** Within one version an artifact
+  may be re-published with a more faithful description of the same format — an
+  added `description`, or a constraint the runtime already enforced — and that
+  is not a format change, so it does not move the `$id`. `session-import`
+  pinning its `schema_version` to a `const` is such a case: the set of payloads
+  the importer accepts is exactly what it always was.
+
+  One consequence of that rule is accepted rather than resolved.
+  `session-import.schema.json` embeds the event union, so its published bytes
+  changed with the 0.2.0 event while its own `$id` stayed at `0.1.0` — its
+  envelope format did not change, and its importer still requires
+  `schema_version: "0.1.0"`. A consumer holding the earlier bytes of that URL
+  will reject a payload basou now writes, with no version signal that anything
+  moved. Moving the envelope's `$id` would be dishonest (its own format did not
+  change), and a second version axis for embedded formats costs more than it
+  buys for a document whose importer pins one version anyway. Consumers that
+  need the current bytes should read the artifact from the installed
+  `@basou/core` rather than caching the URL.
 
 ### Event `schema_version` 0.2.0 — `command_executed.duration_ms`
 
