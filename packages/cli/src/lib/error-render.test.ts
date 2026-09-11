@@ -1,4 +1,4 @@
-import { FailedToFinalizeError } from "@basou/core";
+import { FailedToFinalizeError, type ReplayWarning } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type ErrorClassifier,
@@ -293,6 +293,37 @@ describe("printReplayWarning", () => {
       "ses_01HXABCDEFG1234567890ABCDE",
     );
     expect(joinCalls(err)).toBe("Warning: skipped invalid event at line 12 in 01HXAB/events.jsonl");
+  });
+
+  it("prints the retired_zero_duration variant, and says the event was KEPT", () => {
+    // This variant shipped invisible once: the switch had no case and no
+    // default, so it printed nothing on every CLI surface while the spec and
+    // the release notes said it was visible.
+    const err = captureStderr();
+    printReplayWarning(
+      { kind: "retired_zero_duration", line: 4 },
+      "ses_01HXABCDEFG1234567890ABCDE",
+    );
+    const out = joinCalls(err);
+    expect(out).toContain("line 4 in 01HXAB/events.jsonl");
+    expect(out).toContain("kept");
+    expect(out).not.toContain("skipped");
+  });
+
+  it("prints SOMETHING for every ReplayWarning variant the type allows", () => {
+    // The guard against the same omission recurring: add a variant to
+    // ReplayWarning and this fails until the renderer handles it.
+    const variants: ReplayWarning[] = [
+      { kind: "partial_trailing_line", line: 1 },
+      { kind: "malformed_json", line: 1, cause: new Error("x") },
+      { kind: "schema_violation", line: 1, cause: new Error("x") },
+      { kind: "retired_zero_duration", line: 1 },
+    ];
+    for (const v of variants) {
+      const err = captureStderr();
+      printReplayWarning(v, "ses_01HXABCDEFG1234567890ABCDE");
+      expect(joinCalls(err), `no output for ${v.kind}`).not.toBe("");
+    }
   });
 });
 

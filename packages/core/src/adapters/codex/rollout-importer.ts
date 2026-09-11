@@ -997,13 +997,17 @@ function parseExitCode(output: string | undefined): number | null {
  *
  * On the `exec_command` path this banner is NOT the child process's duration.
  * It is the interval codex itself waited on the tool call, bounded by the
- * caller-supplied `yield_time_ms`. Measured 2026-09-10 over this host's
- * rollouts: the banner never exceeds the yield it was given (yield 1000 ms ->
- * 2,857 calls, max 1.0214 s, one borderline; yield 30000 -> max 30.0023 s;
- * yield 9000 -> max 7.9111 s), 1,416 of the 3,153 positive values that declared
- * a yield land within 30 ms of it, and the control case is explicit: `sleep 8`
- * reports 7.8757 s at `yield_time_ms: 9000` and 1.0018 s at 1000. So a positive
- * value is `min(duration, yield)` — right-censored, not measured.
+ * caller-supplied `yield_time_ms`. Measured 2026-09-11 over this host's
+ * rollouts: no banner from a process that EXITED exceeds the yield it was
+ * given, in any bucket (yield 1000 -> 1,498 exited calls, max 999 ms; 4000 ->
+ * 34, max 3,536 ms; 9000 -> 11, max 7,911 ms; 30000 -> 126, max 17,319 ms), and
+ * the control case is explicit: `sleep 8` reports 7.8757 s at
+ * `yield_time_ms: 9000` and 1.0018 s at 1000. Overshoot exists but belongs
+ * entirely to the other population -- 1,366 of the 3,153 positive banners that
+ * declared a yield exceed it, and every one of them had NOT exited, overrunning
+ * the timeout by a few milliseconds of overhead. So a positive banner from an
+ * unfinished call is `min(duration, yield)` plus overhead: right-censored, not
+ * measured.
  *
  * Two consequences, and the caller applies both:
  *

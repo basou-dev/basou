@@ -304,8 +304,14 @@ export async function doRunSessionShow(
     throw new Error("Failed to read session", { cause: error });
   }
 
+  // A dropped line means the stream is incomplete in a way replay cannot see,
+  // which the work summary needs to know before it calls a 0 the truth.
+  let eventsLostLines = 0;
   const events = await readAllEvents(sessionDir, {
-    onWarning: (w) => printReplayWarning(w, sessionId),
+    onWarning: (w) => {
+      if (w.kind === "malformed_json" || w.kind === "schema_violation") eventsLostLines++;
+      printReplayWarning(w, sessionId);
+    },
   });
 
   if (options.json === true) {
@@ -314,7 +320,7 @@ export async function doRunSessionShow(
   }
 
   const now = ctx.nowProvider?.() ?? new Date();
-  printSessionShowText(session, events, options, repositoryRoot, now);
+  printSessionShowText(session, events, options, repositoryRoot, now, eventsLostLines);
 }
 
 function suspectLabel(reason: string | null): string {
@@ -374,6 +380,7 @@ function printSessionShowText(
   options: SessionShowOptions,
   repositoryRoot: string,
   now: Date,
+  eventsLostLines: number,
 ): void {
   const s = session.session;
   console.log(`Session: ${s.id}  (status: ${s.status})`);
@@ -402,7 +409,7 @@ function printSessionShowText(
   }
 
   console.log("");
-  console.log(`Work:          ${formatSessionWork(session, events, now)}`);
+  console.log(`Work:          ${formatSessionWork(session, events, now, eventsLostLines)}`);
 
   if (events.length === 0) return;
 
@@ -421,14 +428,28 @@ function printSessionShowText(
  * One-line work summary for `session show`: output volume + action counts +
  * time proxies, reusing the same per-session computation as `basou stats`.
  * `command n/a (no duration observed)` flags a session that ran commands none
- * of which was timed; a session that ran none reports its truthful 0ms. (The
- * incomplete-stream case that also clears the flag in `basou stats` cannot
- * arise here: `session show` fails earlier, when it cannot read events.jsonl.)
- * A session that timed only SOME of its commands reports a floor and is not
- * marked, because one boolean cannot carry "all", "some" and "none".
+ * of which was timed, or whose stream lost a line to malformed JSON or a
+ * schema violation — "ran no commands" is unbacked when the stream was not read
+ * in full. (The other incomplete case, an unreadable events.jsonl, cannot reach
+ * here: `session show` fails earlier.) A session that ran none and whose stream
+ * WAS read in full reports its truthful 0ms. A session that timed only SOME of
+ * its commands reports a floor and is not marked, because one boolean cannot
+ * carry "all", "some" and "none".
  */
-function formatSessionWork(session: Session, events: Event[], now: Date): string {
-  const w = sessionWorkStatsFromEvents(session.session.id, session.session, events, now);
+function formatSessionWork(
+  session: Session,
+  events: Event[],
+  now: Date,
+  eventsLostLines: number,
+): string {
+  const w = sessionWorkStatsFromEvents(
+    session.session.id,
+    session.session,
+    events,
+    now,
+    false,
+    eventsLostLines,
+  );
   const parts: string[] = [];
   if (w.tokens.output > 0) parts.push(`${w.tokens.output.toLocaleString("en-US")} output tokens`);
   parts.push(`${w.commandCount} cmd / ${w.fileChangedCount} files / ${w.decisionCount} dec`);

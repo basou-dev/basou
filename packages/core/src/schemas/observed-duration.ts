@@ -39,15 +39,24 @@ export function readObservedDuration(ev: CommandExecutedEvent): number | null {
  * The counterpart of {@link readObservedDuration}, so the two halves of the
  * convention live side by side.
  *
- * A non-positive measurement is not an observation of a command. basou's own
- * live capture takes a wall-clock difference across a spawn, and a spawn costs
- * real time: measured on one host, 40 of 40 `/usr/bin/true` spawns took over
- * 0.5ms (minimum 0.9ms) and `/bin/sh -c :` took 2.4ms. So a zero or negative
- * value here is a clock anomaly — the wall clock stepping backwards
- * mid-command — not a command that ran instantly, and basou reports no
- * duration it cannot back. The paths where nothing was timed at all (a spawn
- * that failed before the child ran, a run interrupted early) write null
- * directly and do not come through here.
+ * A non-positive measurement is not an observation of a command. A spawn costs
+ * real time — measured on one host, 40 of 40 `/usr/bin/true` spawns took over
+ * 0.5ms (minimum 0.75ms, median 0.83ms) — and basou's own live capture times it
+ * on a monotonic sub-millisecond clock, so a real spawn rounds to at least 1ms.
+ * A zero or negative value therefore means the measurement itself is not
+ * usable, not that the command ran instantly, and basou reports no duration it
+ * cannot back.
+ *
+ * This depends on the caller measuring at sub-millisecond resolution. Taking
+ * the difference of two whole-millisecond wall-clock readings does NOT
+ * qualify: a 0.8ms spawn lands on 0 or 1 depending only on where in the
+ * millisecond it started, and 5 of those same 40 runs came out 0 that way —
+ * which this function would then report as unobserved. `ChildProcessRunner`
+ * measures with {@link performance.now} for exactly that reason.
+ *
+ * The paths where nothing was timed at all (a spawn that failed before the
+ * child ran, a run interrupted early) write null directly and do not come
+ * through here.
  */
 export function writeObservedDuration(measuredMs: number | null): number | null {
   if (measuredMs === null || !Number.isFinite(measuredMs)) return null;

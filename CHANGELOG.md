@@ -29,8 +29,10 @@ All notable changes to **basou** are recorded here. The project follows
   `0` is not a duration a command can have had, whoever wrote it: a spawned
   process cannot run in under half a millisecond, and the field is whole
   milliseconds, so anything faster rounds to `0` regardless. Nothing on disk is
-  rewritten — that would break the tamper-evidence chain, and re-deriving cannot
-  recover a duration the source never reported — and the schema still accepts
+  rewritten in place — that would break the tamper-evidence chain — though a
+  session whose source log grows is re-derived and restamped, which is how the
+  stored zeros drain away; re-deriving still cannot recover a duration the
+  source never reported. The schema still accepts
   `0` so that the 19,592 such events measured on one store keep validating.
   Every other `.basou/` document stays at `0.1.0` because those formats did not
   change.
@@ -61,11 +63,14 @@ All notable changes to **basou** are recorded here. The project follows
   duration unless the command finished.** On the per-command `exec_command` path
   that banner is the interval *codex* waited on the tool call, bounded by the
   caller-supplied `yield_time_ms`, not the child process's duration. Measured
-  2026-09-10 on one host's rollouts: the banner never exceeds the yield it was
-  given (`yield 1000` → 2,857 calls, max 1.0214 s; `yield 30000` → max
-  30.0023 s; `yield 9000` → max 7.9111 s), and `sleep 8` reports 7.8757 s at
-  `yield_time_ms: 9000` against 1.0018 s at 1000. A positive value is therefore
-  `min(duration, yield)` — right-censored.
+  2026-09-11 on one host's rollouts: no banner from a process that EXITED
+  exceeds the yield it was given, in any bucket (yield 1000 → 1,498 exited
+  calls, max 999 ms; 4000 → 34, max 3,536 ms; 9000 → 11, max 7,911 ms; 30000 →
+  126, max 17,319 ms), and `sleep 8` reports 7.8757 s at `yield_time_ms: 9000`
+  against 1.0018 s at 1000. Overshoot exists but only in the other population:
+  1,366 of the 3,153 positive banners that declared a yield exceed it, and every
+  one of them had NOT exited. A positive banner from an unfinished call is
+  therefore `min(duration, yield)` plus overhead — right-censored.
 
   Two shapes are now recorded as unobserved:
 
@@ -97,9 +102,13 @@ All notable changes to **basou** are recorded here. The project follows
   still-running process. Its banner is the program's own elapsed time rather
   than a wait that was cut short.
 
-  Net effect on one host's 914 rollouts: 15.0% of derived commands carry an
-  observed duration (1.5% for 2026-05, 56.0% for 2026-08), down from 18.8%
-  before this gate and from 91.7% before the release.
+  Net effect on one host's rollouts, on ONE metric throughout — the share of
+  derived commands carrying a duration basou will report: 15.1% after this gate
+  (1.5% for 2026-05, 56.0% for 2026-08), against 18.8% under the previous commit
+  and 18.9% under v0.41.0. The large drop people may expect — from ~92% — comes
+  from counting the 26,591 stored zeros as observations, which is the
+  proposition this release denies, so it is not a like-for-like comparison and
+  is not claimed here.
 
 - **`basou stats` decides whether a session's command time rests on a real
   observation from the session, not from its source kind.**

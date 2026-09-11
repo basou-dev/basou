@@ -306,13 +306,17 @@ regardless. Two sources were writing `0` for something else entirely:
   from one was written as `0` under 0.1.0 and is written as `null` now.
 - Codex's `Wall time` banner on the per-command `exec_command` path reports the
   interval **codex** waited on the tool call, bounded by the caller-supplied
-  `yield_time_ms` — not the child process's duration. Measured 2026-09-10 on one
-  host's rollouts: the banner never exceeds the yield it was given (`yield 1000`
-  → 2,857 calls, max 1.0214 s; `yield 30000` → max 30.0023 s; `yield 9000` → max
-  7.9111 s), 1,416 of the 3,153 positive values that declared a yield land
-  within 30 ms of it, and the control case is explicit — `sleep 8` reports
-  7.8757 s at `yield_time_ms: 9000` and 1.0018 s at 1000. A positive value is
-  therefore `min(duration, yield)`: right-censored, not measured.
+  `yield_time_ms` — not the child process's duration. Measured 2026-09-11 on one
+  host's rollouts: **no banner from a process that EXITED exceeds the yield it
+  was given, in any bucket** (yield 1000 → 1,498 exited calls, max 999 ms; 4000
+  → 34, max 3,536 ms; 9000 → 11, max 7,911 ms; 30000 → 126, max 17,319 ms), and
+  the control case is explicit — `sleep 8` reports 7.8757 s at
+  `yield_time_ms: 9000` and 1.0018 s at 1000. Overshoot exists, but only in the
+  other population: 1,366 of the 3,153 positive banners that declared a yield
+  exceed it, and every one of them is a call that had NOT exited, overrunning
+  the timeout by a few milliseconds of overhead. A positive banner from an
+  unfinished call is therefore `min(duration, yield)` plus overhead:
+  right-censored, not measured.
 
   basou records `null` for two shapes of that banner, and keeps the rest:
 
@@ -338,16 +342,18 @@ regardless. Two sources were writing `0` for something else entirely:
   duration/yield ratio whose median is 1.002, while only 24 of the 1,760
   "exited" ones (1.4%) do, at a median ratio of 0.259. **Residual:** those 24
   exited within a whisker of the timeout, where the banner cannot be told apart
-  from the clamp. basou records them as observed; they are 1.4% of the retained
-  population and 0.07% of all derived commands.
+  from the clamp. basou records them as observed; they are 1.4% of the 1,760
+  exited banners that declared a yield, 1.3% of the 1,839 retained on this path,
+  and 0.07% of all derived commands.
 
 - The SCRIPTED path is a different quantity and is NOT censored the same way.
   Its programs DO declare `yield_time_ms` — 1,960 of 4,661 such calls on this
   host (measured 2026-09-11) — but the banner is not bounded by it: **0** of the
   1,952 comparable banners land within 30 ms of the declared yield, the median
-  banner is 1.0% of it, and some exceed it outright (max 1.200x), which a clamp
-  could not produce. None of the 4,661 outputs ever reported a still-running
-  process either. So the scripted banner is the program's own elapsed time
+  banner is 1.0% of it, and 1.200x at the maximum. None of the 4,661 outputs
+  ever reported a still-running process either — which is the decisive
+  difference: on the `exec_command` path every overshoot belongs to a call that
+  had not exited, and the scripted path has no such calls at all. So the scripted banner is the program's own elapsed time
   rather than a wait that was cut short. Its per-command `exit_code` is
   nonetheless always `null`, because the format never carries one — the program
   would have to print it. So a scripted command can legitimately hold a duration
@@ -378,6 +384,17 @@ them (measured on one store: 19,592 such events). `schema_version` accepts any
 The published JSON Schema `$id` moves with the version
 (`https://basou.dev/schemas/0.2.0/event.schema.json`), so the URL that describes
 the nullable field is not the URL that described the non-nullable one.
+
+**Backward consequence, stated plainly.** A basou at 0.41.0 or earlier REJECTS a
+`0.2.0` event whose `duration_ms` is null — its schema requires a number — and
+`replayEvents` drops a rejected line. The whole command event disappears from
+that reader's counts, not just its duration. This is reachable two ways: an
+older global install reading a store a newer build wrote, and the federation
+reader (`~/.basou/hosts.yaml`), where a peer host still on 0.41.0 replays this
+host's sessions. `SchemaVersionSchema` accepts any `0.x.y`, so the
+"upgrade basou" gate described in `compatibility.md` does not catch this — that
+gate is major-only. Nothing shipped now can change how an already-released
+reader behaves; the mitigation is to upgrade every host that shares a store.
 
 Two neighbours deliberately did NOT change:
 

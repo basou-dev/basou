@@ -52,8 +52,9 @@ describe("writeObservedDuration", () => {
   });
 
   it("records a non-positive measurement as unobserved, never as 0", () => {
-    // basou's own live capture has only ever measured 0 on an ENOENT spawn,
-    // where the process never ran.
+    // A spawn costs real time and the runner measures at sub-millisecond
+    // resolution, so a 0 or negative reaching here means the measurement is
+    // unusable rather than that the command was instant.
     expect(writeObservedDuration(0)).toBeNull();
     expect(writeObservedDuration(-5)).toBeNull();
     expect(writeObservedDuration(null)).toBeNull();

@@ -136,7 +136,7 @@ export async function writeEventsBulk(
  * asserted. Round-tripping a genuine 0.1.0 event through `session import` is
  * unaffected: the check is scoped to the event's own version.
  */
-function assertWritableEvent(event: Event): void {
+export function assertWritableEvent(event: Event): void {
   if (!hasRetiredZeroDuration(event)) return;
   throw new Error(
     `Refusing to write command_executed with duration_ms: 0 at schema_version ${event.schema_version}: ` +

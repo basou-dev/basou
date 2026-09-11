@@ -211,4 +211,24 @@ describe("writeEventsBulk", () => {
     const first = JSON.parse(content.trim()) as { prev_hash: string };
     expect(first.prev_hash).toBe(genesisHash(CHAIN_SES_ID));
   });
+
+  it("refuses a batch containing a retired zero, and accepts the same batch at 0.1.0", async () => {
+    // Deleting the guard from this entry point used to leave the suite green,
+    // while this is the one that guards `session import` and the ad-hoc writers.
+    const cmd = (schemaVersion: string) =>
+      ({
+        ...BASE,
+        schema_version: schemaVersion,
+        type: "command_executed",
+        command: "ls",
+        args: ["-la"],
+        cwd: "/tmp/example",
+        exit_code: 0,
+        duration_ms: 0,
+      }) as Event;
+    await expect(writeEventsBulk(workDir, [cmd("0.2.0")])).rejects.toThrow(
+      /duration_ms: 0 at schema_version 0\.2\.0/,
+    );
+    await expect(writeEventsBulk(workDir, [cmd("0.1.0")])).resolves.not.toThrow();
+  });
 });

@@ -634,6 +634,25 @@ describe("doRunSessionShow", () => {
     expect(stdout).not.toContain("command n/a");
   });
 
+  it("case 11f: does not call 0ms the truth when a line of the stream was lost", async () => {
+    // "ran no commands" is a claim about the WHOLE stream. A malformed line
+    // means it was not read in full, and `basou stats` already says so -- the
+    // two surfaces used to disagree on the same session.
+    const repo = await setupInitedRepo();
+    const id = SES("Y0P");
+    const events =
+      SESSION_STARTED_LINE(id, "P01", "2026-05-08T11:00:00+09:00") +
+      '{"schema_version":"0.2.0","type":"command_exec\n' +
+      SESSION_ENDED_LINE(id, "P03", "2026-05-08T11:00:30+09:00");
+    await createSession(repo, { id, endedAt: "2026-05-08T11:00:30+09:00", events });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("0 cmd");
+    expect(stdout).toContain("command n/a (no duration observed)");
+    expect(stdout).not.toContain("command 0s");
+  });
+
   it("case 12: unique prefix hit resolves to the full ID", async () => {
     const repo = await setupInitedRepo();
     const id = SES("Y02");
