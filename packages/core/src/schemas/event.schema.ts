@@ -110,9 +110,11 @@ const ApprovalExpiredEventSchema = BaseEventSchema.extend({
 // cancellation, so a timeout (signal set, received_signal absent) can be
 // distinguished from a user interrupt (both set).
 //
-// Four fields are nullable, and null means the SAME thing in each: basou did
-// not observe the value. It never means a default, and never means the value
-// was something benign.
+// Four fields carry the not-observed convention, and null means the SAME thing
+// in each of them: basou did not observe the value. It never means a default,
+// and never means the value was something benign. (`signal` and
+// `received_signal` are nullable too, but are NOT part of this convention: a
+// null `signal` records that the child was not terminated by one.)
 //
 //   - `command`: null when the executor was not observed. A command imported
 //     from another tool's log is the usual case: the log records the shell

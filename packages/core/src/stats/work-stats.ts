@@ -61,7 +61,7 @@ export type MeasureAvailability = {
    * True does NOT mean every command was timed. When only some were,
    * `commandTimeMs` is a FLOOR and this flag does not say so — one boolean
    * cannot carry "all", "some" and "none". Measured 2026-09-10: 292 of 818
-   * importable codex rollouts are partly timed, at 15.0% of commands overall.
+   * importable codex rollouts are partly timed, at 15.1% of commands overall.
    * Compare `commandCount` if the difference matters to the caller.
    */
   commandTime: boolean;

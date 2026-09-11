@@ -427,11 +427,13 @@ function printSessionShowText(
 /**
  * One-line work summary for `session show`: output volume + action counts +
  * time proxies, reusing the same per-session computation as `basou stats`.
- * `command n/a (no duration observed)` flags a session that ran commands none
- * of which was timed, or whose stream lost a line to malformed JSON or a
- * schema violation — "ran no commands" is unbacked when the stream was not read
- * in full. (The other incomplete case, an unreadable events.jsonl, cannot reach
- * here: `session show` fails earlier.) A session that ran none and whose stream
+ * `command n/a (no duration observed, or the stream was not read in full)`
+ * flags a session that ran commands none of which was timed, or whose stream
+ * lost a line to malformed JSON or a schema violation — "ran no commands" is
+ * unbacked when the stream was not read in full, and the rendered string names
+ * both causes because this surface cannot tell them apart. (The other
+ * incomplete case, an unreadable events.jsonl, cannot reach here: `session
+ * show` fails earlier.) A session that ran none and whose stream
  * WAS read in full reports its truthful 0ms. A session that timed only SOME of
  * its commands reports a floor and is not marked, because one boolean cannot
  * carry "all", "some" and "none".
@@ -462,7 +464,7 @@ function formatSessionWork(
   parts.push(
     w.availability.commandTime
       ? `command ${formatDurationMs(w.commandTimeMs)}`
-      : "command n/a (no duration observed)",
+      : "command n/a (no duration observed, or the stream was not read in full)",
   );
   return parts.join(", ");
 }

@@ -252,6 +252,45 @@ describe("basou stats", () => {
     expect(text).toContain("codex-import:");
   });
 
+  it("--by-source prints a sub-second floor in milliseconds, never as >=0s", async () => {
+    // One timed session and one untimed session of the same kind: the sum is a
+    // real floor, but 400ms rounds to `0s`, and `>=0s` would read as a measured
+    // zero while hiding the very milliseconds this branch exists to show.
+    const repo = await setupInitedRepo();
+    await placeSession(repo, {
+      id: "ses_01HXABCDEF1234567890ABCDEA",
+      source: "codex-import",
+      endedAt: "2026-05-10T00:05:00.000Z",
+      commands: [{ at: "2026-05-10T00:00:30.000Z", durationMs: 400 }],
+    });
+    await placeSession(repo, {
+      id: "ses_01HXABCDEF1234567890ABCDEB",
+      source: "codex-import",
+      endedAt: "2026-05-10T00:05:00.000Z",
+      commands: [{ at: "2026-05-10T00:00:30.000Z", durationMs: null }],
+    });
+    const out = captureStdout();
+    await doRunStats({ bySource: true }, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("command >=400ms");
+    expect(text).not.toContain(">=0s");
+  });
+
+  it("--by-source says n/a only when the source has nothing to report", async () => {
+    const repo = await setupInitedRepo();
+    await placeSession(repo, {
+      id: "ses_01HXABCDEF1234567890ABCDEC",
+      source: "codex-import",
+      endedAt: "2026-05-10T00:05:00.000Z",
+      commands: [{ at: "2026-05-10T00:00:30.000Z", durationMs: null }],
+    });
+    const out = captureStdout();
+    await doRunStats({ bySource: true }, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("command n/a");
+    expect(text).not.toContain(">=");
+  });
+
   it("--by-day prints a per-day billing breakdown", async () => {
     const repo = await setupInitedRepo();
     await placeSession(repo, {

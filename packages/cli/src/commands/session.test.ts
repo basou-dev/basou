@@ -614,7 +614,9 @@ describe("doRunSessionShow", () => {
     const out = captureStdout();
     await doRunSessionShow(id, {}, { cwd: repo });
     const stdout = joinCalls(out);
-    expect(stdout).toContain("command n/a (no duration observed)");
+    expect(stdout).toContain(
+      "command n/a (no duration observed, or the stream was not read in full)",
+    );
     expect(stdout).not.toContain("(import)");
   });
 
@@ -649,7 +651,9 @@ describe("doRunSessionShow", () => {
     await doRunSessionShow(id, {}, { cwd: repo });
     const stdout = joinCalls(out);
     expect(stdout).toContain("0 cmd");
-    expect(stdout).toContain("command n/a (no duration observed)");
+    expect(stdout).toContain(
+      "command n/a (no duration observed, or the stream was not read in full)",
+    );
     expect(stdout).not.toContain("command 0s");
   });
 

@@ -450,6 +450,12 @@ export const VIEW_HTML = `<!doctype html>
     if (m > 0) return m + 'm ' + (sec < 10 ? '0' : '') + sec + 's';
     return sec + 's';
   }
+  // A floor under half a second renders as '>=0s' -- true of any total, and
+  // reading as a measured zero. Show those milliseconds instead.
+  function fmtFloor(ms) {
+    var coarse = fmtDur(ms);
+    return coarse === '0s' ? Math.round(ms || 0) + 'ms' : coarse;
+  }
   function kvrow(k, v) {
     return el('tr', {}, [el('td', { class: 'k', text: k }), el('td', { text: v })]);
   }
@@ -496,7 +502,7 @@ export const VIEW_HTML = `<!doctype html>
       if (d.bySource && d.bySource.length) {
         detail.appendChild(el('h3', { text: 'By source' }));
         d.bySource.forEach(function (s) {
-          var cmd = s.commandTimeReliable ? fmtDur(s.commandTimeMs) : (s.commandTimeMs > 0 ? '>=' + fmtDur(s.commandTimeMs) : 'n/a');
+          var cmd = s.commandTimeReliable ? fmtDur(s.commandTimeMs) : (s.commandTimeMs > 0 ? '>=' + fmtFloor(s.commandTimeMs) : 'n/a');
           var machine = s.machineActiveAvailable ? ', model ' + fmtDur(s.machineActiveTimeMs) : '';
           detail.appendChild(el('div', { class: 'row' }, [
             el('span', { text: s.sourceKind + ': ' + s.sessionCount + ' sessions, ' + numfmt(s.tokens.output) + ' out tok, active ' + fmtDur(s.activeTimeMs) + machine + ', command ' + cmd })

@@ -174,13 +174,26 @@ function describeSource(s: SourceWorkStats): string {
   const cmd = s.commandTimeReliable
     ? formatDurationMs(s.commandTimeMs)
     : s.commandTimeMs > 0
-      ? `>=${formatDurationMs(s.commandTimeMs)}`
+      ? `>=${formatFloorMs(s.commandTimeMs)}`
       : "n/a";
   const tokens = s.tokensAvailable ? `${formatInt(s.tokens.output)} out tok` : "no tokens";
   const machine = s.machineActiveAvailable
     ? `, model ${formatDurationMs(s.machineActiveTimeMs)}`
     : "";
   return `${s.sessionCount} sessions, ${tokens}, active ${formatDurationMs(s.activeTimeMs)}${machine}, command ${cmd}`;
+}
+
+/**
+ * A floor is only worth printing if it shows the time it is a floor of. Under
+ * half a second `formatDurationMs` rounds to `0s`, and `>=0s` is true of every
+ * possible total while reading as a measured zero next to a truthful
+ * `command 0s` on the line above. Print such a floor in milliseconds instead —
+ * not hiding time the workspace total already counts is the whole reason this
+ * branch exists rather than `n/a`.
+ */
+function formatFloorMs(ms: number): string {
+  const coarse = formatDurationMs(ms);
+  return coarse === "0s" ? `${Math.round(ms)}ms` : coarse;
 }
 
 /** "1,234,567" — thousands-separated, fixed en-US so output is deterministic. */

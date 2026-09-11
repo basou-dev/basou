@@ -298,6 +298,34 @@ describe("computeWorkStats", () => {
     }
   });
 
+  it("does NOT certify a session whose stream lost a line, even with no commands", async () => {
+    // The counting side of the same rule, one level up: computeWorkStats has to
+    // carry the replay's malformed / schema-invalid line count into the session
+    // stats. "Ran no commands" is a claim about the WHOLE stream, and a lost
+    // line means it was not read in full, so the 0ms is unbacked. Only the CLI
+    // surfaces tested this wiring; nothing pinned it here.
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const id = "ses_01HXABCDEF1234567890ABCDEF";
+    await placeSession(
+      paths,
+      {
+        id,
+        source: "codex-import",
+        startedAt: "2026-05-10T00:00:00.000Z",
+        endedAt: "2026-05-10T00:05:00.000Z",
+      },
+      started(id, "2026-05-10T00:00:00.000Z") +
+        '{"schema_version":"0.2.0","type":"command_exec\n' +
+        ended(id, "2026-05-10T00:05:00.000Z"),
+    );
+    const r = await computeWorkStats({ paths, now: NOW, onWarning: () => {} });
+    const s = r.sessions[0];
+    expect(s?.commandCount).toBe(0);
+    expect(s?.eventsUnreadable).toBe(false);
+    expect(s?.availability.commandTime).toBe(false);
+    expect(r.totals.commandTimeReliable).toBe(false);
+  });
+
   it("leaves a session that ran no commands reliable: 0ms is the truth there", async () => {
     // `basou note` / `decision capture` sessions record no command at all
     // (measured 2026-09-10: 466 of one store's 862 sessions). Marking them

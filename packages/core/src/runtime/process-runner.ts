@@ -81,6 +81,16 @@ export type RunResult = {
   readonly started_at: string;
   /** ISO 8601 timestamp captured on the `close` event. */
   readonly ended_at: string;
+  /**
+   * Elapsed time on a monotonic sub-millisecond clock, rounded to whole
+   * milliseconds — NOT `ended_at - started_at`, and not required to equal it:
+   * those two are whole-millisecond wall-clock captures, and measured, 7 of 40
+   * `/usr/bin/true` runs disagreed with their difference. The monotonic basis
+   * is what keeps a sub-millisecond spawn from rounding to `0`, which callers
+   * record as "no duration observed". One consequence on macOS: this clock
+   * does not advance across a system sleep, so a command spanning a suspend
+   * reports less than the wall interval it covered.
+   */
   readonly duration_ms: number;
   readonly pid: number | null;
 };

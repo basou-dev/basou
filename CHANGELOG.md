@@ -28,12 +28,14 @@ All notable changes to **basou** are recorded here. The project follows
 
   `0` is not a duration a command can have had, whoever wrote it: a spawned
   process cannot run in under half a millisecond, and the field is whole
-  milliseconds, so anything faster rounds to `0` regardless. Nothing on disk is
-  rewritten in place — that would break the tamper-evidence chain — though a
-  session whose source log grows is re-derived and restamped, which is how the
-  stored zeros drain away; re-deriving still cannot recover a duration the
-  source never reported. The schema still accepts
-  `0` so that the 19,592 such events measured on one store keep validating.
+  milliseconds, so anything faster rounds to `0` regardless. No migration
+  rewrites anything on disk in place — that would break the tamper-evidence
+  chain, and `basou session rechain` is the one command that rewrites a log in
+  place, on request and by rebuilding the chain as it goes — though a session
+  whose source log grows is re-derived and restamped, which is how the stored
+  zeros drain away; re-deriving still cannot recover a duration the source
+  never reported. The schema still accepts `0` so that the 19,592 such events
+  measured on one store keep validating.
   Every other `.basou/` document stays at `0.1.0` because those formats did not
   change.
 
@@ -54,10 +56,11 @@ All notable changes to **basou** are recorded here. The project follows
   accounting for 3,015 of its 6,678 scripted command events), the Codex importer
   for a `Wall time` banner it cannot read as the command's duration (see below),
   and `basou exec` / `basou run` when a run ended before a duration could be
-  measured, the spawn itself failed, or the wall clock produced a value that is
-  not a duration — non-positive across a spawn that cannot cost zero, or beyond
-  the field's integer domain, which used to fail validation deep inside a batch
-  import and abort the candidates behind it.
+  measured, the spawn itself failed, or the measurement came back as something
+  that is not a duration — non-positive across a spawn that cannot cost zero
+  (which is why the clock behind it is now monotonic rather than the wall
+  clock), or beyond the field's integer domain, which used to fail validation
+  deep inside a batch import and abort the candidates behind it.
 
 - **The Codex importer no longer reads a `Wall time` banner as the command's
   duration unless the command finished.** On the per-command `exec_command` path
@@ -104,8 +107,11 @@ All notable changes to **basou** are recorded here. The project follows
 
   Net effect on one host's rollouts, on ONE metric throughout — the share of
   derived commands carrying a duration basou will report: 15.1% after this gate
-  (1.5% for 2026-05, 56.0% for 2026-08), against 18.8% under the previous commit
-  and 18.9% under v0.41.0. The large drop people may expect — from ~92% — comes
+  (1.5% for 2026-05, 56.0% for 2026-08), against 18.90% before it. That 18.90%
+  is v0.41.0's value and is unchanged by the commits in this release that
+  precede the gate: rewriting a never-reportable `0` as `null` moves no command
+  from timed to untimed, because the read rule already reported neither. The
+  large drop people may expect — from ~92% — comes
   from counting the 26,591 stored zeros as observations, which is the
   proposition this release denies, so it is not a like-for-like comparison and
   is not claimed here.
@@ -125,7 +131,7 @@ All notable changes to **basou** are recorded here. The project follows
   The flag says the total rests on at least one real observation. It does not
   say every command was timed: when only some were, `commandTimeMs` is a floor
   and one boolean cannot carry "all", "some" and "none" (measured: 292 of 818
-  importable rollouts are partly timed, at 15.0% of commands overall). The
+  importable rollouts are partly timed, at 15.1% of commands overall). The
   `basou stats` line now says "at least" rather than implying completeness, and
   `--by-source` prints such a source as `>=<duration>` rather than `n/a`, which
   was hiding milliseconds the workspace total already counted.

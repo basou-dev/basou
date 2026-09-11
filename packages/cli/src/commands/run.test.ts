@@ -167,6 +167,36 @@ describe("runClaudeCode", () => {
     expect(cmdExec.source).toBe("terminal-recording");
   });
 
+  it("writes a measured duration through to the event", async () => {
+    // Same hole exec.test.ts closed for `basou exec`: every fake runner here
+    // returns 0 and no other test reads the field, so replacing the
+    // `writeObservedDuration` call with a literal null kept the suite green.
+    const repo = await setupInitedRepo();
+    const runner = makeFakeRunner({ exit_code: 0, duration_ms: 1500 });
+    await runClaudeCode(
+      [],
+      { cwd: repo, snapshot: false },
+      { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+    );
+    const sessionId = await findOnlySessionId(repo);
+    const ce = JSON.parse((await readEventsLines(repo, sessionId))[2] ?? "{}");
+    expect(ce.duration_ms).toBe(1500);
+    expect(ce.schema_version).toBe("0.2.0");
+  });
+
+  it("writes a non-positive measurement as unobserved, never as a measured zero", async () => {
+    const repo = await setupInitedRepo();
+    const runner = makeFakeRunner({ exit_code: 0, duration_ms: 0 });
+    await runClaudeCode(
+      [],
+      { cwd: repo, snapshot: false },
+      { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+    );
+    const sessionId = await findOnlySessionId(repo);
+    const ce = JSON.parse((await readEventsLines(repo, sessionId))[2] ?? "{}");
+    expect(ce.duration_ms).toBeNull();
+  });
+
   // 2
   it("marks session as failed when claude-code exits non-zero", async () => {
     const repo = await setupInitedRepo();

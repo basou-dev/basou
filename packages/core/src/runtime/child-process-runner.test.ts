@@ -144,6 +144,22 @@ describe("ChildProcessRunner", () => {
     expect(result.command).toBe(NODE);
   });
 
+  // 12b
+  it("does not measure the duration as a difference of the wall-clock Dates", async () => {
+    // The release lets a reader take 0 as "not observed" because a spawn cannot
+    // cost under half a millisecond. A whole-millisecond `getTime()` difference
+    // breaks that: measured, 5 of 40 `/usr/bin/true` runs landed on 0 depending
+    // only on where in the millisecond the spawn started, so basou reported a
+    // command it had timed as untimed. Test 12's 100ms sleep cannot see this --
+    // the old difference satisfied `>= 100` equally, and a loop of fast spawns
+    // catches it only about half the time (measured on this host). Freezing
+    // `getTime()` pins the basis instead of sampling for it: the wall-clock
+    // difference is then exactly 0 while the monotonic clock still advances.
+    vi.spyOn(Date.prototype, "getTime").mockReturnValue(1_700_000_000_000);
+    const result = await runner.run(NODE, ["-e", "setTimeout(() => {}, 20)"], { cwd });
+    expect(result.duration_ms).toBeGreaterThanOrEqual(20);
+  });
+
   // 13
   it("does not interpret shell metacharacters in args (shell:false)", async () => {
     const result = await runner.run(

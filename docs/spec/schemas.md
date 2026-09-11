@@ -222,8 +222,10 @@ Events written by the import paths additionally carry an optional top-level
 
 ## §7.3 Extension rules (additive by default; breaking changes are gated)
 
-- New event types may be added; required-field changes to existing types are
-  forbidden.
+- New event types may be added. For an existing type, adding a required field,
+  removing one, or narrowing one's domain is forbidden. Widening a required
+  field's domain is the one exception: the third rule below gates it rather
+  than forbidding it.
 - Adding optional fields to existing types is allowed.
 - Widening a required field's domain (e.g. making it nullable) is a BREAKING
   change to the event format. From 0.2.0 onward it requires a `schema_version`
