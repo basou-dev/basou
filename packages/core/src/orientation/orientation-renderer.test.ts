@@ -120,6 +120,19 @@ function decisionLine(
   })}\n`;
 }
 
+function taskCreatedLine(sessionId: string, evt: string, taskId: string, title: string): string {
+  return `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "task_created",
+    id: EVT(evt),
+    session_id: sessionId,
+    occurred_at: "2026-05-08T14:00:00+09:00",
+    source: "human",
+    task_id: taskId,
+    title,
+  })}\n`;
+}
+
 function voidLine(
   id: string,
   evt: string,
@@ -212,8 +225,7 @@ async function placePendingApproval(
 
 // The zero-task line distinguishes "never used tasks here" from "nothing pending";
 // see orientation-renderer's in-flight block.
-const NO_TASKS_LINE =
-  "(no tasks recorded — this workspace may not be using tasks yet; `basou task new` records work that spans sessions)";
+const NO_TASKS_LINE = "(no tasks recorded)";
 
 describe("orientation-renderer", () => {
   it("empty workspace renders all four sections with placeholders", async () => {
@@ -642,6 +654,37 @@ describe("orientation-renderer", () => {
     });
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain("### In-flight tasks (0)");
+    expect(result.body).toContain("- (none)");
+    expect(result.body).not.toContain(NO_TASKS_LINE);
+  });
+
+  it("a task_created with no surviving task file still counts as a task on record", async () => {
+    const paths = await setupPaths();
+    const sid = SES("S07");
+    await placeSession(
+      paths,
+      { id: sid, status: "completed" },
+      taskCreatedLine(sid, "E77", TASK("T08"), "deleted since"),
+    );
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("### In-flight tasks (0)");
+    expect(result.body).toContain("- (none)");
+    expect(result.body).not.toContain(NO_TASKS_LINE);
+  });
+
+  it("an archived task file still counts as a task on record", async () => {
+    const paths = await setupPaths();
+    await mkdir(join(paths.tasks, "archive"), { recursive: true });
+    await writeFile(join(paths.tasks, "archive", `${TASK("T07")}.md`), "---\n---\n\n");
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("- (none)");
+    expect(result.body).not.toContain(NO_TASKS_LINE);
+  });
+
+  it("a task file the loader cannot parse still counts as a task on record", async () => {
+    const paths = await setupPaths();
+    await writeFile(join(paths.tasks, `${TASK("T06")}.md`), "not a task file at all\n");
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain("- (none)");
     expect(result.body).not.toContain(NO_TASKS_LINE);
   });

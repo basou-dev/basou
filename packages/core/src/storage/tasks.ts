@@ -2504,3 +2504,32 @@ async function archiveTaskLocked(input: ArchiveTaskInput): Promise<ArchiveTaskRe
     eventId,
   };
 }
+
+/**
+ * Is there ANY surviving trace that a task was ever recorded in this workspace?
+ *
+ * Live, index-visible, parseable task files are not that trace. A task that was
+ * archived, deleted, corrupted on disk, or dropped by a stale `tasks/index.json`
+ * leaves none of them behind, and yet it was recorded. Counting only those and
+ * then reporting "no tasks recorded" would restate the loader's blind spots as a
+ * fact about the record -- one level down, the very mistake that line exists to
+ * stop.
+ *
+ * So the claim is made only when every channel agrees: no live entry, no
+ * `task_created` replayed from the trail, no archived file, and no task file
+ * skipped as unreadable. Anything unknown counts as a trace, so an enumeration
+ * that throws yields silence rather than a claim.
+ */
+export async function anyTaskEverRecorded(input: {
+  paths: BasouPaths;
+  liveCount: number;
+  taskCreatedSeen: boolean;
+  skippedCount: number;
+}): Promise<boolean> {
+  if (input.liveCount > 0 || input.taskCreatedSeen || input.skippedCount > 0) return true;
+  try {
+    return (await enumerateArchivedTaskIds(input.paths)).length > 0;
+  } catch {
+    return true;
+  }
+}

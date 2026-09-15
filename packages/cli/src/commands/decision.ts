@@ -260,35 +260,48 @@ async function warnLinkedFilesOutsideRoots(input: {
 }
 
 /**
- * Advisory: the title carries a track marker (bracketed TRACK, in ASCII or
- * full-width brackets, or a leading `TRACK:`)
- * but no track kind was set. Unlike a misspelled field, an OMITTED optional one
- * cannot be caught by the unknown-field check, so the write succeeds and reports
- * success — and the miss only shows up later, as a track that never resurfaces
- * in orient. The marker in the title is the one signal available.
+ * Advisory: the title carries a track marker (TRACK bracketed in ASCII, square,
+ * round, full-width or lenticular brackets, or a leading `TRACK:`) while `kind`
+ * was OMITTED. A misspelled field is already a hard error, but an omitted
+ * optional one cannot be -- the write succeeds and reports success, and the miss
+ * shows up much later, as a track that never resurfaces in orient. The marker in
+ * the title is then the one signal available.
+ *
+ * Fires ONLY on omission, which is the whole justification. An explicit
+ * `kind: "decision"` states the intent, and the write path normalizes it away
+ * (the event omits a default `kind`), so the normalized value cannot answer the
+ * question -- the parser reports whether the KEY was present instead. Without
+ * that, a deliberate decision whose title names the marker ("Drop the [TRACK]
+ * marker from decisions.md") would be warned about with no way to say otherwise.
  *
  * Bracketed or prefixed forms only: a bare "track" inside a sentence is ordinary
  * prose ("track the duration in ms"), and a warning that fires on prose stops
  * being read. Warn-only, like the source_roots guardrail above.
+ *
+ * `basou decision record` deliberately has NO counterpart: its option list puts
+ * `--track` next to `--title`, and it offers no way to declare "explicitly not a
+ * track", so the same check there could never be silenced by anyone whose title
+ * merely names the marker.
  */
 // Source stays ASCII (see scripts/check-language.mjs): U+FF1A fullwidth colon,
-// U+FF08/U+FF09 fullwidth parens, U+3010/U+3011 lenticular brackets.
-const TRACK_MARKER_IN_TITLE = /^\s*track\s*[:\uff1a]|[[(\uff08\u3010]\s*track\s*[\])\uff09\u3011]/i;
+// U+FF08/U+FF09 fullwidth parens, U+FF3B/U+FF3D fullwidth square brackets,
+// U+3010/U+3011 lenticular brackets.
+const TRACK_MARKER_IN_TITLE =
+  /^\s*track\s*[:\uff1a]|[[(\uff08\uff3b\u3010]\s*track\s*[\])\uff09\uff3d\u3011]/i;
 
-function trackMarkerAdvice(setter: string): string {
-  return (
-    "title carries a track marker but no track kind is set — it is recorded as a " +
-    "point-in-time decision and will NOT resurface in orient. Pass " +
-    `${setter} to open a track.`
-  );
-}
-
-function warnTrackMarkerWithoutKind(decisions: readonly CaptureDecisionInput[]): void {
-  decisions.forEach((decision, index) => {
-    if (decision.kind === "track") return;
-    if (!TRACK_MARKER_IN_TITLE.test(decision.title)) return;
-    console.error(`basou: decision[${index}] ${trackMarkerAdvice('"kind": "track"')}`);
-  });
+function warnTrackMarkerWithoutKind(
+  decisions: readonly CaptureDecisionInput[],
+  markerWithoutKind: readonly number[],
+): void {
+  for (const index of markerWithoutKind) {
+    const title = (decisions[index]?.title ?? "").trim();
+    console.error(
+      `basou: decision[${index}] title carries a track marker (${title.slice(0, 40)}) but ` +
+        '"kind" is absent — it is recorded as a point-in-time decision and will NOT resurface ' +
+        'in orient. Set "kind": "track" to open a track, or "kind": "decision" to say the ' +
+        "marker is part of the title.",
+    );
+  }
 }
 
 export async function doRunDecisionRecord(
@@ -305,9 +318,6 @@ export async function doRunDecisionRecord(
   const decisionId = prefixedUlid("decision");
 
   const rich = pickRichFields(options);
-  if (rich.kind !== "track" && TRACK_MARKER_IN_TITLE.test(options.title)) {
-    console.error(`basou: ${trackMarkerAdvice("--track")}`);
-  }
 
   await warnLinkedFilesOutsideRoots({
     linkedFiles: rich.linked_files ?? [],
@@ -454,8 +464,8 @@ export async function doRunDecisionCapture(
   await assertWorkspaceInitialized(paths.root);
 
   const raw = await readCaptureInput(options, ctx);
-  const decisions = parseCaptureInput(raw);
-  warnTrackMarkerWithoutKind(decisions);
+  const { decisions, markerWithoutKind } = parseCaptureInput(raw);
+  warnTrackMarkerWithoutKind(decisions, markerWithoutKind);
 
   // Cross-project guardrail (warn-only): surface linked files that resolve
   // outside the declared source_roots, before the dry-run early-return so a
@@ -796,7 +806,13 @@ const CAPTURE_ALLOWED_KEYS: ReadonlySet<string> = new Set([
  * field (e.g. `decision[2].title must be a non-empty string`) so the in-loop
  * agent can self-correct its extraction without guessing.
  */
-function parseCaptureInput(raw: string): CaptureDecisionInput[] {
+type ParsedCapture = {
+  decisions: CaptureDecisionInput[];
+  /** Indices whose title carries a track marker while `kind` was omitted. */
+  markerWithoutKind: number[];
+};
+
+function parseCaptureInput(raw: string): ParsedCapture {
   if (raw.trim().length === 0) {
     throw new Error(NO_INPUT_HINT);
   }
@@ -813,10 +829,20 @@ function parseCaptureInput(raw: string): CaptureDecisionInput[] {
   if (parsed.length === 0) {
     throw new Error("Input array must contain at least one decision.");
   }
-  return parsed.map((item, index) => validateCaptureItem(item, index));
+  const decisions: CaptureDecisionInput[] = [];
+  const markerWithoutKind: number[] = [];
+  parsed.forEach((item, index) => {
+    const { input, kindWasPresent } = validateCaptureItem(item, index);
+    decisions.push(input);
+    if (!kindWasPresent && TRACK_MARKER_IN_TITLE.test(input.title)) markerWithoutKind.push(index);
+  });
+  return { decisions, markerWithoutKind };
 }
 
-function validateCaptureItem(item: unknown, index: number): CaptureDecisionInput {
+function validateCaptureItem(
+  item: unknown,
+  index: number,
+): { input: CaptureDecisionInput; kindWasPresent: boolean } {
   if (typeof item !== "object" || item === null || Array.isArray(item)) {
     throw new Error(`decision[${index}] must be a JSON object.`);
   }
@@ -877,7 +903,10 @@ function validateCaptureItem(item: unknown, index: number): CaptureDecisionInput
       }
     });
   }
-  return out;
+  // `kindWasPresent` reports the KEY, not the normalized value: an explicit
+  // "decision" is dropped from `out` so the event omits a default `kind`, and
+  // the marker guard must still be able to tell it from an omission.
+  return { input: out, kindWasPresent: obj.kind !== undefined };
 }
 
 function requireNonEmptyString(value: unknown, index: number, field: string): string {

@@ -15,7 +15,12 @@ import {
   type SessionSkipReason,
   type SuspectReason,
 } from "../storage/sessions.js";
-import { loadTaskEntries, type TaskDocument, type TaskSkipReason } from "../storage/tasks.js";
+import {
+  anyTaskEverRecorded,
+  loadTaskEntries,
+  type TaskDocument,
+  type TaskSkipReason,
+} from "../storage/tasks.js";
 
 /** Input contract for {@link renderHandoff}. */
 export type HandoffRendererInput = {
@@ -238,8 +243,15 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     return c !== 0 ? c : a.taskId.localeCompare(b.taskId);
   });
 
-  const taskLoadOpts: Parameters<typeof loadTaskEntries>[1] = {};
-  if (input.onTaskSkip !== undefined) taskLoadOpts.onSkip = input.onTaskSkip;
+  // Always counted, callback or not: an unreadable task file is still a
+  // recorded task. See anyTaskEverRecorded.
+  let skippedTaskCount = 0;
+  const taskLoadOpts: Parameters<typeof loadTaskEntries>[1] = {
+    onSkip: (taskId, reason) => {
+      skippedTaskCount += 1;
+      input.onTaskSkip?.(taskId, reason);
+    },
+  };
   const taskEntries = await loadTaskEntries(input.paths, taskLoadOpts);
   const taskById = new Map<string, TaskDocument>();
   for (const t of taskEntries) taskById.set(t.task.task.id, t);
@@ -326,6 +338,12 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     latestTaskDoc,
     pendingTasks,
     totalTaskCount: taskEntries.length,
+    anyTaskEverRecorded: await anyTaskEverRecorded({
+      paths: input.paths,
+      liveCount: taskEntries.length,
+      taskCreatedSeen: tasksCreated.length > 0,
+      skippedCount: skippedTaskCount,
+    }),
   });
 
   return {
@@ -357,7 +375,10 @@ function formatHandoffBody(args: {
   latestActivityRecord: { taskId: string; title: string } | undefined;
   latestTaskDoc: TaskDocument | undefined;
   pendingTasks: ReadonlyArray<TaskDocument>;
+  /** Live, parseable task files — the `Tasks: N` footer figure. */
   totalTaskCount: number;
+  /** Any surviving trace of a task ever recorded here (NOT a live count). */
+  anyTaskEverRecorded: boolean;
 }): string {
   const t = viewStrings(args.language);
   const lines: string[] = [];
@@ -510,7 +531,7 @@ function formatHandoffBody(args: {
     // Zero pending is two different facts: every task is closed, or this
     // workspace never used tasks. Reported with one line, the second reads as
     // "nothing is in flight" — the mechanism's silence stated as the work's.
-    lines.push(args.totalTaskCount === 0 ? t.handoff.noTasksRecorded : t.handoff.noPendingTasks);
+    lines.push(args.anyTaskEverRecorded ? t.handoff.noPendingTasks : t.handoff.noTasksRecorded);
   } else {
     for (const t of args.pendingTasks) {
       // Lead with the task title; the raw id is demoted to a trailing [short id].

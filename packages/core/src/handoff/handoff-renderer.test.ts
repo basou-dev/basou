@@ -443,9 +443,7 @@ describe("handoff-renderer", () => {
     expect(result.taskCount).toBe(0);
     expect(result.pendingTaskCount).toBe(0);
     expect(result.body).toContain("- Last task: (no tasks recorded yet)");
-    expect(result.body).toContain(
-      "(no tasks recorded — this workspace may not be using tasks yet; `basou task new` records work that spans sessions)",
-    );
+    expect(result.body).toContain("(no tasks recorded)");
     expect(result.body).not.toContain("(no pending tasks)");
   });
 
@@ -463,6 +461,56 @@ describe("handoff-renderer", () => {
     expect(result.pendingTaskCount).toBe(0);
     expect(result.body).toContain("(no pending tasks)");
     expect(result.body).not.toContain("this workspace may not be using tasks yet");
+  });
+
+  it("case 13c: a task_created with no surviving task file is still a task on record", async () => {
+    // The deleted / index-dropped / unparseable shapes all look like this from
+    // the loader's side: zero live entries, but the trail says a task existed.
+    const paths = await setupPaths();
+    const sid = SES("X0E");
+    await placeSession(
+      paths,
+      { id: sid, status: "completed" },
+      taskCreatedLine(sid, "E19", TASK("T08"), "deleted since", "2026-05-08T14:00:00+09:00"),
+    );
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.taskCount).toBe(0);
+    expect(result.body).toContain("(no pending tasks)");
+    expect(result.body).not.toContain("(no tasks recorded)");
+  });
+
+  it("case 13d: an archived task file is still a task on record", async () => {
+    const paths = await setupPaths();
+    await mkdir(join(paths.tasks, "archive"), { recursive: true });
+    await writeFile(join(paths.tasks, "archive", `${TASK("T07")}.md`), "---\n---\n\n");
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.taskCount).toBe(0);
+    expect(result.body).toContain("(no pending tasks)");
+    expect(result.body).not.toContain("(no tasks recorded)");
+  });
+
+  it("case 13e: a task file the loader cannot parse is still a task on record", async () => {
+    const paths = await setupPaths();
+    await writeFile(join(paths.tasks, `${TASK("T06")}.md`), "not a task file at all\n");
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.taskCount).toBe(0);
+    expect(result.body).toContain("(no pending tasks)");
+    expect(result.body).not.toContain("(no tasks recorded)");
+  });
+
+  it("case 13f: the ja handoff renders both placeholders in Japanese", async () => {
+    const paths = await setupPaths();
+    const empty = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO, language: "ja" });
+    expect(empty.body).toContain("(task が 1 件も記録されていません)");
+    await placeTaskFile(paths, {
+      id: TASK("T05"),
+      title: "closed out",
+      status: "done",
+      createdAt: "2026-05-08T14:00:00+09:00",
+      sessionId: SES("X0D"),
+    });
+    const closed = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO, language: "ja" });
+    expect(closed.body).toContain("(未完了の task はありません)");
   });
 
   it("case 14: a single planned task surfaces as Last task and in Work to do next", async () => {

@@ -489,17 +489,18 @@ describe("doRunDecisionRecord (rich fields)", () => {
     expect(decision.kind).toBe("track");
   });
 
-  it("dec-rich-track-marker: a marker in the title without --track warns on the record path too", async () => {
+  it("dec-rich-track-marker: the record path deliberately does NOT warn on a marker in the title", async () => {
+    // `--track` sits next to `--title` in the option list, and there is no way to
+    // declare "explicitly not a track" — so the capture-side guard would fire
+    // unsilenceably on any title that merely names the marker.
     const repo = await setupInitedRepo();
     captureStdout();
     const err = captureStderr();
     await doRunDecisionRecord(
-      { title: "\u3010TRACK\u3011 deploy the importer" },
+      { title: "Drop the [TRACK] marker from decisions.md" },
       { cwd: repo, ...FIXED_CTX },
     );
-    const stderr = joinCalls(err);
-    expect(stderr).toContain("will NOT resurface in orient");
-    expect(stderr).toContain("--track");
+    expect(joinCalls(err)).toBe("");
   });
 
   it("dec-rich-3: --linked-file twice persists both paths", async () => {
@@ -808,28 +809,63 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     expect(joinCalls(out)).toMatch(/- decision_[A-Z0-9]+: plain \[DECISION\]/);
   });
 
-  it("cap-track-6: a track marker in the title with no kind warns instead of passing silently", async () => {
-    const repo = await setupInitedRepo();
-    captureStdout();
-    const err = captureStderr();
-    const input = JSON.stringify([{ title: "\u3010TRACK\u3011 deploy the importer" }]);
-    await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
-    const stderr = joinCalls(err);
-    expect(stderr).toContain("decision[0]");
-    expect(stderr).toContain("will NOT resurface in orient");
-    expect(stderr).toContain('"kind": "track"');
-  });
+  // One case per marker shape the JSDoc and the CHANGELOG claim to catch. Each
+  // row is its own assertion so a shrunk character class or a dropped `/i` fails
+  // loudly instead of hiding behind a sibling row.
+  const MARKER_WARNS: ReadonlyArray<[string, string]> = [
+    ["ascii square", "[TRACK] deploy the importer"],
+    ["ascii lowercase", "[track] deploy the importer"],
+    ["ascii round", "(TRACK) deploy the importer"],
+    ["lenticular", "\u3010TRACK\u3011 deploy the importer"],
+    ["fullwidth square", "\uff3bTRACK\uff3d deploy the importer"],
+    ["fullwidth round", "\uff08TRACK\uff09 deploy the importer"],
+    ["ascii prefix", "TRACK: deploy the importer"],
+    ["fullwidth colon prefix", "TRACK\uff1a deploy the importer"],
+  ];
+  for (const [label, title] of MARKER_WARNS) {
+    it(`cap-track-6 (${label}): a marker in the title with no kind warns instead of passing silently`, async () => {
+      const repo = await setupInitedRepo();
+      captureStdout();
+      const err = captureStderr();
+      await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, JSON.stringify([{ title }])));
+      const stderr = joinCalls(err);
+      expect(stderr).toContain("decision[0]");
+      expect(stderr).toContain("will NOT resurface");
+      expect(stderr).toContain('"kind": "track"');
+    });
+  }
 
-  it("cap-track-7: the marker warning stays quiet for a correct track and for prose", async () => {
+  const MARKER_QUIET: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ["a correct track", { title: "[TRACK] a real one", kind: "track" }],
+    // The justification is an OMITTED field; an explicit kind states the intent.
+    [
+      "an explicit decision",
+      { title: "Drop the [TRACK] marker from decisions.md", kind: "decision" },
+    ],
+    ["prose", { title: "Track the duration in ms so the importer can report it" }],
+    ["prose with a colon later", { title: "Importer: track the duration in ms" }],
+  ];
+  for (const [label, item] of MARKER_QUIET) {
+    it(`cap-track-7 (${label}): the marker warning stays quiet`, async () => {
+      const repo = await setupInitedRepo();
+      captureStdout();
+      const err = captureStderr();
+      await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, JSON.stringify([item])));
+      expect(joinCalls(err)).not.toContain("will NOT resurface");
+    });
+  }
+
+  it("cap-track-8: an explicit kind:decision still writes no kind on the event", async () => {
+    // The suppression above must not change what is persisted.
     const repo = await setupInitedRepo();
     captureStdout();
-    const err = captureStderr();
-    const input = JSON.stringify([
-      { title: "[TRACK] a real one", kind: "track" },
-      { title: "Track the duration in ms so the importer can report it" },
-    ]);
-    await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
-    expect(joinCalls(err)).not.toContain("resurface in orient");
+    captureStderr();
+    const input = JSON.stringify([{ title: "[TRACK] in the title", kind: "decision" }]);
+    await doRunDecisionCapture({}, captureCtx(repo, input));
+    const decision = (await readAdHocEvents(repo)).find(
+      (e) => e.type === "decision_recorded",
+    ) as Record<string, unknown>;
+    expect(decision.kind).toBeUndefined();
   });
 
   it("cap-4: --json emits mode=ad-hoc, count, and a decisions array with ids + fields", async () => {
