@@ -20,7 +20,7 @@ import {
   type SessionSkipReason,
   type SuspectReason,
 } from "../storage/sessions.js";
-import { loadTaskEntries, type TaskSkipReason } from "../storage/tasks.js";
+import { anyTaskEverRecorded, loadTaskEntries, type TaskSkipReason } from "../storage/tasks.js";
 
 /** Input contract for {@link renderOrientation} and {@link summarizeOrientation}. */
 export type OrientationRendererInput = {
@@ -226,6 +226,10 @@ export type OrientationSummary = {
   };
   /** Tasks whose status is `planned` or `in_progress`. */
   inFlightTasks: InFlightTask[];
+  /** Whether any task was ever recorded here, by any surviving trace — lets a
+   *  zero in-flight count distinguish "all closed" from "never used here".
+   *  See {@link anyTaskEverRecorded}: a live count is NOT this. */
+  anyTaskEverRecorded: boolean;
   /** Tasks whose status is `planned` ("where am I heading"). */
   plannedTasks: PlannedTask[];
   pendingApprovals: PendingApproval[];
@@ -336,6 +340,7 @@ export async function summarizeOrientation(
     else if (kind === "note" && typeof value === "string") bucket.notes.push(value);
   };
   let latestActivityAt: string | null = null;
+  let taskCreatedSeen = false;
   let latestNote: NoteRecord | null = null;
   const noteActivity = (iso: string): void => {
     if (latestActivityAt === null || Date.parse(iso) > Date.parse(latestActivityAt)) {
@@ -382,6 +387,10 @@ export async function summarizeOrientation(
               host: entry.host,
             });
           }
+        } else if (ev.type === "task_created") {
+          // Only the fact is needed: a task existed once, whatever became of
+          // its file. See anyTaskEverRecorded.
+          taskCreatedSeen = true;
         } else if (ev.type === "decision_voided") {
           voidedDecisionIds.add(ev.decision_id);
         }
@@ -486,8 +495,15 @@ export async function summarizeOrientation(
 
   // Tasks: in-flight (planned / in_progress) carry the cross-session linkage
   // that a flat transcript scan cannot reconstruct.
-  const taskLoadOpts: Parameters<typeof loadTaskEntries>[1] = {};
-  if (input.onTaskSkip !== undefined) taskLoadOpts.onSkip = input.onTaskSkip;
+  // The skip counter is always installed, whether or not the caller wants the
+  // callback: a task file the loader could not read is still a recorded task.
+  let skippedTaskCount = 0;
+  const taskLoadOpts: Parameters<typeof loadTaskEntries>[1] = {
+    onSkip: (taskId, reason) => {
+      skippedTaskCount += 1;
+      input.onTaskSkip?.(taskId, reason);
+    },
+  };
   const taskEntries = await loadTaskEntries(input.paths, taskLoadOpts);
   const inFlightTasks: InFlightTask[] = taskEntries
     .filter((t) => t.task.task.status === "in_progress" || t.task.task.status === "planned")
@@ -653,6 +669,12 @@ export async function summarizeOrientation(
     recentDirection,
     relatedFiles: { displayed, overflow, outOfRoot, omitted: omittedFiles },
     inFlightTasks,
+    anyTaskEverRecorded: await anyTaskEverRecorded({
+      paths: input.paths,
+      liveCount: taskEntries.length,
+      taskCreatedSeen,
+      skippedCount: skippedTaskCount,
+    }),
     plannedTasks,
     pendingApprovals,
     suspects,
@@ -860,7 +882,9 @@ function formatOrientationBody(
   lines.push("");
   lines.push(t.orientation.inFlightTasksHeading(summary.inFlightTasks.length));
   if (summary.inFlightTasks.length === 0) {
-    lines.push("- (none)");
+    // As in handoff: with no task ever recorded, "(none)" reports the
+    // absence of the record as the absence of pending work.
+    lines.push(summary.anyTaskEverRecorded ? "- (none)" : `- ${t.orientation.noTasksRecorded}`);
   } else {
     for (const t of summary.inFlightTasks) {
       const linkedSuffix = t.linkedSessions > 1 ? ` — linked_sessions: ${t.linkedSessions}` : "";

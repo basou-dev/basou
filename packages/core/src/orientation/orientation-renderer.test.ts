@@ -120,6 +120,19 @@ function decisionLine(
   })}\n`;
 }
 
+function taskCreatedLine(sessionId: string, evt: string, taskId: string, title: string): string {
+  return `${JSON.stringify({
+    schema_version: "0.1.0",
+    type: "task_created",
+    id: EVT(evt),
+    session_id: sessionId,
+    occurred_at: "2026-05-08T14:00:00+09:00",
+    source: "human",
+    task_id: taskId,
+    title,
+  })}\n`;
+}
+
 function voidLine(
   id: string,
   evt: string,
@@ -209,6 +222,10 @@ async function placePendingApproval(
   });
   await writeFile(join(paths.approvals.pending, `${fixture.id}.yaml`), yaml);
 }
+
+// The zero-task line distinguishes "never used tasks here" from "nothing pending";
+// see orientation-renderer's in-flight block.
+const NO_TASKS_LINE = "(no tasks recorded)";
 
 describe("orientation-renderer", () => {
   it("empty workspace renders all four sections with placeholders", async () => {
@@ -627,6 +644,51 @@ describe("orientation-renderer", () => {
     expect(verbose.body).toContain("- staleness probe: new 0, updated 0");
   });
 
+  it("in-flight 0 with a task on record still reads (none): closed out is not the same as never used", async () => {
+    const paths = await setupPaths();
+    await placeTaskFile(paths, {
+      id: TASK("T09"),
+      title: "shipped last week",
+      status: "done",
+      sessionId: SES("S01"),
+    });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("### In-flight tasks (0)");
+    expect(result.body).toContain("- (none)");
+    expect(result.body).not.toContain(NO_TASKS_LINE);
+  });
+
+  it("a task_created with no surviving task file still counts as a task on record", async () => {
+    const paths = await setupPaths();
+    const sid = SES("S07");
+    await placeSession(
+      paths,
+      { id: sid, status: "completed" },
+      taskCreatedLine(sid, "E77", TASK("T08"), "deleted since"),
+    );
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("### In-flight tasks (0)");
+    expect(result.body).toContain("- (none)");
+    expect(result.body).not.toContain(NO_TASKS_LINE);
+  });
+
+  it("an archived task file still counts as a task on record", async () => {
+    const paths = await setupPaths();
+    await mkdir(join(paths.tasks, "archive"), { recursive: true });
+    await writeFile(join(paths.tasks, "archive", `${TASK("T07")}.md`), "---\n---\n\n");
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("- (none)");
+    expect(result.body).not.toContain(NO_TASKS_LINE);
+  });
+
+  it("a task file the loader cannot parse still counts as a task on record", async () => {
+    const paths = await setupPaths();
+    await writeFile(join(paths.tasks, `${TASK("T06")}.md`), "not a task file at all\n");
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("- (none)");
+    expect(result.body).not.toContain(NO_TASKS_LINE);
+  });
+
   // Output-invariance lock: renderOrientation must keep emitting byte-identical
   // markdown after the summarizeOrientation extraction. The empty workspace is
   // fully deterministic given FIXED_NOW_ISO (no sessions / decisions / dates).
@@ -652,7 +714,7 @@ describe("orientation-renderer", () => {
         "## What is in flight",
         "",
         "### In-flight tasks (0)",
-        "- (none)",
+        `- ${NO_TASKS_LINE}`,
         "",
         "### Pending approvals (0)",
         "- (none)",

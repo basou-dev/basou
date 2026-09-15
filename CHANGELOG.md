@@ -3,6 +3,66 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A workspace with no tasks no longer reads as a workspace with nothing
+  pending.** `handoff.md` and `basou orient` reported zero in-flight tasks as
+  `(no pending tasks)` / `- (none)` whether every task was closed or none had
+  ever been recorded. Those are different facts: the first is a claim about the
+  work, the second a claim about the record. Stated with one line, the second
+  reads as the first, and the reader is told nothing is in flight by a
+  mechanism nobody is using. Both views now say `(no tasks recorded)` when the
+  record is empty.
+
+  The workspace that reported this had regenerated its handoff 147 times over
+  three months, each time under `(no pending tasks)`, while the work actually
+  in flight sat in 13 open decision tracks. handoff already drew the
+  distinction two sections earlier (`Last task: (no tasks recorded yet)`); the
+  section an agent acts on did not.
+
+  "Empty" is decided by every trace that survives, not by the live task files:
+  a task that was archived, deleted, corrupted on disk, or dropped by a stale
+  `tasks/index.json` leaves no live entry and was still recorded. The line
+  appears only when the live entries, the replayed `task_created` events, the
+  archive directory and the skipped-file count all agree — and anything that
+  cannot be enumerated counts as a trace, so the fallback is silence rather
+  than a claim. Reporting a loader's blind spot as an empty record would be the
+  same mistake one level down.
+
+  The line states the fact and stops there: no modal about what the workspace
+  "may" be doing, and no command to run. `orient`'s existing vessel hint
+  (`trackNudge`) is shown only when no open track, note or planned task already
+  gives direction; an ungated pointer in a view that an agent reads every
+  session is noise it cannot silence.
+
+- **`decision capture` names the vessel it wrote to, and speaks up when a title
+  says track but `kind` is absent.** The confirmation line marked `[TRACK]` and
+  left a point-in-time decision unmarked, so that case had to be read off an
+  absent marker; it now prints `[DECISION]`. A misspelled field was already a
+  hard error, but an OMITTED optional one cannot be caught that way — so a
+  title carrying a track marker (`TRACK` in ASCII, full-width, lenticular or
+  round brackets, or a leading `TRACK:`) with no `kind` key now warns on
+  stderr.
+
+  It fires on omission only. An explicit `kind: "decision"` is normalized away
+  before the write (the event omits a default `kind`), so the parser reports
+  whether the key was PRESENT — otherwise a deliberate decision whose title
+  names the marker ("Drop the `[TRACK]` marker from decisions.md") would be
+  warned about with no way to say otherwise. `basou decision record` has no
+  counterpart guard for the same reason: `--track` sits next to `--title` in
+  its option list, and it offers no way to declare "explicitly not a track".
+  Warn-only, and marker forms only: a bare "track" inside a sentence is prose,
+  and a warning that fires on prose stops being read.
+
+### Changed
+
+- **The `handoff.md` "work to do next" placeholder is now translated in a
+  Japanese workspace** (`(no pending tasks)` → `(未完了の task はありません)`).
+  It was the one line in that view still emitted in English regardless of the
+  anchor's declared language. `orient`'s `- (none)` placeholders are unchanged.
+
 ## 0.42.0 — 2026-09-11
 
 ### Changed
