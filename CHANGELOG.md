@@ -3,6 +3,36 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A workspace with no tasks no longer reads as a workspace with nothing
+  pending.** `handoff.md` and `basou orient` reported zero in-flight tasks as
+  `(no pending tasks)` / `- (none)` whether every task was closed or none had
+  ever been recorded. Those are different facts: the first is a claim about the
+  work, the second a claim about the record. Stated with one line, the second
+  reads as the first, and the reader is told nothing is in flight by a
+  mechanism nobody is using. Both views now say so when no task is on record,
+  and name `basou task new`.
+
+  The workspace that reported this had regenerated its handoff 147 times over
+  three months, each time under `(no pending tasks)`, while the work actually
+  in flight sat in 13 open decision tracks. handoff already drew the
+  distinction two sections earlier (`Last task: (no tasks recorded yet)`); the
+  section an agent acts on did not.
+
+- **`decision capture` names the vessel it wrote to, and speaks up when a title
+  says track but `kind` does not.** The confirmation line marked `[TRACK]` and
+  left a point-in-time decision unmarked, so that case had to be read off an
+  absent marker; it now prints `[DECISION]`. A misspelled field was already a
+  hard error, but an OMITTED optional one cannot be caught that way — so a
+  title carrying a track marker (bracketed `TRACK`, ASCII or full-width, or a
+  leading `TRACK:`) with no track kind now warns on stderr, on `decision
+  capture` and on `decision record` alike. Warn-only, and marker forms only: a
+  bare "track" inside a sentence is prose, and a warning that fires on prose
+  stops being read.
+
 ## 0.42.0 — 2026-09-11
 
 ### Changed

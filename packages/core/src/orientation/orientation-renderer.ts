@@ -226,6 +226,9 @@ export type OrientationSummary = {
   };
   /** Tasks whose status is `planned` or `in_progress`. */
   inFlightTasks: InFlightTask[];
+  /** Every task on record, whatever its status — lets a zero in-flight
+   *  count distinguish "all closed" from "tasks never used here". */
+  totalTaskCount: number;
   /** Tasks whose status is `planned` ("where am I heading"). */
   plannedTasks: PlannedTask[];
   pendingApprovals: PendingApproval[];
@@ -653,6 +656,7 @@ export async function summarizeOrientation(
     recentDirection,
     relatedFiles: { displayed, overflow, outOfRoot, omitted: omittedFiles },
     inFlightTasks,
+    totalTaskCount: taskEntries.length,
     plannedTasks,
     pendingApprovals,
     suspects,
@@ -860,7 +864,9 @@ function formatOrientationBody(
   lines.push("");
   lines.push(t.orientation.inFlightTasksHeading(summary.inFlightTasks.length));
   if (summary.inFlightTasks.length === 0) {
-    lines.push("- (none)");
+    // As in handoff: with no task ever recorded, "(none)" reports the
+    // absence of the record as the absence of pending work.
+    lines.push(summary.totalTaskCount === 0 ? `- ${t.orientation.noTasksRecorded}` : "- (none)");
   } else {
     for (const t of summary.inFlightTasks) {
       const linkedSuffix = t.linkedSessions > 1 ? ` — linked_sessions: ${t.linkedSessions}` : "";

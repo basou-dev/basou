@@ -86,6 +86,13 @@ export type ViewStrings = {
     headingForward: string;
     headingCurrency: string;
     inFlightTasksHeading: (n: number) => string;
+    /**
+     * Body line under the in-flight-tasks heading when the workspace has
+     * never recorded a task. "(none)" states that nothing is pending — a
+     * claim about the work. With no task on record the only honest claim is
+     * about the record.
+     */
+    noTasksRecorded: string;
     pendingApprovalsHeading: (n: number) => string;
     suspectSessionsHeading: (n: number) => string;
     openTracksHeading: (n: number) => string;
@@ -134,6 +141,10 @@ export type ViewStrings = {
     headingNextWork: string;
     headingSessions: string;
     lastTaskLabel: string;
+    /** "Work to do next" placeholder: tasks exist, none are open. */
+    noPendingTasks: string;
+    /** "Work to do next" placeholder: no task was ever recorded. */
+    noTasksRecorded: string;
     decisionStaleNote: string;
     trackCloseInstruction: string;
   };
@@ -206,6 +217,8 @@ const EN: ViewStrings = {
     headingForward: "## Where you are heading",
     headingCurrency: "## Is this current",
     inFlightTasksHeading: (n) => `### In-flight tasks (${n})`,
+    noTasksRecorded:
+      "(no tasks recorded — this workspace may not be using tasks yet; `basou task new` records work that spans sessions)",
     pendingApprovalsHeading: (n) => `### Pending approvals (${n})`,
     suspectSessionsHeading: (n) => `### Suspect sessions (${n})`,
     openTracksHeading: (n) => `### Open tracks (shown until closed) (${n})`,
@@ -282,6 +295,9 @@ const EN: ViewStrings = {
     headingNextWork: "## Work to do next",
     headingSessions: "## Sessions",
     lastTaskLabel: "Last task",
+    noPendingTasks: "(no pending tasks)",
+    noTasksRecorded:
+      "(no tasks recorded — this workspace may not be using tasks yet; `basou task new` records work that spans sessions)",
     decisionStaleNote:
       "Note: the latest activity postdates this decision. It may already be resolved in conversation — confirm the continuation point before resuming (conversational decisions are not captured automatically; record them with `basou decision capture`).",
     trackCloseInstruction: "When finished, close it with `basou decision void <decision_id>`.",
@@ -323,6 +339,8 @@ const JA: ViewStrings = {
     headingForward: "## どこへ向かう",
     headingCurrency: "## これは最新か",
     inFlightTasksHeading: (n) => `### 進行中 task (${n})`,
+    noTasksRecorded:
+      "(task が 1 件も記録されていません — この workspace はまだ task を使っていない可能性があります。session をまたぐ作業は `basou task new` で記録します)",
     pendingApprovalsHeading: (n) => `### 承認待ち (${n})`,
     suspectSessionsHeading: (n) => `### 要注意 session (${n})`,
     openTracksHeading: (n) => `### 未完トラック (close まで継続表示) (${n})`,
@@ -397,6 +415,9 @@ const JA: ViewStrings = {
     headingNextWork: "## 次に実行すべき作業",
     headingSessions: "## セッション一覧",
     lastTaskLabel: "最終 task",
+    noPendingTasks: "(未完了の task はありません)",
+    noTasksRecorded:
+      "(task が 1 件も記録されていません — この workspace はまだ task を使っていない可能性があります。session をまたぐ作業は `basou task new` で記録します)",
     decisionStaleNote:
       "注: 最終活動はこの判断より後です。会話で既に解決済みの可能性があるため、再開前に継続点を確認してください(会話での意思決定は自動記録されません。`basou decision capture` で記録できます)。",
     trackCloseInstruction: "完了したら `basou decision void <decision_id>` で閉じてください。",

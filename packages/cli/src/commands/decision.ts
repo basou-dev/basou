@@ -259,6 +259,38 @@ async function warnLinkedFilesOutsideRoots(input: {
   }
 }
 
+/**
+ * Advisory: the title carries a track marker (bracketed TRACK, in ASCII or
+ * full-width brackets, or a leading `TRACK:`)
+ * but no track kind was set. Unlike a misspelled field, an OMITTED optional one
+ * cannot be caught by the unknown-field check, so the write succeeds and reports
+ * success — and the miss only shows up later, as a track that never resurfaces
+ * in orient. The marker in the title is the one signal available.
+ *
+ * Bracketed or prefixed forms only: a bare "track" inside a sentence is ordinary
+ * prose ("track the duration in ms"), and a warning that fires on prose stops
+ * being read. Warn-only, like the source_roots guardrail above.
+ */
+// Source stays ASCII (see scripts/check-language.mjs): U+FF1A fullwidth colon,
+// U+FF08/U+FF09 fullwidth parens, U+3010/U+3011 lenticular brackets.
+const TRACK_MARKER_IN_TITLE = /^\s*track\s*[:\uff1a]|[[(\uff08\u3010]\s*track\s*[\])\uff09\u3011]/i;
+
+function trackMarkerAdvice(setter: string): string {
+  return (
+    "title carries a track marker but no track kind is set — it is recorded as a " +
+    "point-in-time decision and will NOT resurface in orient. Pass " +
+    `${setter} to open a track.`
+  );
+}
+
+function warnTrackMarkerWithoutKind(decisions: readonly CaptureDecisionInput[]): void {
+  decisions.forEach((decision, index) => {
+    if (decision.kind === "track") return;
+    if (!TRACK_MARKER_IN_TITLE.test(decision.title)) return;
+    console.error(`basou: decision[${index}] ${trackMarkerAdvice('"kind": "track"')}`);
+  });
+}
+
 export async function doRunDecisionRecord(
   options: DecisionRecordOptions,
   ctx: DecisionContext,
@@ -273,6 +305,9 @@ export async function doRunDecisionRecord(
   const decisionId = prefixedUlid("decision");
 
   const rich = pickRichFields(options);
+  if (rich.kind !== "track" && TRACK_MARKER_IN_TITLE.test(options.title)) {
+    console.error(`basou: ${trackMarkerAdvice("--track")}`);
+  }
 
   await warnLinkedFilesOutsideRoots({
     linkedFiles: rich.linked_files ?? [],
@@ -420,6 +455,7 @@ export async function doRunDecisionCapture(
 
   const raw = await readCaptureInput(options, ctx);
   const decisions = parseCaptureInput(raw);
+  warnTrackMarkerWithoutKind(decisions);
 
   // Cross-project guardrail (warn-only): surface linked files that resolve
   // outside the declared source_roots, before the dry-run early-return so a
@@ -909,6 +945,15 @@ function captureItemToPayload(item: CaptureResultItem): Record<string, unknown> 
   return payload;
 }
 
+/**
+ * Name the vessel on every line. Marking only tracks left the other case to be
+ * read off an ABSENT marker, which is exactly how a missed `kind` passed for a
+ * plain decision without anyone noticing.
+ */
+function kindMarker(kind: "decision" | "track" | undefined): string {
+  return kind === "track" ? " [TRACK]" : " [DECISION]";
+}
+
 function printCapturePreview(
   options: DecisionCaptureOptions,
   decisions: CaptureDecisionInput[],
@@ -921,7 +966,7 @@ function printCapturePreview(
     `Would capture ${decisions.length} decision${decisions.length === 1 ? "" : "s"} (dry run; nothing written):`,
   );
   for (const decision of decisions) {
-    console.log(`- ${decision.title}${decision.kind === "track" ? " [TRACK]" : ""}`);
+    console.log(`- ${decision.title}${kindMarker(decision.kind)}`);
   }
 }
 
@@ -946,9 +991,7 @@ function printCaptureResult(
     `Captured ${result.items.length} decision${result.items.length === 1 ? "" : "s"} in ad-hoc session ${sid}:`,
   );
   for (const item of result.items) {
-    console.log(
-      `- ${item.decisionId}: ${item.input.title}${item.input.kind === "track" ? " [TRACK]" : ""}`,
-    );
+    console.log(`- ${item.decisionId}: ${item.input.title}${kindMarker(item.input.kind)}`);
   }
 }
 

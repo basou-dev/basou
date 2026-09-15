@@ -507,7 +507,10 @@ function formatHandoffBody(args: {
   lines.push(t.handoff.headingNextWork);
   lines.push("");
   if (args.pendingTasks.length === 0) {
-    lines.push("(no pending tasks)");
+    // Zero pending is two different facts: every task is closed, or this
+    // workspace never used tasks. Reported with one line, the second reads as
+    // "nothing is in flight" — the mechanism's silence stated as the work's.
+    lines.push(args.totalTaskCount === 0 ? t.handoff.noTasksRecorded : t.handoff.noPendingTasks);
   } else {
     for (const t of args.pendingTasks) {
       // Lead with the task title; the raw id is demoted to a trailing [short id].

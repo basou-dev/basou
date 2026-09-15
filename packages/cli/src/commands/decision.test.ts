@@ -489,6 +489,19 @@ describe("doRunDecisionRecord (rich fields)", () => {
     expect(decision.kind).toBe("track");
   });
 
+  it("dec-rich-track-marker: a marker in the title without --track warns on the record path too", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    await doRunDecisionRecord(
+      { title: "\u3010TRACK\u3011 deploy the importer" },
+      { cwd: repo, ...FIXED_CTX },
+    );
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("will NOT resurface in orient");
+    expect(stderr).toContain("--track");
+  });
+
   it("dec-rich-3: --linked-file twice persists both paths", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
@@ -775,15 +788,48 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     );
   });
 
-  it("cap-track-4: text + dry-run output flag a track with [TRACK]", async () => {
+  it("cap-track-4: text + dry-run output name the vessel on every line, track or not", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
+    captureStderr();
     const input = JSON.stringify([{ title: "the track", kind: "track" }, { title: "plain" }]);
     await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
     const stdout = joinCalls(out);
     expect(stdout).toContain("- the track [TRACK]");
-    expect(stdout).toContain("- plain");
+    expect(stdout).toContain("- plain [DECISION]");
     expect(stdout).not.toContain("- plain [TRACK]");
+  });
+
+  it("cap-track-5: the written result also marks a plain decision [DECISION]", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    const input = JSON.stringify([{ title: "plain" }]);
+    await doRunDecisionCapture({}, captureCtx(repo, input));
+    expect(joinCalls(out)).toMatch(/- decision_[A-Z0-9]+: plain \[DECISION\]/);
+  });
+
+  it("cap-track-6: a track marker in the title with no kind warns instead of passing silently", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    const input = JSON.stringify([{ title: "\u3010TRACK\u3011 deploy the importer" }]);
+    await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("decision[0]");
+    expect(stderr).toContain("will NOT resurface in orient");
+    expect(stderr).toContain('"kind": "track"');
+  });
+
+  it("cap-track-7: the marker warning stays quiet for a correct track and for prose", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    const input = JSON.stringify([
+      { title: "[TRACK] a real one", kind: "track" },
+      { title: "Track the duration in ms so the importer can report it" },
+    ]);
+    await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
+    expect(joinCalls(err)).not.toContain("resurface in orient");
   });
 
   it("cap-4: --json emits mode=ad-hoc, count, and a decisions array with ids + fields", async () => {

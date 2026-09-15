@@ -437,13 +437,32 @@ describe("handoff-renderer", () => {
     expect(result.body).toContain(`> Generated at ${customNow}`);
   });
 
-  it("case 13: Last task / Work to do next stay placeholder when no tasks exist", async () => {
+  it("case 13: with no task on record, Work to do next says so instead of claiming nothing is pending", async () => {
     const paths = await setupPaths();
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.taskCount).toBe(0);
     expect(result.pendingTaskCount).toBe(0);
     expect(result.body).toContain("- Last task: (no tasks recorded yet)");
+    expect(result.body).toContain(
+      "(no tasks recorded — this workspace may not be using tasks yet; `basou task new` records work that spans sessions)",
+    );
+    expect(result.body).not.toContain("(no pending tasks)");
+  });
+
+  it("case 13b: a closed-out task keeps the (no pending tasks) wording — that claim is now earned", async () => {
+    const paths = await setupPaths();
+    await placeTaskFile(paths, {
+      id: TASK("T09"),
+      title: "shipped last week",
+      status: "done",
+      createdAt: "2026-05-08T14:00:00+09:00",
+      sessionId: SES("X0D"),
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.taskCount).toBe(1);
+    expect(result.pendingTaskCount).toBe(0);
     expect(result.body).toContain("(no pending tasks)");
+    expect(result.body).not.toContain("this workspace may not be using tasks yet");
   });
 
   it("case 14: a single planned task surfaces as Last task and in Work to do next", async () => {

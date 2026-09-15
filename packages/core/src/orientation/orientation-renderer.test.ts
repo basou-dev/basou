@@ -210,6 +210,11 @@ async function placePendingApproval(
   await writeFile(join(paths.approvals.pending, `${fixture.id}.yaml`), yaml);
 }
 
+// The zero-task line distinguishes "never used tasks here" from "nothing pending";
+// see orientation-renderer's in-flight block.
+const NO_TASKS_LINE =
+  "(no tasks recorded — this workspace may not be using tasks yet; `basou task new` records work that spans sessions)";
+
 describe("orientation-renderer", () => {
   it("empty workspace renders all four sections with placeholders", async () => {
     const paths = await setupPaths();
@@ -627,6 +632,20 @@ describe("orientation-renderer", () => {
     expect(verbose.body).toContain("- staleness probe: new 0, updated 0");
   });
 
+  it("in-flight 0 with a task on record still reads (none): closed out is not the same as never used", async () => {
+    const paths = await setupPaths();
+    await placeTaskFile(paths, {
+      id: TASK("T09"),
+      title: "shipped last week",
+      status: "done",
+      sessionId: SES("S01"),
+    });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).toContain("### In-flight tasks (0)");
+    expect(result.body).toContain("- (none)");
+    expect(result.body).not.toContain(NO_TASKS_LINE);
+  });
+
   // Output-invariance lock: renderOrientation must keep emitting byte-identical
   // markdown after the summarizeOrientation extraction. The empty workspace is
   // fully deterministic given FIXED_NOW_ISO (no sessions / decisions / dates).
@@ -652,7 +671,7 @@ describe("orientation-renderer", () => {
         "## What is in flight",
         "",
         "### In-flight tasks (0)",
-        "- (none)",
+        `- ${NO_TASKS_LINE}`,
         "",
         "### Pending approvals (0)",
         "- (none)",
