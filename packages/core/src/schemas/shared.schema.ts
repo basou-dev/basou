@@ -65,13 +65,13 @@ const isoTimestampRegex = new RegExp(ISO_TIMESTAMP_PATTERN);
  * what the runtime actually accepts.
  *
  * It deliberately does NOT declare `format: "date-time"`. That format names
- * RFC 3339, which requires seconds, while these timestamps do not — so
- * declaring it described an accepted set narrower than the one basou has. The
- * cost was that the artifact contradicted itself: a validator treating
- * `format` as an assertion rejected `2026-09-16T01:23Z`, while one treating it
- * as an annotation (the JSON Schema 2020-12 default) accepted it, from the
- * same bytes. The `pattern` is the contract, and `description` carries the
- * meaning a reader would otherwise take from the format name.
+ * RFC 3339, and the two sets cross rather than nest: basou takes a timestamp
+ * without seconds, which RFC 3339 does not, and refuses the lowercase
+ * designators and the leap second that RFC 3339 allows. Declaring the format
+ * made one artifact answer two ways from the same bytes — a validator
+ * asserting it rejected `2026-09-16T01:23Z`, one treating it as an annotation
+ * (the JSON Schema 2020-12 default) accepted it. The `pattern` is the
+ * contract, and `description` says so, because no format name states this set.
  */
 export const IsoTimestampSchema = z
   .string()
@@ -79,7 +79,8 @@ export const IsoTimestampSchema = z
     message: "Expected an ISO 8601 timestamp with a timezone offset",
   })
   .meta({
-    description: "ISO 8601 timestamp with a timezone offset. Seconds are optional.",
+    description:
+      "Timestamp with an offset or Z. The pattern is normative: RFC 3339 date-time with uppercase designators, no leap second, and optional seconds.",
     pattern: ISO_TIMESTAMP_PATTERN,
   });
 
