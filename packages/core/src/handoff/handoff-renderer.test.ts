@@ -319,7 +319,9 @@ describe("handoff-renderer", () => {
     await placeSession(paths, { id }, events);
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.decisionCount).toBe(3);
-    expect(result.body).toContain(`- third [${SHORT(dec3)}]`);
+    // Decision ids render in full (a track is routinely also the latest
+    // decision, and the open-track line below needs the complete id).
+    expect(result.body).toContain(`- third [${dec3}]`);
     expect(result.body).toContain("(3 decisions total — see decisions.md)");
   });
 
@@ -413,7 +415,7 @@ describe("handoff-renderer", () => {
       `- Last session: fixture ${id.slice(-3)} (completed) [${SHORT(id)}]`,
     );
     expect(result.body).toContain("- src/x.ts");
-    expect(result.body).toContain(`- pick A [${SHORT(dec)}]`);
+    expect(result.body).toContain(`- pick A [${dec}]`);
     expect(result.body).toContain("| short_id | status | started_at | label |");
     expect(result.body).toContain("Sessions: 1 (completed 1). Tasks: 0.");
   });
@@ -1007,6 +1009,28 @@ describe("renderHandoff (open tracks)", () => {
     expect(result.body).toContain("admin form coverage");
     expect(result.body).toContain("Why: raw JSON is a stopgap");
     expect(result.body).toContain("basou decision void");
+  });
+
+  it("prints the FULL decision id for every open track, so a same-millisecond batch stays distinguishable", async () => {
+    const paths = await setupPaths();
+    const id = SES("HT9");
+    const a = "decision_01HXABCDEF1234567890ABCTQG";
+    const b = "decision_01HXABCDEF1234567890ABCTQH";
+    await placeSession(
+      paths,
+      { id, status: "completed", startedAt: "2026-05-08T09:00:00+09:00" },
+      decisionRecordedLine(id, "HQ1", a, "first of the batch", "2026-05-08T10:00:00.000Z", {
+        kind: "track",
+      }) +
+        decisionRecordedLine(id, "HQ2", b, "second of the batch", "2026-05-08T10:00:00.000Z", {
+          kind: "track",
+        }),
+    );
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    const section = sliceSection(result.body, "## Open tracks (shown until closed)", "## ");
+    expect(section).toContain(`[${a}]`);
+    expect(section).toContain(`[${b}]`);
+    expect(section).toContain("basou decision void");
   });
 
   it("an open track survives a LATER plain decision (the intent-leak regression)", async () => {

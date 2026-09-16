@@ -522,6 +522,13 @@ export function formatCoverageReport(result: CoverageResult): string[] {
   lines.push(
     "Register the project in a workspace's import.source_roots to start capturing it (registering a path in ~/.basou/portfolio.yaml alone imports nothing — it only adds the workspace to this view). A scratch directory, a temp path, or a GUI tool's own working directory has no repo to declare and is expected to stay here.",
   );
+  // The paths above are the ones the SESSIONS ran in, which for a moved or
+  // renamed project no longer exist. Without this line the remedy reads as
+  // advice about a directory that is gone, and the reader concludes there is
+  // nothing to do — the misreading this line exists to prevent.
+  lines.push(
+    "A directory that no longer exists is still worth declaring: when a project moved or was renamed, add its OLD path — written relative to the workspace it now lives in — to that workspace's import.source_roots. The path does not have to exist for the sessions recorded under it to be captured on the next refresh.",
+  );
   return [...lines, ...inertLines(result)];
 }
 

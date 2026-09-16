@@ -788,7 +788,7 @@ function formatOrientationBody(
     const dec = summary.latestDecision;
     const decAge = t.relativeAge(dec.occurredAt, now);
     lines.push(
-      `- ${t.common.latestDecisionLabel}: ${dec.title} [${shortId(dec.decisionId)}] (${decAge})${hostSuffix(dec.host)}`,
+      `- ${t.common.latestDecisionLabel}: ${dec.title} [${dec.decisionId}] (${decAge})${hostSuffix(dec.host)}`,
     );
     // Honesty over recency theater: this is the latest *recorded* decision, not
     // necessarily the latest decision. When captured activity continued well
@@ -933,9 +933,16 @@ function formatOrientationBody(
     lines.push(t.orientation.openTracksHeading(summary.openTracks.length));
     for (const track of shownTracks) {
       const trackAge = t.relativeAge(track.occurredAt, now);
-      lines.push(
-        `- ${track.title} [${shortId(track.decisionId)}] (${trackAge})${hostSuffix(track.host)}`,
-      );
+      // A DECISION id is printed in full, here and on the latest-decision line.
+      // Two reasons. The section's closing line tells the reader to run
+      // `basou decision void <decision_id>`, which accepts only a complete
+      // `decision_<ULID>` and refuses a short one -- a short id here asks for a
+      // command it does not supply. And a short id cannot be shortened safely:
+      // `decision capture` mints a batch inside one millisecond, and monotonic
+      // ULIDs increment by one, so ADJACENT ids in a batch differ only in the
+      // final character; no usefully short prefix tells them apart. Session and
+      // task ids stay short: one is minted per command, so they do not collide.
+      lines.push(`- ${track.title} [${track.decisionId}] (${trackAge})${hostSuffix(track.host)}`);
       if (track.rationale !== null && track.rationale.trim() !== "") {
         lines.push(`  - ${t.common.trackWhyLabel}: ${trackRationale(track.rationale)}`);
       }
