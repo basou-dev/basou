@@ -19,6 +19,18 @@ All notable changes to **basou** are recorded here. The project follows
   unchanged: seconds stay optional, an offset or `Z` stays required. Changing
   it is a change to the event format, gated by the rules in that document.
 
+- **The live artifacts no longer declare a format the timestamps do not
+  match.** Every timestamp node carried `format: "date-time"` next to a
+  `pattern` that makes seconds optional, and RFC 3339, which that format names,
+  requires them. One artifact therefore described two accepted sets: a
+  validator treating `format` as an assertion rejected `2026-09-16T01:23Z`,
+  while one treating it as an annotation, the JSON Schema 2020-12 default,
+  accepted it from the same bytes. The declaration is dropped and a
+  `description` carries the meaning instead. What basou accepts does not
+  change, and under ECMA-262 pattern semantics both kinds of validator now
+  agree with it. The retired `0.1.0` artifact keeps the contradiction: its
+  bytes are frozen by construction, and it stays published as it was.
+
 - **zod moves to 4.6.4.** The emitted artifacts spell a nullable string as
   `"type": ["string", "null"]` where 4.4 emitted a two-branch `anyOf`. The two
   accept exactly the same values, and no `$id` moves.
