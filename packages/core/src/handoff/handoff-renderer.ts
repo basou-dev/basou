@@ -638,10 +638,10 @@ function formatHandoffBody(args: {
 // the decision_recorded event (see decisions.md).
 const HANDOFF_TRACK_RATIONALE_MAX = 240;
 function handoffRationale(rationale: string): string {
-  const oneLine = rationale.replace(/\s+/g, " ").trim();
-  return oneLine.length > HANDOFF_TRACK_RATIONALE_MAX
-    ? `${oneLine.slice(0, HANDOFF_TRACK_RATIONALE_MAX - 1)}…`
-    : oneLine;
+  const collapsed = oneLine(rationale);
+  return collapsed.length > HANDOFF_TRACK_RATIONALE_MAX
+    ? `${collapsed.slice(0, HANDOFF_TRACK_RATIONALE_MAX - 1)}…`
+    : collapsed;
 }
 
 // A label is whatever was recorded for the session, and for an ad-hoc session

@@ -851,21 +851,27 @@ describe("handoff-renderer", () => {
   // nobody had noticed, because nothing reads handoff.md.
   //
   // The fixture carries every hazard at once: runs of spaces and a tab (so a
-  // newline-only collapse fails), leading and trailing whitespace (so a missing
+  // newline-only collapse fails), trailing whitespace (so a missing
   // trim fails), a bare `|` (so a missing escape fails), and a `\|` that is
   // already escaped (so escaping the delimiter without escaping the backslash
   // first fails -- GFM would eat the `\\` and read the `|` as a live cell).
   const HOSTILE_LABEL = 'basou run codex exec  grep -E "a|b"\t\n\n# Target\n\nRepo: c\\|d\n';
 
+  // The renderer splits the two tables on `source.kind`, not on status -- a
+  // parameterisation over status puts both cases in the live table and leaves
+  // the imported one unguarded while reading as though it were covered.
   it.each([
-    ["live", "completed"],
-    ["imported", "imported"],
-  ] as const)("collapses a %s session label so it cannot break the table or the document", async (_kind, status) => {
+    ["live", "terminal"],
+    ["imported", "import"],
+  ] as const)("collapses a %s session label so it cannot break the table or the document", async (kind, source) => {
     const paths = await setupPaths();
     const id = SES("X30");
-    await placeSession(paths, { id, status, label: HOSTILE_LABEL });
+    await placeSession(paths, { id, status: "completed", source, label: HOSTILE_LABEL });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     const lines = result.body.split("\n");
+
+    // The case reached the table it names.
+    expect(result.body.includes("### Imported sessions")).toBe(kind === "imported");
 
     // Nothing the label carried became a heading of this document.
     expect(lines.filter((l) => /^#{1,6} /.test(l))).not.toContain("# Target");

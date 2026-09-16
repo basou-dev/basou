@@ -1225,8 +1225,8 @@ const FILES_PER_DIGEST = 3;
 // dominate the view. The full body is preserved in the event (see session show).
 const NOTE_SUMMARY_MAX = 200;
 function noteSummary(body: string): string {
-  const oneLine = body.replace(/\s+/g, " ").trim();
-  return oneLine.length > NOTE_SUMMARY_MAX ? `${oneLine.slice(0, NOTE_SUMMARY_MAX - 1)}…` : oneLine;
+  const collapsed = oneLine(body);
+  return collapsed.length > NOTE_SUMMARY_MAX ? `${collapsed.slice(0, NOTE_SUMMARY_MAX - 1)}…` : collapsed;
 }
 
 // A track's rationale is the WHY behind the direction; like a note it can be
@@ -1234,10 +1234,10 @@ function noteSummary(body: string): string {
 // text is preserved in the decision_recorded event (see decisions.md).
 const TRACK_RATIONALE_MAX = 240;
 function trackRationale(rationale: string): string {
-  const oneLine = rationale.replace(/\s+/g, " ").trim();
-  return oneLine.length > TRACK_RATIONALE_MAX
-    ? `${oneLine.slice(0, TRACK_RATIONALE_MAX - 1)}…`
-    : oneLine;
+  const collapsed = oneLine(rationale);
+  return collapsed.length > TRACK_RATIONALE_MAX
+    ? `${collapsed.slice(0, TRACK_RATIONALE_MAX - 1)}…`
+    : collapsed;
 }
 
 function suspectText(reason: SuspectReason | null): string {
