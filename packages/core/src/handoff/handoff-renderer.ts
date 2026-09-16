@@ -403,7 +403,7 @@ function formatHandoffBody(args: {
     // available, so it becomes the primary text and the bracket is dropped to
     // avoid repeating it.
     if (label !== undefined && label !== "") {
-      lines.push(`- ${t.common.lastSessionLabel}: ${label} (${status}) [${shortId}]`);
+      lines.push(`- ${t.common.lastSessionLabel}: ${oneLine(label)} (${status}) [${shortId}]`);
     } else {
       lines.push(`- ${t.common.lastSessionLabel}: ${shortId} (${status})`);
     }
@@ -580,7 +580,7 @@ function formatHandoffBody(args: {
       const sid = shortHandoffId(e.sessionId);
       const status = e.session.session.status + suspectLabel(e.suspectReason);
       const startedAt = e.session.session.started_at;
-      const label = e.session.session.label ?? "";
+      const label = tableCell(e.session.session.label ?? "");
       lines.push(`| ${sid} | ${status} | ${startedAt} | ${label} |`);
     }
   }
@@ -594,7 +594,7 @@ function formatHandoffBody(args: {
       const sid = shortHandoffId(e.sessionId);
       const status = e.session.session.status + suspectLabel(e.suspectReason);
       const startedAt = e.session.session.started_at;
-      const label = e.session.session.label ?? "";
+      const label = tableCell(e.session.session.label ?? "");
       lines.push(`| ${sid} | ${status} | ${startedAt} | ${label} |`);
     }
   }
@@ -641,6 +641,23 @@ function handoffRationale(rationale: string): string {
   return oneLine.length > HANDOFF_TRACK_RATIONALE_MAX
     ? `${oneLine.slice(0, HANDOFF_TRACK_RATIONALE_MAX - 1)}…`
     : oneLine;
+}
+
+// A session label is whatever was recorded for it, and for an ad-hoc session
+// that is the command line -- which for `basou run codex exec <prompt>` carries
+// the whole prompt, newlines and all. Rendered raw it breaks this document
+// twice over: the newline ends the table row early, and any line the prompt
+// began with `#` becomes a heading of the handoff itself. Orientation already
+// collapses whitespace for the same reason (see noteSummary there); handoff
+// did not, and 206 lines of one real store had turned into headings.
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+// Cells additionally have to survive the column delimiter: a label containing
+// `|` would silently add columns to the row.
+function tableCell(text: string): string {
+  return oneLine(text).replace(/\|/g, "\\|");
 }
 
 function suspectLabel(reason: SuspectReason | null): string {

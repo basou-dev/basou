@@ -819,6 +819,40 @@ describe("handoff-renderer", () => {
     expect(liveSection).toContain("live work");
     expect(liveSection).not.toContain("from-external");
   });
+  // A session label is whatever was recorded for it, and an ad-hoc session's
+  // label is the command line: `basou run codex exec <prompt>` puts a whole
+  // prompt there. Rendered raw it broke this document twice -- the newline
+  // ended the table row early, and a prompt line beginning with `#` became a
+  // heading of the handoff itself. One real store had 206 such headings, and
+  // nobody had noticed, because nothing reads handoff.md.
+  it("collapses a multi-line session label so it cannot break the table or the document", async () => {
+    const paths = await setupPaths();
+    const id = SES("X30");
+    await placeSession(paths, {
+      id,
+      status: "completed",
+      label: "basou run codex exec You are reviewing\n\n# Target\n\nRepo: a | b\n",
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    const lines = result.body.split("\n");
+
+    // Nothing the label carried became a heading of this document.
+    expect(lines.filter((l) => /^#{1,6} /.test(l))).not.toContain("# Target");
+
+    // It occupies exactly one table row, and the column delimiter is escaped so
+    // the row keeps its four cells.
+    const tableId = id.slice("ses_".length, "ses_".length + 10);
+    const rows = lines.filter((l) => l.startsWith(`| ${tableId} `));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("basou run codex exec You are reviewing # Target Repo: a \\| b");
+    // Split on unescaped delimiters only: the escaped one belongs to the cell.
+    expect(rows[0]?.split(/(?<!\\)\|/)).toHaveLength(6);
+
+    // The prose line that leads with the label is collapsed the same way.
+    const prose = lines.filter((l) => l.includes("Last session: "));
+    expect(prose).toHaveLength(1);
+    expect(prose[0]).toContain("You are reviewing # Target Repo: a | b");
+  });
 });
 
 // Resume coherence (HypArt triage): handoff must carry a staleness caveat on a
