@@ -458,7 +458,10 @@ function formatHandoffBody(args: {
     const last = args.latestDecision;
     // Lead with the decision title; the raw id is demoted to a trailing
     // [short id].
-    lines.push(`- ${last.title} [${shortIdWithPrefix(last.decisionId)}]`);
+    // Same decision id rule as the open-track lines below: a track is
+    // routinely also the latest decision, and one document must not spell
+    // the same decision two ways.
+    lines.push(`- ${last.title} [${last.decisionId}]`);
     // Staleness caveat (mirrors orientation): when real work continued well past
     // this decision, it may already be resolved/executed — do not let a resume
     // treat it as the current next step. handoff had no such note before, so a
@@ -488,14 +491,15 @@ function formatHandoffBody(args: {
     lines.push(t.handoff.headingOpenTracks);
     lines.push("");
     for (const track of shown) {
-      // FULL decision id, not the short form used elsewhere. Two reasons, and
-      // the first is the section's own instruction: the closing line tells the
-      // reader to run `basou decision void <decision_id>`, which accepts only a
-      // complete `decision_<ULID>` -- a short id is refused. Printing a short one
-      // here asks for a command it does not supply. Second, a short id CANNOT be
-      // made unambiguous by lengthening it: `decision capture` mints a batch in
-      // one millisecond, and monotonic ULIDs then share the timestamp and all but
-      // the last characters of the randomness, so every prefix collides.
+      // A DECISION id is printed in full, here and on the latest-decision line.
+      // Two reasons. The section's closing line tells the reader to run
+      // `basou decision void <decision_id>`, which accepts only a complete
+      // `decision_<ULID>` and refuses a short one -- a short id here asks for a
+      // command it does not supply. And a short id cannot be shortened safely:
+      // `decision capture` mints a batch inside one millisecond, and monotonic
+      // ULIDs increment by one, so ADJACENT ids in a batch differ only in the
+      // final character; no usefully short prefix tells them apart. Session and
+      // task ids stay short: one is minted per command, so they do not collide.
       lines.push(`- ${track.title} [${track.decisionId}]`);
       if (track.rationale !== null && track.rationale.trim() !== "") {
         lines.push(`  - ${t.common.trackWhyLabel}: ${handoffRationale(track.rationale)}`);

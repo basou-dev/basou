@@ -319,7 +319,9 @@ describe("handoff-renderer", () => {
     await placeSession(paths, { id }, events);
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.decisionCount).toBe(3);
-    expect(result.body).toContain(`- third [${SHORT(dec3)}]`);
+    // Decision ids render in full (a track is routinely also the latest
+    // decision, and the open-track line below needs the complete id).
+    expect(result.body).toContain(`- third [${dec3}]`);
     expect(result.body).toContain("(3 decisions total — see decisions.md)");
   });
 
@@ -413,7 +415,7 @@ describe("handoff-renderer", () => {
       `- Last session: fixture ${id.slice(-3)} (completed) [${SHORT(id)}]`,
     );
     expect(result.body).toContain("- src/x.ts");
-    expect(result.body).toContain(`- pick A [${SHORT(dec)}]`);
+    expect(result.body).toContain(`- pick A [${dec}]`);
     expect(result.body).toContain("| short_id | status | started_at | label |");
     expect(result.body).toContain("Sessions: 1 (completed 1). Tasks: 0.");
   });

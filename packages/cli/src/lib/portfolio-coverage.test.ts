@@ -472,7 +472,11 @@ describe("formatCoverageReport", () => {
     expect(report).toContain("A directory that no longer exists is still worth declaring");
     expect(report).toContain("OLD path");
     expect(report).toContain("relative to the workspace it now lives in");
-    expect(report).toContain("does not have to exist");
+    // The operative promise, not just the concession: a truncated
+    // "The path does not have to exist." would otherwise still pass.
+    expect(report).toContain(
+      "does not have to exist for the sessions recorded under it to be captured",
+    );
   });
 
   it("reports the remedy lines only once the coverage is not OK", () => {

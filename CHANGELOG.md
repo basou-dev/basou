@@ -7,19 +7,23 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Fixed
 
-- **Every open track now carries the id the line below it asks you to run.**
-  `handoff.md` and `basou orient` list open tracks with a short id and then say
-  "close it with `basou decision void <decision_id>`" — but that command accepts
-  only a complete `decision_<ULID>` and refuses a short one, so the section
-  asked for a command it did not supply.
+- **Decision ids are printed in full, so the id a line shows is the id its
+  instruction accepts.** `handoff.md` and `basou orient` listed open tracks with
+  a short id and then said "close it with `basou decision void <decision_id>`" —
+  but that command accepts only a complete `decision_<ULID>` and refuses a short
+  one, so the section asked for a command it did not supply.
 
-  Lengthening the short id would not have fixed it. `basou decision capture`
-  mints a whole batch inside one millisecond, and monotonic ULIDs then share the
-  timestamp and every character of the randomness except the last few — measured
-  on one workspace, five tracks captured together rendered as the same
-  `[decision_01M2KYJ7JX]`, because the ten characters shown are exactly the ULID
-  timestamp. Open-track lines now print the full id; short ids stay everywhere
-  else.
+  A longer short id would not have fixed it. `basou decision capture` mints a
+  whole batch inside one millisecond, and monotonic ULIDs increment by one, so
+  adjacent ids in a batch differ only in the final character — and the ten
+  characters the short form showed are exactly the ULID timestamp. Measured on
+  one workspace, five tracks captured together all rendered as
+  `[decision_01M2KYJ7JX]`.
+
+  The latest-decision line changed too, and for a second reason: a track is
+  routinely also the latest decision, so leaving that line short would have
+  spelled one decision two ways in a single document. Session and task ids stay
+  short — one is minted per command, so they do not collide.
 
 - **The capture-coverage report no longer reads as advice about a directory that
   is gone.** The paths it lists are the ones the sessions ran in, so for a
