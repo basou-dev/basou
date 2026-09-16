@@ -63,13 +63,25 @@ const isoTimestampRegex = new RegExp(ISO_TIMESTAMP_PATTERN);
  * the way the prefixed-ID schemas below do. Both are built from the single
  * {@link ISO_TIMESTAMP_PATTERN} constant, so the artifact cannot drift from
  * what the runtime actually accepts.
+ *
+ * It deliberately does NOT declare `format: "date-time"`. That format names
+ * RFC 3339, which requires seconds, while these timestamps do not — so
+ * declaring it described an accepted set narrower than the one basou has. The
+ * cost was that the artifact contradicted itself: a validator treating
+ * `format` as an assertion rejected `2026-09-16T01:23Z`, while one treating it
+ * as an annotation (the JSON Schema 2020-12 default) accepted it, from the
+ * same bytes. The `pattern` is the contract, and `description` carries the
+ * meaning a reader would otherwise take from the format name.
  */
 export const IsoTimestampSchema = z
   .string()
   .refine((value) => isoTimestampRegex.test(value), {
     message: "Expected an ISO 8601 timestamp with a timezone offset",
   })
-  .meta({ format: "date-time", pattern: ISO_TIMESTAMP_PATTERN });
+  .meta({
+    description: "ISO 8601 timestamp with a timezone offset. Seconds are optional.",
+    pattern: ISO_TIMESTAMP_PATTERN,
+  });
 
 // Internal factory shared by every prefixed-ID schema. Not exported because
 // the public API surface should only expose the six fully-typed ID schemas.
