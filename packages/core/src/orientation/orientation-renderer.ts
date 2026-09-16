@@ -1226,7 +1226,9 @@ const FILES_PER_DIGEST = 3;
 const NOTE_SUMMARY_MAX = 200;
 function noteSummary(body: string): string {
   const collapsed = oneLine(body);
-  return collapsed.length > NOTE_SUMMARY_MAX ? `${collapsed.slice(0, NOTE_SUMMARY_MAX - 1)}…` : collapsed;
+  return collapsed.length > NOTE_SUMMARY_MAX
+    ? `${collapsed.slice(0, NOTE_SUMMARY_MAX - 1)}…`
+    : collapsed;
 }
 
 // A track's rationale is the WHY behind the direction; like a note it can be
