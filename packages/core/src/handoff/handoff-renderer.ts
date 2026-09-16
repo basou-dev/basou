@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { enumerateApprovals } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
+import { oneLine } from "../lib/one-line.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
 import { isTransientToolPath } from "../lib/transient-paths.js";
 import {
@@ -643,21 +644,18 @@ function handoffRationale(rationale: string): string {
     : oneLine;
 }
 
-// A session label is whatever was recorded for it, and for an ad-hoc session
+// A label is whatever was recorded for the session, and for an ad-hoc session
 // that is the command line -- which for `basou run codex exec <prompt>` carries
-// the whole prompt, newlines and all. Rendered raw it breaks this document
-// twice over: the newline ends the table row early, and any line the prompt
-// began with `#` becomes a heading of the handoff itself. Orientation already
-// collapses whitespace for the same reason (see noteSummary there); handoff
-// did not, and 206 lines of one real store had turned into headings.
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-// Cells additionally have to survive the column delimiter: a label containing
-// `|` would silently add columns to the row.
+// the whole prompt. {@link oneLine} keeps it on the line it was rendered into.
+//
+// A cell must additionally survive the column delimiter, and the backslash has
+// to be escaped FIRST: a label that already contains `\|` -- a shell-quoted
+// alternation, say -- would otherwise become `\\|`, and GFM consumes the `\\`
+// and reads the `|` as a live delimiter. The row would gain a cell, and cells
+// past the header count are dropped when rendered, so the tail of the label
+// would vanish from the displayed table.
 function tableCell(text: string): string {
-  return oneLine(text).replace(/\|/g, "\\|");
+  return oneLine(text).replace(/([\\|])/g, "\\$1");
 }
 
 function suspectLabel(reason: SuspectReason | null): string {

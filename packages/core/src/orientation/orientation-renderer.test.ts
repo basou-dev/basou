@@ -825,6 +825,33 @@ describe("orientation-renderer", () => {
       ].join("\n"),
     );
   });
+  // Orientation is the document a SessionStart hook injects as a developer
+  // message, so a label that breaks its structure does not merely look wrong --
+  // it lands inside the instructions an agent reads. The label is the command
+  // line for an ad-hoc session, and `basou run codex exec <prompt>` records a
+  // whole prompt there, headings and all.
+  it("collapses a session label so it cannot inject headings into the document", async () => {
+    const paths = await setupPaths();
+    const id = SES("H01");
+    await placeSession(paths, {
+      id,
+      status: "completed",
+      startedAt: FIXED_NOW_ISO,
+      label: "basou run codex exec  reviewing\t\n\n# Target\n\nRepo: a | b\n",
+    });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const lines = result.body.split("\n");
+
+    expect(lines.filter((l) => /^#{1,6} /.test(l))).not.toContain("# Target");
+
+    // Both places the label reaches keep it on one line: the latest-session
+    // line, and the head of a recent-direction entry.
+    const collapsed = "basou run codex exec reviewing # Target Repo: a | b";
+    const latest = lines.filter((l) => l.includes("Last session: "));
+    expect(latest).toHaveLength(1);
+    expect(latest[0]).toContain(collapsed);
+    expect(lines.filter((l) => l.startsWith(`- ${collapsed} (`))).toHaveLength(1);
+  });
 });
 
 describe("Recent direction (direction arc)", () => {

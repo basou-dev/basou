@@ -819,39 +819,77 @@ describe("handoff-renderer", () => {
     expect(liveSection).toContain("live work");
     expect(liveSection).not.toContain("from-external");
   });
-  // A session label is whatever was recorded for it, and an ad-hoc session's
+  // GFM consumes the character after a backslash, so a delimiter is live only
+  // when the backslash run before it is even. Splitting on /(?<!\\)\|/ instead
+  // reads an escaped delimiter as escaped even when a preceding backslash has
+  // already been consumed -- exactly the case a naive escape gets wrong.
+  const gfmCells = (row: string): string[] => {
+    const cells: string[] = [];
+    let cur = "";
+    for (let i = 0; i < row.length; i++) {
+      if (row[i] === "\\" && i + 1 < row.length) {
+        cur += row.slice(i, i + 2);
+        i++;
+        continue;
+      }
+      if (row[i] === "|") {
+        cells.push(cur);
+        cur = "";
+        continue;
+      }
+      cur += row[i];
+    }
+    cells.push(cur);
+    return cells;
+  };
+
+  // A label is whatever was recorded for the session, and an ad-hoc session's
   // label is the command line: `basou run codex exec <prompt>` puts a whole
   // prompt there. Rendered raw it broke this document twice -- the newline
   // ended the table row early, and a prompt line beginning with `#` became a
   // heading of the handoff itself. One real store had 206 such headings, and
   // nobody had noticed, because nothing reads handoff.md.
-  it("collapses a multi-line session label so it cannot break the table or the document", async () => {
+  //
+  // The fixture carries every hazard at once: runs of spaces and a tab (so a
+  // newline-only collapse fails), leading and trailing whitespace (so a missing
+  // trim fails), a bare `|` (so a missing escape fails), and a `\|` that is
+  // already escaped (so escaping the delimiter without escaping the backslash
+  // first fails -- GFM would eat the `\\` and read the `|` as a live cell).
+  const HOSTILE_LABEL = 'basou run codex exec  grep -E "a|b"\t\n\n# Target\n\nRepo: c\\|d\n';
+
+  it.each([
+    ["live", "completed"],
+    ["imported", "imported"],
+  ] as const)("collapses a %s session label so it cannot break the table or the document", async (_kind, status) => {
     const paths = await setupPaths();
     const id = SES("X30");
-    await placeSession(paths, {
-      id,
-      status: "completed",
-      label: "basou run codex exec You are reviewing\n\n# Target\n\nRepo: a | b\n",
-    });
+    await placeSession(paths, { id, status, label: HOSTILE_LABEL });
     const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     const lines = result.body.split("\n");
 
     // Nothing the label carried became a heading of this document.
     expect(lines.filter((l) => /^#{1,6} /.test(l))).not.toContain("# Target");
 
-    // It occupies exactly one table row, and the column delimiter is escaped so
-    // the row keeps its four cells.
+    // It occupies exactly one row, and that row still has four cells once the
+    // escapes are read the way a renderer reads them.
     const tableId = id.slice("ses_".length, "ses_".length + 10);
     const rows = lines.filter((l) => l.startsWith(`| ${tableId} `));
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toContain("basou run codex exec You are reviewing # Target Repo: a \\| b");
-    // Split on unescaped delimiters only: the escaped one belongs to the cell.
-    expect(rows[0]?.split(/(?<!\\)\|/)).toHaveLength(6);
+    expect(gfmCells(rows[0] ?? "")).toHaveLength(6);
 
-    // The prose line that leads with the label is collapsed the same way.
-    const prose = lines.filter((l) => l.includes("Last session: "));
+    // Whitespace of every kind is collapsed, not just newlines, and the label
+    // is trimmed.
+    const cell = gfmCells(rows[0] ?? "")[4] ?? "";
+    expect(cell).toBe(` basou run codex exec grep -E "a\\|b" # Target Repo: c\\\\\\|d `);
+  });
+
+  it("collapses the label on the prose line that leads with it", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, { id: SES("X31"), status: "completed", label: HOSTILE_LABEL });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    const prose = result.body.split("\n").filter((l) => l.includes("Last session: "));
     expect(prose).toHaveLength(1);
-    expect(prose[0]).toContain("You are reviewing # Target Repo: a | b");
+    expect(prose[0]).toContain('basou run codex exec grep -E "a|b" # Target Repo: c\\|d');
   });
 });
 
