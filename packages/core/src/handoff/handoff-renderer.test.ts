@@ -1009,6 +1009,28 @@ describe("renderHandoff (open tracks)", () => {
     expect(result.body).toContain("basou decision void");
   });
 
+  it("prints the FULL decision id for every open track, so a same-millisecond batch stays distinguishable", async () => {
+    const paths = await setupPaths();
+    const id = SES("HT9");
+    const a = "decision_01HXABCDEF1234567890ABCTQG";
+    const b = "decision_01HXABCDEF1234567890ABCTQH";
+    await placeSession(
+      paths,
+      { id, status: "completed", startedAt: "2026-05-08T09:00:00+09:00" },
+      decisionRecordedLine(id, "HQ1", a, "first of the batch", "2026-05-08T10:00:00.000Z", {
+        kind: "track",
+      }) +
+        decisionRecordedLine(id, "HQ2", b, "second of the batch", "2026-05-08T10:00:00.000Z", {
+          kind: "track",
+        }),
+    );
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    const section = sliceSection(result.body, "## Open tracks (shown until closed)", "## ");
+    expect(section).toContain(`[${a}]`);
+    expect(section).toContain(`[${b}]`);
+    expect(section).toContain("basou decision void");
+  });
+
   it("an open track survives a LATER plain decision (the intent-leak regression)", async () => {
     const paths = await setupPaths();
     const id = SES("HT5");

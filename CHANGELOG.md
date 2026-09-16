@@ -3,6 +3,32 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **Every open track now carries the id the line below it asks you to run.**
+  `handoff.md` and `basou orient` list open tracks with a short id and then say
+  "close it with `basou decision void <decision_id>`" — but that command accepts
+  only a complete `decision_<ULID>` and refuses a short one, so the section
+  asked for a command it did not supply.
+
+  Lengthening the short id would not have fixed it. `basou decision capture`
+  mints a whole batch inside one millisecond, and monotonic ULIDs then share the
+  timestamp and every character of the randomness except the last few — measured
+  on one workspace, five tracks captured together rendered as the same
+  `[decision_01M2KYJ7JX]`, because the ten characters shown are exactly the ULID
+  timestamp. Open-track lines now print the full id; short ids stay everywhere
+  else.
+
+- **The capture-coverage report no longer reads as advice about a directory that
+  is gone.** The paths it lists are the ones the sessions ran in, so for a
+  project that moved or was renamed the remedy pointed at a path that no longer
+  exists and looked like nothing could be done. It now says that such a path is
+  still worth declaring, where to declare it (the workspace the project moved
+  into, written relative to that workspace), and that it does not have to exist
+  for the sessions recorded under it to be captured.
+
 ## 0.42.1 — 2026-09-16
 
 ### Fixed

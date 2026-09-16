@@ -488,7 +488,15 @@ function formatHandoffBody(args: {
     lines.push(t.handoff.headingOpenTracks);
     lines.push("");
     for (const track of shown) {
-      lines.push(`- ${track.title} [${shortIdWithPrefix(track.decisionId)}]`);
+      // FULL decision id, not the short form used elsewhere. Two reasons, and
+      // the first is the section's own instruction: the closing line tells the
+      // reader to run `basou decision void <decision_id>`, which accepts only a
+      // complete `decision_<ULID>` -- a short id is refused. Printing a short one
+      // here asks for a command it does not supply. Second, a short id CANNOT be
+      // made unambiguous by lengthening it: `decision capture` mints a batch in
+      // one millisecond, and monotonic ULIDs then share the timestamp and all but
+      // the last characters of the randomness, so every prefix collides.
+      lines.push(`- ${track.title} [${track.decisionId}]`);
       if (track.rationale !== null && track.rationale.trim() !== "") {
         lines.push(`  - ${t.common.trackWhyLabel}: ${handoffRationale(track.rationale)}`);
       }

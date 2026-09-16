@@ -1897,6 +1897,30 @@ describe("orientation — open tracks (strategic continuation)", () => {
     expect(body).toContain("basou decision void");
   });
 
+  it("prints the FULL decision id for every open track, so a same-millisecond batch stays distinguishable", async () => {
+    // Monotonic ULIDs minted in one `decision capture` share the timestamp and
+    // all but the trailing characters, so no prefix can tell them apart.
+    const paths = await setupPaths();
+    const sid = SES("T09");
+    const a = "decision_01HXABCDEF1234567890ABCTQG";
+    const b = "decision_01HXABCDEF1234567890ABCTQH";
+    await placeSession(
+      paths,
+      { id: sid, status: "completed" },
+      decisionLine(sid, "EQ1", a, "first of the batch", "2026-05-08T12:00:00Z", {
+        kind: "track",
+      }) +
+        decisionLine(sid, "EQ2", b, "second of the batch", "2026-05-08T12:00:00Z", {
+          kind: "track",
+        }),
+    );
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain(`[${a}]`);
+    expect(body).toContain(`[${b}]`);
+    // Both ids are the ones the close instruction below them actually accepts.
+    expect(body).toContain("basou decision void");
+  });
+
   it("does NOT surface a track once it is voided (closed)", async () => {
     const paths = await setupPaths();
     const sid = SES("T02");
@@ -2172,7 +2196,7 @@ const JA_GOLDEN_BODY = [
   "## どこへ向かう",
   "",
   "### 未完トラック (close まで継続表示) (1)",
-  "- adopt zod for schema validation [decision_01HXABCDEF] (1日前)",
+  "- adopt zod for schema validation [decision_01HXABCDEF1234567890ABCG01] (1日前)",
   "  - 理由: single source of truth for schemas",
   "完了したら `basou decision void <decision_id>` で閉じてください。閉じるまで毎回ここに表示されます。",
   "",

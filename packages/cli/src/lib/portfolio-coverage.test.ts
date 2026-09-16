@@ -459,6 +459,29 @@ describe("formatCoverageReport", () => {
     expect(formatCoverageReport(resultWith(groups)).join("\n")).not.toContain("more working");
   });
 
+  it("tells the reader a path that no longer exists is still declarable", () => {
+    // The listed cwds are where the SESSIONS ran. For a moved or renamed
+    // project that directory is gone, and without this the remedy reads as
+    // advice about a path that no longer exists.
+    const report = formatCoverageReport(
+      resultWith([
+        { cwd: "/gone/old-name", logs: 7, sources: ["codex"], kind: "no_declared_root" },
+      ]),
+    ).join("\n");
+
+    expect(report).toContain("A directory that no longer exists is still worth declaring");
+    expect(report).toContain("OLD path");
+    expect(report).toContain("relative to the workspace it now lives in");
+    expect(report).toContain("does not have to exist");
+  });
+
+  it("reports the remedy lines only once the coverage is not OK", () => {
+    const ok = formatCoverageReport(resultWith([], { attributed: 200 })).join("\n");
+
+    expect(ok).toContain("Capture coverage: OK");
+    expect(ok).not.toContain("A directory that no longer exists");
+  });
+
   it("does not add a kind's note when no group is of that kind", () => {
     const report = formatCoverageReport(
       resultWith([{ cwd: "/tmp", logs: 1, sources: ["codex"], kind: "no_declared_root" }]),
