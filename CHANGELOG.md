@@ -3,6 +3,26 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **The accepted shape of a timestamp is basou's own, so a dependency's minor
+  release cannot move it.** `IsoTimestampSchema` was zod's
+  `.datetime({ offset: true })`, which meant the expression published in every
+  JSON Schema artifact was whatever the installed zod happened to emit. zod 4.6
+  narrowed that expression to require seconds, which would have shrunk what
+  already-published artifacts accept under an unchanged `$id`, and the
+  extension rules in `docs/spec/schemas.md` forbid narrowing a domain. The
+  expression is now pinned as a constant here, the runtime check and the
+  emitted `pattern` are built from that one constant, and the accepted set is
+  unchanged: seconds stay optional, an offset or `Z` stays required. Changing
+  it is a change to the event format, gated by the rules in that document.
+
+- **zod moves to 4.6.4.** The emitted artifacts spell a nullable string as
+  `"type": ["string", "null"]` where 4.4 emitted a two-branch `anyOf`. The two
+  accept exactly the same values, and no `$id` moves.
+
 ## 0.42.2 — 2026-09-16
 
 ### Fixed

@@ -34,12 +34,42 @@ export const SchemaVersionSchema = z.string().regex(/^0\.\d+\.\d+$/, {
 export const CacheVersionSchema = z.literal("0.1.0");
 
 /**
+ * The accepted shape of an ISO 8601 timestamp, owned by basou rather than by
+ * whichever zod is installed.
+ *
+ * Seconds are optional; an offset (e.g. `+09:00`) or `Z` is required, because
+ * the spec samples carry offsets and the default zod `.datetime()` rejects
+ * them. The expression is the one zod emitted for `.datetime({ offset: true })`
+ * when these artifacts were first published, pinned here as a literal.
+ *
+ * It is pinned because the published JSON Schema artifacts describe it under a
+ * `$id` that does not move: zod 4.6 narrowed its own ISO expression to require
+ * seconds, which would have shrunk what an already-published artifact accepts
+ * without any version signal. `docs/spec/schemas.md` forbids narrowing a
+ * domain, so a dependency's minor release must not be able to do it. Widening
+ * or narrowing this constant is a change to the event format itself and is
+ * gated by the rules in that document.
+ */
+const ISO_TIMESTAMP_PATTERN =
+  "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$";
+
+const isoTimestampRegex = new RegExp(ISO_TIMESTAMP_PATTERN);
+
+/**
  * ISO 8601 timestamp with explicit timezone offset (e.g. `+09:00`).
  *
- * The spec samples include offsets, so the default zod `.datetime()` (which
- * rejects offsets) is insufficient; `{ offset: true }` is required.
+ * Parsing goes through `.refine`, which is opaque to JSON Schema generation,
+ * so the `.meta` mirrors the same expression as a representable `pattern` —
+ * the way the prefixed-ID schemas below do. Both are built from the single
+ * {@link ISO_TIMESTAMP_PATTERN} constant, so the artifact cannot drift from
+ * what the runtime actually accepts.
  */
-export const IsoTimestampSchema = z.string().datetime({ offset: true });
+export const IsoTimestampSchema = z
+  .string()
+  .refine((value) => isoTimestampRegex.test(value), {
+    message: "Expected an ISO 8601 timestamp with a timezone offset",
+  })
+  .meta({ format: "date-time", pattern: ISO_TIMESTAMP_PATTERN });
 
 // Internal factory shared by every prefixed-ID schema. Not exported because
 // the public API surface should only expose the six fully-typed ID schemas.

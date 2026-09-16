@@ -282,13 +282,9 @@
           "type": "string"
         },
         "note": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         }
       },
@@ -441,15 +437,11 @@
           "const": "command_executed"
         },
         "command": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Spawned executable name. null means basou did not observe the executor - not a default, and not a benign value."
+          "description": "Spawned executable name. null means basou did not observe the executor - not a default, and not a benign value.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "args": {
           "type": "array",
@@ -458,15 +450,11 @@
           }
         },
         "cwd": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Working directory the command ran in. null means the directory could not be resolved; it is never the session's directory as a fallback."
+          "description": "Working directory the command ran in. null means the directory could not be resolved; it is never the session's directory as a fallback.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "exit_code": {
           "anyOf": [
@@ -482,23 +470,15 @@
           "description": "Child exit code. null means the outcome is unknown (signal-terminated, or never recorded by the source). null is not success."
         },
         "signal": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "received_signal": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "duration_ms": {
@@ -661,13 +641,9 @@
           ]
         },
         "old_path": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         }
       },
@@ -724,13 +700,9 @@
           "type": "string"
         },
         "rationale": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "alternatives": {
@@ -741,13 +713,9 @@
           }
         },
         "rejected_reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "linked_events": {
@@ -824,13 +792,9 @@
           "description": "Basou decision id: `decision_` followed by a 26-character Crockford Base32 ULID."
         },
         "reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "superseded_by": {
