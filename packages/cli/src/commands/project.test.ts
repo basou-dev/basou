@@ -3349,14 +3349,17 @@ describe("basou project new", () => {
     ["trailing space", "foo "],
     ["interior space", "foo bar"],
     ["non-ascii", `caf${String.fromCharCode(0x00e9)}`],
-  ])("rejects an invalid --project-name (%s) before writing anything", async (_label, bad: string) => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    await expect(
-      doRunProjectNew([], { apply: true, projectName: bad }, { cwd: anchor() }),
-    ).rejects.toThrow(/Invalid --project-name/);
-    // Validation runs before any write — no corrupt manifest lands on disk.
-    expect(existsSync(basouPaths(anchor()).files.manifest)).toBe(false);
-  });
+  ])(
+    "rejects an invalid --project-name (%s) before writing anything",
+    async (_label, bad: string) => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      await expect(
+        doRunProjectNew([], { apply: true, projectName: bad }, { cwd: anchor() }),
+      ).rejects.toThrow(/Invalid --project-name/);
+      // Validation runs before any write — no corrupt manifest lands on disk.
+      expect(existsSync(basouPaths(anchor()).files.manifest)).toBe(false);
+    },
+  );
 
   it("accepts a dashed / underscored / dotted product-name slug", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});

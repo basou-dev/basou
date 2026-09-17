@@ -148,7 +148,7 @@ describe("importSessionFromJson", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.session_id).toBe(result.sessionId);
     expect(typeof events[0]?.id).toBe("string");
-    expect((events[0]?.id as string).startsWith("evt_")).toBe(true);
+    expect(events[0]?.id).toMatch(/^evt_/);
     expect(events[0]?.id).not.toBe(INPUT_EVT_ID);
   });
 
