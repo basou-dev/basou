@@ -7,6 +7,7 @@ import {
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { type ChainVerdictStatus, verifyEventsChain } from "../events/verify.js";
 import { formatDurationMs } from "../lib/format-duration.js";
+import { oneLine } from "../lib/one-line.js";
 import {
   resolveViewLanguageFromPaths,
   type ViewLanguage,
@@ -391,7 +392,7 @@ function tallyTaskStatus(items: ReadonlyArray<ReportTaskItem>): TaskStatusCount[
 
 function formatReportBody(data: ReportData, t: ViewStrings): string {
   const lines: string[] = [];
-  const titleSuffix = data.title !== undefined ? ` — ${data.title}` : "";
+  const titleSuffix = data.title !== undefined ? ` — ${oneLine(data.title)}` : "";
   lines.push(`# Report${titleSuffix}`);
   lines.push("");
   const periodSuffix =
@@ -452,7 +453,7 @@ function formatReportBody(data: ReportData, t: ViewStrings): string {
     for (const d of shown) {
       const trackTag = d.track === true ? " [track]" : "";
       const voidedTag = d.voided === true ? " (voided)" : "";
-      lines.push(`- ${d.occurredAt.slice(0, 10)} · ${d.title}${trackTag}${voidedTag}`);
+      lines.push(`- ${d.occurredAt.slice(0, 10)} · ${oneLine(d.title)}${trackTag}${voidedTag}`);
     }
   }
   lines.push("");
@@ -469,7 +470,7 @@ function formatReportBody(data: ReportData, t: ViewStrings): string {
     );
     lines.push("");
     for (const item of data.approvals.items.slice(0, APPROVALS_MARKDOWN_LIMIT)) {
-      lines.push(`- ${item.reason} (${item.status}, ${item.riskLevel})`);
+      lines.push(`- ${oneLine(item.reason)} (${item.status}, ${item.riskLevel})`);
     }
     const overflow = data.approvals.items.length - APPROVALS_MARKDOWN_LIMIT;
     if (overflow > 0) lines.push(`- ... +${overflow} more`);
@@ -486,7 +487,7 @@ function formatReportBody(data: ReportData, t: ViewStrings): string {
     lines.push(`Tasks: ${data.tasks.total} (${breakdown})`);
     lines.push("");
     for (const item of data.tasks.items.slice(0, TASKS_MARKDOWN_LIMIT)) {
-      lines.push(`- ${item.title} (${item.status})`);
+      lines.push(`- ${oneLine(item.title)} (${item.status})`);
     }
     const overflow = data.tasks.items.length - TASKS_MARKDOWN_LIMIT;
     if (overflow > 0) lines.push(`- ... +${overflow} more`);

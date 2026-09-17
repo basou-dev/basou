@@ -900,7 +900,7 @@ function formatOrientationBody(
     for (const a of summary.pendingApprovals) {
       const expired = a.expired ? " (expired)" : "";
       lines.push(
-        `- [${a.risk}] ${a.kind}: ${a.reason} — session ${shortId(a.sessionId)}, since ${a.createdAt}${expired}`,
+        `- [${a.risk}] ${a.kind}: ${oneLine(a.reason)} — session ${shortId(a.sessionId)}, since ${a.createdAt}${expired}`,
       );
     }
   }

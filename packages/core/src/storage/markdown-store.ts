@@ -140,6 +140,30 @@ export function parseMarkers(content: string, markers: Markers = DEFAULT_MARKERS
 }
 
 /**
+ * Blunt any line of a generated body that IS a marker, so the body cannot add a
+ * second pair to the file it is written into.
+ *
+ * A body carries text the operator recorded — a decision's rationale, the
+ * reason one was voided, a file path — and {@link parseMarkers} matches a
+ * marker on a whole line. A recorded value containing a line equal to one is
+ * written successfully the first time and refused on every render after that,
+ * because the file then holds two pairs. Nothing looks wrong in the file;
+ * `basou refresh` simply stops, and stays stopped until someone edits it by
+ * hand. Every document written after the failing one stops updating too, since
+ * the regenerators run in sequence.
+ *
+ * One leading space stops the line matching and keeps the text and its line
+ * breaks — which matters, because some of these fields exist to hold multi-line
+ * prose verbatim.
+ */
+function defuseMarkerLines(body: string, markers: Markers): string {
+  const isMarker = (line: string): boolean => line === markers.start || line === markers.end;
+  const lines = body.split("\n");
+  if (!lines.some(isMarker)) return body;
+  return lines.map((line) => (isMarker(line) ? ` ${line}` : line)).join("\n");
+}
+
+/**
  * Build the final markdown body by replacing the BASOU:GENERATED region.
  *
  * - `existing === null` (no file yet): return `<START>\n<generated>\n<END>\n`.
@@ -156,7 +180,10 @@ export function renderWithMarkers(
   fileLabel: string,
   markers: Markers = DEFAULT_MARKERS,
 ): string {
-  const normalized = generated.endsWith("\n") ? generated : `${generated}\n`;
+  const normalized = defuseMarkerLines(
+    generated.endsWith("\n") ? generated : `${generated}\n`,
+    markers,
+  );
   if (existing === null) {
     return `${markers.start}\n${normalized}${markers.end}\n`;
   }

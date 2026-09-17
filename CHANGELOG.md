@@ -7,17 +7,6 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Fixed
 
-- **Nor can a recorded title.** A decision or track title is whatever was piped
-  into `basou decision capture`, and a task title comes from `--title`, so both
-  can carry newlines the same way a label can. Every title the handoff,
-  orientation and decisions documents render is now collapsed first.
-
-  The decisions document had the worse exposure. It is written through the
-  generated-block markers, which are matched on a whole line, so a title
-  carrying a bare end marker would be written once and then every later
-  regeneration would fail until someone edited the file by hand. A collapsed
-  title cannot occupy a line of its own, so it cannot be one.
-
 - **A session label can no longer break the generated documents.** A label is
   whatever was recorded for the session, and an ad-hoc session's label is the
   command line, so `basou run codex exec <prompt>` puts a whole prompt there.
@@ -37,6 +26,23 @@ All notable changes to **basou** are recorded here. The project follows
 ## 0.43.0 — 2026-09-16
 
 ### Changed
+
+- **Nor can a recorded title, and a generated document can no longer be written
+  into a state that stops `basou refresh`.** A decision or track title is
+  whatever was piped into `basou decision capture`, and a task title comes from
+  `--title`, so both carry newlines the same way a label does. Every title the
+  handoff, orientation, decisions and report documents render is collapsed now,
+  as is an approval's reason.
+
+  Collapsing titles alone would not have been enough. The generated block is
+  delimited by markers matched on a whole line, and the same JSON carries a
+  rationale, alternatives and a rejected reason — fields that exist to hold
+  multi-line prose and are deliberately left intact. A marker line arriving
+  through any of them was written once and refused on every render after that,
+  and since the regenerators run in sequence, every document after the failing
+  one stopped updating too. The body is defused where it is written instead: a
+  line that is a marker gets one leading space, which keeps the text and its
+  breaks while no longer delimiting anything.
 
 - **The accepted shape of a timestamp is basou's own, so a dependency's minor
   release cannot move it.** `IsoTimestampSchema` was zod's

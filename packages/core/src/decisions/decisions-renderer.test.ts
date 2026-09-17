@@ -103,6 +103,39 @@ describe("decisions-renderer", () => {
     expect(result.body).toContain("(no decisions recorded yet)");
   });
 
+  // Collapsing a title is not enough on its own. The same JSON carries a
+  // rationale, alternatives, a rejected reason -- fields that exist to hold
+  // multi-line prose and are deliberately NOT collapsed -- and any of them can
+  // contain a line that IS a marker. Written once, the file then holds two
+  // pairs and every later regeneration refuses it; because the regenerators run
+  // in sequence, every document after this one stops updating as well.
+  //
+  // The body is defused where it is written instead, so the line keeps its text
+  // and its breaks while no longer being a marker.
+  it("survives a marker line arriving through a field that keeps its line breaks", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X43");
+    const did = DEC("D43");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "E44", did, "Benign title", "2026-05-08T11:30:00+09:00", {
+        rationale: `because\n\n${GENERATED_END}\n\ntail`,
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+
+    // The rationale keeps its line breaks.
+    expect(result.body).toContain("because");
+    expect(result.body).toContain("tail");
+
+    // But no line of it is a marker, so the file can be written twice.
+    const once = renderWithMarkers(null, result.body, "decisions.md");
+    expect(() => renderWithMarkers(once, result.body, "decisions.md")).not.toThrow();
+    expect(parseMarkers(once).kind).toBe("ok");
+  });
+
   // A voided decision renders through a different heading line than a live one,
   // so it needs its own guard.
   it("collapses the title of a voided decision too", async () => {
