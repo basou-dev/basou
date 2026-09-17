@@ -47,6 +47,14 @@ describe("IsoTimestampSchema", () => {
     ["an offset hour past 23 is refused", "2026-05-04T09:00:00+24:00", false],
     ["basic format is refused", "20260504T090000Z", false],
     ["a trailing newline is refused", "2026-05-04T09:00:00Z\n", false],
+    ["hour 24 is refused", "2026-05-04T24:00:00Z", false],
+    ["minute 60 is refused", "2026-05-04T09:60:00Z", false],
+    ["an offset minute past 59 is refused", "2026-05-04T09:00:00+09:60", false],
+    ["day 32 is refused in a 31-day month", "2026-01-32T09:00:00Z", false],
+    ["the expression is anchored at the start", "x2026-05-04T09:00:00Z", false],
+    ["the time of day is required", "2026-05-04T", false],
+    ["a leap year divisible by 4 with 0 in the tens (2008)", "2008-02-29T09:00:00Z", true],
+    ["a leap year with an odd tens digit (2016)", "2016-02-29T09:00:00Z", true],
   ])("%s", (_boundary, value, accepted) => {
     expect(IsoTimestampSchema.safeParse(value).success).toBe(accepted);
   });

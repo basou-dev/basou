@@ -134,7 +134,7 @@ describe("buildJsonSchemas", () => {
       }
       for (const [key, value] of Object.entries(node)) {
         if (!keysAreNames && key === "format") declared.push(`${path}/${key}`);
-        walk(value, `${path}/${key}`, NAME_SPACES.has(key));
+        walk(value, `${path}/${key}`, !keysAreNames && NAME_SPACES.has(key));
       }
     };
     for (const { name, schema } of artifacts) walk(schema, name, false);
@@ -161,7 +161,10 @@ describe("buildJsonSchemas", () => {
     };
     for (const { schema } of artifacts) walk(schema);
 
-    expect(nodes).toHaveLength(62);
+    expect(
+      nodes,
+      "a timestamp field was added or removed -- update this count to match",
+    ).toHaveLength(62);
     for (const node of nodes) {
       expect(typeof node.description).toBe("string");
       expect(node.pattern).toBe(nodes[0]?.pattern);
@@ -369,6 +372,14 @@ describe("emitted schemas validate real documents (ajv draft 2020-12)", () => {
     ["2000-02-29T00:00:00Z", true],
     ["2026-05-10T00:00:00+24:00", false],
     ["20260510T000000Z", false],
+    ["2026-05-10T24:00:00Z", false],
+    ["2026-05-10T00:60:00Z", false],
+    ["2026-05-10T00:00:00+09:60", false],
+    ["2026-01-32T00:00:00Z", false],
+    ["x2026-05-10T00:00:00Z", false],
+    ["2026-05-10T", false],
+    ["2008-02-29T00:00:00Z", true],
+    ["2016-02-29T00:00:00Z", true],
   ])("the published artifact answers %s the way the runtime does", (value, accepted) => {
     expect(IsoTimestampSchema.safeParse(value).success).toBe(accepted);
     const doc = structuredClone(samples.status) as { generated_at: string };
