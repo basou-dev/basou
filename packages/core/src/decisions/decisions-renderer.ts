@@ -232,6 +232,8 @@ async function formatDecisionsBody(args: {
       const parts = d.linkedEvents.map((eid) =>
         args.knownEventIds.has(eid) ? eid : `${eid} (missing)`,
       );
+      // No collapse: an event id is gated by EventIdSchema, so a newline cannot
+      // reach this line. linked_files below is a free string and can.
       lines.push(`- linked_events: ${parts.join(", ")}`);
     }
     if (d.linkedFiles !== undefined && d.linkedFiles.length > 0) {
@@ -240,7 +242,11 @@ async function formatDecisionsBody(args: {
           (await args.fileExists(path)) ? path : `${path} (missing)`,
         ),
       );
-      lines.push(`- linked_files: ${parts.join(", ")}`);
+      // A path and an event id are opaque references, not prose: the fields that
+      // keep their line breaks are the rationale, the alternatives and the
+      // rejected reason. A newline here would end the bullet and let whatever
+      // followed become a line of this document.
+      lines.push(`- linked_files: ${oneLine(parts.join(", "))}`);
     }
     lines.push("");
   }

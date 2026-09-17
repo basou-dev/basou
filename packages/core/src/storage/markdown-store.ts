@@ -157,7 +157,17 @@ export function parseMarkers(content: string, markers: Markers = DEFAULT_MARKERS
  * prose verbatim.
  */
 function defuseMarkerLines(body: string, markers: Markers): string {
-  const isMarker = (line: string): boolean => line === markers.start || line === markers.end;
+  // {@link parseMarkers} splits on /\r?\n/, so a CRLF-terminated marker line
+  // reads as a marker there while `split("\n")` leaves a trailing \r on it.
+  // Strip that before comparing, or a body arriving with CRLF -- pasted from a
+  // Windows-authored document, or built by something that emits \r\n -- walks
+  // straight through. Splitting on /\r?\n/ here instead would lose the line
+  // endings this function exists to preserve. `assertNoMarkerLine` in the CLI's
+  // context channel matches the same way.
+  const isMarker = (line: string): boolean => {
+    const bare = line.endsWith("\r") ? line.slice(0, -1) : line;
+    return bare === markers.start || bare === markers.end;
+  };
   const lines = body.split("\n");
   if (!lines.some(isMarker)) return body;
   return lines.map((line) => (isMarker(line) ? ` ${line}` : line)).join("\n");

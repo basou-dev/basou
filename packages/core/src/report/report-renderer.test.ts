@@ -230,6 +230,55 @@ describe("report-renderer", () => {
     expect(data.time.timeZone).toBe(TZ);
   });
 
+  // A report is the generated document most likely to be handed to someone, and
+  // every piece of text it interpolates was recorded by a person or an agent: a
+  // decision title and a task title come from what was captured, an approval
+  // reason is free text, and `--title` comes from the command line. A newline in
+  // any of them ends the bullet and lets a following `#` line become a heading
+  // of the report itself.
+  it("collapses every recorded string so none of them can add a heading", async () => {
+    const paths = await setupPaths();
+    const hostile = (n: string): string => `Recorded ${n}\n\n# INJECTED-${n}\n\ntail`;
+    await placeSession(paths, {
+      id: SES("0H1"),
+      startedAt: "2026-05-04T09:00:00.000Z",
+      endedAt: "2026-05-04T10:00:00.000Z",
+      events: decisionLine(
+        SES("0H1"),
+        "E90",
+        DEC("D90"),
+        hostile("decision"),
+        "2026-05-04T09:30:00.000Z",
+      ),
+    });
+    await placeTask(paths, {
+      id: TASK("T90"),
+      title: hostile("task"),
+      status: "planned",
+      createdAt: "2026-05-04T09:00:00.000Z",
+      sessionId: SES("0H1"),
+    });
+    await placeApproval(paths, {
+      id: APPR("A90"),
+      sessionId: SES("0H1"),
+      status: "pending",
+      reason: hostile("approval"),
+    });
+    const { body } = await renderReport({
+      paths,
+      nowIso: NOW_ISO,
+      title: hostile("title"),
+      timeZone: TZ,
+    });
+    const headings = body.split("\n").filter((l) => /^#{1,6} /.test(l));
+
+    expect(headings.filter((l) => /^#{1,6} INJECTED/.test(l))).toEqual([]);
+    // Each path rendered, so the assertion above is not vacuous.
+    for (const n of ["decision", "task", "approval", "title"]) {
+      expect(body).toContain(`Recorded ${n} # INJECTED-${n} tail`);
+    }
+  });
+
   it("composes sections, counts, and the curated data for a populated workspace", async () => {
     const paths = await setupPaths();
     await seedPopulated(paths);

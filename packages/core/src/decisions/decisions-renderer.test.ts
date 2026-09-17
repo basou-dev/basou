@@ -103,6 +103,28 @@ describe("decisions-renderer", () => {
     expect(result.body).toContain("(no decisions recorded yet)");
   });
 
+  // linked_files and linked_events are opaque references, not the prose fields
+  // that keep their line breaks, so a newline in one of them has nothing to
+  // preserve -- it just ends the bullet and lets the rest become lines of this
+  // document.
+  it("collapses a linked path so it cannot add a heading", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X44");
+    const did = DEC("D44");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "E45", did, "Benign title", "2026-05-08T11:30:00+09:00", {
+        linked_files: ["src/a.ts\n\n# INJECTED\n\ntail"],
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    const headings = result.body.split("\n").filter((l) => /^#{1,6} /.test(l));
+    expect(headings.filter((l) => /^#{1,6} INJECTED/.test(l))).toEqual([]);
+    expect(result.body).toContain("src/a.ts # INJECTED tail");
+  });
+
   // Collapsing a title is not enough on its own. The same JSON carries a
   // rationale, alternatives, a rejected reason -- fields that exist to hold
   // multi-line prose and are deliberately NOT collapsed -- and any of them can
