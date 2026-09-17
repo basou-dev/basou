@@ -430,7 +430,7 @@ function formatHandoffBody(args: {
     // Lead with the task title; the raw id is demoted to a trailing [short id]
     // and linked_sessions rides alongside the status.
     lines.push(
-      `- ${t.handoff.lastTaskLabel}: ${args.latestActivityRecord.title} (${statusLabel}${linkedSuffix}) [${shortIdWithPrefix(args.latestActivityRecord.taskId)}]`,
+      `- ${t.handoff.lastTaskLabel}: ${oneLine(args.latestActivityRecord.title)} (${statusLabel}${linkedSuffix}) [${shortIdWithPrefix(args.latestActivityRecord.taskId)}]`,
     );
   } else {
     lines.push(`- ${t.handoff.lastTaskLabel}: (no tasks recorded yet)`);
@@ -462,7 +462,7 @@ function formatHandoffBody(args: {
     // Same decision id rule as the open-track lines below: a track is
     // routinely also the latest decision, and one document must not spell
     // the same decision two ways.
-    lines.push(`- ${last.title} [${last.decisionId}]`);
+    lines.push(`- ${oneLine(last.title)} [${last.decisionId}]`);
     // Staleness caveat (mirrors orientation): when real work continued well past
     // this decision, it may already be resolved/executed — do not let a resume
     // treat it as the current next step. handoff had no such note before, so a
@@ -501,7 +501,7 @@ function formatHandoffBody(args: {
       // ULIDs increment by one, so ADJACENT ids in a batch differ only in the
       // final character; no usefully short prefix tells them apart. Session and
       // task ids stay short: one is minted per command, so they do not collide.
-      lines.push(`- ${track.title} [${track.decisionId}]`);
+      lines.push(`- ${oneLine(track.title)} [${track.decisionId}]`);
       if (track.rationale !== null && track.rationale.trim() !== "") {
         lines.push(`  - ${t.common.trackWhyLabel}: ${handoffRationale(track.rationale)}`);
       }
@@ -549,7 +549,7 @@ function formatHandoffBody(args: {
     for (const t of args.pendingTasks) {
       // Lead with the task title; the raw id is demoted to a trailing [short id].
       lines.push(
-        `- ${t.task.task.title} (${t.task.task.status}) [${shortIdWithPrefix(t.task.task.id)}]`,
+        `- ${oneLine(t.task.task.title)} (${t.task.task.status}) [${shortIdWithPrefix(t.task.task.id)}]`,
       );
     }
   }

@@ -301,3 +301,42 @@ describe("markdown-store", () => {
     expect(next).toContain("remember the meeting tomorrow");
   });
 });
+
+describe("renderWithMarkers (a body that carries a marker line)", () => {
+  it("defuses the line so the region can be replaced again", () => {
+    const body = `before\n${GENERATED_END}\nafter`;
+    const once = renderWithMarkers(null, body, "decisions.md");
+    expect(parseMarkers(once).kind).toBe("ok");
+    expect(() => renderWithMarkers(once, body, "decisions.md")).not.toThrow();
+  });
+
+  it("keeps the text and the line breaks it arrived with", () => {
+    const body = `before\n${GENERATED_START}\nafter`;
+    const once = renderWithMarkers(null, body, "decisions.md");
+    expect(once).toContain(`before\n ${GENERATED_START}\nafter`);
+  });
+
+  // parseMarkers splits on /\r?\n/, so a CRLF-terminated marker line is a
+  // marker there. The defuse splits on "\n" to preserve line endings, which
+  // leaves a trailing \r on the line -- it has to be stripped before comparing
+  // or CRLF walks straight through. CRLF arrives without malice: a value pasted
+  // from a Windows-authored document, or built by something that emits \r\n.
+  it.each([
+    ["end", GENERATED_END],
+    ["start", GENERATED_START],
+  ])("defuses a CRLF-terminated %s marker as well", (_which, marker) => {
+    const body = `before\r\n${marker}\r\nafter`;
+    const once = renderWithMarkers(null, body, "decisions.md");
+    expect(parseMarkers(once).kind).toBe("ok");
+    expect(() => renderWithMarkers(once, body, "decisions.md")).not.toThrow();
+    // The CR survives: only a space is added in front.
+    expect(once).toContain(`before\r\n ${marker}\r\nafter`);
+  });
+
+  it("leaves a body without marker lines byte-identical", () => {
+    const body = "nothing to defuse\n";
+    expect(renderWithMarkers(null, body, "decisions.md")).toBe(
+      `${GENERATED_START}\n${body}${GENERATED_END}\n`,
+    );
+  });
+});

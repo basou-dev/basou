@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { createManifest, writeManifest } from "../storage/manifest.js";
+import { GENERATED_END, parseMarkers, renderWithMarkers } from "../storage/markdown-store.js";
 import { renderDecisions } from "./decisions-renderer.js";
 
 const FIXED_WS_ID = "ws_01HXABCDEF1234567890ABCDEF" as const;
@@ -100,6 +101,121 @@ describe("decisions-renderer", () => {
     expect(result.body).toContain("# Decisions");
     expect(result.body).toContain(`> Generated at ${FIXED_NOW_ISO}`);
     expect(result.body).toContain("(no decisions recorded yet)");
+  });
+
+  // linked_files and linked_events are opaque references, not the prose fields
+  // that keep their line breaks, so a newline in one of them has nothing to
+  // preserve -- it just ends the bullet and lets the rest become lines of this
+  // document.
+  it("collapses a linked path so it cannot add a heading", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X44");
+    const did = DEC("D44");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "E45", did, "Benign title", "2026-05-08T11:30:00+09:00", {
+        linked_files: ["src/a.ts\n\n# INJECTED\n\ntail"],
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    const headings = result.body.split("\n").filter((l) => /^#{1,6} /.test(l));
+    expect(headings.filter((l) => /^#{1,6} INJECTED/.test(l))).toEqual([]);
+    expect(result.body).toContain("src/a.ts # INJECTED tail");
+  });
+
+  // Collapsing a title is not enough on its own. The same JSON carries a
+  // rationale, alternatives, a rejected reason -- fields that exist to hold
+  // multi-line prose and are deliberately NOT collapsed -- and any of them can
+  // contain a line that IS a marker. Written once, the file then holds two
+  // pairs and every later regeneration refuses it; because the regenerators run
+  // in sequence, every document after this one stops updating as well.
+  //
+  // The body is defused where it is written instead, so the line keeps its text
+  // and its breaks while no longer being a marker.
+  it("survives a marker line arriving through a field that keeps its line breaks", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X43");
+    const did = DEC("D43");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "E44", did, "Benign title", "2026-05-08T11:30:00+09:00", {
+        rationale: `because\n\n${GENERATED_END}\n\ntail`,
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+
+    // The rationale keeps its line breaks.
+    expect(result.body).toContain("because");
+    expect(result.body).toContain("tail");
+
+    // But no line of it is a marker, so the file can be written twice.
+    const once = renderWithMarkers(null, result.body, "decisions.md");
+    expect(() => renderWithMarkers(once, result.body, "decisions.md")).not.toThrow();
+    expect(parseMarkers(once).kind).toBe("ok");
+  });
+
+  // A voided decision renders through a different heading line than a live one,
+  // so it needs its own guard.
+  it("collapses the title of a voided decision too", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X42");
+    const did = DEC("D42");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "E42", did, "Adopt\n\n# INJECTED\n\ntail", "2026-05-08T11:30:00+09:00") +
+        voidLine(sid, "E43", did, "2026-05-08T12:00:00+09:00"),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    const headings = result.body.split("\n").filter((l) => /^#{1,6} /.test(l));
+    // A heading the title CREATED, not the legitimate heading the title is
+    // part of -- the collapsed title lives inside `## <id>: ...`.
+    expect(headings.filter((l) => /^#{1,6} INJECTED/.test(l))).toEqual([]);
+    expect(result.body).toContain("Adopt # INJECTED tail");
+  });
+
+  // A title is whatever was piped into `basou decision capture`, so it can carry
+  // newlines. Rendered raw into `## <id>: <title>` the heading ends at the first
+  // one and the rest of the title becomes lines of this document -- a line that
+  // began with `#` becomes a heading of its own.
+  //
+  // The marker case is the worse one. decisions.md is written through
+  // renderWithMarkers, and parseMarkers matches a marker on a whole line. A
+  // title carrying a bare END marker line would be written once and then every
+  // later regeneration would throw, until someone edited the file by hand.
+  it("collapses a decision title so it cannot add headings or a second marker", async () => {
+    const paths = await setupPaths();
+    const sid = SES("X40");
+    const did = DEC("D40");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(
+        sid,
+        "E40",
+        did,
+        `Adopt plan\n\n# Injected heading\n\n${GENERATED_END}\n\ntail`,
+        "2026-05-08T11:30:00+09:00",
+      ),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    const lines = result.body.split("\n");
+
+    expect(lines.filter((l) => /^#{1,6} /.test(l))).not.toContain("# Injected heading");
+    expect(result.body).toContain(`## ${did}: Adopt plan # Injected heading ${GENERATED_END} tail`);
+
+    // No line of the body is a marker on its own, so the document can be
+    // regenerated a second time.
+    expect(lines).not.toContain(GENERATED_END);
+    const once = renderWithMarkers(null, result.body, "decisions.md");
+    expect(() => renderWithMarkers(once, result.body, "decisions.md")).not.toThrow();
+    expect(parseMarkers(once).kind).toBe("ok");
   });
 
   it("case 2: a single decision renders the 4-field section", async () => {

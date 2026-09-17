@@ -1,6 +1,7 @@
 import { lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
+import { oneLine } from "../lib/one-line.js";
 import {
   resolveViewLanguageFromPaths,
   type ViewLanguage,
@@ -195,7 +196,7 @@ async function formatDecisionsBody(args: {
     if (d.voided !== undefined) {
       // Struck heading + a void line; the decision body is kept for the audit
       // trail but visibly marked no longer in force.
-      lines.push(`## ~~${d.decisionId}: ${d.title}~~ [VOIDED]${trackMark}`);
+      lines.push(`## ~~${d.decisionId}: ${oneLine(d.title)}~~ [VOIDED]${trackMark}`);
       lines.push("");
       const supersededBy =
         d.voided.supersededBy !== undefined ? `, superseded by ${d.voided.supersededBy}` : "";
@@ -205,7 +206,7 @@ async function formatDecisionsBody(args: {
           : "";
       lines.push(`- ⚠ VOIDED${reason}${supersededBy}`);
     } else {
-      lines.push(`## ${d.decisionId}: ${d.title}${trackMark}`);
+      lines.push(`## ${d.decisionId}: ${oneLine(d.title)}${trackMark}`);
       lines.push("");
     }
     const occurredDate = d.occurredAt.slice(0, 10); // YYYY-MM-DD
@@ -217,7 +218,7 @@ async function formatDecisionsBody(args: {
       lines.push(t.decisions.trackKindLine);
     }
     lines.push(`- session: ${shortDecisionSessionId(d.sessionId)}`);
-    lines.push(`- ${t.decisions.decisionLabel}: ${d.title}`);
+    lines.push(`- ${t.decisions.decisionLabel}: ${oneLine(d.title)}`);
     if (typeof d.rationale === "string" && d.rationale.length > 0) {
       lines.push(`- rationale: ${d.rationale}`);
     }
@@ -231,6 +232,8 @@ async function formatDecisionsBody(args: {
       const parts = d.linkedEvents.map((eid) =>
         args.knownEventIds.has(eid) ? eid : `${eid} (missing)`,
       );
+      // No collapse: an event id is gated by EventIdSchema, so a newline cannot
+      // reach this line. linked_files below is a free string and can.
       lines.push(`- linked_events: ${parts.join(", ")}`);
     }
     if (d.linkedFiles !== undefined && d.linkedFiles.length > 0) {
@@ -239,7 +242,11 @@ async function formatDecisionsBody(args: {
           (await args.fileExists(path)) ? path : `${path} (missing)`,
         ),
       );
-      lines.push(`- linked_files: ${parts.join(", ")}`);
+      // A path and an event id are opaque references, not prose: the fields that
+      // keep their line breaks are the rationale, the alternatives and the
+      // rejected reason. A newline here would end the bullet and let whatever
+      // followed become a line of this document.
+      lines.push(`- linked_files: ${oneLine(parts.join(", "))}`);
     }
     lines.push("");
   }

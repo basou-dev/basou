@@ -27,6 +27,23 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Changed
 
+- **Nor can a recorded title, and a generated document can no longer be written
+  into a state that stops `basou refresh`.** A decision or track title is
+  whatever was piped into `basou decision capture`, and a task title comes from
+  `--title`, so both carry newlines the same way a label does. Every title the
+  handoff, orientation, decisions and report documents render is collapsed now,
+  as is an approval's reason.
+
+  Collapsing titles alone would not have been enough. The generated block is
+  delimited by markers matched on a whole line, and the same JSON carries a
+  rationale, alternatives and a rejected reason — fields that exist to hold
+  multi-line prose and are deliberately left intact. A marker line arriving
+  through any of them was written once and refused on every render after that,
+  and since the regenerators run in sequence, every document after the failing
+  one stopped updating too. The body is defused where it is written instead: a
+  line that is a marker gets one leading space, which keeps the text and its
+  breaks while no longer delimiting anything.
+
 - **The accepted shape of a timestamp is basou's own, so a dependency's minor
   release cannot move it.** `IsoTimestampSchema` was zod's
   `.datetime({ offset: true })`, which meant the expression published in every
