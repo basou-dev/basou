@@ -44,10 +44,6 @@ All notable changes to **basou** are recorded here. The project follows
   escapes the backslash before the column delimiter, so a label already
   containing `\|` cannot gain a cell and lose its tail when displayed.
 
-## 0.43.0 — 2026-09-16
-
-### Changed
-
 - **Nor can a recorded title, and a generated document can no longer be written
   into a state that stops `basou refresh`.** A decision or track title is
   whatever was piped into `basou decision capture`, and a task title comes from
@@ -64,6 +60,10 @@ All notable changes to **basou** are recorded here. The project follows
   one stopped updating too. The body is defused where it is written instead: a
   line that is a marker gets one leading space, which keeps the text and its
   breaks while no longer delimiting anything.
+
+## 0.43.0 — 2026-09-16
+
+### Changed
 
 - **The accepted shape of a timestamp is basou's own, so a dependency's minor
   release cannot move it.** `IsoTimestampSchema` was zod's
