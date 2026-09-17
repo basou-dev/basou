@@ -223,9 +223,10 @@ Events written by the import paths additionally carry an optional top-level
 ## §7.3 Extension rules (additive by default; breaking changes are gated)
 
 - New event types may be added. For an existing type, adding a required field,
-  removing one, or narrowing one's domain is forbidden. Widening a required
-  field's domain is the one exception: the third rule below gates it rather
-  than forbidding it.
+  removing one, or narrowing one's domain is forbidden. Two exceptions are
+  gated rather than forbidden: widening a required field's domain (the third
+  rule below), and narrowing one that no writer has ever exercised (the rule
+  immediately after it).
 - Adding optional fields to existing types is allowed.
 - Widening a required field's domain (e.g. making it nullable) is a BREAKING
   change to the event format. From 0.2.0 onward it requires a `schema_version`
@@ -240,6 +241,38 @@ Events written by the import paths additionally carry an optional top-level
   `source` field makes it — the `claude-code-import` adapter fabricated `bash`
   before 0.38.0. That ambiguity is on disk permanently and is the reason this
   rule exists.
+
+- **Narrowing a required field's domain is allowed only when the set it starts
+  refusing is EMPTY on disk**, and then it still requires a `schema_version`
+  bump and a stated read rule. Narrowing is otherwise forbidden for a concrete
+  reason: every line read from disk is validated, and a violation is DROPPED
+  with a `schema_violation` warning, so a narrowing that catches real documents
+  destroys traces rather than reporting them.
+
+  "Empty" is a measurement, not a judgement, and the measurement belongs in the
+  read rule beside the bump. A narrowing whose refused set cannot be measured —
+  because the values come from somewhere basou cannot enumerate — does not
+  qualify, and neither does one that is merely believed to be rare.
+
+  Where the values enter from outside basou, the bump must also come with a
+  normalizer at that boundary, so a producer that later starts writing the
+  refused form is brought into the accepted set rather than silently dropped.
+  The measurement says what is true today; the normalizer is what keeps it
+  true.
+
+  **Worked example — timestamps require seconds (event `0.3.0`, and `0.2.0` for
+  every other durable document).** The accepted shape had made seconds
+  optional, inherited from the expression zod emitted for
+  `.datetime({ offset: true })` rather than chosen. Measured before the bump:
+  across 39,070 timestamps in one store (34,075 in `events.jsonl`, 4,935 in
+  `session.yaml`, 60 in tasks and the manifest) and 226,077 in the vendor logs
+  both adapters read from, every single value carried seconds, as did every
+  sample in this spec. The refused set was empty in all three populations.
+  **Read rule:** a document at the earlier version means exactly what it meant;
+  nothing on disk is reinterpreted, and nothing is rewritten in place. The only
+  change is what a writer may newly produce. Vendor strings are normalized at
+  the import boundary (`normalizeIsoTimestamp`), which restores an omitted
+  `:00` and preserves the offset rather than folding it to UTC.
 - Redefining a value that already exists on disk is forbidden: it must keep
   meaning what it meant (introduce a new type or a new field instead). A bump
   may only ASSIGN a meaning to a value the field could not hold before. The
@@ -266,27 +299,47 @@ Events written by the import paths additionally carry an optional top-level
   **The `$id` version tracks the format a document describes, not the byte
   revision of the artifact that describes it.** Within one version an artifact
   may be re-published with a more faithful description of the same format — an
-  added `description`, or a constraint the runtime already enforced — and that
-  is not a format change, so it does not move the `$id`. `session-import`
+  added `description`, a constraint the runtime already enforced, or the
+  REMOVAL of a declaration the runtime never enforced — and that is not a
+  format change, so it does not move the `$id`. The test is the accepted set,
+  not the byte count: a keyword whose removal leaves every document that
+  validated before still validating was describing the format wrongly, and
+  dropping it is the same act as adding a `description` that was missing. `session-import`
   pinning its `schema_version` to a `const` is such a case: the set of payloads
   the importer accepts is exactly what it always was.
 
-  One consequence of that rule is accepted rather than resolved.
-  `session-import.schema.json` embeds the event union, so its published bytes
-  changed with the 0.2.0 event while its own `$id` stayed at `0.1.0` — its
-  envelope format did not change, and its importer still requires
-  `schema_version: "0.1.0"`. A consumer holding the earlier bytes of that URL
-  will reject a payload basou now writes, with no version signal that anything
-  moved. Moving the envelope's `$id` would be dishonest (its own format did not
-  change), and a second version axis for embedded formats costs more than it
-  buys for a document whose importer pins one version anyway. Consumers that
-  need the current bytes should read the artifact from the installed
-  `@basou/core` rather than caching the URL.
+  One consequence of that rule was accepted rather than resolved, and it has
+  since expired. `session-import.schema.json` embeds the event union, so its
+  published bytes changed with the 0.2.0 event while its own `$id` stayed at
+  `0.1.0` — its envelope format had not changed, and moving the `$id` would
+  have been dishonest. For that window a consumer holding the earlier bytes of
+  that URL would reject a payload basou wrote, with no version signal that
+  anything moved.
+
+  The timestamp narrowing ended the window, because it reached the envelope's
+  OWN fields — `session.started_at`, `session.ended_at`, and both
+  `active_intervals` bounds — rather than only the union it embeds. So the
+  envelope's accepted set did move, its `$id` is `0.2.0`, and its importer
+  requires `schema_version: "0.2.0"`. The distinction is worth keeping: bytes
+  changing because of an embedded format is not a reason to move a `$id`; the
+  envelope's own accepted set changing is. Consumers that need the current
+  bytes should still read the artifact from the installed `@basou/core` rather
+  than caching the URL.
+
+### Timestamps require seconds — event `0.3.0`, every other durable document `0.2.0`
+
+The narrowing, its measurement and its read rule are stated as the worked
+example in §7.3 above. What it moved: `event` to `0.3.0` (it had already moved
+once, for `duration_ms`), and `manifest`, `session`, `task`, `approval` and
+`session-import` to `0.2.0`. `status` and `task-index` did NOT move — they are
+rebuildable caches, matched exactly or re-derived, so no stored document
+outlives a change to their shape.
 
 ### Event `schema_version` 0.2.0 — `command_executed.duration_ms`
 
-Events written from this release carry `schema_version: "0.2.0"`. Every other
-`.basou/` document stays at `0.1.0`, because those formats did not change.
+Events written between that release and the timestamp narrowing carry
+`schema_version: "0.2.0"`, and every other `.basou/` document stayed at
+`0.1.0`, because those formats had not changed yet.
 
 `duration_ms` became nullable, joining `command`, `cwd` and `exit_code` under
 one rule: **null means basou did not observe the value.** Widening a required

@@ -11,6 +11,7 @@ import type { Manifest } from "../schemas/manifest.schema.js";
 import type { SessionStatus } from "../schemas/session.schema.js";
 import { IsoTimestampSchema, SessionIdSchema, TaskIdSchema } from "../schemas/shared.schema.js";
 import {
+  TASK_SCHEMA_VERSION,
   type Task,
   TaskSchema,
   type TaskStatus,
@@ -1046,7 +1047,7 @@ function buildInitialTask(input: {
       ? input.completedAt
       : input.occurredAt;
   return {
-    schema_version: "0.1.0",
+    schema_version: TASK_SCHEMA_VERSION,
     task: {
       id: input.taskId,
       title: input.title,

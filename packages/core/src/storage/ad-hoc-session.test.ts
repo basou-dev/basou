@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import { verifyEventsChain } from "../events/verify.js";
 import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
+import { SESSION_SCHEMA_VERSION } from "../schemas/session.schema.js";
 import {
   appendEventToExistingSession,
   createAdHocSessionWithEvent,
@@ -164,7 +165,7 @@ describe("createAdHocSessionWithEvent", () => {
     });
 
     const yaml = await readSessionYaml(paths, result.sessionId);
-    expect(yaml.schema_version).toBe("0.1.0");
+    expect(yaml.schema_version).toBe(SESSION_SCHEMA_VERSION);
     expect(yaml.session.status).toBe("completed");
     expect(yaml.session.started_at).toBe(occurredAt);
     expect(yaml.session.ended_at).toBe(occurredAt);

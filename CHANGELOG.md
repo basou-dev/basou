@@ -5,6 +5,53 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- **Every timestamp basou writes now carries seconds, and the schemas that
+  describe them say so.** The accepted shape had made seconds optional — not
+  by decision, but because it began as the expression zod emitted for
+  `.datetime({ offset: true })`, which was pinned as a literal and then
+  promoted to the sole published contract without anyone asking whether the
+  shape was right. Nothing exercised the tolerance: measured before the change,
+  all 39,070 timestamps in one store, all 226,077 in the vendor logs both
+  adapters read, and every sample in the spec carried seconds, while basou's
+  own `--completed-at` already refused a value without them.
+
+  Narrowing what a format accepts is otherwise forbidden, because a line that
+  fails validation is dropped rather than reported — so `docs/spec/schemas.md`
+  now states the one exception this landed under (the refused set must be
+  measured and empty, the bump and read rule are still required, and a boundary
+  the values arrive through must normalize rather than drop), with this change
+  as its worked example.
+
+  The narrowing is shared, so every durable format moved: `event` to `0.3.0`,
+  and `manifest`, `session`, `task`, `approval` and `session-import` to
+  `0.2.0`. Each one's previous artifact is kept verbatim under
+  `schemas/retired/`, because the `$id` it published still describes every
+  document written under it. `status` and `task-index` did not move: they are
+  rebuildable caches, so nothing stored outlives a change to their shape.
+
+  **Nothing on disk is reinterpreted or rewritten.** A document at the earlier
+  version means exactly what it meant. What changed is what a writer may newly
+  produce — and, at the import boundary, adapters now restore an omitted `:00`
+  and preserve the offset instead of folding it to UTC, so a vendor that starts
+  writing seconds-less timestamps is brought into the accepted set rather than
+  having its trace silently dropped.
+
+  `basou session import` requires `schema_version: "0.2.0"` on the envelope.
+  The previous value is refused with the same message any unsupported version
+  gets. The envelope's own fields — `session.started_at`, `session.ended_at`
+  and both `active_intervals` bounds — carry the narrowed shape, which is why
+  its `$id` moved this time and did not when the events it embeds changed.
+
+- **A published declaration the runtime never enforced can be removed without
+  moving a `$id`.** The rule that lets an artifact be re-published with a more
+  faithful description of the same format gave two examples, both additive, so
+  removing a keyword had no stated precedent. The test is now written down: if
+  every document that validated before still validates, the keyword was
+  describing the format wrongly and dropping it is the same act as adding a
+  missing `description`.
+
 ### Fixed
 
 - **Orientation no longer answers "is anything in flight?" with a word that

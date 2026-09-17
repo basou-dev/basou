@@ -52,18 +52,19 @@ describe("buildJsonSchemas", () => {
     }
   });
 
-  it("versions each $id independently: only the event format moved to 0.2.0", () => {
+  it("versions each $id independently: the caches did not move with the durable formats", () => {
     const byName = new Map(artifacts.map((a) => [a.name, a.schema.$id]));
-    expect(byName.get("event")).toBe("https://basou.dev/schemas/0.2.0/event.schema.json");
-    for (const name of [
-      "approval",
-      "manifest",
-      "session",
-      "session-import",
-      "status",
-      "task",
-      "task-index",
-    ]) {
+    // The timestamp narrowing is shared, so every DURABLE format moved. `event`
+    // is a version ahead because it had already moved once, for nullable
+    // `duration_ms`.
+    expect(byName.get("event")).toBe("https://basou.dev/schemas/0.3.0/event.schema.json");
+    for (const name of ["approval", "manifest", "session", "session-import", "task"]) {
+      expect(byName.get(name)).toBe(`https://basou.dev/schemas/0.2.0/${name}.schema.json`);
+    }
+    // `status` and `task-index` are rebuildable caches: their bytes changed with
+    // the narrowing, but a cache is re-derived rather than read forward, so
+    // there is no stored document for a version to speak about.
+    for (const name of ["status", "task-index"]) {
       expect(byName.get(name)).toBe(`https://basou.dev/schemas/0.1.0/${name}.schema.json`);
     }
   });
@@ -206,7 +207,17 @@ describe("retired JSON Schema artifacts", () => {
   // 0.1.0 event schema still describes every 0.1.0 event on disk, and nothing
   // regenerates it (its Zod source is gone). These assertions are about
   // identity and non-collision, never about content -- the bytes are frozen.
-  const retired = [{ name: "event", version: "0.1.0" }] as const;
+  const retired = [
+    { name: "event", version: "0.1.0" },
+    // The timestamp narrowing moved every durable format, so each one left its
+    // previous bytes behind under the `$id` it had published.
+    { name: "event", version: "0.2.0" },
+    { name: "approval", version: "0.1.0" },
+    { name: "manifest", version: "0.1.0" },
+    { name: "session", version: "0.1.0" },
+    { name: "session-import", version: "0.1.0" },
+    { name: "task", version: "0.1.0" },
+  ] as const;
 
   for (const { name, version } of retired) {
     it(`schemas/retired/${version}/${name}.schema.json declares the $id its path serves`, () => {
@@ -309,7 +320,7 @@ describe("emitted schemas validate real documents (ajv draft 2020-12)", () => {
       last_rebuilt_at: ISO,
     },
     "session-import": {
-      schema_version: "0.1.0",
+      schema_version: "0.2.0",
       session: {
         id: SES,
         workspace_id: WS,
@@ -353,12 +364,14 @@ describe("emitted schemas validate real documents (ajv draft 2020-12)", () => {
 
   // The ajv instance above asserts formats, so this is the pair that used to
   // disagree: the runtime accepted a seconds-less timestamp while the artifact
-  // describing it rejected one. Pinning the whole boundary here means the
+  // describing it rejected one. They now agree by REFUSING one -- the narrowing
+  // the durable formats bumped for. Pinning the whole boundary here means the
   // published `pattern` and the schema that produced it cannot drift apart --
   // a reinstated `format`, or a pattern edited on one side only, fails a test
   // that says why rather than a byte diff that does not.
   it.each([
-    ["2026-05-10T00:00Z", true],
+    ["2026-05-10T00:00Z", false],
+    ["2026-05-10T00:00+09:00", false],
     ["2026-05-10T00:00:00.123456Z", true],
     ["2026-05-10T00:00:00-05:00", true],
     ["2026-05-10T00:00:00", false],
@@ -395,7 +408,9 @@ describe("emitted schemas validate real documents (ajv draft 2020-12)", () => {
     // Both now read SESSION_IMPORT_SCHEMA_VERSION.
     const envelope = structuredClone(samples["session-import"]) as { schema_version: string };
     expect(validate("session-import", envelope)).toBe(true);
-    envelope.schema_version = "0.2.0";
+    // 0.1.0 is the version this envelope used to stamp; the timestamp
+    // narrowing reached the envelope's own fields, so it is now refused.
+    envelope.schema_version = "0.1.0";
     expect(validate("session-import", envelope)).toBe(false);
   });
 

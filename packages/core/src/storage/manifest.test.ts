@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isValidPrefixedId } from "../ids/ulid.js";
+import { MANIFEST_SCHEMA_VERSION } from "../schemas/manifest.schema.js";
 import { ensureBasouDirectory } from "./basou-dir.js";
 import { createManifest, readManifest, writeManifest } from "./manifest.js";
 
@@ -34,7 +35,7 @@ describe("createManifest", () => {
       now: FIXED_DATE,
       workspaceId: FIXED_WS_ID,
     });
-    expect(manifest.schema_version).toBe("0.1.0");
+    expect(manifest.schema_version).toBe(MANIFEST_SCHEMA_VERSION);
     expect(manifest.basou_version).toBe("0.1.0");
     expect(manifest.workspace.id).toBe(FIXED_WS_ID);
     expect(manifest.workspace.name).toBe("client-foo-lp");

@@ -37,10 +37,12 @@ export const CacheVersionSchema = z.literal("0.1.0");
  * The accepted shape of an ISO 8601 timestamp, owned by basou rather than by
  * whichever zod is installed.
  *
- * Seconds are optional; an offset (e.g. `+09:00`) or `Z` is required, because
- * the spec samples carry offsets and the default zod `.datetime()` rejects
- * them. The expression is the one zod emitted for `.datetime({ offset: true })`
- * when these artifacts were first published, pinned here as a literal.
+ * Seconds are required, and an offset (e.g. `+09:00`) or `Z` is required
+ * because the spec samples carry offsets and the default zod `.datetime()`
+ * rejects them. The expression began as the one zod emitted for
+ * `.datetime({ offset: true })` when these artifacts were first published,
+ * pinned here as a literal; requiring seconds is the one deliberate departure
+ * from it.
  *
  * It is pinned because the published JSON Schema artifacts describe it under a
  * `$id` that does not move: zod 4.6 narrowed its own ISO expression to require
@@ -51,7 +53,7 @@ export const CacheVersionSchema = z.literal("0.1.0");
  * gated by the rules in that document.
  */
 const ISO_TIMESTAMP_PATTERN =
-  "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$";
+  "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$";
 
 const isoTimestampRegex = new RegExp(ISO_TIMESTAMP_PATTERN);
 

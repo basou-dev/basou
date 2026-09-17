@@ -10,6 +10,7 @@ import type { Event } from "../schemas/event.schema.js";
 import { EVENT_SCHEMA_VERSION } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import {
+  SESSION_SCHEMA_VERSION,
   type Session,
   SessionSchema,
   type SessionSourceKind,
@@ -323,7 +324,7 @@ function buildInitialSession(input: {
   taskId: PrefixedId<"task"> | null;
 }): Session {
   return {
-    schema_version: "0.1.0",
+    schema_version: SESSION_SCHEMA_VERSION,
     session: {
       id: input.sessionId,
       label: input.label,

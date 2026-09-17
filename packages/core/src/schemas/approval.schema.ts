@@ -8,6 +8,20 @@ import {
 } from "./shared.schema.js";
 
 /**
+ * `schema_version` stamped on NEWLY WRITTEN `.basou/approvals/**`.
+ *
+ * 0.2.0 requires seconds in every timestamp. That NARROWS the field's domain,
+ * which §7.3 forbids except under the vacuous-narrowing rule the same section
+ * states: no value basou has ever written omits seconds, so the set of
+ * documents this refuses is empty. See `docs/spec/schemas.md` for the read
+ * rule and the measurement. The narrowing is shared with the event format, so
+ * every durable document bumps together.
+ *
+ * Note: basou only READS this document -- approvals are placed by an outside orchestrator, so nothing in this tree stamps the version; the constant exists so the published artifact and the accepted set are declared in one place.
+ */
+export const APPROVAL_SCHEMA_VERSION = "0.2.0" as const;
+
+/**
  * Lifecycle states of a Basou approval. The status is stored directly on
  * the approval YAML (flat shape) so that pending → resolved transitions
  * are atomic-move + in-place rewrites rather than schema-variant swaps.

@@ -9,6 +9,7 @@ import {
   basouPaths,
   type RunOptions as CoreRunOptions,
   createManifest,
+  EVENT_SCHEMA_VERSION,
   ensureBasouDirectory,
   type ProcessRunner,
   type RunResult,
@@ -181,7 +182,7 @@ describe("runClaudeCode", () => {
     const sessionId = await findOnlySessionId(repo);
     const ce = JSON.parse((await readEventsLines(repo, sessionId))[2] ?? "{}");
     expect(ce.duration_ms).toBe(1500);
-    expect(ce.schema_version).toBe("0.2.0");
+    expect(ce.schema_version).toBe(EVENT_SCHEMA_VERSION);
   });
 
   it("writes a non-positive measurement as unobserved, never as a measured zero", async () => {

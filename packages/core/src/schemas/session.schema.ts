@@ -7,6 +7,20 @@ import {
   WorkspaceIdSchema,
 } from "./shared.schema.js";
 
+/**
+ * `schema_version` stamped on NEWLY WRITTEN `.basou/sessions/<id>/session.yaml`.
+ *
+ * 0.2.0 requires seconds in every timestamp. That NARROWS the field's domain,
+ * which §7.3 forbids except under the vacuous-narrowing rule the same section
+ * states: no value basou has ever written omits seconds, so the set of
+ * documents this refuses is empty. See `docs/spec/schemas.md` for the read
+ * rule and the measurement. The narrowing is shared with the event format, so
+ * every durable document bumps together.
+ *
+ * Note: basou writes this document.
+ */
+export const SESSION_SCHEMA_VERSION = "0.2.0" as const;
+
 /** Session lifecycle states. */
 export const SessionStatusSchema = z.enum([
   "initialized",

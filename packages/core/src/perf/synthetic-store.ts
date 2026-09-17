@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { stringify } from "yaml";
 import { ulid } from "../ids/ulid.js";
 import { EVENT_SCHEMA_VERSION } from "../schemas/event.schema.js";
+import { SESSION_SCHEMA_VERSION } from "../schemas/session.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 
 export type SyntheticStoreOptions = {
@@ -138,7 +139,7 @@ function buildEvents(
 function buildSessionYaml(sessionId: string, startedAtMs: number): string {
   const iso = new Date(startedAtMs).toISOString();
   return stringify({
-    schema_version: "0.1.0",
+    schema_version: SESSION_SCHEMA_VERSION,
     session: {
       id: sessionId,
       label: `Synthetic session ${sessionId.slice(-6)}`,

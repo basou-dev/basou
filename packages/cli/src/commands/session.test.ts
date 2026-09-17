@@ -137,7 +137,7 @@ async function createSession(repo: string, fixture: SessionFixture): Promise<str
   await mkdir(sessionDir, { recursive: true });
   const status = fixture.status ?? "completed";
   const session = {
-    schema_version: "0.1.0" as const,
+    schema_version: "0.2.0" as const,
     session: {
       id: fixture.id,
       label: fixture.label ?? `fixture ${fixture.id}`,
@@ -168,7 +168,7 @@ async function createSession(repo: string, fixture: SessionFixture): Promise<str
 async function placeFixtureTask(repo: string, taskId: string): Promise<void> {
   const paths = basouPaths(repo);
   const body = `---
-schema_version: "0.1.0"
+schema_version: "0.2.0"
 task:
   id: ${taskId}
   title: fixture task
@@ -202,7 +202,7 @@ const EVT = (suffix: string) => `evt_01HXABCDEF1234567890ABC${suffix}`;
 
 const SESSION_STARTED_LINE = (sessionId: string, suffix: string, occurredAt: string) =>
   `${JSON.stringify({
-    schema_version: "0.1.0",
+    schema_version: "0.2.0",
     type: "session_started",
     id: EVT(suffix),
     session_id: sessionId,
@@ -233,7 +233,7 @@ const COMMAND_LINE = (
 
 const SESSION_ENDED_LINE = (sessionId: string, suffix: string, occurredAt: string) =>
   `${JSON.stringify({
-    schema_version: "0.1.0",
+    schema_version: "0.2.0",
     type: "session_ended",
     id: EVT(suffix),
     session_id: sessionId,
@@ -250,7 +250,7 @@ const TASK_RECONCILED_LINE = (
   brokenSesId: string,
 ) =>
   `${JSON.stringify({
-    schema_version: "0.1.0",
+    schema_version: "0.2.0",
     type: "task_reconciled",
     id: EVT(suffix),
     session_id: sessionId,
@@ -449,7 +449,7 @@ describe("doRunSessionList", () => {
     const id = SES("X13");
     // valid started line + valid ended line WITHOUT trailing newline.
     const lastLine = JSON.stringify({
-      schema_version: "0.1.0",
+      schema_version: "0.2.0",
       type: "session_ended",
       id: EVT("E05"),
       session_id: id,
@@ -1097,15 +1097,17 @@ describe("runSessionImport", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("import-12: schema_version '0.2.0' is rejected with the dedicated message", async () => {
+  it("import-12: schema_version '0.1.0' is rejected with the dedicated message", async () => {
     const repo = await setupInitedRepo();
     const fixture = await readFixture();
-    fixture.schema_version = "0.2.0";
+    // 0.1.0 is the envelope version this importer used to require; the
+    // timestamp narrowing reached the envelope's own fields, so it moved.
+    fixture.schema_version = "0.1.0";
     const from = await writeImportPayload(fixture, repo);
     const err = captureStderr();
     await runSessionImport({ format: "json", from }, { cwd: repo });
     const stderr = err.mock.calls.map((c) => String(c[0])).join("\n");
-    expect(stderr).toContain("Unsupported import schema_version: 0.2.0");
+    expect(stderr).toContain("Unsupported import schema_version: 0.1.0");
     expect(process.exitCode).toBe(1);
   });
 
