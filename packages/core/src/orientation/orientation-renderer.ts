@@ -231,6 +231,15 @@ export type OrientationSummary = {
    *  zero in-flight count distinguish "all closed" from "never used here".
    *  See {@link anyTaskEverRecorded}: a live count is NOT this. */
   anyTaskEverRecorded: boolean;
+  /** Task files THIS pass tried and failed to read, so their status is
+   *  unknown. A zero in-flight count is only a claim about the files that
+   *  parsed: with one of these present, "none in flight" is not something the
+   *  renderer can say. Reported to the caller through `onTaskSkip` as well,
+   *  but that goes to stderr and the body travels on its own (hooks ship the
+   *  body alone). Not a standing count: enumerating tasks can rebuild the
+   *  index without the unreadable file, after which later passes do not
+   *  attempt it and this reads zero while the file is still on disk. */
+  unreadableTaskCount: number;
   /** Tasks whose status is `planned` ("where am I heading"). */
   plannedTasks: PlannedTask[];
   pendingApprovals: PendingApproval[];
@@ -676,6 +685,7 @@ export async function summarizeOrientation(
       taskCreatedSeen,
       skippedCount: skippedTaskCount,
     }),
+    unreadableTaskCount: skippedTaskCount,
     plannedTasks,
     pendingApprovals,
     suspects,
@@ -883,9 +893,22 @@ function formatOrientationBody(
   lines.push("");
   lines.push(t.orientation.inFlightTasksHeading(summary.inFlightTasks.length));
   if (summary.inFlightTasks.length === 0) {
-    // As in handoff: with no task ever recorded, "(none)" reports the
-    // absence of the record as the absence of pending work.
-    lines.push(summary.anyTaskEverRecorded ? "- (none)" : `- ${t.orientation.noTasksRecorded}`);
+    // Three states share one count of zero, and a bare "(none)" collapses
+    // them into a claim about the work. Each line below names only what the
+    // record supports: nothing filed, nothing open, or nothing readable
+    // enough to say. Handoff draws the first distinction too but answers the
+    // second with "(no pending tasks)" -- a claim about the work; the two
+    // documents word this state differently on purpose, and handoff's is
+    // reasoned at length in the 0.42.1 notes.
+    lines.push(
+      `- ${
+        summary.unreadableTaskCount > 0
+          ? t.orientation.tasksUnreadable
+          : summary.anyTaskEverRecorded
+            ? t.orientation.noTasksInFlight
+            : t.orientation.noTasksRecorded
+      }`,
+    );
   } else {
     for (const t of summary.inFlightTasks) {
       const linkedSuffix = t.linkedSessions > 1 ? ` — linked_sessions: ${t.linkedSessions}` : "";
