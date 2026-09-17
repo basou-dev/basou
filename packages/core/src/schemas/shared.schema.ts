@@ -58,11 +58,11 @@ const isoTimestampRegex = new RegExp(ISO_TIMESTAMP_PATTERN);
 /**
  * ISO 8601 timestamp with explicit timezone offset (e.g. `+09:00`).
  *
- * Parsing goes through `.refine`, which is opaque to JSON Schema generation,
- * so the `.meta` mirrors the same expression as a representable `pattern` —
- * the way the prefixed-ID schemas below do. Both are built from the single
- * {@link ISO_TIMESTAMP_PATTERN} constant, so the artifact cannot drift from
- * what the runtime actually accepts.
+ * The gate is `.regex`, not a `.refine`: zod emits a regex check as the
+ * artifact's `pattern`, so there is one expression rather than a runtime check
+ * and a `.meta` restating it. A `.refine` is opaque to JSON Schema generation
+ * and would need the pattern written a second time, which is a second place to
+ * forget. {@link SchemaVersionSchema} takes the same form for the same reason.
  *
  * It deliberately does NOT declare `format: "date-time"`. That format names
  * RFC 3339, and the two sets cross rather than nest: basou takes a timestamp
@@ -75,13 +75,10 @@ const isoTimestampRegex = new RegExp(ISO_TIMESTAMP_PATTERN);
  */
 export const IsoTimestampSchema = z
   .string()
-  .refine((value) => isoTimestampRegex.test(value), {
-    message: "Expected an ISO 8601 timestamp with a timezone offset",
-  })
+  .regex(isoTimestampRegex, "Expected an ISO 8601 timestamp with a timezone offset")
   .meta({
     description:
-      "Timestamp with an offset or Z. The pattern is normative: RFC 3339 date-time with uppercase designators, no leap second, and optional seconds.",
-    pattern: ISO_TIMESTAMP_PATTERN,
+      "Timestamp with an offset or Z. The pattern is normative under ECMA-262 semantics: RFC 3339 date-time with uppercase designators, no leap second, and optional seconds.",
   });
 
 // Internal factory shared by every prefixed-ID schema. Not exported because
