@@ -24,6 +24,32 @@ describe("IsoTimestampSchema", () => {
   it("rejects a space-separated timestamp", () => {
     expect(IsoTimestampSchema.safeParse("2026-05-04 09:00:00+09:00").success).toBe(false);
   });
+
+  // The accepted set is the published contract: it is what every JSON Schema
+  // artifact carries as its `pattern`, under a `$id` that does not move. The
+  // extension rules in docs/spec/schemas.md forbid narrowing a domain and gate
+  // widening behind a `schema_version` bump, so moving any boundary below is a
+  // change to the event format and not a refactor. Each case names the boundary
+  // it holds rather than leaving the set implied by three examples.
+  it.each([
+    ["seconds are optional", "2026-05-04T09:00Z", true],
+    ["fractional seconds are accepted", "2026-05-04T09:00:00.123456Z", true],
+    ["a negative offset is accepted", "2026-05-04T09:00:00-05:00", true],
+    ["an offset or Z is required", "2026-05-04T09:00:00", false],
+    ["designators are uppercase only (t)", "2026-05-04t09:00:00Z", false],
+    ["designators are uppercase only (z)", "2026-05-04T09:00:00z", false],
+    ["a leap second is refused", "2026-12-31T23:59:60Z", false],
+    ["the calendar day must exist", "2026-02-30T09:00:00Z", false],
+    ["a non-leap year has no 29 February", "2026-02-29T09:00:00Z", false],
+    ["a leap year does", "2024-02-29T09:00:00Z", true],
+    ["the century rule holds (1900)", "1900-02-29T09:00:00Z", false],
+    ["the 400-year rule holds (2000)", "2000-02-29T09:00:00Z", true],
+    ["an offset hour past 23 is refused", "2026-05-04T09:00:00+24:00", false],
+    ["basic format is refused", "20260504T090000Z", false],
+    ["a trailing newline is refused", "2026-05-04T09:00:00Z\n", false],
+  ])("%s", (_boundary, value, accepted) => {
+    expect(IsoTimestampSchema.safeParse(value).success).toBe(accepted);
+  });
 });
 
 describe("Prefixed ID schemas", () => {
