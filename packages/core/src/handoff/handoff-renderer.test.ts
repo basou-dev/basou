@@ -901,31 +901,34 @@ describe("handoff-renderer", () => {
   it.each([
     ["live", "terminal"],
     ["imported", "import"],
-  ] as const)("collapses a %s session label so it cannot break the table or the document", async (kind, source) => {
-    const paths = await setupPaths();
-    const id = SES("X30");
-    await placeSession(paths, { id, status: "completed", source, label: HOSTILE_LABEL });
-    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
-    const lines = result.body.split("\n");
+  ] as const)(
+    "collapses a %s session label so it cannot break the table or the document",
+    async (kind, source) => {
+      const paths = await setupPaths();
+      const id = SES("X30");
+      await placeSession(paths, { id, status: "completed", source, label: HOSTILE_LABEL });
+      const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+      const lines = result.body.split("\n");
 
-    // The case reached the table it names.
-    expect(result.body.includes("### Imported sessions")).toBe(kind === "imported");
+      // The case reached the table it names.
+      expect(result.body.includes("### Imported sessions")).toBe(kind === "imported");
 
-    // Nothing the label carried became a heading of this document.
-    expect(lines.filter((l) => /^#{1,6} /.test(l))).not.toContain("# Target");
+      // Nothing the label carried became a heading of this document.
+      expect(lines.filter((l) => /^#{1,6} /.test(l))).not.toContain("# Target");
 
-    // It occupies exactly one row, and that row still has four cells once the
-    // escapes are read the way a renderer reads them.
-    const tableId = id.slice("ses_".length, "ses_".length + 10);
-    const rows = lines.filter((l) => l.startsWith(`| ${tableId} `));
-    expect(rows).toHaveLength(1);
-    expect(gfmCells(rows[0] ?? "")).toHaveLength(6);
+      // It occupies exactly one row, and that row still has four cells once the
+      // escapes are read the way a renderer reads them.
+      const tableId = id.slice("ses_".length, "ses_".length + 10);
+      const rows = lines.filter((l) => l.startsWith(`| ${tableId} `));
+      expect(rows).toHaveLength(1);
+      expect(gfmCells(rows[0] ?? "")).toHaveLength(6);
 
-    // Whitespace of every kind is collapsed, not just newlines, and the label
-    // is trimmed.
-    const cell = gfmCells(rows[0] ?? "")[4] ?? "";
-    expect(cell).toBe(` basou run codex exec grep -E "a\\|b" # Target Repo: c\\\\\\|d `);
-  });
+      // Whitespace of every kind is collapsed, not just newlines, and the label
+      // is trimmed.
+      const cell = gfmCells(rows[0] ?? "")[4] ?? "";
+      expect(cell).toBe(` basou run codex exec grep -E "a\\|b" # Target Repo: c\\\\\\|d `);
+    },
+  );
 
   it("collapses the label on the prose line that leads with it", async () => {
     const paths = await setupPaths();

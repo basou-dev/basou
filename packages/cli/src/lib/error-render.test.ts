@@ -61,13 +61,12 @@ describe("isVerbose", () => {
     // Tests assert behavior when BASOU_DEBUG is absent; `= undefined` would
     // coerce to the string "undefined" in process.env, so `delete` is the
     // only correct way to clear the key.
-    // biome-ignore lint/performance/noDelete: env-var absence is semantically meaningful
     delete process.env.BASOU_DEBUG;
   });
 
   afterEach(() => {
     if (originalEnv === undefined) {
-      // biome-ignore lint/performance/noDelete: restoring the original absence
+      // Restoring the original absence - see the beforeEach note above.
       delete process.env.BASOU_DEBUG;
     } else {
       process.env.BASOU_DEBUG = originalEnv;

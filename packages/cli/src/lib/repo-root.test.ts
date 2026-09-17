@@ -3,7 +3,7 @@ import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
+import { createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveBasouRootForCommand, resolveMemberToMaster } from "./repo-root.js";
 

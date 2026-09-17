@@ -132,10 +132,7 @@ export function planRename(input: {
 
   let sourceRootRenamed: string | undefined;
   let nextSourceRoots: string[] | undefined;
-  if (
-    input.sourceRoots !== undefined &&
-    input.sourceRoots.some((s) => normalize(s) === oldTarget)
-  ) {
+  if (input.sourceRoots?.some((s) => normalize(s) === oldTarget)) {
     nextSourceRoots = dedupNorm(
       input.sourceRoots.map((s) => (normalize(s) === oldTarget ? newTarget : s)),
     );
