@@ -95,6 +95,25 @@ export type ViewStrings = {
      * cannot be silenced is noise (see `trackNudge`, which is gated).
      */
     noTasksRecorded: string;
+    /**
+     * Body line under the in-flight-tasks heading when tasks ARE on record
+     * here and every one of them parsed, with none open. A bare "(none)" is
+     * literally true and still misread: it answers "is anything in flight?"
+     * with a word that sounds like "nothing is happening". Work can be under
+     * way and simply not filed as a task. This line leads with what the
+     * record does hold, so it cannot be skimmed as its sibling below, and it
+     * claims nothing about the work.
+     */
+    noTasksInFlight: string;
+    /**
+     * Same heading, but a task file could not be read on THIS pass, so its
+     * status is unknown and "none in flight" would be an assertion the
+     * renderer cannot support. Says what it can see and stops. Reading the
+     * tasks directory can rebuild the index without the unreadable file, in
+     * which case a later render does not attempt it and this line gives way
+     * to its sibling -- the line reports a pass, not a standing condition.
+     */
+    tasksUnreadable: string;
     pendingApprovalsHeading: (n: number) => string;
     suspectSessionsHeading: (n: number) => string;
     openTracksHeading: (n: number) => string;
@@ -220,6 +239,8 @@ const EN: ViewStrings = {
     headingCurrency: "## Is this current",
     inFlightTasksHeading: (n) => `### In-flight tasks (${n})`,
     noTasksRecorded: "(no tasks recorded)",
+    noTasksInFlight: "(tasks on record, none in flight)",
+    tasksUnreadable: "(tasks on record, some unreadable -- in flight unknown)",
     pendingApprovalsHeading: (n) => `### Pending approvals (${n})`,
     suspectSessionsHeading: (n) => `### Suspect sessions (${n})`,
     openTracksHeading: (n) => `### Open tracks (shown until closed) (${n})`,
@@ -340,6 +361,8 @@ const JA: ViewStrings = {
     headingCurrency: "## これは最新か",
     inFlightTasksHeading: (n) => `### 進行中 task (${n})`,
     noTasksRecorded: "(task が 1 件も記録されていません)",
+    noTasksInFlight: "(記録済みの task はありますが、進行中はありません)",
+    tasksUnreadable: "(記録済みの task に読めないものがあり、進行中かは不明です)",
     pendingApprovalsHeading: (n) => `### 承認待ち (${n})`,
     suspectSessionsHeading: (n) => `### 要注意 session (${n})`,
     openTracksHeading: (n) => `### 未完トラック (close まで継続表示) (${n})`,

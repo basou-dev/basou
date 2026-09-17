@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -24,6 +24,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  while (separateWorkDirs.length > 0) {
+    const dir = separateWorkDirs.pop();
+    if (dir !== undefined) await rm(dir, { recursive: true, force: true });
+  }
   if (workDir !== undefined) {
     await rm(workDir, { recursive: true, force: true });
     workDir = undefined;
@@ -37,6 +41,17 @@ function getWorkDir(): string {
 
 async function setupPaths(): Promise<BasouPaths> {
   return ensureBasouDirectory(getWorkDir());
+}
+
+/** A workspace of its own, for tests that compare two or more side by side.
+ *  `setupPaths` hands back the one per-test directory, so calling it twice
+ *  mutates a single workspace in sequence rather than building separate ones.
+ *  Each directory handed out here is removed in `afterEach`. */
+const separateWorkDirs: string[] = [];
+async function setupSeparatePaths(): Promise<BasouPaths> {
+  const dir = await mkdtemp(join(tmpdir(), "basou-orient-alt-"));
+  separateWorkDirs.push(dir);
+  return ensureBasouDirectory(dir);
 }
 
 async function placeSession(
@@ -226,6 +241,8 @@ async function placePendingApproval(
 // The zero-task line distinguishes "never used tasks here" from "nothing pending";
 // see orientation-renderer's in-flight block.
 const NO_TASKS_LINE = "(no tasks recorded)";
+const NO_IN_FLIGHT_LINE = "(tasks on record, none in flight)";
+const UNREADABLE_LINE = "(tasks on record, some unreadable -- in flight unknown)";
 
 describe("orientation-renderer", () => {
   it("empty workspace renders all four sections with placeholders", async () => {
@@ -662,7 +679,7 @@ describe("orientation-renderer", () => {
     expect(verbose.body).toContain("- staleness probe: new 0, updated 0");
   });
 
-  it("in-flight 0 with a task on record still reads (none): closed out is not the same as never used", async () => {
+  it("in-flight 0 with a task on record names the empty record, not empty work", async () => {
     const paths = await setupPaths();
     await placeTaskFile(paths, {
       id: TASK("T09"),
@@ -672,7 +689,7 @@ describe("orientation-renderer", () => {
     });
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain("### In-flight tasks (0)");
-    expect(result.body).toContain("- (none)");
+    expect(result.body).toContain(`- ${NO_IN_FLIGHT_LINE}`);
     expect(result.body).not.toContain(NO_TASKS_LINE);
   });
 
@@ -686,7 +703,7 @@ describe("orientation-renderer", () => {
     );
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(result.body).toContain("### In-flight tasks (0)");
-    expect(result.body).toContain("- (none)");
+    expect(result.body).toContain(`- ${NO_IN_FLIGHT_LINE}`);
     expect(result.body).not.toContain(NO_TASKS_LINE);
   });
 
@@ -695,16 +712,130 @@ describe("orientation-renderer", () => {
     await mkdir(join(paths.tasks, "archive"), { recursive: true });
     await writeFile(join(paths.tasks, "archive", `${TASK("T07")}.md`), "---\n---\n\n");
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).toContain("- (none)");
+    expect(result.body).toContain(`- ${NO_IN_FLIGHT_LINE}`);
     expect(result.body).not.toContain(NO_TASKS_LINE);
   });
 
-  it("a task file the loader cannot parse still counts as a task on record", async () => {
+  // A file that will not parse is a task on record whose status nobody knows.
+  // "none in flight" would be an assertion about it; the body says so instead
+  // of quietly counting it as absent.
+  it("a task file the loader cannot parse is on record and leaves in-flight unknown", async () => {
     const paths = await setupPaths();
     await writeFile(join(paths.tasks, `${TASK("T06")}.md`), "not a task file at all\n");
     const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(result.body).toContain("- (none)");
+    expect(result.body).toContain(`- ${UNREADABLE_LINE}`);
     expect(result.body).not.toContain(NO_TASKS_LINE);
+    expect(result.body).not.toContain(NO_IN_FLIGHT_LINE);
+  });
+
+  // Three states share one count of zero, and a bare "(none)" collapses them
+  // into a claim about the work. Each must read as a different claim, and none
+  // may emit "(none)" under this heading.
+  it("the three empty-task states stay distinguishable and none says (none)", async () => {
+    const never = await renderOrientation({
+      paths: await setupSeparatePaths(),
+      nowIso: FIXED_NOW_ISO,
+    });
+
+    const recorded = await setupSeparatePaths();
+    await placeTaskFile(recorded, {
+      id: TASK("T10"),
+      title: "closed out",
+      status: "done",
+      sessionId: SES("S02"),
+    });
+    const closedOut = await renderOrientation({ paths: recorded, nowIso: FIXED_NOW_ISO });
+
+    const broken = await setupSeparatePaths();
+    await writeFile(join(broken.tasks, `${TASK("T11")}.md`), "not a task file at all\n");
+    const unreadable = await renderOrientation({ paths: broken, nowIso: FIXED_NOW_ISO });
+
+    // All three are "In-flight tasks (0)" -- the count cannot tell them apart.
+    for (const body of [never.body, closedOut.body, unreadable.body]) {
+      expect(body).toContain("### In-flight tasks (0)");
+    }
+
+    // The body line can, and each claims only what its record supports.
+    expect(never.body).toContain(`- ${NO_TASKS_LINE}`);
+    expect(closedOut.body).toContain(`- ${NO_IN_FLIGHT_LINE}`);
+    expect(unreadable.body).toContain(`- ${UNREADABLE_LINE}`);
+
+    // They must also differ at the first content word: two strings that both
+    // open "no task ... recorded" are a distinction the reader cannot skim.
+    const firstWord = (line: string) => line.replace(/^\(/, "").split(" ")[0];
+    expect(firstWord(NO_TASKS_LINE)).not.toBe(firstWord(NO_IN_FLIGHT_LINE));
+
+    // "(none)" survives only where it is a claim about the record itself
+    // (approvals, suspect sessions), never under the in-flight heading.
+    for (const body of [never.body, closedOut.body, unreadable.body]) {
+      const inFlight = body.split("### In-flight tasks (0)")[1]?.split("###")[0] ?? "";
+      expect(inFlight).not.toContain("(none)");
+    }
+  });
+
+  // KNOWN LIMIT, locked deliberately so it is not rediscovered as a surprise.
+  // The unreadable line reports the skips THIS render saw. `enumerateTaskIds`
+  // rebuilds `tasks/index.json` when it is missing or version-mismatched and
+  // drops the file it could not read, so the second render no longer attempts
+  // it, no longer skips it, and falls back to the sibling line. The corrupt
+  // file is still on disk. Whether basou should keep forgetting it is a
+  // separate question; if that changes, this test should fail and be updated
+  // on purpose.
+  it("the unreadable line reports this render's skips, and does not survive the index rebuild", async () => {
+    const paths = await setupPaths();
+    await writeFile(join(paths.tasks, `${TASK("T14")}.md`), "not a task file at all\n");
+
+    const first = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(first.body).toContain(`- ${UNREADABLE_LINE}`);
+
+    const second = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(second.body).not.toContain(`- ${UNREADABLE_LINE}`);
+
+    // The file never went anywhere -- only the index stopped naming it.
+    await expect(stat(join(paths.tasks, `${TASK("T14")}.md`))).resolves.toBeDefined();
+  });
+
+  // The Japanese values are held only by the totality check on `const JA`
+  // otherwise: the golden fixture carries an in-flight task, so it never
+  // reaches this branch and a wrong or empty string would ship unnoticed.
+  it("the Japanese view carries all three empty-task lines", async () => {
+    const never = await renderOrientation({
+      paths: await setupSeparatePaths(),
+      nowIso: FIXED_NOW_ISO,
+      language: "ja",
+    });
+
+    const recorded = await setupSeparatePaths();
+    await placeTaskFile(recorded, {
+      id: TASK("T12"),
+      title: "closed out",
+      status: "done",
+      sessionId: SES("S03"),
+    });
+    const closedOut = await renderOrientation({
+      paths: recorded,
+      nowIso: FIXED_NOW_ISO,
+      language: "ja",
+    });
+
+    const broken = await setupSeparatePaths();
+    await writeFile(join(broken.tasks, `${TASK("T13")}.md`), "not a task file at all\n");
+    const unreadable = await renderOrientation({
+      paths: broken,
+      nowIso: FIXED_NOW_ISO,
+      language: "ja",
+    });
+
+    expect(never.body).toContain("- (task が 1 件も記録されていません)");
+    expect(closedOut.body).toContain("- (記録済みの task はありますが、進行中はありません)");
+    expect(unreadable.body).toContain(
+      "- (記録済みの task に読めないものがあり、進行中かは不明です)",
+    );
+    for (const body of [never.body, closedOut.body, unreadable.body]) {
+      const inFlight = body.split("### 進行中 task (0)")[1]?.split("###")[0] ?? "";
+      expect(inFlight).not.toContain("(none)");
+      expect(inFlight.trim()).not.toBe("");
+    }
   });
 
   // Output-invariance lock: renderOrientation must keep emitting byte-identical

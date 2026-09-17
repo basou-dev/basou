@@ -3,6 +3,49 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **Orientation no longer answers "is anything in flight?" with a word that
+  sounds like "nothing is happening".** Three different situations produced the
+  same `### In-flight tasks (0)`, and two of them printed a bare `- (none)`.
+  The count is honest -- no task is open -- but the word was read as a claim
+  about the work, and work can be under way and simply not filed as a task. A
+  workspace that recorded a handful of tasks, closed them all, and then ran for
+  two months on decisions and notes alone saw `(none)` at every session start,
+  and agents read it as "nothing in progress" and moved on.
+
+  Each of the three states now says only what its render could see:
+  `(no tasks recorded)` where no task was filed or is still indexed,
+  `(tasks on record, none in flight)` where every task file it read parsed and
+  none is open, and `(tasks on record, some unreadable -- in flight unknown)`
+  where a task file could not be read on this pass, so its status is not known.
+  That last state used to be folded into the second, which asserted something
+  the renderer could not see; the unreadable file was reported only on stderr,
+  and hooks ship the body alone.
+
+  **The unreadable line reports the skips of the render that emitted it, and
+  does not persist.** Reading the tasks directory rebuilds `tasks/index.json`
+  when it is missing or version-mismatched, and that rebuild drops the file it
+  could not read. The next render no longer attempts it, no longer skips it,
+  and falls back to the sibling line -- while the file is still on disk. A test
+  holds that behaviour so it is a known limit rather than a surprise. Whether
+  basou should keep forgetting an unreadable task file is a separate question
+  and is recorded as one.
+
+  Orientation drew the first distinction already, in 0.42.1 -- what it lacked
+  was a named string, so the second state was a literal. Handoff answers that
+  second state with `(no pending tasks)`, a claim about the work rather than
+  the record. **The two documents word this state differently on purpose:**
+  handoff's phrasing was reasoned out and tested in 0.42.1, and reversing it
+  here on a wording argument alone is not warranted. Whether the two should
+  converge is left open.
+
+  Naming the absence is all this does. A store where decisions and notes keep
+  moving while tasks sit still is a separate question, and these lines do not
+  answer it.
+
 ## 0.44.0 — 2026-09-17
 
 ### Fixed
