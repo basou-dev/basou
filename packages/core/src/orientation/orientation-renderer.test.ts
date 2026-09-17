@@ -825,6 +825,74 @@ describe("orientation-renderer", () => {
       ].join("\n"),
     );
   });
+  // When activity continued well past the decision, the forward section demotes
+  // it to a labelled reference instead of an instruction -- a third place the
+  // title reaches this document.
+  it("collapses the title where a stale decision is demoted to a reference", async () => {
+    const paths = await setupPaths();
+    const id = SES("H04");
+    const dec = DEC("D05");
+    await placeSession(
+      paths,
+      { id, status: "completed", startedAt: "2026-05-08T00:00:00+09:00" },
+      decisionLine(id, "E55", dec, "Adopt\n\n# INJECTED\n\ntail", "2026-05-08T00:00:00+09:00") +
+        noteLine(id, "E56", "kept working", FIXED_NOW_ISO),
+    );
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const headings = result.body.split("\n").filter((l) => /^#{1,6} /.test(l));
+    expect(headings.filter((l) => /^#{1,6} INJECTED/.test(l))).toEqual([]);
+    expect(result.body).toContain("Adopt # INJECTED tail");
+  });
+
+  // With no planned task the forward section falls back to the latest decision,
+  // which is a second place a title reaches this document.
+  it("collapses the title where direction falls back to a decision", async () => {
+    const paths = await setupPaths();
+    const id = SES("H03");
+    const dec = DEC("D04");
+    await placeSession(
+      paths,
+      { id, status: "completed", startedAt: FIXED_NOW_ISO },
+      decisionLine(id, "E54", dec, "Adopt\n\n# INJECTED\n\ntail", FIXED_NOW_ISO),
+    );
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const headings = result.body.split("\n").filter((l) => /^#{1,6} /.test(l));
+    expect(headings.filter((l) => /^#{1,6} INJECTED/.test(l))).toEqual([]);
+    expect(result.body).toContain("Adopt # INJECTED tail");
+  });
+
+  // Same hazard through every recorded title. Orientation is the document a
+  // hook injects, so a heading a title smuggles in lands in an agent's
+  // instructions. One fixture drives the decision, track and task paths at
+  // once; the assertion is that no heading anywhere came from a title.
+  it("collapses every recorded title so none of them can add a heading", async () => {
+    const paths = await setupPaths();
+    const id = SES("H02");
+    const dec = DEC("D02");
+    const track = DEC("D03");
+    const hostile = (n: string): string => `Adopt ${n}\n\n# INJECTED-${n}\n\ntail`;
+    await placeSession(
+      paths,
+      { id, status: "completed", startedAt: FIXED_NOW_ISO },
+      decisionLine(id, "E52", track, hostile("track"), FIXED_NOW_ISO, { kind: "track" }) +
+        decisionLine(id, "E51", dec, hostile("decision"), FIXED_NOW_ISO) +
+        taskCreatedLine(id, "E53", TASK("T51"), hostile("task")),
+    );
+    await placeTaskFile(paths, {
+      id: TASK("T51"),
+      title: hostile("task"),
+      status: "planned",
+      sessionId: id,
+    });
+    const result = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    const headings = result.body.split("\n").filter((l) => /^#{1,6} /.test(l));
+
+    expect(headings.filter((l) => l.includes("INJECTED"))).toEqual([]);
+    for (const n of ["decision", "track", "task"]) {
+      expect(result.body).toContain(`Adopt ${n} # INJECTED-${n} tail`);
+    }
+  });
+
   // Orientation is the document a SessionStart hook injects as a developer
   // message, so a label that breaks its structure does not merely look wrong --
   // it lands inside the instructions an agent reads. The label is the command

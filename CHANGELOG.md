@@ -7,6 +7,17 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Fixed
 
+- **Nor can a recorded title.** A decision or track title is whatever was piped
+  into `basou decision capture`, and a task title comes from `--title`, so both
+  can carry newlines the same way a label can. Every title the handoff,
+  orientation and decisions documents render is now collapsed first.
+
+  The decisions document had the worse exposure. It is written through the
+  generated-block markers, which are matched on a whole line, so a title
+  carrying a bare end marker would be written once and then every later
+  regeneration would fail until someone edited the file by hand. A collapsed
+  title cannot occupy a line of its own, so it cannot be one.
+
 - **A session label can no longer break the generated documents.** A label is
   whatever was recorded for the session, and an ad-hoc session's label is the
   command line, so `basou run codex exec <prompt>` puts a whole prompt there.

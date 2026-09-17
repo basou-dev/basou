@@ -789,7 +789,7 @@ function formatOrientationBody(
     const dec = summary.latestDecision;
     const decAge = t.relativeAge(dec.occurredAt, now);
     lines.push(
-      `- ${t.common.latestDecisionLabel}: ${dec.title} [${dec.decisionId}] (${decAge})${hostSuffix(dec.host)}`,
+      `- ${t.common.latestDecisionLabel}: ${oneLine(dec.title)} [${dec.decisionId}] (${decAge})${hostSuffix(dec.host)}`,
     );
     // Honesty over recency theater: this is the latest *recorded* decision, not
     // necessarily the latest decision. When captured activity continued well
@@ -889,7 +889,7 @@ function formatOrientationBody(
   } else {
     for (const t of summary.inFlightTasks) {
       const linkedSuffix = t.linkedSessions > 1 ? ` — linked_sessions: ${t.linkedSessions}` : "";
-      lines.push(`- ${t.title} (${t.status}) [${shortId(t.id)}]${linkedSuffix}`);
+      lines.push(`- ${oneLine(t.title)} (${t.status}) [${shortId(t.id)}]${linkedSuffix}`);
     }
   }
   lines.push("");
@@ -943,7 +943,9 @@ function formatOrientationBody(
       // ULIDs increment by one, so ADJACENT ids in a batch differ only in the
       // final character; no usefully short prefix tells them apart. Session and
       // task ids stay short: one is minted per command, so they do not collide.
-      lines.push(`- ${track.title} [${track.decisionId}] (${trackAge})${hostSuffix(track.host)}`);
+      lines.push(
+        `- ${oneLine(track.title)} [${track.decisionId}] (${trackAge})${hostSuffix(track.host)}`,
+      );
       if (track.rationale !== null && track.rationale.trim() !== "") {
         lines.push(`  - ${t.common.trackWhyLabel}: ${trackRationale(track.rationale)}`);
       }
@@ -973,7 +975,7 @@ function formatOrientationBody(
     }
   }
   for (const task of summary.plannedTasks) {
-    lines.push(`- ${task.title} [${shortId(task.id)}]`);
+    lines.push(`- ${oneLine(task.title)} [${shortId(task.id)}]`);
   }
   // Fall back to the decision hint only when there is no open track, no recorded
   // next step, and no planned task — otherwise the section already says where to
@@ -994,10 +996,10 @@ function formatOrientationBody(
       // reference rather than an instruction (aligns the forward section with the
       // staleness warning already shown on the latest-decision line above).
       lines.push(t.orientation.fallbackStaleDirection);
-      lines.push(`  - ${t.orientation.fallbackStaleReferenceLabel}: ${dec.title}`);
+      lines.push(`  - ${t.orientation.fallbackStaleReferenceLabel}: ${oneLine(dec.title)}`);
     } else {
       lines.push("- (no planned tasks — direction is inferred from recent decisions)");
-      lines.push(`  - ${t.common.latestDecisionLabel}: ${dec.title}`);
+      lines.push(`  - ${t.common.latestDecisionLabel}: ${oneLine(dec.title)}`);
     }
     // Discoverability nudge: fires when there ARE recorded decisions but none give
     // a durable forward direction (latest is stale, or just point-in-time) — the

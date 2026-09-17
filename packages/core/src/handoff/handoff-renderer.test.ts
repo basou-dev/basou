@@ -857,6 +857,44 @@ describe("handoff-renderer", () => {
   // first fails -- GFM would eat the `\\` and read the `|` as a live cell).
   const HOSTILE_LABEL = 'basou run codex exec  grep -E "a|b"\t\n\n# Target\n\nRepo: c\\|d\n';
 
+  // Every title in this document is text someone recorded: a decision or track
+  // title comes from whatever was piped into `basou decision capture`, a task
+  // title from `--title`. Each one is interpolated into a bullet, so a newline
+  // ends the bullet and a following `#` line becomes a heading of the handoff.
+  // One fixture drives every title path at once, and the assertion is that no
+  // heading anywhere in the output came from a title.
+  it("collapses every recorded title so none of them can add a heading", async () => {
+    const paths = await setupPaths();
+    const id = SES("X41");
+    const dec = DEC("D41");
+    const track = DEC("D42");
+    const hostile = (n: string): string => `Adopt ${n}\n\n# INJECTED-${n}\n\ntail`;
+    await placeSession(
+      paths,
+      { id, status: "completed" },
+      decisionRecordedLine(id, "E42", track, hostile("track"), "2026-05-08T11:30:00+09:00", {
+        kind: "track",
+      }) +
+        decisionRecordedLine(id, "E41", dec, hostile("decision"), "2026-05-08T11:31:00+09:00") +
+        taskCreatedLine(id, "E43", TASK("T41"), hostile("task"), "2026-05-08T11:32:00+09:00"),
+    );
+    await placeTaskFile(paths, {
+      id: TASK("T41"),
+      title: hostile("task"),
+      status: "planned",
+      createdAt: "2026-05-08T11:32:00+09:00",
+      sessionId: id,
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    const headings = result.body.split("\n").filter((l) => /^#{1,6} /.test(l));
+
+    expect(headings.filter((l) => l.includes("INJECTED"))).toEqual([]);
+    // Each path actually rendered, so the assertion above is not vacuous.
+    for (const n of ["decision", "track", "task"]) {
+      expect(result.body).toContain(`Adopt ${n} # INJECTED-${n} tail`);
+    }
+  });
+
   // The renderer splits the two tables on `source.kind`, not on status -- a
   // parameterisation over status puts both cases in the live table and leaves
   // the imported one unguarded while reading as though it were covered.

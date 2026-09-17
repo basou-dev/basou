@@ -1,6 +1,7 @@
 import { lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
+import { oneLine } from "../lib/one-line.js";
 import {
   resolveViewLanguageFromPaths,
   type ViewLanguage,
@@ -195,7 +196,7 @@ async function formatDecisionsBody(args: {
     if (d.voided !== undefined) {
       // Struck heading + a void line; the decision body is kept for the audit
       // trail but visibly marked no longer in force.
-      lines.push(`## ~~${d.decisionId}: ${d.title}~~ [VOIDED]${trackMark}`);
+      lines.push(`## ~~${d.decisionId}: ${oneLine(d.title)}~~ [VOIDED]${trackMark}`);
       lines.push("");
       const supersededBy =
         d.voided.supersededBy !== undefined ? `, superseded by ${d.voided.supersededBy}` : "";
@@ -205,7 +206,7 @@ async function formatDecisionsBody(args: {
           : "";
       lines.push(`- ⚠ VOIDED${reason}${supersededBy}`);
     } else {
-      lines.push(`## ${d.decisionId}: ${d.title}${trackMark}`);
+      lines.push(`## ${d.decisionId}: ${oneLine(d.title)}${trackMark}`);
       lines.push("");
     }
     const occurredDate = d.occurredAt.slice(0, 10); // YYYY-MM-DD
@@ -217,7 +218,7 @@ async function formatDecisionsBody(args: {
       lines.push(t.decisions.trackKindLine);
     }
     lines.push(`- session: ${shortDecisionSessionId(d.sessionId)}`);
-    lines.push(`- ${t.decisions.decisionLabel}: ${d.title}`);
+    lines.push(`- ${t.decisions.decisionLabel}: ${oneLine(d.title)}`);
     if (typeof d.rationale === "string" && d.rationale.length > 0) {
       lines.push(`- rationale: ${d.rationale}`);
     }
