@@ -3,6 +3,26 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A session label can no longer break the generated documents.** A label is
+  whatever was recorded for the session, and an ad-hoc session's label is the
+  command line, so `basou run codex exec <prompt>` puts a whole prompt there.
+  Rendered raw it broke the document twice: the newline ended the table row or
+  the bullet early, and a prompt line beginning with `#` became a heading of the
+  document itself. Measured on one store, 206 lines of the handoff session table
+  had turned into headings.
+
+  Orientation had the same defect on its latest-session and recent-direction
+  lines. It collapsed whitespace for a note and for a track's rationale, but
+  never for a label -- and orientation is the document a SessionStart hook
+  injects, so those stray headings landed inside what an agent reads. Both
+  documents now collapse a label before rendering it, and the handoff table
+  escapes the backslash before the column delimiter, so a label already
+  containing `\|` cannot gain a cell and lose its tail when displayed.
+
 ## 0.43.0 — 2026-09-16
 
 ### Changed

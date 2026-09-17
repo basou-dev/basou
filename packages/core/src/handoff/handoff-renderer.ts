@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { enumerateApprovals } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
+import { oneLine } from "../lib/one-line.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
 import { isTransientToolPath } from "../lib/transient-paths.js";
 import {
@@ -403,7 +404,7 @@ function formatHandoffBody(args: {
     // available, so it becomes the primary text and the bracket is dropped to
     // avoid repeating it.
     if (label !== undefined && label !== "") {
-      lines.push(`- ${t.common.lastSessionLabel}: ${label} (${status}) [${shortId}]`);
+      lines.push(`- ${t.common.lastSessionLabel}: ${oneLine(label)} (${status}) [${shortId}]`);
     } else {
       lines.push(`- ${t.common.lastSessionLabel}: ${shortId} (${status})`);
     }
@@ -580,7 +581,7 @@ function formatHandoffBody(args: {
       const sid = shortHandoffId(e.sessionId);
       const status = e.session.session.status + suspectLabel(e.suspectReason);
       const startedAt = e.session.session.started_at;
-      const label = e.session.session.label ?? "";
+      const label = tableCell(e.session.session.label ?? "");
       lines.push(`| ${sid} | ${status} | ${startedAt} | ${label} |`);
     }
   }
@@ -594,7 +595,7 @@ function formatHandoffBody(args: {
       const sid = shortHandoffId(e.sessionId);
       const status = e.session.session.status + suspectLabel(e.suspectReason);
       const startedAt = e.session.session.started_at;
-      const label = e.session.session.label ?? "";
+      const label = tableCell(e.session.session.label ?? "");
       lines.push(`| ${sid} | ${status} | ${startedAt} | ${label} |`);
     }
   }
@@ -637,10 +638,24 @@ function formatHandoffBody(args: {
 // the decision_recorded event (see decisions.md).
 const HANDOFF_TRACK_RATIONALE_MAX = 240;
 function handoffRationale(rationale: string): string {
-  const oneLine = rationale.replace(/\s+/g, " ").trim();
-  return oneLine.length > HANDOFF_TRACK_RATIONALE_MAX
-    ? `${oneLine.slice(0, HANDOFF_TRACK_RATIONALE_MAX - 1)}…`
-    : oneLine;
+  const collapsed = oneLine(rationale);
+  return collapsed.length > HANDOFF_TRACK_RATIONALE_MAX
+    ? `${collapsed.slice(0, HANDOFF_TRACK_RATIONALE_MAX - 1)}…`
+    : collapsed;
+}
+
+// A label is whatever was recorded for the session, and for an ad-hoc session
+// that is the command line -- which for `basou run codex exec <prompt>` carries
+// the whole prompt. {@link oneLine} keeps it on the line it was rendered into.
+//
+// A cell must additionally survive the column delimiter, and the backslash has
+// to be escaped FIRST: a label that already contains `\|` -- a shell-quoted
+// alternation, say -- would otherwise become `\\|`, and GFM consumes the `\\`
+// and reads the `|` as a live delimiter. The row would gain a cell, and cells
+// past the header count are dropped when rendered, so the tail of the label
+// would vanish from the displayed table.
+function tableCell(text: string): string {
+  return oneLine(text).replace(/([\\|])/g, "\\$1");
 }
 
 function suspectLabel(reason: SuspectReason | null): string {

@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { formatDurationMs } from "../lib/format-duration.js";
+import { oneLine } from "../lib/one-line.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
 import { AGENT_INFRA_DIRS, classifyFilesBySourceRoot } from "../lib/source-root-scope.js";
 import { isTransientToolPath } from "../lib/transient-paths.js";
@@ -776,7 +777,7 @@ function formatOrientationBody(
     const sid = shortId(s.sessionId);
     if (s.label !== null && s.label !== "") {
       lines.push(
-        `- ${t.common.lastSessionLabel}: ${s.label} (${s.status}) [${sid}]${hostSuffix(s.host)}`,
+        `- ${t.common.lastSessionLabel}: ${oneLine(s.label)} (${s.status}) [${sid}]${hostSuffix(s.host)}`,
       );
     } else {
       lines.push(`- ${t.common.lastSessionLabel}: ${sid} (${s.status})${hostSuffix(s.host)}`);
@@ -858,7 +859,7 @@ function formatOrientationBody(
     for (const s of summary.recentDirection) {
       const sid = shortId(s.sessionId);
       const age = t.relativeAge(s.occurredAt, now);
-      const head = s.label !== null && s.label !== "" ? s.label : sid;
+      const head = s.label !== null && s.label !== "" ? oneLine(s.label) : sid;
       lines.push(`- ${head} (${age})${hostSuffix(s.host)}`);
       if (s.decisions.length > 0) {
         const more = s.decisionsOverflow > 0 ? ` (+${s.decisionsOverflow})` : "";
@@ -1224,8 +1225,10 @@ const FILES_PER_DIGEST = 3;
 // dominate the view. The full body is preserved in the event (see session show).
 const NOTE_SUMMARY_MAX = 200;
 function noteSummary(body: string): string {
-  const oneLine = body.replace(/\s+/g, " ").trim();
-  return oneLine.length > NOTE_SUMMARY_MAX ? `${oneLine.slice(0, NOTE_SUMMARY_MAX - 1)}…` : oneLine;
+  const collapsed = oneLine(body);
+  return collapsed.length > NOTE_SUMMARY_MAX
+    ? `${collapsed.slice(0, NOTE_SUMMARY_MAX - 1)}…`
+    : collapsed;
 }
 
 // A track's rationale is the WHY behind the direction; like a note it can be
@@ -1233,10 +1236,10 @@ function noteSummary(body: string): string {
 // text is preserved in the decision_recorded event (see decisions.md).
 const TRACK_RATIONALE_MAX = 240;
 function trackRationale(rationale: string): string {
-  const oneLine = rationale.replace(/\s+/g, " ").trim();
-  return oneLine.length > TRACK_RATIONALE_MAX
-    ? `${oneLine.slice(0, TRACK_RATIONALE_MAX - 1)}…`
-    : oneLine;
+  const collapsed = oneLine(rationale);
+  return collapsed.length > TRACK_RATIONALE_MAX
+    ? `${collapsed.slice(0, TRACK_RATIONALE_MAX - 1)}…`
+    : collapsed;
 }
 
 function suspectText(reason: SuspectReason | null): string {
