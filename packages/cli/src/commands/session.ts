@@ -747,7 +747,13 @@ export async function doRunSessionImport(
   }
 
   if (parsed.data.schema_version !== SESSION_IMPORT_SCHEMA_VERSION) {
-    throw new Error(`Unsupported import schema_version: ${parsed.data.schema_version}`);
+    throw new Error(
+      `Unsupported import schema_version: ${parsed.data.schema_version} ` +
+        `(expected ${SESSION_IMPORT_SCHEMA_VERSION}). The envelope's shape is ` +
+        `published as @basou/core/schemas/session-import.schema.json; this ` +
+        `version may move at a minor release, so a producer should read it ` +
+        `from the installed @basou/core rather than pinning it.`,
+    );
   }
 
   const importOptions: ImportSessionOptions = { dryRun: options.dryRun === true };

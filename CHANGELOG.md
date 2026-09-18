@@ -49,9 +49,14 @@ All notable changes to **basou** are recorded here. The project follows
   writing seconds-less timestamps is brought into the accepted set rather than
   having its trace silently dropped.
 
-  `basou session import` requires `schema_version: "0.2.0"` on the envelope.
-  The previous value is refused with the same message any unsupported version
-  gets. The envelope's own fields — `session.started_at`, `session.ended_at`
+  `basou session import` requires `schema_version: "0.2.0"` on the envelope, and
+  the refusal now names the value expected and the artifact to read, not only
+  the value received. `docs/spec/compatibility.md` states the matching policy:
+  the envelope's version MAY move within a `1.x` line — the general additive
+  rule would otherwise freeze it until `2.0`, which is not the intent — bounded
+  by the refusal being loud, the version being readable from the installed
+  `@basou/core` rather than hard-coded, and the carve-out reaching the
+  envelope's own version and nothing else about the CLI. The envelope's own fields — `session.started_at`, `session.ended_at`
   and both `active_intervals` bounds — carry the narrowed shape, which is why
   its `$id` moved this time and did not when the events it embeds changed.
 
