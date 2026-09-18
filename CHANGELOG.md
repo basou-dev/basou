@@ -5,6 +5,45 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Fixed
+
+- **`basou --version` now answers for the code that is running, not for the
+  file next to it.** It read `package.json` at runtime, which reports what the
+  SOURCE says — and source moves without a rebuild. A `git pull` or
+  `git checkout` leaves `dist` untouched while `package.json` advances, so the
+  two readings came from different places and the answer was confidently wrong.
+  One workspace ran a build a release and a half behind for a full day while
+  `--version` reported the newest release; the drift was invisible because the
+  number and the behaviour had no common source.
+
+  Each build now freezes its own identity — version, commit, build time — into
+  its bundle, and `--version` reports that. It cannot drift: editing
+  `package.json` afterwards does not change what a built `basou` says. The
+  version stays the FIRST token, so anything parsing the old single-token
+  output keeps working, and the commit follows it — because two builds of one
+  version number differ only by commit, which is exactly the case that went
+  unnoticed. `@basou/core` is stamped separately, since the CLI does not bundle
+  it and a partial rebuild can leave the two at different commits; a
+  disagreement is printed, a match is not.
+
+  The test that called itself a release drift guard could not have been one: it
+  compared the built entry's output to the same `package.json` the entry read,
+  so both sides came from one file and it passed for any dist, however old. The
+  two sides now have independent origins, and bumping `package.json` without
+  rebuilding fails it.
+
+- **`basou hook status` says which build the hook will actually execute.** The
+  Stop hook runs a node entry path with a `2>/dev/null || true` wrapper that is
+  deliberately fail-open, so a stale or broken entry never blocks a turn — the
+  right default for every turn, and the wrong one for the moment somebody asks
+  whether their hook is current. `hook status` now names the entry and asks it
+  (`--version`) what build it is, rather than reading a path or a timestamp:
+  the entry is the only thing that knows. An entry that cannot be executed is
+  reported as such, instead of a "registered" line that implies it works.
+
+  Nothing was added to what a session start injects — the question is answered
+  where it is asked.
+
 ### Changed
 
 - **Every timestamp basou writes now carries seconds, and the schemas that

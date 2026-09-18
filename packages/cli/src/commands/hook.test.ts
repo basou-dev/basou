@@ -421,6 +421,40 @@ describe("hook install / uninstall / status", () => {
     expect(backup).toContain(advisoryCmd);
   });
 
+  it("status names the entry it runs, and asks that entry what build it is", async () => {
+    // The reported harm: a hook ran a build a release and a half old for a
+    // full day, and nothing said so — the wrapper swallows stderr on purpose,
+    // so every turn is silent by design. `hook status` is the moment somebody
+    // asks, so the answer belongs here.
+    await doRunHookInstall({ settings: settingsPath }, ctx);
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    const out = logs.join("\n");
+
+    expect(out).toMatch(/runs: .*index\.js/);
+    // It ASKS the entry rather than reading a path or an mtime, so what comes
+    // back is whatever that build says about itself.
+    expect(out).toMatch(/that build reports:|could not be executed/);
+  });
+
+  it("status says so when the entry cannot be executed, instead of implying it works", async () => {
+    await doRunHookInstall({ settings: settingsPath }, ctx);
+    const raw = await readFile(settingsPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    const entry = parsed.hooks.Stop[0]?.hooks[0];
+    if (entry === undefined) throw new Error("hook not registered");
+    entry.command = "node '/nonexistent/packages/cli/dist/index.js' hook stop 2>/dev/null || true";
+    await writeFile(settingsPath, JSON.stringify(parsed, null, 2), "utf8");
+
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    const out = logs.join("\n");
+    expect(out).toContain("/nonexistent/packages/cli/dist/index.js");
+    expect(out).toContain("silently doing nothing");
+  });
+
   it("status reports advisory, then blocking, then not-registered", async () => {
     await doRunHookStatus({ settings: settingsPath });
     expect(logs.join("\n")).toContain("not registered");

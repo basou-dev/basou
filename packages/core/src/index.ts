@@ -102,6 +102,7 @@ export type { HandoffRendererInput, HandoffRendererResult } from "./handoff/inde
 export { renderHandoff } from "./handoff/index.js";
 export type { IdPrefix, PrefixedId } from "./ids/ulid.js";
 export { ID_PREFIXES, isValidPrefixedId, prefixedUlid, ulid } from "./ids/ulid.js";
+export { BASOU_CORE_BUILD, type BuildStamp } from "./lib/build-stamp.js";
 export { parseDuration } from "./lib/duration.js";
 export { formatDurationMs } from "./lib/format-duration.js";
 export { resolveSessionId, resolveTaskId } from "./lib/id-resolver.js";

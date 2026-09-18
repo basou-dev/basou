@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { open, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   buildSessionStartHookCommand,
   buildStopHookCommand,
@@ -93,6 +95,8 @@ export type HookStopContext = {
  * (default — the Stop hook in `~/.claude/settings.json`) or `codex` (the
  * SessionStart hook in `~/.codex/hooks.json`).
  */
+const execFileAsync = promisify(execFile);
+
 export function registerHookCommand(program: Command): void {
   const hook = program
     .command("hook")
@@ -844,6 +848,52 @@ export async function doRunHookStatus(options: HookInstallOptions): Promise<void
     review: / --require-review\b/.test(command),
   });
   console.log(`basou Stop hook: registered, ${mode}.`);
+  await reportHookEntryBuild(command);
+}
+
+/**
+ * Say which BUILD the registered hook will actually execute.
+ *
+ * The hook runs a node entry path, not the `basou` on `PATH`, and the wrapper
+ * it carries (`2>/dev/null || true`) is deliberately fail-open so a broken or
+ * stale entry never blocks a turn. That silence is the right default for every
+ * turn and the wrong one for the moment somebody asks whether their hook is
+ * current -- which is what this command is for. So the question is answered
+ * here, where it was asked, and nowhere that costs a session-start byte.
+ *
+ * The build is obtained by ASKING the entry (`--version`), not by reading a
+ * path or a timestamp: the entry is the only thing that knows what it is.
+ */
+async function reportHookEntryBuild(command: string): Promise<void> {
+  const entry = extractHookEntryPath(command);
+  if (entry === undefined) return;
+  try {
+    const { stdout } = await execFileAsync(process.execPath, [entry, "--version"], {
+      timeout: 10_000,
+    });
+    const reported = stdout.trim();
+    console.log(`  runs: ${entry}`);
+    console.log(`  that build reports: ${reported}`);
+    if (!reported.includes("(build ")) {
+      console.log(
+        "  note: that build predates build stamping, so what it reports is its package.json, not itself. Rebuild to find out what is running.",
+      );
+    }
+  } catch {
+    console.log(`  runs: ${entry}`);
+    console.log(
+      "  note: that entry could not be executed. The hook's wrapper fails open, so it is silently doing nothing.",
+    );
+  }
+}
+
+/**
+ * Pull the node entry path out of the registered hook command. The path is
+ * shell-quoted at registration, so the quotes come back off here.
+ */
+function extractHookEntryPath(command: string): string | undefined {
+  const match = /^node\s+'((?:[^']|'\\'')*)'/.exec(command) ?? /^node\s+(\S+)/.exec(command);
+  return match?.[1]?.replace(/'\\''/g, "'");
 }
 
 /**

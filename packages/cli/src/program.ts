@@ -1,4 +1,11 @@
 import { createRequire } from "node:module";
+// A NAMESPACE import on purpose. This feature exists to diagnose a CLI and a
+// core that were built at different commits, so it must survive one: a named
+// import of a symbol an older core does not export is a module-level
+// SyntaxError, and under the hook's `2>/dev/null || true` wrapper that turns
+// into a silent no-op -- strictly worse than the stale build it is meant to
+// reveal. Read through the namespace so a missing export is just `undefined`.
+import * as basouCore from "@basou/core";
 import { Command } from "commander";
 import { registerApprovalCommand } from "./commands/approval.js";
 import { registerChannelCommand } from "./commands/channel.js";
@@ -26,15 +33,72 @@ import { registerTaskCommand } from "./commands/task.js";
 import { registerVerifyCommand } from "./commands/verify.js";
 import { registerViewCommand } from "./commands/view.js";
 
-// Read the CLI release version directly from the sibling package.json so
-// `basou --version` cannot drift past a future package-bump (the v0.2/v0.3
-// releases both shipped with a stale "0.1.0" constant before the dynamic
-// read landed). The relative path is stable across the dev (src/program.ts
-// → src/../package.json) and built (dist/program.js → dist/../package.json)
-// layouts, since both files sit one directory below the package root.
+/**
+ * The identity of the build that is RUNNING, frozen into the bundle by
+ * `tsup.config.ts` at build time. `undefined` when this module is loaded from
+ * source (tests, `tsx`), where there is no build to be stale.
+ *
+ * `typeof` guards an identifier esbuild only declares in a built bundle.
+ */
+declare const __BASOU_BUILD_STAMP__: string | undefined;
+
+type BuildStamp = { version: string; commit: string; builtAt: string };
+
+function readBuildStamp(): BuildStamp | undefined {
+  if (typeof __BASOU_BUILD_STAMP__ !== "string") return undefined;
+  try {
+    return JSON.parse(__BASOU_BUILD_STAMP__) as BuildStamp;
+  } catch {
+    return undefined;
+  }
+}
+
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { version: string };
-export const BASOU_CLI_VERSION = pkg.version;
+
+/** The build's own record of itself, or `undefined` when running from source. */
+export const BASOU_BUILD = readBuildStamp();
+
+/**
+ * The version of the code that is RUNNING.
+ *
+ * This used to read `package.json` at runtime, on the reasoning that a constant
+ * could go stale past a package bump — true, and it fixed that. But it answers
+ * with what the SOURCE says, and source moves without a rebuild: `git pull` or
+ * `git checkout` leaves `dist` untouched while `package.json` advances. One
+ * workspace ran a build a release and a half behind for a full day while
+ * `--version` confidently reported the newest release, because the built code
+ * and the number it printed came from different places.
+ *
+ * So the built bundle answers from its own stamp, and only a source checkout —
+ * where the source IS the running code — falls back to `package.json`. Neither
+ * reading can now disagree with what is executing.
+ */
+export const BASOU_CLI_VERSION = BASOU_BUILD?.version ?? pkg.version;
+
+/**
+ * What `--version` prints. The version stays the FIRST token, so anything
+ * parsing the old single-line output with `cut`/`awk` keeps working, and the
+ * build identity follows it.
+ *
+ * The commit is the part that carries the information: two builds of the same
+ * version number are exactly the case that went unnoticed, and the version
+ * alone cannot tell them apart.
+ */
+export const BASOU_VERSION_LINE = buildVersionLine();
+
+function buildVersionLine(): string {
+  if (BASOU_BUILD === undefined) return `${pkg.version} (source)`;
+  const coreBuild = basouCore.BASOU_CORE_BUILD;
+  const self = `${BASOU_BUILD.version} (build ${BASOU_BUILD.commit}, ${BASOU_BUILD.builtAt})`;
+  // Core is a separate artifact the CLI does not bundle, so a partial rebuild
+  // can leave the two at different commits. Only the disagreement is worth
+  // printing: when they match, naming core twice says nothing.
+  if (coreBuild === undefined || coreBuild.commit === BASOU_BUILD.commit) {
+    return self;
+  }
+  return `${self}; core build ${coreBuild.commit}, ${coreBuild.builtAt}`;
+}
 
 /**
  * Build the fully-registered `basou` command tree WITHOUT parsing argv.
@@ -50,7 +114,7 @@ export function buildProgram(): Command {
   program
     .name("basou")
     .description("A harness for steering AI coding agents")
-    .version(BASOU_CLI_VERSION)
+    .version(BASOU_VERSION_LINE)
     // Required so that `basou exec` (and any other passThroughOptions
     // subcommand) can forward unknown flags to the wrapped child.
     .enablePositionalOptions();
