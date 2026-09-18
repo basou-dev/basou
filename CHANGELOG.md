@@ -5,6 +5,65 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Fixed
+
+- **`basou --version` now answers for the code that is running, not for the
+  file next to it.** It read `package.json` at runtime, which reports what the
+  SOURCE says — and source moves without a rebuild. A `git pull` or
+  `git checkout` leaves `dist` untouched while `package.json` advances, so the
+  two readings came from different places and the answer was confidently wrong.
+  One workspace ran a build a release and a half behind for a full day while
+  `--version` reported the newest release; the drift was invisible because the
+  number and the behaviour had no common source.
+
+  Each build now freezes its own identity — version, commit, build time — into
+  its bundle, and `--version` reports that. It cannot drift: editing
+  `package.json` afterwards does not change what a built `basou` says. The
+  version stays the FIRST token, so anything parsing the old single-token
+  output keeps working, and the commit follows it — because two builds of one
+  version number differ only by commit, which is exactly the case that went
+  unnoticed. `@basou/core` is stamped separately, since the CLI does not bundle
+  it and a partial rebuild can leave the two at different commits; a
+  disagreement is printed, a match is not.
+
+  The test that called itself a release drift guard could not have been one: it
+  compared the built entry's output to the same `package.json` the entry read,
+  so both sides came from one file and it passed for any dist, however old. The
+  two sides now have independent origins, and bumping `package.json` without
+  rebuilding fails it.
+
+- **`basou hook status` says which build the hook will actually execute.** The
+  Stop hook runs a node entry path with a `2>/dev/null || true` wrapper that is
+  deliberately fail-open, so a stale or broken entry never blocks a turn — the
+  right default for every turn, and the wrong one for the moment somebody asks
+  whether their hook is current. `hook status` now prints the running basou's
+  build AND the hook entry's, because "is my hook current" needs both and the
+  two are allowed to differ — a source build in the hook, the npm global on
+  `PATH`. It makes no verdict; it stops asking for a second command. The
+  entry's build comes from asking it (`--version`), not from a path or an
+  mtime, because the entry is the only thing that knows what it is.
+
+  It never guesses. The registered command is tokenized rather than
+  pattern-matched, so a quoted path, an env prefix, a `node` flag or an
+  absolute interpreter are read correctly; anything it cannot parse with
+  confidence — including the alias registration form, where no path exists —
+  says that no answer is possible rather than printing a plausible one. An
+  entry that cannot be executed says so.
+
+  The **Codex** SessionStart hook gets the same report. It carries the identical
+  fail-open wrapper and is the more consequential of the two: it is the channel
+  where a build too old to parse a newer event drops it line by line.
+
+  One posture change, stated rather than slipped in: `hook status` was
+  read-only and now **executes** the entry named in the hooks file, to ask it
+  its version. There is no shell — `execFile` with `process.execPath` and an
+  argument array — so no interpolation path exists, and the file is the user's
+  own. It is still a command that reads turning into a command that runs, which
+  is worth knowing about a tool whose trust model is read-only.
+
+  Nothing was added to what a session start injects — the question is answered
+  where it is asked.
+
 ### Changed
 
 - **Every timestamp basou writes now carries seconds, and the schemas that

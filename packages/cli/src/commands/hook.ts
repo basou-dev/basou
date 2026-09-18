@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { open, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   buildSessionStartHookCommand,
   buildStopHookCommand,
@@ -93,6 +95,10 @@ export type HookStopContext = {
  * (default — the Stop hook in `~/.claude/settings.json`) or `codex` (the
  * SessionStart hook in `~/.codex/hooks.json`).
  */
+import { BASOU_VERSION_LINE } from "../program.js";
+
+const execFileAsync = promisify(execFile);
+
 export function registerHookCommand(program: Command): void {
   const hook = program
     .command("hook")
@@ -844,6 +850,148 @@ export async function doRunHookStatus(options: HookInstallOptions): Promise<void
     review: / --require-review\b/.test(command),
   });
   console.log(`basou Stop hook: registered, ${mode}.`);
+  await reportHookEntryBuild(command);
+}
+
+/**
+ * Say which BUILD the registered hook will actually execute.
+ *
+ * The hook runs a node entry path, not the `basou` on `PATH`, and the wrapper
+ * it carries (`2>/dev/null || true`) is deliberately fail-open so a broken or
+ * stale entry never blocks a turn. That silence is the right default for every
+ * turn and the wrong one for the moment somebody asks whether their hook is
+ * current -- which is what this command is for. So the question is answered
+ * here, where it was asked, and nowhere that costs a session-start byte.
+ *
+ * The build is obtained by ASKING the entry (`--version`), not by reading a
+ * path or a timestamp: the entry is the only thing that knows what it is.
+ */
+async function reportHookEntryBuild(command: string): Promise<void> {
+  // Both halves are printed, always. The question behind the question is "is
+  // my hook current", and the two builds are ALLOWED to differ -- the hook
+  // often runs a source build while `basou` on PATH is the npm global -- so
+  // this makes no verdict. It just stops asking the reader to run a second
+  // command and hold the first answer in their head.
+  console.log(`  this basou is: ${BASOU_VERSION_LINE}`);
+
+  const entry = extractHookEntryPath(command);
+  if (entry === undefined) {
+    // The alias form (`basou hook stop`) is a registration shape basou itself
+    // recognizes, and no path can be read out of it. Saying so is the point:
+    // a silent return here prints output identical to a healthy hook's, which
+    // is precisely the false reassurance this command exists to remove.
+    console.log(
+      "  runs: (registered by alias, not by path) — which build that resolves to depends on the hook's PATH, so this cannot tell you.",
+    );
+    return;
+  }
+
+  try {
+    const { stdout } = await execFileAsync(process.execPath, [entry, "--version"], {
+      timeout: 10_000,
+    });
+    const reported = stdout.trim();
+    console.log(`  the hook runs: ${entry}`);
+    console.log(`  that build is: ${reported}`);
+    if (!reported.includes("(build ")) {
+      console.log(
+        "  note: that build predates build stamping, so what it reports is its package.json rather than itself — it cannot tell you which build it is. Update it (rebuild a source checkout, or reinstall the package) to find out.",
+      );
+    }
+  } catch {
+    console.log(`  the hook runs: ${entry}`);
+    console.log(
+      "  that build is: could not be executed — the hook's wrapper fails open, so it is silently doing nothing.",
+    );
+  }
+}
+
+/**
+ * Split a registered hook command the way a POSIX shell would, honouring
+ * single and double quotes. Returns `undefined` for input the shell itself
+ * would reject (an unterminated quote), because a command that cannot be
+ * parsed is one this must not pretend to understand.
+ */
+function tokenizeShellCommand(command: string): string[] | undefined {
+  const tokens: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: "'" | '"' | undefined;
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i] as string;
+    if (quote === "'") {
+      if (ch === "'") quote = undefined;
+      else current += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = undefined;
+      else if (ch === "\\" && i + 1 < command.length) current += command[++i] as string;
+      else current += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < command.length) {
+      current += command[++i] as string;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) tokens.push(current);
+      current = "";
+      started = false;
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (quote !== undefined) return undefined;
+  if (started) tokens.push(current);
+  return tokens;
+}
+
+/**
+ * Pull the node entry path out of the registered hook command.
+ *
+ * This tokenizes rather than pattern-matches, because the shapes basou itself
+ * accepts as a registration are wider than the one it writes: a quoted path
+ * (either quote), an `ENV=1` prefix, node flags before the entry, an absolute
+ * interpreter. A regex over the raw string got each of those wrong in a way
+ * that produced a CONFIDENT and false report -- `node --enable-source-maps
+ * '<entry>' hook stop` yielded `--enable-source-maps`, which this then executed
+ * with `--version` and printed node's own version as "the build", followed by
+ * advice to rebuild.
+ *
+ * `undefined` means "cannot tell", and the caller must say so. The alias form
+ * (`basou hook stop`) lands here by design: there is no path in it, and which
+ * build it resolves to depends on the hook's PATH.
+ */
+function extractHookEntryPath(command: string): string | undefined {
+  const tokens = tokenizeShellCommand(command);
+  if (tokens === undefined) return undefined;
+
+  let index = 0;
+  // Environment assignments precede the command word.
+  while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index] as string)) index++;
+
+  const interpreter = tokens[index];
+  if (interpreter === undefined) return undefined;
+  // Only a node invocation carries an entry path as an argument. Anything else
+  // (the `basou` alias, a wrapper script) has no path to read.
+  const base = interpreter.replace(/\\/g, "/").split("/").pop() ?? "";
+  if (base !== "node" && base !== "node.exe") return undefined;
+  index++;
+
+  // Node's own flags come before the script.
+  while (index < tokens.length && (tokens[index] as string).startsWith("-")) index++;
+
+  const entry = tokens[index];
+  return entry === undefined || entry === "" ? undefined : entry;
 }
 
 /**
@@ -1069,6 +1217,11 @@ export async function doRunCodexHookStatus(options: HookInstallOptions): Promise
   console.log(
     `basou Codex SessionStart hook: registered in ${hooksPath} (matcher: ${matcher}); speaks only for workspaces registered in ~/.basou/portfolio.yaml.`,
   );
+  // The Codex handler carries the same fail-open wrapper as the Claude Stop
+  // hook and the same silence, and it is the more consequential of the two:
+  // this is the channel where a build too old to parse a newer event drops it
+  // line by line. Whatever the Stop hook is asked, ask this one too.
+  await reportHookEntryBuild(location.command);
   await reportCodexHookState(hooksPath, parsed, options);
 }
 

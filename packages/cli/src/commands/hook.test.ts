@@ -10,7 +10,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   basouPaths,
@@ -419,6 +420,142 @@ describe("hook install / uninstall / status", () => {
     // The backup preserves the pre-blocking (advisory) file.
     const backup = await readFile(`${settingsPath}.basou-bak`, "utf8");
     expect(backup).toContain(advisoryCmd);
+  });
+
+  it("status names the entry it runs, and asks that entry what build it is", async () => {
+    // The reported harm: a hook ran a build a release and a half old for a
+    // full day, and nothing said so — the wrapper swallows stderr on purpose,
+    // so every turn is silent by design. `hook status` is the moment somebody
+    // asks, so the answer belongs here.
+    await doRunHookInstall({ settings: settingsPath }, ctx);
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    const out = logs.join("\n");
+
+    expect(out).toMatch(/the hook runs: .*index\.js/);
+    // It ASKS the entry rather than reading a path or an mtime, so what comes
+    // back is whatever that build says about itself.
+    expect(out).toMatch(/that build is:/);
+    // BOTH halves, always. The user's question is "is my hook current", which
+    // needs two numbers; printing one and making them fetch the other by hand
+    // is the second command this was supposed to save them.
+    expect(out).toMatch(/this basou is: \d+\.\d+\.\d+/);
+  });
+
+  it("reports a REAL entry's build, not only the failure branch", async () => {
+    // The suite's default cliEntry does not exist on disk, so every earlier
+    // assertion about this feature was satisfied by the catch branch: the
+    // success path -- the one line the feature exists to print -- was
+    // unprotected, and gutting it left the whole suite green.
+    const realEntry = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "dist",
+      "index.js",
+    );
+    await doRunHookInstall({ settings: settingsPath }, { resolveCliEntry: () => realEntry });
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    const out = logs.join("\n");
+
+    expect(out).toContain(`the hook runs: ${realEntry}`);
+    expect(out).toMatch(/that build is: \d+\.\d+\.\d+/);
+    expect(out).not.toContain("could not be executed");
+  });
+
+  it.each([
+    ["a double-quoted entry", `node "ENTRY" hook stop 2>/dev/null || true`],
+    ["node flags before the entry", `node --enable-source-maps 'ENTRY' hook stop`],
+    ["an env assignment prefix", `BASOU_DEBUG=1 node 'ENTRY' hook stop`],
+    ["an absolute interpreter", `/usr/local/bin/node 'ENTRY' hook stop`],
+    ["leading whitespace", `   node 'ENTRY' hook stop`],
+  ])("reads the entry out of %s", async (_label, shape) => {
+    // Each of these is a shape `isBasouStopHookCommand` accepts. A regex over
+    // the raw string got them wrong CONFIDENTLY -- the node-flag case reported
+    // node's own version as "the build" and advised a rebuild.
+    const realEntry = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "dist",
+      "index.js",
+    );
+    await doRunHookInstall({ settings: settingsPath }, ctx);
+    const parsed = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    const entry = parsed.hooks.Stop[0]?.hooks[0];
+    if (entry === undefined) throw new Error("hook not registered");
+    entry.command = shape.replace("ENTRY", realEntry);
+    await writeFile(settingsPath, JSON.stringify(parsed, null, 2), "utf8");
+
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    const out = logs.join("\n");
+    expect(out).toContain(`the hook runs: ${realEntry}`);
+    expect(out).toMatch(/that build is: \d+\.\d+\.\d+/);
+  });
+
+  it("reports the build on the Codex hook too, not only the Claude one", async () => {
+    // The Codex handler carries the identical fail-open wrapper, and it is the
+    // channel where a build too old to parse a newer event drops it line by
+    // line — the asymmetry would have left the more consequential half silent.
+    const realEntry = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "dist",
+      "index.js",
+    );
+    const hooksPath = `${settingsPath}.codex-hooks.json`;
+    await doRunCodexHookInstall({ hooks: hooksPath }, { resolveCliEntry: () => realEntry });
+    logs.length = 0;
+    await doRunCodexHookStatus({ hooks: hooksPath });
+    const out = logs.join("\n");
+
+    expect(out).toMatch(/this basou is: \d+\.\d+\.\d+/);
+    expect(out).toContain(`the hook runs: ${realEntry}`);
+    expect(out).toMatch(/that build is: \d+\.\d+\.\d+/);
+  });
+
+  it("says it cannot tell when the hook is registered by alias rather than by path", async () => {
+    // The alias form is a shape basou itself recognizes, and no path can be
+    // read out of it. Returning silently would print output identical to a
+    // healthy hook's — the exact false reassurance this command exists to
+    // remove.
+    await doRunHookInstall({ settings: settingsPath }, ctx);
+    const parsed = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    const entry = parsed.hooks.Stop[0]?.hooks[0];
+    if (entry === undefined) throw new Error("hook not registered");
+    entry.command = "basou hook stop 2>/dev/null || true";
+    await writeFile(settingsPath, JSON.stringify(parsed, null, 2), "utf8");
+
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    const out = logs.join("\n");
+    expect(out).toContain("registered by alias");
+    expect(out).toContain("cannot tell you");
+  });
+
+  it("status says so when the entry cannot be executed, instead of implying it works", async () => {
+    await doRunHookInstall({ settings: settingsPath }, ctx);
+    const raw = await readFile(settingsPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    const entry = parsed.hooks.Stop[0]?.hooks[0];
+    if (entry === undefined) throw new Error("hook not registered");
+    entry.command = "node '/nonexistent/packages/cli/dist/index.js' hook stop 2>/dev/null || true";
+    await writeFile(settingsPath, JSON.stringify(parsed, null, 2), "utf8");
+
+    logs.length = 0;
+    await doRunHookStatus({ settings: settingsPath });
+    const out = logs.join("\n");
+    expect(out).toContain("/nonexistent/packages/cli/dist/index.js");
+    expect(out).toContain("silently doing nothing");
   });
 
   it("status reports advisory, then blocking, then not-registered", async () => {

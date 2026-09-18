@@ -1,3 +1,4 @@
+export { BASOU_SDK_BUILD, type BuildStamp, parseBuildStamp } from "./build-stamp.js";
 /**
  * `@basou/sdk` — the stable, read-only programmatic API for reading a Basou
  * workspace's provenance (`.basou/`). It is a thin, ergonomic facade over
