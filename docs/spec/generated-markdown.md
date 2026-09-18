@@ -273,3 +273,41 @@ product, not surveillance of the fleet.
 sessions)`, `## What is in flight` (structured facts), `## Where you are
 heading`, `## Is this current` (capture freshness / coverage) — localized per
 §10.0.
+
+## §10.8 Which artifact answers which question
+
+Four artifacts are generated from the same event log, and they are not nested —
+each carries something the others do not, and `handoff.md` is the one with no
+route pointing at it. `orient` names `decisions.md` in its own output; the
+SessionStart hook delivers orientation; nothing names `handoff.md`. It was
+therefore possible to read its first screen, take it for a restatement of
+`orient`, and never reach what makes it worth opening.
+
+| question | artifact | how it is reached |
+|---|---|---|
+| where does the work stand, what is next | `orientation.md` (§10.7) | `basou orient`; a SessionStart hook can deliver it |
+| why was this decided, and what was rejected | `decisions.md` (§10.4) | `basou decisions generate`; `orient` links to it |
+| **which session did what, and when — every session** | **`handoff.md` (§10.3)** | **`basou handoff generate`; opened by hand** |
+| what happened over a period, for someone outside | report (§10.6) | `basou report generate` |
+
+What distinguishes `handoff.md` is the **complete** session roster. Other
+artifacts carry a slice of the same material: `orient` shows the newest few
+sessions as recent direction, the report's markdown shows the newest 30 (§10.6),
+`basou session list` prints the same table, and `report generate --json` carries
+every session structured — **which is the better source when a machine is
+reading**. `handoff.md` is the one that renders them all as a document.
+
+Measured on a workspace with 1,057 sessions, in bytes throughout: the file is
+299,489 B, the roster 288,269 B (96.3%), and everything above it 11,220 B
+(11.0 KB).
+
+Two consequences follow, and both are deliberate:
+
+- **It is a reference, not a briefing.** Instructing an agent to read
+  `handoff.md` at session start would spend a context window on a roster it
+  almost never needs. Point at the section, not the file.
+- **`orient` does not absorb it.** The roster cannot go into an artifact that is
+  injected at session start, and of the seven sections above it, six restate
+  material `orient` already carries — only "Files to read next" is unique to it.
+  The two are kept separate because their delivery differs, not because their
+  content was split arbitrarily.

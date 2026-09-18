@@ -58,6 +58,35 @@ All notable changes to **basou** are recorded here. The project follows
   `--limit 0` to see everything. Read-only: it writes nothing and enforces
   nothing.
 
+- **`handoff.md` now has a route to it, and `basou handoff generate` works from
+  a workspace view.** The file is generated on every `refresh` and pointed at by
+  nothing: `orient` names `decisions.md` in its own output and a SessionStart
+  hook delivers orientation, but nothing named `handoff.md`. A workspace read
+  its first screen, took it for a restatement of `orient`, and proposed that
+  basou stop generating it — withdrawing that once they read further down.
+
+  What makes it worth opening is the **complete session roster**: which session
+  did what, and when. Other artifacts carry a slice — `orient` shows the newest
+  few, the report's markdown the newest 30, `basou session list` the same table,
+  and `report generate --json` every session structured, which is the better
+  source for a machine. `handoff.md` is the one that renders them all as a
+  document. Measured in bytes on a workspace with 1,057 sessions: 299,489 B
+  total, the roster 288,269 B of it (96.3%), everything above it 11.0 KB.
+
+  The route now says both halves — consult the roster, do not read the file
+  through — in the README, in a new `§10.8` routing each question to the
+  artifact that answers it, and in the workspace block and anchor starter that
+  basou generates. Pointing an agent at the file without the second half would
+  spend a context window on a roster it almost never needs, which is also why
+  the roster is not folded into `orient`.
+
+  And the address now resolves from where it is published. `handoff` used the
+  plain git resolver while `orient`, `refresh` and the rest went through the
+  shared one, so in a workspace view — a non-git directory that symlinks its
+  planning repo — `basou handoff generate` failed with "Not a git repository"
+  while `basou refresh`, which regenerates the same file, worked from that same
+  directory. It now behaves like its siblings.
+
 - **`docs/spec/compatibility.md` now gives advisory surfacers their own
   stability tier.** `review-gaps` and `decision gaps` answer "what looks like it
   was missed", and what reads as a gap is an ongoing judgement — a population

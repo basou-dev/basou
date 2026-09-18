@@ -15,7 +15,8 @@ export type ResolveRootOptions = {
 /**
  * Resolve the repository root for a CLI command with two fallbacks, shared by
  * `orient` / `refresh` / `note` / `decision capture` / `project *` /
- * `review-gaps` / `decision gaps` / `session` so they behave identically:
+ * `review-gaps` / `decision gaps` / `session` / `handoff generate` so they
+ * behave identically:
  *
  *  1. A git-untracked workspace *view* dir that symlinks its planning repo
  *     redirects to that repo (handled inside {@link resolveBasouRepositoryRoot},

@@ -83,8 +83,13 @@ re-derived from scratch each time you sit back down.
   recorded next step, and whether your trail is stale.
 - `basou decision capture` / `basou note` — record a decision (with its
   rationale and rejected alternatives) or the terminal next step.
-- `basou handoff generate` — a regenerated, hand-editable summary for the
-  next session or a teammate.
+- `basou handoff generate` — writes `.basou/handoff.md`, whose distinguishing
+  content is the **complete roster of every session**, with label, status and
+  time. `orient` shows only the newest few, so this is what to open when the
+  question is *which session did what, and when*. Consult the roster; do not
+  read the file through — on a workspace with a thousand sessions the roster is
+  96% of about 300 KB. (For a machine, `basou report generate --json` carries
+  the same sessions structured.)
 - `basou hook install codex` — hand a Codex session (CLI, desktop app, IDE)
   the position of the workspace it was opened in, at session start. The hook
   computes the position from that session's own directory, speaks only for
@@ -147,9 +152,10 @@ basou init
 basou task new --title "Refactor login form"
 basou session note --body "Started exploring auth.ts"
 
-# 4. Regenerate the human-readable summary
+# 4. Regenerate the human-readable summary (fine to `cat` on day one; once the
+#    session roster grows, read the sections above it instead)
 basou handoff generate
-cat .basou/handoff.md
+head -40 .basou/handoff.md
 
 # 5. Or skip the per-command typing: import the project's native agent logs
 #    and regenerate handoff + decisions in one step, then browse it all in a

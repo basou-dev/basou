@@ -426,10 +426,27 @@ describe("renderViewPresetBlock", () => {
     expect(a.endsWith("\n")).toBe(false);
   });
 
+  it("names where the session roster lives, and that it is not a file to read through", () => {
+    const block = renderViewPresetBlock({
+      viewName: "acme-workspace",
+      repos: [{ name: "acme", visibility: "public", language: "en", anchor: true }],
+    });
+    // The route the adjudication asked for: handoff.md has no automatic
+    // delivery, so nothing tells a reader it exists unless this does.
+    expect(block).toContain(".basou/handoff.md");
+    expect(block).toContain("basou handoff generate");
+    // And the caveat that makes the route safe to follow — the file is mostly
+    // roster, so "read handoff.md" without it is bad advice.
+    expect(block).toContain("do not read the file through");
+    // It must not claim orient covers the roster, which is the confusion the
+    // report started from.
+    expect(block).toContain("shows only the newest few sessions");
+  });
+
   // Golden full-block lock on the ja bytes: a roster whose ANCHOR declares
-  // `language: ja` promises the exact pre-i18n view block, whatever the other
-  // repos declare. Any edit to the ja table (or to how the generator assembles
-  // it) must surface here as a full-block diff.
+  // `language: ja` fixes the whole view block, whatever the other repos declare.
+  // Any edit to the ja table (or to how the generator assembles it) must surface
+  // here as a full-block diff.
   it("golden: a ja-anchor roster renders this exact block", () => {
     const block = renderViewPresetBlock({
       viewName: "acme-workspace",
@@ -478,6 +495,10 @@ const JA_GOLDEN_VIEW_BLOCK = [
   "- acme/AGENTS.md",
   "- acme-site/AGENTS.md",
   "- acme-lab/AGENTS.md",
+  "",
+  "### 調べるとき",
+  "",
+  "どのセッションが何をいつやったかは、`.basou/handoff.md` のセッション一覧を参照してください(`basou handoff generate` で更新でき、ここからでも動きます)。通読せず参照してください — 大半がその一覧です。`basou orient` は現在地を答え、直近数件しか出しません。",
   "",
   "### 重要原則",
   "",

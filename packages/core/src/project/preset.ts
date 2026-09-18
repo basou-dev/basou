@@ -117,8 +117,9 @@ export type ViewPresetInput = {
  * operator-specific string is embedded), so re-running on an unchanged manifest
  * produces byte-identical output. The view is a workspace-level artifact, so
  * its content language follows the ANCHOR entry's declared language (mirroring
- * the generated views' rule); a `ja` anchor renders byte-identical to the
- * pre-i18n output. The repos are listed in the order supplied. An empty roster
+ * the generated views' rule). It no longer reproduces the pre-i18n output: the
+ * block gained a line naming where the session roster lives, which that output
+ * predates. The repos are listed in the order supplied. An empty roster
  * still renders cleanly (a header-only table, empty lists). Returns the block
  * WITHOUT a trailing newline; the marker writer adds the surrounding structure.
  */
@@ -162,6 +163,10 @@ export function renderViewPresetBlock(input: ViewPresetInput): string {
   for (const r of input.repos) {
     lines.push(`- ${r.name}/AGENTS.md`);
   }
+  lines.push("");
+  lines.push(t.handoffHeading);
+  lines.push("");
+  lines.push(t.handoffPointer);
   lines.push("");
   lines.push(t.principlesHeading);
   lines.push("");

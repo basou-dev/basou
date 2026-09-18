@@ -114,6 +114,11 @@ export function renderAnchorStarter(input: AnchorStarterInput): string {
   }
   lines.push("");
 
+  lines.push(t.handoffHeading);
+  lines.push("");
+  lines.push(t.handoffPointer);
+  lines.push("");
+
   lines.push(t.policyHeading);
   lines.push("");
   lines.push(...t.policyTodo);
