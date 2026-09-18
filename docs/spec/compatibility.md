@@ -28,6 +28,22 @@ a new optional flag, a new optional field, a new SDK export, an added field in a
 `--json` payload. Removing or changing the meaning of anything on a guaranteed
 surface is a breaking change and requires a major bump (`2.0`).
 
+### `--version`: the first token is the contract, the rest is build identity
+
+`basou --version` prints the semver version as its **first whitespace-delimited
+token**, and that token is guaranteed. Everything after it identifies the build
+— the commit it was compiled from, and that commit's date — and **may change at
+any minor**, including gaining or losing fields.
+
+The distinction is worth stating because the output is scraped: a release check
+that reads the first token keeps working across `1.x`, and one that compares the
+whole line to a bare version string does not. Compare the first token.
+
+The build identity is there because a version number cannot answer the question
+people actually ask when something behaves unexpectedly — *which* build is this.
+Two builds of one version differ only by commit, and that is the case that has
+actually gone unnoticed in practice.
+
 ### One carve-out: the import envelope version may move at a minor
 
 `basou session import` and `basou import` require the envelope's

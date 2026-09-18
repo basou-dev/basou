@@ -36,10 +36,19 @@ All notable changes to **basou** are recorded here. The project follows
   Stop hook runs a node entry path with a `2>/dev/null || true` wrapper that is
   deliberately fail-open, so a stale or broken entry never blocks a turn — the
   right default for every turn, and the wrong one for the moment somebody asks
-  whether their hook is current. `hook status` now names the entry and asks it
-  (`--version`) what build it is, rather than reading a path or a timestamp:
-  the entry is the only thing that knows. An entry that cannot be executed is
-  reported as such, instead of a "registered" line that implies it works.
+  whether their hook is current. `hook status` now prints the running basou's
+  build AND the hook entry's, because "is my hook current" needs both and the
+  two are allowed to differ — a source build in the hook, the npm global on
+  `PATH`. It makes no verdict; it stops asking for a second command. The
+  entry's build comes from asking it (`--version`), not from a path or an
+  mtime, because the entry is the only thing that knows what it is.
+
+  It never guesses. The registered command is tokenized rather than
+  pattern-matched, so a quoted path, an env prefix, a `node` flag or an
+  absolute interpreter are read correctly; anything it cannot parse with
+  confidence — including the alias registration form, where no path exists —
+  says that no answer is possible rather than printing a plausible one. An
+  entry that cannot be executed says so.
 
   Nothing was added to what a session start injects — the question is answered
   where it is asked.

@@ -42,7 +42,7 @@ import { registerViewCommand } from "./commands/view.js";
  */
 declare const __BASOU_BUILD_STAMP__: string | undefined;
 
-type BuildStamp = { version: string; commit: string; builtAt: string };
+type BuildStamp = { version: string; commit: string; committedAt: string };
 
 function readBuildStamp(): BuildStamp | undefined {
   if (typeof __BASOU_BUILD_STAMP__ !== "string") return undefined;
@@ -90,14 +90,19 @@ export const BASOU_VERSION_LINE = buildVersionLine();
 function buildVersionLine(): string {
   if (BASOU_BUILD === undefined) return `${pkg.version} (source)`;
   const coreBuild = basouCore.BASOU_CORE_BUILD;
-  const self = `${BASOU_BUILD.version} (build ${BASOU_BUILD.commit}, ${BASOU_BUILD.builtAt})`;
+  const self = `${BASOU_BUILD.version} (build ${BASOU_BUILD.commit}, ${BASOU_BUILD.committedAt})`;
   // Core is a separate artifact the CLI does not bundle, so a partial rebuild
-  // can leave the two at different commits. Only the disagreement is worth
-  // printing: when they match, naming core twice says nothing.
-  if (coreBuild === undefined || coreBuild.commit === BASOU_BUILD.commit) {
-    return self;
-  }
-  return `${self}; core build ${coreBuild.commit}, ${coreBuild.builtAt}`;
+  // can leave the two at different commits.
+  //
+  // The three cases are told apart on purpose. Folding "core carries no stamp"
+  // into "core agrees" would render a BROKEN mismatch check identically to a
+  // passing one: drop core's `define` and the CLI would go on printing the
+  // agreement shape forever, with nothing anywhere saying the check had
+  // stopped working. Silence is reserved for the one case that has actually
+  // been checked and found equal.
+  if (coreBuild === undefined) return `${self}; core build unknown (not stamped)`;
+  if (coreBuild.commit === BASOU_BUILD.commit) return self;
+  return `${self}; core build ${coreBuild.commit}, ${coreBuild.committedAt}`;
 }
 
 /**
