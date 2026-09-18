@@ -497,6 +497,28 @@ describe("hook install / uninstall / status", () => {
     expect(out).toMatch(/that build is: \d+\.\d+\.\d+/);
   });
 
+  it("reports the build on the Codex hook too, not only the Claude one", async () => {
+    // The Codex handler carries the identical fail-open wrapper, and it is the
+    // channel where a build too old to parse a newer event drops it line by
+    // line — the asymmetry would have left the more consequential half silent.
+    const realEntry = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "dist",
+      "index.js",
+    );
+    const hooksPath = `${settingsPath}.codex-hooks.json`;
+    await doRunCodexHookInstall({ hooks: hooksPath }, { resolveCliEntry: () => realEntry });
+    logs.length = 0;
+    await doRunCodexHookStatus({ hooks: hooksPath });
+    const out = logs.join("\n");
+
+    expect(out).toMatch(/this basou is: \d+\.\d+\.\d+/);
+    expect(out).toContain(`the hook runs: ${realEntry}`);
+    expect(out).toMatch(/that build is: \d+\.\d+\.\d+/);
+  });
+
   it("says it cannot tell when the hook is registered by alias rather than by path", async () => {
     // The alias form is a shape basou itself recognizes, and no path can be
     // read out of it. Returning silently would print output identical to a

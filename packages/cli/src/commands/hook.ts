@@ -895,7 +895,7 @@ async function reportHookEntryBuild(command: string): Promise<void> {
     console.log(`  that build is: ${reported}`);
     if (!reported.includes("(build ")) {
       console.log(
-        "  note: that build predates build stamping, so what it reports is its package.json, not itself. Rebuild to find out what is running.",
+        "  note: that build predates build stamping, so what it reports is its package.json rather than itself — it cannot tell you which build it is. Update it (rebuild a source checkout, or reinstall the package) to find out.",
       );
     }
   } catch {
@@ -1217,6 +1217,11 @@ export async function doRunCodexHookStatus(options: HookInstallOptions): Promise
   console.log(
     `basou Codex SessionStart hook: registered in ${hooksPath} (matcher: ${matcher}); speaks only for workspaces registered in ~/.basou/portfolio.yaml.`,
   );
+  // The Codex handler carries the same fail-open wrapper as the Claude Stop
+  // hook and the same silence, and it is the more consequential of the two:
+  // this is the channel where a build too old to parse a newer event drops it
+  // line by line. Whatever the Stop hook is asked, ask this one too.
+  await reportHookEntryBuild(location.command);
   await reportCodexHookState(hooksPath, parsed, options);
 }
 

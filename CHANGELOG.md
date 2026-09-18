@@ -50,6 +50,17 @@ All notable changes to **basou** are recorded here. The project follows
   says that no answer is possible rather than printing a plausible one. An
   entry that cannot be executed says so.
 
+  The **Codex** SessionStart hook gets the same report. It carries the identical
+  fail-open wrapper and is the more consequential of the two: it is the channel
+  where a build too old to parse a newer event drops it line by line.
+
+  One posture change, stated rather than slipped in: `hook status` was
+  read-only and now **executes** the entry named in the hooks file, to ask it
+  its version. There is no shell — `execFile` with `process.execPath` and an
+  argument array — so no interpolation path exists, and the file is the user's
+  own. It is still a command that reads turning into a command that runs, which
+  is worth knowing about a tool whose trust model is read-only.
+
   Nothing was added to what a session start injects — the question is answered
   where it is asked.
 
