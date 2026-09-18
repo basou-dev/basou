@@ -41,7 +41,13 @@ function buildStamp(): string {
   let committedAt = "unknown";
   try {
     const head = git("rev-parse --short HEAD");
-    const dirty = git("status --porcelain") !== "";
+    // `--untracked-files=no` on purpose, matching `git describe --dirty`:
+    // git's own notion of a dirty build ignores untracked files, and so must
+    // this. A stray file in the working directory does not change what was
+    // compiled, and counting it would stamp `-dirty` on every CI artifact --
+    // which it did, until a clean `actions/checkout` produced `-dirty` and
+    // made the marker meaningless exactly where it is published.
+    const dirty = git("status --porcelain --untracked-files=no") !== "";
     commit = dirty ? `${head}-dirty` : head;
     committedAt = git("log -1 --format=%cI");
   } catch {

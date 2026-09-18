@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,23 +42,23 @@ describe("@basou/cli", () => {
     expect(stampedDate).toBe(commitDate.trim());
   });
 
-  it("says `-dirty` when the tree carries uncommitted changes", async () => {
-    // The documented source install builds straight from a working tree, which
-    // during development is dirty nearly always. A bare commit there names code
-    // that is not what was built — the same shape of confident wrongness this
-    // whole change exists to end.
+  it("marks a build `-dirty` on the same terms as `git describe --dirty`", () => {
+    // Asserted against git's own answer rather than against the ambient tree,
+    // because the property is "we mark dirtiness the way git defines it", not
+    // "this checkout happens to be clean". The earlier version asserted the
+    // latter and failed in CI on a clean `actions/checkout` -- untracked files
+    // were being counted, which would have stamped `-dirty` on every published
+    // artifact.
     const here = dirname(fileURLToPath(import.meta.url));
-    const distEntry = resolve(here, "..", "dist", "index.js");
-    const { stdout: status } = await execFileAsync("git", ["status", "--porcelain"], { cwd: here });
-    const { stdout } = await execFileAsync(process.execPath, [distEntry, "--version"]);
-
-    const commit = /\(build (\S+?),/.exec(stdout.trim())?.[1];
-    expect(commit).toBeDefined();
-    if (commit === "unknown") return;
-    // The dist was built from whatever the tree was at build time, so this
-    // asserts the marker's PRESENCE tracks a dirty build, not the tree right
-    // now: a clean tree cannot have produced a `-dirty` stamp.
-    if (status.trim() === "") expect(commit).not.toContain("-dirty");
+    const tracked = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
+      cwd: here,
+      encoding: "utf8",
+    });
+    const described = execFileSync("git", ["describe", "--always", "--dirty"], {
+      cwd: here,
+      encoding: "utf8",
+    }).trim();
+    expect(described.endsWith("-dirty")).toBe(tracked.trim() !== "");
   });
 
   it("`basou --version` reports the BUILD, and the build matches package.json", async () => {
