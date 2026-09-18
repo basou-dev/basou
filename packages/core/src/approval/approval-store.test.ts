@@ -50,6 +50,45 @@ const PENDING_FIXTURE: Approval = {
 };
 
 describe("approval-store", () => {
+  // Regression guard for the boundary clause in docs/spec/schemas.md §7.3.
+  // Approvals are written by an outside orchestrator, so the version that
+  // required seconds could only land here with a normalizer. Without it the
+  // failure is worse than the dropped line the rule is written around:
+  // `loadApproval` THROWS, and neither the orientation nor the report renderer
+  // catches it, so a single seconds-less file takes both commands down and
+  // hides a pending approval from `approval list`.
+  it("reads an approval whose timestamps omit seconds, as an outside producer may write them", async () => {
+    const paths = getPaths();
+    const secondsLess = {
+      ...PENDING_FIXTURE,
+      created_at: "2026-05-04T10:00+09:00",
+      expires_at: "2026-05-04T18:00Z",
+    };
+    await writeYamlFile(join(paths.approvals.pending, `${PENDING_FIXTURE.id}.yaml`), secondsLess);
+
+    const loaded = await loadApproval(paths, PENDING_FIXTURE.id);
+    expect(loaded).not.toBeNull();
+    expect(loaded?.location).toBe("pending");
+    // Repaired to the accepted spelling, with the offset preserved.
+    expect(loaded?.approval.created_at).toBe("2026-05-04T10:00:00+09:00");
+    expect(loaded?.approval.expires_at).toBe("2026-05-04T18:00:00Z");
+    // The document still appears where it must.
+    const { pending } = await enumerateApprovals(paths);
+    expect([...pending]).toContain(PENDING_FIXTURE.id);
+  });
+
+  it("still refuses a timestamp the normalizer does not recognize", async () => {
+    // The boundary repairs one spelling; it does not widen the accepted set.
+    const paths = getPaths();
+    await writeYamlFile(join(paths.approvals.pending, `${PENDING_FIXTURE.id}.yaml`), {
+      ...PENDING_FIXTURE,
+      created_at: "2026-05-04t10:00:00z",
+    });
+    await expect(loadApproval(paths, PENDING_FIXTURE.id)).rejects.toThrow(
+      "Failed to read approval",
+    );
+  });
+
   it("loadApproval returns the pending YAML when it exists", async () => {
     const paths = getPaths();
     const filePath = join(paths.approvals.pending, `${PENDING_FIXTURE.id}.yaml`);

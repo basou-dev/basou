@@ -89,6 +89,23 @@ function transform(records: CodexRolloutRecord[]) {
 }
 
 describe("codexRolloutToImportPayload", () => {
+  // Regression guard for the import boundary -- see the matching test in
+  // transcript-importer.test.ts. Deleting the normalizer call here must fail a
+  // test rather than pass quietly.
+  it("normalizes a vendor timestamp that omits seconds, and keeps its offset", () => {
+    const records: CodexRolloutRecord[] = [
+      sessionMeta("2026-05-10T00:00+09:00"),
+      execCall("2026-05-10T00:05+09:00", "call-1", "echo hi"),
+    ];
+    const payload = codexRolloutToImportPayload(records, { workspaceId: WS_ID });
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+    expect(payload.events.every((e) => /T\d{2}:\d{2}:\d{2}/.test(e.occurred_at))).toBe(true);
+    expect(payload.session.started_at).toBe("2026-05-10T00:00:00+09:00");
+  });
+
   it("derives session lifecycle + command_executed from exec_command calls", () => {
     const records: CodexRolloutRecord[] = [
       sessionMeta("2026-05-10T00:00:00.000Z"),

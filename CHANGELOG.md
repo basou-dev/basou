@@ -19,10 +19,21 @@ All notable changes to **basou** are recorded here. The project follows
 
   Narrowing what a format accepts is otherwise forbidden, because a line that
   fails validation is dropped rather than reported — so `docs/spec/schemas.md`
-  now states the one exception this landed under (the refused set must be
-  measured and empty, the bump and read rule are still required, and a boundary
-  the values arrive through must normalize rather than drop), with this change
-  as its worked example.
+  now states the one exception this landed under, with this change as its
+  worked example. Where basou is the writer the refused set must be empty **by
+  construction** — no code path can emit it, which a test can assert — rather
+  than merely absent from somebody's disk. Where basou is not the writer, the
+  read rule must name the population and its size, the measurement must be
+  taken upstream of any normalizer, a normalizer must be installed at that
+  boundary, and the boundary's refusal path must be stated — because a boundary
+  that throws rather than dropping one line is worse than the case the rule was
+  written around.
+
+  Approvals are that boundary. They are placed by an outside orchestrator, and
+  `loadApproval` threw on a document it could not parse while neither `orient`
+  nor `report` caught it, so one refused approval would have taken both
+  commands down and hidden a pending approval from `approval list`. Their three
+  timestamp fields are now normalized before the document is parsed.
 
   The narrowing is shared, so every durable format moved: `event` to `0.3.0`,
   and `manifest`, `session`, `task`, `approval` and `session-import` to

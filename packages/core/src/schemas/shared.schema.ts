@@ -66,21 +66,28 @@ const isoTimestampRegex = new RegExp(ISO_TIMESTAMP_PATTERN);
  * and would need the pattern written a second time, which is a second place to
  * forget. {@link SchemaVersionSchema} takes the same form for the same reason.
  *
- * It deliberately does NOT declare `format: "date-time"`. That format names
- * RFC 3339, and the two sets cross rather than nest: basou takes a timestamp
- * without seconds, which RFC 3339 does not, and refuses the lowercase
- * designators and the leap second that RFC 3339 allows. Declaring the format
- * made one artifact answer two ways from the same bytes — a validator
- * asserting it rejected `2026-09-16T01:23Z`, one treating it as an annotation
- * (the JSON Schema 2020-12 default) accepted it. The `pattern` is the
- * contract, and `description` says so, because no format name states this set.
+ * It deliberately does NOT declare `format: "date-time"`. The sets used to
+ * CROSS — basou took a timestamp without seconds, which RFC 3339 does not —
+ * and declaring the format made one artifact answer two ways from the same
+ * bytes: a validator asserting it rejected `2026-09-16T01:23Z`, one treating
+ * it as an annotation (the JSON Schema 2020-12 default) accepted it.
+ *
+ * Requiring seconds ended the crossing: this set is now a strict SUBSET of
+ * RFC 3339 `date-time`, since uppercase-only and no-leap-second are
+ * restrictions on it. So the format could be declared truthfully again. It is
+ * still not declared, for a different reason than before — the `pattern` is
+ * the whole contract and the format names a strictly larger set, so declaring
+ * it would say less than the artifact already says while reintroducing a
+ * keyword whose enforcement varies by validator. Reinstating it is a decision
+ * about what the artifact should assert, not a correction; `description` is
+ * what states this set, because no format name does.
  */
 export const IsoTimestampSchema = z
   .string()
   .regex(isoTimestampRegex, "Expected an ISO 8601 timestamp with a timezone offset")
   .meta({
     description:
-      "Timestamp with an offset or Z. The pattern is normative under ECMA-262 semantics: RFC 3339 date-time with uppercase designators, no leap second, and optional seconds.",
+      "Timestamp with an offset or Z, and seconds are required. The pattern is normative under ECMA-262 semantics: an RFC 3339 date-time restricted to uppercase designators and no leap second.",
   });
 
 // Internal factory shared by every prefixed-ID schema. Not exported because

@@ -243,36 +243,86 @@ Events written by the import paths additionally carry an optional top-level
   rule exists.
 
 - **Narrowing a required field's domain is allowed only when the set it starts
-  refusing is EMPTY on disk**, and then it still requires a `schema_version`
-  bump and a stated read rule. Narrowing is otherwise forbidden for a concrete
-  reason: every line read from disk is validated, and a violation is DROPPED
-  with a `schema_violation` warning, so a narrowing that catches real documents
+  refusing is EMPTY, and the bump still requires a `schema_version` move and a
+  stated read rule.** Narrowing is otherwise forbidden for a concrete reason:
+  every line read from disk is validated, and a violation is DROPPED with a
+  `schema_violation` warning, so a narrowing that catches real documents
   destroys traces rather than reporting them.
 
-  "Empty" is a measurement, not a judgement, and the measurement belongs in the
-  read rule beside the bump. A narrowing whose refused set cannot be measured —
-  because the values come from somewhere basou cannot enumerate — does not
-  qualify, and neither does one that is merely believed to be rare.
+  **"Empty" means empty BY CONSTRUCTION wherever basou is the writer**: no code
+  path in this repository can emit the refused value, which is a property a
+  test can assert and a reader can re-check years later. A count of what
+  happens to be on one operator's disk is not that property — it is evidence
+  about one store, and the store that matters may be someone else's.
 
-  Where the values enter from outside basou, the bump must also come with a
-  normalizer at that boundary, so a producer that later starts writing the
-  refused form is brought into the accepted set rather than silently dropped.
-  The measurement says what is true today; the normalizer is what keeps it
-  true.
+  **Where basou is NOT the writer**, construction-emptiness is unavailable and
+  a measurement is the only evidence there is. Then all of the following are
+  required, and a narrowing that cannot supply them does not qualify:
+
+  1. the population must be NAMED and its size stated in the read rule, so a
+     later reader can judge what the measurement covered and what it did not;
+  2. the measurement must be taken UPSTREAM of any normalizer, on raw producer
+     input — measuring after a normalizer returns empty because of the
+     normalizer, which is evidence about basou's own repair, not about what
+     producers write;
+  3. a normalizer must be installed at that boundary, so a producer that later
+     starts writing the refused form is brought into the accepted set rather
+     than dropped;
+  4. and the refusal path at that boundary must be known and stated. A boundary
+     that THROWS rather than dropping one line is worse than the case this rule
+     was written for, and a narrowing must not land there until the throw is
+     accounted for.
+
+  A narrowing that is merely believed to be rare never qualifies under either
+  branch.
+
+  **Rebuildable caches are outside this rule**, because it is a rule about
+  documents that outlive a change. A cache (`status.json`, `task-index.json`)
+  carries a `CacheVersionSchema` version and is matched exactly or re-derived,
+  so narrowing its shape refuses nothing that survives: the next read rebuilds
+  it. Their `$id` therefore does not move when a shared constraint narrows, and
+  their previous bytes are not archived. Everything durable is inside the rule.
 
   **Worked example — timestamps require seconds (event `0.3.0`, and `0.2.0` for
   every other durable document).** The accepted shape had made seconds
   optional, inherited from the expression zod emitted for
-  `.datetime({ offset: true })` rather than chosen. Measured before the bump:
-  across 39,070 timestamps in one store (34,075 in `events.jsonl`, 4,935 in
-  `session.yaml`, 60 in tasks and the manifest) and 226,077 in the vendor logs
-  both adapters read from, every single value carried seconds, as did every
-  sample in this spec. The refused set was empty in all three populations.
-  **Read rule:** a document at the earlier version means exactly what it meant;
-  nothing on disk is reinterpreted, and nothing is rewritten in place. The only
-  change is what a writer may newly produce. Vendor strings are normalized at
-  the import boundary (`normalizeIsoTimestamp`), which restores an omitted
-  `:00` and preserves the offset rather than folding it to UTC.
+  `.datetime({ offset: true })` rather than chosen.
+
+  *Where basou is the writer* — `event`, `session`, `task`, `manifest` — the
+  refused set is empty by construction: every durable timestamp is either
+  `Date.prototype.toISOString()` output, which always emits seconds, or a CLI
+  option already validated to require them (`--completed-at`). No code path in
+  this repository can emit a seconds-less value. The counts measured before the
+  bump (39,070 timestamps across one store's `events.jsonl`, `session.yaml`,
+  tasks and manifest, all carrying seconds) agree with that, and are recorded as
+  corroboration rather than as the evidence.
+
+  *Where basou is not the writer* there are two boundaries, and they are not
+  alike:
+
+  - **Adapter imports** (`claude-code`, `codex`) read a vendor's `timestamp`
+    string. Population: the rollout and transcript logs both adapters read,
+    226,077 values measured upstream of any normalizer — the normalizer was
+    added in the same change and the measurement predates it. All carried
+    seconds. Refusal path: an event line failing validation is dropped with a
+    `schema_violation` warning. Normalizer: `normalizeIsoTimestamp`, at both
+    read sites.
+  - **Approvals** are placed by an outside orchestrator; basou only reads them.
+    Population: **zero documents** in the measured store — which is not evidence
+    that producers agree, only that this store has none, and the read rule says
+    so rather than presenting an empty directory as a clean measurement.
+    Refusal path: `loadApproval` THROWS rather than dropping, and neither the
+    orientation nor the report renderer catches it, so one refused document
+    takes both commands down. That is the case clause 4 above says a narrowing
+    must not land on unaccounted-for; it is accounted for here by normalizing
+    the three timestamp fields at the read boundary before the document is
+    parsed, so the seconds axis cannot reach the throw.
+
+  **Read rule:** a document at the earlier version means exactly what it meant.
+  Nothing on disk is reinterpreted, and nothing is rewritten in place. The only
+  change is what a writer may newly produce, and what an outside producer's
+  value is repaired to before it is parsed.
+
 - Redefining a value that already exists on disk is forbidden: it must keep
   meaning what it meant (introduce a new type or a new field instead). A bump
   may only ASSIGN a meaning to a value the field could not hold before. The
@@ -301,10 +351,26 @@ Events written by the import paths additionally carry an optional top-level
   may be re-published with a more faithful description of the same format — an
   added `description`, a constraint the runtime already enforced, or the
   REMOVAL of a declaration the runtime never enforced — and that is not a
-  format change, so it does not move the `$id`. The test is the accepted set,
-  not the byte count: a keyword whose removal leaves every document that
-  validated before still validating was describing the format wrongly, and
-  dropping it is the same act as adding a `description` that was missing. `session-import`
+  format change, so it does not move the `$id`.
+
+  **The test is two-directional, and both halves are required:** no document
+  that validated before may now fail, AND no document that failed before may
+  now validate. One half alone is useless for a removal — dropping a keyword
+  can only widen what validates, so "everything that passed still passes" is
+  satisfied by removing `pattern`, `required`, `enum` or `const`, and would
+  license any of them. What actually gates a removal is the other half,
+  together with "never enforced": the runtime must already have been answering
+  as though the keyword were absent, so that nothing which the runtime refused
+  now passes.
+
+  A keyword the runtime never consulted but some CONSUMER might is the hard
+  case, and it does not pass this test. `format` is the example: under a
+  validator that asserts formats, removing it grows the accepted set by exactly
+  the values the format excluded, so a third party gets a different answer than
+  before even though basou's own reader does not. Such a removal is a format
+  change and moves the `$id`. The carve-out covers a declaration that no
+  validator could have been enforcing differently from the rest of the
+  artifact — not one whose enforcement merely varies by validator. `session-import`
   pinning its `schema_version` to a `const` is such a case: the set of payloads
   the importer accepts is exactly what it always was.
 
@@ -456,9 +522,22 @@ artifact the old URL served is kept rather than replaced or removed: the bytes
 it describes are still on disk everywhere, and that URL was published as the
 canonical place to point a validator. Superseded artifacts live at
 `@basou/core/schemas/retired/<version>/<name>.schema.json` and keep serving at
-their own `$id`. Nothing regenerates them — the Zod source that produced them is
-gone — so they are frozen by construction, and a retired version may never equal
-a live one.
+their own `$id`, and a retired version may never equal a live one.
+
+Two limits on that archive are worth stating rather than leaving to be
+discovered. **It is frozen by convention, not by construction, except where the
+Zod source is genuinely gone** — that is true of `retired/0.1.0/event`, whose
+non-nullable `duration_ms` shape no longer exists in the source, and not true of
+an artifact a live constant would regenerate. A test asserts each retired file's
+`$id` and its non-collision with a live one; nothing asserts its bytes.
+
+**And it holds the LAST bytes an `$id` served, not every byte it served.** An
+artifact may be re-published within one version under the carve-out above, so a
+consumer that fetched a URL early and one that fetched it late can hold
+different bytes for the same `$id`, and only the later set is archived. The
+carve-out's two-directional test bounds how far they can differ — neither set
+accepts a document the other refuses — but they are not identical, and the
+archive does not record which was served when.
 
 **Backward consequence, stated plainly.** A basou at 0.41.0 or earlier REJECTS a
 `0.2.0` event whose `duration_ms` is null — its schema requires a number — and

@@ -35,7 +35,7 @@ describe("createManifest", () => {
       now: FIXED_DATE,
       workspaceId: FIXED_WS_ID,
     });
-    expect(manifest.schema_version).toBe(MANIFEST_SCHEMA_VERSION);
+    expect(manifest.schema_version).toBe("0.2.0");
     expect(manifest.basou_version).toBe("0.1.0");
     expect(manifest.workspace.id).toBe(FIXED_WS_ID);
     expect(manifest.workspace.name).toBe("client-foo-lp");

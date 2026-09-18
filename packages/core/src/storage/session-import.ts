@@ -11,6 +11,7 @@ import { sanitizeRelatedFiles, sanitizeWorkingDirectory } from "../lib/path-sani
 import { type Event, EventSchema } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { Session, SessionSourceKind, SessionStatus } from "../schemas/session.schema.js";
+import { SESSION_SCHEMA_VERSION } from "../schemas/session.schema.js";
 import type {
   SessionImportPayload,
   SessionInnerImportInput,
@@ -62,7 +63,7 @@ export type ImportSessionResult = {
 /**
  * Import a round-trip JSON payload into `.basou/sessions/<new>/`. The caller
  * MUST validate the payload against {@link SessionImportPayloadSchema} first
- * and gate the `schema_version === "0.1.0"` literal check externally; this
+ * and gate the `schema_version === SESSION_IMPORT_SCHEMA_VERSION` check externally; this
  * function trusts both invariants.
  *
  * On success a fresh session ID is minted and a complete
@@ -301,7 +302,7 @@ function buildSessionRecord(
     ...(input.metrics !== undefined ? { metrics: input.metrics } : {}),
   };
   return {
-    record: { schema_version: "0.1.0", session: inner },
+    record: { schema_version: SESSION_SCHEMA_VERSION, session: inner },
     pathSanitizeReport: {
       relatedFiles: relatedSanitized.mutationCount,
       workingDirectoryRewritten: workingDirectorySanitized !== workingDirectoryRaw,
@@ -389,14 +390,14 @@ export type ReimportResult =
  * pair is present in that same store).
  */
 function derivedEventContentKey(event: Event): string {
-  const base = `${event.type} ${event.occurred_at}`;
+  const base = `${event.type}\0${event.occurred_at}`;
   switch (event.type) {
     case "command_executed":
       return `${base} ${event.args.join("")} ${event.cwd}`;
     case "file_changed":
-      return `${base} ${event.path} ${event.change_type}`;
+      return `${base}\0${event.path}\0${event.change_type}`;
     case "decision_recorded":
-      return `${base} ${event.title}`;
+      return `${base}\0${event.title}`;
     default:
       return base;
   }
@@ -574,7 +575,10 @@ export async function reimportPreservingId(
       // Re-derivation always yields a null summary; keep a prior non-null one.
       summary: prior.session.summary ?? record.session.summary ?? null,
     };
-    const updatedRecord: Session = { schema_version: "0.1.0", session: preservedInner };
+    const updatedRecord: Session = {
+      schema_version: SESSION_SCHEMA_VERSION,
+      session: preservedInner,
+    };
 
     if (options.dryRun !== true) {
       // Capture the prior events.jsonl RAW BYTES before the rewrite so a

@@ -165,7 +165,9 @@ describe("createAdHocSessionWithEvent", () => {
     });
 
     const yaml = await readSessionYaml(paths, result.sessionId);
-    expect(yaml.schema_version).toBe(SESSION_SCHEMA_VERSION);
+    // Pinned as a LITERAL: this asserts what a writer put on DISK, which a
+    // constant shared with the writer cannot do.
+    expect(yaml.schema_version).toBe("0.2.0");
     expect(yaml.session.status).toBe("completed");
     expect(yaml.session.started_at).toBe(occurredAt);
     expect(yaml.session.ended_at).toBe(occurredAt);
