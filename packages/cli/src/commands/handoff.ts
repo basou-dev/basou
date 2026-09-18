@@ -5,7 +5,6 @@ import {
   readMarkdownFile,
   renderHandoff,
   renderWithMarkers,
-  resolveRepositoryRoot,
   writeMarkdownFile,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -16,6 +15,7 @@ import {
   printTaskSkip,
   renderCliError,
 } from "../lib/error-render.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 export type HandoffGenerateOptions = { verbose?: boolean };
 
@@ -91,9 +91,20 @@ export async function doRunHandoffGenerate(
   );
 }
 
+/**
+ * Resolve the root the way its sibling artifact commands do.
+ *
+ * `handoff` used the plain git resolver while `orient`, `refresh`, `decisions`
+ * and the rest went through {@link resolveBasouRootForCommand}, so from a
+ * workspace view — a non-git directory that symlinks its planning repo —
+ * `basou handoff generate` failed with "Not a git repository" while `basou
+ * refresh`, which REGENERATES handoff.md, worked from the same directory. The
+ * asymmetry had no reason behind it, and it made the view the one place where
+ * the file could be read but not asked for.
+ */
 async function resolveRepositoryRootForHandoff(cwd: string): Promise<string> {
   try {
-    return await resolveRepositoryRoot(cwd);
+    return await resolveBasouRootForCommand(cwd, "handoff generate");
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "Not a git repository") {
       throw new Error(
