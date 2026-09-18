@@ -59,6 +59,15 @@ export {
 } from "./adapters/codex/index.js";
 export type { ApprovalLocation, LoadedApproval } from "./approval/index.js";
 export { enumerateApprovals, isLazyExpired, loadApproval } from "./approval/index.js";
+export type {
+  DecisionGap,
+  DecisionGapsExcluded,
+  DecisionGapsIncomplete,
+  DecisionGapsInput,
+  DecisionGapsScope,
+  DecisionGapsSummary,
+} from "./decision-gaps/index.js";
+export { DECISION_GAPS_EPOCH, findDecisionGaps } from "./decision-gaps/index.js";
 export type { DecisionsRendererInput, DecisionsRendererResult } from "./decisions/index.js";
 export { renderDecisions } from "./decisions/index.js";
 export type {
@@ -323,6 +332,7 @@ export {
   hasRetiredZeroDuration,
   IsoTimestampSchema,
   JSON_SCHEMA_VERSIONS,
+  LOCAL_CLI_EVENT_SOURCE,
   MANIFEST_SCHEMA_VERSION,
   ManifestSchema,
   RiskLevelSchema,

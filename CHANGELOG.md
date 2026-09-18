@@ -5,6 +5,70 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Added
+
+- **`basou decision gaps` lists the decisions no task is carrying** — the plans
+  that were agreed and then never became work. A ratified plan lands in
+  `decisions.md` and is never surfaced again, so the next session starts from
+  whatever is nearest to hand and recommends something else; one workspace
+  watched a milestone sit still while each session proposed a different next
+  thing. Nothing was lost, and nothing pointed at it either.
+
+  The rule is the reported one: a decision that changes what gets built should
+  have a task carrying it, and the ones without are listed. The question is a
+  RELATION — "is any task carrying this" — and a decision id appearing in a task
+  file is today's way of answering it; a `task_created` field naming the
+  decision would answer it better later without redefining the question. Nothing
+  reads what a decision MEANS, so the answer does not depend on a model. An
+  abbreviated id matches nothing, and that is correct rather than merely safe:
+  a batch written by one `decision capture` shares a millisecond, so its ids
+  differ only at the end and an abbreviation genuinely names no one of them —
+  measured, one abbreviation in a real task file prefix-matches seven distinct
+  decisions. An id no decision has does not count as carrying anything either,
+  so a plausible string typed into a markdown file cannot take an entry off the
+  list with no event recording that it happened.
+
+  Fail-closed only pays for itself if the list is drainable, so the population
+  is cut on four structural grounds, each reported as a count so the cut is
+  never silent. Decisions recorded before a fixed instant this
+  release carries are out of scope — applying the rule to a whole history
+  measured ~1450 entries, which buries the signal on day one — and `--since`
+  moves that boundary, so a store that had been running before the release can
+  still look back. Decisions an importer derived from a
+  transcript's in-conversation questions are out (what stays is what basou
+  itself recorded, from `decision capture` or `decision record`): they were 70% of that store's
+  decisions and 0 of the ones any task carried. Tracks are out, because a track
+  is already resurfaced by `basou orient` every session until it is closed, so
+  the premise "recorded, then never surfaced again" is false for exactly them.
+  And a decision closed with `basou decision void` is out, because `void` is the
+  closing verb this product tells the operator to use and a direction no longer
+  in force is not waiting for anyone — without that, the list would be drainable
+  only by writing a sham task.
+
+  It says what it could not read. A session whose log or `session.yaml` is
+  unreadable is counted and named, rather than leaving a store that could only
+  be partly read indistinguishable from one that holds nothing; one corrupt log
+  no longer takes the whole command down. The zero case reports what was checked
+  instead of declaring a clear, because the answer rests on task files that are
+  hand-editable and carry no events.
+
+  `basou orient` gains one line — a count and the command that expands it — so
+  the list reaches the next session instead of waiting to be remembered. The
+  list itself is capped by default, with the remainder as a count and
+  `--limit 0` to see everything. Read-only: it writes nothing and enforces
+  nothing.
+
+- **`docs/spec/compatibility.md` now gives advisory surfacers their own
+  stability tier.** `review-gaps` and `decision gaps` answer "what looks like it
+  was missed", and what reads as a gap is an ongoing judgement — a population
+  boundary, a ground for excluding an entry. Freezing today's answer at 1.0
+  would mean either never improving it or bumping the major to do so. Their
+  commands and flags stay under the additive rule; their `--json` field set and
+  count meanings may change within a `1.x` line, against a guarantee that the
+  payload stays self-describing — every boundary the run applied is in the
+  payload, and a ground that changes meaning gets a new name rather than keeping
+  an old one.
+
 ### Fixed
 
 - **`basou --version` now answers for the code that is running, not for the

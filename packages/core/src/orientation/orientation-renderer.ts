@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "../approval/approval-store.js";
+import { countOpenDecisionGaps, type DecisionForGapCount } from "../decision-gaps/index.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { formatDurationMs } from "../lib/format-duration.js";
 import { oneLine } from "../lib/one-line.js";
@@ -196,6 +197,13 @@ export type OrientationSummary = {
    */
   openTracks: TrackRecord[];
   /**
+   * Decisions recorded by `basou decision capture` that are still open and that
+   * no task carries — the count `basou decision gaps` lists. Surfaced here as a
+   * single number because a ratified plan that became no task is invisible
+   * otherwise, and a command nobody is told to run does not fix that.
+   */
+  openDecisionGaps: number;
+  /**
    * Most recent `note_added` over non-archived sessions — the recorded next
    * step / handoff ("next step") surfaced in the forward section; null when none.
    */
@@ -320,6 +328,7 @@ export async function summarizeOrientation(
   //    the activity tail and latest note are non-archived only (they answer "is
   //    there newer work" / "where do I resume").
   const decisions: DecisionRecord[] = [];
+  const gapCandidates: DecisionForGapCount[] = [];
   // Decisions recorded with `kind: "track"` (a strategic, unfinished direction).
   // Collected across the same pass; the open subset (minus voided) is surfaced
   // in the forward section and resurfaces until closed.
@@ -375,6 +384,21 @@ export async function summarizeOrientation(
             sessionId: entry.sessionId,
             host: entry.host,
           });
+          // Kept for the decision-gap count below, which needs the two fields
+          // the display record does not carry.
+          // Local root only. The count exists to point at `basou decision
+          // gaps`, which reads this store's sessions and this store's tasks; a
+          // federated host's decision would be counted here while its task —
+          // which lives in ITS `.basou/tasks` — is not, so the line would name
+          // a number the command it names cannot reproduce.
+          if (entry.host === null) {
+            gapCandidates.push({
+              decisionId: ev.decision_id,
+              occurredAt: ev.occurred_at,
+              source: ev.source,
+              kind: ev.kind,
+            });
+          }
           // Per-session arc (non-archived only); voided ids are filtered later.
           if (counted) {
             recordDirection(entry.sessionId, "decision", {
@@ -445,6 +469,15 @@ export async function summarizeOrientation(
   // Open tracks: every `kind: "track"` decision not yet voided/superseded, newest
   // first (most recent strategic direction leads). These resurface in the forward
   // section every session until explicitly closed — the durable intent layer.
+  // Guarded: this reads the tasks directory, which orient did not touch before.
+  // A broken `tasks/` or `tasks/archive` must not take down the default command
+  // (and the SessionStart hook channel's content) over one advisory line.
+  const openDecisionGaps = await countOpenDecisionGaps({
+    paths: input.paths,
+    decisions: gapCandidates,
+    voidedDecisionIds,
+  }).catch(() => 0);
+
   const openTracks: TrackRecord[] = tracks
     .filter((t) => !voidedDecisionIds.has(t.decisionId))
     .sort((a, b) => {
@@ -675,6 +708,7 @@ export async function summarizeOrientation(
     latestDecision: latestDecision ?? null,
     decisionCount: decisions.length,
     openTracks,
+    openDecisionGaps,
     latestNote,
     recentDirection,
     relatedFiles: { displayed, overflow, outOfRoot, omitted: omittedFiles },
@@ -996,6 +1030,12 @@ function formatOrientationBody(
     if (activityAt !== null && isTrailingStale(activityAt, summary.latestNote.occurredAt)) {
       lines.push(`  - ${t.orientation.noteStaleNote(t.relativeAge(activityAt, now))}`);
     }
+  }
+  // One line, not the list: the same-day ruling capped what session start
+  // injects, and a count plus the command that expands it is the least this can
+  // be and still reach a session that would otherwise never run it.
+  if (summary.openDecisionGaps > 0) {
+    lines.push(`- ${t.orientation.decisionGapsLine(summary.openDecisionGaps)}`);
   }
   for (const task of summary.plannedTasks) {
     lines.push(`- ${oneLine(task.title)} [${shortId(task.id)}]`);

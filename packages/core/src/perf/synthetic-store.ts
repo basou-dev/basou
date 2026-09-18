@@ -17,6 +17,7 @@ import { stringify } from "yaml";
 import { ulid } from "../ids/ulid.js";
 import { EVENT_SCHEMA_VERSION } from "../schemas/event.schema.js";
 import { SESSION_SCHEMA_VERSION } from "../schemas/session.schema.js";
+import { LOCAL_CLI_EVENT_SOURCE } from "../schemas/shared.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 
 export type SyntheticStoreOptions = {
@@ -77,7 +78,7 @@ function buildEvents(
         id: id("evt", t),
         session_id: sessionId,
         occurred_at: occurredAt(),
-        source: "local-cli",
+        source: LOCAL_CLI_EVENT_SOURCE,
         ...event,
       }),
     );

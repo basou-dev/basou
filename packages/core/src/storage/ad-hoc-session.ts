@@ -17,7 +17,7 @@ import {
   SessionSourceKindSchema,
   type SessionStatus,
 } from "../schemas/session.schema.js";
-import { SessionIdSchema } from "../schemas/shared.schema.js";
+import { LOCAL_CLI_EVENT_SOURCE, SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
 import { readSessionYaml } from "./sessions.js";
@@ -235,7 +235,7 @@ export async function createAdHocSessionWithEvent(
           id: startedEventId,
           session_id: sessionId,
           occurred_at: input.occurredAt,
-          source: "local-cli",
+          source: LOCAL_CLI_EVENT_SOURCE,
           type: "session_started",
         },
         {
@@ -243,7 +243,7 @@ export async function createAdHocSessionWithEvent(
           id: statusToRunningEventId,
           session_id: sessionId,
           occurred_at: input.occurredAt,
-          source: "local-cli",
+          source: LOCAL_CLI_EVENT_SOURCE,
           type: "session_status_changed",
           from: "initialized",
           to: "running",
@@ -254,7 +254,7 @@ export async function createAdHocSessionWithEvent(
           id: statusToCompletedEventId,
           session_id: sessionId,
           occurred_at: input.occurredAt,
-          source: "local-cli",
+          source: LOCAL_CLI_EVENT_SOURCE,
           type: "session_status_changed",
           from: "running",
           to: "completed",
@@ -264,7 +264,7 @@ export async function createAdHocSessionWithEvent(
           id: endedEventId,
           session_id: sessionId,
           occurred_at: input.occurredAt,
-          source: "local-cli",
+          source: LOCAL_CLI_EVENT_SOURCE,
           type: "session_ended",
           exit_code: 0,
         },

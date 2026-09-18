@@ -127,6 +127,8 @@ export type ViewStrings = {
     /** Trails the recent-files line when scratch paths were left out of it. */
     scratchOmitted: (count: number) => string;
     trackCloseInstruction: string;
+    /** Forward-section pointer to `basou decision gaps`; omitted when the count is 0. */
+    decisionGapsLine: (n: number) => string;
     nextStepRecordedLabel: (age: string) => string;
     noteStaleNote: (activityAge: string) => string;
     fallbackStaleDirection: string;
@@ -255,6 +257,8 @@ const EN: ViewStrings = {
     scratchOmitted: (count) => `(+${count} scratch omitted)`,
     trackCloseInstruction:
       "When finished, close it with `basou decision void <decision_id>`. It stays listed here every time until closed.",
+    decisionGapsLine: (n) =>
+      `${n} recorded decision${n === 1 ? "" : "s"} ${n === 1 ? "has" : "have"} no task carrying ${n === 1 ? "it" : "them"} — list ${n === 1 ? "it" : "them"} with \`basou decision gaps\`.`,
     nextStepRecordedLabel: (age) => `Next step (recorded, ${age})`,
     noteStaleNote: (age) =>
       `Note: work continued after this was recorded (latest activity ${age}), so this starting point may be stale.`,
@@ -377,6 +381,8 @@ const JA: ViewStrings = {
     scratchOmitted: (count) => `(作業用一時ファイル ${count} 件は除外)`,
     trackCloseInstruction:
       "完了したら `basou decision void <decision_id>` で閉じてください。閉じるまで毎回ここに表示されます。",
+    decisionGapsLine: (n) =>
+      `task が紐づいていない判断が ${n} 件あります — \`basou decision gaps\` で一覧できます。`,
     nextStepRecordedLabel: (age) => `次の起点 (記録済み, ${age})`,
     noteStaleNote: (age) =>
       `注: この起点の記録後 (最終活動 ${age}) も作業が続いています。再開点が古い可能性があります。`,

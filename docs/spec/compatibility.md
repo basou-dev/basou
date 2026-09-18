@@ -72,6 +72,30 @@ three:
    its exit codes, or any `--json` output shape, which stay under the additive
    rule above.
 
+### Advisory surfacers: the command is guaranteed, the payload evolves
+
+`basou review-gaps` and `basou decision gaps` are **advisory surfacers**: they
+answer "what looks like it was missed", they write nothing, and they enforce
+nothing. They sit on the guaranteed CLI surface — the commands and their flags
+stay under the additive rule — with one carve-out for the `--json` payload:
+
+1. **The payload's field set and the meaning of its counts may change within a
+   `1.x` line.** What a surfacer looks at is an ongoing judgement about what
+   reads as a gap — a population boundary, a ground for excluding an entry, a
+   caveat about what could not be read — and freezing today's answer to `2.0`
+   would mean either never improving it or bumping the major to do so.
+2. **What is guaranteed is that the payload stays self-describing.** Every
+   boundary the run applied is reported in the payload itself (for instance
+   `scope`), so a consumer reads the run's own account of what it checked rather
+   than assuming last release's rule. A count never silently changes meaning
+   while keeping its name: a ground that changes gets a new name.
+3. **It applies to these commands' `--json` payloads only** — not to their
+   existence, their flags, or their exit codes, which stay under the additive
+   rule above.
+
+A consumer that needs a frozen shape should read the store through
+**`@basou/sdk`** and apply its own rule.
+
 ## What is *not* guaranteed
 
 - **`@basou/core` is published on npm but is not a semver-guaranteed API.**

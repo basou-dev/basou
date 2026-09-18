@@ -1,6 +1,7 @@
 import type { PrefixedId } from "../ids/ulid.js";
 import type { Event, ReviewBlocked, ReviewFinding } from "../schemas/event.schema.js";
 import { EVENT_SCHEMA_VERSION } from "../schemas/event.schema.js";
+import { LOCAL_CLI_EVENT_SOURCE } from "../schemas/shared.schema.js";
 
 /**
  * The deterministic writer for `basou review record` — the twin of
@@ -238,7 +239,7 @@ export function buildReviewRecordedEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "review_recorded",
     reviewer: review.reviewer,
     target: review.target,

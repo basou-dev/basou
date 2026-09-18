@@ -31,6 +31,7 @@ basou task ...              # purpose units spanning sessions (new / list / show
 
 # Decisions and approvals
 basou decision record      # record a human-authored decision as an event
+                           #   (see also `basou decision gaps` below)
 basou approval ...         # manage approval requests (list / show / approve / reject)
 
 # Generated artifacts
@@ -38,6 +39,10 @@ basou handoff generate     # generate or inspect .basou/handoff.md
 basou decisions generate   # generate or inspect .basou/decisions.md
 basou report generate      # generate a work report (stdout / --out / --json)
 basou orient               # show the current position (also writes .basou/orientation.md)
+
+# Read-only advisory surfacers (they list; they never enforce or write)
+basou review-gaps          # units of work committed with no bound cross-model review trail
+basou decision gaps        # open decisions that no task carries
 
 # Hooks (handlers an AI tool runs at its own lifecycle points)
 basou hook install [claude|codex]    # register the Claude Code Stop hook (default) or the

@@ -140,3 +140,16 @@ export type RiskLevel = z.infer<typeof RiskLevelSchema>;
  * non-empty string in v0.1; a stricter enum may be introduced post-v0.1.
  */
 export const EventSourceSchema = z.string().min(1);
+
+/**
+ * The `source` basou stamps on an event it wrote itself, in response to a
+ * `basou` command the operator (or an agent acting for them) ran — as opposed
+ * to an event an importer derived from a vendor transcript.
+ *
+ * It is a named constant because a reader distinguishes the two: `plan-gaps`
+ * admits a decision to its population only when this source recorded it, so a
+ * writer drifting from this literal would silently shrink that population
+ * rather than fail. Every local writer imports this rather than repeating the
+ * string, so the reader's predicate and the writers have one origin.
+ */
+export const LOCAL_CLI_EVENT_SOURCE = "local-cli";
