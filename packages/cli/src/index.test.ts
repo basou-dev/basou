@@ -22,13 +22,23 @@ describe("@basou/cli", () => {
     const distEntry = resolve(here, "..", "dist", "index.js");
     const { stdout } = await execFileAsync(process.execPath, [distEntry, "--version"]);
 
-    const stampedDate = /,\s*(\S+)\)/.exec(stdout.trim())?.[1];
+    const line = stdout.trim();
+    const stampedDate = /,\s*(\S+)\)/.exec(line)?.[1];
+    const stampedCommit = /\(build (\S+?),/.exec(line)?.[1];
     expect(stampedDate).toBeDefined();
-    if (stampedDate === undefined || stampedDate === "unknown") return;
+    if (stampedDate === undefined || stampedCommit === undefined || stampedCommit === "unknown") {
+      return;
+    }
 
-    const { stdout: commitDate } = await execFileAsync("git", ["log", "-1", "--format=%cI"], {
-      cwd: here,
-    });
+    // Compared against the commit the stamp NAMES, not against HEAD. Asserting
+    // HEAD would fail whenever the dist was not rebuilt after the last commit —
+    // a true statement about staleness, but not the property under test, which
+    // is that the date comes from the commit rather than from a wall clock.
+    const { stdout: commitDate } = await execFileAsync(
+      "git",
+      ["log", "-1", "--format=%cI", stampedCommit.replace(/-dirty$/, "")],
+      { cwd: here },
+    );
     expect(stampedDate).toBe(commitDate.trim());
   });
 
