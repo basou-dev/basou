@@ -71,6 +71,7 @@ export {
   EventIdSchema,
   EventSourceSchema,
   IsoTimestampSchema,
+  LOCAL_CLI_EVENT_SOURCE,
   RiskLevelSchema,
   SchemaVersionSchema,
   SessionIdSchema,

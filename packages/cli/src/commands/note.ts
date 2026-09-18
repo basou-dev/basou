@@ -7,6 +7,7 @@ import {
   EVENT_SCHEMA_VERSION,
   type Event,
   findErrorCode,
+  LOCAL_CLI_EVENT_SOURCE,
   type PrefixedId,
   readManifest,
   resolveSessionId,
@@ -204,7 +205,7 @@ function buildNoteEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "note_added",
     body: input.body,
     // `basou note` is the resume-hint command; mark it so orientation surfaces

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
+import { LOCAL_CLI_EVENT_SOURCE } from "../schemas/shared.schema.js";
 import type { TaskStatus } from "../schemas/task.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { createManifest, writeManifest } from "../storage/manifest.js";
@@ -119,7 +120,7 @@ function decisionLine(
   decisionId: string,
   title: string,
   occurredAt: string,
-  opts?: { kind?: "decision" | "track"; rationale?: string | null },
+  opts?: { kind?: "decision" | "track"; rationale?: string | null; source?: string },
 ): string {
   return `${JSON.stringify({
     schema_version: "0.1.0",
@@ -127,7 +128,7 @@ function decisionLine(
     id: EVT(evt),
     session_id: id,
     occurred_at: occurredAt,
-    source: "human",
+    source: opts?.source ?? "human",
     decision_id: decisionId,
     title,
     ...(opts?.kind !== undefined ? { kind: opts.kind } : {}),
@@ -2214,6 +2215,46 @@ describe("orientation — open tracks (strategic continuation)", () => {
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(body).toContain("### Open tracks");
     expect(body).not.toContain("no planned tasks or recorded next step");
+  });
+
+  it("points at `basou decision gaps` when a captured decision has no task carrying it", async () => {
+    const paths = await setupPaths();
+    const sid = SES("G01");
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      // After DECISION_GAPS_EPOCH and written by `basou decision capture`, so it
+      // is in the population the count is defined over.
+      decisionLine(sid, "EG1", DEC("GA1"), "a ratified plan", "2026-09-19T00:00:00.000Z", {
+        source: LOCAL_CLI_EVENT_SOURCE,
+      }),
+    );
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.openDecisionGaps).toBe(1);
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("basou decision gaps");
+  });
+
+  it("stays silent about decision gaps once a task carries the decision", async () => {
+    const paths = await setupPaths();
+    const sid = SES("G02");
+    await placeSession(
+      paths,
+      { id: sid, status: "completed", source: "claude-code-import" },
+      decisionLine(sid, "EG2", DEC("GA2"), "a ratified plan", "2026-09-19T00:00:00.000Z", {
+        source: LOCAL_CLI_EVENT_SOURCE,
+      }),
+    );
+    await mkdir(paths.tasks, { recursive: true });
+    await writeFile(
+      join(paths.tasks, "task_01HXABCDEF1234567890ABCG02.md"),
+      `covers ${DEC("GA2")}`,
+    );
+
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.openDecisionGaps).toBe(0);
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).not.toContain("basou decision gaps");
   });
 
   it("summarizeOrientation exposes openTracks (with rationale) as structured facts", async () => {

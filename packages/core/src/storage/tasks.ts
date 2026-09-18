@@ -9,7 +9,12 @@ import type { Event } from "../schemas/event.schema.js";
 import { EVENT_SCHEMA_VERSION } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { SessionStatus } from "../schemas/session.schema.js";
-import { IsoTimestampSchema, SessionIdSchema, TaskIdSchema } from "../schemas/shared.schema.js";
+import {
+  IsoTimestampSchema,
+  LOCAL_CLI_EVENT_SOURCE,
+  SessionIdSchema,
+  TaskIdSchema,
+} from "../schemas/shared.schema.js";
 import {
   TASK_SCHEMA_VERSION,
   type Task,
@@ -345,7 +350,10 @@ async function safeUpdateTaskIndex(
   }
 }
 
-const ARCHIVE_DIR_NAME = "archive";
+/** Subdirectory of `paths.tasks` holding archived task files. Exported so a
+ * reader looking for archived tasks resolves the same directory the archiver
+ * writes to, rather than repeating the literal. */
+export const ARCHIVE_DIR_NAME = "archive";
 
 function archiveTasksDir(paths: BasouPaths): string {
   return join(paths.tasks, ARCHIVE_DIR_NAME);
@@ -634,7 +642,7 @@ function buildTaskCreatedEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "task_created",
     task_id: input.taskId,
     title: input.title,
@@ -654,7 +662,7 @@ function buildTaskStatusChangedEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "task_status_changed",
     task_id: input.taskId,
     from: input.from,
@@ -713,7 +721,7 @@ function buildTaskReconciledEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "task_reconciled",
     task_id: input.taskId,
     removed_created_in_session: input.removedCreatedInSession,
@@ -734,7 +742,7 @@ function buildTaskDeletedEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "task_deleted",
     task_id: input.taskId,
     title: input.title,
@@ -753,7 +761,7 @@ function buildTaskArchivedEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "task_archived",
     task_id: input.taskId,
     title: input.title,
@@ -774,7 +782,7 @@ function buildTaskLinkageRefreshedEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "task_linkage_refreshed",
     task_id: input.taskId,
     added_linked_sessions: input.addedLinkedSessions,

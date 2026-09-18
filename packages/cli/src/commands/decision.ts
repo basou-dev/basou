@@ -14,6 +14,7 @@ import {
   type Event,
   findErrorCode,
   isValidPrefixedId,
+  LOCAL_CLI_EVENT_SOURCE,
   loadSessionEntries,
   type PrefixedId,
   prefixedUlid,
@@ -32,6 +33,7 @@ import {
   shortSessionId,
 } from "../lib/error-render.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
+import { registerDecisionGapsCommand } from "./decision-gaps.js";
 
 // Raised from the original 40-char cap to 80 chars so a long decision
 // title (= the most common ad-hoc trigger) retains its core information
@@ -75,6 +77,8 @@ export function registerDecisionCommand(program: Command): void {
   const decision = program
     .command("decision")
     .description("Record human-authored decisions as events");
+
+  registerDecisionGapsCommand(decision);
 
   decision
     .command("record")
@@ -707,7 +711,7 @@ function buildDecisionVoidedEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "decision_voided",
     decision_id: input.decisionId,
     ...(input.reason !== undefined ? { reason: input.reason } : {}),
@@ -1065,7 +1069,7 @@ function buildDecisionEvent(input: {
     id: input.eventId,
     session_id: input.sessionId,
     occurred_at: input.occurredAt,
-    source: "local-cli",
+    source: LOCAL_CLI_EVENT_SOURCE,
     type: "decision_recorded",
     decision_id: input.decisionId,
     title: input.title,
