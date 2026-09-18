@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import { verifyEventsChain } from "../events/verify.js";
 import type { Event } from "../schemas/event.schema.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
+import { SESSION_SCHEMA_VERSION } from "../schemas/session.schema.js";
 import {
   appendEventToExistingSession,
   createAdHocSessionWithEvent,
@@ -164,7 +165,9 @@ describe("createAdHocSessionWithEvent", () => {
     });
 
     const yaml = await readSessionYaml(paths, result.sessionId);
-    expect(yaml.schema_version).toBe("0.1.0");
+    // Pinned as a LITERAL: this asserts what a writer put on DISK, which a
+    // constant shared with the writer cannot do.
+    expect(yaml.schema_version).toBe("0.2.0");
     expect(yaml.session.status).toBe("completed");
     expect(yaml.session.started_at).toBe(occurredAt);
     expect(yaml.session.ended_at).toBe(occurredAt);

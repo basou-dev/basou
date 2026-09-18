@@ -90,16 +90,24 @@ export const SessionInnerImportSchema = z
  * validates a payload against the published artifact gets the same answer the
  * importer will give, instead of passing validation and being rejected at run
  * time. Unrelated to the events INSIDE the envelope, which carry their own
- * `schema_version` and are at 0.2.0.
+ * `schema_version` and are at 0.3.0.
+ *
+ * Bumped to 0.2.0 when timestamps began requiring seconds. That narrowing
+ * reaches the envelope's OWN fields -- `session.started_at`, `session.ended_at`
+ * and both `active_intervals` bounds -- so unlike the 0.2.0 event bump, whose
+ * bytes changed only because of the union it embeds, the envelope's own
+ * accepted set moved and the `$id` moves with it. A third party still gets one
+ * answer from the artifact and the importer, which is the whole point of
+ * pinning the version here.
  */
-export const SESSION_IMPORT_SCHEMA_VERSION = "0.1.0" as const;
+export const SESSION_IMPORT_SCHEMA_VERSION = "0.2.0" as const;
 
 export const SessionImportPayloadSchema = z
   .object({
     schema_version: z.string().meta({
       const: SESSION_IMPORT_SCHEMA_VERSION,
       description:
-        "Import envelope version. Must be exactly 0.1.0; any other value is rejected by the importer. This is the envelope's own version, not the version of the events it carries.",
+        "Import envelope version. Must be exactly 0.2.0; any other value is rejected by the importer. This is the envelope's own version, not the version of the events it carries.",
     }),
     session: SessionInnerImportSchema,
     events: z.array(EventSchema),

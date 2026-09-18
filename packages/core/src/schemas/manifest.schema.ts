@@ -1,6 +1,20 @@
 import { z } from "zod";
 import { IsoTimestampSchema, SchemaVersionSchema, WorkspaceIdSchema } from "./shared.schema.js";
 
+/**
+ * `schema_version` stamped on NEWLY WRITTEN `.basou/manifest.yaml`.
+ *
+ * 0.2.0 requires seconds in every timestamp. That NARROWS the field's domain,
+ * which §7.3 forbids except under the vacuous-narrowing rule the same section
+ * states: no value basou has ever written omits seconds, so the set of
+ * documents this refuses is empty. See `docs/spec/schemas.md` for the read
+ * rule and the measurement. The narrowing is shared with the event format, so
+ * every durable document bumps together.
+ *
+ * Note: basou writes this document.
+ */
+export const MANIFEST_SCHEMA_VERSION = "0.2.0" as const;
+
 // `repository_url` was removed: it was a write-once copy of git's `remote.origin.url`
 // that nothing read and that drifted on an org move/rename. The manifest holds only
 // declarative intent; the remote is an observed git fact, derived live where needed

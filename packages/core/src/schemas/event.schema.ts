@@ -12,9 +12,16 @@ import {
 } from "./shared.schema.js";
 
 /**
- * `schema_version` stamped on NEWLY WRITTEN events. Bumped to 0.2.0 when
- * `command_executed.duration_ms` became nullable, which widened the field's
- * domain and so is a breaking change to the format.
+ * `schema_version` stamped on NEWLY WRITTEN events.
+ *
+ * 0.3.0 requires seconds in every timestamp. That NARROWS the field's domain,
+ * which §7.3 forbids except under the vacuous-narrowing rule the same section
+ * states: no value basou has ever written omits seconds, so the set of
+ * documents this refuses is empty. See `docs/spec/schemas.md` for the read
+ * rule and the measurement.
+ *
+ * 0.2.0 made `command_executed.duration_ms` nullable, which widened the
+ * field's domain and so is a breaking change to the format.
  *
  * The bump does not change what any value already on disk means: `0` meant "not
  * observed" before and still does. What changes is that a writer now says so
@@ -23,13 +30,17 @@ import {
  * `readObservedDuration`), and the
  * version is a statement about validation, not about interpretation.
  *
- * Reading is unaffected — {@link SchemaVersionSchema} accepts any 0.x.y — so
- * events already on disk keep validating, and are not rewritten in place (a
- * session IS re-derived, and restamped, when its source log grows). Only EVENTS
- * carry this version: the other `.basou/` documents did not change, so their
- * `schema_version` stays 0.1.0.
+ * Reading is unaffected by the 0.2.0 bump — {@link SchemaVersionSchema}
+ * accepts any 0.x.y — so events already on disk keep validating, and are not
+ * rewritten in place (a session IS re-derived, and restamped, when its source
+ * log grows). The 0.3.0 narrowing is what a stored value IS checked against,
+ * which is why it had to be empty of real documents before it could land.
+ *
+ * The 0.3.0 timestamp narrowing is shared, so the other durable documents
+ * (manifest, session, task, approval) bump alongside it. The two caches
+ * (`status`, `task-index`) are rebuilt rather than versioned.
  */
-export const EVENT_SCHEMA_VERSION = "0.2.0" as const;
+export const EVENT_SCHEMA_VERSION = "0.3.0" as const;
 
 // Common base every event variant extends. Each variant declares its own
 // `type: z.literal(...)` and adds variant-specific fields.

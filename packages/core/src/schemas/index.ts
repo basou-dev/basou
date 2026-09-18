@@ -1,5 +1,6 @@
 export type { Approval, ApprovalStatus } from "./approval.schema.js";
 export {
+  APPROVAL_SCHEMA_VERSION,
   ApprovalSchema,
   ApprovalStatusSchema,
 } from "./approval.schema.js";
@@ -32,7 +33,7 @@ export { EVENT_SCHEMA_VERSION, EventSchema } from "./event.schema.js";
 export type { JsonSchemaArtifact } from "./json-schema.js";
 export { buildJsonSchemas, JSON_SCHEMA_VERSIONS, serializeJsonSchema } from "./json-schema.js";
 export type { Manifest } from "./manifest.schema.js";
-export { ManifestSchema, unknownManifestKeys } from "./manifest.schema.js";
+export { MANIFEST_SCHEMA_VERSION, ManifestSchema, unknownManifestKeys } from "./manifest.schema.js";
 export {
   hasRetiredZeroDuration,
   readObservedDuration,
@@ -47,6 +48,7 @@ export type {
   SessionStatus,
 } from "./session.schema.js";
 export {
+  SESSION_SCHEMA_VERSION,
   SessionIntegritySchema,
   SessionMetricsSchema,
   SessionSchema,
@@ -78,7 +80,7 @@ export {
 export type { StatusSnapshot } from "./status.schema.js";
 export { StatusSchema } from "./status.schema.js";
 export type { Task, TaskStatus } from "./task.schema.js";
-export { TaskSchema, TaskStatusSchema } from "./task.schema.js";
+export { TASK_SCHEMA_VERSION, TaskSchema, TaskStatusSchema } from "./task.schema.js";
 export type { TaskIndex, TaskIndexEntry } from "./task-index.schema.js";
 export {
   TASK_INDEX_SCHEMA_VERSION,

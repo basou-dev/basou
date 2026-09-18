@@ -2,8 +2,39 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { type Approval, ApprovalSchema } from "../schemas/approval.schema.js";
+import { normalizeIsoTimestamp } from "../schemas/iso-timestamp.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { readYamlFile } from "../storage/yaml-store.js";
+
+/**
+ * Bring an approval's timestamps into the shape the schema accepts, before it
+ * is parsed.
+ *
+ * This is the boundary §7.3 of `docs/spec/schemas.md` names: basou never
+ * WRITES an approval -- they are placed by an outside orchestrator -- so the
+ * refused set cannot be enumerated the way the durable formats basou writes
+ * can be, and the version that required seconds had to come with a normalizer
+ * here. Without it a producer that omits seconds does not merely lose the
+ * line: `loadApproval` throws, and neither the orientation nor the report
+ * renderer catches it, so one such file takes both commands down and hides a
+ * pending approval from `approval list`.
+ *
+ * Only the three timestamp fields are touched, only when they are strings, and
+ * only by {@link normalizeIsoTimestamp} -- which restores an omitted `:00` and
+ * changes nothing else. Anything it does not recognize is passed through for
+ * the schema to refuse, so this widens no accepted set; it repairs a spelling
+ * the accepted set used to admit.
+ */
+function normalizeApprovalTimestamps(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const record = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...record };
+  for (const field of ["created_at", "expires_at", "resolved_at"] as const) {
+    const value = out[field];
+    if (typeof value === "string") out[field] = normalizeIsoTimestamp(value);
+  }
+  return out;
+}
 
 /** Which side of `.basou/approvals/` an approval YAML lives on. */
 export type ApprovalLocation = "pending" | "resolved";
@@ -37,7 +68,7 @@ export async function loadApproval(
       if (error instanceof Error && error.message === "YAML file not found") continue;
       throw new Error("Failed to read approval", { cause: error });
     }
-    const result = ApprovalSchema.safeParse(raw);
+    const result = ApprovalSchema.safeParse(normalizeApprovalTimestamps(raw));
     if (!result.success) {
       throw new Error("Failed to read approval", { cause: result.error });
     }

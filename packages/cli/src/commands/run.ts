@@ -29,6 +29,7 @@ import {
   resolveClaudeCodeCommand,
   resolveCodexCommand,
   resolveRepositoryRoot,
+  SESSION_SCHEMA_VERSION,
   type Session,
   SessionSchema,
   type SessionSourceKind,
@@ -641,7 +642,7 @@ function buildInitialSession(input: {
 }): Session {
   const cmdline = [input.command, ...input.args].join(" ");
   return {
-    schema_version: "0.1.0",
+    schema_version: SESSION_SCHEMA_VERSION,
     session: {
       id: input.id,
       label: `basou run ${cmdline} (${input.startedAt})`,

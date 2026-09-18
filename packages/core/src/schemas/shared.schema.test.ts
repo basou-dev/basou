@@ -26,13 +26,16 @@ describe("IsoTimestampSchema", () => {
   });
 
   // The accepted set is the published contract: it is what every JSON Schema
-  // artifact carries as its `pattern`, under a `$id` that does not move. The
-  // extension rules in docs/spec/schemas.md forbid narrowing a domain and gate
-  // widening behind a `schema_version` bump, so moving any boundary below is a
-  // change to the event format and not a refactor. Each case names the boundary
-  // it holds rather than leaving the set implied by three examples.
+  // artifact carries as its `pattern`. The extension rules in
+  // docs/spec/schemas.md gate widening behind a `schema_version` bump and
+  // forbid narrowing outright, except where the narrowing refuses a set no
+  // writer has ever produced -- which is the exception the seconds requirement
+  // below landed under, and it moved every durable `$id`. So moving any
+  // boundary here is a format change and not a refactor. Each case names the
+  // boundary it holds rather than leaving the set implied by three examples.
   it.each([
-    ["seconds are optional", "2026-05-04T09:00Z", true],
+    ["seconds are required", "2026-05-04T09:00Z", false],
+    ["seconds are required with an offset too", "2026-05-04T09:00+09:00", false],
     ["fractional seconds are accepted", "2026-05-04T09:00:00.123456Z", true],
     ["a negative offset is accepted", "2026-05-04T09:00:00-05:00", true],
     ["an offset or Z is required", "2026-05-04T09:00:00", false],

@@ -1,8 +1,10 @@
 import { type PrefixedId, prefixedUlid } from "../../ids/ulid.js";
 import type { Event } from "../../schemas/event.schema.js";
 import { EVENT_SCHEMA_VERSION } from "../../schemas/event.schema.js";
+import { normalizeIsoTimestamp } from "../../schemas/iso-timestamp.js";
 import type { Manifest } from "../../schemas/manifest.schema.js";
 import type { SessionImportPayload } from "../../schemas/session-import.schema.js";
+import { SESSION_IMPORT_SCHEMA_VERSION } from "../../schemas/session-import.schema.js";
 import {
   ACTIVE_GAP_CAP_MS,
   activeTimeFromTimestamps,
@@ -121,7 +123,11 @@ export function claudeTranscriptToImportPayload(
   const seenEngagementMessageIds = new Set<string>();
 
   for (const record of records) {
-    const ts = readString(record.timestamp);
+    // Normalize at the boundary: from event 0.3.0 the schema requires
+    // seconds, and a vendor that omitted them would otherwise have its
+    // events dropped as schema violations rather than imported.
+    const rawTs = readString(record.timestamp);
+    const ts = rawTs === undefined ? undefined : normalizeIsoTimestamp(rawTs);
     if (ts === undefined) continue;
     if (minTs === undefined || Date.parse(ts) < Date.parse(minTs)) minTs = ts;
     if (maxTs === undefined || Date.parse(ts) > Date.parse(maxTs)) maxTs = ts;
@@ -278,7 +284,7 @@ export function claudeTranscriptToImportPayload(
   const metrics = Object.keys(metricsFields).length > 0 ? metricsFields : undefined;
 
   const payload: SessionImportPayload = {
-    schema_version: "0.1.0",
+    schema_version: SESSION_IMPORT_SCHEMA_VERSION,
     session: {
       label,
       workspace_id: options.workspaceId,

@@ -28,6 +28,34 @@ a new optional flag, a new optional field, a new SDK export, an added field in a
 `--json` payload. Removing or changing the meaning of anything on a guaranteed
 surface is a breaking change and requires a major bump (`2.0`).
 
+### One carve-out: the import envelope version may move at a minor
+
+`basou session import` and `basou import` require the envelope's
+`schema_version` to equal exactly one value, published as the `const` in
+`session-import.schema.json`. **That value may move within a `1.x` line**, and a
+producer holding the previous one is refused.
+
+This is stated rather than left to the general rule, because the general rule
+would freeze it until `2.0` and that is not the intent. The envelope describes a
+payload basou accepts at a boundary it does not write; when the durable formats
+it carries narrow, the envelope narrows with them, and pinning the envelope's
+version until a major would mean either a stale envelope accepting payloads the
+importer can no longer store, or a major bump for a change nothing on disk
+notices.
+
+The carve-out is bounded by three things, and it is only defensible with all
+three:
+
+1. **The refusal is loud.** A wrong version is an immediate error naming the
+   value received, the value expected and the artifact to read — never a
+   silently dropped or partially imported payload.
+2. **The version is discoverable at runtime.** `@basou/core` ships the artifact,
+   so a producer can read the `const` from the installed package instead of
+   hard-coding it. A producer that pins the value by hand has opted out of this.
+3. **It applies to the envelope's own version only** — not to the CLI's flags,
+   its exit codes, or any `--json` output shape, which stay under the additive
+   rule above.
+
 ## What is *not* guaranteed
 
 - **`@basou/core` is published on npm but is not a semver-guaranteed API.**

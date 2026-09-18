@@ -1,6 +1,10 @@
 import { lstat } from "node:fs/promises";
 import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
-import { type Manifest, ManifestSchema } from "../schemas/manifest.schema.js";
+import {
+  MANIFEST_SCHEMA_VERSION,
+  type Manifest,
+  ManifestSchema,
+} from "../schemas/manifest.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { readYamlFile, writeYamlFile } from "./yaml-store.js";
 
@@ -45,7 +49,7 @@ export function createManifest(input: CreateManifestInput): Manifest {
   };
 
   const manifest: Manifest = {
-    schema_version: "0.1.0",
+    schema_version: MANIFEST_SCHEMA_VERSION,
     basou_version: "0.1.0",
     workspace: {
       id: workspaceId,

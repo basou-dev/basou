@@ -22,6 +22,7 @@ import {
   readManifest,
   readYamlFile,
   resolveRepositoryRoot,
+  SESSION_SCHEMA_VERSION,
   type Session,
   SessionSchema,
   sanitizeWorkingDirectory,
@@ -402,7 +403,7 @@ function buildInitialSession(input: {
 }): Session {
   const cmdline = [input.command, ...input.args].join(" ");
   return {
-    schema_version: "0.1.0",
+    schema_version: SESSION_SCHEMA_VERSION,
     session: {
       id: input.id,
       label: `basou exec ${cmdline} (${input.startedAt})`,

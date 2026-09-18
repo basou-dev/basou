@@ -138,7 +138,11 @@ describe("importSessionFromJson", () => {
     expect(result.sessionId).not.toBe(INPUT_SES_ID);
 
     const yaml = await readSessionYaml(paths, result.sessionId);
-    expect(yaml.schema_version).toBe("0.1.0");
+    // A LITERAL, and deliberately not SESSION_SCHEMA_VERSION: this asserts what
+    // the writer put on disk. Reading the constant the writer reads makes the
+    // assertion agree with any value, which is how this path kept stamping
+    // 0.1.0 through a bump that moved the session format to 0.2.0.
+    expect(yaml.schema_version).toBe("0.2.0");
     expect(yaml.session.id).toBe(result.sessionId);
     expect(yaml.session.status).toBe("imported");
     expect(yaml.session.workspace_id).toBe(LOCAL_WS_ID);

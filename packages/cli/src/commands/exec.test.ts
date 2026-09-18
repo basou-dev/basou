@@ -8,6 +8,7 @@ import {
   appendEvent,
   basouPaths,
   createManifest,
+  EVENT_SCHEMA_VERSION,
   ensureBasouDirectory,
   type ProcessRunner,
   type RunOptions,
@@ -154,7 +155,10 @@ describe("runExec", () => {
     const sessionId = await findOnlySessionId(repo);
     const ce = JSON.parse((await readEventsLines(repo, sessionId))[2] ?? "{}");
     expect(ce.duration_ms).toBe(1500);
-    expect(ce.schema_version).toBe("0.2.0");
+    // Pinned as a LITERAL on purpose. Reading the same constant the writer
+    // reads makes the assertion a tautology that cannot fail on a version
+    // mismatch -- which is how a writer that never moved went unnoticed.
+    expect(ce.schema_version).toBe("0.3.0");
   });
 
   it("writes a non-positive measurement as unobserved, never as a measured zero", async () => {

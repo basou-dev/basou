@@ -1,14 +1,14 @@
 import { z } from "zod";
-import { ApprovalSchema } from "./approval.schema.js";
+import { APPROVAL_SCHEMA_VERSION, ApprovalSchema } from "./approval.schema.js";
 import { EVENT_SCHEMA_VERSION, EventSchema } from "./event.schema.js";
-import { ManifestSchema } from "./manifest.schema.js";
-import { SessionSchema } from "./session.schema.js";
+import { MANIFEST_SCHEMA_VERSION, ManifestSchema } from "./manifest.schema.js";
+import { SESSION_SCHEMA_VERSION, SessionSchema } from "./session.schema.js";
 import {
   SESSION_IMPORT_SCHEMA_VERSION,
   SessionImportPayloadSchema,
 } from "./session-import.schema.js";
 import { StatusSchema } from "./status.schema.js";
-import { TaskSchema } from "./task.schema.js";
+import { TASK_SCHEMA_VERSION, TaskSchema } from "./task.schema.js";
 import { TaskIndexSchema } from "./task-index.schema.js";
 
 /**
@@ -28,11 +28,11 @@ import { TaskIndexSchema } from "./task-index.schema.js";
  * changed without the envelope's own format changing.
  */
 export const JSON_SCHEMA_VERSIONS = {
-  manifest: "0.1.0",
-  session: "0.1.0",
+  manifest: MANIFEST_SCHEMA_VERSION,
+  session: SESSION_SCHEMA_VERSION,
   event: EVENT_SCHEMA_VERSION,
-  task: "0.1.0",
-  approval: "0.1.0",
+  task: TASK_SCHEMA_VERSION,
+  approval: APPROVAL_SCHEMA_VERSION,
   status: "0.1.0",
   "task-index": "0.1.0",
   "session-import": SESSION_IMPORT_SCHEMA_VERSION,

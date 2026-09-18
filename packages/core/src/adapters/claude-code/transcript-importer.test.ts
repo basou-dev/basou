@@ -14,6 +14,33 @@ function transform(records: ClaudeTranscriptRecord[]) {
 }
 
 describe("claudeTranscriptToImportPayload", () => {
+  // Regression guard for the import boundary the timestamp narrowing made
+  // mandatory (docs/spec/schemas.md §7.3). Without the normalizer call this
+  // adapter would emit `occurred_at` values the event schema refuses, and the
+  // lines would be DROPPED on read with a `schema_violation` rather than
+  // reported -- which is the harm the rule exists to prevent. Deleting the
+  // call from the adapter must fail a test, not pass quietly.
+  it("normalizes a vendor timestamp that omits seconds, and keeps its offset", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      { type: "user", timestamp: "2026-05-10T00:00+09:00", cwd: CWD, message: { content: [] } },
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:05+09:00",
+        cwd: CWD,
+        message: { content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }] },
+      },
+    ];
+    const payload = transform(records);
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+
+    // The payload validates, which it would not if the seconds were missing.
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+    expect(payload.events.every((e) => /T\d{2}:\d{2}:\d{2}/.test(e.occurred_at))).toBe(true);
+    // The offset is preserved rather than folded to UTC.
+    expect(payload.session.started_at).toBe("2026-05-10T00:00:00+09:00");
+  });
+
   it("derives session lifecycle + command_executed + file_changed from tool uses", () => {
     const records: ClaudeTranscriptRecord[] = [
       {
