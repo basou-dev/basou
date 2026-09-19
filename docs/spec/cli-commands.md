@@ -79,6 +79,41 @@ one's. basou therefore writes to exactly one of them, with one kind of content:
   basou left there, writing no `.basou-bak` (the block is being removed because
   it should not be on the machine).
 
+**Reaching a session that is already running.** The protocol block is read at
+SESSION START, so a protocol updated while a session runs never reaches that
+session: the agent goes on following the text it read at the start, which is
+not disobedience — the new text simply never arrived. No SessionStart hook can
+close this, because it fires at the one moment the copy is already fresh. The
+Stop hook does: `basou hook stop` hands a running session the protocols when
+they changed after it started.
+
+It delivers the protocol TEXT, not a pointer to it. basou is a read-only reader
+and cannot observe whether an agent re-read a file, so a "go re-read this"
+notice would leave the deciding step outside anything basou can see; carrying
+the text makes the delivery and the reading one act. It does not make the
+ADOPTION observable — nothing would — but it removes the step that was
+avoidably invisible. And it sends the COMPLETE current set rather than a diff,
+which is what lets the message say truthfully that it supersedes the copy read
+at start, including a protocol that has been withdrawn.
+
+How it knows: `protocol sync` records inside the block when the rendered
+protocol text last changed — a timestamp and a digest, with nothing the
+operator wrote on that line. A block whose stamp is newer than the session's
+start is newer than the copy that session holds. The timestamp is carried
+forward whenever the rendered text is unchanged, so a sync that changes nothing
+writes the same bytes and still reports "already up to date", and upgrading
+from a basou that wrote no stamp announces nothing to the sessions running at
+that moment.
+
+It reads the rendered block and nothing else — not the protocols config, not
+the source files. So an edit the operator has NOT synced cannot reach a
+session: unpublished text is not in the block. A block written by an older
+basou carries no stamp, and nothing is claimed about it until the next sync.
+Delivery happens once per block STATE, not once per session: the hook finds its
+own earlier delivery in the transcript, where the tool records a hook's output,
+so a second update in one session — usually the correction of the first — still
+lands, and nothing new is written to disk.
+
 **How a position reaches Codex instead: the SessionStart hook.** `basou hook
 install codex` registers, once, in the user-global `~/.codex/hooks.json`, a
 SessionStart hook that runs `basou hook session-start`. Codex runs it when a

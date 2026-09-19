@@ -31,6 +31,7 @@ export {
   resolveClaudeCodeCommand,
   STOP_HOOK_TIMEOUT_SECONDS,
   summarizeAdapterOutput,
+  transcriptStartedAt,
   upsertStopHook,
 } from "./adapters/claude-code/index.js";
 export type {
@@ -234,6 +235,19 @@ export type {
   WorkspaceViewPlan,
 } from "./project/workspace-view.js";
 export { planWorkspaceView } from "./project/workspace-view.js";
+export type { ProtocolStamp } from "./protocol/protocol-stamp.js";
+export {
+  carryForwardProtocolStamp,
+  isProtocolUpdateDue,
+  PROTOCOL_UPDATE_TOKEN_PREFIX,
+  parseProtocolStamp,
+  protocolBlockHash,
+  protocolSectionsFrom,
+  protocolUpdateToken,
+  renderProtocolStamp,
+  renderProtocolUpdate,
+  unstampedProtocolSectionsFrom,
+} from "./protocol/protocol-stamp.js";
 export type {
   ReportApprovalItem,
   ReportData,

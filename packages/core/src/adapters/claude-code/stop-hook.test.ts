@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_STOP_HOOK_MIN_EDITS, evaluateStopHook } from "./stop-hook.js";
+import { DEFAULT_STOP_HOOK_MIN_EDITS, evaluateStopHook, transcriptStartedAt } from "./stop-hook.js";
 import type { ClaudeTranscriptRecord } from "./transcript-importer.js";
 
 /** Build an assistant record carrying the given tool_use items. */
@@ -422,5 +422,51 @@ describe("evaluateStopHook (review gate)", () => {
       stopHookActive: true,
     });
     expect(result.review).toEqual({ fires: false, reason: "stop_hook_active" });
+  });
+});
+
+describe("transcriptStartedAt", () => {
+  it("returns the first record's timestamp", () => {
+    expect(
+      transcriptStartedAt([
+        { type: "user", timestamp: "2026-09-16T09:00:00.000Z" },
+        { type: "assistant", timestamp: "2026-09-16T09:05:00.000Z" },
+      ]),
+    ).toBe("2026-09-16T09:00:00.000Z");
+  });
+
+  it("scans past a leading record that carries no timestamp", () => {
+    expect(
+      transcriptStartedAt([
+        { type: "summary", summary: "an earlier conversation" },
+        { type: "user", timestamp: "2026-09-16T09:00:00.000Z" },
+      ]),
+    ).toBe("2026-09-16T09:00:00.000Z");
+  });
+
+  it("skips a timestamp that is not a parseable date", () => {
+    expect(
+      transcriptStartedAt([
+        { type: "user", timestamp: "whenever" },
+        { type: "user", timestamp: "2026-09-16T09:00:00.000Z" },
+      ]),
+    ).toBe("2026-09-16T09:00:00.000Z");
+  });
+
+  it("skips a timestamp that is not a string", () => {
+    expect(
+      transcriptStartedAt([
+        { type: "user", timestamp: 1_758_000_000_000 },
+        { type: "user", timestamp: "2026-09-16T09:00:00.000Z" },
+      ]),
+    ).toBe("2026-09-16T09:00:00.000Z");
+  });
+
+  it("returns undefined when no record carries one", () => {
+    expect(transcriptStartedAt([{ type: "summary" }, { type: "user" }])).toBeUndefined();
+  });
+
+  it("returns undefined for an empty transcript", () => {
+    expect(transcriptStartedAt([])).toBeUndefined();
   });
 });
