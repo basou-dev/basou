@@ -71,6 +71,19 @@ describe("evaluateStopHook (content-aware trigger)", () => {
     expect(result.additionalContext).toContain("just stop");
   });
 
+  it("the nudge states the capture input shape the command actually accepts", () => {
+    // This text is what basou injects into a RUNNING session, so it is the one
+    // place a stale input shape does real damage: an agent following it
+    // literally is the caller. It named only `title` as required while `kind`
+    // was the field whose omission failed silently.
+    const result = evaluateStopHook({ records: [edits(2)], stopHookActive: false });
+    if (result.kind !== "nudge") throw new Error("expected nudge");
+    expect(result.additionalContext).toContain('"title" and "kind" required');
+    expect(result.additionalContext).toContain('"track"');
+    expect(result.additionalContext).toContain('"decision"');
+    expect(result.additionalContext).not.toContain('"title" required, plus optional');
+  });
+
   it("stays silent for a single trivial edit (below the edit threshold)", () => {
     const result = evaluateStopHook({ records: [edits(1)], stopHookActive: false });
     expect(result.kind).toBe("silent");

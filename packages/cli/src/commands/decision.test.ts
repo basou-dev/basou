@@ -698,7 +698,10 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
   it("cap-1: a 2-decision batch lands in ONE ad-hoc session (4 lifecycle + 2 decisions)", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
-    const input = JSON.stringify([{ title: "first" }, { title: "second" }]);
+    const input = JSON.stringify([
+      { title: "first", kind: "decision" },
+      { title: "second", kind: "decision" },
+    ]);
     await doRunDecisionCapture({}, captureCtx(repo, input));
 
     const events = await readAdHocEvents(repo);
@@ -720,7 +723,10 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
   it("cap-2: text output lists each decision id + title and the ad-hoc session", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
-    await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title: "ship it" }])));
+    await doRunDecisionCapture(
+      {},
+      captureCtx(repo, JSON.stringify([{ title: "ship it", kind: "decision" }])),
+    );
     const stdout = joinCalls(out);
     expect(stdout).toContain("Captured 1 decision in ad-hoc session");
     expect(stdout).toMatch(/- decision_[0-9A-Z]+: ship it/);
@@ -737,6 +743,7 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
         rejected_reason: "hoisting bugs",
         linked_events: ["evt_01HXABCDEF1234567890ABCDC1"],
         linked_files: ["pnpm-workspace.yaml"],
+        kind: "decision",
       },
     ]);
     await doRunDecisionCapture({}, captureCtx(repo, input));
@@ -751,12 +758,12 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     expect(decision.linked_files).toEqual(["pnpm-workspace.yaml"]);
   });
 
-  it('cap-track-1: kind:"track" is persisted onto the decision event; a plain item omits kind', async () => {
+  it("cap-track-1: BOTH declared vessels are persisted onto the decision event", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
     const input = JSON.stringify([
       { title: "admin form coverage", kind: "track", rationale: "stopgap" },
-      { title: "ordinary decision" },
+      { title: "ordinary decision", kind: "decision" },
     ]);
     await doRunDecisionCapture({}, captureCtx(repo, input));
     const decisions = (await readAdHocEvents(repo)).filter((e) => e.type === "decision_recorded");
@@ -766,14 +773,16 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     >;
     const plain = decisions.find((d) => d.title === "ordinary decision") as Record<string, unknown>;
     expect(track.kind).toBe("track");
-    expect(plain.kind).toBeUndefined();
+    expect(plain.kind).toBe("decision");
   });
 
-  it('cap-track-2: an explicit kind:"decision" is accepted but normalized to omission', async () => {
+  it("cap-track-2: an item that declares nothing leaves kind absent on the event", async () => {
+    // Absence now means "nobody said", which is a different fact from "someone
+    // said decision" -- that is what makes the deprecated form findable later.
     const repo = await setupInitedRepo();
     captureStdout();
-    const input = JSON.stringify([{ title: "plain", kind: "decision" }]);
-    await doRunDecisionCapture({}, captureCtx(repo, input));
+    captureStderr();
+    await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title: "undeclared" }])));
     const decision = (await readAdHocEvents(repo)).find(
       (e) => e.type === "decision_recorded",
     ) as Record<string, unknown>;
@@ -789,91 +798,131 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     );
   });
 
-  it("cap-track-4: text + dry-run output name the vessel on every line, track or not", async () => {
+  it("cap-track-4: the DRY-RUN preview names all three states", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
     captureStderr();
-    const input = JSON.stringify([{ title: "the track", kind: "track" }, { title: "plain" }]);
+    const input = JSON.stringify([
+      { title: "the track", kind: "track" },
+      { title: "plain", kind: "decision" },
+      { title: "undeclared" },
+    ]);
     await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
     const stdout = joinCalls(out);
     expect(stdout).toContain("- the track [TRACK]");
     expect(stdout).toContain("- plain [DECISION]");
-    expect(stdout).not.toContain("- plain [TRACK]");
+    expect(stdout).toContain("- undeclared [NO KIND]");
   });
 
-  it("cap-track-5: the written result also marks a plain decision [DECISION]", async () => {
+  it("cap-track-5: the WRITTEN result marks a track and an undeclared item, not a plain one", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
-    const input = JSON.stringify([{ title: "plain" }]);
+    captureStderr();
+    const input = JSON.stringify([
+      { title: "plain", kind: "decision" },
+      { title: "the track", kind: "track" },
+      { title: "undeclared" },
+    ]);
     await doRunDecisionCapture({}, captureCtx(repo, input));
-    expect(joinCalls(out)).toMatch(/- decision_[A-Z0-9]+: plain \[DECISION\]/);
+    const stdout = joinCalls(out);
+    expect(stdout).toMatch(/- decision_[A-Z0-9]+: plain$/m);
+    expect(stdout).toMatch(/- decision_[A-Z0-9]+: the track \[TRACK\]$/m);
+    expect(stdout).toMatch(/- decision_[A-Z0-9]+: undeclared \[NO KIND\]$/m);
   });
 
-  // One case per marker shape the JSDoc and the CHANGELOG claim to catch. Each
-  // row is its own assertion so a shrunk character class or a dropped `/i` fails
-  // loudly instead of hiding behind a sibling row.
-  const MARKER_WARNS: ReadonlyArray<[string, string]> = [
-    ["ascii square", "[TRACK] deploy the importer"],
-    ["ascii lowercase", "[track] deploy the importer"],
-    ["ascii round", "(TRACK) deploy the importer"],
-    ["lenticular", "\u3010TRACK\u3011 deploy the importer"],
-    ["fullwidth square", "\uff3bTRACK\uff3d deploy the importer"],
-    ["fullwidth round", "\uff08TRACK\uff09 deploy the importer"],
-    ["ascii prefix", "TRACK: deploy the importer"],
-    ["fullwidth colon prefix", "TRACK\uff1a deploy the importer"],
-  ];
-  for (const [label, title] of MARKER_WARNS) {
-    it(`cap-track-6 (${label}): a marker in the title with no kind warns instead of passing silently`, async () => {
-      const repo = await setupInitedRepo();
-      captureStdout();
-      const err = captureStderr();
-      await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, JSON.stringify([{ title }])));
-      const stderr = joinCalls(err);
-      expect(stderr).toContain("decision[0]");
-      expect(stderr).toContain("will NOT resurface");
-      expect(stderr).toContain('"kind": "track"');
-    });
-  }
+  it("cap-track-6: an omitted kind warns, names the index, and still writes", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title: "no vessel" }])));
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("decision[0]");
+    expect(stderr).toContain("will NOT resurface");
+    expect(stderr).toContain('"kind": "track"');
+    expect(stderr).toContain("ERROR in the next release");
+    // Deprecated, not refused: losing an agent's last output would be worse.
+    const decisions = (await readAdHocEvents(repo)).filter((e) => e.type === "decision_recorded");
+    expect(decisions).toHaveLength(1);
+  });
 
-  const MARKER_QUIET: ReadonlyArray<[string, Record<string, unknown>]> = [
-    ["a correct track", { title: "[TRACK] a real one", kind: "track" }],
-    // The justification is an OMITTED field; an explicit kind states the intent.
-    [
-      "an explicit decision",
-      { title: "Drop the [TRACK] marker from decisions.md", kind: "decision" },
-    ],
-    ["prose", { title: "Track the duration in ms so the importer can report it" }],
-    ["prose with a colon later", { title: "Importer: track the duration in ms" }],
+  it("cap-track-6b: the warning names the offending index when a later item omits kind", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    const input = JSON.stringify([{ title: "ok", kind: "decision" }, { title: "no vessel" }]);
+    await doRunDecisionCapture({}, captureCtx(repo, input));
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("decision[1]");
+    expect(stderr).not.toContain("decision[0]");
+  });
+
+  it("cap-track-6c: --dry-run warns too, so a preview is never a false clear", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    await doRunDecisionCapture(
+      { dryRun: true },
+      captureCtx(repo, JSON.stringify([{ title: "no vessel" }])),
+    );
+    expect(joinCalls(err)).toContain("will NOT resurface");
+  });
+
+  const DECLARED_QUIET: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ["a track", { title: "a real one", kind: "track" }],
+    ["an explicit decision", { title: "a settled one", kind: "decision" }],
   ];
-  for (const [label, item] of MARKER_QUIET) {
-    it(`cap-track-7 (${label}): the marker warning stays quiet`, async () => {
+  for (const [label, item] of DECLARED_QUIET) {
+    it(`cap-track-7 (${label}): declaring a vessel silences the warning`, async () => {
       const repo = await setupInitedRepo();
       captureStdout();
       const err = captureStderr();
-      await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, JSON.stringify([item])));
+      await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([item])));
       expect(joinCalls(err)).not.toContain("will NOT resurface");
     });
   }
 
-  it("cap-track-8: an explicit kind:decision still writes no kind on the event", async () => {
-    // The suppression above must not change what is persisted.
+  // Titles the retired marker heuristic could never have matched: it read
+  // `TRACK` in Latin letters only, so on a workspace whose titles are written in
+  // another script it fired on nothing. Warning on the omission itself needs no
+  // guess about what a title meant, and catches strictly more.
+  const NON_LATIN_TITLES: ReadonlyArray<[string, string]> = [
+    [
+      "japanese bracketed",
+      "\u3010\u30c8\u30e9\u30c3\u30af\u3011\u5b9f\u88c5\u3092\u9032\u3081\u308b",
+    ],
+    ["japanese prose", "\u672a\u5b8c\u30c8\u30e9\u30c3\u30af\u3092\u68da\u5378\u3057\u3059\u308b"],
+  ];
+  for (const [label, title] of NON_LATIN_TITLES) {
+    it(`cap-track-7b (${label}): now warns, where the marker heuristic was silent`, async () => {
+      const repo = await setupInitedRepo();
+      captureStdout();
+      const err = captureStderr();
+      await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title }])));
+      expect(joinCalls(err)).toContain("will NOT resurface");
+    });
+  }
+
+  it("cap-track-8: a title that merely names the marker is quiet once kind is declared", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
-    captureStderr();
-    const input = JSON.stringify([{ title: "[TRACK] in the title", kind: "decision" }]);
+    const err = captureStderr();
+    const input = JSON.stringify([
+      { title: "Drop the [TRACK] marker from decisions.md", kind: "decision" },
+    ]);
     await doRunDecisionCapture({}, captureCtx(repo, input));
+    expect(joinCalls(err)).not.toContain("will NOT resurface");
     const decision = (await readAdHocEvents(repo)).find(
       (e) => e.type === "decision_recorded",
     ) as Record<string, unknown>;
-    expect(decision.kind).toBeUndefined();
+    expect(decision.kind).toBe("decision");
   });
 
   it("cap-4: --json emits mode=ad-hoc, count, and a decisions array with ids + fields", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
     const input = JSON.stringify([
-      { title: "a", rationale: "ra" },
-      { title: "b", alternatives: ["x"] },
+      { title: "a", rationale: "ra", kind: "decision" },
+      { title: "b", alternatives: ["x"], kind: "decision" },
     ]);
     await doRunDecisionCapture({ json: true }, captureCtx(repo, input));
     const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
@@ -893,7 +942,7 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     const repo = await setupInitedRepo();
     captureStdout();
     const file = join(repo, "decisions.json");
-    await writeFile(file, JSON.stringify([{ title: "from-file" }]), "utf8");
+    await writeFile(file, JSON.stringify([{ title: "from-file", kind: "decision" }]), "utf8");
     await doRunDecisionCapture(
       { file },
       // no readInput: prove --file is the source
@@ -908,7 +957,10 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
   it("cap-6: --dry-run writes nothing and previews the decisions", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
-    const input = JSON.stringify([{ title: "preview-me" }, { title: "and-me" }]);
+    const input = JSON.stringify([
+      { title: "preview-me", kind: "decision" },
+      { title: "and-me", kind: "decision" },
+    ]);
     await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
     const stdout = joinCalls(out);
     expect(stdout).toContain("Would capture 2 decisions (dry run; nothing written):");
@@ -921,7 +973,7 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
   it("cap-7: --dry-run --json emits dry_run:true with the parsed decisions and no ids", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
-    const input = JSON.stringify([{ title: "x", rationale: "y" }]);
+    const input = JSON.stringify([{ title: "x", rationale: "y", kind: "decision" }]);
     await doRunDecisionCapture({ dryRun: true, json: true }, captureCtx(repo, input));
     const payload = JSON.parse(joinCalls(out)) as Record<string, unknown>;
     expect(payload.dry_run).toBe(true);
@@ -936,7 +988,14 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     captureStdout();
     await doRunDecisionCapture(
       {},
-      captureCtx(repo, JSON.stringify([{ title: "a" }, { title: "b" }, { title: "c" }])),
+      captureCtx(
+        repo,
+        JSON.stringify([
+          { title: "a", kind: "decision" },
+          { title: "b", kind: "decision" },
+          { title: "c", kind: "decision" },
+        ]),
+      ),
     );
     const parsed = (await readYamlFile(
       join(basouPaths(repo).sessions, await findAdHocSessionId(repo), "session.yaml"),
@@ -949,7 +1008,13 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     captureStdout();
     await doRunDecisionCapture(
       {},
-      captureCtx(repo, JSON.stringify([{ title: "earliest" }, { title: "latest" }])),
+      captureCtx(
+        repo,
+        JSON.stringify([
+          { title: "earliest", kind: "decision" },
+          { title: "latest", kind: "decision" },
+        ]),
+      ),
     );
     const decisions = (await readAdHocEvents(repo)).filter((e) => e.type === "decision_recorded");
     const [a, b] = decisions as Record<string, unknown>[];
@@ -966,7 +1031,7 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     const sub = join(repo, "notes");
     await mkdir(sub, { recursive: true });
     const file = join(sub, "decisions.json");
-    await writeFile(file, JSON.stringify([{ title: "from-file" }]), "utf8");
+    await writeFile(file, JSON.stringify([{ title: "from-file", kind: "decision" }]), "utf8");
     await doRunDecisionCapture({ file }, { cwd: repo, nowProvider: () => FIXED_NOW });
     const yaml = await readFile(
       join(basouPaths(repo).sessions, await findAdHocSessionId(repo), "session.yaml"),
@@ -1021,7 +1086,10 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
   it("cap-err-5: an empty title names the offending index", async () => {
     const repo = await setupInitedRepo();
     const err = captureStderr();
-    await runDecisionCapture({}, errCtx(repo, JSON.stringify([{ title: "ok" }, { title: "" }])));
+    await runDecisionCapture(
+      {},
+      errCtx(repo, JSON.stringify([{ title: "ok", kind: "decision" }, { title: "" }])),
+    );
     expect(joinCalls(err)).toContain("decision[1].title must be a non-empty string.");
     expect(process.exitCode).toBe(1);
   });
@@ -1042,7 +1110,11 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
       errCtx(
         repo,
         JSON.stringify([
-          { title: "x", linked_events: ["evt_01HXABCDEF1234567890ABCDC1", "ses_wrong"] },
+          {
+            title: "x",
+            linked_events: ["evt_01HXABCDEF1234567890ABCDC1", "ses_wrong"],
+            kind: "decision",
+          },
         ]),
       ),
     );
@@ -1055,7 +1127,10 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
     const err = captureStderr();
     await runDecisionCapture(
       {},
-      errCtx(repo, JSON.stringify([{ title: "x", alternatives: "not-an-array" }])),
+      errCtx(
+        repo,
+        JSON.stringify([{ title: "x", alternatives: "not-an-array", kind: "decision" }]),
+      ),
     );
     expect(joinCalls(err)).toContain("decision[0].alternatives must be an array of strings.");
     expect(process.exitCode).toBe(1);
@@ -1089,7 +1164,7 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
     const err = captureStderr();
     await runDecisionCapture(
       {},
-      errCtx(repo, JSON.stringify([{ title: "x", linked_events: ["evt_X"] }])),
+      errCtx(repo, JSON.stringify([{ title: "x", linked_events: ["evt_X"], kind: "decision" }])),
     );
     expect(joinCalls(err)).toContain("decision[0].linked_events[0] must match evt_<ULID>");
     expect(process.exitCode).toBe(1);
@@ -1100,7 +1175,7 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
     const err = captureStderr();
     await runDecisionCapture(
       { dryRun: true },
-      errCtx(repo, JSON.stringify([{ title: "x", linked_events: ["evt_X"] }])),
+      errCtx(repo, JSON.stringify([{ title: "x", linked_events: ["evt_X"], kind: "decision" }])),
     );
     expect(joinCalls(err)).toContain("decision[0].linked_events[0] must match evt_<ULID>");
     expect(process.exitCode).toBe(1);
@@ -1137,7 +1212,9 @@ describe("decision cross-project linked_files guardrail (warn-only)", () => {
     const repo = await repoWithSourceRoots();
     captureStdout();
     const err = captureStderr();
-    const input = JSON.stringify([{ title: "blog runbook", linked_files: ["/etc/hosts"] }]);
+    const input = JSON.stringify([
+      { title: "blog runbook", linked_files: ["/etc/hosts"], kind: "decision" },
+    ]);
     await doRunDecisionCapture(
       {},
       { cwd: repo, nowProvider: () => FIXED_NOW, readInput: async () => input },
@@ -1151,7 +1228,7 @@ describe("decision cross-project linked_files guardrail (warn-only)", () => {
     const repo = await repoWithSourceRoots();
     captureStdout();
     const err = captureStderr();
-    const input = JSON.stringify([{ title: "ok", linked_files: ["src/a.ts"] }]);
+    const input = JSON.stringify([{ title: "ok", linked_files: ["src/a.ts"], kind: "decision" }]);
     await doRunDecisionCapture(
       {},
       { cwd: repo, nowProvider: () => FIXED_NOW, readInput: async () => input },
@@ -1163,7 +1240,7 @@ describe("decision cross-project linked_files guardrail (warn-only)", () => {
     const repo = await setupInitedRepo();
     captureStdout();
     const err = captureStderr();
-    const input = JSON.stringify([{ title: "x", linked_files: ["/etc/hosts"] }]);
+    const input = JSON.stringify([{ title: "x", linked_files: ["/etc/hosts"], kind: "decision" }]);
     await doRunDecisionCapture(
       {},
       { cwd: repo, nowProvider: () => FIXED_NOW, readInput: async () => input },

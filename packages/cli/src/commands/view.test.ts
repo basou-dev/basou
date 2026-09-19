@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ViewServerHandle } from "../lib/view-server.js";
+import { VIEW_HTML } from "../lib/view-ui.js";
 import { doRunView, runView, type ViewContext, type ViewOptions } from "./view.js";
 
 const execFileAsync = promisify(execFile);
@@ -71,6 +72,7 @@ async function setupInitedRepo(): Promise<string> {
   return repo;
 }
 
+const ARCHIVED_TASK_ID = "task_01HXABCDEF1234567890ABCDEF" as const;
 const WS_ID_A = "ws_01HXABCDEF1234567890ABCDEF" as const;
 const WS_ID_B = "ws_01HXABCDEF1234567890ABCDEG" as const;
 
@@ -483,6 +485,96 @@ describe("basou view portfolio mode", () => {
         // Flat routes still target the first workspace (single-mode compatibility).
         const flat = await getJson(handle, "/api/overview");
         expect((flat.data as { repoRoot: string }).repoRoot).toBe(wsA);
+      });
+    } finally {
+      await rm(rawA, { recursive: true, force: true });
+      await rm(rawB, { recursive: true, force: true });
+    }
+  });
+
+  // Lifts the real function out of the served page and runs it. Asserting the
+  // /api/portfolio payload alone left this unpinned: inverting the branch, or
+  // replacing the label with garbage, kept the whole suite green.
+  function liftTaskFlightLabel(): (w: Record<string, unknown>) => string {
+    const marker = "function taskFlightLabel(w) {";
+    const start = VIEW_HTML.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    let end = -1;
+    for (let i = start + marker.length - 1; i < VIEW_HTML.length; i++) {
+      const ch = VIEW_HTML[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          end = i + 1;
+          break;
+        }
+      }
+    }
+    expect(end).toBeGreaterThan(start);
+    const src = VIEW_HTML.slice(start, end);
+    return new Function(`${src}; return taskFlightLabel;`)() as (
+      w: Record<string, unknown>,
+    ) => string;
+  }
+
+  it("the card label distinguishes all three of the in-flight zeros", () => {
+    const label = liftTaskFlightLabel();
+    expect(label({ inFlightCount: 0, anyTaskEverRecorded: false, unreadableTaskCount: 0 })).toBe(
+      "no tasks recorded",
+    );
+    expect(label({ inFlightCount: 0, anyTaskEverRecorded: true, unreadableTaskCount: 0 })).toBe(
+      "in-flight 0",
+    );
+    expect(label({ inFlightCount: 2, anyTaskEverRecorded: true, unreadableTaskCount: 0 })).toBe(
+      "in-flight 2",
+    );
+    // A store whose task files cannot be read: the count is not 0, it is unknown.
+    expect(label({ inFlightCount: 0, anyTaskEverRecorded: true, unreadableTaskCount: 1 })).toBe(
+      "in-flight unknown (1 unreadable)",
+    );
+  });
+
+  it("an older card payload without the new fields degrades to the plain count", () => {
+    // A page served to a stale client, or a card shape that predates the fields:
+    // absent must read as the old behaviour, never as "no tasks recorded".
+    const label = liftTaskFlightLabel();
+    expect(label({ inFlightCount: 3 })).toBe("in-flight 3");
+    expect(label({ inFlightCount: 0 })).toBe("in-flight 0");
+  });
+
+  it("tells a workspace that never recorded a task from one whose tasks are all done", async () => {
+    // Two different zeros. `inFlightCount` reads 0 for both, which is the same
+    // defect orient and handoff already fixed -- the card carries the third
+    // state so it can say which zero it is.
+    const rawA = await mkdtemp(join(tmpdir(), "basou-pf-zero-a-"));
+    const rawB = await mkdtemp(join(tmpdir(), "basou-pf-zero-b-"));
+    try {
+      const never = await initWorkspaceAt(rawA, WS_ID_A, "never");
+      const allDone = await initWorkspaceAt(rawB, WS_ID_B, "all-done");
+      // An archived task: nothing in flight, but a task WAS recorded here.
+      const archive = join(basouPaths(allDone).tasks, "archive");
+      await mkdir(archive, { recursive: true });
+      await writeFile(join(archive, `${ARCHIVED_TASK_ID}.md`), "# archived\n", "utf8");
+
+      await withPortfolioServer([never, allDone], {}, async (handle) => {
+        const { data } = await getJson(handle, "/api/portfolio");
+        const d = data as {
+          workspaces: Array<{
+            label: string;
+            inFlightCount: number;
+            anyTaskEverRecorded: boolean;
+            unreadableTaskCount: number;
+          }>;
+        };
+        const byLabel = new Map(d.workspaces.map((w) => [w.label, w]));
+        expect(byLabel.get("never")?.inFlightCount).toBe(0);
+        expect(byLabel.get("all-done")?.inFlightCount).toBe(0);
+        expect(byLabel.get("never")?.anyTaskEverRecorded).toBe(false);
+        expect(byLabel.get("all-done")?.anyTaskEverRecorded).toBe(true);
+        expect(byLabel.get("never")?.unreadableTaskCount).toBe(0);
+        expect(byLabel.get("all-done")?.unreadableTaskCount).toBe(0);
       });
     } finally {
       await rm(rawA, { recursive: true, force: true });

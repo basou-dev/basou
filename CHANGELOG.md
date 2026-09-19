@@ -3,6 +3,75 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Deprecated
+
+- **Omitting `"kind"` on `basou decision capture` now warns, and becomes an
+  error in a later release.** The field selects the vessel, and getting it
+  wrong fails with no symptom: a track filed as a point-in-time decision is
+  written, reported as a success, and then never resurfaces in `orient`. An
+  omitted optional field cannot be caught the way a misspelled one is, so
+  nothing stood between the miss and that outcome.
+
+  0.42.1 covered it with a heuristic on the title — warn when a bracketed
+  `TRACK` marker (ASCII, full-width, lenticular or round, or a leading `TRACK:`)
+  appeared while `kind` was absent. That heuristic is now retired, and the
+  reason is not that it misfired: once the omission itself is what warns, the
+  heuristic is unreachable — every title it could have matched is already
+  covered, and so is every title it could not. Measuring it happens to show it
+  was doing nothing here (it reads `TRACK` in Latin letters only, and this
+  workspace writes its titles in Japanese), but the removal does not rest on
+  that.
+
+  The warning names the offending index and both vessels, fires under
+  `--dry-run` too, and **the item is still written**. Refusing the batch would
+  trade a silent mis-filing for a silent total loss: capture is what an agent
+  runs at the end of a session, often from a hook that fires once, and a batch
+  that errors is a batch that may simply never be retried.
+
+  `basou decision record` is unchanged. Its vessel is the `--track` flag, which
+  cannot be omitted in the same sense — there is no way to state "explicitly not
+  a track" — so the same warning could never be silenced there.
+
+### Changed
+
+- **An explicit `"kind": "decision"` is now carried onto the event instead of
+  being normalized away.** Dropping it is what made the two cases
+  indistinguishable on disk: nothing could tell a decision someone MEANT from
+  one whose `kind` was forgotten — not a reader, not a later audit, not the
+  command's own `--json` output. Absence now means "nobody said", which is what
+  makes the deprecated form findable while the warning release is in effect
+  rather than merely tolerated. Every reader branches on `kind === "track"`
+  only, so nothing else changes; events written before this release keep their
+  old meaning, where an absent `kind` says only that none was recorded.
+
+- **`decision capture` output names the undeclared case.** `--dry-run` marks all
+  three states (`[TRACK]`, `[DECISION]`, `[NO KIND]`); after the write a track
+  and an undeclared item are marked and a declared decision is left bare, the
+  convention `decisions.md` uses. Marking the undeclared item after the write is
+  what the `[DECISION]` marker added in 0.42.1 was reaching for and could not
+  do: the default flow pipes JSON with no dry run, so the written line is the
+  only receipt the operator ever sees. The `[NO KIND]` arm goes away with the
+  deprecation.
+
+- **`docs/spec/compatibility.md` now names JSON *input* shapes as a guaranteed
+  surface**, and states the deprecation path for a field that becomes required
+  on one. The list covered flags, exit codes and `--json` output shapes, so the
+  shape `decision capture` reads on stdin was governed by nothing — which left
+  "can this be tightened, and on what notice" unanswerable from the document.
+
+### Fixed
+
+- **A `basou view` portfolio card no longer collapses three different task
+  states into `in-flight 0`.** A workspace that has never recorded a task, one
+  whose tasks are all finished, and one whose task files cannot be READ all
+  rendered identically — the third being the worst, since a loader blind spot
+  was reported as an empty record. The card now carries `anyTaskEverRecorded`
+  and `unreadableTaskCount` and renders `no tasks recorded` /
+  `in-flight <n>` / `in-flight unknown (<n> unreadable)`, matching the three-way
+  branch `orient` already makes.
+
 ## 0.46.0 — 2026-09-19
 
 ### Added

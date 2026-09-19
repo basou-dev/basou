@@ -15,8 +15,13 @@ cannot be retrofitted onto an already-frozen contract.
 At `1.0`, semantic versioning applies to exactly three surfaces:
 
 1. **The `basou` CLI** — the set of commands and subcommands, their flags,
-   exit codes, and the documented `--json` output shapes of the commands that
-   offer one.
+   exit codes, the documented `--json` output shapes of the commands that offer
+   one, and the documented JSON **input** shapes of the commands that read one
+   from stdin or `--file` (today: `basou decision capture`). An input shape is a
+   contract for the same reason an output shape is — something else produces it,
+   and tightening what is accepted breaks that producer exactly as surely as
+   dropping a field breaks a consumer. Accepting MORE is additive; accepting
+   less is not.
 2. **The `@basou/sdk` package** — its exported read-only API for reading a
    workspace's provenance.
 3. **The `.basou/` on-disk format** — the durable file schemas (manifest,
@@ -166,6 +171,22 @@ instead of erroring on an unknown option. Deprecated no-op flags are removed at
 > Example: `basou init --repo-url` became a no-op when `project.repository_url`
 > was removed from the manifest (a value nothing read and that drifted silently).
 > The flag is accepted-and-ignored through `0.x` and dropped at `1.0`.
+
+The same policy covers a field that becomes **required** on a documented JSON
+input shape. It is warned about for at least one release first — the item is
+still accepted and still written, and the full text of the eventual error goes
+to stderr — before omitting it becomes an error. The warning release is not a
+courtesy: it is what lets the eventual error be introduced without discarding
+work that a caller has no cheap way to reproduce.
+
+> Example: `"kind"` on `basou decision capture`. It was optional, and omitting
+> it filed an unfinished direction as a settled decision that never resurfaced —
+> a failure with no symptom. `0.47` warns on every omission and still writes the
+> item; a later release makes it an error. Through the warning release an
+> explicit `"kind"` is carried onto the event, so an item written WITHOUT a
+> declared vessel stays distinguishable from one written with it. Events
+> recorded before `0.47` predate that distinction: an absent `kind` there means
+> only that nothing was recorded, not that nothing was declared.
 
 After `1.0`, removing or changing the meaning of any guaranteed-surface element
 requires a major bump; additions within a line remain backward-compatible.

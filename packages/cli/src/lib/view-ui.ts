@@ -309,6 +309,18 @@ export const VIEW_HTML = `<!doctype html>
     return el('span', { class: 'badge ok', text: 'up to date' });
   }
 
+  // Three states hide behind a bare 'in-flight 0': nothing ever recorded,
+  // everything finished, and a task store that cannot be read -- where the
+  // count is not zero but UNKNOWN. Say which one it is, as orient does.
+  // Kept as a named top-level function with no free variables so the test suite
+  // can lift it out of this template and run it; inlined in the card it was
+  // unreachable from any test.
+  function taskFlightLabel(w) {
+    if (w.unreadableTaskCount > 0) return 'in-flight unknown (' + w.unreadableTaskCount + ' unreadable)';
+    if (w.anyTaskEverRecorded === false) return 'no tasks recorded';
+    return 'in-flight ' + w.inFlightCount;
+  }
+
   function portfolioCard(w, generatedAt) {
     if (!w.initialized) {
       return el('div', { class: 'card pcard muted' }, [
@@ -324,6 +336,7 @@ export const VIEW_HTML = `<!doctype html>
     }
     var pend = w.pendingApprovals || [];
     var pendText = 'pending ' + pend.length + (pend.length ? ' (' + highestRisk(pend) + ')' : '');
+    var flightText = taskFlightLabel(w);
     var now = w.latestSession ? ((w.latestSession.label || '(session)') + ' [' + w.latestSession.status + ']') : '(no live sessions)';
     var dec = w.latestDecision ? w.latestDecision.title : '(no decisions yet)';
     var newest = (w.freshness && w.freshness.newestStartedAt) ? w.freshness.newestStartedAt : null;
@@ -336,7 +349,7 @@ export const VIEW_HTML = `<!doctype html>
       ]),
       el('div', { class: 'f', text: 'now: ' + now }),
       el('div', { class: 'f', text: 'latest: ' + dec }),
-      el('div', { class: 'f', text: 'in-flight ' + w.inFlightCount + '  |  ' + pendText + '  |  suspect ' + w.suspectCount }),
+      el('div', { class: 'f', text: flightText + '  |  ' + pendText + '  |  suspect ' + w.suspectCount }),
       el('div', { class: 'f muted', text: 'sessions ' + w.sessionCount + '  |  newest ' + relAge(newest, generatedAt) })
     ]);
   }
