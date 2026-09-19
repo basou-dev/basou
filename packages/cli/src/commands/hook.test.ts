@@ -17,6 +17,9 @@ import {
   basouPaths,
   createManifest,
   ensureBasouDirectory,
+  PROTOCOL_END,
+  PROTOCOL_START,
+  parseProtocolStamp,
   writeManifest,
   writeYamlFile,
 } from "@basou/core";
@@ -38,6 +41,7 @@ import {
   runHookInstall,
   runHookSessionStart,
 } from "./hook.js";
+import { doRunProtocolSync } from "./protocol.js";
 
 /** A transcript line for one assistant message carrying N read-only Bash commands. */
 function bashLine(n: number): string {
@@ -78,11 +82,40 @@ function cmdLine(command: string): string {
   });
 }
 
-/** Drive doRunHookStop with injected stdin + transcript, returning what it wrote. */
+/**
+ * A path inside this suite's own temp directory that nothing creates.
+ *
+ * The protocol-update gate reads the file the protocol block is rendered into
+ * (`~/.claude/CLAUDE.md`) unless told otherwise, so every run below pins it
+ * here and the suite stays hermetic. A fixed name in the shared tmpdir would
+ * make "absent" an assumption about a directory other processes write to,
+ * rather than a property of the suite.
+ */
+let absentProtocolTarget: string;
+let hookSuiteDir: string;
+
+beforeEach(async () => {
+  hookSuiteDir = await mkdtemp(join(tmpdir(), "basou-hook-suite-"));
+  absentProtocolTarget = join(hookSuiteDir, "absent-CLAUDE.md");
+});
+
+afterEach(async () => {
+  await rm(hookSuiteDir, { recursive: true, force: true });
+});
+
+/**
+ * Drive doRunHookStop with injected stdin + transcript, returning what it wrote.
+ *
+ * `transcript` feeds the capture / review gates through the injected reader;
+ * the protocol gate reads `transcript_path` from disk for real (it needs the
+ * HEAD of the file to date the session, and a full scan to dedupe), so a test
+ * exercising it writes a real transcript and passes its path in `stdin`.
+ */
 async function run(
   stdin: unknown,
   transcript: string | { error: true },
   opts: { minEdits?: number; block?: boolean; requireReview?: boolean } = {},
+  paths: { protocolTargetPath?: string } = {},
 ): Promise<string> {
   let out = "";
   const ctx: HookStopContext = {
@@ -94,6 +127,7 @@ async function run(
     write: (text) => {
       out += text;
     },
+    protocolTargetPath: paths.protocolTargetPath ?? absentProtocolTarget,
   };
   await doRunHookStop(opts, ctx);
   return out;
@@ -1161,5 +1195,292 @@ describe("hook install / status codex: trust line, leftover face block, unchange
     await expect(access(`${hooksPath}.basou-bak`)).rejects.toThrow();
     expect(logs.join("\n")).toContain("already registered");
     expect(logs.join("\n")).not.toContain("Updated");
+  });
+});
+
+describe("doRunHookStop — the protocol-update gate", () => {
+  let pdir: string;
+  let pconfig: string;
+  let psource: string;
+  let ptarget: string;
+  let tpath: string;
+
+  /** Write a real transcript file whose first record dates the session start. */
+  async function transcript(startedAt: string, extra: string[] = []): Promise<string> {
+    const lines = [JSON.stringify({ type: "user", timestamp: startedAt }), ...extra];
+    await writeFile(tpath, `${lines.join("\n")}\n`);
+    return lines.join("\n");
+  }
+
+  /** Sync the declared protocols into `ptarget`, stamping at the current time. */
+  async function sync(): Promise<void> {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await doRunProtocolSync({ config: pconfig, target: ptarget });
+    log.mockRestore();
+  }
+
+  /**
+   * Sync the current protocols and return a session start dated at that sync.
+   *
+   * Using the baseline stamp's own date is what makes these tests mean what
+   * they say: a session that started THEN has read exactly this block, so a
+   * later delivery can only be something that changed afterwards. A wall-clock
+   * "a minute ago" would sit before the baseline sync too, and every case would
+   * pass by delivering the baseline.
+   */
+  async function syncAndStart(): Promise<string> {
+    await sync();
+    const stamp = parseProtocolStamp(await readFile(ptarget, "utf8"));
+    if (stamp === null) throw new Error("expected the synced block to carry a stamp");
+    return stamp.changedAt;
+  }
+
+  /** Drive the Stop hook against this test's real transcript file and target. */
+  function runGate(body: string, opts: { block?: boolean } = {}): Promise<string> {
+    return run({ transcript_path: tpath, stop_hook_active: false }, body, opts, {
+      protocolTargetPath: ptarget,
+    });
+  }
+
+  beforeEach(async () => {
+    pdir = await mkdtemp(join(tmpdir(), "basou-hook-protocol-"));
+    psource = join(pdir, "capture.md");
+    pconfig = join(pdir, "protocols.yaml");
+    ptarget = join(pdir, "CLAUDE.md");
+    tpath = join(pdir, "transcript.jsonl");
+    await writeFile(psource, "Capture decisions at the end of a session.\n");
+    await writeFile(
+      pconfig,
+      `protocols:\n  - source: ${psource}\n    title: Session-end capture\n`,
+    );
+  });
+
+  afterEach(async () => {
+    await rm(pdir, { recursive: true, force: true });
+  });
+
+  it("hands the running session the protocols when they changed after it started", async () => {
+    const startedAt = await syncAndStart(); // the copy the session reads at start
+    await writeFile(psource, "Capture decisions AND the next step.\n");
+    await sync(); // the operator publishes an update mid-session
+
+    const context = nudgeContext(await runGate(await transcript(startedAt)));
+    expect(context).toContain("Capture decisions AND the next step.");
+    expect(context).toContain("## Session-end capture");
+    expect(context).toContain("COMPLETE current set");
+  });
+
+  it("delivers the complete set, so a withdrawn protocol is announced by its absence", async () => {
+    const second = join(pdir, "review.md");
+    await writeFile(second, "Review before shipping.\n");
+    await writeFile(
+      pconfig,
+      `protocols:\n  - source: ${psource}\n    title: Session-end capture\n  - source: ${second}\n    title: Review\n`,
+    );
+    const startedAt = await syncAndStart();
+
+    await writeFile(
+      pconfig,
+      `protocols:\n  - source: ${psource}\n    title: Session-end capture\n`,
+    );
+    await sync();
+
+    const context = nudgeContext(await runGate(await transcript(startedAt)));
+    expect(context).toContain("## Session-end capture");
+    expect(context).not.toContain("Review before shipping.");
+    expect(context).toContain("withdrawn");
+  });
+
+  it("stays silent when the protocols have not changed since the session started", async () => {
+    const startedAt = await syncAndStart();
+    expect(await runGate(await transcript(startedAt))).toBe("");
+  });
+
+  it("stays silent for an edit the operator has not synced", async () => {
+    const startedAt = await syncAndStart();
+    await writeFile(psource, "An unpublished draft.\n"); // edited, never synced
+    expect(await runGate(await transcript(startedAt))).toBe("");
+  });
+
+  it("cannot leak an unsynced draft even when a later sync does publish something else", async () => {
+    const second = join(pdir, "review.md");
+    await writeFile(second, "Review before shipping.\n");
+    const startedAt = await syncAndStart();
+
+    await writeFile(psource, "An unpublished draft.\n"); // never synced
+    await writeFile(
+      pconfig,
+      `protocols:\n  - source: ${psource}\n    title: Session-end capture\n  - source: ${second}\n    title: Review\n`,
+    );
+    // This sync publishes the draft along with the new protocol, which is what
+    // `protocol sync` MEANS -- the block is the published state either way.
+    await sync();
+
+    const context = nudgeContext(await runGate(await transcript(startedAt)));
+    expect(context).toContain("Review before shipping.");
+    expect(context).toContain("An unpublished draft.");
+  });
+
+  it("stays silent for an edit that changes no rendered text", async () => {
+    const startedAt = await syncAndStart();
+    await writeFile(psource, "Capture decisions at the end of a session.\n\n\n");
+    await sync();
+    expect(await runGate(await transcript(startedAt))).toBe("");
+  });
+
+  it("does not repeat itself: its own earlier delivery in the transcript silences it", async () => {
+    const startedAt = await syncAndStart();
+    await writeFile(psource, "Capture decisions AND the next step.\n");
+    await sync();
+
+    const first = await runGate(await transcript(startedAt));
+    expect(nudgeContext(first)).toContain("Capture decisions AND the next step.");
+
+    // The tool records a hook's output in the transcript, so the next turn
+    // finds the earlier delivery and does not send it again. The gate scans the
+    // real file, so this asserts the scan, not the record shape.
+    const body = await transcript(startedAt, [
+      JSON.stringify({ type: "attachment", attachment: { hookEvent: "Stop", stdout: first } }),
+    ]);
+    expect(await runGate(body)).toBe("");
+  });
+
+  it("delivers a SECOND update in the same session, because the token carries the block state", async () => {
+    const startedAt = await syncAndStart();
+    await writeFile(psource, "Capture decisions AND the next step.\n");
+    await sync();
+    const first = await runGate(await transcript(startedAt));
+
+    // The operator watches the agent misapply it and tightens the wording.
+    await writeFile(psource, "Capture decisions AND the next step, in that order.\n");
+    await sync();
+    const body = await transcript(startedAt, [
+      JSON.stringify({ type: "attachment", attachment: { hookEvent: "Stop", stdout: first } }),
+    ]);
+    expect(nudgeContext(await runGate(body))).toContain("in that order.");
+  });
+
+  it("dates the session from the HEAD of a long transcript, not its tail", async () => {
+    const startedAt = await syncAndStart();
+    await writeFile(psource, "Capture decisions AND the next step.\n");
+    await sync();
+
+    // Pad past the tail bound the other gates read, so a tail-derived start
+    // would be later than the sync and the delivery would be lost.
+    const filler = JSON.stringify({
+      type: "user",
+      timestamp: new Date().toISOString(),
+      pad: "x".repeat(4096),
+    });
+    const lines = [JSON.stringify({ type: "user", timestamp: startedAt })];
+    for (let i = 0; i < 3000; i++) lines.push(filler);
+    await writeFile(tpath, `${lines.join("\n")}\n`);
+
+    expect(nudgeContext(await runGate(""))).toContain("Capture decisions AND the next step.");
+  });
+
+  it("upgrading is silent: the first sync over an older stamp-less block announces nothing", async () => {
+    // Every existing installation takes this path once. The block an older
+    // basou wrote holds the same protocol text, so no running session is owed
+    // anything -- and dating the new stamp at `now` would tell every session on
+    // the machine that its protocols changed.
+    const sections = "## Session-end capture\n\nCapture decisions at the end of a session.";
+    await writeFile(
+      ptarget,
+      `${PROTOCOL_START}\n<!-- old managed note -->\n\n${sections}\n${PROTOCOL_END}\n`,
+    );
+    const startedAt = new Date().toISOString();
+    await sync();
+    expect(await runGate(await transcript(startedAt))).toBe("");
+  });
+
+  it("upgrading still delivers when the older block's text really is out of date", async () => {
+    await writeFile(
+      ptarget,
+      `${PROTOCOL_START}\n<!-- old managed note -->\n\n## Session-end capture\n\nSomething else entirely.\n${PROTOCOL_END}\n`,
+    );
+    const startedAt = new Date().toISOString();
+    await sync();
+    expect(nudgeContext(await runGate(await transcript(startedAt)))).toContain(
+      "Capture decisions at the end of a session.",
+    );
+  });
+
+  it("stays silent when the block carries no stamp (rendered by an older basou)", async () => {
+    await writeFile(
+      ptarget,
+      `${PROTOCOL_START}\n<!-- old note -->\n\n## Session-end capture\n\nold text\n${PROTOCOL_END}\n`,
+    );
+    expect(await runGate(await transcript(new Date().toISOString()))).toBe("");
+  });
+
+  it("stays silent when there is no protocol block at all", async () => {
+    await writeFile(ptarget, "# just the operator's own CLAUDE.md\n");
+    expect(await runGate(await transcript(new Date().toISOString()))).toBe("");
+  });
+
+  it("stays silent when the transcript never dates the session start", async () => {
+    await sync();
+    await writeFile(psource, "Capture decisions AND the next step.\n");
+    await sync();
+    await writeFile(tpath, `${JSON.stringify({ type: "user" })}\n`);
+    expect(await runGate("")).toBe("");
+  });
+
+  it("leads the envelope, ahead of the capture nudge it sets the rules for", async () => {
+    const startedAt = await syncAndStart();
+    await writeFile(psource, "Capture decisions AND the next step.\n");
+    await sync();
+
+    const body = await transcript(startedAt, [editLine(2)]);
+    const context = nudgeContext(await runGate(body));
+    expect(context.indexOf("SUPERSEDES")).toBeLessThan(context.indexOf("basou decision capture"));
+  });
+
+  it("fires on its own, without any capture or review nudge to ride along with", async () => {
+    const startedAt = await syncAndStart();
+    await writeFile(psource, "Capture decisions AND the next step.\n");
+    await sync();
+
+    const body = await transcript(startedAt, [bashLine(3)]);
+    const context = nudgeContext(await runGate(body));
+    expect(context).toContain("Capture decisions AND the next step.");
+    expect(context).not.toContain("basou decision capture");
+  });
+
+  it("honours the loop guard: a continuation turn delivers nothing", async () => {
+    const startedAt = await syncAndStart();
+    await writeFile(psource, "Capture decisions AND the next step.\n");
+    await sync();
+
+    const body = await transcript(startedAt);
+    const out = await run(
+      { transcript_path: tpath, stop_hook_active: true },
+      body,
+      {},
+      {
+        protocolTargetPath: ptarget,
+      },
+    );
+    expect(out).toBe("");
+  });
+
+  it("blocks with the protocol text when the operator opted into enforcement", async () => {
+    const startedAt = await syncAndStart();
+    await writeFile(psource, "Capture decisions AND the next step.\n");
+    await sync();
+
+    const parsed = JSON.parse(await runGate(await transcript(startedAt), { block: true })) as {
+      decision: string;
+      reason: string;
+    };
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain("Capture decisions AND the next step.");
+  });
+
+  it("lets the capture nudge through when the target is unreadable", async () => {
+    await rm(ptarget, { force: true });
+    const body = await transcript(new Date().toISOString(), [editLine(2)]);
+    expect(nudgeContext(await runGate(body))).toContain("basou decision capture");
   });
 });

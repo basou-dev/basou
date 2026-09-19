@@ -1,7 +1,14 @@
 import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PROTOCOL_END, PROTOCOL_START } from "@basou/core";
+import {
+  PROTOCOL_END,
+  PROTOCOL_START,
+  type ProtocolStamp,
+  parseProtocolStamp,
+  protocolBlockHash,
+  protocolSectionsFrom,
+} from "@basou/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -41,6 +48,13 @@ function captureStderr(): ReturnType<typeof vi.spyOn> {
 
 function joinCalls(spy: ReturnType<typeof vi.spyOn>): string {
   return spy.mock.calls.map((args) => args.map(String).join(" ")).join("\n");
+}
+
+/** The sync stamp carried by the managed block in a written target. */
+function readStamp(body: string): ProtocolStamp {
+  const stamp = parseProtocolStamp(body);
+  if (stamp === null) throw new Error("expected the block to carry a stamp");
+  return stamp;
 }
 
 describe("basou protocol sync", () => {
@@ -291,5 +305,92 @@ describe("register", () => {
     expect(protocol).toBeDefined();
     const subs = protocol?.commands.map((c) => c.name()) ?? [];
     expect(subs).toEqual(expect.arrayContaining(["sync", "list", "unsync"]));
+  });
+});
+
+describe("basou protocol sync — the sync stamp", () => {
+  it("writes a stamp whose digest covers the rendered protocol text", async () => {
+    captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+    const body = await readFile(targetPath, "utf8");
+    const sections = protocolSectionsFrom(body);
+    expect(sections).not.toBeNull();
+    expect(readStamp(body).contentHash).toBe(protocolBlockHash(sections ?? ""));
+  });
+
+  it("does not move the date for an edit that changes no rendered text", async () => {
+    captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+    const before = readStamp(await readFile(targetPath, "utf8"));
+
+    // Trailing whitespace is trimmed when the body is rendered, so this reaches
+    // no session and must not be announced to one.
+    await writeFile(sourcePath, "## Review protocol\n\nConsult before applying.\n\n\n");
+    const out = captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+
+    expect(readStamp(await readFile(targetPath, "utf8"))).toEqual(before);
+    expect(joinCalls(out)).toContain("already up to date");
+  });
+
+  it("moves the date when the rendered text changes", async () => {
+    captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+    const before = readStamp(await readFile(targetPath, "utf8"));
+
+    await writeFile(sourcePath, "## Review protocol\n\nConsult, then apply.\n");
+    captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+    const after = readStamp(await readFile(targetPath, "utf8"));
+
+    expect(after.changedAt).not.toBe(before.changedAt);
+    expect(after.contentHash).not.toBe(before.contentHash);
+  });
+
+  it("moves the date when a protocol is withdrawn, even though no source changed", async () => {
+    const second = join(dir, "other.md");
+    await writeFile(second, "## Other\n\nkeep this.\n");
+    await writeFile(configPath, `protocols:\n  - source: ${sourcePath}\n  - source: ${second}\n`);
+    captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+    const before = readStamp(await readFile(targetPath, "utf8"));
+
+    await writeFile(configPath, `protocols:\n  - source: ${sourcePath}\n`);
+    captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+
+    expect(readStamp(await readFile(targetPath, "utf8")).changedAt).not.toBe(before.changedAt);
+  });
+
+  it("carries nothing operator-authored onto the stamp line", async () => {
+    captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+    const line = (await readFile(targetPath, "utf8"))
+      .split("\n")
+      .find((l) => l.startsWith("<!-- basou:protocols"));
+    expect(line).toBeDefined();
+    expect(line).not.toContain(dir);
+    expect(line).toContain("changed=");
+    expect(line).toContain("content=");
+  });
+
+  it("leaves the date alone when an older stamp-less block already held the same text", async () => {
+    // Every existing installation takes this path once. The rendered text is
+    // identical, so no running session is owed an update -- the new stamp's
+    // digest must match what a fresh render produces.
+    captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+    const stamped = await readFile(targetPath, "utf8");
+    const sections = protocolSectionsFrom(stamped) ?? "";
+    await writeFile(
+      targetPath,
+      `${PROTOCOL_START}\n<!-- old note -->\n\n${sections}\n${PROTOCOL_END}\n`,
+    );
+
+    captureStdout();
+    await doRunProtocolSync({ config: configPath, target: targetPath });
+    expect(readStamp(await readFile(targetPath, "utf8")).contentHash).toBe(
+      protocolBlockHash(sections),
+    );
   });
 });

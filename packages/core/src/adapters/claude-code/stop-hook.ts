@@ -349,3 +349,25 @@ function toolUsesOf(record: ClaudeTranscriptRecord): Array<Record<string, unknow
   }
   return result;
 }
+
+/**
+ * When the session this transcript belongs to started: the timestamp of its
+ * first record that carries a parseable one.
+ *
+ * Used to date what the session is HOLDING. Anything the session read at start
+ * — its instruction files, the protocols rendered into them — is the version
+ * that existed at this instant, so a managed block whose stamp says it changed
+ * after it is newer than the copy in that session's context.
+ *
+ * Not every record carries a timestamp (a leading `summary` record does not),
+ * so this scans forward rather than reading `records[0]` and giving up.
+ * `undefined` means the transcript never said, and callers then say nothing
+ * rather than guess a start.
+ */
+export function transcriptStartedAt(records: ClaudeTranscriptRecord[]): string | undefined {
+  for (const record of records) {
+    const timestamp = readString(record.timestamp);
+    if (timestamp !== undefined && !Number.isNaN(Date.parse(timestamp))) return timestamp;
+  }
+  return undefined;
+}

@@ -1,5 +1,16 @@
-import { readFile } from "node:fs/promises";
-import { PROTOCOL_END, PROTOCOL_START, parseMarkers, readMarkdownFile } from "@basou/core";
+import { readFile, stat } from "node:fs/promises";
+import {
+  carryForwardProtocolStamp,
+  PROTOCOL_END,
+  PROTOCOL_START,
+  type ProtocolStamp,
+  parseMarkers,
+  parseProtocolStamp,
+  protocolBlockHash,
+  readMarkdownFile,
+  renderProtocolStamp,
+  unstampedProtocolSectionsFrom,
+} from "@basou/core";
 import type { Command } from "commander";
 import { assertNoMarkerLine, removeMarkerBlock, syncMarkerBlock } from "../lib/context-channel.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
@@ -138,13 +149,69 @@ async function readProtocolSources(
   return out;
 }
 
-/** Assemble the inner block body (without the markers) from the read sources. */
-function buildBlock(sources: { entry: ProtocolEntry; content: string }[]): string {
-  const sections = sources.map(({ entry, content }) => {
-    const body = content.replace(/\s+$/, "");
-    return entry.title !== undefined ? `## ${entry.title}\n\n${body}` : body;
-  });
-  return `${MANAGED_NOTE}\n\n${sections.join("\n\n")}\n`;
+/**
+ * The rendered protocol text: the declared sources, in order, each under its
+ * title. This is the ONLY thing the stamp hashes and the only thing a delivery
+ * carries, so the digest describes exactly the bytes a session reads.
+ */
+function buildSections(sources: { entry: ProtocolEntry; content: string }[]): string {
+  return sources
+    .map(({ entry, content }) => {
+      const body = content.replace(/\s+$/, "");
+      return entry.title !== undefined ? `## ${entry.title}\n\n${body}` : body;
+    })
+    .join("\n\n");
+}
+
+/**
+ * Assemble the inner block body (without the markers): the managed note, the
+ * sync stamp, then the rendered protocol text.
+ *
+ * The stamp records when that text last changed. A session reads this block at
+ * start; a Stop hook later compares the stamp against when the session started
+ * to tell whether the protocols moved underneath it (see `protocol-stamp` in
+ * core). A carried-forward timestamp means a sync that changes nothing renders
+ * the same bytes, so the channel still reports "unchanged".
+ */
+function buildBlock(sections: string, stamp: ProtocolStamp): string {
+  return `${MANAGED_NOTE}\n${renderProtocolStamp(stamp)}\n\n${sections}\n`;
+}
+
+/**
+ * What the block currently in `target` says about itself, or `null` when there
+ * is no readable block to say anything.
+ *
+ * A block written by a basou older than the stamp carries none, and taking
+ * that as "nothing is known" would date the new stamp at the current time —
+ * announcing a change to every session running the first time the new basou
+ * syncs, when in fact the text they hold is the text they are about to be
+ * handed. So an unstamped block is read for its protocol text and reported as
+ * a stamp dated at the file's last write, which is the best evidence of when
+ * that text was put there. Carry-forward then keeps that date if the text is
+ * unchanged, and the upgrade is silent.
+ */
+async function readPreviousStamp(target: string): Promise<ProtocolStamp | null> {
+  const existing = await readMarkdownFile(target);
+  if (existing === null) return null;
+  const section = parseMarkers(existing, PROTOCOL_MARKERS);
+  if (section.kind !== "ok") return null;
+  const stamp = parseProtocolStamp(section.generated);
+  if (stamp !== null) return stamp;
+  const writtenAt = await lastWrittenAt(target);
+  if (writtenAt === null) return null;
+  return {
+    changedAt: writtenAt,
+    contentHash: protocolBlockHash(unstampedProtocolSectionsFrom(section.generated)),
+  };
+}
+
+/** The target's last-write time as an ISO string, or `null` when unreadable. */
+async function lastWrittenAt(target: string): Promise<string | null> {
+  try {
+    return new Date((await stat(target)).mtimeMs).toISOString();
+  } catch {
+    return null;
+  }
 }
 
 export async function doRunProtocolSync(
@@ -156,7 +223,13 @@ export async function doRunProtocolSync(
 
   const entries = await loadProtocolsConfig(configPath);
   const sources = await readProtocolSources(entries);
-  const block = buildBlock(sources);
+  const sections = buildSections(sources);
+  const stamp = carryForwardProtocolStamp({
+    sections,
+    previous: await readPreviousStamp(target),
+    now: new Date().toISOString(),
+  });
+  const block = buildBlock(sections, stamp);
 
   // Content check (advisory): this block is the one thing basou still renders
   // into a USER-GLOBAL file, and it reads no manifest, so nothing else in the

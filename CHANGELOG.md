@@ -3,6 +3,62 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **A protocol updated mid-session now reaches the session it was meant to
+  correct.** `basou protocol sync` renders the operator's standing protocols
+  into a file the tool auto-loads at SESSION START, so an update made while a
+  session is running never arrived: the agent went on following the text it
+  read at the start. That is not disobedience — the new text simply never
+  reached it — and no SessionStart hook can fix it, because it fires at the one
+  moment the copy is already fresh. The Stop hook is the one channel basou owns
+  that reaches a session still running, so the delivery rides it.
+
+  What is delivered is the protocol TEXT, not a pointer to it. basou is a
+  read-only reader and cannot observe whether an agent re-read a file, so a "go
+  re-read this" notice would put the step that decides the outcome outside
+  anything basou can see; carrying the text makes the delivery and the reading
+  one act. It does not make the ADOPTION observable — nothing would — but it
+  removes the step that was avoidably invisible.
+
+  It sends the COMPLETE current set, not a diff. That is what lets the message
+  say truthfully that it supersedes the copy read at session start, and it is
+  the only shape under which a WITHDRAWN protocol can be announced at all — the
+  case that matters most, because a rule is usually deleted while it is doing
+  harm in the session running right now. A diff of source files could not say
+  it, and neither could anything that names only what moved.
+
+  `protocol sync` records inside the block when the rendered protocol text last
+  changed — a timestamp and a digest, with nothing the operator wrote on that
+  line, so a source path or a body containing a space or a `-->` cannot break
+  it. The digest covers the RENDERED text rather than the source bytes, so an
+  editor adding a trailing newline moves nothing, and upgrading from a basou
+  that wrote no stamp announces nothing to the sessions running at that moment.
+  The timestamp is carried forward whenever the text is unchanged, so a sync
+  that changes nothing writes the same bytes and still reports "already up to
+  date", and it is forced strictly forward when it does change, so a clock
+  corrected backwards cannot silently drop a delivery.
+
+  The hook reads the rendered block and nothing else — not the protocols
+  config, not the source files, which could move and take the feature quietly
+  dead with them. One consequence is worth stating plainly: an edit the
+  operator has NOT synced cannot reach a session, because unpublished text is
+  simply not in the block.
+
+  Delivery happens once per block STATE, not once per session. The token
+  carries the content digest, so a second update inside one session — usually
+  the correction of the first, written after watching an agent misapply it —
+  still lands, while the same text is never sent twice. The transcript is what
+  remembers, since the tool records a hook's output there, so nothing new is
+  written to disk and nothing is left for a teardown to miss.
+
+  The scope is the protocol block alone. The other instruction text basou
+  generates changes when basou itself is upgraded, and the session doing that
+  upgrade already knows; the blind spot being closed here is the operator
+  changing the rules underneath a session that cannot see it happen.
+
 ## 0.45.0
 
 ### Added

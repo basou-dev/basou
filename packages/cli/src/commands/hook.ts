@@ -12,12 +12,20 @@ import {
   evaluateStopHook,
   findBasouSessionStartHook,
   findBasouStopHookCommand,
+  isProtocolUpdateDue,
   ORIENTATION_END,
   ORIENTATION_START,
+  PROTOCOL_END,
+  PROTOCOL_START,
   parseMarkers,
+  parseProtocolStamp,
+  protocolSectionsFrom,
+  protocolUpdateToken,
   readMarkdownFile,
   removeSessionStartHook,
   removeStopHook,
+  renderProtocolUpdate,
+  transcriptStartedAt,
   upsertSessionStartHook,
   upsertStopHook,
 } from "@basou/core";
@@ -34,11 +42,21 @@ import { assertNotSymlink, writeFileDurable } from "../lib/durable-write.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { findForeignWorkspaceNames } from "../lib/foreign-workspace-warn.js";
 import { DEFAULT_PORTFOLIO_CONFIG_PATH, loadPortfolioConfig } from "../lib/portfolio-config.js";
+import { DEFAULT_TARGET_PATH as PROTOCOL_TARGET_PATH } from "../lib/protocols-config.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import { renderOrientationForRoot } from "./orient.js";
 
 /** Read at most this many trailing bytes of a transcript (keeps the per-turn hook bounded). */
 const MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Read at most this many LEADING bytes when dating a session's start. The first
+ * records of a transcript are small, and the start is all this read is for.
+ */
+const MAX_TRANSCRIPT_HEAD_BYTES = 256 * 1024;
+
+/** Chunk size for the streaming token scan that dedupes a protocol delivery. */
+const TOKEN_SCAN_CHUNK_BYTES = 1024 * 1024;
 
 export type HookStopOptions = {
   minEdits?: number;
@@ -76,6 +94,8 @@ export type HookStopContext = {
   readTranscript?: (path: string) => Promise<string>;
   /** Sink for the hook's stdout JSON. Defaults to `process.stdout.write`. Injectable for tests. */
   write?: (text: string) => void;
+  /** Path to the file the protocol block is rendered into. Injectable for tests. */
+  protocolTargetPath?: string;
 };
 
 /**
@@ -123,8 +143,11 @@ export function registerHookCommand(program: Command): void {
     .command("stop")
     .description(
       "Stop-hook: when a substantive session recorded no decisions or next " +
-        "step, emit a non-blocking nudge to capture them. Reads the Stop hook " +
-        "JSON payload on stdin; never blocks and never fails the session.",
+        "step, emit a non-blocking nudge to capture them. Also hands a running " +
+        "session the standing protocols when they changed after it started — the " +
+        "copy it read at start is stale, and only this hook reaches a session " +
+        "still running. Reads the Stop hook JSON payload on stdin; never blocks " +
+        "and never fails the session.",
     )
     .option(
       "--min-edits <n>",
@@ -132,7 +155,7 @@ export function registerHookCommand(program: Command): void {
     )
     .option(
       "--block",
-      "Opt-in enforcement: hold the agent in-turn (decision:block) instead of a non-blocking reminder",
+      "Opt-in enforcement: hold the agent in-turn (decision:block) instead of a non-blocking message",
     )
     .option(
       "--require-review",
@@ -301,12 +324,25 @@ gh pr create|merge) without recording a review ('basou review record'). This
 gate is off by default; when on, its reminder is composed into the same
 envelope as the capture reminder.
 
-By default the reminder is non-blocking: Claude sees it and may act on it or
-stop. With --block (opt-in enforcement, 'basou hook install --block') it instead
-returns decision:block, holding the agent in-turn to act on the reminder; the
-'stop_hook_active' flag and Claude Code's own loop prevention bound it to a
-single turn. Either way the hook fails open: a bad payload or unreadable
-transcript exits cleanly with no output.
+It also hands a RUNNING session the standing protocols when they changed after
+that session started. The protocol block in ~/.claude/CLAUDE.md is read at
+session start, so an update made mid-session never reaches the session it was
+meant to correct; this is the only channel that does. The complete current set
+is delivered, not a diff, so what it supersedes -- including a protocol that is
+no longer there -- is unambiguous. It reads the rendered block and nothing else,
+so an edit not yet published by 'basou protocol sync' cannot reach a session,
+and it delivers once per block state: a second update in the same session still
+lands, the same one twice does not. This part is always on, needs no flag, and
+says nothing at all unless the block actually changed.
+
+By default every message here is non-blocking: Claude sees it and may act on it
+or stop. With --block (opt-in enforcement, 'basou hook install --block') it
+instead returns decision:block, holding the agent in-turn; the 'stop_hook_active'
+flag and Claude Code's own loop prevention bound it to a single turn. Note that
+this covers the protocol delivery too, which carries no action to take -- with
+--block the turn is held so the new text lands before more work is done on the
+old. Either way the hook fails open: a bad payload or unreadable transcript
+exits cleanly with no output.
 `;
 
 /**
@@ -365,12 +401,24 @@ export async function doRunHookStop(options: HookStopOptions, ctx: HookStopConte
     ...(options.minEdits !== undefined ? { minEdits: options.minEdits } : {}),
   });
 
-  // Compose the two independent gates into one Stop response (a Stop hook emits
-  // at most one). The capture nudge always participates; the review nudge only
+  // Compose the independent gates into one Stop response (a Stop hook emits at
+  // most one). The capture nudge always participates; the review nudge only
   // when opted in via --require-review (otherwise the review verdict is ignored,
-  // so the capture-only output stays byte-identical). When both fire, their
-  // texts join into a single envelope.
+  // so the capture-only output stays byte-identical); the protocol delivery only
+  // when the block actually moved. When several fire, their texts join into a
+  // single envelope.
+  //
+  // The protocol delivery LEADS that envelope, because it carries the rules the
+  // other parts are written against — the capture nudge is a restatement of the
+  // standing capture protocol — so the agent has the governing text in hand
+  // before the reminders that follow from it.
+  const protocolUpdate = await evaluateProtocolUpdateGate({
+    transcriptPath,
+    target: ctx.protocolTargetPath ?? PROTOCOL_TARGET_PATH,
+  });
+
   const parts: string[] = [];
+  if (protocolUpdate !== null) parts.push(protocolUpdate);
   if (evaluation.kind === "nudge") parts.push(evaluation.additionalContext);
   if (options.requireReview === true && evaluation.review.fires) {
     parts.push(evaluation.review.additionalContext);
@@ -396,6 +444,119 @@ export async function doRunHookStop(options: HookStopOptions, ctx: HookStopConte
           },
         });
   write(`${payloadJson}\n`);
+}
+
+/**
+ * Hand a RUNNING session the standing protocols, when they changed after it
+ * started.
+ *
+ * `basou protocol sync` renders the declared protocols into a user-global
+ * instruction file the tool auto-loads at SESSION START, so an update made
+ * mid-session never reaches the session it was meant to correct: the agent goes
+ * on obeying the text it read at start. That is not disobedience, and no
+ * SessionStart hook can fix it — it fires at the one moment the copy is already
+ * fresh. The Stop hook is the only channel basou owns that reaches a session
+ * still running, so the delivery rides it.
+ *
+ * What is delivered is the protocol TEXT, not a pointer to it: basou cannot
+ * observe whether an agent re-read a file, so a "go re-read this" notice would
+ * leave the deciding step outside anything basou can see. And it is the
+ * COMPLETE current set rather than a diff, which is what lets the message say
+ * truthfully that it supersedes what was read at start — including the
+ * protocols that are no longer there.
+ *
+ * It reads the rendered block and nothing else. Not the protocols config, not
+ * the source files: they could be moved or unreadable and take the feature
+ * silently dead with them, and an edit the operator has not synced is not in
+ * the block, so unpublished text cannot reach a session by construction.
+ *
+ * Once per block STATE, not once per session. The token carries the content
+ * digest, so a second update inside one session — usually the correction of the
+ * first — still lands. The transcript is what remembers: the tool records a
+ * hook's output there, so an earlier delivery is found by its token and no new
+ * state is written to disk.
+ *
+ * Fail-silent in its own right: every failure path returns `null` rather than
+ * throwing, so an unreadable file or a damaged block cannot take the capture
+ * and review nudges down with it.
+ */
+async function evaluateProtocolUpdateGate(input: {
+  transcriptPath: string;
+  target: string;
+}): Promise<string | null> {
+  try {
+    // The session start must come from the HEAD of the transcript. The other
+    // gates read a bounded TAIL, and past that bound its first record is not
+    // the session's first — it drifts forward as the session grows, which would
+    // silently stop the delivery on exactly the long sessions it exists for.
+    const head = await readTranscriptHead(input.transcriptPath);
+    const sessionStartedAt = transcriptStartedAt(parseTranscript(head));
+    if (sessionStartedAt === undefined) return null;
+
+    // Cheap early-out for the overwhelmingly common turn: a target untouched
+    // since the session started cannot be carrying anything new.
+    const touchedAt = await targetModifiedAt(input.target);
+    if (touchedAt !== null && touchedAt <= Date.parse(sessionStartedAt)) return null;
+
+    const existing = await readMarkdownFile(input.target);
+    if (existing === null) return null;
+    const section = parseMarkers(existing, { start: PROTOCOL_START, end: PROTOCOL_END });
+    if (section.kind !== "ok") return null;
+    const stamp = parseProtocolStamp(section.generated);
+    if (stamp === null) return null;
+    if (!isProtocolUpdateDue({ stamp, sessionStartedAt })) return null;
+
+    const sections = protocolSectionsFrom(section.generated);
+    if (sections === null || sections.trim().length === 0) return null;
+
+    // Only now — on a turn where something really did change — is the whole
+    // transcript worth scanning. Scanning the bounded tail instead would make
+    // the delivery repeat once the token scrolled out of it.
+    if (await transcriptCarries(input.transcriptPath, protocolUpdateToken(stamp.contentHash))) {
+      return null;
+    }
+    return renderProtocolUpdate(sections, stamp);
+  } catch {
+    return null;
+  }
+}
+
+/** Last-modified time of the render target in ms, or `null` when it cannot be read. */
+async function targetModifiedAt(target: string): Promise<number | null> {
+  try {
+    return (await stat(target)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `token` appears anywhere in the file at `path`, read in chunks so a
+ * long transcript is never held in memory at once.
+ *
+ * Chunks overlap by one less than the token's length, so a token straddling a
+ * chunk boundary is still found. Called only on a turn where a delivery is
+ * otherwise due, which is rare enough that the full read costs nothing in
+ * practice.
+ */
+async function transcriptCarries(path: string, token: string): Promise<boolean> {
+  const handle = await open(path, "r");
+  try {
+    const overlap = Math.max(token.length - 1, 0);
+    const chunk = Buffer.alloc(TOKEN_SCAN_CHUNK_BYTES);
+    let carry = "";
+    let position = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(chunk, 0, TOKEN_SCAN_CHUNK_BYTES, position);
+      if (bytesRead === 0) return false;
+      position += bytesRead;
+      const text = carry + chunk.subarray(0, bytesRead).toString("utf8");
+      if (text.includes(token)) return true;
+      carry = overlap > 0 ? text.slice(-overlap) : "";
+    }
+  } finally {
+    await handle.close();
+  }
 }
 
 export type HookSessionStartContext = {
@@ -586,6 +747,32 @@ export async function readTranscriptBounded(
     const text = buffer.subarray(0, bytesRead).toString("utf8");
     const firstNewline = text.indexOf("\n");
     return firstNewline >= 0 ? text.slice(firstNewline + 1) : text;
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Read at most the leading `maxBytes` of a transcript.
+ *
+ * The sibling {@link readTranscriptBounded} reads the TAIL, which is right for
+ * counting what a session did and wrong for dating when it began: past the
+ * bound its first record is not the session's first. A partial trailing line is
+ * dropped so the caller only ever parses whole records.
+ */
+export async function readTranscriptHead(
+  path: string,
+  maxBytes: number = MAX_TRANSCRIPT_HEAD_BYTES,
+): Promise<string> {
+  const { size } = await stat(path);
+  if (size <= maxBytes) return readFile(path, "utf8");
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    const lastNewline = text.lastIndexOf("\n");
+    return lastNewline >= 0 ? text.slice(0, lastNewline + 1) : text;
   } finally {
     await handle.close();
   }
