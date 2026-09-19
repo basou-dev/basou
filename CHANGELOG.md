@@ -63,6 +63,35 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- **`basou review-gaps` now says when a recorded review was followed, before
+  the commit, by edits to files none of its findings named.** A review runs and
+  is recorded truthfully; one of its findings changes the DESIGN; the new
+  implementation is written and that is what ships. Nothing in the report was
+  wrong — a review did happen — which is exactly why this miss was invisible:
+  what was reviewed is not what landed. The failure gets MORE likely the more
+  seriously adversarial review is taken, because a review that changes nothing
+  never triggers it.
+
+  Each self-report now carries `editsAfterRecord`: the repo-relative paths
+  edited after the record and before that unit's last commit, split by whether
+  one of the record's own findings named the file, plus
+  `hasFindingLocations` so a record that named no location at all is reported
+  as having nothing to compare rather than as having missed everything. A
+  summary count, `unitsWithEditsAfterRecord`, sits beside the gap counts rather
+  than inside them: a gap asks whether a review happened, and this asks whether
+  the review that happened looked at what shipped, so a unit with a full review
+  trail can still be counted here.
+
+  Like every other self-report label it NEVER moves a verdict. It can only add
+  suspicion to a record, never remove it — a record with no unnamed edit is not
+  thereby corroborated, it has merely failed to raise this flag. The join is by
+  time and repository rather than by session, because `basou review record`
+  writes into its own ad-hoc session and the work a record covers may itself
+  span sessions. Erring wide is deliberate: an edit wrongly included adds
+  suspicion, which is the direction this surfacer is allowed to fail in. The
+  added `--json` fields fall under the advisory-surfacer carve-out in
+  `docs/spec/compatibility.md`.
+
 - **CI refuses a change that edits CHANGELOG notes for a version that already
   shipped.** Two pull requests each appended to `## Unreleased` at the same
   position; GitHub did not call it a conflict, both stayed mergeable, and after

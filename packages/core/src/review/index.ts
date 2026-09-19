@@ -1,5 +1,6 @@
 export {
   type CitedReview,
+  type EditsAfterRecord,
   findReviewGaps,
   findUnbindableRepos,
   normalizeRepoKey,
