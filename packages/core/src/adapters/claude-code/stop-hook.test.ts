@@ -534,6 +534,122 @@ describe("evaluateStopHook (review gate)", () => {
     expect(result.review).toEqual({ fires: false, reason: "already_reviewed" });
   });
 
+  it("a --dry-run on ANOTHER verb does not discard a real review record", () => {
+    // The unsafe direction on this side: a false positive throws away evidence
+    // that a review happened and nudges for one that did. `review record` and
+    // the dry-run flag must share a segment for the exclusion to apply.
+    for (const command of [
+      "basou review record --file r.json && npm publish --dry-run",
+      "basou review record --file r.json && git push --dry-run",
+      "basou review record --dry-run --file r.json && basou review record --file r.json",
+    ]) {
+      const result = evaluateStopHook({
+        records: [edits(3), bash(command), bash("git push")],
+        stopHookActive: false,
+      });
+      expect(result.review, command).toEqual({ fires: false, reason: "already_reviewed" });
+    }
+  });
+
+  it("the dry-run exclusion matches the flag itself, not a lookalike", () => {
+    // `--dry-run-please` and a path containing the text are not the flag.
+    for (const command of [
+      "basou review record --dry-run-please --file r.json",
+      "basou review record --file /tmp/--dry-run/r.json",
+    ]) {
+      const result = evaluateStopHook({
+        records: [edits(3), bash(command), bash("git push")],
+        stopHookActive: false,
+      });
+      expect(result.review, command).toEqual({ fires: false, reason: "already_reviewed" });
+    }
+  });
+
+  it("a subagent's records are not this session's acts", () => {
+    // A sidechain turn is a subagent's. Its push is not the parent shipping and
+    // its review record did not cover what the parent shipped. The importer
+    // excludes them for the same reason.
+    const sidechainReview = {
+      ...bash("basou review record --file r.json"),
+      isSidechain: true,
+    } as unknown as ClaudeTranscriptRecord;
+    const covered = evaluateStopHook({
+      records: [edits(3), sidechainReview, bash("git push")],
+      stopHookActive: false,
+    });
+    expect(covered.review.fires).toBe(true);
+    if (!covered.review.fires) throw new Error("expected review to fire");
+    expect(covered.review.reason).toBe("no_review");
+
+    const sidechainShip = {
+      ...bash("git push"),
+      isSidechain: true,
+    } as unknown as ClaudeTranscriptRecord;
+    const shipped = evaluateStopHook({
+      records: [edits(3), sidechainShip],
+      stopHookActive: false,
+    });
+    expect(shipped.review).toEqual({ fires: false, reason: "no_ship_act" });
+  });
+
+  it("substantiveness is measured at EACH ship act, not latched at the first", () => {
+    // Two ships straddling the threshold: the first has too few edits before it,
+    // the last has enough. Latching the first ship's count silences the verdict.
+    const result = evaluateStopHook({
+      records: [edits(1), bash("git push"), edits(1), bash("git push")],
+      stopHookActive: false,
+    });
+    expect(result.review.fires).toBe(true);
+    if (!result.review.fires) throw new Error("expected review to fire");
+    expect(result.review.reason).toBe("no_review");
+  });
+
+  it("a Write or NotebookEdit counts as post-review rework, like an Edit", () => {
+    const rework = assistant([
+      { name: "Write", input: { file_path: "/x/a.ts" } },
+      { name: "NotebookEdit", input: { file_path: "/x/b.ipynb" } },
+    ]);
+    const result = evaluateStopHook({
+      records: [edits(2), bash("basou review record --file r.json"), rework, bash("git push")],
+      stopHookActive: false,
+    });
+    expect(result.review.fires).toBe(true);
+    if (!result.review.fires) throw new Error("expected review to fire");
+    expect(result.review.reason).toBe("changed_after_review");
+  });
+
+  it("substantiveness is checked BEFORE coverage: a covered but tiny ship says so", () => {
+    // Pins the documented AND order. Both conditions hold; the reason must name
+    // the first unmet one.
+    const result = evaluateStopHook({
+      records: [bash("basou review record --file r.json"), bash("git push")],
+      stopHookActive: false,
+    });
+    expect(result.review).toEqual({ fires: false, reason: "not_substantive_code" });
+  });
+
+  it("a --dry-run review does not make a real push stop counting as a ship", () => {
+    const result = evaluateStopHook({
+      records: [edits(3), bash("basou review record --dry-run --file r.json && git push")],
+      stopHookActive: false,
+    });
+    expect(result.review.fires).toBe(true);
+    if (!result.review.fires) throw new Error("expected review to fire");
+    expect(result.review.reason).toBe("no_review");
+  });
+
+  it("the no_review message says what actually clears the verdict", () => {
+    // It used to prescribe "record it now", which does not clear it -- only
+    // reviewing and shipping again from the reviewed state does.
+    const result = evaluateStopHook({
+      records: [edits(3), bash("git push")],
+      stopHookActive: false,
+    });
+    if (!result.review.fires) throw new Error("expected review to fire");
+    expect(result.review.additionalContext).toContain("does NOT change this verdict");
+    expect(result.review.additionalContext).toContain("shipping again");
+  });
+
   it("a command that both ships and records in one segment is not covered by that record", () => {
     const result = evaluateStopHook({
       records: [edits(2), bash("git push && basou review record --file r.json")],

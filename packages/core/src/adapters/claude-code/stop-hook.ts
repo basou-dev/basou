@@ -94,24 +94,38 @@ function isShipAct(command: string): boolean {
 }
 
 /**
- * Recording that a review ran: `basou review record` (or the node-path form,
- * for the same alias-not-on-PATH reason as {@link CAPTURE_COMMAND_PATTERN}).
- * Position matters, not mere presence: see {@link evaluateReviewGate}.
+ * `basou review record --dry-run` validates and previews WITHOUT writing an
+ * event, so it is not a record: it bought silence from a command that provably
+ * recorded nothing.
+ *
+ * Scoped to ONE segment, and for the opposite reason to
+ * {@link DRY_RUN_PUSH_PATTERN}. There, a miss is a false negative — one
+ * un-nudged ship. Here a false positive DISCARDS a real record and nudges for a
+ * review that happened, so `review record ... && npm publish --dry-run`, and the
+ * validate-then-record pair `review record --dry-run && review record`, must
+ * both still count.
  */
-const REVIEW_RECORD_PATTERN = new RegExp(
-  `(?:^|[\\n;&|(])\\s*${CAPTURE_INVOCATION.source}\\s+review\\s+record\\b`,
+const DRY_RUN_REVIEW_PATTERN = /(?:^|\s)--dry-run(?![-\w=])/;
+
+/** The record invocation with the segment boundary already consumed by the split. */
+const REVIEW_RECORD_IN_SEGMENT = new RegExp(
+  `^\\s*${CAPTURE_INVOCATION.source}\\s+review\\s+record\\b`,
 );
 
 /**
- * `basou review record --dry-run` validates and previews WITHOUT writing an
- * event, so it is not a record. It matched the pattern above and bought
- * silence from a command that provably recorded nothing.
+ * Command segments, split on the same separators the anchored patterns above
+ * treat as boundaries. Not a shell parser: a separator inside a quoted string
+ * splits too, which is the pre-existing behaviour of those anchors.
  */
-const DRY_RUN_REVIEW_PATTERN = /(?:^|\s)--dry-run(?![-\w])/;
+function commandSegments(command: string): string[] {
+  return command.split(/[\n;&|()]+/);
+}
 
-/** A command that actually writes a review record. */
+/** A command with at least one segment that actually WRITES a review record. */
 function isReviewRecord(command: string): boolean {
-  return REVIEW_RECORD_PATTERN.test(command) && !DRY_RUN_REVIEW_PATTERN.test(command);
+  return commandSegments(command).some(
+    (segment) => REVIEW_RECORD_IN_SEGMENT.test(segment) && !DRY_RUN_REVIEW_PATTERN.test(segment),
+  );
 }
 
 /** Tool-use names that mutate a file; each counts as one substantive edit. */
@@ -268,6 +282,12 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
 
   for (const record of input.records) {
     if (readString(record.type) !== "assistant") continue;
+    // A sidechain is a subagent's turn, not this session's act: its `git push`
+    // is not the parent shipping, and its `review record` did not cover what the
+    // parent shipped. The importer excludes them for the same reason, and its
+    // stated hazard -- sidechain blocks flush out of order -- bites here now
+    // that position decides the verdict.
+    if (record.isSidechain === true) continue;
     for (const tool of toolUsesOf(record)) {
       const name = readString(tool.name);
       if (name === undefined) continue;
@@ -419,12 +439,14 @@ function renderReviewNudge(reason: ReviewGateFireReason): string {
       "  - the review overturned a premise or a design and the work was redone — the new design has not been reviewed by anyone. That is the case this exists for, and it gets MORE likely the harder reviews are made to bite.",
       "If the second, review the current state before relying on it, and record that pass:",
       RECORD_LINE,
+      "This verdict is about the ship act that already happened, so neither answer silences it here; reviewing and then shipping again from the reviewed state does.",
     ].join("\n");
   }
   return [
-    "This session shipped code (a push / PR / merge) after substantive edits but recorded no review before doing so.",
-    "An adversarial / second-opinion review before shipping is the discipline here. If a review ran, record it now so it lands on the durable trail:",
+    "This session shipped code (a push / PR / merge) after substantive edits, and no review was recorded before that ship act.",
+    "An adversarial / second-opinion review before shipping is the discipline here. If a review ran, record it so it lands on the durable trail:",
     RECORD_LINE,
+    "Recording it does NOT change this verdict — the ship it would have covered already happened. What changes it is reviewing the current state and shipping again from there. The record still matters: without it, nothing on the trail says the review happened at all.",
     "If no review ran, that is the gap this is meant to catch — review before relying on this. If a review genuinely was not warranted, just stop — do not fabricate a review record.",
   ].join("\n");
 }

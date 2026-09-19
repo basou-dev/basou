@@ -356,7 +356,7 @@ describe("doRunHookStop --require-review (opt-in review gate)", () => {
     const out = await run({ transcript_path: "/t.jsonl", stop_hook_active: false }, transcript, {
       requireReview: true,
     });
-    expect(out).toContain("recorded no review before doing so");
+    expect(out).toContain("no review was recorded before that ship act");
   });
 
   it("speaks when the code substantively changed between the review and the ship", async () => {

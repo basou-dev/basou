@@ -79,9 +79,9 @@ three:
 
 ### Advisory surfacers: the command is guaranteed, the payload evolves
 
-`basou review-gaps`, `basou decision gaps` and the opt-in review reminder of
-`basou hook stop --require-review` are **advisory surfacers**: they answer "what
-looks like it was missed", they write nothing, and they enforce nothing. They sit on the guaranteed CLI surface — the commands and their flags
+`basou review-gaps` and `basou decision gaps` are **advisory surfacers**: they
+answer "what looks like it was missed", they write nothing, and they enforce
+nothing. They sit on the guaranteed CLI surface — the commands and their flags
 stay under the additive rule — with one carve-out for the `--json` payload:
 
 1. **The payload's field set and the meaning of its counts may change within a
@@ -89,14 +89,6 @@ stay under the additive rule — with one carve-out for the `--json` payload:
    reads as a gap — a population boundary, a ground for excluding an entry, a
    caveat about what could not be read — and freezing today's answer to `2.0`
    would mean either never improving it or bumping the major to do so.
-1b. **The same applies to `hook stop --require-review`'s firing condition.**
-   What reads as "shipped without a review that covered it" is the same ongoing
-   judgement — it has already moved once, from "a review record exists anywhere
-   in the session" to "the last ship act was covered by one", because the first
-   reading accepted a review recorded after the merge. The flag itself, its
-   name, and its opt-in nature stay under the additive rule; what it looks at
-   does not. It emits prose only, which §What is not guaranteed already exempts,
-   so the self-describing requirement below does not reach it.
 2. **What is guaranteed is that the payload stays self-describing.** Every
    boundary the run applied is reported in the payload itself (for instance
    `scope`), so a consumer reads the run's own account of what it checked rather
@@ -108,6 +100,25 @@ stay under the additive rule — with one carve-out for the `--json` payload:
 
 A consumer that needs a frozen shape should read the store through
 **`@basou/sdk`** and apply its own rule.
+
+### `hook stop --require-review`: the flag is guaranteed, what it looks at is not
+
+The opt-in review reminder of `basou hook stop` is deliberately NOT filed with
+the advisory surfacers above: with `--block` it holds the agent in-turn, which
+is enforcement, and it has no `--json` payload for their carve-out to apply to.
+It gets its own rule.
+
+**The flag, its name, its opt-in nature and its exit codes stay under the
+additive rule. Its FIRING CONDITION does not, and may change within a `1.x`
+line.** What reads as "shipped without a review that covered it" is an ongoing
+judgement of the same kind the surfacers make. It has already moved once: from
+"a review record exists anywhere in the session" to "the last ship act was
+covered by one", because the first reading counted a review recorded after the
+merge, which cannot have gated it.
+
+What the reminder emits is prose, which §What is not guaranteed already exempts
+from the additive rule. A caller must not parse it; the stable contract is the
+flag and the envelope, not the sentence.
 
 ## What is *not* guaranteed
 

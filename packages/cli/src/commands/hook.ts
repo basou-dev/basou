@@ -159,7 +159,7 @@ export function registerHookCommand(program: Command): void {
     )
     .option(
       "--require-review",
-      "Opt-in review gate: also remind when a session shipped substantive code (push / PR / merge) without recording a review",
+      "Opt-in review gate: also remind when the last ship act (push / PR / merge) was not covered by a recorded review",
     )
     .addHelpText("after", HOOK_STOP_HELP)
     .action(async (options: RawHookStopOptions) => {

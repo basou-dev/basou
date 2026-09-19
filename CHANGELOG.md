@@ -62,9 +62,29 @@ All notable changes to **basou** are recorded here. The project follows
   commit by design. Half of all review records name a working tree and carry no
   commit to compare. Order needs neither.
 
-  `docs/spec/compatibility.md` now names this reminder alongside the other
-  advisory surfacers, whose firing condition is explicitly an ongoing judgement
-  rather than a frozen one.
+  A subagent's records no longer count as this session's acts: a sidechain turn
+  is the subagent's, so its push is not the parent shipping and its review
+  record did not cover what the parent shipped. The importer next door excludes
+  them for the same reason, and its stated hazard — sidechain blocks flush out
+  of order — bites here now that position decides the verdict.
+
+  The `--dry-run` exclusion is scoped to the segment that invokes the record,
+  and for the opposite reason to the one on the push side. There a miss is one
+  un-nudged ship; here a false positive DISCARDS a real record and nudges for a
+  review that happened, so `review record ... && npm publish --dry-run` and the
+  validate-then-record pair still count.
+
+  The nudge says what actually clears the verdict. It prescribed "record it
+  now", which does not: the ship it would have covered already happened.
+  Reviewing the current state and shipping again from there does. Recording it
+  still matters — without it nothing on the trail says the review happened at
+  all — and the message now says both.
+
+  `docs/spec/compatibility.md` gives this reminder its own rule rather than
+  filing it with the advisory surfacers: with `--block` it holds the agent
+  in-turn, which is enforcement, and it has no `--json` payload for their
+  carve-out to apply to. The flag, its name, its opt-in nature and its exit
+  codes stay under the additive rule; its firing condition does not.
 
 - **An explicit `"kind": "decision"` is now carried onto the event instead of
   being normalized away.** Dropping it is what made the two cases
