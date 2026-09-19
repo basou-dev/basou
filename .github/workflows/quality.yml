@@ -45,6 +45,12 @@ jobs:
         # plain `pnpm -r test`, so tests are not run twice. Floors only ever
         # move up — see vitest.coverage.ts.
         run: pnpm -r test:coverage
+      - name: Test (repo scripts)
+        # The CI-only scripts under scripts/ are outside the pnpm workspace, so
+        # `pnpm -r test:coverage` never reaches them. check-changelog-history is
+        # a few lines of off-by-one arithmetic whose regressions are silent in
+        # both directions, so its boundary cases are pinned here.
+        run: pnpm test:scripts
       - name: Lint
         # biome check across the workspace; this is the gap that the
         # security workflow alone did not cover and that let a
