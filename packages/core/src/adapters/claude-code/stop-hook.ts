@@ -134,13 +134,27 @@ export type StopHookSilentReason = "stop_hook_active" | "not_substantive" | "alr
  *  - `no_ship_act`: nothing was shipped this turn (review is a pre-ship act, so
  *    a turn that did not push / open / merge owes no review).
  *  - `not_substantive_code`: shipped, but fewer than `minEdits` file edits.
- *  - `already_reviewed`: a `basou review record` ran this session.
+ *  - `already_reviewed`: a `basou review record` ran BEFORE the ship act, and
+ *    the working state did not substantively change between the two.
  */
 export type ReviewGateSilentReason =
   | "stop_hook_active"
   | "no_ship_act"
   | "not_substantive_code"
   | "already_reviewed";
+
+/**
+ * Why the gate fired. A review that ran but did not cover what shipped is a
+ * different failure from no review at all, and the two need different advice.
+ *  - `no_review`: nothing was recorded before the ship act.
+ *  - `changed_after_review`: a review was recorded, then the code substantively
+ *    changed before shipping. Applying the review's own findings looks exactly
+ *    like this, which is why the nudge asks rather than asserts -- but so does
+ *    reimplementing after a review overturned the design, and THAT is the case
+ *    this exists for: it is the one that gets more likely the harder reviews
+ *    are made to bite.
+ */
+export type ReviewGateFireReason = "no_review" | "changed_after_review";
 
 /**
  * The review gate's verdict, computed INDEPENDENTLY of the capture gate in the
@@ -151,7 +165,7 @@ export type ReviewGateSilentReason =
  */
 export type ReviewGateResult =
   | { fires: false; reason: ReviewGateSilentReason }
-  | { fires: true; additionalContext: string };
+  | { fires: true; reason: ReviewGateFireReason; additionalContext: string };
 
 type StopHookCounts = {
   /** Bash tool uses (informational — does NOT drive the trigger). */
@@ -216,6 +230,13 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
   let captured = false;
   let shipped = false;
   let reviewed = false;
+  // The loop already walks the turn in order; the gate used to throw that away
+  // and keep only "a review record ran somewhere". Order is the whole signal
+  // here: a review recorded AFTER the merge cannot have gated it, and neither
+  // can one recorded before a substantive rewrite.
+  let editsSinceReview = 0;
+  let shipUncovered = false;
+  let shipStale = false;
 
   for (const record of input.records) {
     if (readString(record.type) !== "assistant") continue;
@@ -228,11 +249,21 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
         const command = toolInput !== undefined ? readString(toolInput.command) : undefined;
         if (command !== undefined) {
           if (CAPTURE_COMMAND_PATTERN.test(command)) captured = true;
-          if (isShipAct(command)) shipped = true;
-          if (REVIEW_RECORD_PATTERN.test(command)) reviewed = true;
+          if (isShipAct(command)) {
+            shipped = true;
+            if (!reviewed) shipUncovered = true;
+            else if (editsSinceReview >= minEdits) shipStale = true;
+          }
+          // Checked after the ship act in the same segment: a command that both
+          // ships and records cannot have been reviewed beforehand.
+          if (REVIEW_RECORD_PATTERN.test(command)) {
+            reviewed = true;
+            editsSinceReview = 0;
+          }
         }
       } else if (FILE_EDIT_TOOLS.has(name)) {
         fileCount += 1;
+        editsSinceReview += 1;
       }
     }
   }
@@ -242,7 +273,7 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
   // The review gate is independent of the capture outcome, so compute it once
   // and attach it to every post-scan return (e.g. a session can be
   // `already_captured` yet still owe a review).
-  const review = evaluateReviewGate({ shipped, reviewed, fileCount, minEdits });
+  const review = evaluateReviewGate({ shipped, shipUncovered, shipStale, fileCount, minEdits });
 
   if (captured) {
     return { kind: "silent", reason: "already_captured", review, ...counts };
@@ -262,25 +293,41 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
 /**
  * Decide whether a finished turn warrants a review nudge: it SHIPPED work (a
  * push / PR / merge appeared this session) after a substantive-code edit
- * (>= `minEdits` file edits) yet recorded NO review (`basou review record`).
+ * (>= `minEdits` file edits) without a review that covered what shipped.
+ *
+ * "Covered" is positional, not a count of records. The obvious alternative —
+ * compare the reviewed commit to the merged one — does not survive contact with
+ * squash merge: of 62 reviewed commits recorded on this workspace, 5 were
+ * reachable from `main`, 35 were not, and 22 no longer existed at all, because
+ * squashing discards the commit that was reviewed BY DESIGN. Half of all review
+ * records name a working tree and carry no commit to compare in the first
+ * place. Order needs neither.
  *
  * Unlike the capture gate, a free-form decision point does NOT make this fire —
  * you review code that shipped, not a conversation — so it keys on file edits
- * alone. MVP: built-in ship patterns at the same edit threshold as capture,
- * with no code-vs-docs filter; dogfeedback tunes it. The reasons are checked in
- * the AND order (ship → substantive → not-reviewed) so the silent reason names
- * the first unmet condition.
+ * alone. The reasons are checked in the AND order (ship → substantive →
+ * covered) so the silent reason names the first unmet condition.
  */
 function evaluateReviewGate(input: {
   shipped: boolean;
-  reviewed: boolean;
+  shipUncovered: boolean;
+  shipStale: boolean;
   fileCount: number;
   minEdits: number;
 }): ReviewGateResult {
   if (!input.shipped) return { fires: false, reason: "no_ship_act" };
   if (input.fileCount < input.minEdits) return { fires: false, reason: "not_substantive_code" };
-  if (input.reviewed) return { fires: false, reason: "already_reviewed" };
-  return { fires: true, additionalContext: renderReviewNudge() };
+  if (input.shipUncovered) {
+    return { fires: true, reason: "no_review", additionalContext: renderReviewNudge("no_review") };
+  }
+  if (input.shipStale) {
+    return {
+      fires: true,
+      reason: "changed_after_review",
+      additionalContext: renderReviewNudge("changed_after_review"),
+    };
+  }
+  return { fires: false, reason: "already_reviewed" };
 }
 
 /**
@@ -316,11 +363,23 @@ function renderNudge(counts: StopHookCounts): string {
  * `basou review record` verb and gives the model an out so it does not
  * fabricate a review record.
  */
-function renderReviewNudge(): string {
+function renderReviewNudge(reason: ReviewGateFireReason): string {
+  const RECORD_LINE =
+    '  - run `basou review record` and pipe a JSON object: { "reviewer": "...", "target": "...", with optional "verdict" / "findings" / "blocked" } (an explicit "blocked": [] records that you blocked nothing).';
+  if (reason === "changed_after_review") {
+    return [
+      "This session recorded a review, then substantively changed the code before shipping it. What shipped is not what was reviewed.",
+      "Only you can tell which of these it was:",
+      "  - the change only APPLIED the review's findings — nothing further is owed; say so.",
+      "  - the review overturned a premise or a design and the work was redone — the new design has not been reviewed by anyone. That is the case this exists for, and it gets MORE likely the harder reviews are made to bite.",
+      "If the second, review the current state before relying on it, and record that pass:",
+      RECORD_LINE,
+    ].join("\n");
+  }
   return [
-    "This session shipped code (a push / PR / merge) after substantive edits but recorded no review.",
+    "This session shipped code (a push / PR / merge) after substantive edits but recorded no review before doing so.",
     "An adversarial / second-opinion review before shipping is the discipline here. If a review ran, record it now so it lands on the durable trail:",
-    '  - run `basou review record` and pipe a JSON object: { "reviewer": "...", "target": "...", with optional "verdict" / "findings" / "blocked" } (an explicit "blocked": [] records that you blocked nothing).',
+    RECORD_LINE,
     "If no review ran, that is the gap this is meant to catch — review before relying on this. If a review genuinely was not warranted, just stop — do not fabricate a review record.",
   ].join("\n");
 }

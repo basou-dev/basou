@@ -384,7 +384,7 @@ describe("evaluateStopHook (review gate)", () => {
     expect(result.review).toEqual({ fires: false, reason: "not_substantive_code" });
   });
 
-  it("stays silent (already_reviewed) once a review record ran this session", () => {
+  it("stays silent (already_reviewed) when the review ran BEFORE the ship act", () => {
     for (const command of [
       "basou review record <<'JSON'\n{}\nJSON",
       "basou review record --file r.json",
@@ -393,11 +393,81 @@ describe("evaluateStopHook (review gate)", () => {
       "/usr/bin/node /opt/node_modules/@basou/cli/dist/index.js review record",
     ]) {
       const result = evaluateStopHook({
-        records: [edits(2), bash("git push"), bash(command)],
+        records: [edits(2), bash(command), bash("git push")],
         stopHookActive: false,
       });
       expect(result.review, command).toEqual({ fires: false, reason: "already_reviewed" });
     }
+  });
+
+  it("fires (no_review) when the review is recorded AFTER the ship act", () => {
+    // Recording it afterwards cannot have gated the merge. The previous gate
+    // accepted this order, which is how a session could ship unreviewed and
+    // still be told it was fine -- observed on this workspace on 2026-09-19.
+    const result = evaluateStopHook({
+      records: [
+        edits(2),
+        bash("gh pr merge 248 --squash"),
+        bash("basou review record --file r.json"),
+      ],
+      stopHookActive: false,
+    });
+    expect(result.review.fires).toBe(true);
+    if (!result.review.fires) throw new Error("expected review to fire");
+    expect(result.review.reason).toBe("no_review");
+  });
+
+  it("fires (changed_after_review) when the code substantively changed between review and ship", () => {
+    // What shipped is not what was reviewed. The nudge cannot tell "applied the
+    // findings" from "the review overturned the design and it was rebuilt", so
+    // it names both and asks.
+    const result = evaluateStopHook({
+      records: [
+        edits(2),
+        bash("basou review record --file r.json"),
+        edits(2),
+        bash("gh pr merge 1 --squash"),
+      ],
+      stopHookActive: false,
+    });
+    expect(result.review.fires).toBe(true);
+    if (!result.review.fires) throw new Error("expected review to fire");
+    expect(result.review.reason).toBe("changed_after_review");
+    expect(result.review.additionalContext).toContain("not what was reviewed");
+    expect(result.review.additionalContext).toContain("APPLIED the review's findings");
+  });
+
+  it("stays silent when the post-review edits stay under the substantiveness bar", () => {
+    // Applying a one-line finding is the common case and must not nag.
+    const result = evaluateStopHook({
+      records: [edits(2), bash("basou review record --file r.json"), edits(1), bash("git push")],
+      stopHookActive: false,
+    });
+    expect(result.review).toEqual({ fires: false, reason: "already_reviewed" });
+  });
+
+  it("a second review after the rework covers the ship again", () => {
+    const result = evaluateStopHook({
+      records: [
+        edits(2),
+        bash("basou review record --file a.json"),
+        edits(3),
+        bash("basou review record --file b.json"),
+        bash("git push"),
+      ],
+      stopHookActive: false,
+    });
+    expect(result.review).toEqual({ fires: false, reason: "already_reviewed" });
+  });
+
+  it("a command that both ships and records in one segment is not covered by that record", () => {
+    const result = evaluateStopHook({
+      records: [edits(2), bash("git push && basou review record --file r.json")],
+      stopHookActive: false,
+    });
+    expect(result.review.fires).toBe(true);
+    if (!result.review.fires) throw new Error("expected review to fire");
+    expect(result.review.reason).toBe("no_review");
   });
 
   it("does not treat a review verb merely MENTIONED in another command as a review record", () => {

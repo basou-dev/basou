@@ -331,7 +331,22 @@ describe("doRunHookStop --require-review (opt-in review gate)", () => {
     expect(context).not.toContain("basou decision capture");
   });
 
-  it("stays silent when the shipped session already recorded a review", async () => {
+  it("stays silent when the review was recorded BEFORE the ship act", async () => {
+    const transcript = [
+      editLine(2),
+      cmdLine("basou review record --file r.json"),
+      cmdLine("git push origin main"),
+      cmdLine("basou decision capture <<'JSON'\n[]\nJSON"),
+    ].join("\n");
+    const out = await run({ transcript_path: "/t.jsonl", stop_hook_active: false }, transcript, {
+      requireReview: true,
+    });
+    expect(out).toBe("");
+  });
+
+  it("still speaks when the review was recorded only AFTER the ship act", async () => {
+    // Recording it afterwards cannot have gated the push, so the end-to-end
+    // path must not fall silent on that order either.
     const transcript = [
       editLine(2),
       cmdLine("git push origin main"),
@@ -341,7 +356,21 @@ describe("doRunHookStop --require-review (opt-in review gate)", () => {
     const out = await run({ transcript_path: "/t.jsonl", stop_hook_active: false }, transcript, {
       requireReview: true,
     });
-    expect(out).toBe("");
+    expect(out).toContain("recorded no review before doing so");
+  });
+
+  it("speaks when the code substantively changed between the review and the ship", async () => {
+    const transcript = [
+      editLine(2),
+      cmdLine("basou review record --file r.json"),
+      editLine(2),
+      cmdLine("git push origin main"),
+      cmdLine("basou decision capture <<'JSON'\n[]\nJSON"),
+    ].join("\n");
+    const out = await run({ transcript_path: "/t.jsonl", stop_hook_active: false }, transcript, {
+      requireReview: true,
+    });
+    expect(out).toContain("not what was reviewed");
   });
 
   it("blocks with the review reason under --require-review --block", async () => {

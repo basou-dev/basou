@@ -5,6 +5,31 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- **The Stop hook's review gate now asks whether a review covered what SHIPPED,
+  not whether a review record exists.** It set one boolean — "a `basou review
+  record` ran this session" — so recording a review after the merge silenced it,
+  and so did recording one before a rewrite that replaced what the review had
+  looked at. Both orders were accepted. The transcript pass already walks the
+  turn in order; it was throwing that order away.
+
+  The gate now distinguishes two failures. `no_review`: nothing was recorded
+  before the ship act. `changed_after_review`: a review was recorded, then the
+  code substantively changed before shipping. The second is the one worth
+  having, and it gets MORE likely the harder reviews are made to bite — a review
+  that overturns a design produces a reimplementation that no one has reviewed,
+  while the feeling that "the review is done" remains. Applying a review's own
+  findings looks identical to the gate, so its message names both readings and
+  asks rather than asserting; edits below the substantiveness bar stay silent.
+
+  The obvious alternative — compare the reviewed commit to the merged one —
+  does not survive squash merge. Of 62 reviewed commits recorded on this
+  workspace, 5 were reachable from `main`, 35 were not, and 22 no longer existed
+  at all: squashing discards the commit that was reviewed, by design. Half of
+  all review records name a working tree and carry no commit to compare in the
+  first place. Order needs neither.
+
 ### Deprecated
 
 - **Omitting `"kind"` on `basou decision capture` now warns, and becomes an
