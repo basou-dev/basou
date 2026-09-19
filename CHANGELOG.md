@@ -59,6 +59,39 @@ All notable changes to **basou** are recorded here. The project follows
   upgrade already knows; the blind spot being closed here is the operator
   changing the rules underneath a session that cannot see it happen.
 
+### Fixed
+
+- **A corrupt task file is reported until someone acts on it, not just once.**
+  `tasks/index.json` is a cache of what the tasks directory holds, and it was
+  returned unchecked. Rebuilding it dropped any file it could not parse, so the
+  FIRST render after a task file was corrupted said "tasks on record, some
+  unreadable -- in flight unknown" and every render after that said nothing.
+  The file stayed on disk and its status stayed `in_progress`; in a workspace
+  with no other task, `orient` fell all the way to "no tasks recorded" —
+  basou stating the absence of a fact it had merely stopped enumerating, which
+  is the claim 0.42.1 shipped to stop making.
+
+  The index is now reconciled against the directory before it is trusted, by
+  comparing id sets rather than counts so a file swapped for another id is
+  caught too. Listing the directory also stopped requiring each entry to report
+  itself as a regular file: `readTaskFile` follows symlinks, so that bit was
+  narrower than the predicate deciding whether a task can be read, and it is
+  false for every entry on a filesystem that does not report dirent types.
+  Under the old behaviour the index covered for that; under reconciliation it
+  would have refuted a task that reads perfectly well. That costs one `readdir`; what the index exists to save is
+  READING N task files, and it still saves that whenever it agrees with disk.
+  While a file is unreadable the index is deliberately left alone: rewriting it
+  without that file is what made the condition vanish, and it would also put a
+  write on every read path. Two consequences worth naming: an index entry with
+  no file behind it is no longer returned (it would have been reported as an
+  unreadable task that does not exist), and the warning clears by itself as
+  soon as the file is repaired or removed.
+
+  `orient` also names an unreadable file when it DID find tasks to list. A
+  non-empty list can be incomplete and the heading count cannot say so — it
+  counts what was readable — so without this line "unreadable" was something
+  basou mentioned only when it had nothing else to show.
+
 ## 0.45.0
 
 ### Added

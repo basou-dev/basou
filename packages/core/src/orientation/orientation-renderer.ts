@@ -239,14 +239,13 @@ export type OrientationSummary = {
    *  zero in-flight count distinguish "all closed" from "never used here".
    *  See {@link anyTaskEverRecorded}: a live count is NOT this. */
   anyTaskEverRecorded: boolean;
-  /** Task files THIS pass tried and failed to read, so their status is
-   *  unknown. A zero in-flight count is only a claim about the files that
-   *  parsed: with one of these present, "none in flight" is not something the
-   *  renderer can say. Reported to the caller through `onTaskSkip` as well,
-   *  but that goes to stderr and the body travels on its own (hooks ship the
-   *  body alone). Not a standing count: enumerating tasks can rebuild the
-   *  index without the unreadable file, after which later passes do not
-   *  attempt it and this reads zero while the file is still on disk. */
+  /** How many task files this render could not read.
+   *
+   * A standing count: the task index is reconciled against the tasks directory
+   * on every enumeration, so a file that cannot be parsed keeps being attempted
+   * — and keeps being counted — until it is repaired or removed. It used to
+   * read zero from the second render on, because rebuilding the index dropped
+   * the file and nothing enumerated it again. */
   unreadableTaskCount: number;
   /** Tasks whose status is `planned` ("where am I heading"). */
   plannedTasks: PlannedTask[];
@@ -947,6 +946,12 @@ function formatOrientationBody(
     for (const t of summary.inFlightTasks) {
       const linkedSuffix = t.linkedSessions > 1 ? ` — linked_sessions: ${t.linkedSessions}` : "";
       lines.push(`- ${oneLine(t.title)} (${t.status}) [${shortId(t.id)}]${linkedSuffix}`);
+    }
+    // A non-empty list can be incomplete, and the heading count cannot say so:
+    // it counts what was readable. Without this line, an unreadable task file
+    // is something basou mentions only when it has nothing else to show.
+    if (summary.unreadableTaskCount > 0) {
+      lines.push(`- ${t.orientation.tasksUnreadableAlongside(summary.unreadableTaskCount)}`);
     }
   }
   lines.push("");

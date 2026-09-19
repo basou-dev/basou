@@ -774,26 +774,46 @@ describe("orientation-renderer", () => {
     }
   });
 
-  // KNOWN LIMIT, locked deliberately so it is not rediscovered as a surprise.
-  // The unreadable line reports the skips THIS render saw. `enumerateTaskIds`
-  // rebuilds `tasks/index.json` when it is missing or version-mismatched and
-  // drops the file it could not read, so the second render no longer attempts
-  // it, no longer skips it, and falls back to the sibling line. The corrupt
-  // file is still on disk. Whether basou should keep forgetting it is a
-  // separate question; if that changes, this test should fail and be updated
-  // on purpose.
-  it("the unreadable line reports this render's skips, and does not survive the index rebuild", async () => {
+  // The unreadable line used to report only the skips THAT render saw:
+  // `enumerateTaskIds` rebuilt `tasks/index.json` without the file it could
+  // not read, so the second render no longer enumerated it, no longer skipped
+  // it, and fell back to the sibling line while the corrupt file sat on disk.
+  // The index is now reconciled against the directory, so the condition holds
+  // until someone acts on it.
+  it("the unreadable line stands on every render until the file is repaired", async () => {
     const paths = await setupPaths();
     await writeFile(join(paths.tasks, `${TASK("T14")}.md`), "not a task file at all\n");
 
-    const first = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(first.body).toContain(`- ${UNREADABLE_LINE}`);
+    for (let render = 0; render < 3; render++) {
+      const out = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+      expect(out.body).toContain(`- ${UNREADABLE_LINE}`);
+    }
 
-    const second = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
-    expect(second.body).not.toContain(`- ${UNREADABLE_LINE}`);
-
-    // The file never went anywhere -- only the index stopped naming it.
+    // The file never went anywhere while it was being reported.
     await expect(stat(join(paths.tasks, `${TASK("T14")}.md`))).resolves.toBeDefined();
+
+    // ... and the report stops once it does.
+    await rm(join(paths.tasks, `${TASK("T14")}.md`));
+    const after = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(after.body).not.toContain(`- ${UNREADABLE_LINE}`);
+  });
+
+  // A non-empty list can be incomplete, and the heading count cannot say so --
+  // it counts what was readable.
+  it("names an unreadable file alongside the tasks it could read", async () => {
+    const paths = await setupPaths();
+    await placeTaskFile(paths, {
+      id: TASK("T15"),
+      title: "a healthy purpose unit",
+      status: "in_progress",
+      sessionId: SES("S03"),
+    });
+    await writeFile(join(paths.tasks, `${TASK("T16")}.md`), "not a task file at all\n");
+
+    const out = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(out.body).toContain("### In-flight tasks (1)");
+    expect(out.body).toContain("a healthy purpose unit");
+    expect(out.body).toContain("- (and 1 task file could not be read -- what it holds is unknown)");
   });
 
   // The Japanese values are held only by the totality check on `const JA`

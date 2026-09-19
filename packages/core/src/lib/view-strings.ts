@@ -108,12 +108,24 @@ export type ViewStrings = {
     /**
      * Same heading, but a task file could not be read on THIS pass, so its
      * status is unknown and "none in flight" would be an assertion the
-     * renderer cannot support. Says what it can see and stops. Reading the
-     * tasks directory can rebuild the index without the unreadable file, in
-     * which case a later render does not attempt it and this line gives way
-     * to its sibling -- the line reports a pass, not a standing condition.
+     * renderer cannot support. Says what it can see and stops.
+     *
+     * A standing condition, not a one-pass report: it holds every render until
+     * the file is repaired or removed. It used to give way to its sibling on
+     * the second render, because rebuilding the task index dropped the file it
+     * could not parse and nothing enumerated it again.
      */
     tasksUnreadable: string;
+    /**
+     * Appended under a NON-empty in-flight list when some task file could not
+     * be read.
+     *
+     * The list above it is true and incomplete at the same time, and a reader
+     * has no way to tell from a heading count that anything is missing. The
+     * zero case already says so; saying nothing here would make "unreadable" a
+     * fact basou reports only when it happens to have nothing else to report.
+     */
+    tasksUnreadableAlongside: (n: number) => string;
     pendingApprovalsHeading: (n: number) => string;
     suspectSessionsHeading: (n: number) => string;
     openTracksHeading: (n: number) => string;
@@ -243,6 +255,10 @@ const EN: ViewStrings = {
     noTasksRecorded: "(no tasks recorded)",
     noTasksInFlight: "(tasks on record, none in flight)",
     tasksUnreadable: "(tasks on record, some unreadable -- in flight unknown)",
+    tasksUnreadableAlongside: (n) =>
+      n === 1
+        ? "(and 1 task file could not be read -- what it holds is unknown)"
+        : `(and ${n} task files could not be read -- what they hold is unknown)`,
     pendingApprovalsHeading: (n) => `### Pending approvals (${n})`,
     suspectSessionsHeading: (n) => `### Suspect sessions (${n})`,
     openTracksHeading: (n) => `### Open tracks (shown until closed) (${n})`,
@@ -367,6 +383,7 @@ const JA: ViewStrings = {
     noTasksRecorded: "(task が 1 件も記録されていません)",
     noTasksInFlight: "(記録済みの task はありますが、進行中はありません)",
     tasksUnreadable: "(記録済みの task に読めないものがあり、進行中かは不明です)",
+    tasksUnreadableAlongside: (n) => `(ほかに読めない task ファイルが ${n} 件あり、内容は不明です)`,
     pendingApprovalsHeading: (n) => `### 承認待ち (${n})`,
     suspectSessionsHeading: (n) => `### 要注意 session (${n})`,
     openTracksHeading: (n) => `### 未完トラック (close まで継続表示) (${n})`,
