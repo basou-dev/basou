@@ -34,8 +34,18 @@ import { deriveCommandWorkdir } from "./command-workdir.js";
  * record is bound to a unit by the repo paths it names and surfaced as a label,
  * but it NEVER changes that unit's verdict — a gap stays a gap, a candidate
  * stays a candidate — otherwise an empty record would become a way to make the
- * gap count go down, the same weakness the Stop-gate has. It re-labels; it does
- * not clear.
+ * gap count go down. It re-labels; it does not clear.
+ *
+ * The Stop review gate takes such a self-report at face value and goes quiet on
+ * it. That is a settled difference in contract, not a lapse there and rigour
+ * here. This surfacer answers a question about the RECORD — across everything
+ * captured, what still looks unreviewed — so a claim it cannot corroborate must
+ * not move the answer. The gate answers a question about ONE turn, while that
+ * turn is ending, with only that turn's transcript to read: there the
+ * self-report is the only evidence in existence. Declining it would not hang a
+ * session — the loop guard keeps a continuation turn silent — but it would put
+ * a reminder on every shipping turn regardless of what that session did, which
+ * is a reminder a person stops reading.
  *
  * It reads only captured provenance and writes nothing.
  */
