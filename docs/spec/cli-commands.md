@@ -235,9 +235,10 @@ before.
 Boundaries (intentional, kept neutral). Aggregation is **read-only**: a
 portfolio load runs no import (a stale capture is shown as stale; run a refresh
 to re-import). Cards carry structured facts only — latest session/decision,
-in-flight count (with whether a task was ever recorded, so a workspace that has
-none is not shown as one that finished them all), pending-approval risk,
-suspect count, capture freshness — and
+in-flight count (with whether a task was ever recorded and how many task files
+could not be read, so a workspace with none, one that finished them all, and one
+whose store is unreadable are not shown as the same thing), pending-approval
+risk, suspect count, capture freshness — and
 **never** work-stats or per-agent productivity / utilization metrics: this is
 the owner orienting across their own work, not surveillance of a fleet. The
 server stays **localhost-only and unauthenticated** (do not expose the port);

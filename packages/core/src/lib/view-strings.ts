@@ -282,7 +282,7 @@ const EN: ViewStrings = {
       "- (no planned tasks or recorded next step — the latest activity postdates the latest decision; ask the user for the continuation point)",
     fallbackStaleReferenceLabel: "Reference (possibly stale — not the current direction)",
     trackNudge:
-      'Once the next essential direction is settled, record it as a track with `basou decision capture` (`"kind":"track"`) / `basou decision record --track` — it stays surfaced here every session until closed.',
+      'Once the next essential direction is settled, record it as a track: `basou decision capture` with `"kind":"track"` (the batch form, piped as JSON), or `basou decision record --track` for a single one typed by hand — it stays surfaced here every session until closed.',
     federatedFreshnessNote:
       "Note: the freshness verdict covers only this machine's local store. Missed work on other hosts cannot be assessed here (run `basou refresh` on each host to sync).",
     bannerUnverifiable: (n) =>
@@ -407,7 +407,7 @@ const JA: ViewStrings = {
       "- (no planned tasks or recorded next step — 最終活動は直近の判断より後です。継続点をユーザに確認してください)",
     fallbackStaleReferenceLabel: "参考 (古い可能性・方針ではない)",
     trackNudge:
-      '次に作るべき本質的な方向性が定まったら `basou decision capture` (`"kind":"track"`) / `basou decision record --track` で track 化すると、close まで毎 session ここに継続表示されます。',
+      '次に作るべき本質的な方向性が定まったら track 化すると、close まで毎 session ここに継続表示されます。まとめて JSON で渡すなら `basou decision capture` に `"kind":"track"` を、手で 1 件書くなら `basou decision record --track` を使ってください。',
     federatedFreshnessNote:
       "注: 鮮度判定はこのマシンのローカルストアのみが対象です。他ホストの取りこぼしは判定できません(各ホストで basou refresh を実行し同期してください)。",
     bannerUnverifiable: (n) =>

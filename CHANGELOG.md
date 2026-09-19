@@ -5,43 +5,72 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Deprecated
+
+- **Omitting `"kind"` on `basou decision capture` now warns, and becomes an
+  error in a later release.** The field selects the vessel, and getting it
+  wrong fails with no symptom: a track filed as a point-in-time decision is
+  written, reported as a success, and then never resurfaces in `orient`. An
+  omitted optional field cannot be caught the way a misspelled one is, so
+  nothing stood between the miss and that outcome.
+
+  0.42.1 covered it with a heuristic on the title — warn when a bracketed
+  `TRACK` marker (ASCII, full-width, lenticular or round, or a leading `TRACK:`)
+  appeared while `kind` was absent. That heuristic is now retired, and the
+  reason is not that it misfired: once the omission itself is what warns, the
+  heuristic is unreachable — every title it could have matched is already
+  covered, and so is every title it could not. Measuring it happens to show it
+  was doing nothing here (it reads `TRACK` in Latin letters only, and this
+  workspace writes its titles in Japanese), but the removal does not rest on
+  that.
+
+  The warning names the offending index and both vessels, fires under
+  `--dry-run` too, and **the item is still written**. Refusing the batch would
+  trade a silent mis-filing for a silent total loss: capture is what an agent
+  runs at the end of a session, often from a hook that fires once, and a batch
+  that errors is a batch that may simply never be retried.
+
+  `basou decision record` is unchanged. Its vessel is the `--track` flag, which
+  cannot be omitted in the same sense — there is no way to state "explicitly not
+  a track" — so the same warning could never be silenced there.
+
 ### Changed
 
-- **BREAKING: `basou decision capture` now requires `"kind"` on every item.**
-  It had no default and no way to be caught when omitted: a misspelled field is
-  a hard error, but an omitted optional one is indistinguishable from a
-  deliberate choice, so a track filed without `kind` was recorded as a
-  point-in-time decision, reported as a success, and never resurfaced in
-  orient. 0.42.1 covered that with a heuristic on the title -- a warning when a
-  title carried a bracketed `TRACK` marker while `kind` was absent.
+- **An explicit `"kind": "decision"` is now carried onto the event instead of
+  being normalized away.** Dropping it is what made the two cases
+  indistinguishable on disk: nothing could tell a decision someone MEANT from
+  one whose `kind` was forgotten — not a reader, not a later audit, not the
+  command's own `--json` output. Absence now means "nobody said", which is what
+  makes the deprecated form findable while the warning release is in effect
+  rather than merely tolerated. Every reader branches on `kind === "track"`
+  only, so nothing else changes; events written before this release keep their
+  old meaning, where an absent `kind` says only that none was recorded.
 
-  The heuristic is now removed, because measuring it showed it could not do the
-  job it was given. It matched `TRACK` in Latin letters only, so on a workspace
-  whose decision titles are written in Japanese it fired on nothing at all: the
-  stopgap was running at zero. Requiring the field is the only form of the fix
-  that does not depend on guessing what the title meant, and the input shape is
-  published, so the change has to land before 1.0 freezes it.
+- **`decision capture` output names the undeclared case.** `--dry-run` marks all
+  three states (`[TRACK]`, `[DECISION]`, `[NO KIND]`); after the write a track
+  and an undeclared item are marked and a declared decision is left bare, the
+  convention `decisions.md` uses. Marking the undeclared item after the write is
+  what the `[DECISION]` marker added in 0.42.1 was reaching for and could not
+  do: the default flow pipes JSON with no dry run, so the written line is the
+  only receipt the operator ever sees. The `[NO KIND]` arm goes away with the
+  deprecation.
 
-  Callers that omitted `kind` now get `decision[N].kind is required` naming the
-  offending index and both vessels, before anything is written (`--dry-run`
-  included). `basou decision record` is unchanged: its `--track` flag already
-  sits next to `--title` in the option list, where the choice is visible.
-
-- **After the write, `decision capture` marks a track and leaves a plain
-  decision bare.** 0.42.1 added `[DECISION]` to the confirmation line so that
-  neither case had to be read off an absent marker. That reasoning belonged to
-  the moment the vessel could still be wrong; after the write it announces a
-  fait accompli, and the boundary now refuses a missing `kind` outright. The
-  `--dry-run` preview keeps naming both, because its whole job is to read the
-  declaration back before anything is written.
+- **`docs/spec/compatibility.md` now names JSON *input* shapes as a guaranteed
+  surface**, and states the deprecation path for a field that becomes required
+  on one. The list covered flags, exit codes and `--json` output shapes, so the
+  shape `decision capture` reads on stdin was governed by nothing — which left
+  "can this be tightened, and on what notice" unanswerable from the document.
 
 ### Fixed
 
-- **A `basou view` portfolio card no longer shows the same thing for a
-  workspace that has never recorded a task and one whose tasks are all
-  finished.** Both read `in-flight 0`. The card now carries
-  `anyTaskEverRecorded` and prints `in-flight (no tasks recorded)` for the
-  first, matching the distinction `orient` and `handoff` already draw.
+- **A `basou view` portfolio card no longer collapses three different task
+  states into `in-flight 0`.** A workspace that has never recorded a task, one
+  whose tasks are all finished, and one whose task files cannot be READ all
+  rendered identically — the third being the worst, since a loader blind spot
+  was reported as an empty record. The card now carries `anyTaskEverRecorded`
+  and `unreadableTaskCount` and renders `no tasks recorded` /
+  `in-flight <n>` / `in-flight unknown (<n> unreadable)`, matching the three-way
+  branch `orient` already makes.
 
 ## 0.46.0 — 2026-09-19
 

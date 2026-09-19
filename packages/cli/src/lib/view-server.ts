@@ -395,8 +395,9 @@ function matchWsRoute(pathname: string): { key: string; sub: string } | null {
  * Aggregate the per-workspace "current position" for the portfolio landing.
  * Read-only: it runs NO import, so a stale capture is shown as stale (run a
  * refresh to re-import). Each card carries STRUCTURED FACTS only (latest
- * session/decision, in-flight count, pending-approval risk, suspect count,
- * capture freshness) — never work-stats or per-agent productivity metrics. One
+ * session/decision, in-flight count plus the two facts that tell its zeros
+ * apart, pending-approval risk, suspect count, capture freshness) — never
+ * work-stats or per-agent productivity metrics. One
  * workspace failing to read degrades only its own card, not the whole response.
  */
 async function portfolio(deps: ViewServerDeps): Promise<Record<string, unknown>> {
@@ -437,10 +438,13 @@ async function portfolioCard(ws: WorkspaceEntry, nowIso: string): Promise<Record
       sessionCount: s.sessionCount,
       suspectCount: s.suspects.length,
       inFlightCount: s.inFlightTasks.length,
-      // Two different zeros: a workspace that has never recorded a task, and
-      // one whose tasks are all finished. `inFlightCount` alone reads the same
-      // for both, which is the defect orient and handoff already fixed.
+      // Three states hide behind `inFlightCount: 0`: nothing ever recorded,
+      // everything finished, and a store whose task files cannot be read (where
+      // the count is not 0 but UNKNOWN). `orient` branches all three ways; the
+      // card carries the two extra facts so it can too, instead of reporting a
+      // loader blind spot as an empty record.
       anyTaskEverRecorded: s.anyTaskEverRecorded,
+      unreadableTaskCount: s.unreadableTaskCount,
       pendingApprovals: s.pendingApprovals.map((a) => ({
         risk: a.risk,
         kind: a.kind,

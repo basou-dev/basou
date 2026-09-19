@@ -758,7 +758,7 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     expect(decision.linked_files).toEqual(["pnpm-workspace.yaml"]);
   });
 
-  it('cap-track-1: kind:"track" is persisted onto the decision event; a plain item omits kind', async () => {
+  it("cap-track-1: BOTH declared vessels are persisted onto the decision event", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
     const input = JSON.stringify([
@@ -773,14 +773,16 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     >;
     const plain = decisions.find((d) => d.title === "ordinary decision") as Record<string, unknown>;
     expect(track.kind).toBe("track");
-    expect(plain.kind).toBeUndefined();
+    expect(plain.kind).toBe("decision");
   });
 
-  it('cap-track-2: an explicit kind:"decision" is accepted but normalized to omission', async () => {
+  it("cap-track-2: an item that declares nothing leaves kind absent on the event", async () => {
+    // Absence now means "nobody said", which is a different fact from "someone
+    // said decision" -- that is what makes the deprecated form findable later.
     const repo = await setupInitedRepo();
     captureStdout();
-    const input = JSON.stringify([{ title: "plain", kind: "decision" }]);
-    await doRunDecisionCapture({}, captureCtx(repo, input));
+    captureStderr();
+    await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title: "undeclared" }])));
     const decision = (await readAdHocEvents(repo)).find(
       (e) => e.type === "decision_recorded",
     ) as Record<string, unknown>;
@@ -796,77 +798,93 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     );
   });
 
-  it("cap-track-4: the DRY-RUN preview names the declared vessel on every line", async () => {
-    // Before the write, the line's job is to confirm what was declared, so both
-    // vessels are named: an absent marker cannot confirm anything.
+  it("cap-track-4: the DRY-RUN preview names all three states", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
     captureStderr();
     const input = JSON.stringify([
       { title: "the track", kind: "track" },
       { title: "plain", kind: "decision" },
+      { title: "undeclared" },
     ]);
     await doRunDecisionCapture({ dryRun: true }, captureCtx(repo, input));
     const stdout = joinCalls(out);
     expect(stdout).toContain("- the track [TRACK]");
     expect(stdout).toContain("- plain [DECISION]");
-    expect(stdout).not.toContain("- plain [TRACK]");
+    expect(stdout).toContain("- undeclared [NO KIND]");
   });
 
-  it("cap-track-5: the WRITTEN result marks a track and leaves a plain decision bare", async () => {
-    // After the write the declaration has already been checked at the boundary,
-    // so only the exception is marked -- the same convention decisions.md uses.
+  it("cap-track-5: the WRITTEN result marks a track and an undeclared item, not a plain one", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
+    captureStderr();
     const input = JSON.stringify([
       { title: "plain", kind: "decision" },
       { title: "the track", kind: "track" },
+      { title: "undeclared" },
     ]);
     await doRunDecisionCapture({}, captureCtx(repo, input));
     const stdout = joinCalls(out);
     expect(stdout).toMatch(/- decision_[A-Z0-9]+: plain$/m);
     expect(stdout).toMatch(/- decision_[A-Z0-9]+: the track \[TRACK\]$/m);
-    expect(stdout).not.toContain("[DECISION]");
+    expect(stdout).toMatch(/- decision_[A-Z0-9]+: undeclared \[NO KIND\]$/m);
   });
 
-  it("cap-track-6: an omitted kind is refused, and the error names both vessels", async () => {
-    // The point of requiring it: an omitted optional field cannot be caught the
-    // way a misspelled one is, so the miss used to surface much later, as a
-    // track that never resurfaced in orient.
+  it("cap-track-6: an omitted kind warns, names the index, and still writes", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
-    await expect(
-      doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title: "no vessel" }]))),
-    ).rejects.toThrow(/decision\[0\]\.kind is required/);
-    await expect(
-      doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title: "no vessel" }]))),
-    ).rejects.toThrow(/"track".+"decision"/s);
+    const err = captureStderr();
+    await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title: "no vessel" }])));
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("decision[0]");
+    expect(stderr).toContain("will NOT resurface");
+    expect(stderr).toContain('"kind": "track"');
+    expect(stderr).toContain("ERROR in the next release");
+    // Deprecated, not refused: losing an agent's last output would be worse.
+    const decisions = (await readAdHocEvents(repo)).filter((e) => e.type === "decision_recorded");
+    expect(decisions).toHaveLength(1);
   });
 
-  it("cap-track-7: --dry-run refuses an omitted kind too (no false-clear preview)", async () => {
-    const repo = await setupInitedRepo();
-    const out = captureStdout();
-    await expect(
-      doRunDecisionCapture(
-        { dryRun: true },
-        captureCtx(repo, JSON.stringify([{ title: "no vessel" }])),
-      ),
-    ).rejects.toThrow(/decision\[0\]\.kind is required/);
-    expect(joinCalls(out)).not.toContain("Would capture");
-  });
-
-  it("cap-track-7b: the offending index is named when a later item omits kind", async () => {
+  it("cap-track-6b: the warning names the offending index when a later item omits kind", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
+    const err = captureStderr();
     const input = JSON.stringify([{ title: "ok", kind: "decision" }, { title: "no vessel" }]);
-    await expect(doRunDecisionCapture({}, captureCtx(repo, input))).rejects.toThrow(
-      /decision\[1\]\.kind is required/,
-    );
+    await doRunDecisionCapture({}, captureCtx(repo, input));
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("decision[1]");
+    expect(stderr).not.toContain("decision[0]");
   });
 
-  // Titles the retired marker heuristic could never have matched. It only read
-  // `TRACK` in Latin letters, so every title this workspace actually writes went
-  // through unflagged -- which is why guessing was replaced by declaring.
+  it("cap-track-6c: --dry-run warns too, so a preview is never a false clear", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    await doRunDecisionCapture(
+      { dryRun: true },
+      captureCtx(repo, JSON.stringify([{ title: "no vessel" }])),
+    );
+    expect(joinCalls(err)).toContain("will NOT resurface");
+  });
+
+  const DECLARED_QUIET: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ["a track", { title: "a real one", kind: "track" }],
+    ["an explicit decision", { title: "a settled one", kind: "decision" }],
+  ];
+  for (const [label, item] of DECLARED_QUIET) {
+    it(`cap-track-7 (${label}): declaring a vessel silences the warning`, async () => {
+      const repo = await setupInitedRepo();
+      captureStdout();
+      const err = captureStderr();
+      await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([item])));
+      expect(joinCalls(err)).not.toContain("will NOT resurface");
+    });
+  }
+
+  // Titles the retired marker heuristic could never have matched: it read
+  // `TRACK` in Latin letters only, so on a workspace whose titles are written in
+  // another script it fired on nothing. Warning on the omission itself needs no
+  // guess about what a title meant, and catches strictly more.
   const NON_LATIN_TITLES: ReadonlyArray<[string, string]> = [
     [
       "japanese bracketed",
@@ -875,39 +893,28 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     ["japanese prose", "\u672a\u5b8c\u30c8\u30e9\u30c3\u30af\u3092\u68da\u5378\u3057\u3059\u308b"],
   ];
   for (const [label, title] of NON_LATIN_TITLES) {
-    it(`cap-track-7c (${label}): now refused rather than silently filed as a decision`, async () => {
+    it(`cap-track-7b (${label}): now warns, where the marker heuristic was silent`, async () => {
       const repo = await setupInitedRepo();
       captureStdout();
-      await expect(
-        doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title }]))),
-      ).rejects.toThrow(/decision\[0\]\.kind is required/);
+      const err = captureStderr();
+      await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title }])));
+      expect(joinCalls(err)).toContain("will NOT resurface");
     });
   }
 
-  it("cap-track-7d: a title that merely names the marker is accepted once kind is declared", async () => {
+  it("cap-track-8: a title that merely names the marker is quiet once kind is declared", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
+    const err = captureStderr();
     const input = JSON.stringify([
       { title: "Drop the [TRACK] marker from decisions.md", kind: "decision" },
     ]);
     await doRunDecisionCapture({}, captureCtx(repo, input));
+    expect(joinCalls(err)).not.toContain("will NOT resurface");
     const decision = (await readAdHocEvents(repo)).find(
       (e) => e.type === "decision_recorded",
     ) as Record<string, unknown>;
-    expect(decision.kind).toBeUndefined();
-  });
-
-  it("cap-track-8: an explicit kind:decision still writes no kind on the event", async () => {
-    // The suppression above must not change what is persisted.
-    const repo = await setupInitedRepo();
-    captureStdout();
-    captureStderr();
-    const input = JSON.stringify([{ title: "[TRACK] in the title", kind: "decision" }]);
-    await doRunDecisionCapture({}, captureCtx(repo, input));
-    const decision = (await readAdHocEvents(repo)).find(
-      (e) => e.type === "decision_recorded",
-    ) as Record<string, unknown>;
-    expect(decision.kind).toBeUndefined();
+    expect(decision.kind).toBe("decision");
   });
 
   it("cap-4: --json emits mode=ad-hoc, count, and a decisions array with ids + fields", async () => {
