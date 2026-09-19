@@ -63,6 +63,36 @@ export type CitedReview = {
 };
 
 /**
+ * What was edited between a self-report and the work it was paired with, split
+ * by whether one of that record's own findings named the file.
+ *
+ * The shape this exists to surface: a review runs, one of its findings changes
+ * the DESIGN, the new implementation is written, and that implementation ships
+ * without anyone reviewing the thing that actually shipped. The record is
+ * truthful — a review did run — and is exactly why the miss is invisible: what
+ * it covered is not what landed.
+ *
+ * Like every other self-report label, this NEVER changes the unit's verdict. It
+ * can only add suspicion to a record, never take it away: a record with no
+ * unnamed edit is not thereby corroborated, it has merely failed to raise this
+ * particular flag.
+ */
+export type EditsAfterRecord = {
+  /** Repo-relative paths in the window that no finding named (capped for display). */
+  unnamed: string[];
+  /** Distinct unnamed paths, before the display cap. */
+  unnamedCount: number;
+  /** Distinct edited paths a finding DID name — the "applied the findings" case. */
+  namedCount: number;
+  /**
+   * The record carried at least one `findings[].location` to compare against.
+   * When false nothing COULD be named, so `unnamedCount` says only that files
+   * were edited — not that they were files the review never looked at.
+   */
+  hasFindingLocations: boolean;
+};
+
+/**
  * A `review_recorded` self-report bound to a unit by the repo paths it named.
  * Carries no corroboration: it is what the agent said it did, not what the
  * capture observed.
@@ -83,6 +113,11 @@ export type SelfReportedReview = {
    * written is part of what the operator is judging.
    */
   recordedAfterCommit: boolean;
+  /**
+   * Files edited after this record was written and before the paired unit's
+   * last commit. See {@link EditsAfterRecord}.
+   */
+  editsAfterRecord: EditsAfterRecord;
 };
 
 /** One unit of work (a committing session's commits in one repo) and its verdict. */
@@ -172,6 +207,16 @@ export type ReviewGapsSummary = {
    * looking like success again — the very failure this surfacer exists to catch.
    */
   unattachedSelfReports: UnattachedSelfReports;
+  /**
+   * Units carrying a self-report that was followed, before the commit, by an
+   * edit to a file none of that record's findings named.
+   *
+   * Reported as its own number rather than folded into the gap count, because
+   * it answers a different question. A gap asks whether a review happened at
+   * all; this asks whether the review that happened looked at what shipped. A
+   * unit can be a `candidate` — trail and all — and still be counted here.
+   */
+  unitsWithEditsAfterRecord: number;
   /**
    * How many (record, unit) pairings fell inside a unit's window but could not
    * be checked, because that unit's own repository path was never verified.
@@ -509,15 +554,54 @@ type ReviewRec = {
   /** repo key -> what the review touched in it. */
   repos: Map<string, { examinedDiff: boolean; files: Set<string> }>;
 };
+/** One recorded file edit, reduced to when it happened and where. */
+type EditRec = { at: number; path: string };
+
+/**
+ * A `findings[].location` reduced to the repo-relative path it points at.
+ *
+ * A location is written for a person to read, so it carries a line number
+ * (`packages/core/x.ts:907`) or a trailing note naming a symbol
+ * (`packages/core/x.ts (deriveCommandWorkdir)`). Both are stripped; a location
+ * naming no path at all yields null.
+ */
+function findingPath(location: string): string | null {
+  const s = location
+    .trim()
+    .replace(/\s*\(.*\)\s*$/, "")
+    .replace(/:\d+(-\d+)?$/, "")
+    .replace(/^\.\//, "")
+    .trim();
+  return s.length === 0 ? null : s;
+}
+
+/**
+ * A recorded `file_changed` path as an absolute path, or null.
+ *
+ * The path sanitizer writes `~/…` for anything under the home directory and
+ * leaves any other absolute path verbatim, so those two spellings are the whole
+ * population. A repo-relative spelling cannot be placed without already knowing
+ * which repository it belongs to, so it is dropped rather than guessed at.
+ */
+function absoluteEditPath(p: string | null | undefined): string | null {
+  if (!p) return null;
+  const s = p.trim();
+  if (s.startsWith("~/")) return homedir() + s.slice(1);
+  return isAbsolute(s) ? s : null;
+}
+
 /**
  * A `review_recorded` event reduced to what binding and display need.
- * `recordedAfterCommit` is deliberately absent: it is a fact about a record
- * PAIRED WITH a unit, not about the record, so it is decided at attach time.
+ * `recordedAfterCommit` and `editsAfterRecord` are deliberately absent: both are
+ * facts about a record PAIRED WITH a unit, not about the record, so they are
+ * decided at attach time.
  */
-type SelfReportRec = Omit<SelfReportedReview, "recordedAfterCommit"> & {
+type SelfReportRec = Omit<SelfReportedReview, "recordedAfterCommit" | "editsAfterRecord"> & {
   at: number;
   /** Normalized repo paths the record named; the only binding key it has. */
   repos: Set<string>;
+  /** Repo-relative paths this record's own findings named. */
+  findingPaths: Set<string>;
 };
 
 const REVIEW_SOURCE = "codex-import"; // the cross-model reviewer vendor (v1)
@@ -551,6 +635,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
 
   const reviews: ReviewRec[] = [];
   const selfReports: SelfReportRec[] = [];
+  const edits: EditRec[] = [];
   // Records rejected before they ever reach the binding step, by cause.
   let noRepos = 0;
   let unresolvableRepo = 0;
@@ -602,6 +687,11 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
             else unresolvableRepo++;
             continue;
           }
+          const findingPaths = new Set<string>();
+          for (const f of ev.findings ?? []) {
+            const fp = f.location === undefined ? null : findingPath(f.location);
+            if (fp !== null) findingPaths.add(fp);
+          }
           selfReports.push({
             sessionId: entry.sessionId,
             eventId: ev.id,
@@ -611,7 +701,20 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
             commits: ev.commits ?? [],
             at: recordedAt,
             repos,
+            findingPaths,
           });
+          continue;
+        }
+        // Every recorded edit, from EVERY session, kept as (when, where). The
+        // records these will be compared against land in their own ad-hoc
+        // sessions, and the work one covers may itself span sessions, so the
+        // join is by time and repository rather than by session. Erring wide is
+        // deliberate: an edit wrongly included adds suspicion to a record, and
+        // adding suspicion is the direction this module is allowed to fail in.
+        if (ev.type === "file_changed") {
+          const editedAt = Date.parse(ev.occurred_at);
+          const abs = absoluteEditPath(ev.path);
+          if (!Number.isNaN(editedAt) && abs !== null) edits.push({ at: editedAt, path: abs });
           continue;
         }
         if (ev.type !== "command_executed") continue;
@@ -763,7 +866,9 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         verdict,
         // Attached after the verdict is computed, and deliberately not an input
         // to it: a record must never move a unit out of `gaps`.
-        selfReports: selfBound.map((r) => toSelfReportedReview(r, r.at > earliest)),
+        selfReports: selfBound.map((r) =>
+          toSelfReportedReview(r, r.at > earliest, editsAfterRecordFor(r, repoPath, latest, edits)),
+        ),
         commitsWithUnobservedOutcome: commits.filter((c) => !c.outcomeObserved).length,
         reviews: cited.map((r) => ({
           sessionId: r.sessionId,
@@ -829,6 +934,12 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
     };
   });
 
+  // Counted over EVERY unit, not only the gaps: a unit with a bound review
+  // trail can still have shipped something that trail never saw.
+  const unitsWithEditsAfterRecord = units.filter((u) =>
+    u.selfReports.some((r) => r.editsAfterRecord.unnamedCount > 0),
+  ).length;
+
   return {
     generatedAt: input.nowIso,
     windowHours,
@@ -844,6 +955,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       noMatchingUnit,
       unverifiableUnit,
     },
+    unitsWithEditsAfterRecord,
     refusedPairings,
     newestCommitAt: newestCommit === null ? null : new Date(newestCommit).toISOString(),
   };
@@ -854,8 +966,59 @@ function isGap(u: ReviewGapUnit): boolean {
   return u.verdict === "omission" || u.verdict === "near_unbound";
 }
 
+/** How many unnamed paths a single record spells out before the rest are counted. */
+const UNNAMED_EDITS_SHOWN = 5;
+
+/**
+ * Split the edits recorded between `r` and the unit's work by whether one of
+ * `r`'s own findings named the file.
+ *
+ * The window opens strictly AFTER the record: an edit made while the review was
+ * being written is part of what it was looking at. It closes at the unit's LAST
+ * commit rather than its first, because every commit in the unit is work this
+ * record is being read as covering — closing at the first would let everything
+ * after it ship uncounted.
+ *
+ * Membership in the repository is by path prefix on the unit's own key, which
+ * is a canonical root. A record's finding locations are repo-relative and an
+ * edit is absolute, so the edit is reduced to the same spelling before the two
+ * are compared; without that step nothing would ever match and this would
+ * silently report every edit as unnamed.
+ */
+function editsAfterRecordFor(
+  r: SelfReportRec,
+  repoPath: string,
+  lastCommitAt: number,
+  edits: readonly EditRec[],
+): EditsAfterRecord {
+  const prefix = repoPath.endsWith("/") ? repoPath : `${repoPath}/`;
+  const relatives = new Set<string>();
+  for (const e of edits) {
+    if (e.at <= r.at || e.at > lastCommitAt) continue;
+    if (!e.path.startsWith(prefix)) continue;
+    relatives.add(e.path.slice(prefix.length));
+  }
+  let namedCount = 0;
+  const unnamed: string[] = [];
+  for (const rel of relatives) {
+    if (r.findingPaths.has(rel)) namedCount++;
+    else unnamed.push(rel);
+  }
+  unnamed.sort();
+  return {
+    unnamed: unnamed.slice(0, UNNAMED_EDITS_SHOWN),
+    unnamedCount: unnamed.length,
+    namedCount,
+    hasFindingLocations: r.findingPaths.size > 0,
+  };
+}
+
 /** Drop the binding-only fields so the emitted record carries just the report. */
-function toSelfReportedReview(r: SelfReportRec, recordedAfterCommit: boolean): SelfReportedReview {
+function toSelfReportedReview(
+  r: SelfReportRec,
+  recordedAfterCommit: boolean,
+  editsAfterRecord: EditsAfterRecord,
+): SelfReportedReview {
   return {
     sessionId: r.sessionId,
     eventId: r.eventId,
@@ -864,5 +1027,6 @@ function toSelfReportedReview(r: SelfReportRec, recordedAfterCommit: boolean): S
     recordedAt: r.recordedAt,
     commits: r.commits,
     recordedAfterCommit,
+    editsAfterRecord,
   };
 }

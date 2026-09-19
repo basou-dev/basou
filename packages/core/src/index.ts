@@ -261,6 +261,7 @@ export type {
 export { renderReport } from "./report/index.js";
 export type {
   CitedReview,
+  EditsAfterRecord,
   RepoPathProblem,
   ReviewGapRepoSummary,
   ReviewGapsInput,

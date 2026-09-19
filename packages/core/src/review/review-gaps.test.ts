@@ -102,6 +102,7 @@ function reviewRecorded(
     repos?: string[];
     reposResolved?: string[];
     commits?: string[];
+    findings?: { title: string; location?: string }[];
   } = {},
 ): string {
   evtSeq++;
@@ -117,6 +118,22 @@ function reviewRecorded(
     ...(fields.repos !== undefined ? { repos: fields.repos } : {}),
     ...(fields.reposResolved !== undefined ? { repos_resolved: fields.reposResolved } : {}),
     ...(fields.commits !== undefined ? { commits: fields.commits } : {}),
+    ...(fields.findings !== undefined ? { findings: fields.findings } : {}),
+  });
+}
+
+/** A `file_changed` event line. `path` is absolute, as the sanitizer leaves it. */
+function fileChanged(sessionId: string, occurredAt: string, path: string): string {
+  evtSeq++;
+  return JSON.stringify({
+    schema_version: "0.1.0",
+    id: `evt_01HXABCDEF1234567890AB${String(evtSeq).padStart(4, "0")}`,
+    session_id: sessionId,
+    occurred_at: occurredAt,
+    source: "claude-code-import",
+    type: "file_changed",
+    path,
+    change_type: "modified",
   });
 }
 
@@ -881,6 +898,206 @@ describe("findReviewGaps — self-reported reviews", () => {
     await placeSession(paths, { id, source: "human", startedAt: NOW }, lines);
   }
 
+  // --- edits that landed after the record ---------------------------------
+  //
+  // The failure these are for: a review runs and is recorded truthfully, one of
+  // its findings changes the design, the new implementation is written, and THAT
+  // is what ships. The record is not a lie, which is why the miss is invisible
+  // unless the report says what was edited after it.
+
+  it("flags files edited after the record that none of its findings named", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "narrowing", location: "src/reviewed.ts:12" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", `${repo}/src/redesigned.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const e = s.gaps[0]?.selfReports[0]?.editsAfterRecord;
+    expect(e?.unnamedCount).toBe(1);
+    expect(e?.unnamed).toEqual(["src/redesigned.ts"]);
+    expect(e?.namedCount).toBe(0);
+    expect(e?.hasFindingLocations).toBe(true);
+    expect(s.unitsWithEditsAfterRecord).toBe(1);
+    // The label must not move the unit: this is suspicion, not a verdict.
+    expect(s.gaps[0]?.verdict).toBe("omission");
+  });
+
+  it("does not flag an edit to a file a finding DID name (applying the findings)", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        // The spellings a person actually writes: a line number, and a symbol note.
+        findings: [
+          { title: "off by one", location: "src/a.ts:12" },
+          { title: "naming", location: "src/b.ts (renderThing)" },
+        ],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", `${repo}/src/a.ts`),
+        fileChanged(SES("S2"), "2026-05-09T09:46:00.000Z", `${repo}/src/b.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const e = s.gaps[0]?.selfReports[0]?.editsAfterRecord;
+    expect(e?.namedCount).toBe(2);
+    expect(e?.unnamedCount).toBe(0);
+    expect(s.unitsWithEditsAfterRecord).toBe(0);
+  });
+
+  it("ignores an edit made BEFORE the record — that is what the review was looking at", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "src/reviewed.ts" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:00:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:10:00.000Z", `${repo}/src/earlier.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps[0]?.selfReports[0]?.editsAfterRecord.unnamedCount).toBe(0);
+    expect(s.unitsWithEditsAfterRecord).toBe(0);
+  });
+
+  it("ignores an edit in ANOTHER repository, so a parallel project cannot accuse this record", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    const other = await mkRepo("beta");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "src/reviewed.ts" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", `${other}/src/elsewhere.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const unit = s.gaps.find((u) => u.selfReports.length > 0);
+    expect(unit?.selfReports[0]?.editsAfterRecord.unnamedCount).toBe(0);
+  });
+
+  it("counts the edits but says a record with no finding location could name nothing", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", { repos: [repo] }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", `${repo}/src/whatever.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const e = s.gaps[0]?.selfReports[0]?.editsAfterRecord;
+    expect(e?.unnamedCount).toBe(1);
+    expect(e?.hasFindingLocations).toBe(false);
+  });
+
+  it("counts edits up to the unit's LAST commit, not only its first", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "src/reviewed.ts" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T09:50:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+        // Between the two commits: still this unit's work, still unreviewed.
+        fileChanged(SES("S2"), "2026-05-09T09:55:00.000Z", `${repo}/src/between.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps[0]?.selfReports[0]?.editsAfterRecord.unnamed).toEqual(["src/between.ts"]);
+  });
+
   it("binds by repos and keeps the unit in gaps (a record never clears)", async () => {
     const paths = await setup();
     const repo = await mkRepo("alpha");
@@ -906,6 +1123,7 @@ describe("findReviewGaps — self-reported reviews", () => {
     // Binding fields are internal; the emitted record carries just the report.
     expect(Object.keys(s.gaps[0]?.selfReports[0] ?? {}).sort()).toEqual([
       "commits",
+      "editsAfterRecord",
       "eventId",
       "recordedAfterCommit",
       "recordedAt",

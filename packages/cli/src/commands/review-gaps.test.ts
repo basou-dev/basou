@@ -178,6 +178,7 @@ function summaryOf(
       total:
         counts.noRepos + counts.unresolvableRepo + counts.noMatchingUnit + counts.unverifiableUnit,
     },
+    unitsWithEditsAfterRecord: 0,
     refusedPairings: 0,
     newestCommitAt: "2026-05-09T10:05:00.000Z",
   };
@@ -194,6 +195,7 @@ function selfReport(
     recordedAt: "2026-05-09T09:30:00.000Z",
     commits: [],
     recordedAfterCommit: false,
+    editsAfterRecord: { unnamed: [], unnamedCount: 0, namedCount: 0, hasFindingLocations: false },
     ...overrides,
   };
 }

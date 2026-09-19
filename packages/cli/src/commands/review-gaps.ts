@@ -1,5 +1,6 @@
 import {
   basouPaths,
+  type EditsAfterRecord,
   findReviewGaps,
   type ReviewGapsSummary,
   type ReviewGapUnit,
@@ -161,6 +162,25 @@ function claimedCommits(commits: string[]): string {
 const SELF_REPORTS_SHOWN = 3;
 
 /**
+ * What landed after a record that the record itself never named.
+ *
+ * Written only when the record HAD a finding location to compare against.
+ * Without one nothing COULD be named, so "3 files it never named" would be an
+ * accusation manufactured out of a missing field; that case says plainly that
+ * there was nothing to compare, and leaves the judgement to the reader.
+ */
+function editsAfterRecordClause(e: EditsAfterRecord): string {
+  if (e.unnamedCount === 0) return "";
+  const n = `${e.unnamedCount} file${e.unnamedCount === 1 ? "" : "s"}`;
+  if (!e.hasFindingLocations) {
+    return ` — then ${n} edited before the commit, and the record named no location to compare them with`;
+  }
+  const rest = e.unnamedCount - e.unnamed.length;
+  const shown = `${e.unnamed.join(", ")}${rest > 0 ? `, +${rest} more` : ""}`;
+  return ` — then ${n} it never named edited before the commit: ${shown}`;
+}
+
+/**
  * The self-report suffix. It is appended to a line — never substituted for it —
  * so the record is visible without changing what the unit is. The commits a
  * record claimed are shown as exactly that: the reviewer's claim, which nothing
@@ -175,7 +195,7 @@ function selfReportSuffix(u: ReviewGapUnit, stillCounted: boolean): string {
     .slice(0, SELF_REPORTS_SHOWN)
     .map(
       (r) =>
-        `${oneLine(r.reviewer, 40)}${claimedCommits(r.commits)}${r.recordedAfterCommit ? " (recorded after the commit)" : ""}`,
+        `${oneLine(r.reviewer, 40)}${claimedCommits(r.commits)}${r.recordedAfterCommit ? " (recorded after the commit)" : ""}${editsAfterRecordClause(r.editsAfterRecord)}`,
     );
   const rest = u.selfReports.length - parts.length;
   if (rest > 0) parts.push(`+${rest} more`);
@@ -290,6 +310,12 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
   if (summary.gaps.some((u) => u.selfReports.length > 0)) {
     lines.push(
       'Note: a "self-reported" unit has a `basou review record` naming this repo, but nothing corroborates it — it stays in the count above, because an empty record must not be a way to make the number go down.',
+    );
+  }
+  if (summary.unitsWithEditsAfterRecord > 0) {
+    const n = summary.unitsWithEditsAfterRecord;
+    lines.push(
+      `Note: ${n} unit${n === 1 ? "" : "s"} carr${n === 1 ? "ies" : "y"} a recorded review that was followed, before the commit, by edits to files none of its findings named. The record is truthful — a review did run — which is why this particular miss is invisible without saying it: what was reviewed is not what shipped.`,
     );
   }
   lines.push(...unattachedLines(summary.unattachedSelfReports));
