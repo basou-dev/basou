@@ -96,12 +96,23 @@ function isShipAct(command: string): boolean {
 /**
  * Recording that a review ran: `basou review record` (or the node-path form,
  * for the same alias-not-on-PATH reason as {@link CAPTURE_COMMAND_PATTERN}).
- * When present this session, the review gate is satisfied and stays silent —
- * the twin signal to {@link CAPTURE_COMMAND_PATTERN} for the capture gate.
+ * Position matters, not mere presence: see {@link evaluateReviewGate}.
  */
 const REVIEW_RECORD_PATTERN = new RegExp(
   `(?:^|[\\n;&|(])\\s*${CAPTURE_INVOCATION.source}\\s+review\\s+record\\b`,
 );
+
+/**
+ * `basou review record --dry-run` validates and previews WITHOUT writing an
+ * event, so it is not a record. It matched the pattern above and bought
+ * silence from a command that provably recorded nothing.
+ */
+const DRY_RUN_REVIEW_PATTERN = /(?:^|\s)--dry-run(?![-\w])/;
+
+/** A command that actually writes a review record. */
+function isReviewRecord(command: string): boolean {
+  return REVIEW_RECORD_PATTERN.test(command) && !DRY_RUN_REVIEW_PATTERN.test(command);
+}
 
 /** Tool-use names that mutate a file; each counts as one substantive edit. */
 const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
@@ -127,15 +138,17 @@ export type StopHookEvaluationInput = {
 export type StopHookSilentReason = "stop_hook_active" | "not_substantive" | "already_captured";
 
 /**
- * Why the review gate stayed silent. The gate fires only when a SHIP act, a
- * substantive-code edit, and the ABSENCE of a review record all hold; each
- * reason names the first of those three that did not.
+ * Why the review gate stayed silent. The gate fires when a SHIP act happened,
+ * the edits preceding it were substantive, and the LAST such ship act was not
+ * covered by a review; each reason names the first of those three that did not
+ * hold.
  *  - `stop_hook_active`: loop guard — a continuation turn never fires.
  *  - `no_ship_act`: nothing was shipped this turn (review is a pre-ship act, so
  *    a turn that did not push / open / merge owes no review).
- *  - `not_substantive_code`: shipped, but fewer than `minEdits` file edits.
- *  - `already_reviewed`: a `basou review record` ran BEFORE the ship act, and
- *    the working state did not substantively change between the two.
+ *  - `not_substantive_code`: shipped, but fewer than `minEdits` file edits
+ *    PRECEDED the last ship act.
+ *  - `already_reviewed`: a `basou review record` ran BEFORE the last ship act,
+ *    and the working state did not substantively change between the two.
  */
 export type ReviewGateSilentReason =
   | "stop_hook_active"
@@ -230,13 +243,28 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
   let captured = false;
   let shipped = false;
   let reviewed = false;
-  // The loop already walks the turn in order; the gate used to throw that away
-  // and keep only "a review record ran somewhere". Order is the whole signal
-  // here: a review recorded AFTER the merge cannot have gated it, and neither
-  // can one recorded before a substantive rewrite.
+  // Order is the signal the old gate threw away: it kept only "a review record
+  // ran somewhere", so one recorded AFTER the merge silenced it, and so did one
+  // recorded before a substantive rewrite.
+  //
+  // The question is asked of the LAST ship act, not OR-ed over every ship in the
+  // session. A topic-branch push and the merge that lands it are one unit of
+  // work, and the push necessarily precedes the review -- the reviewer reads the
+  // pull request. Latching on the first ship reported `no_review` for the
+  // project's own documented workflow, permanently: no later review could clear
+  // it, so the remedy the message prescribes was not one.
+  //
+  // File order is NOT assumed to be timestamp order -- the importer next door
+  // documents that it is not. Measured on this workspace's transcripts, the
+  // records this loop walks (`assistant` only) were out of order in 1 of 25,
+  // 3 adjacent pairs, at most 7.4s apart, with zero sidechain records; the
+  // interleaving lives in the `user` / `attachment` / `queue-operation` records
+  // skipped above. A review and the ship it covers are minutes apart in
+  // practice, so that jitter cannot reorder the pair this reads.
   let editsSinceReview = 0;
-  let shipUncovered = false;
-  let shipStale = false;
+  let editsBeforeLastShip = 0;
+  /** null until something ships; then whether the LAST ship act was covered. */
+  let lastShipUncovered: ReviewGateFireReason | null = null;
 
   for (const record of input.records) {
     if (readString(record.type) !== "assistant") continue;
@@ -251,12 +279,20 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
           if (CAPTURE_COMMAND_PATTERN.test(command)) captured = true;
           if (isShipAct(command)) {
             shipped = true;
-            if (!reviewed) shipUncovered = true;
-            else if (editsSinceReview >= minEdits) shipStale = true;
+            // Substantiveness is asked of what preceded THIS ship, not of the
+            // session total: edits made after a push do not make that push
+            // substantive, and treating them as if they did is the same
+            // non-positional reading this commit removes on the review axis.
+            editsBeforeLastShip = fileCount;
+            if (!reviewed) lastShipUncovered = "no_review";
+            else if (editsSinceReview >= minEdits) lastShipUncovered = "changed_after_review";
+            else lastShipUncovered = null;
           }
-          // Checked after the ship act in the same segment: a command that both
-          // ships and records cannot have been reviewed beforehand.
-          if (REVIEW_RECORD_PATTERN.test(command)) {
+          // Evaluated after the ship act, so a single command that does both is
+          // conservatively read as shipping first. Neither pattern knows its
+          // own position in the string, so `review && push` is read the same
+          // way: one redundant nudge, never a missed one.
+          if (isReviewRecord(command)) {
             reviewed = true;
             editsSinceReview = 0;
           }
@@ -273,7 +309,12 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
   // The review gate is independent of the capture outcome, so compute it once
   // and attach it to every post-scan return (e.g. a session can be
   // `already_captured` yet still owe a review).
-  const review = evaluateReviewGate({ shipped, shipUncovered, shipStale, fileCount, minEdits });
+  const review = evaluateReviewGate({
+    shipped,
+    lastShipUncovered,
+    editsBeforeLastShip,
+    minEdits,
+  });
 
   if (captured) {
     return { kind: "silent", reason: "already_captured", review, ...counts };
@@ -295,13 +336,21 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
  * push / PR / merge appeared this session) after a substantive-code edit
  * (>= `minEdits` file edits) without a review that covered what shipped.
  *
- * "Covered" is positional, not a count of records. The obvious alternative —
- * compare the reviewed commit to the merged one — does not survive contact with
- * squash merge: of 62 reviewed commits recorded on this workspace, 5 were
- * reachable from `main`, 35 were not, and 22 no longer existed at all, because
- * squashing discards the commit that was reviewed BY DESIGN. Half of all review
- * records name a working tree and carry no commit to compare in the first
- * place. Order needs neither.
+ * "Covered" is positional, not a count of records, and it is asked of the LAST
+ * ship act. The obvious alternative — compare the reviewed commit to the merged
+ * one — does not survive contact with squash merge: of 62 reviewed commits
+ * recorded on this workspace, 5 were reachable from `main`, 35 were not, and 22
+ * no longer existed at all, because squashing discards the commit that was
+ * reviewed BY DESIGN. Half of all review records name a working tree and carry
+ * no commit to compare in the first place. Order needs neither.
+ *
+ * Asking about the last ship act, rather than every ship, means a review
+ * recorded after an earlier uncovered push and followed by a clean re-ship does
+ * clear the gate. That is deliberate: the nudge is a turn-end prompt to act, and
+ * a verdict no action can change is not a prompt, it is wallpaper. What the gate
+ * claims is "what you last shipped was covered", not "every ship this session
+ * was" — the durable record of the latter is the review trail, which basou keeps
+ * regardless, and `review-gaps` is where that question belongs.
  *
  * Unlike the capture gate, a free-form decision point does NOT make this fire —
  * you review code that shipped, not a conversation — so it keys on file edits
@@ -310,24 +359,20 @@ export function evaluateStopHook(input: StopHookEvaluationInput): StopHookEvalua
  */
 function evaluateReviewGate(input: {
   shipped: boolean;
-  shipUncovered: boolean;
-  shipStale: boolean;
-  fileCount: number;
+  lastShipUncovered: ReviewGateFireReason | null;
+  editsBeforeLastShip: number;
   minEdits: number;
 }): ReviewGateResult {
   if (!input.shipped) return { fires: false, reason: "no_ship_act" };
-  if (input.fileCount < input.minEdits) return { fires: false, reason: "not_substantive_code" };
-  if (input.shipUncovered) {
-    return { fires: true, reason: "no_review", additionalContext: renderReviewNudge("no_review") };
+  if (input.editsBeforeLastShip < input.minEdits) {
+    return { fires: false, reason: "not_substantive_code" };
   }
-  if (input.shipStale) {
-    return {
-      fires: true,
-      reason: "changed_after_review",
-      additionalContext: renderReviewNudge("changed_after_review"),
-    };
-  }
-  return { fires: false, reason: "already_reviewed" };
+  if (input.lastShipUncovered === null) return { fires: false, reason: "already_reviewed" };
+  return {
+    fires: true,
+    reason: input.lastShipUncovered,
+    additionalContext: renderReviewNudge(input.lastShipUncovered),
+  };
 }
 
 /**

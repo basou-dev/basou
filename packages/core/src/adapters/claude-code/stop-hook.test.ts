@@ -400,6 +400,80 @@ describe("evaluateStopHook (review gate)", () => {
     }
   });
 
+  it("the project's own workflow is covered: branch push, PR, review, then merge", () => {
+    // The reviewer reads the pull request, so the topic-branch push and the
+    // `gh pr create` NECESSARILY precede the review. Latching on the first ship
+    // act reported no_review for this sequence, permanently -- the defect that
+    // made the nudge unactionable in the workflow CONTRIBUTING.md describes.
+    const result = evaluateStopHook({
+      records: [
+        edits(3),
+        bash("git push -u origin topic"),
+        bash("gh pr create --fill"),
+        bash("basou review record --file r.json"),
+        bash("gh pr merge 1 --squash"),
+      ],
+      stopHookActive: false,
+    });
+    expect(result.review).toEqual({ fires: false, reason: "already_reviewed" });
+  });
+
+  it("an uncovered ship is cleared by recording a review and shipping again", () => {
+    // The verdict is about the LAST ship act. A nudge whose own prescribed
+    // remedy cannot clear it is not a prompt to act.
+    const uncovered = evaluateStopHook({
+      records: [edits(3), bash("git push")],
+      stopHookActive: false,
+    });
+    expect(uncovered.review.fires).toBe(true);
+    const cleared = evaluateStopHook({
+      records: [
+        edits(3),
+        bash("git push"),
+        bash("basou review record --file r.json"),
+        bash("git push"),
+      ],
+      stopHookActive: false,
+    });
+    expect(cleared.review).toEqual({ fires: false, reason: "already_reviewed" });
+  });
+
+  it("edits made AFTER a ship act do not make that ship substantive", () => {
+    // Substantiveness is positional too. Counting the session total let a push
+    // with nothing before it inherit the weight of later work.
+    const result = evaluateStopHook({
+      records: [bash("git push"), edits(5)],
+      stopHookActive: false,
+    });
+    expect(result.review).toEqual({ fires: false, reason: "not_substantive_code" });
+  });
+
+  it("a --dry-run review preview does not count as a review", () => {
+    // It validates and previews WITHOUT writing an event, so it bought silence
+    // from a command that provably recorded nothing.
+    const result = evaluateStopHook({
+      records: [edits(3), bash("basou review record --dry-run --file r.json"), bash("git push")],
+      stopHookActive: false,
+    });
+    expect(result.review.fires).toBe(true);
+    if (!result.review.fires) throw new Error("expected review to fire");
+    expect(result.review.reason).toBe("no_review");
+  });
+
+  it("the changed_after_review message names the recording command", () => {
+    const result = evaluateStopHook({
+      records: [
+        edits(2),
+        bash("basou review record --file r.json"),
+        edits(2),
+        bash("gh pr merge 1 --squash"),
+      ],
+      stopHookActive: false,
+    });
+    if (!result.review.fires) throw new Error("expected review to fire");
+    expect(result.review.additionalContext).toContain("basou review record");
+  });
+
   it("fires (no_review) when the review is recorded AFTER the ship act", () => {
     // Recording it afterwards cannot have gated the merge. The previous gate
     // accepted this order, which is how a session could ship unreviewed and

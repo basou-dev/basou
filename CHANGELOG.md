@@ -5,30 +5,91 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Added
+
+- **CI refuses a change that edits CHANGELOG notes for a version that already
+  shipped.** Two pull requests each appended to `## Unreleased` at the same
+  position; GitHub did not call it a conflict, both stayed mergeable, and after
+  the second squash one entry had landed inside the shipped `## 0.43.0` section
+  — a published version whose notes would then have described a change it did
+  not contain. It was caught only because someone counted the Unreleased
+  entries before the bump, and counting is a step a person can skip.
+
+  The guard reads the boundary from the pull request's BASE revision, so the
+  release commit — which renames `## Unreleased` to `## <version> — <date>`, a
+  line above the first released heading — passes, as does any append to the
+  Unreleased section. There is deliberately no opt-out: one that an automated
+  squash could set would reopen the hole.
+
 ### Changed
 
-- **The Stop hook's review gate now asks whether a review covered what SHIPPED,
-  not whether a review record exists.** It set one boolean — "a `basou review
-  record` ran this session" — so recording a review after the merge silenced it,
-  and so did recording one before a rewrite that replaced what the review had
-  looked at. Both orders were accepted. The transcript pass already walks the
-  turn in order; it was throwing that order away.
+- **The Stop hook's review gate asks whether a review covered what SHIPPED, and
+  asks it of the LAST ship act.** It set one boolean — "a `basou review record`
+  ran this session" — so a review recorded after the merge silenced it, and so
+  did one recorded before a rewrite that replaced what the review had looked at.
+  The transcript pass already walks the turn in order; the gate threw that away.
 
-  The gate now distinguishes two failures. `no_review`: nothing was recorded
-  before the ship act. `changed_after_review`: a review was recorded, then the
-  code substantively changed before shipping. The second is the one worth
-  having, and it gets MORE likely the harder reviews are made to bite — a review
-  that overturns a design produces a reimplementation that no one has reviewed,
-  while the feeling that "the review is done" remains. Applying a review's own
-  findings looks identical to the gate, so its message names both readings and
-  asks rather than asserting; edits below the substantiveness bar stay silent.
+  Two failures are now distinguished. `no_review`: nothing was recorded before
+  the ship act. `changed_after_review`: a review was recorded, then the code
+  substantively changed before shipping. The second is the one worth having, and
+  it gets MORE likely the harder reviews are made to bite — a review that
+  overturns a design produces a reimplementation nobody has reviewed, while the
+  feeling that "the review is done" survives. Applying a review's own findings
+  looks identical at this resolution, so the message names both readings and
+  asks; post-review edits below the substantiveness bar stay silent.
 
-  The obvious alternative — compare the reviewed commit to the merged one —
-  does not survive squash merge. Of 62 reviewed commits recorded on this
-  workspace, 5 were reachable from `main`, 35 were not, and 22 no longer existed
-  at all: squashing discards the commit that was reviewed, by design. Half of
-  all review records name a working tree and carry no commit to compare in the
-  first place. Order needs neither.
+  **Asked of the last ship act, not of every ship.** A topic-branch push and the
+  merge that lands it are one unit of work, and the push necessarily precedes the
+  review — the reviewer reads the pull request. An earlier draft latched on the
+  first ship act and so reported `no_review` for the workflow CONTRIBUTING.md
+  itself describes, permanently: no later review could clear it, which made the
+  remedy its own message prescribed not a remedy. A review recorded after an
+  uncovered push, followed by a clean re-ship, now clears the gate. What the gate
+  claims is "what you last shipped was covered", not "every ship this session
+  was"; the durable record of the latter is the review trail, and `review-gaps`
+  is where that question belongs.
+
+  Substantiveness became positional too: edits made AFTER a ship act no longer
+  make that ship substantive.
+
+  A `basou review record --dry-run` no longer counts. It validates and previews
+  without writing an event, so it was buying silence from a command that
+  provably recorded nothing.
+
+  The commit-comparison alternative does not survive squash merge. Of 62
+  reviewed commits recorded on this workspace, 5 were reachable from `main`, 35
+  were not, and 22 no longer existed at all: squashing discards the reviewed
+  commit by design. Half of all review records name a working tree and carry no
+  commit to compare. Order needs neither.
+
+  `docs/spec/compatibility.md` now names this reminder alongside the other
+  advisory surfacers, whose firing condition is explicitly an ongoing judgement
+  rather than a frozen one.
+
+- **An explicit `"kind": "decision"` is now carried onto the event instead of
+  being normalized away.** Dropping it is what made the two cases
+  indistinguishable on disk: nothing could tell a decision someone MEANT from
+  one whose `kind` was forgotten — not a reader, not a later audit, not the
+  command's own `--json` output. Absence now means "nobody said", which is what
+  makes the deprecated form findable while the warning release is in effect
+  rather than merely tolerated. Every reader branches on `kind === "track"`
+  only, so nothing else changes; events written before this release keep their
+  old meaning, where an absent `kind` says only that none was recorded.
+
+- **`decision capture` output names the undeclared case.** `--dry-run` marks all
+  three states (`[TRACK]`, `[DECISION]`, `[NO KIND]`); after the write a track
+  and an undeclared item are marked and a declared decision is left bare, the
+  convention `decisions.md` uses. Marking the undeclared item after the write is
+  what the `[DECISION]` marker added in 0.42.1 was reaching for and could not
+  do: the default flow pipes JSON with no dry run, so the written line is the
+  only receipt the operator ever sees. The `[NO KIND]` arm goes away with the
+  deprecation.
+
+- **`docs/spec/compatibility.md` now names JSON *input* shapes as a guaranteed
+  surface**, and states the deprecation path for a field that becomes required
+  on one. The list covered flags, exit codes and `--json` output shapes, so the
+  shape `decision capture` reads on stdin was governed by nothing — which left
+  "can this be tightened, and on what notice" unanswerable from the document.
 
 ### Deprecated
 
@@ -58,49 +119,6 @@ All notable changes to **basou** are recorded here. The project follows
   `basou decision record` is unchanged. Its vessel is the `--track` flag, which
   cannot be omitted in the same sense — there is no way to state "explicitly not
   a track" — so the same warning could never be silenced there.
-
-### Changed
-
-- **An explicit `"kind": "decision"` is now carried onto the event instead of
-  being normalized away.** Dropping it is what made the two cases
-  indistinguishable on disk: nothing could tell a decision someone MEANT from
-  one whose `kind` was forgotten — not a reader, not a later audit, not the
-  command's own `--json` output. Absence now means "nobody said", which is what
-  makes the deprecated form findable while the warning release is in effect
-  rather than merely tolerated. Every reader branches on `kind === "track"`
-  only, so nothing else changes; events written before this release keep their
-  old meaning, where an absent `kind` says only that none was recorded.
-
-- **`decision capture` output names the undeclared case.** `--dry-run` marks all
-  three states (`[TRACK]`, `[DECISION]`, `[NO KIND]`); after the write a track
-  and an undeclared item are marked and a declared decision is left bare, the
-  convention `decisions.md` uses. Marking the undeclared item after the write is
-  what the `[DECISION]` marker added in 0.42.1 was reaching for and could not
-  do: the default flow pipes JSON with no dry run, so the written line is the
-  only receipt the operator ever sees. The `[NO KIND]` arm goes away with the
-  deprecation.
-
-- **`docs/spec/compatibility.md` now names JSON *input* shapes as a guaranteed
-  surface**, and states the deprecation path for a field that becomes required
-  on one. The list covered flags, exit codes and `--json` output shapes, so the
-  shape `decision capture` reads on stdin was governed by nothing — which left
-  "can this be tightened, and on what notice" unanswerable from the document.
-
-### Added
-
-- **CI refuses a change that edits CHANGELOG notes for a version that already
-  shipped.** Two pull requests each appended to `## Unreleased` at the same
-  position; GitHub did not call it a conflict, both stayed mergeable, and after
-  the second squash one entry had landed inside the shipped `## 0.43.0` section
-  — a published version whose notes would then have described a change it did
-  not contain. It was caught only because someone counted the Unreleased
-  entries before the bump, and counting is a step a person can skip.
-
-  The guard reads the boundary from the pull request's BASE revision, so the
-  release commit — which renames `## Unreleased` to `## <version> — <date>`, a
-  line above the first released heading — passes, as does any append to the
-  Unreleased section. There is deliberately no opt-out: one that an automated
-  squash could set would reopen the hole.
 
 ### Fixed
 

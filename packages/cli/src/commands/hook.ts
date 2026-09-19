@@ -320,9 +320,13 @@ git status) does NOT count.
 
 With --require-review (opt-in, 'basou hook install --require-review') it also
 reminds when the session SHIPPED substantive code (git push / git merge /
-gh pr create|merge) without recording a review ('basou review record'). This
-gate is off by default; when on, its reminder is composed into the same
-envelope as the capture reminder.
+gh pr create|merge) and the LAST such act was not covered by a review
+('basou review record'). Two cases: no review was recorded before it, or one
+was and the code substantively changed afterwards -- what shipped is then not
+what was reviewed. Position is what is read, not the mere presence of a record,
+so recording a review after the fact does not cover a ship that preceded it;
+shipping again after a fresh review does. This gate is off by default; when on,
+its reminder is composed into the same envelope as the capture reminder.
 
 It also hands a RUNNING session the standing protocols when they changed after
 that session started. The protocol block in ~/.claude/CLAUDE.md is read at
