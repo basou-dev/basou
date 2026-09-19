@@ -248,60 +248,116 @@ const TASK_FILENAME_RE = /^(.+)\.md$/;
  * the caller's `options.onSkip` hook in {@link loadTaskEntries} so list
  * commands can show a warning row.
  *
- * Returns ids in ULID-ascending order (filename sort matches ULID order).
+ * Ids come back in ULID-ascending order: the disk scan sorts by filename,
+ * which matches ULID order, and {@link rebuildTaskIndex} sorts what it writes,
+ * so an index basou wrote is already in that order. An index edited by hand
+ * into some other order is returned in it — no caller depends on the order,
+ * and re-sorting a trusted cache would hide that it was used.
+ *
  * Empty directory or ENOENT → `[]`. Other I/O failures throw
- * `"Failed to enumerate tasks"`.
+ * `"Failed to enumerate tasks"`, unless a valid index is available to answer
+ * from instead.
  */
 export async function enumerateTaskIds(paths: BasouPaths): Promise<string[]> {
-  // Fast path: read `tasks/index.json` if it exists and is valid. The index
-  // is maintained write-through by every task mutation API so the cache
-  // matches disk except across crashes / hand-edits / version bumps.
+  // The index is a cache of what the directory holds, so it is reconciled
+  // against the directory before it is trusted.
+  //
+  // It used to be returned unchecked, and a file the rebuild could not parse
+  // was dropped from it — so the FIRST render after a task file was corrupted
+  // reported "some unreadable" and every render after that reported nothing at
+  // all. The file stayed on disk, its real status stayed `in_progress`, and a
+  // workspace with no other task fell all the way to "no tasks recorded":
+  // basou stating the absence of a fact it had merely stopped enumerating,
+  // which is the claim 0.42.1 shipped to stop making.
+  //
+  // Reconciling costs one `readdir`. That is not what the index is for — it
+  // exists so a render does not READ N task files — so the cache keeps its
+  // value while no longer being able to hide one.
+  let indexed: string[] | null = null;
   try {
-    const index = await readTaskIndex(paths);
-    return index.tasks.map((t) => t.id);
+    indexed = (await readTaskIndex(paths)).tasks.map((t) => t.id);
   } catch {
-    // Index missing / parse fail / schema mismatch — fall through to the
-    // disk-scan rebuild path below. The discrete error classes from
-    // readTaskIndex (Task index not found / Invalid task index / Failed
-    // to read task index) are all equivalent here.
+    // Index missing / parse fail / schema mismatch — the disk scan below is
+    // the answer. The discrete error classes from readTaskIndex (Task index
+    // not found / Invalid task index / Failed to read task index) are all
+    // equivalent here.
   }
 
-  const ids = await enumerateTaskIdsFromDisk(paths);
+  let onDisk: string[];
+  try {
+    onDisk = await enumerateTaskIdsFromDisk(paths);
+  } catch (error: unknown) {
+    // The directory itself is unreadable. A valid index is then the only
+    // account of the tasks there are, and returning it beats failing the
+    // render; with no index there is nothing to fall back to.
+    if (indexed !== null) return indexed;
+    throw error;
+  }
+
+  // Compared as sets, not counts: a file swapped for another id leaves the
+  // count alone and must still fall through to the scan.
+  if (indexed !== null && sameTaskIdSet(indexed, onDisk)) return indexed;
 
   // Skip the lazy rebuild entirely when there is nothing to record: a
   // pre-init / empty workspace has no tasks/ dir, so a rebuild attempt
   // would fail with ENOENT and emit a misleading warning. The next write
   // will recreate the index from scratch via updateTaskIndex anyway.
-  if (ids.length === 0) {
-    return ids;
+  if (onDisk.length === 0) {
+    return onDisk;
   }
 
-  // Lazy rebuild: scan each task.md and write the resulting index. Best-
-  // effort — a per-task read failure (= a malformed file we'd surface as
-  // a skip elsewhere) is excluded from the rebuilt index but still
-  // returned to the caller in `ids` so loadTaskEntries can surface its
-  // own skip reason. Rebuild write failure (disk full, EACCES) is logged
-  // and swallowed; the next enumerateTaskIds call will retry the rebuild.
+  // Lazy rebuild: scan each task.md and write the resulting index. Every id
+  // found on disk is returned either way, so `loadTaskEntries` can surface its
+  // own skip reason for the ones it cannot read.
+  //
+  // The index is only written when every file parsed. Writing one that omits
+  // an unreadable file would guarantee it disagrees with the directory on the
+  // next call, so every read would rewrite it — and the disagreement is the
+  // very thing that keeps the warning alive until someone fixes or removes the
+  // file. Rebuild write failure (disk full, EACCES) is logged and swallowed;
+  // the next enumerateTaskIds call will retry.
   const entries: TaskIndexEntry[] = [];
-  for (const id of ids) {
+  let anyUnreadable = false;
+  for (const id of onDisk) {
     try {
       const doc = await readTaskFile(paths, id);
       entries.push(buildTaskIndexEntry(doc.task.task));
     } catch {
-      // Skip unreadable entry from the rebuild.
+      anyUnreadable = true;
     }
   }
-  await rebuildTaskIndex(paths, entries).catch(() => {
-    console.warn("Failed to rebuild tasks/index.json; subsequent reads will retry");
-  });
-  return ids;
+  if (!anyUnreadable) {
+    await rebuildTaskIndex(paths, entries).catch(() => {
+      console.warn("Failed to rebuild tasks/index.json; subsequent reads will retry");
+    });
+  }
+  return onDisk;
+}
+
+/** Whether two task-id lists name the same set, regardless of order. */
+function sameTaskIdSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const seen = new Set(a);
+  return b.every((id) => seen.has(id));
 }
 
 async function enumerateTaskIdsFromDisk(paths: BasouPaths): Promise<string[]> {
   let entries: string[];
   try {
+    // Anything that is not a directory counts, rather than only what the
+    // dirent reports as a regular file. `readTaskFile` reads by path and
+    // follows symlinks, so `isFile()` was narrower than the predicate that
+    // decides whether a task can actually be read: a symlinked task file was
+    // readable and unlistable at once. That mattered little while the index
+    // covered for it and matters a great deal now that the listing is what the
+    // index is reconciled against — the entry would be dropped as a ghost and
+    // the task would vanish from every view. The same bit is false for EVERY
+    // entry on a filesystem that does not report dirent types (some network
+    // mounts), which would empty the whole directory. Including too much is
+    // the safe direction: something named like a task that cannot be read is
+    // surfaced as a skip, which is a report, not a disappearance.
     entries = (await readdir(paths.tasks, { withFileTypes: true }))
-      .filter((d) => d.isFile())
+      .filter((d) => !d.isDirectory())
       .map((d) => d.name);
   } catch (error: unknown) {
     if (findErrorCode(error, "ENOENT")) return [];
@@ -1413,7 +1469,8 @@ export type ReconcileFailure = {
 };
 
 /**
- * Batch audit result. Order follows `enumerateTaskIds(paths)` (ULID-ascending).
+ * Batch audit result. Order follows `enumerateTaskIds(paths)`, which is
+ * ULID-ascending for any index basou wrote and for every disk scan.
  * `scanned` is the number of readable task.md files processed (= excludes
  * malformed task.md from the count so an integrity-broken file does not
  * pad the total).

@@ -55,12 +55,26 @@ out on disk.
   id / status / optional label / updated_at). The index is updated
   write-through on every task mutation (`createTask`,
   `updateTaskStatus`, `editTask`, `deleteTask`, `archiveTask`,
-  `reconcileTask`, `refreshTaskLinkedSessions`); a missing or
-  unparsable index is rebuilt on the next `enumerateTaskIds` call by
-  scanning `tasks/` and re-parsing each front matter.
+  `reconcileTask`, `refreshTaskLinkedSessions`).
   `tasks/<task_id>.md` remains the sole source of truth — the index is
   a derived cache and never participates in `task reconcile` /
   `task refresh-linkage` invariants.
+- **The index is reconciled against the directory before it is used.**
+  `enumerateTaskIds` lists `tasks/` and compares the ids it finds with
+  the ids the index names, as sets rather than counts. They agree in the
+  ordinary case and the index is returned, so the listing costs one
+  `readdir` and no task file is read. They disagree after a hand edit, a
+  crash, a version bump or a concurrent create, and the disk scan wins.
+  An id the index names with no file behind it is therefore not returned.
+  If `tasks/` cannot be listed at all, a valid index is returned rather
+  than failing the call.
+- A disagreement also triggers a rebuild of the index from the files just
+  scanned — **unless some file could not be parsed**, in which case the
+  index is left exactly as it was. Writing one that omits the unreadable
+  file is what used to make it disappear from later renders, and it would
+  put a write on every read path. So a workspace holding a corrupt task
+  file keeps scanning until the file is repaired or removed, and keeps
+  reporting it.
 - Write-through failures (disk full, permission etc.) emit a single
   `Index update failed; rebuild on next read` warning and the task
   mutation still returns success. The next read repopulates the index
@@ -73,12 +87,13 @@ out on disk.
   the same id). Two concurrent `createTask` calls can therefore both
   observe the same starting index and overwrite each other's
   write-through update, leaving a structurally valid but
-  partially-stale index. The lazy-rebuild path is gated on missing /
-  parse / version-mismatch failures, so a stale-but-valid index is not
-  auto-recovered. To force a clean rebuild, remove the index
-  (`rm .basou/tasks/index.json`) and run any command that calls
-  `enumerateTaskIds` (e.g. `basou task list`); a workspace-wide index
-  lock remains a candidate if dogfood surfaces this drift.
+  partially-stale index. That index now disagrees with the directory, so
+  the next read scans, returns the truth and rebuilds — the drift is
+  self-correcting and needs no manual `rm`. The rebuild on that path
+  takes no lock, so it can still overwrite a concurrent write-through
+  update; the result disagrees with disk again and is repaired by the
+  read after it. A workspace-wide index lock remains a candidate if
+  dogfood surfaces a case this does not converge on.
 - `basou task reconcile` detects and repairs broken references in
   `created_in_session` and `linked_sessions[]`. The default is dry-run;
   `--write` actually mutates state, and only the write path emits a

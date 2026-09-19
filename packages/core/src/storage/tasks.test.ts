@@ -1,4 +1,14 @@
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2228,6 +2238,8 @@ describe("archiveTask", () => {
 // tasks/index.json write-through + lazy rebuild
 // ============================================================================
 
+const GHOST_TASK_ID = "task_01HXGHSTGHSTGHST0000000000";
+
 describe("tasks/index.json write-through", () => {
   async function readIndex(
     paths: BasouPaths,
@@ -2330,12 +2342,43 @@ describe("tasks/index.json write-through", () => {
     expect(index.tasks.map((t) => t.id)).not.toContain(TASK_ID_A);
   });
 
-  it("enumerateTaskIds uses the index fast path when the index is present", async () => {
+  it("enumerateTaskIds keeps the index's answer when it agrees with the directory", async () => {
     const paths = await setupPaths();
-    // Place a synthetic index with an entry that does NOT correspond to a
-    // task.md on disk. If enumerateTaskIds is reading from the index it
-    // should surface this ghost id; if it falls back to readdir it would
-    // skip it. ULID uses Crockford Base32 (I / L / O / U excluded).
+    for (const [taskId, title] of [
+      [TASK_ID_A, "first"],
+      [TASK_ID_B, "second"],
+    ] as const) {
+      await createTaskWithEvent({
+        mode: "ad-hoc",
+        paths,
+        manifest: makeManifest(),
+        occurredAt: OCC_AT,
+        taskId,
+        title,
+        initialStatus: "planned",
+        description: "",
+        workingDirectory: getWorkDir(),
+      });
+    }
+
+    // Rewrite the index with the SAME ids in the opposite order. The ids match
+    // the directory, so the index is trusted and its order comes back -- which
+    // is what shows the per-file read was skipped.
+    const onDisk = await enumerateTaskIds(paths);
+    const index = JSON.parse(await readFile(join(paths.tasks, "index.json"), "utf8")) as {
+      tasks: { id: string }[];
+    };
+    index.tasks.reverse();
+    await writeFile(join(paths.tasks, "index.json"), JSON.stringify(index), "utf8");
+
+    expect(await enumerateTaskIds(paths)).toEqual([...onDisk].reverse());
+  });
+
+  it("enumerateTaskIds drops an index entry with no file behind it", async () => {
+    const paths = await setupPaths();
+    // The index is a cache of the directory, and this entry names a file that
+    // is not there. Returning it would have the caller try to read it and
+    // report an unreadable task that does not exist.
     // 26-char Crockford Base32 ULID (no I/L/O/U).
     const ghostId = "task_01HXGHSTGHSTGHST0000000000";
     await writeFile(
@@ -2347,8 +2390,154 @@ describe("tasks/index.json write-through", () => {
       }),
       "utf8",
     );
-    const ids = await enumerateTaskIds(paths);
-    expect(ids).toEqual([ghostId]);
+    expect(await enumerateTaskIds(paths)).toEqual([]);
+  });
+
+  it("enumerateTaskIds returns a file the index does not name, and stops naming it once removed", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "on disk",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    // An index that has forgotten a file which is right there -- the shape a
+    // failed rebuild leaves behind, and the one that used to make a corrupt
+    // task invisible from the second render on.
+    await writeFile(
+      join(paths.tasks, "index.json"),
+      JSON.stringify({ schema_version: "0.1.0", tasks: [], last_rebuilt_at: OCC_AT }),
+      "utf8",
+    );
+    expect(await enumerateTaskIds(paths)).toEqual([TASK_ID_A]);
+
+    await rm(join(paths.tasks, `${TASK_ID_A}.md`));
+    expect(await enumerateTaskIds(paths)).toEqual([]);
+  });
+
+  it("enumerateTaskIds leaves the index alone while a task file is unreadable", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "readable",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await writeFile(join(paths.tasks, `${GHOST_TASK_ID}.md`), "not a task file\n", "utf8");
+
+    const before = await readFile(join(paths.tasks, "index.json"), "utf8");
+    await enumerateTaskIds(paths);
+    await enumerateTaskIds(paths);
+    // Rewriting it would drop the unreadable file, which is what made the
+    // condition vanish -- and would put a write on every read path.
+    expect(await readFile(join(paths.tasks, "index.json"), "utf8")).toBe(before);
+  });
+
+  it("enumerateTaskIds compares ids, not counts: one file swapped for another is caught", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "on disk",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    // Same count, different membership -- the shape a count-based check reports
+    // as agreement, which would return a ghost and hide the file that is there.
+    await writeFile(
+      join(paths.tasks, "index.json"),
+      JSON.stringify({
+        schema_version: "0.1.0",
+        tasks: [{ id: GHOST_TASK_ID, status: "planned", updated_at: OCC_AT }],
+        last_rebuilt_at: OCC_AT,
+      }),
+      "utf8",
+    );
+    expect(await enumerateTaskIds(paths)).toEqual([TASK_ID_A]);
+  });
+
+  it("enumerateTaskIds counts a task file the directory cannot type, such as a symlink", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "reachable through a link",
+      initialStatus: "in_progress",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    // readTaskFile follows symlinks, so a listing that excluded them would
+    // refute a task it can read perfectly well -- and the reconciliation would
+    // then drop the index entry that was its last record.
+    const real = join(paths.tasks, `${TASK_ID_A}.md`);
+    const linked = join(paths.tasks, `${TASK_ID_B}.md`);
+    await rename(real, join(paths.tasks, "linked-target.hidden"));
+    await symlink(join(paths.tasks, "linked-target.hidden"), real);
+    await symlink(join(paths.tasks, "linked-target.hidden"), linked);
+
+    expect(await enumerateTaskIds(paths)).toContain(TASK_ID_A);
+    expect(await enumerateTaskIds(paths)).toContain(TASK_ID_B);
+  });
+
+  it("enumerateTaskIds answers from the index when the tasks directory cannot be listed", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "still on record",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    // Traversable but not listable: readdir fails, reading a known path does not.
+    await chmod(paths.tasks, 0o311);
+    try {
+      expect(await enumerateTaskIds(paths)).toEqual([TASK_ID_A]);
+    } finally {
+      await chmod(paths.tasks, 0o755);
+    }
+  });
+
+  it("enumerateTaskIds throws when the directory cannot be listed and there is no index", async () => {
+    const paths = await setupPaths();
+    await createTaskWithEvent({
+      mode: "ad-hoc",
+      paths,
+      manifest: makeManifest(),
+      occurredAt: OCC_AT,
+      taskId: TASK_ID_A,
+      title: "unreachable",
+      initialStatus: "planned",
+      description: "",
+      workingDirectory: getWorkDir(),
+    });
+    await rm(join(paths.tasks, "index.json"));
+    await chmod(paths.tasks, 0o311);
+    try {
+      await expect(enumerateTaskIds(paths)).rejects.toThrow(/Failed to enumerate tasks/);
+    } finally {
+      await chmod(paths.tasks, 0o755);
+    }
   });
 
   it("enumerateTaskIds rebuilds index from disk when index is missing", async () => {
