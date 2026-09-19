@@ -171,7 +171,8 @@ Input format (a JSON array; one object per decision):
       "rationale": "Workspace protocol and a content-addressed store fit our layout.",
       "alternatives": ["npm workspaces", "yarn"],
       "rejected_reason": "npm hoisting caused phantom-dependency bugs",
-      "linked_files": ["pnpm-workspace.yaml"]
+      "linked_files": ["pnpm-workspace.yaml"],
+      "kind": "decision"
     },
     {
       "title": "Form-based admin editing is the next track (only 6/19 sections done)",
@@ -180,10 +181,11 @@ Input format (a JSON array; one object per decision):
     }
   ]
 
-Only "title" is required; every other field is optional. Set "kind": "track" to
-record a strategic, UNFINISHED direction (+ why): orientation/handoff resurface
-open tracks every session until you close one with 'basou decision void <id>'.
-Absent / "decision" is a point-in-time decision (surfaced only as the latest).
+"title" and "kind" are required; every other field is optional. "kind" names
+the vessel and has no default, because getting it wrong fails silently: "track"
+records a strategic, UNFINISHED direction (+ why) and orientation/handoff
+resurface it every session until you close it with 'basou decision void <id>',
+while "decision" records a point-in-time call (surfaced only as the latest).
 All decisions are written into one ad-hoc session timestamped now, so
 orientation surfaces them as the latest decisions. Run from a workspace-view
 directory and it resolves to the planning repo, like 'basou orient' /
@@ -191,7 +193,7 @@ directory and it resolves to the planning repo, like 'basou orient' /
 
 Example (heredoc on stdin):
   basou decision capture <<'JSON'
-  [{ "title": "Ship the capture command", "rationale": "Close the why-capture gap" }]
+  [{ "title": "Ship the capture command", "rationale": "Close the why-capture gap", "kind": "decision" }]
   JSON
 `;
 
@@ -260,51 +262,6 @@ async function warnLinkedFilesOutsideRoots(input: {
     );
   } catch {
     // Advisory only; a classification failure must never block the write.
-  }
-}
-
-/**
- * Advisory: the title carries a track marker (TRACK bracketed in ASCII, square,
- * round, full-width or lenticular brackets, or a leading `TRACK:`) while `kind`
- * was OMITTED. A misspelled field is already a hard error, but an omitted
- * optional one cannot be -- the write succeeds and reports success, and the miss
- * shows up much later, as a track that never resurfaces in orient. The marker in
- * the title is then the one signal available.
- *
- * Fires ONLY on omission, which is the whole justification. An explicit
- * `kind: "decision"` states the intent, and the write path normalizes it away
- * (the event omits a default `kind`), so the normalized value cannot answer the
- * question -- the parser reports whether the KEY was present instead. Without
- * that, a deliberate decision whose title names the marker ("Drop the [TRACK]
- * marker from decisions.md") would be warned about with no way to say otherwise.
- *
- * Bracketed or prefixed forms only: a bare "track" inside a sentence is ordinary
- * prose ("track the duration in ms"), and a warning that fires on prose stops
- * being read. Warn-only, like the source_roots guardrail above.
- *
- * `basou decision record` deliberately has NO counterpart: its option list puts
- * `--track` next to `--title`, and it offers no way to declare "explicitly not a
- * track", so the same check there could never be silenced by anyone whose title
- * merely names the marker.
- */
-// Source stays ASCII (see scripts/check-language.mjs): U+FF1A fullwidth colon,
-// U+FF08/U+FF09 fullwidth parens, U+FF3B/U+FF3D fullwidth square brackets,
-// U+3010/U+3011 lenticular brackets.
-const TRACK_MARKER_IN_TITLE =
-  /^\s*track\s*[:\uff1a]|[[(\uff08\uff3b\u3010]\s*track\s*[\])\uff09\uff3d\u3011]/i;
-
-function warnTrackMarkerWithoutKind(
-  decisions: readonly CaptureDecisionInput[],
-  markerWithoutKind: readonly number[],
-): void {
-  for (const index of markerWithoutKind) {
-    const title = (decisions[index]?.title ?? "").trim();
-    console.error(
-      `basou: decision[${index}] title carries a track marker (${title.slice(0, 40)}) but ` +
-        '"kind" is absent — it is recorded as a point-in-time decision and will NOT resurface ' +
-        'in orient. Set "kind": "track" to open a track, or "kind": "decision" to say the ' +
-        "marker is part of the title.",
-    );
   }
 }
 
@@ -468,8 +425,7 @@ export async function doRunDecisionCapture(
   await assertWorkspaceInitialized(paths.root);
 
   const raw = await readCaptureInput(options, ctx);
-  const { decisions, markerWithoutKind } = parseCaptureInput(raw);
-  warnTrackMarkerWithoutKind(decisions, markerWithoutKind);
+  const decisions = parseCaptureInput(raw);
 
   // Cross-project guardrail (warn-only): surface linked files that resolve
   // outside the declared source_roots, before the dry-run early-return so a
@@ -810,13 +766,7 @@ const CAPTURE_ALLOWED_KEYS: ReadonlySet<string> = new Set([
  * field (e.g. `decision[2].title must be a non-empty string`) so the in-loop
  * agent can self-correct its extraction without guessing.
  */
-type ParsedCapture = {
-  decisions: CaptureDecisionInput[];
-  /** Indices whose title carries a track marker while `kind` was omitted. */
-  markerWithoutKind: number[];
-};
-
-function parseCaptureInput(raw: string): ParsedCapture {
+function parseCaptureInput(raw: string): CaptureDecisionInput[] {
   if (raw.trim().length === 0) {
     throw new Error(NO_INPUT_HINT);
   }
@@ -834,19 +784,13 @@ function parseCaptureInput(raw: string): ParsedCapture {
     throw new Error("Input array must contain at least one decision.");
   }
   const decisions: CaptureDecisionInput[] = [];
-  const markerWithoutKind: number[] = [];
   parsed.forEach((item, index) => {
-    const { input, kindWasPresent } = validateCaptureItem(item, index);
-    decisions.push(input);
-    if (!kindWasPresent && TRACK_MARKER_IN_TITLE.test(input.title)) markerWithoutKind.push(index);
+    decisions.push(validateCaptureItem(item, index));
   });
-  return { decisions, markerWithoutKind };
+  return decisions;
 }
 
-function validateCaptureItem(
-  item: unknown,
-  index: number,
-): { input: CaptureDecisionInput; kindWasPresent: boolean } {
+function validateCaptureItem(item: unknown, index: number): CaptureDecisionInput {
   if (typeof item !== "object" || item === null || Array.isArray(item)) {
     throw new Error(`decision[${index}] must be a JSON object.`);
   }
@@ -862,14 +806,19 @@ function validateCaptureItem(
     throw new Error(`decision[${index}].title must be a non-empty string.`);
   }
   const out: CaptureDecisionInput = { title: obj.title };
-  if (obj.kind !== undefined) {
-    if (obj.kind !== "decision" && obj.kind !== "track") {
-      throw new Error(`decision[${index}].kind must be "decision" or "track", got '${obj.kind}'.`);
-    }
-    // Only the non-default `track` is carried forward; an explicit "decision"
-    // is accepted but normalized to omission so the event omits `kind`.
-    if (obj.kind === "track") out.kind = "track";
+  if (obj.kind === undefined) {
+    throw new Error(
+      `decision[${index}].kind is required: "track" for an unfinished direction that must ` +
+        'resurface in orient until you close it, "decision" for a point-in-time call that is ' +
+        "already settled.",
+    );
   }
+  if (obj.kind !== "decision" && obj.kind !== "track") {
+    throw new Error(`decision[${index}].kind must be "decision" or "track", got '${obj.kind}'.`);
+  }
+  // Only the non-default `track` is carried forward; an explicit "decision" is
+  // normalized to omission so the event omits a default `kind`.
+  if (obj.kind === "track") out.kind = "track";
   if (obj.rationale !== undefined) {
     out.rationale = requireNonEmptyString(obj.rationale, index, "rationale");
   }
@@ -907,10 +856,7 @@ function validateCaptureItem(
       }
     });
   }
-  // `kindWasPresent` reports the KEY, not the normalized value: an explicit
-  // "decision" is dropped from `out` so the event omits a default `kind`, and
-  // the marker guard must still be able to tell it from an omission.
-  return { input: out, kindWasPresent: obj.kind !== undefined };
+  return out;
 }
 
 function requireNonEmptyString(value: unknown, index: number, field: string): string {
@@ -979,12 +925,23 @@ function captureItemToPayload(item: CaptureResultItem): Record<string, unknown> 
 }
 
 /**
- * Name the vessel on every line. Marking only tracks left the other case to be
- * read off an ABSENT marker, which is exactly how a missed `kind` passed for a
- * plain decision without anyone noticing.
+ * Dry run only: read the declared vessel back BEFORE anything is written, so a
+ * caller who meant "track" can still say so. Both cases are named here because
+ * the point of the line is to confirm a declaration, and an absent marker
+ * cannot confirm anything.
  */
-function kindMarker(kind: "decision" | "track" | undefined): string {
+function previewKindMarker(kind: "decision" | "track" | undefined): string {
   return kind === "track" ? " [TRACK]" : " [DECISION]";
+}
+
+/**
+ * After the write: mark the exception and leave the default bare, the same way
+ * decisions.md does. Naming both vessels here would only announce a fait
+ * accompli -- the declaration was already checked at the boundary, where a
+ * missing `kind` is now refused outright.
+ */
+function recordedKindMarker(kind: "decision" | "track" | undefined): string {
+  return kind === "track" ? " [TRACK]" : "";
 }
 
 function printCapturePreview(
@@ -999,7 +956,7 @@ function printCapturePreview(
     `Would capture ${decisions.length} decision${decisions.length === 1 ? "" : "s"} (dry run; nothing written):`,
   );
   for (const decision of decisions) {
-    console.log(`- ${decision.title}${kindMarker(decision.kind)}`);
+    console.log(`- ${decision.title}${previewKindMarker(decision.kind)}`);
   }
 }
 
@@ -1024,7 +981,7 @@ function printCaptureResult(
     `Captured ${result.items.length} decision${result.items.length === 1 ? "" : "s"} in ad-hoc session ${sid}:`,
   );
   for (const item of result.items) {
-    console.log(`- ${item.decisionId}: ${item.input.title}${kindMarker(item.input.kind)}`);
+    console.log(`- ${item.decisionId}: ${item.input.title}${recordedKindMarker(item.input.kind)}`);
   }
 }
 

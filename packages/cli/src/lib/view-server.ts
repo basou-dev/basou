@@ -437,6 +437,10 @@ async function portfolioCard(ws: WorkspaceEntry, nowIso: string): Promise<Record
       sessionCount: s.sessionCount,
       suspectCount: s.suspects.length,
       inFlightCount: s.inFlightTasks.length,
+      // Two different zeros: a workspace that has never recorded a task, and
+      // one whose tasks are all finished. `inFlightCount` alone reads the same
+      // for both, which is the defect orient and handoff already fixed.
+      anyTaskEverRecorded: s.anyTaskEverRecorded,
       pendingApprovals: s.pendingApprovals.map((a) => ({
         risk: a.risk,
         kind: a.kind,

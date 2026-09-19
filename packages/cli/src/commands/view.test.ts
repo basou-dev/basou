@@ -71,6 +71,7 @@ async function setupInitedRepo(): Promise<string> {
   return repo;
 }
 
+const ARCHIVED_TASK_ID = "task_01HXABCDEF1234567890ABCDEF" as const;
 const WS_ID_A = "ws_01HXABCDEF1234567890ABCDEF" as const;
 const WS_ID_B = "ws_01HXABCDEF1234567890ABCDEG" as const;
 
@@ -483,6 +484,37 @@ describe("basou view portfolio mode", () => {
         // Flat routes still target the first workspace (single-mode compatibility).
         const flat = await getJson(handle, "/api/overview");
         expect((flat.data as { repoRoot: string }).repoRoot).toBe(wsA);
+      });
+    } finally {
+      await rm(rawA, { recursive: true, force: true });
+      await rm(rawB, { recursive: true, force: true });
+    }
+  });
+
+  it("tells a workspace that never recorded a task from one whose tasks are all done", async () => {
+    // Two different zeros. `inFlightCount` reads 0 for both, which is the same
+    // defect orient and handoff already fixed -- the card carries the third
+    // state so it can say which zero it is.
+    const rawA = await mkdtemp(join(tmpdir(), "basou-pf-zero-a-"));
+    const rawB = await mkdtemp(join(tmpdir(), "basou-pf-zero-b-"));
+    try {
+      const never = await initWorkspaceAt(rawA, WS_ID_A, "never");
+      const allDone = await initWorkspaceAt(rawB, WS_ID_B, "all-done");
+      // An archived task: nothing in flight, but a task WAS recorded here.
+      const archive = join(basouPaths(allDone).tasks, "archive");
+      await mkdir(archive, { recursive: true });
+      await writeFile(join(archive, `${ARCHIVED_TASK_ID}.md`), "# archived\n", "utf8");
+
+      await withPortfolioServer([never, allDone], {}, async (handle) => {
+        const { data } = await getJson(handle, "/api/portfolio");
+        const d = data as {
+          workspaces: Array<{ label: string; inFlightCount: number; anyTaskEverRecorded: boolean }>;
+        };
+        const byLabel = new Map(d.workspaces.map((w) => [w.label, w]));
+        expect(byLabel.get("never")?.inFlightCount).toBe(0);
+        expect(byLabel.get("all-done")?.inFlightCount).toBe(0);
+        expect(byLabel.get("never")?.anyTaskEverRecorded).toBe(false);
+        expect(byLabel.get("all-done")?.anyTaskEverRecorded).toBe(true);
       });
     } finally {
       await rm(rawA, { recursive: true, force: true });

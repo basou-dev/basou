@@ -324,6 +324,11 @@ export const VIEW_HTML = `<!doctype html>
     }
     var pend = w.pendingApprovals || [];
     var pendText = 'pending ' + pend.length + (pend.length ? ' (' + highestRisk(pend) + ')' : '');
+    // Two different zeros. A workspace that has never recorded a task reads the
+    // same as one whose tasks are all finished, so say which it is.
+    var flightText = w.anyTaskEverRecorded === false
+      ? 'in-flight (no tasks recorded)'
+      : 'in-flight ' + w.inFlightCount;
     var now = w.latestSession ? ((w.latestSession.label || '(session)') + ' [' + w.latestSession.status + ']') : '(no live sessions)';
     var dec = w.latestDecision ? w.latestDecision.title : '(no decisions yet)';
     var newest = (w.freshness && w.freshness.newestStartedAt) ? w.freshness.newestStartedAt : null;
@@ -336,7 +341,7 @@ export const VIEW_HTML = `<!doctype html>
       ]),
       el('div', { class: 'f', text: 'now: ' + now }),
       el('div', { class: 'f', text: 'latest: ' + dec }),
-      el('div', { class: 'f', text: 'in-flight ' + w.inFlightCount + '  |  ' + pendText + '  |  suspect ' + w.suspectCount }),
+      el('div', { class: 'f', text: flightText + '  |  ' + pendText + '  |  suspect ' + w.suspectCount }),
       el('div', { class: 'f muted', text: 'sessions ' + w.sessionCount + '  |  newest ' + relAge(newest, generatedAt) })
     ]);
   }

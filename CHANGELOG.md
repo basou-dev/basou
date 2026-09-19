@@ -3,6 +3,46 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **BREAKING: `basou decision capture` now requires `"kind"` on every item.**
+  It had no default and no way to be caught when omitted: a misspelled field is
+  a hard error, but an omitted optional one is indistinguishable from a
+  deliberate choice, so a track filed without `kind` was recorded as a
+  point-in-time decision, reported as a success, and never resurfaced in
+  orient. 0.42.1 covered that with a heuristic on the title -- a warning when a
+  title carried a bracketed `TRACK` marker while `kind` was absent.
+
+  The heuristic is now removed, because measuring it showed it could not do the
+  job it was given. It matched `TRACK` in Latin letters only, so on a workspace
+  whose decision titles are written in Japanese it fired on nothing at all: the
+  stopgap was running at zero. Requiring the field is the only form of the fix
+  that does not depend on guessing what the title meant, and the input shape is
+  published, so the change has to land before 1.0 freezes it.
+
+  Callers that omitted `kind` now get `decision[N].kind is required` naming the
+  offending index and both vessels, before anything is written (`--dry-run`
+  included). `basou decision record` is unchanged: its `--track` flag already
+  sits next to `--title` in the option list, where the choice is visible.
+
+- **After the write, `decision capture` marks a track and leaves a plain
+  decision bare.** 0.42.1 added `[DECISION]` to the confirmation line so that
+  neither case had to be read off an absent marker. That reasoning belonged to
+  the moment the vessel could still be wrong; after the write it announces a
+  fait accompli, and the boundary now refuses a missing `kind` outright. The
+  `--dry-run` preview keeps naming both, because its whole job is to read the
+  declaration back before anything is written.
+
+### Fixed
+
+- **A `basou view` portfolio card no longer shows the same thing for a
+  workspace that has never recorded a task and one whose tasks are all
+  finished.** Both read `in-flight 0`. The card now carries
+  `anyTaskEverRecorded` and prints `in-flight (no tasks recorded)` for the
+  first, matching the distinction `orient` and `handoff` already draw.
+
 ## 0.46.0 — 2026-09-19
 
 ### Added
