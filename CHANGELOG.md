@@ -61,6 +61,22 @@ All notable changes to **basou** are recorded here. The project follows
   shape `decision capture` reads on stdin was governed by nothing — which left
   "can this be tightened, and on what notice" unanswerable from the document.
 
+### Added
+
+- **CI refuses a change that edits CHANGELOG notes for a version that already
+  shipped.** Two pull requests each appended to `## Unreleased` at the same
+  position; GitHub did not call it a conflict, both stayed mergeable, and after
+  the second squash one entry had landed inside the shipped `## 0.43.0` section
+  — a published version whose notes would then have described a change it did
+  not contain. It was caught only because someone counted the Unreleased
+  entries before the bump, and counting is a step a person can skip.
+
+  The guard reads the boundary from the pull request's BASE revision, so the
+  release commit — which renames `## Unreleased` to `## <version> — <date>`, a
+  line above the first released heading — passes, as does any append to the
+  Unreleased section. There is deliberately no opt-out: one that an automated
+  squash could set would reopen the hole.
+
 ### Fixed
 
 - **A `basou view` portfolio card no longer collapses three different task

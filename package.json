@@ -23,6 +23,7 @@
     "format": "biome format --write .",
     "test": "pnpm -r run test",
     "test:coverage": "pnpm -r run test:coverage",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "test:watch": "pnpm -r --parallel run test:watch",
     "clean": "pnpm -r --parallel clean && rm -rf node_modules"
   },

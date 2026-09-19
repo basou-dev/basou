@@ -92,6 +92,10 @@ end-to-end.
 - **One commit, one topic**. Avoid bundling unrelated fixes.
 - **CHANGELOG.md** entries live in the `## Unreleased` section;
   promote to a versioned section as part of the release commit.
+  CI refuses a pull request that edits anything from the first
+  released-version heading down — two PRs appending at the same
+  position once merged CLEAN and silently left one entry inside an
+  already-published section.
 - **Pull request titles** should be a single declarative sentence
   ("Fix Lock-is-held message wording" rather than "WIP"). The PR
   body uses the template that auto-populates from

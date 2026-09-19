@@ -151,6 +151,26 @@ jobs:
           fi
           echo "All new commits are ASCII-only."
 
+  changelog-history:
+    name: CHANGELOG history guard
+    # PR-only, for the same reason as the commit-message check: push /
+    # schedule / dispatch events give no meaningful base..head range, and
+    # the guard is defined entirely in terms of the BASE revision's
+    # CHANGELOG (that is what makes the release commit's `## Unreleased`
+    # rename pass rather than trip it).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The guard diffs against the PR base, which depth=1 cannot resolve.
+          fetch-depth: 0
+      - name: Refuse edits to notes for a version that already shipped
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-changelog-history.mjs "$BASE_SHA"
+
   audit:
     name: Dependency vulnerability audit
     runs-on: ubuntu-latest
