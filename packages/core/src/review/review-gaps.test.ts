@@ -978,13 +978,51 @@ describe("findReviewGaps — self-reported reviews", () => {
     expect(s.gaps[0]?.selfReports[0]?.editsAfterRecord.unnamedCount).toBe(0);
   });
 
-  it("matches a named file through dot segments on either side", async () => {
+  it("normalises dot segments written in the FINDING, not only in the edit", async () => {
+    // The mirror of the test below, and the half that was missing: with the
+    // finding clean and only the edit carrying `..`, path resolution alone
+    // makes them match, so `findingPath`'s own normalisation was never
+    // exercised. Reverting it went undetected until this case existed.
     const paths = await setup();
     const repo = await mkRepo("alpha");
     await placeRecords(paths, SES("S1"), [
       reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
         repos: [repo],
         findings: [{ title: "x", location: "src/../src/a.ts" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", `${repo}/src/a.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const e = s.gaps[0]?.selfReports[0]?.editsAfterRecord;
+    expect(e?.namedCount).toBe(1);
+    expect(e?.unnamedCount).toBe(0);
+  });
+
+  it("matches a named file when only ONE side carries dot segments", async () => {
+    // The two sides must be spelled DIFFERENTLY. An earlier version of this test
+    // used `src/../src/a.ts` on both, which is string-equal with or without
+    // normalisation — it passed against the defective implementation too, and so
+    // pinned nothing. The re-review caught that.
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "src/a.ts" }],
       }),
     ]);
     await placeSession(
@@ -1037,6 +1075,87 @@ describe("findReviewGaps — self-reported reviews", () => {
     expect(e?.namedCount).toBe(1);
     expect(e?.unnamedCount).toBe(0);
     expect(s.unitsWithEditsAfterRecord).toBe(0);
+  });
+
+  it("does not accuse a record of missing a file it named by an alias", async () => {
+    // `src/alias.ts` -> `src/real.ts`. Comparing only the RESOLVED spelling
+    // reports the record as never having named the edit, when it named it
+    // exactly. A false accusation is not the safe direction either.
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await mkdir(join(repo, "src"), { recursive: true });
+    await writeFile(join(repo, "src", "real.ts"), "x");
+    await symlink(join(repo, "src", "real.ts"), join(repo, "src", "alias.ts"));
+
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "src/alias.ts" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", join(repo, "src", "alias.ts")),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const e = s.gaps[0]?.selfReports[0]?.editsAfterRecord;
+    expect(e?.namedCount).toBe(1);
+    expect(e?.unnamedCount).toBe(0);
+    expect(s.unitsWithEditsAfterRecord).toBe(0);
+  });
+
+  it("pins how `..` after a symlinked directory actually resolves on this platform", async () => {
+    // A re-review reported that `link/../a.ts`, with `link` -> `other/sub`,
+    // addresses `other/a.ts` and that collapsing it lexically suppresses a real
+    // unnamed edit. MEASURED, that premise does not hold here:
+    // `fs.realpathSync("<repo>/link/..")` returns `<repo>`, not `<repo>/other`
+    // — Node collapses the `..` lexically, and the finding was reproduced only
+    // in a harness where realpath itself was mocked. This test pins the real
+    // behaviour so that if it ever changes, it changes loudly.
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await mkdir(join(repo, "other", "sub"), { recursive: true });
+    await symlink(join(repo, "other", "sub"), join(repo, "link"));
+
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "a.ts" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        // Built by concatenation: `join` would normalise `link/..` away before
+        // the capture ever saw it.
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", `${repo}/link/../a.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const e = s.gaps[0]?.selfReports[0]?.editsAfterRecord;
+    // Resolves to `<repo>/a.ts`, which the finding names.
+    expect(e?.namedCount).toBe(1);
+    expect(e?.unnamed).toEqual([]);
   });
 
   it("flags files edited after the record that none of its findings named", async () => {

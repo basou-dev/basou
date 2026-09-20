@@ -588,7 +588,10 @@ type EditRec = { at: number; raw: string; resolved: string };
  * direction this surfacer must never fail in.
  */
 function resolveEditPath(abs: string): string {
-  let current = normalize(abs);
+  // NOT normalized first. `link/..` is `other` when `link` is a symlink and
+  // `link`'s parent only lexically; collapsing it here decides that question
+  // wrongly and silently, and the direction it fails in is suppression.
+  let current = abs;
   const tail: string[] = [];
   // Bounded by path depth so a pathological input cannot loop.
   for (let guard = 0; guard < 4096; guard += 1) {
@@ -638,8 +641,11 @@ function findingPath(location: string): string | null {
 function absoluteEditPath(p: string | null | undefined): string | null {
   if (!p) return null;
   const s = p.trim();
-  if (s.startsWith("~/")) return normalize(homedir() + s.slice(1));
-  return isAbsolute(s) ? normalize(s) : null;
+  // Kept as recorded (beyond expanding `~`): the dot segments in it are what
+  // {@link resolveEditPath} needs in order to resolve them through the
+  // filesystem rather than lexically.
+  if (s.startsWith("~/")) return homedir() + s.slice(1);
+  return isAbsolute(s) ? s : null;
 }
 
 /**
@@ -1058,27 +1064,39 @@ function editsAfterRecordFor(
   edits: readonly EditRec[],
 ): EditsAfterRecord {
   const prefix = repoPath.endsWith("/") ? repoPath : `${repoPath}/`;
-  const relatives = new Set<string>();
+  // One entry per edited file: the spelling to SHOW, and every spelling that
+  // file is known by. Both sides matter and for different reasons. Membership
+  // needs either, because a resolved repository key needs the resolved edit
+  // while a key that fell back to the string heuristic needs the raw one.
+  // Matching a finding needs either too: a finding may name the alias
+  // (`src/alias.ts`) that the resolved spelling has already replaced with its
+  // target, and comparing only the target accuses the record of failing to name
+  // a file it named exactly.
+  const byFile = new Map<string, Set<string>>();
   for (const e of edits) {
     if (e.at <= r.at || e.at > lastCommitAt) continue;
-    // Either spelling may be the one that matches: a resolved key needs the
-    // resolved edit, a key that fell back to the string heuristic needs the raw
-    // one. Testing both is what keeps a view-routed edit visible.
-    const under = e.resolved.startsWith(prefix)
-      ? e.resolved
-      : e.raw.startsWith(prefix)
-        ? e.raw
-        : null;
-    if (under === null) continue;
-    // Already normalized: both spellings are normalized when the edit is
-    // collected, and slicing a normalized path at a prefix match leaves one.
-    relatives.add(under.slice(prefix.length));
+    const spellings = new Set<string>();
+    if (e.resolved.startsWith(prefix)) spellings.add(e.resolved.slice(prefix.length));
+    // The raw spelling is kept as a second name for the same file, because a
+    // finding may name the ALIAS (`src/alias.ts`) that resolution has already
+    // replaced with its target (`src/real.ts`). Comparing only the target
+    // accuses the record of failing to name a file it named exactly.
+    // Kept literal. Normalising it here changes nothing that can be observed:
+    // when resolution placed the file its spelling is already canonical, and
+    // when it did not, the fallback it returns is normalised too. The literal
+    // form is the one a finding naming an alias is written in.
+    if (e.raw.startsWith(prefix)) spellings.add(e.raw.slice(prefix.length));
+    const display = [...spellings][0];
+    if (display === undefined) continue;
+    const slot = byFile.get(display) ?? new Set<string>();
+    for (const sp of spellings) slot.add(sp);
+    byFile.set(display, slot);
   }
   let namedCount = 0;
   const unnamed: string[] = [];
-  for (const rel of relatives) {
-    if (r.findingPaths.has(rel)) namedCount++;
-    else unnamed.push(rel);
+  for (const [display, spellings] of byFile) {
+    if ([...spellings].some((sp) => r.findingPaths.has(sp))) namedCount++;
+    else unnamed.push(display);
   }
   unnamed.sort();
   return {
