@@ -179,6 +179,7 @@ function summaryOf(
         counts.noRepos + counts.unresolvableRepo + counts.noMatchingUnit + counts.unverifiableUnit,
     },
     unitsWithEditsAfterRecord: 0,
+    unplaceableEdits: 0,
     refusedPairings: 0,
     newestCommitAt: "2026-05-09T10:05:00.000Z",
   };
@@ -201,6 +202,52 @@ function selfReport(
 }
 
 describe("renderReviewGaps", () => {
+  it("does not let the footer assert what the per-record line declines to say", () => {
+    // A record that named no location could not have named any file. The inline
+    // clause says exactly that; an earlier footer went on to conclude "what was
+    // reviewed is not what shipped" for the same unit, which is the conclusion
+    // the inline clause exists to avoid.
+    const unit = gapUnit({
+      selfReports: [
+        selfReport({
+          editsAfterRecord: {
+            unnamed: ["src/a.ts"],
+            unnamedCount: 1,
+            namedCount: 0,
+            hasFindingLocations: false,
+          },
+        }),
+      ],
+    });
+    const out = renderReviewGaps({ ...summaryOf([unit]), unitsWithEditsAfterRecord: 1 });
+    expect(out).toContain("the record named no location to compare them with");
+    expect(out).toContain("This counts what a record MENTIONED, not what the review covered");
+    expect(out).not.toContain("what was reviewed is not what shipped");
+  });
+
+  it("names the edits it could not place instead of leaving them as silence", () => {
+    const out = renderReviewGaps({ ...summaryOf([gapUnit()]), unplaceableEdits: 3 });
+    expect(out).toContain("3 recorded file changes named no placeable location");
+  });
+
+  it("spells out the files a record never named", () => {
+    const unit = gapUnit({
+      selfReports: [
+        selfReport({
+          editsAfterRecord: {
+            unnamed: ["src/a.ts", "src/b.ts"],
+            unnamedCount: 4,
+            namedCount: 1,
+            hasFindingLocations: true,
+          },
+        }),
+      ],
+    });
+    const out = renderReviewGaps({ ...summaryOf([unit]), unitsWithEditsAfterRecord: 1 });
+    expect(out).toContain("then 4 files it never named edited before the commit");
+    expect(out).toContain("src/a.ts, src/b.ts, +2 more");
+  });
+
   it("labels a self-reported gap as unverified while still counting it as a gap", () => {
     const out = renderReviewGaps(summaryOf([gapUnit({ selfReports: [selfReport()] })]));
     expect(out).toContain("self-reported by gpt-5.6 — unverified, still counted");

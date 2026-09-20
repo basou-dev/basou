@@ -314,8 +314,19 @@ export function renderReviewGaps(summary: ReviewGapsSummary): string {
   }
   if (summary.unitsWithEditsAfterRecord > 0) {
     const n = summary.unitsWithEditsAfterRecord;
+    // States what the count IS, and stops there. An earlier wording went on to
+    // conclude "what was reviewed is not what shipped" — which the per-record
+    // line already declines to say when the record named no location, because
+    // there was then nothing it could have named. The footer must not assert
+    // what the line beneath it qualifies.
     lines.push(
-      `Note: ${n} unit${n === 1 ? "" : "s"} carr${n === 1 ? "ies" : "y"} a recorded review that was followed, before the commit, by edits to files none of its findings named. The record is truthful — a review did run — which is why this particular miss is invisible without saying it: what was reviewed is not what shipped.`,
+      `Note: ${n} unit${n === 1 ? "" : "s"} carr${n === 1 ? "ies" : "y"} a recorded review that was followed, before the commit, by an edit to a file that record's findings did not name. This counts what a record MENTIONED, not what the review covered, and a record that named no location could not have named any file — each unit's own line says which case it is.`,
+    );
+  }
+  if (summary.unplaceableEdits > 0) {
+    const n = summary.unplaceableEdits;
+    lines.push(
+      `Note: ${n} recorded file change${n === 1 ? "" : "s"} named no placeable location, so ${n === 1 ? "it was" : "they were"} considered for no unit. A repo-relative path cannot be attributed to a repository without guessing; this is counted rather than dropped, because a store made of them would otherwise report no edits and read as a clean result.`,
     );
   }
   lines.push(...unattachedLines(summary.unattachedSelfReports));

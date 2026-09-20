@@ -78,9 +78,12 @@ All notable changes to **basou** are recorded here. The project follows
   `hasFindingLocations` so a record that named no location at all is reported
   as having nothing to compare rather than as having missed everything. A
   summary count, `unitsWithEditsAfterRecord`, sits beside the gap counts rather
-  than inside them: a gap asks whether a review happened, and this asks whether
-  the review that happened looked at what shipped, so a unit with a full review
-  trail can still be counted here.
+  than inside them: a gap asks whether a review happened, and this asks what a
+  record mentioned, so a unit with a full review trail can still be counted
+  here. `unplaceableEdits` counts recorded file changes whose path names no
+  placeable location — a repo-relative spelling cannot be attributed to a
+  repository without guessing, and counting them keeps a store full of that
+  shape from reporting no edits and reading as a clean result.
 
   Like every other self-report label it NEVER moves a verdict. It can only add
   suspicion to a record, never remove it — a record with no unnamed edit is not

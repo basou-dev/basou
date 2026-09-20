@@ -905,6 +905,140 @@ describe("findReviewGaps — self-reported reviews", () => {
   // is what ships. The record is not a lie, which is why the miss is invisible
   // unless the report says what was edited after it.
 
+  // --- regressions from the cross-model convergent review -------------------
+
+  it("sees an edit recorded through a workspace view, whose repo key resolved past the symlink", async () => {
+    // The review's most severe finding, reproduced on real proportions: on the
+    // dogfood store nearly a fifth of recorded edits carry a view spelling. The
+    // repository key resolves past the symlink and the edit does not, so
+    // comparing them as written reported an entire ordinary workflow as no edit.
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    const view = join(getRoot(), "alpha-workspace");
+    await mkdir(view, { recursive: true });
+    await symlink(repo, join(view, "alpha"));
+
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "src/reviewed.ts" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        // Recorded THROUGH the view, as the capture actually spells it.
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", join(view, "alpha", "src", "new.ts")),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.gaps[0]?.selfReports[0]?.editsAfterRecord.unnamed).toEqual(["src/new.ts"]);
+    expect(s.unitsWithEditsAfterRecord).toBe(1);
+  });
+
+  it("counts a path it cannot place instead of reporting it as no edit", async () => {
+    // The git capability writes git's own name-status output, which is
+    // repo-relative. Such a path cannot be attributed to a repository without
+    // guessing -- but reporting it as nothing makes a store full of them look
+    // like a store with no edits at all.
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "src/reviewed.ts" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", "src/relative.ts"),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    expect(s.unplaceableEdits).toBe(1);
+    expect(s.gaps[0]?.selfReports[0]?.editsAfterRecord.unnamedCount).toBe(0);
+  });
+
+  it("matches a named file through dot segments on either side", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "src/../src/a.ts" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", `${repo}/src/../src/a.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const e = s.gaps[0]?.selfReports[0]?.editsAfterRecord;
+    expect(e?.namedCount).toBe(1);
+    expect(e?.unnamedCount).toBe(0);
+  });
+
+  it("strips a line-AND-column location, so the file it names is not read as unnamed", async () => {
+    const paths = await setup();
+    const repo = await mkRepo("alpha");
+    await placeRecords(paths, SES("S1"), [
+      reviewRecorded(SES("S1"), "2026-05-09T09:30:00.000Z", {
+        repos: [repo],
+        findings: [{ title: "x", location: "src/a.ts:12:3" }],
+      }),
+    ]);
+    await placeSession(
+      paths,
+      { id: SES("S2"), source: "claude-code-import", startedAt: "2026-05-09T09:40:00.000Z" },
+      [
+        fileChanged(SES("S2"), "2026-05-09T09:45:00.000Z", `${repo}/src/a.ts`),
+        cmd(
+          SES("S2"),
+          "claude-code-import",
+          "2026-05-09T10:05:00.000Z",
+          ["-c", "git commit -m x"],
+          repo,
+        ),
+      ],
+    );
+
+    const s = await findReviewGaps({ paths, nowIso: NOW });
+    const e = s.gaps[0]?.selfReports[0]?.editsAfterRecord;
+    expect(e?.namedCount).toBe(1);
+    expect(e?.unnamedCount).toBe(0);
+    expect(s.unitsWithEditsAfterRecord).toBe(0);
+  });
+
   it("flags files edited after the record that none of its findings named", async () => {
     const paths = await setup();
     const repo = await mkRepo("alpha");

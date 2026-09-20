@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
@@ -217,6 +217,16 @@ export type ReviewGapsSummary = {
    * unit can be a `candidate` — trail and all — and still be counted here.
    */
   unitsWithEditsAfterRecord: number;
+  /**
+   * `file_changed` events whose path named no placeable location, so they could
+   * not be considered for {@link EditsAfterRecord} in any repository.
+   *
+   * Reported because the alternative is silence that reads as a clean result: a
+   * repo-relative path (the shape the git capability writes) cannot be attributed
+   * to a repository without guessing, and a store made mostly of them would
+   * report no edits anywhere while looking exactly like a store that had none.
+   */
+  unplaceableEdits: number;
   /**
    * How many (record, unit) pairings fell inside a unit's window but could not
    * be checked, because that unit's own repository path was never verified.
@@ -554,8 +564,43 @@ type ReviewRec = {
   /** repo key -> what the review touched in it. */
   repos: Map<string, { examinedDiff: boolean; files: Set<string> }>;
 };
-/** One recorded file edit, reduced to when it happened and where. */
-type EditRec = { at: number; path: string };
+/**
+ * One recorded file edit: when it happened, and where in BOTH spellings.
+ *
+ * Both are kept because the two sides of the comparison are not resolved the
+ * same way. A repository key is realpath-resolved when the path is present, but
+ * falls back to a string heuristic when it is not; an edit keeps whatever
+ * spelling it was recorded with. Matching on only one of them misses the other
+ * case.
+ */
+type EditRec = { at: number; raw: string; resolved: string };
+
+/**
+ * A recorded edit path resolved the way a repository key is: realpath the
+ * longest existing ANCESTOR and re-append the segments that are missing, so a
+ * file that has since moved still resolves the symlinks in the ancestry it had.
+ *
+ * Without this the feature is blind to an entire ordinary workflow. Work routed
+ * through a workspace view is RECORDED through the view, while the repository it
+ * commits to resolves past that symlink — measured on the dogfood store, 1119 of
+ * 6135 recorded edits carry a view spelling, so close to a fifth of them. Compared
+ * as written, every one of those reads as no edit at all, which is the single
+ * direction this surfacer must never fail in.
+ */
+function resolveEditPath(abs: string): string {
+  let current = normalize(abs);
+  const tail: string[] = [];
+  // Bounded by path depth so a pathological input cannot loop.
+  for (let guard = 0; guard < 4096; guard += 1) {
+    const real = resolveRealpath(current);
+    if (real !== null) return tail.length > 0 ? join(real, ...tail.reverse()) : real;
+    const parent = dirname(current);
+    if (parent === current) return normalize(abs);
+    tail.push(basename(current));
+    current = parent;
+  }
+  return normalize(abs);
+}
 
 /**
  * A `findings[].location` reduced to the repo-relative path it points at.
@@ -569,10 +614,17 @@ function findingPath(location: string): string | null {
   const s = location
     .trim()
     .replace(/\s*\(.*\)\s*$/, "")
-    .replace(/:\d+(-\d+)?$/, "")
-    .replace(/^\.\//, "")
+    // One or more trailing position groups: `:12`, `:12-15`, `:12:3`. Stripping
+    // only ONE leaves `src/a.ts:12` behind for a line-and-column location, and
+    // that spelling matches no edited file, so the file the finding named is
+    // then reported as one it never named.
+    .replace(/(?::\d+(?:-\d+)?)+$/, "")
     .trim();
-  return s.length === 0 ? null : s;
+  if (s.length === 0) return null;
+  // `src/../src/a.ts` and `src/a.ts` name one file; an unnormalized spelling on
+  // either side of the comparison never matches the other.
+  const n = normalize(s);
+  return n.length === 0 || n === "." ? null : n;
 }
 
 /**
@@ -586,8 +638,8 @@ function findingPath(location: string): string | null {
 function absoluteEditPath(p: string | null | undefined): string | null {
   if (!p) return null;
   const s = p.trim();
-  if (s.startsWith("~/")) return homedir() + s.slice(1);
-  return isAbsolute(s) ? s : null;
+  if (s.startsWith("~/")) return normalize(homedir() + s.slice(1));
+  return isAbsolute(s) ? normalize(s) : null;
 }
 
 /**
@@ -636,6 +688,8 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
   const reviews: ReviewRec[] = [];
   const selfReports: SelfReportRec[] = [];
   const edits: EditRec[] = [];
+  // file_changed events whose path could not be placed in any repository.
+  let unplaceableEdits = 0;
   // Records rejected before they ever reach the binding step, by cause.
   let noRepos = 0;
   let unresolvableRepo = 0;
@@ -714,7 +768,18 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
         if (ev.type === "file_changed") {
           const editedAt = Date.parse(ev.occurred_at);
           const abs = absoluteEditPath(ev.path);
-          if (!Number.isNaN(editedAt) && abs !== null) edits.push({ at: editedAt, path: abs });
+          if (Number.isNaN(editedAt)) continue;
+          if (abs === null) {
+            // A repo-relative spelling cannot be placed without knowing which
+            // repository it belongs to, and guessing would attribute one
+            // project's edit to another. It is COUNTED rather than dropped in
+            // silence: the git capability writes exactly this shape, so a store
+            // full of them would otherwise report "no edits" and read as a
+            // clean result.
+            unplaceableEdits++;
+            continue;
+          }
+          edits.push({ at: editedAt, raw: abs, resolved: resolveEditPath(abs) });
           continue;
         }
         if (ev.type !== "command_executed") continue;
@@ -956,6 +1021,7 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
       unverifiableUnit,
     },
     unitsWithEditsAfterRecord,
+    unplaceableEdits,
     refusedPairings,
     newestCommitAt: newestCommit === null ? null : new Date(newestCommit).toISOString(),
   };
@@ -995,8 +1061,18 @@ function editsAfterRecordFor(
   const relatives = new Set<string>();
   for (const e of edits) {
     if (e.at <= r.at || e.at > lastCommitAt) continue;
-    if (!e.path.startsWith(prefix)) continue;
-    relatives.add(e.path.slice(prefix.length));
+    // Either spelling may be the one that matches: a resolved key needs the
+    // resolved edit, a key that fell back to the string heuristic needs the raw
+    // one. Testing both is what keeps a view-routed edit visible.
+    const under = e.resolved.startsWith(prefix)
+      ? e.resolved
+      : e.raw.startsWith(prefix)
+        ? e.raw
+        : null;
+    if (under === null) continue;
+    // Already normalized: both spellings are normalized when the edit is
+    // collected, and slicing a normalized path at a prefix match leaves one.
+    relatives.add(under.slice(prefix.length));
   }
   let namedCount = 0;
   const unnamed: string[] = [];
