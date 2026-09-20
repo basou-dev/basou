@@ -188,6 +188,16 @@ work that a caller has no cheap way to reproduce.
 > recorded before `0.47` predate that distinction: an absent `kind` there means
 > only that nothing was recorded, not that nothing was declared.
 
+A field that becomes required on one command does not oblige every command that
+writes the same event to grow the same requirement. `decision_recorded` has
+three writers — the transcript importer, `basou decision capture` and `basou
+decision record` — and only `capture` reads a JSON input shape. `record`'s
+vessel is the `--track` flag, which has no way to state "explicitly not a
+track"; the importer declares no vessel at all and cannot be given one. The
+requirement therefore lands on the input shape. `record` instead names the
+vessel it used on its receipt, which needs no new flag on a surface this line
+treats as frozen.
+
 After `1.0`, removing or changing the meaning of any guaranteed-surface element
 requires a major bump; additions within a line remain backward-compatible.
 

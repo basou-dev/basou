@@ -280,6 +280,17 @@ async function warnLinkedFilesOutsideRoots(input: {
  * `basou decision record` has no counterpart: the vessel there is the `--track`
  * flag, which cannot be "omitted" in the same sense -- there is no way to state
  * "explicitly not a track", so the same warning could never be silenced.
+ *
+ * Nor is the asymmetry two-sided. `decision_recorded` has THREE writers, and
+ * the largest of them cannot declare a vessel at all. Measured over a real
+ * store of 1684 such events: the transcript importer wrote 1157 (69%), always
+ * without a `kind` and always meaning a decision; `capture` wrote 513 (30%);
+ * `record` wrote 14 (0.8%). "Every writer declares its vessel" was therefore
+ * never on the table. What closes the `record` gap instead is its receipt,
+ * which names the vessel it used -- see `printDecisionResult`. Holding
+ * `record` to a declared vessel would mean a new flag on a CLI surface the
+ * `0.x` line treats as frozen (docs/spec/compatibility.md), to guard the
+ * thinnest of the three writers, while leaving the widest one untouched.
  */
 function warnMissingKind(
   decisions: readonly CaptureDecisionInput[],
@@ -1192,13 +1203,27 @@ function printDecisionResult(options: DecisionRecordOptions, result: DecisionPri
   const trackPrefix = result.rich.kind === "track" ? "track " : "";
   const rationaleSuffix =
     result.rich.rationale !== undefined ? ` (rationale: ${result.rich.rationale})` : "";
+  // Name the vessel on the non-track receipt too. `--track` already names its
+  // own in the line; the other arm named nothing, so the one command that
+  // cannot state "explicitly not a track" was also the one that never reported
+  // which vessel it had used. That arm is what an agent reaches for after
+  // `capture` refuses an undeclared `kind`, and a silent re-filing there is the
+  // same failure the deprecation exists to remove. This is a receipt, not a
+  // nudge: it states what was written, which is why it is not gated the way
+  // `trackNudge` is. It is appended, so the line up to the rationale is
+  // unchanged.
+  const vesselSuffix =
+    result.rich.kind === "track"
+      ? ""
+      : " — a point-in-time decision; unlike a track it will not keep resurfacing" +
+        " in orient until closed (use --track for an unfinished direction)";
   if (result.mode === "ad-hoc") {
     console.log(
-      `Recorded ${trackPrefix}${result.decisionId} in ad-hoc session ${sid}${rationaleSuffix}`,
+      `Recorded ${trackPrefix}${result.decisionId} in ad-hoc session ${sid}${rationaleSuffix}${vesselSuffix}`,
     );
   } else {
     console.log(
-      `Recorded ${trackPrefix}${result.decisionId} in session ${sid} (${result.sessionStatus})${rationaleSuffix}`,
+      `Recorded ${trackPrefix}${result.decisionId} in session ${sid} (${result.sessionStatus})${rationaleSuffix}${vesselSuffix}`,
     );
   }
 }
