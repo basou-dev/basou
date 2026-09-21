@@ -3,6 +3,17 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.48.1 — 2026-09-21
+
+### Changed
+
+- **`zod` moves to 4.6.5 and `yaml` to 2.9.1.** Both are patch releases, and
+  neither moves anything this package publishes: no source changed, and the
+  committed JSON Schema artifacts are byte-identical under the drift guard that
+  compares them against what the installed `zod` emits. The declared ranges
+  already admitted these versions, so an install of `0.48.0` resolved to them
+  too; this release only makes the declared floors say so.
+
 ## 0.48.0 — 2026-09-21
 
 ### Changed
