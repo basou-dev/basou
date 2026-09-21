@@ -7,6 +7,42 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Changed
 
+- **`"kind"` is now REQUIRED on `basou decision capture`, and omitting it on any
+  item refuses the whole batch.** `0.47.0` shipped the warning release the
+  deprecation policy asks for; this closes it. The field selects the vessel, and
+  getting it wrong fails with no symptom — a track filed as a point-in-time
+  decision is written, reported as a success, and never enters the open-track
+  list, so the next decision simply takes its place.
+
+  The batch is refused **atomically**, which is the same thing every other
+  validation in this command has always done — a malformed field has never
+  written a partial batch. Writing the valid items and reporting the rejected
+  indices was considered and rejected: it reports success while holding fewer
+  items than the caller handed over, which is the same shape of silent miscount
+  the requirement exists to remove, and it would give the exit code a new
+  The error names the offending indices (an agent that forgot the field forgot
+  it on every item, and failing on the first would make it re-pipe the batch
+  once per item to learn that), up to ten with the rest collapsed into a stated
+  count, and it ends with the number of items NOT written. **Every** capture
+  refusal now ends with that disposition, not just this one: a malformed title
+  has always refused the whole batch too, and naming the bad item without saying
+  what became of the others is what let "decision[1] is bad" be read as "the
+  rest landed".
+
+  `--dry-run` refuses too and prints no preview: a dry run that listed the items
+  would read as "this is what will be written".
+
+  The `[NO KIND]` marker is gone from both the preview and the written receipt,
+  leaving the two-state line it was always meant to be, and the parsed item type
+  now carries `kind` as a required field so the undeclared arm cannot creep back
+  as an unreachable `undefined` branch.
+
+  **`basou decision record` is unchanged**, and is still not held to a declared
+  vessel. Its vessel is the `--track` flag, which cannot be omitted in the same
+  sense; `decision_recorded` has three writers and the largest of them — the
+  transcript importer, 1157 of 1684 events measured on a real store — cannot
+  declare one at all.
+
 - **`basou decision record` now names the vessel on its non-track receipt.**
   `--track` already named its own (`Recorded track decision_...`); the other arm
   named nothing, so the one command that cannot state "explicitly not a track"

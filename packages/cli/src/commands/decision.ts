@@ -181,15 +181,16 @@ Input format (a JSON array; one object per decision):
     }
   ]
 
-"title" is required. "kind" names the vessel: "track" records a strategic,
-UNFINISHED direction (+ why) and orientation/handoff resurface it every session
-until you close it with 'basou decision void <id>', while "decision" records a
-point-in-time call (surfaced only as the latest). Every other field is optional.
+"title" and "kind" are both required. "kind" names the vessel: "track" records a
+strategic, UNFINISHED direction (+ why) and orientation/handoff resurface it
+every session until you close it with 'basou decision void <id>', while
+"decision" records a point-in-time call (surfaced as the latest). Every other
+field is optional.
 
-DEPRECATED: omitting "kind" still writes the item, as a decision, but warns --
-and becomes an ERROR in the next release. It has no default because getting it
-wrong fails silently: a track filed as a decision never enters the open-track
-list, so nothing holds it there -- the next decision simply takes its place.
+"kind" has no default because getting it wrong fails silently: a track filed as
+a decision never enters the open-track list, so nothing holds it there -- the
+next decision simply takes its place. Omitting it on ANY item refuses the whole
+batch and writes nothing, so a partial write can never be reported as a success.
 All decisions are written into one ad-hoc session timestamped now, so
 orientation surfaces them as the latest decisions. Run from a workspace-view
 directory and it resolves to the planning repo, like 'basou orient' /
@@ -266,47 +267,6 @@ async function warnLinkedFilesOutsideRoots(input: {
     );
   } catch {
     // Advisory only; a classification failure must never block the write.
-  }
-}
-
-/**
- * Every item that omits `kind` warns, and `kind` becomes REQUIRED in the next
- * release. Until 0.46 the miss was covered by a heuristic on the title -- warn
- * when a bracketed `TRACK` marker appeared while `kind` was absent. Measuring
- * it retired it: the pattern matched `TRACK` in Latin letters only, so on a
- * workspace whose titles are not written in Latin script it fired on nothing.
- * A warning on the omission itself needs no guess about what a title meant, and
- * it catches strictly more (the marker case is a subset of it).
- *
- * `basou decision record` has no counterpart: the vessel there is the `--track`
- * flag, which cannot be "omitted" in the same sense -- there is no way to state
- * "explicitly not a track", so the same warning could never be silenced.
- *
- * Nor is the asymmetry two-sided. `decision_recorded` has THREE writers, and
- * the largest of them cannot declare a vessel at all. Measured over a real
- * store of 1684 such events: the transcript importer wrote 1157 (69%), always
- * without a `kind` and always meaning a decision; `capture` wrote 513 (30%);
- * `record` wrote 14 (0.8%). "Every writer declares its vessel" was therefore
- * never on the table. What closes the `record` gap instead is its receipt,
- * which names the vessel it used -- see `printDecisionResult`. Holding
- * `record` to a declared vessel would mean a new flag on a CLI surface the
- * `0.x` line treats as frozen (docs/spec/compatibility.md), to guard the
- * thinnest of the three writers, while leaving the widest one untouched.
- */
-function warnMissingKind(
-  decisions: readonly CaptureDecisionInput[],
-  indices: readonly number[],
-): void {
-  for (const index of indices) {
-    const title = (decisions[index]?.title ?? "").trim();
-    console.error(
-      `basou: decision[${index}] ("${title.slice(0, 40)}") declares no "kind" — it is recorded ` +
-        "as a point-in-time decision: the next decision takes its place, and it " +
-        "never enters the open-track list orient shows every session until closed. " +
-        "Set " +
-        '"kind": "track" for an unfinished direction, or "kind": "decision" to say it is ' +
-        "settled. Omitting it becomes an ERROR in the next release.",
-    );
   }
 }
 
@@ -429,7 +389,17 @@ export type DecisionCaptureContext = {
 };
 
 /** One decision in the capture input: a title plus the optional rich fields. */
-type CaptureDecisionInput = { title: string } & RichDecisionFields;
+/**
+ * A parsed capture item. `kind` is REQUIRED here, not optional-with-a-default:
+ * the parser refuses a batch that omits it, so every value downstream -- the
+ * markers, the event payload, the preview -- has a declared vessel to read.
+ * Encoding that in the type is what keeps the "undeclared" arm from creeping
+ * back in as an `undefined` branch nobody can reach.
+ */
+type CaptureDecisionInput = { title: string; kind: "decision" | "track" } & Omit<
+  RichDecisionFields,
+  "kind"
+>;
 
 /**
  * Programmatic entry for `basou decision capture`. Owns process exit state.
@@ -470,8 +440,7 @@ export async function doRunDecisionCapture(
   await assertWorkspaceInitialized(paths.root);
 
   const raw = await readCaptureInput(options, ctx);
-  const { decisions, missingKind } = parseCaptureInput(raw);
-  warnMissingKind(decisions, missingKind);
+  const { decisions } = parseCaptureInput(raw);
 
   // Cross-project guardrail (warn-only): surface linked files that resolve
   // outside the declared source_roots, before the dry-run early-return so a
@@ -814,8 +783,6 @@ const CAPTURE_ALLOWED_KEYS: ReadonlySet<string> = new Set([
  */
 type ParsedCapture = {
   decisions: CaptureDecisionInput[];
-  /** Indices that declared no `kind`. Deprecated; an error in the next release. */
-  missingKind: number[];
 };
 
 function parseCaptureInput(raw: string): ParsedCapture {
@@ -837,12 +804,71 @@ function parseCaptureInput(raw: string): ParsedCapture {
   }
   const decisions: CaptureDecisionInput[] = [];
   const missingKind: number[] = [];
-  parsed.forEach((item, index) => {
-    const input = validateCaptureItem(item, index);
-    decisions.push(input);
-    if (input.kind === undefined) missingKind.push(index);
-  });
-  return { decisions, missingKind };
+  try {
+    parsed.forEach((item, index) => {
+      const input = validateCaptureItem(item, index);
+      decisions.push(input);
+      if (input.kind === undefined) missingKind.push(index);
+    });
+  } catch (error: unknown) {
+    // EVERY per-item validation refuses the whole batch, and always has. Naming
+    // the offending item without saying what became of the others is what lets
+    // "decision[1] is bad" be read as "the rest landed" -- the exact misreading
+    // the `kind` requirement exists to remove. So the disposition is appended
+    // here, once, rather than written into each validator's message.
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${detail} ${batchDisposition(parsed.length)}`, { cause: error });
+  }
+  if (missingKind.length > 0) {
+    throw new Error(`${missingKindError(missingKind)} ${batchDisposition(parsed.length)}`);
+  }
+  return { decisions };
+}
+
+/** How many offending indices the error lists before collapsing the rest. */
+const MISSING_KIND_SAMPLE = 10;
+
+/**
+ * The one sentence every capture refusal ends with. It states the disposition
+ * of the BATCH, not of the item that was wrong, because those are the two facts
+ * a caller needs and only one of them was ever being reported.
+ */
+function batchDisposition(total: number): string {
+  return `Nothing was written: all ${total} item(s) in this batch were refused.`;
+}
+
+/**
+ * `basou decision record` is deliberately NOT held to a declared vessel. Its
+ * vessel is the `--track` flag, which cannot be "omitted" in the same sense --
+ * there is no way to state "explicitly not a track". Nor is the asymmetry
+ * two-sided: `decision_recorded` has THREE writers, and the largest of them
+ * cannot declare a vessel at all. Measured over a real store of 1684 such
+ * events: the transcript importer wrote 1157 (69%), always without a `kind`
+ * and always meaning a decision; `capture` wrote 513 (30%); `record` wrote 14
+ * (0.8%). "Every writer declares its vessel" was therefore never on the table.
+ * What closes the `record` gap instead is its receipt, which names the vessel
+ * it used -- see `printDecisionResult`.
+ *
+ * Refusing the batch rather than writing the valid items keeps `capture`
+ * consistent with every other validation it does, and keeps a success line from
+ * ever meaning "fewer than you handed me". The caller learns that from
+ * {@link batchDisposition}, which every refusal ends with.
+ *
+ * At most {@link MISSING_KIND_SAMPLE} indices are listed; the rest collapse
+ * into a count. The cap keeps one diagnostic readable, and nothing is hidden
+ * silently because the overflow is stated. Measured batch sizes top out at 10,
+ * so it almost never engages.
+ */
+function missingKindError(indices: readonly number[]): string {
+  const shown = indices.slice(0, MISSING_KIND_SAMPLE).map((i) => `decision[${i}]`);
+  const overflow = indices.length - shown.length;
+  const list = overflow > 0 ? `${shown.join(", ")} (... +${overflow} more)` : shown.join(", ");
+  return (
+    `${list}: "kind" is required. It names the vessel: "track" for an unfinished ` +
+    "direction, which orient keeps in its open-track list until you close it with " +
+    "'basou decision void', or \"decision\" for a settled point-in-time call, which " +
+    'the next decision replaces. Add "kind" to every item and re-run.'
+  );
 }
 
 function validateCaptureItem(item: unknown, index: number): CaptureDecisionInput {
@@ -860,18 +886,23 @@ function validateCaptureItem(item: unknown, index: number): CaptureDecisionInput
   if (typeof obj.title !== "string" || isBlank(obj.title)) {
     throw new Error(`decision[${index}].title must be a non-empty string.`);
   }
-  const out: CaptureDecisionInput = { title: obj.title };
+  if (obj.kind !== undefined && obj.kind !== "decision" && obj.kind !== "track") {
+    throw new Error(`decision[${index}].kind must be "decision" or "track", got '${obj.kind}'.`);
+  }
+  // A MISSING `kind` is not rejected here. It is collected by the caller and
+  // reported for the whole batch at once, because an agent that forgot the
+  // field almost certainly forgot it on every item, and failing on the first
+  // one would make it re-pipe the batch once per item to discover that.
+  // A kind present but INVALID still fails here: that is a typo in one item,
+  // not a shape the whole batch shares.
+  const out = { title: obj.title } as CaptureDecisionInput;
   if (obj.kind !== undefined) {
-    if (obj.kind !== "decision" && obj.kind !== "track") {
-      throw new Error(`decision[${index}].kind must be "decision" or "track", got '${obj.kind}'.`);
-    }
     // BOTH declared vessels are carried onto the event. Normalizing an explicit
     // "decision" back to omission is what made the two cases indistinguishable
     // ON DISK: nothing could tell a decision someone MEANT from one whose `kind`
     // was forgotten -- not a reader, not a later audit, not this command's own
     // --json output. Every reader branches on `kind === "track"` only, so
-    // persisting "decision" changes no behaviour, and it is what makes the
-    // deprecation window below recoverable instead of merely polite.
+    // persisting "decision" changes no behaviour.
     out.kind = obj.kind;
   }
   if (obj.rationale !== undefined) {
@@ -981,27 +1012,24 @@ function captureItemToPayload(item: CaptureResultItem): Record<string, unknown> 
 
 /**
  * Dry run only: read the declared vessel back BEFORE anything is written, so a
- * caller who meant "track" can still say so. Every state is named, including
- * the undeclared one, because the point of the line is to confirm a
- * declaration and an absent marker cannot confirm anything.
+ * caller who meant "track" can still say so. Both states are named, because the
+ * point of the line is to confirm a declaration and an absent marker cannot
+ * confirm anything. There is no third state to name any more: the parser
+ * refuses a batch that declares no vessel.
  */
-function previewKindMarker(kind: "decision" | "track" | undefined): string {
-  if (kind === "track") return " [TRACK]";
-  return kind === "decision" ? " [DECISION]" : " [NO KIND]";
+function previewKindMarker(kind: "decision" | "track"): string {
+  return kind === "track" ? " [TRACK]" : " [DECISION]";
 }
 
 /**
  * After the write: mark what is not the settled default. A track is marked
- * because it behaves differently (it resurfaces); an UNDECLARED item is marked
- * because it is the deprecated form and the receipt in the transcript is the
- * only place the operator will see it -- the default flow pipes JSON with no
- * dry run, so the preview above is never printed. A declared decision is left
- * bare, the same convention decisions.md uses. The [NO KIND] arm goes away with
- * the deprecation, leaving the two-state line this was always meant to be.
+ * because it behaves differently (it stays in the open-track list until
+ * closed); a decision is left bare, the same convention decisions.md uses. The
+ * `[NO KIND]` arm went away with the deprecation, leaving the two-state line
+ * this was always meant to be.
  */
-function recordedKindMarker(kind: "decision" | "track" | undefined): string {
-  if (kind === "track") return " [TRACK]";
-  return kind === "decision" ? "" : " [NO KIND]";
+function recordedKindMarker(kind: "decision" | "track"): string {
+  return kind === "track" ? " [TRACK]" : "";
 }
 
 function printCapturePreview(

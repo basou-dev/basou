@@ -182,12 +182,23 @@ work that a caller has no cheap way to reproduce.
 > Example: `"kind"` on `basou decision capture`. It was optional, and omitting
 > it filed an unfinished direction as a settled decision, which never enters the
 > open-track list: the next decision takes its place, instead of it being held
-> until closed — a failure with no symptom. `0.47` warns on every omission and still writes the
-> item; a later release makes it an error. Through the warning release an
-> explicit `"kind"` is carried onto the event, so an item written WITHOUT a
-> declared vessel stays distinguishable from one written with it. Events
-> recorded before `0.47` predate that distinction: an absent `kind` there means
-> only that nothing was recorded, not that nothing was declared.
+> until closed — a failure with no symptom. `0.47` warned on every omission and
+> still wrote the item; it is now an error, and omitting it on ANY item refuses
+> the whole batch. Through the warning release an explicit `"kind"` was carried
+> onto the event, so an item written WITHOUT a declared vessel stays
+> distinguishable from one written with it. Events recorded before `0.47`
+> predate that distinction: an absent `kind` there means only that nothing was
+> recorded, not that nothing was declared.
+
+Refusing the whole batch, rather than writing the valid items and reporting the
+rejected indices, is what keeps the success line honest: a partial write reports
+success while holding fewer items than the caller handed over, which is the same
+shape of silent miscount the requirement was introduced to remove. It also keeps
+the rule consistent with every other validation this command performs — a
+malformed field has always refused the batch. Every refusal ends by naming the
+number of items NOT written, so it can never be read as a partial success, and a
+missing `"kind"` names the offending indices — up to ten, with any remainder
+collapsed into a stated count.
 
 A field that becomes required on one command does not oblige every command that
 writes the same event to grow the same requirement. `decision_recorded` has
