@@ -1212,11 +1212,19 @@ function printDecisionResult(options: DecisionRecordOptions, result: DecisionPri
   // nudge: it states what was written, which is why it is not gated the way
   // `trackNudge` is. It is appended, so the line up to the rationale is
   // unchanged.
+  //
+  // It claims nothing about how `orient` RENDERS a decision, deliberately. An
+  // earlier wording said a decision "will not keep resurfacing in orient until
+  // closed"; that is false. `orient` selects the latest non-voided decision
+  // whatever its kind and prints it every run, so a plain decision does keep
+  // reappearing -- until a NEWER decision displaces it, which closing has
+  // nothing to do with. The durable difference is membership of the open-track
+  // list, which is the only thing this says.
   const vesselSuffix =
     result.rich.kind === "track"
       ? ""
-      : " — a point-in-time decision; unlike a track it will not keep resurfacing" +
-        " in orient until closed (use --track for an unfinished direction)";
+      : " — a point-in-time decision, not an open track (use --track for a" +
+        " direction that should keep coming back until you close it)";
   if (result.mode === "ad-hoc") {
     console.log(
       `Recorded ${trackPrefix}${result.decisionId} in ad-hoc session ${sid}${rationaleSuffix}${vesselSuffix}`,
