@@ -936,6 +936,37 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     await expectNothingWritten(repo);
   });
 
+  it("cap-track-6f: a NON-kind validation error also states the batch disposition", async () => {
+    // The finding this pins: naming the bad item without saying what became of
+    // the others is what lets "decision[0] is bad" be read as "the rest landed".
+    // Atomicity was never the problem here; the silence about it was.
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    const input = JSON.stringify([
+      { title: "", kind: "decision" },
+      { title: "unfinished", kind: "track" },
+    ]);
+    await runDecisionCapture({}, captureCtx(repo, input));
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("decision[0].title must be a non-empty string.");
+    expect(stderr).toContain("Nothing was written: all 2 item(s) in this batch were refused.");
+    await expectNothingWritten(repo);
+  });
+
+  it("cap-track-6g: the index list caps at ten and states the remainder", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const err = captureStderr();
+    const input = JSON.stringify(Array.from({ length: 12 }, (_, i) => ({ title: `item ${i}` })));
+    await runDecisionCapture({}, captureCtx(repo, input));
+    const stderr = joinCalls(err);
+    expect(stderr).toContain("decision[9] (... +2 more)");
+    expect(stderr).not.toContain("decision[10]");
+    // The TOTAL is the batch size, not the number of offending items.
+    expect(stderr).toContain("Nothing was written: all 12 item(s) in this batch were refused.");
+  });
+
   it("cap-track-6e: every offending index is named, not just the first", async () => {
     // An agent that forgot the field forgot it everywhere; failing on the first
     // index would make it re-pipe the batch once per item to learn that.

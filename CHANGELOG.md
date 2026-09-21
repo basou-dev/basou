@@ -20,10 +20,14 @@ All notable changes to **basou** are recorded here. The project follows
   indices was considered and rejected: it reports success while holding fewer
   items than the caller handed over, which is the same shape of silent miscount
   the requirement exists to remove, and it would give the exit code a new
-  "partially succeeded" meaning. The error names **every** offending index (an
-  agent that forgot the field forgot it on every item, and failing on the first
-  would make it re-pipe the batch once per item to learn that) and the number of
-  items NOT written, so a refusal cannot be read as a partial success.
+  The error names the offending indices (an agent that forgot the field forgot
+  it on every item, and failing on the first would make it re-pipe the batch
+  once per item to learn that), up to ten with the rest collapsed into a stated
+  count, and it ends with the number of items NOT written. **Every** capture
+  refusal now ends with that disposition, not just this one: a malformed title
+  has always refused the whole batch too, and naming the bad item without saying
+  what became of the others is what let "decision[1] is bad" be read as "the
+  rest landed".
 
   `--dry-run` refuses too and prints no preview: a dry run that listed the items
   would read as "this is what will be written".

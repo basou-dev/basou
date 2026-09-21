@@ -195,9 +195,10 @@ rejected indices, is what keeps the success line honest: a partial write reports
 success while holding fewer items than the caller handed over, which is the same
 shape of silent miscount the requirement was introduced to remove. It also keeps
 the rule consistent with every other validation this command performs — a
-malformed field has always refused the batch. The error names every offending
-index and the number of items NOT written, so a refusal can never be read as a
-partial success.
+malformed field has always refused the batch. Every refusal ends by naming the
+number of items NOT written, so it can never be read as a partial success, and a
+missing `"kind"` names the offending indices — up to ten, with any remainder
+collapsed into a stated count.
 
 A field that becomes required on one command does not oblige every command that
 writes the same event to grow the same requirement. `decision_recorded` has

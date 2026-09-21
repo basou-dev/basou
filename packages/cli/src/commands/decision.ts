@@ -804,19 +804,38 @@ function parseCaptureInput(raw: string): ParsedCapture {
   }
   const decisions: CaptureDecisionInput[] = [];
   const missingKind: number[] = [];
-  parsed.forEach((item, index) => {
-    const input = validateCaptureItem(item, index);
-    decisions.push(input);
-    if (input.kind === undefined) missingKind.push(index);
-  });
+  try {
+    parsed.forEach((item, index) => {
+      const input = validateCaptureItem(item, index);
+      decisions.push(input);
+      if (input.kind === undefined) missingKind.push(index);
+    });
+  } catch (error: unknown) {
+    // EVERY per-item validation refuses the whole batch, and always has. Naming
+    // the offending item without saying what became of the others is what lets
+    // "decision[1] is bad" be read as "the rest landed" -- the exact misreading
+    // the `kind` requirement exists to remove. So the disposition is appended
+    // here, once, rather than written into each validator's message.
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${detail} ${batchDisposition(parsed.length)}`, { cause: error });
+  }
   if (missingKind.length > 0) {
-    throw new Error(missingKindError(missingKind, parsed.length));
+    throw new Error(`${missingKindError(missingKind)} ${batchDisposition(parsed.length)}`);
   }
   return { decisions };
 }
 
 /** How many offending indices the error lists before collapsing the rest. */
 const MISSING_KIND_SAMPLE = 10;
+
+/**
+ * The one sentence every capture refusal ends with. It states the disposition
+ * of the BATCH, not of the item that was wrong, because those are the two facts
+ * a caller needs and only one of them was ever being reported.
+ */
+function batchDisposition(total: number): string {
+  return `Nothing was written: all ${total} item(s) in this batch were refused.`;
+}
 
 /**
  * `basou decision record` is deliberately NOT held to a declared vessel. Its
@@ -830,15 +849,17 @@ const MISSING_KIND_SAMPLE = 10;
  * What closes the `record` gap instead is its receipt, which names the vessel
  * it used -- see `printDecisionResult`.
  *
- * The whole batch is refused, and the message has to say so in the same breath
- * as the cause -- otherwise "1 of 5 was wrong" reads as "4 were written", and
- * the caller re-pipes only the fixed item and silently loses the other four.
- * Naming the count of items NOT written is what makes that unreadable the wrong
- * way. Refusing the batch rather than writing the valid items keeps `capture`
+ * Refusing the batch rather than writing the valid items keeps `capture`
  * consistent with every other validation it does, and keeps a success line from
- * ever meaning "fewer than you handed me".
+ * ever meaning "fewer than you handed me". The caller learns that from
+ * {@link batchDisposition}, which every refusal ends with.
+ *
+ * At most {@link MISSING_KIND_SAMPLE} indices are listed; the rest collapse
+ * into a count. The cap keeps one diagnostic readable, and nothing is hidden
+ * silently because the overflow is stated. Measured batch sizes top out at 10,
+ * so it almost never engages.
  */
-function missingKindError(indices: readonly number[], total: number): string {
+function missingKindError(indices: readonly number[]): string {
   const shown = indices.slice(0, MISSING_KIND_SAMPLE).map((i) => `decision[${i}]`);
   const overflow = indices.length - shown.length;
   const list = overflow > 0 ? `${shown.join(", ")} (... +${overflow} more)` : shown.join(", ");
@@ -846,8 +867,7 @@ function missingKindError(indices: readonly number[], total: number): string {
     `${list}: "kind" is required. It names the vessel: "track" for an unfinished ` +
     "direction, which orient keeps in its open-track list until you close it with " +
     "'basou decision void', or \"decision\" for a settled point-in-time call, which " +
-    "the next decision replaces. Nothing was written: all " +
-    `${total} item(s) in this batch were refused. Add "kind" to every item and re-run.`
+    'the next decision replaces. Add "kind" to every item and re-run.'
   );
 }
 
