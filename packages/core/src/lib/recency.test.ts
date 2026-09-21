@@ -89,6 +89,68 @@ describe("pickLatestSubstantiveEntry", () => {
     expect(pickLatestSubstantiveEntry([work, note], counts)?.sessionId).toBe("work");
   });
 
+  // A subagent invocation is imported as its own session and is newer than the
+  // session that launched it, so recency alone hands "where am I" to the child.
+  const span = (id: string, startedAt: string, endedAt?: string) => ({
+    sessionId: id,
+    session: {
+      session: {
+        started_at: startedAt,
+        ...(endedAt !== undefined ? { ended_at: endedAt } : {}),
+        related_files: [] as string[],
+      },
+    },
+  });
+
+  it("skips a session that ran entirely inside another working session", () => {
+    const parent = span("parent", "2026-05-08T10:00:00Z", "2026-05-08T14:00:00Z");
+    const child = span("child", "2026-05-08T10:50:00Z", "2026-05-08T10:52:00Z"); // newer start
+    const counts = commands({ parent: 262, child: 3 });
+    expect(pickLatestSubstantiveEntry([parent, child], counts)?.sessionId).toBe("parent");
+  });
+
+  it("keeps a session that only overlaps -- containment must be total", () => {
+    const first = span("first", "2026-05-08T10:00:00Z", "2026-05-08T12:00:00Z");
+    const overlapping = span("overlapping", "2026-05-08T11:00:00Z", "2026-05-08T13:00:00Z");
+    const counts = commands({ first: 262, overlapping: 5 });
+    expect(pickLatestSubstantiveEntry([first, overlapping], counts)?.sessionId).toBe("overlapping");
+  });
+
+  it("does not let two identical windows exclude each other", () => {
+    const a = span("a", "2026-05-08T10:00:00Z", "2026-05-08T12:00:00Z");
+    const b = span("b", "2026-05-08T10:00:00Z", "2026-05-08T12:00:00Z");
+    // An older, disjoint session that must NOT win. Without it the fallback
+    // ("no outermost -> rank the working set") returns a or b either way, and
+    // the assertion would hold even if identical windows did exclude each other.
+    const older = span("older", "2026-05-08T08:00:00Z", "2026-05-08T09:00:00Z");
+    const counts = commands({ a: 10, b: 10, older: 300 });
+    expect(["a", "b"]).toContain(pickLatestSubstantiveEntry([a, b, older], counts)?.sessionId);
+  });
+
+  it("does not drop a still-live session, whose end is unknown", () => {
+    const earlier = span("earlier", "2026-05-08T08:00:00Z", "2026-05-08T14:00:00Z");
+    // Newest, and its window would sit inside `earlier` if an unknown end were
+    // read as "ended within". It must still win.
+    const live = span("live", "2026-05-08T10:00:00Z");
+    const counts = commands({ earlier: 300, live: 262 });
+    expect(pickLatestSubstantiveEntry([earlier, live], counts)?.sessionId).toBe("live");
+  });
+
+  it("a still-live session does not contain a session that ended inside it", () => {
+    const live = span("live", "2026-05-08T10:00:00Z");
+    const later = span("later", "2026-05-08T10:50:00Z", "2026-05-08T10:52:00Z");
+    const counts = commands({ live: 262, later: 3 });
+    // `live` has no known end, so it cannot be shown to contain anything.
+    expect(pickLatestSubstantiveEntry([live, later], counts)?.sessionId).toBe("later");
+  });
+
+  it("keeps a standalone session that no other session contains", () => {
+    const earlier = span("earlier", "2026-05-08T08:00:00Z", "2026-05-08T09:00:00Z");
+    const standalone = span("standalone", "2026-05-08T10:00:00Z", "2026-05-08T11:00:00Z");
+    const counts = commands({ earlier: 262, standalone: 4 });
+    expect(pickLatestSubstantiveEntry([earlier, standalone], counts)?.sessionId).toBe("standalone");
+  });
+
   it("keeps a file-touching session substantive even with no command count", () => {
     const files = entry("files", "2026-05-08T09:00:00Z", ["a"]);
     const newer = entry("newer", "2026-05-08T11:00:00Z", []);
