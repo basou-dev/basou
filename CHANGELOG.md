@@ -28,6 +28,32 @@ All notable changes to **basou** are recorded here. The project follows
   `docs/spec/compatibility.md` now states this next to the deprecation path it
   governs.
 
+### Fixed
+
+- **Three places said a point-in-time decision does not come back in `orient`.
+  It does.** The `decision capture` warning on an omitted `"kind"` said it
+  "will NOT resurface in orient", the command's own help said such an item
+  "simply never comes back", and `docs/spec/compatibility.md` said it "never
+  resurfaced". `orient` selects the latest non-voided decision **whatever its
+  kind** and prints it on every run, and the recent-session digest lists a
+  session's decisions the same way; `handoff` behaves likewise. What is actually
+  true is narrower: a decision never enters the open-track list, so the next
+  decision takes its place instead of it being held until closed. Note the
+  subject: it is a newer DECISION that displaces it, not activity in general.
+  Work that records no decision leaves it sitting in the latest slot, gaining
+  only a staleness note. All three texts now say that, and nothing more.
+
+  The wording mattered because it is what the deprecation is FOR. An agent told
+  that a mis-filed track "never comes back" is being told the record is lost,
+  when it is really only unheld — a different thing to act on, and the one the
+  `"kind"` field exists to let it choose. The five tests that pinned the warning
+  by a fragment of its prose now pin it by its signature, so a later rewording
+  cannot quietly unpin them.
+
+  The `0.47.0` notes below carry the same overstatement and are deliberately
+  left as they were: they record what that release shipped, and rewriting a
+  released section is what the CHANGELOG history guard exists to prevent.
+
 ## 0.47.0 — 2026-09-20
 
 ### Deprecated
