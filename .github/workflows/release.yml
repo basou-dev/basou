@@ -292,11 +292,15 @@ jobs:
               break
             fi
             elapsed=$(($(date +%s) - propagation_started_at))
-            if [ "$elapsed" -ge "$propagation_deadline_seconds" ]; then
+            # Bound when an attempt may START, not when one may fail. Checking
+            # only the failure time let a failure one second inside the budget
+            # sleep straight through it and begin another install after the
+            # deadline had already passed.
+            if [ "$((elapsed + propagation_poll_seconds))" -ge "$propagation_deadline_seconds" ]; then
               # Say how long it actually waited. The previous message did not,
               # so diagnosing the repeat failures meant reconstructing step
               # timings from the Actions API instead of reading the log.
-              echo "::error::@basou/core@${version} / @basou/cli@${version} / @basou/sdk@${version} are still not installable ${elapsed}s after the first attempt (${attempt} attempts). The publish jobs already succeeded, so the packages exist; this is either propagation beyond the ${propagation_deadline_seconds}s budget or a registry problem."
+              echo "::error::pnpm add still failed ${elapsed}s after the first attempt (${attempt} attempts) for @basou/core@${version} / @basou/cli@${version} / @basou/sdk@${version}. The publish jobs already succeeded, so those versions were published. Propagation beyond the ${propagation_deadline_seconds}s budget is the likeliest cause, but this loop retries on ANY non-zero exit -- read the pnpm output above for the error that actually occurred."
               # This job is continue-on-error, so the run as a whole still
               # reports success -- a successful publish must not be shown as a
               # failed release. That makes this the only place the miss is
@@ -305,7 +309,7 @@ jobs:
               {
                 echo "### The basou-site docs bump pull request was NOT opened"
                 echo
-                echo "\`pnpm add\` could not resolve \`@basou/core@${version}\` / \`@basou/cli@${version}\` / \`@basou/sdk@${version}\` within ${elapsed}s (${attempt} attempts)."
+                echo "\`pnpm add\` failed for \`@basou/core@${version}\` / \`@basou/cli@${version}\` / \`@basou/sdk@${version}\` after ${attempt} attempts over ${elapsed}s. npm propagation is the likeliest cause; the job log carries the pnpm error that actually occurred."
                 echo
                 echo "**The npm publish itself succeeded.** Only this follow-on pull request is missing, so basou.dev keeps documenting the previous version until it is opened and merged."
                 echo
