@@ -154,6 +154,10 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   // orientation renderer so the latest-decision staleness note fires identically (a
   // decision that real work continued past is not presented as current).
   let latestActivityAt: string | null = null;
+  // Commands per session, collected in the replay pass below so the
+  // latest-session ranking can measure work by commands as well as files
+  // without a second read of events.jsonl. See pickLatestSubstantiveEntry.
+  const commandCounts = new Map<string, number>();
   const noteActivity = (iso: string): void => {
     if (latestActivityAt === null || Date.parse(iso) > Date.parse(latestActivityAt)) {
       latestActivityAt = iso;
@@ -184,6 +188,8 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
               sessionId: entry.sessionId,
             });
           }
+        } else if (ev.type === "command_executed") {
+          commandCounts.set(entry.sessionId, (commandCounts.get(entry.sessionId) ?? 0) + 1);
         } else if (ev.type === "decision_voided") {
           voidedDecisionIds.add(ev.decision_id);
         } else if (ev.type === "task_created") {
@@ -289,7 +295,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   // bare resume/refresh session (e.g. 1 command, 0 files) that merely happens to
   // be newest — the latter hides the real-work session and disagrees with the
   // latest decision.
-  const latestSession = pickLatestSubstantiveEntry(liveEntries);
+  const latestSession = pickLatestSubstantiveEntry(liveEntries, commandCounts);
 
   // "Recently changed files" shows the files touched by the most recent
   // SUBSTANTIVE session — the same session surfaced as the last session above — so the section

@@ -33,28 +33,61 @@ export function isTrailingStale(latestActivityAt: string | null, recordedAt: str
 
 /** Minimal shape needed to rank a session for "representative latest session". */
 type RankableSessionEntry = {
+  sessionId: string;
   session: { session: { started_at: string; related_files?: readonly string[] } };
 };
 
 /**
+ * How many `command_executed` events each session recorded, by session id. A
+ * session absent from the map counts as zero.
+ */
+export type SessionCommandCounts = ReadonlyMap<string, number>;
+
+/**
+ * A `basou exec` / `run` wrapper session records exactly one command and no
+ * files -- the "1 command, 0 files" case this ranking exists to skip -- so a
+ * session counts as work only when it ran MORE than this many commands.
+ */
+const WRAPPER_SESSION_COMMAND_COUNT = 1;
+
+/**
  * Pick the session that should represent the latest / most informative work.
  *
- * A bare resume/refresh session (e.g. 1 command, 0 files) is the most RECENT
+ * A bare wrapper session (exactly 1 command, 0 files) is the most RECENT
  * session but the least informative; selecting it hides the real-work session
  * and makes the latest-session and latest-decision pointers disagree. So rank a
- * session that touched files ahead of one that did not, then break ties by
- * recency (started_at). The result is the most recent SUBSTANTIVE session,
- * falling back to the most recent session overall when none touched files.
+ * session that did work ahead of one that did not, then break ties by recency
+ * (started_at). The result is the most recent WORKING session, falling back to
+ * the most recent session overall when none qualifies.
+ *
+ * "Did work" is commands run OR files touched -- not files alone. Files alone
+ * under-counts, because the importer fills `related_files` from Edit / Write /
+ * NotebookEdit tool calls only: an agent that edits through the shell (a
+ * heredoc, `sed -i`, a script) records commands and no files. Measured on a
+ * real 1205-session store, 307 sessions ran commands with zero `related_files`,
+ * while ZERO sessions touched files without running commands -- so the command
+ * count strictly contains the old signal, and widening to it cannot demote a
+ * session the old rule promoted. Before this, a session that cut a release
+ * entirely through the shell ranked below a two-day-old one.
+ *
+ * `commandCounts` is required rather than optional on purpose: a caller that
+ * forgot it would silently fall back to the files-only ranking this exists to
+ * correct.
  *
  * Returns `undefined` for an empty list. Does not mutate the input.
  */
 export function pickLatestSubstantiveEntry<E extends RankableSessionEntry>(
   entries: readonly E[],
+  commandCounts: SessionCommandCounts,
 ): E | undefined {
+  const didWork = (e: E): number => {
+    if ((e.session.session.related_files?.length ?? 0) > 0) return 1;
+    return (commandCounts.get(e.sessionId) ?? 0) > WRAPPER_SESSION_COMMAND_COUNT ? 1 : 0;
+  };
   return [...entries].sort((a, b) => {
-    const aSubstantive = (a.session.session.related_files?.length ?? 0) > 0 ? 1 : 0;
-    const bSubstantive = (b.session.session.related_files?.length ?? 0) > 0 ? 1 : 0;
-    if (aSubstantive !== bSubstantive) return bSubstantive - aSubstantive;
+    const aWorked = didWork(a);
+    const bWorked = didWork(b);
+    if (aWorked !== bWorked) return bWorked - aWorked;
     return Date.parse(b.session.session.started_at) - Date.parse(a.session.session.started_at);
   })[0];
 }
