@@ -904,7 +904,11 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     const stderr = joinCalls(err);
     expect(stderr).toContain("decision[0]");
     expect(stderr).toContain(KIND_WARNING);
-    expect(stderr).toContain("open-track list");
+    // Assert the claim with its POLARITY, not just its topic: a bare
+    // "open-track list" is satisfied by the exact opposite sentence, which is
+    // how the previous wording stayed wrong for a whole release.
+    expect(stderr).toContain("never enters the open-track list");
+    expect(stderr).toContain("the next decision takes its place");
     expect(stderr).toContain('"kind": "track"');
     expect(stderr).toContain("ERROR in the next release");
     // Deprecated, not refused: losing an agent's last output would be worse.

@@ -181,7 +181,7 @@ work that a caller has no cheap way to reproduce.
 
 > Example: `"kind"` on `basou decision capture`. It was optional, and omitting
 > it filed an unfinished direction as a settled decision, which never enters the
-> open-track list and so is displaced by newer activity instead of being held
+> open-track list: the next decision takes its place, instead of it being held
 > until closed — a failure with no symptom. `0.47` warns on every omission and still writes the
 > item; a later release makes it an error. Through the warning release an
 > explicit `"kind"` is carried onto the event, so an item written WITHOUT a

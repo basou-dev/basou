@@ -37,9 +37,11 @@ All notable changes to **basou** are recorded here. The project follows
   resurfaced". `orient` selects the latest non-voided decision **whatever its
   kind** and prints it on every run, and the recent-session digest lists a
   session's decisions the same way; `handoff` behaves likewise. What is actually
-  true is narrower: a decision never enters the open-track list, so newer
-  activity displaces it instead of it being held until closed. All three now say
-  that, and nothing more.
+  true is narrower: a decision never enters the open-track list, so the next
+  decision takes its place instead of it being held until closed. Note the
+  subject: it is a newer DECISION that displaces it, not activity in general.
+  Work that records no decision leaves it sitting in the latest slot, gaining
+  only a staleness note. All three texts now say that, and nothing more.
 
   The wording mattered because it is what the deprecation is FOR. An agent told
   that a mis-filed track "never comes back" is being told the record is lost,

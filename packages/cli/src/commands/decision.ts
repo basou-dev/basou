@@ -189,7 +189,7 @@ point-in-time call (surfaced only as the latest). Every other field is optional.
 DEPRECATED: omitting "kind" still writes the item, as a decision, but warns --
 and becomes an ERROR in the next release. It has no default because getting it
 wrong fails silently: a track filed as a decision never enters the open-track
-list, so nothing holds it in front of you once newer activity displaces it.
+list, so nothing holds it there -- the next decision simply takes its place.
 All decisions are written into one ad-hoc session timestamped now, so
 orientation surfaces them as the latest decisions. Run from a workspace-view
 directory and it resolves to the planning repo, like 'basou orient' /
@@ -301,8 +301,9 @@ function warnMissingKind(
     const title = (decisions[index]?.title ?? "").trim();
     console.error(
       `basou: decision[${index}] ("${title.slice(0, 40)}") declares no "kind" — it is recorded ` +
-        "as a point-in-time decision: newer activity displaces it, and it never " +
-        "enters the open-track list orient shows every session until closed. Set " +
+        "as a point-in-time decision: the next decision takes its place, and it " +
+        "never enters the open-track list orient shows every session until closed. " +
+        "Set " +
         '"kind": "track" for an unfinished direction, or "kind": "decision" to say it is ' +
         "settled. Omitting it becomes an ERROR in the next release.",
     );
