@@ -891,6 +891,11 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     expect(stdout).toMatch(/- decision_[A-Z0-9]+: undeclared \[NO KIND\]$/m);
   });
 
+  // Pin the warning by its signature, not by a fragment of its prose: these five
+  // assertions only need to know WHETHER it fired. cap-track-6 below is the one
+  // place the message content itself is checked.
+  const KIND_WARNING = 'declares no "kind"';
+
   it("cap-track-6: an omitted kind warns, names the index, and still writes", async () => {
     const repo = await setupInitedRepo();
     captureStdout();
@@ -898,7 +903,8 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title: "no vessel" }])));
     const stderr = joinCalls(err);
     expect(stderr).toContain("decision[0]");
-    expect(stderr).toContain("will NOT resurface");
+    expect(stderr).toContain(KIND_WARNING);
+    expect(stderr).toContain("open-track list");
     expect(stderr).toContain('"kind": "track"');
     expect(stderr).toContain("ERROR in the next release");
     // Deprecated, not refused: losing an agent's last output would be worse.
@@ -925,7 +931,7 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
       { dryRun: true },
       captureCtx(repo, JSON.stringify([{ title: "no vessel" }])),
     );
-    expect(joinCalls(err)).toContain("will NOT resurface");
+    expect(joinCalls(err)).toContain(KIND_WARNING);
   });
 
   const DECLARED_QUIET: ReadonlyArray<[string, Record<string, unknown>]> = [
@@ -938,7 +944,7 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
       captureStdout();
       const err = captureStderr();
       await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([item])));
-      expect(joinCalls(err)).not.toContain("will NOT resurface");
+      expect(joinCalls(err)).not.toContain(KIND_WARNING);
     });
   }
 
@@ -959,7 +965,7 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
       captureStdout();
       const err = captureStderr();
       await doRunDecisionCapture({}, captureCtx(repo, JSON.stringify([{ title }])));
-      expect(joinCalls(err)).toContain("will NOT resurface");
+      expect(joinCalls(err)).toContain(KIND_WARNING);
     });
   }
 
@@ -971,7 +977,7 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
       { title: "Drop the [TRACK] marker from decisions.md", kind: "decision" },
     ]);
     await doRunDecisionCapture({}, captureCtx(repo, input));
-    expect(joinCalls(err)).not.toContain("will NOT resurface");
+    expect(joinCalls(err)).not.toContain(KIND_WARNING);
     const decision = (await readAdHocEvents(repo)).find(
       (e) => e.type === "decision_recorded",
     ) as Record<string, unknown>;
