@@ -489,10 +489,71 @@ describe("doRunDecisionRecord (rich fields)", () => {
     expect(decision.kind).toBe("track");
   });
 
+  it("dec-rich-vessel-1: the non-track receipt names the vessel it used", async () => {
+    // The escape this closes: an agent that trips the capture-side rule for an
+    // undeclared `kind` can reach for `record`, where leaving `--track` off
+    // files the same thing as a decision and used to say nothing about it.
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await doRunDecisionRecord({ title: "settled" }, { cwd: repo, ...FIXED_CTX });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("Recorded decision_");
+    expect(stdout).toContain("a point-in-time decision, not an open track");
+    expect(stdout).toContain("--track");
+  });
+
+  it("dec-rich-vessel-2: a track receipt names its vessel once and does not carry the other arm", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await doRunDecisionRecord({ title: "the track", track: true }, { cwd: repo, ...FIXED_CTX });
+    const stdout = joinCalls(out);
+    // Match the WHOLE line, not a substring: "once" is part of the claim, and a
+    // receipt printed twice would satisfy a `toContain` pair just as well.
+    expect(stdout).toMatch(/^Recorded track decision_[A-Z0-9]+ in ad-hoc session [A-Z0-9]+$/);
+    expect(stdout).not.toContain("point-in-time");
+  });
+
+  it("dec-rich-vessel-2b: the attached receipt carries the vessel too, not just the ad-hoc one", async () => {
+    // The two receipts are built by separate template literals, so the suffix
+    // can be dropped from one arm while the other keeps it.
+    const repo = await setupInitedRepo();
+    const sid = SES("DV2");
+    await createSession(repo, { id: sid, status: "running" });
+    const out = captureStdout();
+    await doRunDecisionRecord({ title: "settled", session: sid }, { cwd: repo, ...FIXED_CTX });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("(running)");
+    expect(stdout).toContain("a point-in-time decision, not an open track");
+    expect(stdout).toContain("--track");
+  });
+
+  it("dec-rich-vessel-3: --json output is untouched by the receipt suffix", async () => {
+    // The suffix is a receipt for a reader, not a claim on disk: an absent
+    // `kind` must keep meaning "nobody said", in the JSON summary as on the
+    // event.
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await doRunDecisionRecord({ title: "settled", json: true }, { cwd: repo, ...FIXED_CTX });
+    const raw = joinCalls(out);
+    expect(raw).not.toContain("point-in-time");
+    const payload = JSON.parse(raw) as Record<string, unknown>;
+    expect(payload.kind).toBeUndefined();
+
+    // ... and on the event itself. The receipt is for a reader; the absence on
+    // disk is the contract, so pin it here rather than trusting the summary.
+    const sid = await findAdHocSessionId(repo);
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const decision = events.find((e) => e.type === "decision_recorded") as Record<string, unknown>;
+    expect(decision.kind).toBeUndefined();
+  });
+
   it("dec-rich-track-marker: the record path deliberately does NOT warn on a marker in the title", async () => {
-    // `--track` sits next to `--title` in the option list, and there is no way to
-    // declare "explicitly not a track" — so the capture-side guard would fire
-    // unsilenceably on any title that merely names the marker.
+    // There is no way to declare "explicitly not a track" here, so the
+    // capture-side guard would fire unsilenceably on any title that merely
+    // names the marker. The receipt names the vessel instead (dec-rich-vessel-1).
     const repo = await setupInitedRepo();
     captureStdout();
     const err = captureStderr();

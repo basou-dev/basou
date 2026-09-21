@@ -3,6 +3,31 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`basou decision record` now names the vessel on its non-track receipt.**
+  `--track` already named its own (`Recorded track decision_...`); the other arm
+  named nothing, so the one command that cannot state "explicitly not a track"
+  was also the one that never reported which vessel it had used. That arm is
+  what an agent reaches for after `decision capture` refuses an undeclared
+  `"kind"`, and a silent re-filing there would be the same failure the
+  deprecation exists to remove. The line is appended to, so everything up to the
+  rationale is unchanged, and `--json` output is untouched: an absent `kind`
+  must keep meaning "nobody said", in the summary as on the event.
+
+  `record` is deliberately NOT held to a declared vessel. `decision_recorded`
+  has three writers and the largest of them cannot declare one at all — measured
+  over a real store of 1684 such events, the transcript importer wrote 1157
+  (69%), always without a `kind` and always meaning a decision; `capture` wrote
+  513 (30%); `record` wrote 14 (0.8%). "Every writer declares its vessel" was
+  therefore never on the table, and requiring it of `record` alone would mean a
+  new flag on a CLI surface the `0.x` line treats as frozen, to guard the
+  thinnest of the three writers while leaving the widest one untouched.
+  `docs/spec/compatibility.md` now states this next to the deprecation path it
+  governs.
+
 ## 0.47.0 — 2026-09-20
 
 ### Deprecated
