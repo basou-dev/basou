@@ -269,19 +269,58 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Pin exactly to the version just published by the jobs above. npm
-          # may need a moment to propagate the new version, so retry briefly.
-          for attempt in 1 2 3 4 5; do
+          # Pin exactly to the version just published by the jobs above. A
+          # freshly published version does not become visible to every npm edge
+          # at once, and the three packages do not settle together: on 0.39.0,
+          # 0.47.0 and 0.48.0 `pnpm add` still failed 76-86s after the last
+          # publish job finished and succeeded by 156-199s, with the
+          # unresolvable package alternating between @basou/cli and @basou/sdk.
+          # The previous 5-attempt loop gave up after ~62s -- just before the
+          # window in which the registry actually settles -- so it failed all
+          # three times and each release needed a manual `gh run rerun`. Retry
+          # against a deadline rather than an attempt count, so the budget is
+          # stated in seconds and cannot drift away from the loop bound. A
+          # long budget is free on the happy path: the first attempt wins and
+          # the loop never sleeps.
+          propagation_deadline_seconds=600
+          propagation_poll_seconds=20
+          propagation_started_at=$(date +%s)
+          attempt=0
+          while true; do
+            attempt=$((attempt + 1))
             if pnpm add -E "@basou/core@${version}" "@basou/cli@${version}" "@basou/sdk@${version}"; then
               break
             fi
-            if [ "$attempt" -eq 5 ]; then
-              echo "::error::@basou/core@${version} / @basou/cli@${version} / @basou/sdk@${version} are not installable after retries."
+            elapsed=$(($(date +%s) - propagation_started_at))
+            if [ "$elapsed" -ge "$propagation_deadline_seconds" ]; then
+              # Say how long it actually waited. The previous message did not,
+              # so diagnosing the repeat failures meant reconstructing step
+              # timings from the Actions API instead of reading the log.
+              echo "::error::@basou/core@${version} / @basou/cli@${version} / @basou/sdk@${version} are still not installable ${elapsed}s after the first attempt (${attempt} attempts). The publish jobs already succeeded, so the packages exist; this is either propagation beyond the ${propagation_deadline_seconds}s budget or a registry problem."
+              # This job is continue-on-error, so the run as a whole still
+              # reports success -- a successful publish must not be shown as a
+              # failed release. That makes this the only place the miss is
+              # stated, so state it where the run page shows it, and name the
+              # recovery command.
+              {
+                echo "### The basou-site docs bump pull request was NOT opened"
+                echo
+                echo "\`pnpm add\` could not resolve \`@basou/core@${version}\` / \`@basou/cli@${version}\` / \`@basou/sdk@${version}\` within ${elapsed}s (${attempt} attempts)."
+                echo
+                echo "**The npm publish itself succeeded.** Only this follow-on pull request is missing, so basou.dev keeps documenting the previous version until it is opened and merged."
+                echo
+                echo "Recover with:"
+                echo
+                echo "\`\`\`"
+                echo "gh run rerun ${GITHUB_RUN_ID} --failed"
+                echo "\`\`\`"
+              } >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
-            echo "Attempt ${attempt} failed; waiting for npm to propagate @basou/core@${version} / @basou/cli@${version} / @basou/sdk@${version}..."
-            sleep 15
+            echo "Attempt ${attempt} failed ${elapsed}s in; waiting ${propagation_poll_seconds}s for npm to propagate @basou/core@${version} / @basou/cli@${version} / @basou/sdk@${version}..."
+            sleep "$propagation_poll_seconds"
           done
+          echo "::notice::@basou/core + @basou/cli + @basou/sdk @${version} resolved after ${attempt} attempt(s), $(($(date +%s) - propagation_started_at))s into this step."
           pnpm gen:docs
           # Decide on a bump using only the paths the PR will actually stage.
           if git diff --quiet -- package.json pnpm-lock.yaml src/content/docs public/schemas; then
