@@ -3,6 +3,35 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **The session `handoff.md` and orientation name as the latest is now the
+  latest session that did WORK, measured by commands as well as files.** It was
+  measured by `related_files` alone, and the importer fills that field from
+  `Edit` / `Write` / `NotebookEdit` tool calls only -- so a session whose agent
+  edits through the shell (a heredoc, `sed -i`, a script) recorded commands and
+  no files, counted as empty, and lost to any older session that happened to
+  touch one. On a 1205-session store, 307 sessions ran commands with zero
+  `related_files` while zero sessions touched files without running commands, so
+  the command count strictly contains the old signal. A session counts as work
+  when it touched files or ran more than one command; exactly one command and no
+  files is a `basou exec` / `run` wrapper, which is the case this ranking has
+  always existed to skip.
+
+- **A session that ran entirely inside another working session's window is no
+  longer a candidate.** A `codex exec` review launched from inside a session is
+  imported as its own session and starts later, so recency alone handed the
+  answer to the subagent rather than to the work it was part of. Containment
+  must be proper -- strictly wider on at least one side -- or two sessions
+  sharing a window would exclude each other. A session with no known end is
+  neither container nor contained.
+
+- **A session whose `events.jsonl` cannot be replayed keeps its candidacy.** Its
+  command count is unknown, not zero, and reading that absence as proof the
+  session did nothing would state a fact the capture never established.
+
 ## 0.48.1 — 2026-09-21
 
 ### Changed
