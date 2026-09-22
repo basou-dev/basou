@@ -360,6 +360,13 @@ export async function summarizeOrientation(
   let latestActivityAt: string | null = null;
   let taskCreatedSeen = false;
   let latestNote: NoteRecord | null = null;
+  // Commands per session, collected in the replay pass below so the
+  // latest-session ranking can measure work by commands as well as files
+  // without a second read of events.jsonl. See pickLatestSubstantiveEntry.
+  const commandCounts = new Map<string, number>();
+  // Sessions whose events could not be replayed: their command count is
+  // unknown, not zero, and the ranking must not read that absence as idleness.
+  const unmeasuredSessions = new Set<string>();
   const noteActivity = (iso: string): void => {
     if (latestActivityAt === null || Date.parse(iso) > Date.parse(latestActivityAt)) {
       latestActivityAt = iso;
@@ -426,6 +433,8 @@ export async function summarizeOrientation(
           taskCreatedSeen = true;
         } else if (ev.type === "decision_voided") {
           voidedDecisionIds.add(ev.decision_id);
+        } else if (ev.type === "command_executed") {
+          commandCounts.set(entry.sessionId, (commandCounts.get(entry.sessionId) ?? 0) + 1);
         }
         // Only `next_step`-kind notes (from `basou note`) are resume hints; a
         // plain `basou session note` annotation (kind absent) is not surfaced.
@@ -446,6 +455,7 @@ export async function summarizeOrientation(
         if (counted) noteActivity(ev.occurred_at);
       }
     } catch {
+      unmeasuredSessions.add(entry.sessionId);
       input.onSessionSkip?.(entry.sessionId, "events_jsonl_unreadable");
     }
   }
@@ -600,7 +610,7 @@ export async function summarizeOrientation(
   // newest — the latter hides the real-work session and makes the last-session and
   // latest-decision pointers disagree. Freshness ("newest captured session", below) still uses
   // pure recency, so the staleness signal stays honest.
-  const latestEntry = pickLatestSubstantiveEntry(liveEntries);
+  const latestEntry = pickLatestSubstantiveEntry(liveEntries, commandCounts, unmeasuredSessions);
   // `label` is `z.string().optional()` in the session schema — a parsed session
   // is `string | undefined`, never `null`. So `?? null` only maps `undefined`,
   // and the formatter's `label !== null && label !== ""` is byte-identical to
