@@ -189,6 +189,97 @@ describe("observeSessionChanges", () => {
     expect(await observe()).toEqual([]);
   });
 
+  it("forgets a change that was COMMITTED and then restored to the base content", async () => {
+    await baseline();
+    await writeFile(join(repo, "README.md"), "# changed\n");
+    await git.add("README.md");
+    await git.commit("change it");
+    await writeFile(join(repo, "README.md"), "# init\n");
+    // The working tree still differs from HEAD, but nothing differs from the
+    // base -- which is what the session is measured against.
+    expect(await observe()).toEqual([]);
+  });
+
+  it("sees work committed in a repository that had NO commits when the session started", async () => {
+    const fresh = join(dir, "unborn");
+    await mkdir(fresh, { recursive: true });
+    const freshGit = fixtureSimpleGit(fresh);
+    await freshGit.init();
+    await freshGit.addConfig("user.email", "test@example.com");
+    await freshGit.addConfig("user.name", "test");
+    await recordSessionBaseline({
+      observationsDir,
+      repoRoots: [fresh],
+      externalId: "unborn-session",
+      nowIso: T0,
+    });
+    await writeFile(join(fresh, "a.ts"), "export const a = 1;\n");
+    await freshGit.add("a.ts");
+    await freshGit.commit("first commit of the session");
+    // The working tree is clean now; only a diff against the empty tree can
+    // still see the work.
+    const result = await observeSessionChanges({
+      observationsDir,
+      externalId: "unborn-session",
+      nowIso: T1,
+    });
+    expect((result?.repos[0]?.files ?? []).map((f) => f.path)).toEqual([join(fresh, "a.ts")]);
+  });
+
+  it("spells a non-ASCII path the same way in both passes, so the subtraction holds", async () => {
+    const name = "\u65e5\u672c\u8a9e.md";
+    await writeFile(join(repo, name), "one\n");
+    await git.add(name);
+    await git.commit("add it");
+    await writeFile(join(repo, name), "two\n"); // dirty BEFORE the session
+    await baseline();
+    // git diff quotes and octal-escapes this path by default while git status
+    // reports it raw; if the two disagree, the subtraction misses and the
+    // session claims a path that names no file.
+    expect(await observe()).toEqual([]);
+  });
+
+  it("names the files inside an untracked directory, not the directory", async () => {
+    await baseline();
+    await mkdir(join(repo, "newdir"), { recursive: true });
+    await writeFile(join(repo, "newdir", "x.ts"), "export const x = 1;\n");
+    expect(await observe()).toEqual([join(repo, "newdir", "x.ts")]);
+  });
+
+  it("does not report an untracked nested repository as a changed file", async () => {
+    await baseline();
+    await initRepo(join(repo, "nested"));
+    await writeFile(join(repo, "mine.ts"), "export const a = 1;\n");
+    // git never looks inside another repository, so it can only offer the
+    // directory -- which names no file.
+    expect(await observe()).toEqual([join(repo, "mine.ts")]);
+  });
+
+  it("observes every repository in the roster, not just the first", async () => {
+    const second = join(dir, "second");
+    const secondGit = await initRepo(second);
+    await recordSessionBaseline({
+      observationsDir,
+      repoRoots: [repo, second],
+      externalId: "multi-repo",
+      nowIso: T0,
+    });
+    await writeFile(join(repo, "first.ts"), "export const a = 1;\n");
+    await writeFile(join(second, "second.ts"), "export const b = 2;\n");
+    await secondGit.add("second.ts");
+    await secondGit.commit("committed in the second repo");
+
+    const result = await observeSessionChanges({
+      observationsDir,
+      externalId: "multi-repo",
+      nowIso: T1,
+    });
+    expect((result?.repos ?? []).map((r) => r.files.map((f) => f.path))).toEqual([
+      [join(repo, "first.ts")],
+      [join(second, "second.ts")],
+    ]);
+  });
+
   it("keeps the previous file list when the base no longer resolves", async () => {
     await baseline();
     await writeFile(join(repo, "work.ts"), "export const a = 1;\n");
@@ -224,10 +315,28 @@ describe("observeSessionChanges", () => {
 });
 
 describe("observeSessionChanges and basou's own store", () => {
-  it("never reports a file inside .basou, not even the observation it just wrote", async () => {
+  it("never reports a TRACKED .basou file, in a workspace that commits its store", async () => {
+    // The guard on the diff pass is the one that matters here: a workspace that
+    // keeps `.basou/` in git would otherwise have every session narrate
+    // basou's own bookkeeping back to it.
+    await mkdir(join(repo, ".basou"), { recursive: true });
+    await writeFile(join(repo, ".basou", "handoff.md"), "# before\n");
+    await git.add(".basou/handoff.md");
+    await git.commit("commit the store");
     await baseline();
-    await mkdir(join(repo, ".basou", "sessions"), { recursive: true });
-    await writeFile(join(repo, ".basou", "status.json"), "{}\n");
+
+    await writeFile(join(repo, ".basou", "handoff.md"), "# rewritten by basou\n");
+    await git.add(".basou/handoff.md");
+    await git.commit("basou rewrote its own file");
+    await writeFile(join(repo, "real-work.ts"), "export const a = 1;\n");
+
+    expect(await observe()).toEqual([join(repo, "real-work.ts")]);
+  });
+
+  it("never reports an UNTRACKED .basou file, including the observation it just wrote", async () => {
+    await baseline();
+    await mkdir(join(repo, ".basou", "tmp", "observations"), { recursive: true });
+    await writeFile(join(repo, ".basou", "tmp", "observations", "some-id.json"), "{}\n");
     await writeFile(join(repo, "real-work.ts"), "export const a = 1;\n");
     expect(await observe()).toEqual([join(repo, "real-work.ts")]);
   });

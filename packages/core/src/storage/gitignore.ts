@@ -8,7 +8,6 @@ const MARKER = "# Basou - default ignore";
 const BASOU_GITIGNORE_BLOCK =
   "# Basou - default ignore\n" +
   ".basou/logs/\n" +
-  ".basou/observations/\n" +
   ".basou/raw/\n" +
   ".basou/tmp/\n" +
   ".basou/locks/\n" +

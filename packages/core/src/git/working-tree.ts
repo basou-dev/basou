@@ -124,3 +124,93 @@ export async function readHeadSha(repoRoot: string): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Paths git does not track yet — the one thing `git diff <base>` cannot report,
+ * whatever base it is given.
+ *
+ * Returned as {@link FileChange} entries with status `added`, so a caller can
+ * union them with a diff without a second shape. Ignored files stay out, as
+ * they do in {@link getWorkingTreeChanges}.
+ *
+ * Without `--directory`, git names each file inside an untracked directory
+ * rather than the directory itself; a directory entry would become a
+ * `related_files` entry that names no file. One case is reported as a
+ * directory regardless: an untracked NESTED repository, which git will not
+ * look inside. Those entries are dropped — a nested repository is its own
+ * repository, and if it belongs to the workspace the roster names it and it is
+ * observed on its own terms.
+ *
+ * Same fixed error vocabulary as {@link getWorkingTreeChanges}.
+ */
+export async function getUntrackedFiles(repoRoot: string): Promise<FileChange[]> {
+  let git: SimpleGit;
+  try {
+    git = safeSimpleGit(repoRoot);
+  } catch (error: unknown) {
+    if (isGitNotFound(error)) {
+      throw new Error("Git executable not found in PATH. Install git first.", { cause: error });
+    }
+    throw new Error("Not a git repository", { cause: error });
+  }
+
+  let raw: string;
+  try {
+    // `-z` gives NUL-separated, UNQUOTED paths, matching what
+    // `core.quotePath=false` gives the diff side.
+    raw = await git.raw([
+      "-c",
+      "core.quotePath=false",
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+    ]);
+  } catch (error: unknown) {
+    if (isGitNotFound(error)) {
+      throw new Error("Git executable not found in PATH. Install git first.", { cause: error });
+    }
+    const message = error instanceof Error ? error.message : "";
+    if (/not a git repository/i.test(message)) {
+      throw new Error("Not a git repository", { cause: error });
+    }
+    throw new Error("Failed to read git status", { cause: error });
+  }
+
+  const changes: FileChange[] = [];
+  for (const path of raw.split("\0")) {
+    if (path.length === 0) continue;
+    // A trailing slash is a directory git would not descend into (a nested
+    // repository); naming it as a changed file would be a lie about a path.
+    if (path.endsWith("/")) continue;
+    changes.push({ path, status: "added" });
+  }
+  return changes.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/**
+ * The sha of the empty tree in this repository's object format, for use as the
+ * base of a repository that had NO commits when the session started.
+ *
+ * Diffing against it answers "everything that exists now is new", which is the
+ * truth for an unborn base — and it is the only way the work survives the
+ * session committing it, after which the working tree is clean and says
+ * nothing. Computed rather than hard-coded because the well-known constant is
+ * the sha-1 value and a sha-256 repository has a different one.
+ */
+export async function readEmptyTreeSha(repoRoot: string): Promise<string> {
+  let git: SimpleGit;
+  try {
+    git = safeSimpleGit(repoRoot);
+  } catch (error: unknown) {
+    if (isGitNotFound(error)) {
+      throw new Error("Git executable not found in PATH. Install git first.", { cause: error });
+    }
+    throw new Error("Not a git repository", { cause: error });
+  }
+  try {
+    return (await git.raw(["hash-object", "-t", "tree", "/dev/null"])).trimEnd();
+  } catch (error: unknown) {
+    throw new Error("Failed to read git status", { cause: error });
+  }
+}

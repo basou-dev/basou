@@ -149,11 +149,17 @@ session:
   because a session that edits through the shell (a heredoc, a `sed -i`, a
   script) names no path anywhere in its transcript, and would otherwise be
   recorded as having touched nothing. The observation is accumulated by
-  basou's SessionStart / Stop hooks into `.basou/observations/<external_id>.json`
-  — working state, not a record, and consumed by the import that turns it into
-  `file_changed` events. Those events carry `source: "git-observed"`, so a
-  reader can tell an observed difference from a witnessed edit; a path already
-  named by a tool call is not recorded twice.
+  basou's SessionStart / Stop hooks into
+  `.basou/tmp/observations/<external_id>.json` — working state, not a record,
+  consumed by the import.
+- The observed half joins `related_files` ONLY; it produces no `file_changed`
+  event. An observation is a snapshot each pass recomputes (a file changed and
+  then reverted leaves it), while the event stream is append-only and a
+  re-import preserves every event it did not derive. `related_files` is rebuilt
+  from the fresh derivation on every import, which is the same shape the
+  observation has. A reader that needs to know a file was WITNESSED being
+  edited, rather than observed as a difference, reads the `file_changed` events,
+  which still come only from tool calls.
 - `working_directory` and `related_files[]` are path-sanitized on write so
   no operator-private absolute prefix leaks into the workspace's persistent
   state. The sanitizer applies two rules in order:

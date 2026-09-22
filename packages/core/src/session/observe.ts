@@ -1,12 +1,16 @@
 import { resolve } from "node:path";
 import { getChangesSince } from "../git/diff.js";
-import { getWorkingTreeChanges, readHeadSha } from "../git/working-tree.js";
+import {
+  getUntrackedFiles,
+  getWorkingTreeChanges,
+  readEmptyTreeSha,
+  readHeadSha,
+} from "../git/working-tree.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import {
   type ObservedFile,
   type ObservedRepo,
   observedFileFrom,
-  pruneSessionObservations,
   readSessionObservation,
   SESSION_OBSERVATION_SCHEMA_VERSION,
   type SessionObservation,
@@ -92,7 +96,6 @@ export async function recordSessionBaseline(
     repos,
   };
   await writeSessionObservation(input.observationsDir, observation);
-  await pruneSessionObservations(input.observationsDir, Date.parse(input.nowIso));
   return observation;
 }
 
@@ -159,18 +162,25 @@ function isBasouStorePath(relativePath: string): boolean {
 async function changedSinceBaseline(repo: ObservedRepo): Promise<ObservedFile[]> {
   const byPath = new Map<string, ObservedFile>();
 
-  if (repo.base_head !== null) {
-    for (const change of await getChangesSince(repo.path, repo.base_head)) {
-      if (isBasouStorePath(change.path)) continue;
-      const file = observedFileFrom(repo.path, change);
-      byPath.set(file.path, file);
-    }
+  // A repository with no commits at session start still has a base: the empty
+  // tree. Skipping the diff there would leave only the working tree, and a
+  // session that commits everything it wrote ends with a clean one — reporting
+  // nothing, which is the silence this whole mechanism exists to end.
+  const base = repo.base_head ?? (await readEmptyTreeSha(repo.path));
+  for (const change of await getChangesSince(repo.path, base)) {
+    if (isBasouStorePath(change.path)) continue;
+    const file = observedFileFrom(repo.path, change);
+    byPath.set(file.path, file);
   }
-  // Untracked files only: every tracked path is already answered above, and
-  // that answer is relative to the baseline, which the working tree alone
-  // cannot express (a file added then committed is `added` since the base, not
-  // `modified` now).
-  for (const change of await getWorkingTreeChanges(repo.path)) {
+
+  // UNTRACKED files only. Every tracked path is already answered above,
+  // relative to the baseline, which the working tree alone cannot express in
+  // either direction: a file added then committed is `added` since the base
+  // rather than absent, and a file committed then restored to its base content
+  // is nothing since the base even though the working tree still differs from
+  // HEAD. Adding every working-tree entry here would re-report the second as a
+  // change that, net, was never made.
+  for (const change of await getUntrackedFiles(repo.path)) {
     if (isBasouStorePath(change.path)) continue;
     const file = observedFileFrom(repo.path, change);
     if (!byPath.has(file.path)) byPath.set(file.path, file);

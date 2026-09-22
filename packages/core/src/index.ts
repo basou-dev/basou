@@ -26,7 +26,6 @@ export {
   DEFAULT_STOP_HOOK_MIN_EDITS,
   evaluateStopHook,
   findBasouStopHookCommand,
-  GIT_OBSERVED_SOURCE,
   isBasouStopHookCommand,
   removeStopHook,
   resolveClaudeCodeCommand,
@@ -382,10 +381,8 @@ export type {
 } from "./session/observation.js";
 export {
   observedFilesOf,
-  pruneSessionObservations,
   readSessionObservation,
   SESSION_OBSERVATION_SCHEMA_VERSION,
-  SESSION_OBSERVATION_TTL_MS,
   sessionObservationPath,
   writeSessionObservation,
 } from "./session/observation.js";

@@ -1,14 +1,12 @@
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   observedFileFrom,
   observedFilesOf,
-  pruneSessionObservations,
   readSessionObservation,
   SESSION_OBSERVATION_SCHEMA_VERSION,
-  SESSION_OBSERVATION_TTL_MS,
   type SessionObservation,
   sessionObservationPath,
   writeSessionObservation,
@@ -127,27 +125,6 @@ describe("observedFilesOf", () => {
       }),
     );
     expect(flat.map((f) => f.path)).toEqual(["/a/y.ts", "/b/z.ts"]);
-  });
-});
-
-describe("pruneSessionObservations", () => {
-  it("drops what is older than the TTL and keeps the rest", async () => {
-    const now = Date.UTC(2026, 8, 22, 12, 0, 0);
-    await writeSessionObservation(dir, observation({ external_id: "stale" }));
-    await writeSessionObservation(dir, observation({ external_id: "fresh" }));
-    const old = new Date(now - SESSION_OBSERVATION_TTL_MS - 1000);
-    await utimes(join(dir, "stale.json"), old, old);
-
-    await pruneSessionObservations(dir, now);
-
-    expect(await readSessionObservation(dir, "stale")).toBeNull();
-    expect(await readSessionObservation(dir, "fresh")).not.toBeNull();
-  });
-
-  it("is a no-op on a directory that does not exist", async () => {
-    await expect(
-      pruneSessionObservations(join(dir, "absent"), Date.now()),
-    ).resolves.toBeUndefined();
   });
 });
 

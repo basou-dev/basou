@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, stat, unlink } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { FileChange } from "../git/diff.js";
@@ -14,11 +14,16 @@ import { atomicReplace } from "../storage/atomic.js";
  * file list. That is why the version below is checked but unversioned in the
  * repository's schema-artifact machinery, and why every read path returns
  * `null` instead of throwing.
+ *
+ * Nothing deletes these files. An age-based sweep was written and removed
+ * before shipping: an observation that has not been imported yet is the ONLY
+ * record of what its session changed — the vendor log cannot reproduce it —
+ * so deleting one on a timer discards evidence to save a kilobyte. What a
+ * retention rule should key on (imported? superseded? the session ended?) is a
+ * decision, and an unbounded directory of small files is the honest state to
+ * leave it in until that decision is made.
  */
 export const SESSION_OBSERVATION_SCHEMA_VERSION = "0.1.0" as const;
-
-/** How long an unconsumed observation is kept before it is pruned. */
-export const SESSION_OBSERVATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const ObservedFileSchema = z.object({
   /** Absolute path, matching the paths the transcript importer records. */
@@ -137,35 +142,6 @@ export function observedFilesOf(observation: SessionObservation): ObservedFile[]
   const files: ObservedFile[] = [];
   for (const repo of observation.repos) files.push(...repo.files);
   return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-}
-
-/**
- * Drop observations older than {@link SESSION_OBSERVATION_TTL_MS}. Best-effort
- * housekeeping so an unconsumed scratch file (a session whose transcript was
- * never imported) cannot accumulate without bound; every error is ignored
- * because failing to prune is never worth failing the caller.
- */
-export async function pruneSessionObservations(
-  observationsDir: string,
-  nowMs: number,
-  ttlMs: number = SESSION_OBSERVATION_TTL_MS,
-): Promise<void> {
-  let entries: string[];
-  try {
-    entries = await readdir(observationsDir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (!entry.endsWith(".json")) continue;
-    const file = join(observationsDir, entry);
-    try {
-      const info = await stat(file);
-      if (nowMs - info.mtimeMs > ttlMs) await unlink(file);
-    } catch {
-      // Ignore: a file that vanished or cannot be stat'd needs no pruning.
-    }
-  }
 }
 
 /** Convert a git {@link FileChange} into the observation's file shape. */

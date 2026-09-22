@@ -16,26 +16,37 @@ All notable changes to **basou** are recorded here. The project follows
   declared repository stood, and `basou hook stop` recomputes, every turn, what
   differs from that base -- committed and uncommitted alike, in one question to
   git, so a file changed and then committed is one entry and not two. The import
-  merges the result into `related_files` and emits `file_changed` events with
-  `source: "git-observed"`, distinct from the `claude-code-import` events that
-  name a witnessed edit. A path a tool call already recorded is not recorded
-  twice.
+  merges the result into the session's `related_files`.
+
+  **Registering the SessionStart hook is still manual.** `basou hook install
+  claude` writes the Stop hook only, so until that line is added by hand no
+  baseline is recorded and every import behaves exactly as it did before.
+
+  Merged into `related_files` and into nothing else: an observation is a
+  SNAPSHOT that each pass recomputes, while the event stream is append-only and
+  a re-import preserves every event it did not derive itself. Writing snapshots
+  there would duplicate them on every re-import of a growing transcript, and
+  leave events contradicting the session record rebuilt beside them.
 
   Bounded on purpose. The base is a COMMIT recorded at session start, never a
   time window over commits -- attributing by proximity is a design this project
-  has already rejected once. Files already dirty when the session opened are
-  subtracted, because they are not its work. Nothing inside `.basou/` is ever
-  reported, including the observation file itself. An observation enriches a
-  session the transcript already established; it never conjures one. A session
-  that started before the hook was installed, or outside a workspace registered
-  in `~/.basou/portfolio.yaml`, is imported exactly as before. What it cannot
-  separate: two sessions editing the same repository in the same window both
-  claim the change, which is the same imprecision `basou run` has always had.
+  has already rejected once. A repository with no commits yet is measured
+  against the empty tree, so work committed there is still seen. Files already
+  dirty when the session opened are subtracted, because they are not its work.
+  Nothing inside `.basou/` is ever reported, including the observation file
+  itself. An observation enriches a session the transcript already established;
+  it never conjures one. What it cannot separate: two sessions editing the same
+  repository in the same window both claim the change, which is the same
+  imprecision `basou run` has always had; and a file the session KEEPS working
+  on after finding it dirty stays subtracted.
 
-  The observation lives in `.basou/observations/<external_id>.json` (added to
-  the default ignore block) as working state, not a record: unreadable or
+  The observation lives in `.basou/tmp/observations/<external_id>.json` --
+  under `tmp/` because `basou init` only appends its ignore block to a file that
+  carries none, so a store initialized earlier never learns to ignore a new
+  top-level entry, and these files hold absolute machine paths. Unreadable, or
   written by a version it does not know, it is dropped and the import falls back
-  to the transcript alone. Unconsumed files are pruned after 30 days.
+  to the transcript alone. Nothing deletes these files: an observation not yet
+  imported is the only record of what its session changed.
 
 ### Changed
 

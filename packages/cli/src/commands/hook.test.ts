@@ -1197,9 +1197,10 @@ describe("the production observer, against a real workspace", () => {
       portfolioConfigPath: portfolioPath,
       render: async () => ({ body: "" }),
     });
-    // The directory exists (every store has it); what matters is that the hook
-    // wrote no observation into it.
-    expect(await readdir(basouPaths(repo).observations)).toEqual([]);
+    // Nothing was written: the directory is created lazily by the first write,
+    // so it is either absent or empty.
+    const entries = await readdir(basouPaths(repo).observations).catch(() => []);
+    expect(entries).toEqual([]);
   });
 });
 

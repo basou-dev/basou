@@ -90,6 +90,11 @@ export async function getDiff(
  * Untracked files are NOT included — `git diff` never reports them — so a
  * caller that wants them unions this with {@link getWorkingTreeChanges}.
  *
+ * {@link getDiff} does NOT set `core.quotePath=false` and still returns git's
+ * quoted rendering for a non-ASCII path. That is a separate defect on a
+ * shipped path (`basou run` / `exec` write those paths into `file_changed`
+ * events) and is deliberately not changed here.
+ *
  * Pathless contract and error vocabulary are identical to {@link getDiff}.
  *
  * @param repoRoot absolute path to the git repository root
@@ -108,7 +113,12 @@ export async function getChangesSince(repoRoot: string, baseRef: string): Promis
 
   let raw: string;
   try {
-    raw = await git.raw(["diff", "--name-status", baseRef]);
+    // `core.quotePath=false` so a non-ASCII path comes back as itself rather
+    // than as git's octal-escaped, double-quoted rendering. The caller unions
+    // this with `git status`, which reports the same path RAW; without this
+    // the two answers spell one file two ways, and nothing downstream —
+    // deduplication, or subtracting what was already dirty — can match them.
+    raw = await git.raw(["-c", "core.quotePath=false", "diff", "--name-status", baseRef]);
   } catch (error: unknown) {
     throw translateDiffError(error);
   }

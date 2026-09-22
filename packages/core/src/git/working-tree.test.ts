@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getWorkingTreeChanges, readHeadSha } from "./working-tree.js";
+import {
+  getUntrackedFiles,
+  getWorkingTreeChanges,
+  readEmptyTreeSha,
+  readHeadSha,
+} from "./working-tree.js";
 
 const ENV_GLOBAL = process.platform === "win32" ? "\\\\.\\nul" : "/dev/null";
 const ENV: NodeJS.ProcessEnv = {
@@ -111,5 +116,53 @@ describe("readHeadSha", () => {
 
   it("throws the fixed 'Not a git repository' outside a repository", async () => {
     await expect(readHeadSha(tmpRepo)).rejects.toThrow("Not a git repository");
+  });
+});
+
+describe("getUntrackedFiles", () => {
+  it("names each file inside an untracked directory, not the directory", async () => {
+    await initRepo(tmpRepo);
+    await mkdir(join(tmpRepo, "newdir"));
+    await writeFile(join(tmpRepo, "newdir", "x.ts"), "export const x = 1;\n");
+    expect(await getUntrackedFiles(tmpRepo)).toEqual([{ path: "newdir/x.ts", status: "added" }]);
+  });
+
+  it("drops an untracked nested repository, which git can only name as a directory", async () => {
+    await initRepo(tmpRepo);
+    const nested = join(tmpRepo, "nested");
+    await mkdir(nested);
+    await initRepo(nested);
+    await writeFile(join(tmpRepo, "mine.ts"), "export const a = 1;\n");
+    expect(await getUntrackedFiles(tmpRepo)).toEqual([{ path: "mine.ts", status: "added" }]);
+  });
+
+  it("returns a non-ASCII path unquoted, as `git status` reports it", async () => {
+    await initRepo(tmpRepo);
+    const name = "\u65e5\u672c\u8a9e.md";
+    await writeFile(join(tmpRepo, name), "x\n");
+    expect(await getUntrackedFiles(tmpRepo)).toEqual([{ path: name, status: "added" }]);
+  });
+
+  it("omits tracked and ignored files", async () => {
+    await initRepo(tmpRepo, { ".gitignore": "ignored.ts\n", "README.md": "# init\n" });
+    await writeFile(join(tmpRepo, "ignored.ts"), "export const a = 1;\n");
+    // A tracked file, edited: it belongs to the diff pass, not to this one.
+    await writeFile(join(tmpRepo, "README.md"), "# edited\n");
+    expect(await getUntrackedFiles(tmpRepo)).toEqual([]);
+  });
+
+  it("throws the fixed 'Not a git repository' outside a repository", async () => {
+    await expect(getUntrackedFiles(tmpRepo)).rejects.toThrow("Not a git repository");
+  });
+});
+
+describe("readEmptyTreeSha", () => {
+  it("returns a base that diffs a repository's entire content as new", async () => {
+    const { git } = await initRepo(tmpRepo);
+    const empty = await readEmptyTreeSha(tmpRepo);
+    // Computed, not hard-coded: a sha-256 repository has a different value.
+    expect(empty).toMatch(/^[0-9a-f]{40,64}$/);
+    const listed = await git.raw(["diff", "--name-only", empty]);
+    expect(listed.trim()).toBe("README.md");
   });
 });

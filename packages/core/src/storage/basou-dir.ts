@@ -27,8 +27,15 @@ export type BasouPaths = {
   /**
    * Per-session git observations: what each vendor session changed on disk,
    * accumulated by the hooks while it runs and consumed by the import that
-   * turns it into `file_changed` events. Working state, not a record — see
-   * `session/observation.ts`.
+   * merges it into the session's related files. Working state, not a record —
+   * see `session/observation.ts`.
+   *
+   * Lives UNDER `tmp/` on purpose. `basou init` only appends its ignore block
+   * when the file carries no basou block yet, so a store initialized before
+   * this directory existed never learns to ignore a new top-level entry — and
+   * these files carry absolute machine paths. `.basou/tmp/` is in every
+   * generation of that block, so the placement is what keeps them out of git
+   * rather than an upgrade step nobody runs.
    */
   readonly observations: string;
   readonly raw: string;
@@ -66,9 +73,9 @@ export function basouPaths(repositoryRoot: string): BasouPaths {
     },
     locks: join(root, "locks"),
     logs: join(root, "logs"),
-    observations: join(root, "observations"),
     raw: join(root, "raw"),
     tmp: join(root, "tmp"),
+    observations: join(root, "tmp", "observations"),
     files: {
       manifest: join(root, "manifest.yaml"),
       status: join(root, "status.json"),
@@ -88,7 +95,6 @@ const PATH_LABELS = {
   approvalsResolved: ".basou/approvals/resolved",
   locks: ".basou/locks",
   logs: ".basou/logs",
-  observations: ".basou/observations",
   raw: ".basou/raw",
   tmp: ".basou/tmp",
 } as const;
@@ -132,7 +138,6 @@ export async function ensureBasouDirectory(repositoryRoot: string): Promise<Baso
     mkdirLabeled(paths.approvals.resolved, PATH_LABELS.approvalsResolved),
     mkdirLabeled(paths.locks, PATH_LABELS.locks),
     mkdirLabeled(paths.logs, PATH_LABELS.logs),
-    mkdirLabeled(paths.observations, PATH_LABELS.observations),
     mkdirLabeled(paths.raw, PATH_LABELS.raw),
     mkdirLabeled(paths.tmp, PATH_LABELS.tmp),
   ]);
