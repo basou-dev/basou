@@ -8,8 +8,10 @@ import {
   createManifest,
   ensureBasouDirectory,
   readYamlFile,
+  SESSION_OBSERVATION_SCHEMA_VERSION,
   SessionSchema,
   writeManifest,
+  writeSessionObservation,
   writeYamlFile,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -127,6 +129,77 @@ async function listSessionDirs(repo: string): Promise<string[]> {
     return [];
   }
 }
+
+describe("basou import claude-code + git observations", () => {
+  /** A transcript that ran a shell command and named no file anywhere. */
+  function shellOnlyTranscript(repo: string): Array<Record<string, unknown>> {
+    return [
+      {
+        type: "user",
+        timestamp: "2026-09-22T00:00:00.000Z",
+        cwd: repo,
+        sessionId: "sess-obs",
+        message: { role: "user", content: [{ type: "text", text: "go" }] },
+      },
+      {
+        type: "assistant",
+        timestamp: "2026-09-22T00:00:01.000Z",
+        cwd: repo,
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              name: "Bash",
+              input: { command: "python3 - <<'PY'\nopen('a.ts','w')\nPY" },
+            },
+          ],
+        },
+      },
+    ];
+  }
+
+  it("imports the files the hooks observed for that session", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-obs", shellOnlyTranscript(repo));
+    await writeSessionObservation(basouPaths(repo).observations, {
+      schema_version: SESSION_OBSERVATION_SCHEMA_VERSION,
+      external_id: "sess-obs",
+      started_at: "2026-09-22T00:00:00.000Z",
+      updated_at: "2026-09-22T00:00:02.000Z",
+      repos: [
+        {
+          path: repo,
+          base_head: "a".repeat(40),
+          base_dirty: [],
+          files: [{ path: `${repo}/a.ts`, change_type: "added" }],
+        },
+      ],
+    });
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    const dirs = await listSessionDirs(repo);
+    expect(dirs).toHaveLength(1);
+    const sessionDir = join(basouPaths(repo).sessions, dirs[0] as string);
+    const session = SessionSchema.parse(await readYamlFile(join(sessionDir, "session.yaml")));
+    // Stored repo-relative, like every other related file: the observation
+    // carries absolute paths and the import sanitizes them as it always has.
+    expect(session.session.related_files).toEqual(["a.ts"]);
+  });
+
+  it("imports the same transcript unchanged when nothing was observed", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-obs", shellOnlyTranscript(repo));
+
+    await doRunImportClaudeCode({ all: true }, { cwd: repo, claudeProjectsDir: getProjectsRoot() });
+
+    const dirs = await listSessionDirs(repo);
+    expect(dirs).toHaveLength(1);
+    const sessionDir = join(basouPaths(repo).sessions, dirs[0] as string);
+    const session = SessionSchema.parse(await readYamlFile(join(sessionDir, "session.yaml")));
+    expect(session.session.related_files).toEqual([]);
+  });
+});
 
 describe("basou import claude-code", () => {
   it("--all imports a transcript with actions into a new session", async () => {

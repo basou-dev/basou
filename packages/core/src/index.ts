@@ -26,6 +26,7 @@ export {
   DEFAULT_STOP_HOOK_MIN_EDITS,
   evaluateStopHook,
   findBasouStopHookCommand,
+  GIT_OBSERVED_SOURCE,
   isBasouStopHookCommand,
   removeStopHook,
   resolveClaudeCodeCommand,
@@ -98,7 +99,7 @@ export {
   writeEventsBulk,
 } from "./events/index.js";
 export type { DiffResult, FileChange, FileChangeStatus } from "./git/diff.js";
-export { getDiff } from "./git/diff.js";
+export { getChangesSince, getDiff } from "./git/diff.js";
 export type { GitSnapshot } from "./git/snapshot.js";
 export {
   getSnapshot,
@@ -108,6 +109,7 @@ export {
   safeSimpleGit,
   tryRemoteUrl,
 } from "./git/snapshot.js";
+export { getWorkingTreeChanges, readHeadSha } from "./git/working-tree.js";
 export type { HandoffRendererInput, HandoffRendererResult } from "./handoff/index.js";
 export { renderHandoff } from "./handoff/index.js";
 export type { IdPrefix, PrefixedId } from "./ids/ulid.js";
@@ -373,6 +375,26 @@ export {
   writeObservedDuration,
   ZERO_DURATION_RETIRED_SINCE,
 } from "./schemas/index.js";
+export type {
+  ObservedFile,
+  ObservedRepo,
+  SessionObservation,
+} from "./session/observation.js";
+export {
+  observedFilesOf,
+  pruneSessionObservations,
+  readSessionObservation,
+  SESSION_OBSERVATION_SCHEMA_VERSION,
+  SESSION_OBSERVATION_TTL_MS,
+  sessionObservationPath,
+  writeSessionObservation,
+} from "./session/observation.js";
+export type { ObserveSessionInput } from "./session/observe.js";
+export {
+  observedRepoRoots,
+  observeSessionChanges,
+  recordSessionBaseline,
+} from "./session/observe.js";
 export type {
   ActiveTimeBasis,
   DayWorkStats,

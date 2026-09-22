@@ -5,6 +5,38 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Added
+
+- **basou now sees the files a session changes through the shell.** A transcript
+  names a file only when the agent edited it with an editing tool, so a session
+  that works through a heredoc, a `sed -i` or a script reads as having touched
+  nothing -- and the orientation's changed-files line, which is built from those
+  names, says `(none recorded)` about real work. The two hooks now observe the
+  work through git instead: `basou hook session-start` records where each
+  declared repository stood, and `basou hook stop` recomputes, every turn, what
+  differs from that base -- committed and uncommitted alike, in one question to
+  git, so a file changed and then committed is one entry and not two. The import
+  merges the result into `related_files` and emits `file_changed` events with
+  `source: "git-observed"`, distinct from the `claude-code-import` events that
+  name a witnessed edit. A path a tool call already recorded is not recorded
+  twice.
+
+  Bounded on purpose. The base is a COMMIT recorded at session start, never a
+  time window over commits -- attributing by proximity is a design this project
+  has already rejected once. Files already dirty when the session opened are
+  subtracted, because they are not its work. Nothing inside `.basou/` is ever
+  reported, including the observation file itself. An observation enriches a
+  session the transcript already established; it never conjures one. A session
+  that started before the hook was installed, or outside a workspace registered
+  in `~/.basou/portfolio.yaml`, is imported exactly as before. What it cannot
+  separate: two sessions editing the same repository in the same window both
+  claim the change, which is the same imprecision `basou run` has always had.
+
+  The observation lives in `.basou/observations/<external_id>.json` (added to
+  the default ignore block) as working state, not a record: unreadable or
+  written by a version it does not know, it is dropped and the import falls back
+  to the transcript alone. Unconsumed files are pruned after 30 days.
+
 ### Changed
 
 - **The session `handoff.md` and orientation name as the latest is now the

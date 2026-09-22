@@ -111,6 +111,7 @@ out on disk.
 ```gitignore
 # Basou - default ignore
 .basou/logs/
+.basou/observations/
 .basou/raw/
 .basou/tmp/
 .basou/locks/

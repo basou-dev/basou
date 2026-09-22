@@ -5,6 +5,7 @@ import { normalizeIsoTimestamp } from "../../schemas/iso-timestamp.js";
 import type { Manifest } from "../../schemas/manifest.schema.js";
 import type { SessionImportPayload } from "../../schemas/session-import.schema.js";
 import { SESSION_IMPORT_SCHEMA_VERSION } from "../../schemas/session-import.schema.js";
+import type { ObservedFile } from "../../session/observation.js";
 import {
   ACTIVE_GAP_CAP_MS,
   activeTimeFromTimestamps,
@@ -19,6 +20,17 @@ import { indexAskAnswers, readOfferedOptions } from "./ask-user-question.js";
  * native transcript, and the matching session `source.kind`.
  */
 export const CLAUDE_IMPORT_SOURCE = "claude-code-import";
+
+/**
+ * The `source` stamped on a `file_changed` event that came from OBSERVING git
+ * rather than from reading a tool call out of the transcript. A reader must be
+ * able to tell the two apart: a tool-derived event names a file the agent
+ * edited through an editing tool, while this one names a file that differed
+ * from the session's starting commit — including one changed by a shell
+ * command, and including one the operator themselves changed in the same
+ * window. Same fact class, weaker attribution, so it is labelled.
+ */
+export const GIT_OBSERVED_SOURCE = "git-observed";
 
 /**
  * One parsed line of a Claude Code native transcript
@@ -48,6 +60,19 @@ export type ClaudeTranscriptToPayloadOptions = {
    * matches the imported content. Omitted => the field is not recorded.
    */
   sourceSizeBytes?: number;
+  /**
+   * Files this session changed, observed through git while it ran (see
+   * `session/observe.ts`). A transcript can only report an edit made with an
+   * editing TOOL; work done through the shell — a heredoc, a `sed -i`, a
+   * script — leaves no `file_path` anywhere in it, so a session that edits
+   * that way reads as having touched nothing. These observations become
+   * `file_changed` events alongside the tool-derived ones and join
+   * `related_files`, under their own event source.
+   *
+   * An OPTION rather than something read here: this function is pure, and the
+   * observation lives on disk beside the store.
+   */
+  observedFiles?: ReadonlyArray<ObservedFile>;
 };
 
 /**
@@ -234,7 +259,34 @@ export function claudeTranscriptToImportPayload(
   }
 
   if (minTs === undefined || maxTs === undefined) return null;
+  // The skip gate is decided on the TRANSCRIPT alone, before observations are
+  // merged: an observation must enrich a session that exists, never conjure
+  // one. A transcript that derived nothing is a session basou did not witness,
+  // and git changes made while it sat idle are somebody else's work.
   if (derived.length === 0) return null;
+
+  // Git-observed changes join the derived stream. They are stamped at the
+  // session's LAST timestamp because that is when the observation was true —
+  // the final pass over the repositories — and because any earlier stamp would
+  // claim a moment inside the session that nothing witnessed. It also keeps
+  // the stream non-decreasing without a re-sort.
+  //
+  // A path already recorded by a tool call is skipped: the tool-derived event
+  // is the stronger statement (it names the edit, not the difference), and two
+  // events for one file would double-count it in every reader.
+  //
+  // Exact string match, deliberately. The same file can be spelled two ways —
+  // a tool call made through a workspace view records the symlinked path,
+  // while git answers with the repository's own — and collapsing those needs a
+  // path-identity rule this function has no way to apply without I/O. The
+  // sessions this observation exists for are the ones with NO tool-derived
+  // files at all, so the overlap is the rare case; it shows as one file listed
+  // under both spellings, never as a file invented or lost.
+  for (const observed of options.observedFiles ?? []) {
+    if (relatedFiles.has(observed.path)) continue;
+    relatedFiles.add(observed.path);
+    derived.push(observedFileChangedEvent(maxTs, placeholderSessionId, observed));
+  }
 
   // Order derived events by occurred_at so the assembled stream is
   // non-decreasing — importSessionFromJson rejects out-of-order events.
@@ -382,6 +434,27 @@ function fileChangedEvent(
     type: "file_changed",
     path,
     change_type: changeType,
+  };
+}
+
+/**
+ * A `file_changed` event for a git-observed change. Carries the full status
+ * vocabulary (`deleted` / `renamed` included), which the tool-derived builder
+ * above cannot: a transcript's Edit/Write calls only ever mean added or
+ * modified, while a diff against the session's base sees every class.
+ */
+function observedFileChangedEvent(
+  occurredAt: string,
+  sessionId: PrefixedId<"ses">,
+  observed: ObservedFile,
+): Event {
+  return {
+    ...baseEvent(occurredAt, sessionId),
+    source: GIT_OBSERVED_SOURCE,
+    type: "file_changed",
+    path: observed.path,
+    change_type: observed.change_type,
+    ...(observed.old_path !== undefined ? { old_path: observed.old_path } : {}),
   };
 }
 

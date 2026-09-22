@@ -4,6 +4,7 @@ import {
   CLAUDE_IMPORT_SOURCE,
   type ClaudeTranscriptRecord,
   claudeTranscriptToImportPayload,
+  GIT_OBSERVED_SOURCE,
 } from "./transcript-importer.js";
 
 const WS_ID = "ws_01HXABCDEF1234567890ABCDEF";
@@ -660,5 +661,111 @@ describe("claudeTranscriptToImportPayload", () => {
     expect(payload).not.toBeNull();
     if (payload === null) return;
     expect(payload.session.metrics?.active_time_ms).toBe(60 * 1000);
+  });
+});
+
+describe("claudeTranscriptToImportPayload with git-observed files", () => {
+  /** A session that ran one shell command and edited nothing with a tool. */
+  const shellOnly: ClaudeTranscriptRecord[] = [
+    { type: "user", timestamp: "2026-09-22T00:00:00.000Z", cwd: CWD, message: { content: [] } },
+    {
+      type: "assistant",
+      timestamp: "2026-09-22T00:05:00.000Z",
+      cwd: CWD,
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            name: "Bash",
+            input: { command: "python3 - <<'PY'\nopen('a.ts','w').write('x')\nPY" },
+          },
+        ],
+      },
+    },
+  ];
+
+  it("records a file the transcript could never name, under its own source", () => {
+    const payload = claudeTranscriptToImportPayload(shellOnly, {
+      workspaceId: WS_ID,
+      observedFiles: [{ path: `${CWD}/a.ts`, change_type: "added" }],
+    });
+    expect(payload).not.toBeNull();
+    if (payload === null) return;
+
+    const changed = payload.events.filter((e) => e.type === "file_changed");
+    expect(changed).toHaveLength(1);
+    expect(changed[0]).toMatchObject({
+      path: `${CWD}/a.ts`,
+      change_type: "added",
+      source: GIT_OBSERVED_SOURCE,
+    });
+    expect(payload.session.related_files).toEqual([`${CWD}/a.ts`]);
+    // The label counts it, which is what makes the session readable as work.
+    expect(payload.session.label).toContain("1 file");
+    expect(SessionImportPayloadSchema.safeParse(payload).success).toBe(true);
+  });
+
+  it("carries the statuses a transcript cannot express", () => {
+    const payload = claudeTranscriptToImportPayload(shellOnly, {
+      workspaceId: WS_ID,
+      observedFiles: [
+        { path: `${CWD}/gone.ts`, change_type: "deleted" },
+        { path: `${CWD}/new.ts`, change_type: "renamed", old_path: `${CWD}/old.ts` },
+      ],
+    });
+    if (payload === null) throw new Error("expected a payload");
+    const changed = payload.events.filter((e) => e.type === "file_changed");
+    expect(changed.map((e) => e.change_type).sort()).toEqual(["deleted", "renamed"]);
+    expect(changed.find((e) => e.change_type === "renamed")).toMatchObject({
+      old_path: `${CWD}/old.ts`,
+    });
+  });
+
+  it("does not double-count a file a tool call already recorded", () => {
+    const records: ClaudeTranscriptRecord[] = [
+      { type: "user", timestamp: "2026-09-22T00:00:00.000Z", cwd: CWD, message: { content: [] } },
+      {
+        type: "assistant",
+        timestamp: "2026-09-22T00:05:00.000Z",
+        cwd: CWD,
+        message: {
+          content: [{ type: "tool_use", name: "Edit", input: { file_path: `${CWD}/a.ts` } }],
+        },
+      },
+    ];
+    const payload = claudeTranscriptToImportPayload(records, {
+      workspaceId: WS_ID,
+      observedFiles: [{ path: `${CWD}/a.ts`, change_type: "modified" }],
+    });
+    if (payload === null) throw new Error("expected a payload");
+    const changed = payload.events.filter((e) => e.type === "file_changed");
+    expect(changed).toHaveLength(1);
+    // The tool-derived event survives: it names the edit, not the difference.
+    expect(changed[0]?.source).toBe(CLAUDE_IMPORT_SOURCE);
+    expect(payload.session.related_files).toEqual([`${CWD}/a.ts`]);
+  });
+
+  it("stamps observations at the session's end, keeping the stream in order", () => {
+    const payload = claudeTranscriptToImportPayload(shellOnly, {
+      workspaceId: WS_ID,
+      observedFiles: [{ path: `${CWD}/a.ts`, change_type: "added" }],
+    });
+    if (payload === null) throw new Error("expected a payload");
+    const times = payload.events.map((e) => Date.parse(e.occurred_at));
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+    const observed = payload.events.find((e) => e.source === GIT_OBSERVED_SOURCE);
+    expect(observed?.occurred_at).toBe(payload.session.ended_at);
+  });
+
+  it("does not conjure a session out of observations alone", () => {
+    const noToolUse: ClaudeTranscriptRecord[] = [
+      { type: "user", timestamp: "2026-09-22T00:00:00.000Z", cwd: CWD, message: { content: [] } },
+    ];
+    expect(
+      claudeTranscriptToImportPayload(noToolUse, {
+        workspaceId: WS_ID,
+        observedFiles: [{ path: `${CWD}/a.ts`, change_type: "added" }],
+      }),
+    ).toBeNull();
   });
 });

@@ -34,4 +34,8 @@ export type {
   ClaudeTranscriptRecord,
   ClaudeTranscriptToPayloadOptions,
 } from "./transcript-importer.js";
-export { CLAUDE_IMPORT_SOURCE, claudeTranscriptToImportPayload } from "./transcript-importer.js";
+export {
+  CLAUDE_IMPORT_SOURCE,
+  claudeTranscriptToImportPayload,
+  GIT_OBSERVED_SOURCE,
+} from "./transcript-importer.js";

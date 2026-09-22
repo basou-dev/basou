@@ -3,6 +3,7 @@ import {
   access,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -20,6 +21,7 @@ import {
   PROTOCOL_END,
   PROTOCOL_START,
   parseProtocolStamp,
+  readSessionObservation,
   writeManifest,
   writeYamlFile,
 } from "@basou/core";
@@ -128,6 +130,9 @@ async function run(
       out += text;
     },
     protocolTargetPath: paths.protocolTargetPath ?? absentProtocolTarget,
+    // The git observation has its own tests; injecting a no-op keeps these
+    // hermetic (no real portfolio, no repository under the test's cwd).
+    observe: async () => {},
   };
   await doRunHookStop(opts, ctx);
   return out;
@@ -782,6 +787,115 @@ describe("hook install/uninstall edge cases", () => {
   });
 });
 
+describe("hook handlers observe the session's file changes", () => {
+  type Call = { pass: "baseline" | "changes"; sessionId: unknown };
+
+  function spy(calls: Call[]) {
+    return async (fields: Record<string, unknown>, pass: "baseline" | "changes") => {
+      calls.push({ pass, sessionId: fields.session_id });
+    };
+  }
+
+  it("Stop observes the changes for the session in the payload", async () => {
+    const calls: Call[] = [];
+    await doRunHookStop(
+      {},
+      {
+        readStdin: async () =>
+          JSON.stringify({ session_id: "sess-1", cwd: "/ws", transcript_path: "" }),
+        readTranscript: async () => "",
+        write: () => {},
+        protocolTargetPath: absentProtocolTarget,
+        observe: spy(calls),
+      },
+    );
+    expect(calls).toEqual([{ pass: "changes", sessionId: "sess-1" }]);
+  });
+
+  it("Stop observes on a continuation turn too, where every nudge is suppressed", async () => {
+    const calls: Call[] = [];
+    await doRunHookStop(
+      {},
+      {
+        readStdin: async () =>
+          JSON.stringify({ session_id: "sess-1", cwd: "/ws", stop_hook_active: true }),
+        readTranscript: async () => "",
+        write: () => {},
+        protocolTargetPath: absentProtocolTarget,
+        observe: spy(calls),
+      },
+    );
+    // The turn that answers a blocking nudge is often the one that captures the
+    // decisions; its edits must not fall outside the observation.
+    expect(calls).toEqual([{ pass: "changes", sessionId: "sess-1" }]);
+  });
+
+  it("Stop survives an observation that throws", async () => {
+    let wrote = "";
+    await expect(
+      doRunHookStop(
+        {},
+        {
+          readStdin: async () => JSON.stringify({ session_id: "s", cwd: "/ws" }),
+          readTranscript: async () => "",
+          write: (text) => {
+            wrote += text;
+          },
+          protocolTargetPath: absentProtocolTarget,
+          observe: async () => {
+            throw new Error("git exploded");
+          },
+        },
+      ),
+    ).resolves.toBeUndefined();
+    expect(wrote).toBe("");
+  });
+
+  it("SessionStart records the baseline before rendering the position", async () => {
+    const order: string[] = [];
+    await doRunHookSessionStart({
+      readStdin: async () => JSON.stringify({ session_id: "sess-2", cwd: "/ws" }),
+      write: () => {
+        order.push("write");
+      },
+      render: async () => {
+        order.push("render");
+        return { body: "position" };
+      },
+      observe: async (_fields, pass) => {
+        order.push(`observe:${pass}`);
+      },
+    });
+    expect(order).toEqual(["observe:baseline", "render", "write"]);
+  });
+
+  it("SessionStart still records the baseline when the position stays silent", async () => {
+    const calls: Call[] = [];
+    await doRunHookSessionStart({
+      readStdin: async () => JSON.stringify({ session_id: "sess-3", cwd: "/ws" }),
+      write: () => {},
+      render: async () => {
+        throw new Error("not a registered workspace");
+      },
+      observe: spy(calls),
+    });
+    // The silence gates decide what a session HEARS; they say nothing about
+    // whether basou may observe the operator's own store.
+    expect(calls).toEqual([{ pass: "baseline", sessionId: "sess-3" }]);
+  });
+
+  it("observes nothing when the payload cannot be parsed", async () => {
+    const calls: Call[] = [];
+    await doRunHookSessionStart({
+      readStdin: async () => "not json",
+      write: () => {},
+      render: async () => ({ body: "position" }),
+      observe: spy(calls),
+    });
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("doRunHookSessionStart (Codex SessionStart handler)", () => {
   async function run(
     stdin: unknown,
@@ -794,6 +908,7 @@ describe("doRunHookSessionStart (Codex SessionStart handler)", () => {
         out += text;
       },
       render,
+      observe: async () => {},
     });
     return out;
   }
@@ -992,6 +1107,102 @@ describe("hook install / uninstall / status codex", () => {
   });
 });
 
+describe("the production observer, against a real workspace", () => {
+  const execFileAsync = promisify(execFile);
+  const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
+  let dir: string;
+  let repo: string;
+  let portfolioPath: string;
+
+  beforeEach(async () => {
+    dir = await realpath(await mkdtemp(join(tmpdir(), "basou-hook-observe-")));
+    repo = join(dir, "ws");
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init", "-q", repo], { env: ENV });
+    await execFileAsync("git", ["-C", repo, "config", "user.email", "t@example.com"], { env: ENV });
+    await execFileAsync("git", ["-C", repo, "config", "user.name", "t"], { env: ENV });
+    await writeFile(join(repo, "README.md"), "# init\n");
+    await execFileAsync("git", ["-C", repo, "add", "README.md"], { env: ENV });
+    await execFileAsync("git", ["-C", repo, "commit", "-qm", "initial"], { env: ENV });
+    const paths = await ensureBasouDirectory(repo);
+    await writeManifest(
+      paths,
+      createManifest({
+        workspaceName: "ws",
+        now: new Date("2026-09-22T03:00:00.000Z"),
+        workspaceId: "ws_01HXABCDEF1234567890ABCDEF",
+      }),
+    );
+    portfolioPath = join(dir, "portfolio.yaml");
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** Fire SessionStart, then Stop, for one session id — the real observer. */
+  async function fireBoth(sessionId: string, cwd: string): Promise<void> {
+    await doRunHookSessionStart({
+      readStdin: async () => JSON.stringify({ session_id: sessionId, cwd, source: "startup" }),
+      write: () => {},
+      portfolioConfigPath: portfolioPath,
+      render: async () => ({ body: "" }),
+    });
+    await doRunHookStop(
+      {},
+      {
+        readStdin: async () => JSON.stringify({ session_id: sessionId, cwd }),
+        readTranscript: async () => "",
+        write: () => {},
+        protocolTargetPath: absentProtocolTarget,
+        portfolioConfigPath: portfolioPath,
+      },
+    );
+  }
+
+  it("records a file written by a shell command, which no transcript names", async () => {
+    await writeFile(portfolioPath, `workspaces:\n  - path: ${JSON.stringify(repo)}\n`);
+    await doRunHookSessionStart({
+      readStdin: async () => JSON.stringify({ session_id: "sess-1", cwd: repo }),
+      write: () => {},
+      portfolioConfigPath: portfolioPath,
+      render: async () => ({ body: "" }),
+    });
+    // The session does its work through the shell: no editing tool is involved.
+    await writeFile(join(repo, "written.ts"), "export const a = 1;\n");
+    await doRunHookStop(
+      {},
+      {
+        readStdin: async () => JSON.stringify({ session_id: "sess-1", cwd: repo }),
+        readTranscript: async () => "",
+        write: () => {},
+        protocolTargetPath: absentProtocolTarget,
+        portfolioConfigPath: portfolioPath,
+      },
+    );
+
+    const stored = await readSessionObservation(basouPaths(repo).observations, "sess-1");
+    expect(stored?.repos[0]?.files.map((f) => f.path)).toEqual([join(repo, "written.ts")]);
+  });
+
+  it("writes nothing for a workspace the operator has not registered", async () => {
+    await writeFile(portfolioPath, "workspaces:\n  - path: /somewhere/else\n");
+    await fireBoth("sess-2", repo);
+    expect(await readSessionObservation(basouPaths(repo).observations, "sess-2")).toBeNull();
+  });
+
+  it("writes nothing when the payload carries no session id", async () => {
+    await writeFile(portfolioPath, `workspaces:\n  - path: ${JSON.stringify(repo)}\n`);
+    await doRunHookSessionStart({
+      readStdin: async () => JSON.stringify({ cwd: repo }),
+      write: () => {},
+      portfolioConfigPath: portfolioPath,
+      render: async () => ({ body: "" }),
+    });
+    // The directory exists (every store has it); what matters is that the hook
+    // wrote no observation into it.
+    expect(await readdir(basouPaths(repo).observations)).toEqual([]);
+  });
+});
+
 describe("hook session-start against a real workspace (allowlist, no write)", () => {
   const execFileAsync = promisify(execFile);
   const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
@@ -1026,6 +1237,7 @@ describe("hook session-start against a real workspace (allowlist, no write)", ()
         out += t;
       },
       portfolioConfigPath: portfolioPath,
+      observe: async () => {},
     });
     return out;
   }

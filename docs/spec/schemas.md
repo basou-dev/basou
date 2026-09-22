@@ -143,6 +143,17 @@ session:
   environment, so the resolved command name is stored.
 - `related_files` is populated from the git capability at session end. The
   initial value is an empty array.
+- For an IMPORTED session, `related_files` has two sources, unioned: the file
+  paths named by the transcript's own editing tool calls, and the files git
+  reports as changed since the session started. The second source exists
+  because a session that edits through the shell (a heredoc, a `sed -i`, a
+  script) names no path anywhere in its transcript, and would otherwise be
+  recorded as having touched nothing. The observation is accumulated by
+  basou's SessionStart / Stop hooks into `.basou/observations/<external_id>.json`
+  — working state, not a record, and consumed by the import that turns it into
+  `file_changed` events. Those events carry `source: "git-observed"`, so a
+  reader can tell an observed difference from a witnessed edit; a path already
+  named by a tool call is not recorded twice.
 - `working_directory` and `related_files[]` are path-sanitized on write so
   no operator-private absolute prefix leaks into the workspace's persistent
   state. The sanitizer applies two rules in order:

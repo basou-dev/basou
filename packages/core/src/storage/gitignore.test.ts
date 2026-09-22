@@ -28,6 +28,9 @@ function getRepoRoot(): string {
 const SPEC_BLOCK =
   "# Basou - default ignore\n" +
   ".basou/logs/\n" +
+  // Per-session git observations: working state carrying absolute paths from
+  // the operator's machine, so never committed.
+  ".basou/observations/\n" +
   ".basou/raw/\n" +
   ".basou/tmp/\n" +
   ".basou/locks/\n" +

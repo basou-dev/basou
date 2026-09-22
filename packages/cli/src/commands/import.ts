@@ -20,7 +20,9 @@ import {
   type ImportSessionResult,
   importSessionFromJson,
   type Manifest,
+  observedFilesOf,
   readManifest,
+  readSessionObservation,
   readSessionYaml,
   reimportPreservingId,
   resolveRepositoryRoot,
@@ -247,10 +249,17 @@ export async function doRunImportClaudeCode(
         const { records, sizeBytes } = await readJsonlRecords(file);
         const cwd = firstTranscriptCwd(records);
         if (cwd === undefined || !projectSet.has(cwd)) return null;
+        // What the hooks observed through git while this session ran. Absent
+        // for any session that started before the hook was installed, or
+        // outside a registered workspace — the import then carries only what
+        // the transcript itself could show, exactly as before.
+        const observation = await readSessionObservation(paths.observations, externalId);
+        const observedFiles = observation === null ? [] : observedFilesOf(observation);
         return claudeTranscriptToImportPayload(records, {
           workspaceId: manifest.workspace.id,
           externalId,
           sourceSizeBytes: sizeBytes,
+          ...(observedFiles.length > 0 ? { observedFiles } : {}),
         });
       },
     };
