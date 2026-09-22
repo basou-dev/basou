@@ -364,6 +364,9 @@ export async function summarizeOrientation(
   // latest-session ranking can measure work by commands as well as files
   // without a second read of events.jsonl. See pickLatestSubstantiveEntry.
   const commandCounts = new Map<string, number>();
+  // Sessions whose events could not be replayed: their command count is
+  // unknown, not zero, and the ranking must not read that absence as idleness.
+  const unmeasuredSessions = new Set<string>();
   const noteActivity = (iso: string): void => {
     if (latestActivityAt === null || Date.parse(iso) > Date.parse(latestActivityAt)) {
       latestActivityAt = iso;
@@ -452,6 +455,7 @@ export async function summarizeOrientation(
         if (counted) noteActivity(ev.occurred_at);
       }
     } catch {
+      unmeasuredSessions.add(entry.sessionId);
       input.onSessionSkip?.(entry.sessionId, "events_jsonl_unreadable");
     }
   }
@@ -606,7 +610,7 @@ export async function summarizeOrientation(
   // newest — the latter hides the real-work session and makes the last-session and
   // latest-decision pointers disagree. Freshness ("newest captured session", below) still uses
   // pure recency, so the staleness signal stays honest.
-  const latestEntry = pickLatestSubstantiveEntry(liveEntries, commandCounts);
+  const latestEntry = pickLatestSubstantiveEntry(liveEntries, commandCounts, unmeasuredSessions);
   // `label` is `z.string().optional()` in the session schema — a parsed session
   // is `string | undefined`, never `null`. So `?? null` only maps `undefined`,
   // and the formatter's `label !== null && label !== ""` is byte-identical to

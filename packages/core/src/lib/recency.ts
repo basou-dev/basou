@@ -50,6 +50,13 @@ type RankableSessionEntry = {
 export type SessionCommandCounts = ReadonlyMap<string, number>;
 
 /**
+ * Sessions whose `events.jsonl` could not be replayed, so their command count
+ * is UNKNOWN rather than zero. Kept apart from an absent map entry, which means
+ * "read fine, ran nothing".
+ */
+export type UnmeasuredSessions = ReadonlySet<string>;
+
+/**
  * A `basou exec` / `run` wrapper session records exactly one command and no
  * files -- the "1 command, 0 files" case this ranking exists to skip -- so a
  * session counts as work only when it ran MORE than this many commands.
@@ -89,9 +96,18 @@ const WRAPPER_SESSION_COMMAND_COUNT = 1;
 export function pickLatestSubstantiveEntry<E extends RankableSessionEntry>(
   entries: readonly E[],
   commandCounts: SessionCommandCounts,
+  unmeasured: UnmeasuredSessions,
 ): E | undefined {
   const didWork = (e: E): boolean => {
     if ((e.session.session.related_files?.length ?? 0) > 0) return true;
+    // An unreadable events.jsonl leaves no map entry, which is indistinguishable
+    // from "ran nothing" unless it is named. Reading that absence as proof of
+    // idleness is the same error as reporting an unrecorded handoff as "no
+    // pending tasks": it states a fact the capture never established. So a
+    // session we could not measure keeps its candidacy. The cost is that a
+    // corrupt bookkeeping session can be named the latest; the alternative is
+    // hiding real work, which is the failure this ranking exists to prevent.
+    if (unmeasured.has(e.sessionId)) return true;
     return (commandCounts.get(e.sessionId) ?? 0) > WRAPPER_SESSION_COMMAND_COUNT;
   };
   const working = entries.filter(didWork);
@@ -133,12 +149,21 @@ function isNestedInAnother<E extends RankableSessionEntry>(
   if (end === undefined) return false;
   const start = Date.parse(entry.session.session.started_at);
   const finish = Date.parse(end);
+  // Every bound must be finite before containment can be claimed. A NaN makes
+  // each `>` and `<` false, so an unparseable end would slip past the rejection
+  // and let a single `oStart < start` establish containment on its own -- and
+  // several such windows can form a containment cycle that empties the
+  // candidate set. Schema-validated sessions cannot reach this (the timestamp
+  // schema gates on a regex that Date.parse accepts), so this guards the
+  // function rather than the store.
+  if (!Number.isFinite(start) || !Number.isFinite(finish)) return false;
   return working.some((other) => {
     if (other.sessionId === entry.sessionId) return false;
     const otherEnd = other.session.session.ended_at;
     if (otherEnd === undefined) return false;
     const oStart = Date.parse(other.session.session.started_at);
     const oFinish = Date.parse(otherEnd);
+    if (!Number.isFinite(oStart) || !Number.isFinite(oFinish)) return false;
     if (oStart > start || oFinish < finish) return false;
     return oStart < start || oFinish > finish;
   });

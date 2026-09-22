@@ -158,6 +158,9 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   // latest-session ranking can measure work by commands as well as files
   // without a second read of events.jsonl. See pickLatestSubstantiveEntry.
   const commandCounts = new Map<string, number>();
+  // Sessions whose events could not be replayed: their command count is
+  // unknown, not zero, and the ranking must not read that absence as idleness.
+  const unmeasuredSessions = new Set<string>();
   const noteActivity = (iso: string): void => {
     if (latestActivityAt === null || Date.parse(iso) > Date.parse(latestActivityAt)) {
       latestActivityAt = iso;
@@ -208,6 +211,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
         }
       }
     } catch {
+      unmeasuredSessions.add(entry.sessionId);
       // events.jsonl unreadable on the decision-aggregation pass. If the
       // suspect pass has not already surfaced a warning for this session
       // (e.g. completed session, where classifySuspect short-circuits
@@ -295,7 +299,7 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
   // bare resume/refresh session (e.g. 1 command, 0 files) that merely happens to
   // be newest — the latter hides the real-work session and disagrees with the
   // latest decision.
-  const latestSession = pickLatestSubstantiveEntry(liveEntries, commandCounts);
+  const latestSession = pickLatestSubstantiveEntry(liveEntries, commandCounts, unmeasuredSessions);
 
   // "Recently changed files" shows the files touched by the most recent
   // SUBSTANTIVE session — the same session surfaced as the last session above — so the section
