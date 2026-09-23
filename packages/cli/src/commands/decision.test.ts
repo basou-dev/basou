@@ -1372,6 +1372,23 @@ describe("decision cross-project linked_files guardrail (warn-only)", () => {
     expect(warnings).toContain("/etc/hosts");
   });
 
+  it("prints a linked file outside source_roots escaped, so the terminal never gets its raw bytes", async () => {
+    const repo = await repoWithSourceRoots();
+    captureStdout();
+    const err = captureStderr();
+    const forged = "/etc/new\n\n## Forged section\ntext\u001b[2J.txt";
+    const input = JSON.stringify([{ title: "forged", linked_files: [forged], kind: "decision" }]);
+    await doRunDecisionCapture(
+      {},
+      { cwd: repo, nowProvider: () => FIXED_NOW, readInput: async () => input },
+    );
+    const warnings = joinCalls(err);
+    expect(warnings).toContain("outside this project's source_roots");
+    expect(warnings).toContain("/etc/new\\n\\n## Forged section\\ntext\\x1b[2J.txt");
+    expect(warnings).not.toContain("\u001b");
+    expect(warnings).not.toMatch(/^## Forged section/m);
+  });
+
   it("does not warn for an in-repo linked file", async () => {
     const repo = await repoWithSourceRoots();
     captureStdout();

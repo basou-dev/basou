@@ -575,6 +575,25 @@ export const VIEW_HTML = `<!doctype html>
       detail.appendChild(tl);
     }).catch(fail);
   }
+  // The page cannot import @basou/core, so this mirrors its displayPath: a
+  // recorded name is shown with its control characters as visible escapes, so a
+  // newline in it does not read as a space and an invisible one stays visible.
+  // A test lifts this function and checks it agrees with displayPath.
+  function showPath(p) {
+    var out = '';
+    for (var i = 0; i < p.length; i++) {
+      var c = p.charCodeAt(i);
+      var acting = c <= 0x1f || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029 ||
+        (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069);
+      if (!acting) { out += p.charAt(i); continue; }
+      if (c === 10) out += '\\\\n';
+      else if (c === 13) out += '\\\\r';
+      else if (c === 9) out += '\\\\t';
+      else if (c <= 0xff) out += '\\\\x' + ('0' + c.toString(16)).slice(-2);
+      else out += '\\\\u' + ('000' + c.toString(16)).slice(-4);
+    }
+    return out;
+  }
   function eventSummary(ev) {
     if (ev.type === 'command_executed') {
       var cmd = (ev.args && ev.args.length) ? ev.args.join(' ') : ev.command;
@@ -582,7 +601,7 @@ export const VIEW_HTML = `<!doctype html>
       var ex = (ev.exit_code === null || ev.exit_code === undefined) ? '' : ' (exit ' + ev.exit_code + ')';
       return cmd + ex;
     }
-    if (ev.type === 'file_changed') return ev.path + ' [' + ev.change_type + ']';
+    if (ev.type === 'file_changed') return showPath(ev.path) + ' [' + ev.change_type + ']';
     if (ev.type === 'decision_recorded') return ev.title || '';
     if (ev.type === 'decision_voided') {
       var vs = ev.superseded_by ? ' superseded by ' + ev.superseded_by : '';

@@ -1539,3 +1539,40 @@ describe("doRunSessionShow task_reconciled summary", () => {
     expect(stdout).toContain("1 created_in_session");
   });
 });
+
+describe("session show: a file name that carries line breaks or control characters", () => {
+  it("prints it escaped, so the terminal never receives the raw bytes", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("YE1");
+    const forged = "new\n\n## Forged section\ntext\u001b[2J.txt";
+    const fileChanged = `${JSON.stringify({
+      schema_version: "0.2.0",
+      type: "file_changed",
+      id: EVT("FE2"),
+      session_id: id,
+      occurred_at: "2026-05-08T11:00:10+09:00",
+      source: "local-cli",
+      path: forged,
+      change_type: "added",
+    })}\n`;
+    const events =
+      SESSION_STARTED_LINE(id, "FE1", "2026-05-08T11:00:00+09:00") +
+      fileChanged +
+      SESSION_ENDED_LINE(id, "FE3", "2026-05-08T11:00:30+09:00");
+    await createSession(repo, {
+      id,
+      endedAt: "2026-05-08T11:00:30+09:00",
+      relatedFiles: [forged],
+      events,
+    });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).not.toContain("\u001b");
+    expect(stdout).not.toMatch(/^## Forged section/m);
+    // Both the related-files line and the file_changed event line.
+    expect(
+      stdout.split("\n").filter((l) => l.includes("new\\n\\n## Forged section\\ntext\\x1b[2J.txt")),
+    ).toHaveLength(2);
+  });
+});

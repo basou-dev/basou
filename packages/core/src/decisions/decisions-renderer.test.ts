@@ -122,7 +122,26 @@ describe("decisions-renderer", () => {
     const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
     const headings = result.body.split("\n").filter((l) => /^#{1,6} /.test(l));
     expect(headings.filter((l) => /^#{1,6} INJECTED/.test(l))).toEqual([]);
-    expect(result.body).toContain("src/a.ts # INJECTED tail");
+    // Shown escaped, not collapsed: `src/a.ts # INJECTED tail` would be another
+    // name, indistinguishable from this one.
+    expect(result.body).toContain("src/a.ts\\n\\n# INJECTED\\n\\ntail");
+  });
+
+  it("keeps the spacing of a linked file name exactly, since it is part of the name", async () => {
+    const paths = await setupPaths();
+    const sid = SES("SP1");
+    const did = DEC("SP2");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "E46", did, "Spaced names", "2026-05-08T11:30:00+09:00", {
+        linked_files: ["docs/two  spaces.md", " leading.md"],
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO });
+    // Collapsing whitespace would show a different file: `two spaces.md`.
+    expect(result.body).toContain("docs/two  spaces.md (missing),  leading.md (missing)");
   });
 
   // Collapsing a title is not enough on its own. The same JSON carries a

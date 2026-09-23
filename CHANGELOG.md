@@ -30,6 +30,26 @@ All notable changes to **basou** are recorded here. The project follows
   subtracted when it was already dirty at session start: the working-tree side
   of that comparison goes through a status parser that trims each record.
 
+- **A recorded file name can no longer break out of its line.** Paths are
+  stored exactly as the filesystem names them, and a name may contain a newline
+  -- so `new\n\n## Forged section\n...` became a heading of `handoff.md`,
+  `decisions.md`, `basou report` and the position a session reads at start, and
+  an ESC byte in a name reached the terminal through `basou session show`,
+  `basou import` or `basou decision capture` as an instruction rather than a
+  character. Wherever a recorded FILE path is shown -- orientation, handoff,
+  report, decisions.md, `session show`, the `basou view` timeline, and the
+  out-of-root warnings of `import` and `decision` -- its control characters (C0,
+  DEL, C1, U+2028 / U+2029) and bidirectional controls (U+202A-U+202E,
+  U+2066-U+2069) are now shown as visible escapes (`\n`, `\x1b`, `\u202e`, ...).
+  The stored value and every `--json` output keep the real name.
+
+  The display is not reversible: a backslash is not escaped, so a name with a
+  real newline and a name with the two characters `\` and `n` look the same;
+  the stored value is what identifies the file. Not covered yet: recorded
+  command lines and session labels in `session show` (a heredoc's newlines are
+  meant to be shown), recorded working directories, zero-width characters, and
+  Markdown syntax that stays on the one line (`# `, `[..](..)`).
+
 ## 0.50.0 — 2026-09-23
 
 ### Changed

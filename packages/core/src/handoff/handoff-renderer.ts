@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { enumerateApprovals } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
+import { displayPath } from "../lib/display-path.js";
 import { oneLine } from "../lib/one-line.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
 import { isTransientToolPath } from "../lib/transient-paths.js";
@@ -453,7 +454,7 @@ function formatHandoffBody(args: {
   if (args.displayedFiles.length === 0) {
     lines.push("(no related files recorded)");
   } else {
-    for (const f of args.displayedFiles) lines.push(`- ${f}`);
+    for (const f of args.displayedFiles) lines.push(`- ${displayPath(f)}`);
     if (args.overflow > 0) lines.push(`- ... +${args.overflow} more`);
   }
   lines.push("");
@@ -544,7 +545,7 @@ function formatHandoffBody(args: {
   lines.push(t.handoff.headingReadNext);
   lines.push("");
   lines.push("- .basou/decisions.md");
-  for (const f of args.displayedFiles.slice(0, 3)) lines.push(`- ${f}`);
+  for (const f of args.displayedFiles.slice(0, 3)) lines.push(`- ${displayPath(f)}`);
   lines.push("");
 
   // Work to do next

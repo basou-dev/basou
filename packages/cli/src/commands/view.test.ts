@@ -4,7 +4,13 @@ import { request as httpRequest } from "node:http";
 import { devNull, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
+import {
+  basouPaths,
+  createManifest,
+  displayPath,
+  ensureBasouDirectory,
+  writeManifest,
+} from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ViewServerHandle } from "../lib/view-server.js";
 import { VIEW_HTML } from "../lib/view-ui.js";
@@ -840,5 +846,58 @@ describe("basou view (CLI wrapper)", () => {
     } finally {
       await rm(nonRepo, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the view page shows a recorded file name with its control characters escaped", () => {
+  /** Lift a named function out of the served page (same approach as the card-label tests). */
+  function lift(name: string): string {
+    const marker = `function ${name}(`;
+    const start = VIEW_HTML.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    let end = -1;
+    for (let i = VIEW_HTML.indexOf("{", start); i < VIEW_HTML.length; i++) {
+      const ch = VIEW_HTML[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          end = i + 1;
+          break;
+        }
+      }
+    }
+    expect(end).toBeGreaterThan(start);
+    return VIEW_HTML.slice(start, end);
+  }
+
+  const ch = (code: number) => String.fromCharCode(code);
+  const INPUTS = [
+    "plain/path.ts",
+    "new\n\n## Forged section\ntext\u001b[2J.txt",
+    "tab\there\r.txt",
+    `bidi${ch(0x202e)}gnp.exe`,
+    `sep${ch(0x2028)}x${ch(0x2029)}y`,
+    `c1${ch(0x9b)}${ch(0x9d)}${ch(0x85)}`,
+    `edge${ch(0x1f)}${ch(0x20)}${ch(0x7e)}${ch(0x7f)}${ch(0xa0)}`,
+    '\u65e5\u672c\u8a9e "q" back\\slash.md',
+    "emoji \ud83d\ude00 ok",
+  ];
+
+  it("showPath agrees with @basou/core's displayPath on every input", () => {
+    const showPath = new Function(`${lift("showPath")}; return showPath;`)() as (
+      p: string,
+    ) => string;
+    for (const input of INPUTS) expect(showPath(input)).toBe(displayPath(input));
+  });
+
+  it("the timeline's file_changed line uses it", () => {
+    const summary = new Function(
+      `${lift("showPath")}; ${lift("eventSummary")}; return eventSummary;`,
+    )() as (ev: Record<string, unknown>) => string;
+    expect(summary({ type: "file_changed", path: "a\nb\u001b.txt", change_type: "added" })).toBe(
+      "a\\nb\\x1b.txt [added]",
+    );
   });
 });

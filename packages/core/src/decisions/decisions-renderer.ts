@@ -1,6 +1,7 @@
 import { lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
+import { displayPath } from "../lib/display-path.js";
 import { oneLine } from "../lib/one-line.js";
 import {
   resolveViewLanguageFromPaths,
@@ -239,14 +240,16 @@ async function formatDecisionsBody(args: {
     if (d.linkedFiles !== undefined && d.linkedFiles.length > 0) {
       const parts = await Promise.all(
         d.linkedFiles.map(async (path) =>
-          (await args.fileExists(path)) ? path : `${path} (missing)`,
+          (await args.fileExists(path)) ? displayPath(path) : `${displayPath(path)} (missing)`,
         ),
       );
       // A path and an event id are opaque references, not prose: the fields that
       // keep their line breaks are the rationale, the alternatives and the
       // rejected reason. A newline here would end the bullet and let whatever
-      // followed become a line of this document.
-      lines.push(`- linked_files: ${oneLine(parts.join(", "))}`);
+      // followed become a line of this document. `displayPath` rather than
+      // `oneLine`: collapsing shows `a\nb` and `a b` as the same name, and keeps
+      // an ESC byte in the file.
+      lines.push(`- linked_files: ${parts.join(", ")}`);
     }
     lines.push("");
   }

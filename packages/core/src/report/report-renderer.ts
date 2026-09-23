@@ -6,6 +6,7 @@ import {
 } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { type ChainVerdictStatus, verifyEventsChain } from "../events/verify.js";
+import { displayPath } from "../lib/display-path.js";
 import { formatDurationMs } from "../lib/format-duration.js";
 import { oneLine } from "../lib/one-line.js";
 import {
@@ -500,7 +501,9 @@ function formatReportBody(data: ReportData, t: ViewStrings): string {
   if (data.changedFiles.length === 0) {
     lines.push("(no related files recorded)");
   } else {
-    for (const f of data.changedFiles.slice(0, CHANGED_FILES_MARKDOWN_LIMIT)) lines.push(`- ${f}`);
+    for (const f of data.changedFiles.slice(0, CHANGED_FILES_MARKDOWN_LIMIT)) {
+      lines.push(`- ${displayPath(f)}`);
+    }
     const overflow = data.changedFiles.length - CHANGED_FILES_MARKDOWN_LIMIT;
     if (overflow > 0) lines.push(`- ... +${overflow} more`);
   }
