@@ -174,7 +174,11 @@ session:
   targets macOS / Linux, where it is an ordinary filename character, so
   `back\slash.txt` is stored as `back\slash.txt` and not as
   `back/slash.txt` (a different file). A Windows-style path is not
-  translated; full Windows support is a future task.
+  translated; full Windows support is a future task. Only POSIX paths are
+  recognised against the two bases: a path written with backslash
+  separators (`C:\Users\<user>\...`, `\Users\<user>\...`) is neither made
+  relative nor shortened, so a producer that feeds such paths to
+  `basou session import` persists them as given, prefix included.
 - `working_directory` is sanitized via a sentinel-based variant that skips
   rule (1) when applied to the field's own value — feeding the live cwd
   through the general sanitizer with itself as the workingDirectory
@@ -190,7 +194,12 @@ session:
 - Backward compatibility: existing session.yaml files written before the
   path sanitizer was introduced are NOT retroactively rewritten. A future
   release may introduce `basou session migrate` to sanitize existing data
-  on request.
+  on request. Records written while the sanitizer still folded backslashes
+  may spell a name that contains one with `/` instead (`back/slash.txt`
+  for `back\slash.txt`), and are not rewritten either. A reader must not
+  treat two paths as the same file by replacing one separator with the
+  other -- on macOS / Linux they can be two different files -- and an
+  exact-string count across sessions is not a count of distinct files.
 
 ---
 
