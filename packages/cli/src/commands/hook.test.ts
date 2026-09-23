@@ -437,8 +437,136 @@ describe("hook install / uninstall / status", () => {
       hooks: { SessionStart: unknown[]; Stop: unknown[] };
     };
     expect(settings.model).toBe("opus");
-    expect(settings.hooks.SessionStart).toHaveLength(1);
+    // `node x orient` is not basou's shape (no basou entry path), so it is left
+    // exactly as written and basou's own SessionStart group is added beside it.
+    expect(settings.hooks.SessionStart).toHaveLength(2);
+    expect(settings.hooks.SessionStart[0]).toEqual({
+      matcher: "*",
+      hooks: [{ type: "command", command: "node x orient" }],
+    });
     expect(settings.hooks.Stop).toHaveLength(1);
+  });
+
+  describe("the SessionStart half", () => {
+    const sessionStartCmd = `node '${cliEntry}' hook session-start 2>/dev/null || true`;
+    /** What this machine had, and what basou's own reference told users to write. */
+    const handOrient = `node ${cliEntry} orient 2>/dev/null || true`;
+
+    type Groups = Array<{ matcher?: string; hooks: Array<Record<string, unknown>> }>;
+    async function sessionStartGroups(): Promise<Groups> {
+      const settings = (await readSettings()) as { hooks?: { SessionStart?: Groups } };
+      return settings.hooks?.SessionStart ?? [];
+    }
+
+    it("installs it beside the Stop hook, and says what it is for", async () => {
+      await doRunHookInstall({ settings: settingsPath }, ctx);
+      expect(await sessionStartGroups()).toEqual([
+        {
+          matcher: "startup|resume|clear",
+          hooks: [{ type: "command", command: sessionStartCmd, timeout: 30 }],
+        },
+      ]);
+      expect(logs.join("\n")).toContain("Installed the basou SessionStart hook");
+      expect(logs.join("\n")).toContain("changes through the shell");
+    });
+
+    it("replaces a hand-registered `basou orient` in place and keeps its matcher", async () => {
+      await writeFile(
+        settingsPath,
+        `${JSON.stringify({ hooks: { SessionStart: [{ matcher: "*", hooks: [{ type: "command", command: handOrient, timeout: 20 }] }] } }, null, 2)}\n`,
+      );
+      await doRunHookInstall({ settings: settingsPath }, ctx);
+      expect(await sessionStartGroups()).toEqual([
+        { matcher: "*", hooks: [{ type: "command", command: sessionStartCmd, timeout: 30 }] },
+      ]);
+      const out = logs.join("\n");
+      expect(out).toContain("Replaced the hand-registered 'basou orient' SessionStart hook");
+      // The behaviour that differs from `basou orient` is said out loud.
+      expect(out).toContain("does not rewrite .basou/orientation.md");
+      expect(out).toContain("stays silent when the position names another registered workspace");
+    });
+
+    it("dry-run says it would replace, and writes nothing", async () => {
+      const body = `${JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: handOrient }] }] } }, null, 2)}\n`;
+      await writeFile(settingsPath, body);
+      await doRunHookInstall({ settings: settingsPath, dryRun: true }, ctx);
+      expect(await readFile(settingsPath, "utf8")).toBe(body);
+      expect(logs.join("\n")).toContain(
+        "[dry-run] Would replace the hand-registered 'basou orient' SessionStart hook",
+      );
+      expect(logs.join("\n")).toContain("[dry-run] Would install the basou Stop hook");
+    });
+
+    it("re-running reports no change for both hooks", async () => {
+      await doRunHookInstall({ settings: settingsPath }, ctx);
+      logs.length = 0;
+      const before = await readFile(settingsPath, "utf8");
+      await doRunHookInstall({ settings: settingsPath }, ctx);
+      expect(await readFile(settingsPath, "utf8")).toBe(before);
+      expect(logs).toEqual([
+        "The basou Stop hook is already registered (advisory (non-blocking), capture); no change.",
+        "The basou SessionStart hook is already registered; no change.",
+      ]);
+    });
+
+    it("--no-session-start registers the Stop hook only, and leaves SessionStart as written", async () => {
+      const body = `${JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: handOrient }] }] } }, null, 2)}\n`;
+      await writeFile(settingsPath, body);
+      await doRunHookInstall({ settings: settingsPath, noSessionStart: true }, ctx);
+      expect(await sessionStartGroups()).toEqual([
+        { hooks: [{ type: "command", command: handOrient }] },
+      ]);
+      expect(logs.join("\n")).toContain("left as it is (--no-session-start)");
+    });
+
+    it("warns, rather than rewrites, when `basou orient` sits inside a longer command", async () => {
+      const compound = `cd ~/work && node ${cliEntry} orient`;
+      await writeFile(
+        settingsPath,
+        `${JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: compound }] }] } }, null, 2)}\n`,
+      );
+      await doRunHookInstall({ settings: settingsPath }, ctx);
+      const groups = await sessionStartGroups();
+      expect(groups[0]).toEqual({ hooks: [{ type: "command", command: compound }] });
+      expect(groups).toHaveLength(2);
+      expect(logs.join("\n")).toContain("may now receive the position twice");
+    });
+
+    it("uninstall removes both hooks, and the hand-registered orient too", async () => {
+      await writeFile(
+        settingsPath,
+        `${JSON.stringify({ model: "opus", hooks: { SessionStart: [{ hooks: [{ type: "command", command: handOrient }] }], Stop: [{ hooks: [{ type: "command", command: advisoryCmd }] }] } }, null, 2)}\n`,
+      );
+      await doRunHookUninstall({ settings: settingsPath });
+      expect(await readSettings()).toEqual({ model: "opus" });
+      expect(logs).toEqual([
+        "Removed the basou Stop hook from settings.json.",
+        "Removed the basou SessionStart hook from settings.json.",
+      ]);
+    });
+
+    it("status names each SessionStart state by what it means", async () => {
+      await doRunHookStatus({ settings: settingsPath });
+      expect(logs.join("\n")).toContain("basou SessionStart hook: not registered");
+      expect(logs.join("\n")).toContain("are not observed");
+
+      logs.length = 0;
+      await writeFile(
+        settingsPath,
+        `${JSON.stringify({ hooks: { SessionStart: [{ matcher: "*", hooks: [{ type: "command", command: handOrient }] }] } }, null, 2)}\n`,
+      );
+      await doRunHookStatus({ settings: settingsPath });
+      expect(logs.join("\n")).toContain("registered by hand as 'basou orient'");
+
+      logs.length = 0;
+      await doRunHookInstall({ settings: settingsPath }, ctx);
+      logs.length = 0;
+      await doRunHookStatus({ settings: settingsPath });
+      // The hand-registered group kept its "*" matcher.
+      expect(logs.join("\n")).toContain(
+        "basou SessionStart hook: registered, fires on every session source.",
+      );
+    });
   });
 
   it("is idempotent: re-installing the same mode reports no change", async () => {

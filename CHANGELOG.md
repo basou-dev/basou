@@ -3,6 +3,32 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`basou hook install` (target `claude`) now registers the SessionStart hook
+  as well as the Stop hook.** In 0.49.0 the SessionStart registration had to be
+  added by hand, and without it the Stop hook had no baseline to measure a
+  session's file changes against, so the git observation 0.49.0 shipped did
+  nothing anywhere it was not hand-configured. The hook is `basou hook
+  session-start` -- the same command, matcher (`startup|resume|clear`) and
+  timeout as the Codex registration. `--no-session-start` registers the Stop
+  hook alone and leaves any SessionStart hook as it is; `uninstall` removes both
+  and `status` reports both.
+
+  **A hand-registered `basou orient` SessionStart hook is replaced.** Until now
+  the command reference told Claude Code users to add exactly that, so leaving
+  it would put the position into every session twice. Install recognizes the
+  documented shape only -- `basou orient`, or `node <entry> orient` with basou's
+  own entry, optional flags and the `2>/dev/null || true` wrapper -- and
+  rewrites it in place, keeping its group's matcher. The replacement does not
+  rewrite `.basou/orientation.md` at session start, and it stays silent when the
+  position names another registered workspace; install says both. A
+  SessionStart command that runs `basou orient` inside anything longer is left
+  as written, with a note that the position may now arrive twice: rewriting it
+  would delete whatever was written around it.
+
 ## 0.49.0 — 2026-09-23
 
 ### Added

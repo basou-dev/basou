@@ -6,6 +6,10 @@ export const BASOU_CORE_VERSION = "0.1.0";
 
 export type {
   BuildStopHookCommandOptions,
+  ClaudeSessionStartHookKind,
+  ClaudeSessionStartHookLocation,
+  ClaudeSessionStartHookRemoval,
+  ClaudeSessionStartHookUpsert,
   ClaudeSettings,
   ClaudeTranscriptRecord,
   ClaudeTranscriptToPayloadOptions,
@@ -26,12 +30,17 @@ export {
   DEFAULT_STOP_HOOK_MIN_EDITS,
   evaluateStopHook,
   findBasouStopHookCommand,
+  findClaudeSessionStartHook,
+  findUnrecognizedOrientSessionStart,
+  isBasouOrientSessionStartCommand,
   isBasouStopHookCommand,
+  removeClaudeSessionStartHook,
   removeStopHook,
   resolveClaudeCodeCommand,
   STOP_HOOK_TIMEOUT_SECONDS,
   summarizeAdapterOutput,
   transcriptStartedAt,
+  upsertClaudeSessionStartHook,
   upsertStopHook,
 } from "./adapters/claude-code/index.js";
 export type {
