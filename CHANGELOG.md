@@ -3,6 +3,33 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A changed file whose name git would quote is recorded under its real
+  name.** `git diff --name-status` renders such a path as a double-quoted,
+  backslash-escaped string -- every non-ASCII byte as an octal escape
+  (`"\346\227\245.md"`), and a `"`, `\`, tab or newline always -- and
+  `getDiff` returned that string as the path. So `basou run` wrote
+  `file_changed` events naming files that do not exist. Both diff readers now
+  ask git with `-z`, which quotes nothing and keeps a path containing a tab or a
+  newline in one piece. `getChangesSince`, which 0.49.0's git observation of
+  shell edits uses, had set `core.quotePath=false`; that fixes non-ASCII only,
+  so a `"`, `\`, tab or newline in a name still came back quoted there.
+
+  Three limits remain. Events already written with a quoted path are left as
+  they are -- rewriting them would break their hash chain, and guessing which
+  strings are quoted would corrupt names that really contain a quote or a
+  backslash -- so one file can appear under both spellings across the upgrade,
+  and `basou report`, which unions `related_files` across sessions by exact
+  string, counts it twice. A name that is not valid UTF-8 (which a macOS disk
+  cannot hold, but a commit made on Linux can) now reads with replacement
+  characters, so two such names can collapse into one path where the quoted
+  form kept them apart. And a name with a leading or trailing space is still not
+  subtracted when it was already dirty at session start: the working-tree side
+  of that comparison goes through a status parser that trims each record.
+
 ## 0.50.0 — 2026-09-23
 
 ### Changed

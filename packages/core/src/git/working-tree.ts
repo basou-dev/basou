@@ -156,8 +156,8 @@ export async function getUntrackedFiles(repoRoot: string): Promise<FileChange[]>
 
   let raw: string;
   try {
-    // `-z` gives NUL-separated, UNQUOTED paths, matching what
-    // `core.quotePath=false` gives the diff side.
+    // `-z` gives NUL-separated, UNQUOTED paths, matching the diff side, which
+    // asks git with `-z` too.
     raw = await git.raw([
       "-c",
       "core.quotePath=false",
