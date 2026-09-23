@@ -127,6 +127,46 @@ describe("sanitizePath", () => {
     );
   });
 
+  it("does not read a leading backslash as the root", () => {
+    // Both are single relative names on POSIX, not `/server/...` or `/Users/...`.
+    expect(sanitizePath("\\\\server\\share\\x.ts", { workingDirectory: WD, homedir: HOME })).toBe(
+      "\\\\server\\share\\x.ts",
+    );
+    expect(sanitizePath("\\Users\\u\\x.ts", { workingDirectory: WD, homedir: HOME })).toBe(
+      "\\Users\\u\\x.ts",
+    );
+  });
+
+  it("keeps a backslash in an absolute path outside both bases", () => {
+    expect(sanitizePath("/etc/back\\slash", { workingDirectory: WD, homedir: HOME })).toBe(
+      "/etc/back\\slash",
+    );
+  });
+
+  // `path.relative` spells a target outside the base as `..` or `../...`. A
+  // name that merely begins with two dots is still inside.
+  it("rewrites a name beginning with two dots under workingDirectory as relative", () => {
+    for (const name of ["..notes", "..\\x.json", "..\\..\\b"]) {
+      expect(sanitizePath(`${WD}/${name}`, { workingDirectory: WD, homedir: HOME })).toBe(name);
+    }
+  });
+
+  it("rewrites a name beginning with two dots under homedir with the ~/ prefix", () => {
+    for (const name of ["..notes", "..\\notes.md"]) {
+      expect(sanitizePath(`${HOME}/${name}`, { workingDirectory: WD, homedir: HOME })).toBe(
+        `~/${name}`,
+      );
+    }
+  });
+
+  it("does not rewrite the parent of workingDirectory or of homedir as inside it", () => {
+    // `path.relative` returns exactly `..` for these two.
+    expect(sanitizePath("/Users/u/projects", { workingDirectory: WD, homedir: HOME })).toBe(
+      "~/projects",
+    );
+    expect(sanitizePath("/Users", { workingDirectory: WD, homedir: HOME })).toBe("/Users");
+  });
+
   it("is robust against a trailing slash on workingDirectory / homedir options", () => {
     expect(
       sanitizePath("/Users/u/projects/foo/src/x.ts", {
@@ -169,6 +209,10 @@ describe("sanitizeWorkingDirectory", () => {
     expect(sanitizeWorkingDirectory("/Users/u/projects/we\\ird", { homedir: HOME })).toBe(
       "~/projects/we\\ird",
     );
+  });
+
+  it("rewrites a working directory whose name begins with two dots under homedir", () => {
+    expect(sanitizeWorkingDirectory("/Users/u/..\\w", { homedir: HOME })).toBe("~/..\\w");
   });
 });
 
