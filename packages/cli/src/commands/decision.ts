@@ -10,6 +10,7 @@ import {
   basouPaths,
   classifyFilesBySourceRoot,
   createAdHocSessionWithEvent,
+  displayPath,
   EVENT_SCHEMA_VERSION,
   type Event,
   findErrorCode,
@@ -257,7 +258,8 @@ async function warnLinkedFilesOutsideRoots(input: {
     });
     if (scope.outOfRoot.length === 0) return;
     const PATH_SAMPLE = 5;
-    const sample = scope.outOfRoot.slice(0, PATH_SAMPLE).join(", ");
+    // Printed to a terminal: see `displayPath`.
+    const sample = scope.outOfRoot.slice(0, PATH_SAMPLE).map(displayPath).join(", ");
     const more =
       scope.outOfRoot.length > PATH_SAMPLE
         ? ` (... +${scope.outOfRoot.length - PATH_SAMPLE} more)`

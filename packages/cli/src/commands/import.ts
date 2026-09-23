@@ -15,6 +15,7 @@ import {
   classifyFilesBySourceRoot,
   claudeTranscriptToImportPayload,
   codexRolloutToImportPayload,
+  displayPath,
   enumerateSessionDirs,
   findErrorCode,
   type ImportSessionResult,
@@ -522,7 +523,8 @@ async function importDerivedSessions(
   if (crossProject.length > 0) {
     const PATH_SAMPLE = 5;
     for (const { externalId, outOfRoot } of crossProject) {
-      const sample = outOfRoot.slice(0, PATH_SAMPLE).join(", ");
+      // Printed to a terminal: see `displayPath`.
+      const sample = outOfRoot.slice(0, PATH_SAMPLE).map(displayPath).join(", ");
       const more =
         outOfRoot.length > PATH_SAMPLE ? ` (... +${outOfRoot.length - PATH_SAMPLE} more)` : "";
       console.error(

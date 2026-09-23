@@ -1365,6 +1365,45 @@ describe("basou import claude-code (cross-project boundary warning)", () => {
     }
   });
 
+  it("prints a file outside source_roots escaped, so the terminal never gets its raw bytes", async () => {
+    const repo = await realpath(tmpRepo as string);
+    const paths = await ensureBasouDirectory(repo);
+    await writeManifest(
+      paths,
+      createManifest({
+        workspaceName: "fixture-ws",
+        now: FIXED_DATE,
+        workspaceId: FIXED_WS_ID,
+        sourceRoots: ["."],
+      }),
+    );
+    const forged = "/etc/new\n\n## Forged section\ntext\u001b[2J.txt";
+    await writeTranscript(repo, "sess-forged", [
+      {
+        type: "assistant",
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: repo,
+        message: {
+          content: [{ type: "tool_use", name: "Edit", input: { file_path: forged } }],
+        },
+      },
+    ]);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await doRunImportClaudeCode(
+        { all: true },
+        { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+      );
+      const warnings = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(warnings).toContain("outside this project's source_roots");
+      expect(warnings).toContain("/etc/new\\n\\n## Forged section\\ntext\\x1b[2J.txt");
+      expect(warnings).not.toContain("\u001b");
+      expect(warnings).not.toMatch(/^## Forged section/m);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
   it("does not warn for a solo project (no declared source_roots)", async () => {
     const repo = await setupInitedRepo();
     const outside = await mkdtemp(join(tmpdir(), "basou-import-outside-"));

@@ -13,15 +13,25 @@
  * happens where a path is SHOWN, never where it is kept.
  *
  * Not {@link oneLine}: collapsing a newline into a space turns `a\nb.txt` into
- * `a b.txt`, which is another, possibly real, file. An escape stays visibly
- * different from any name without one.
+ * `a b.txt`, which is another, possibly real, file.
  *
- * Escaped: C0 controls (U+0000–U+001F), DEL, C1 controls (U+0080–U+009F), and
- * the Unicode line and paragraph separators U+2028 / U+2029, which Markdown and
- * JavaScript both treat as line breaks. `\n`, `\r` and `\t` keep their familiar
- * spellings; the rest become `\xHH` or `\uHHHH`. A backslash is NOT escaped: it
- * is an ordinary character in a POSIX name, and doubling every one would make
- * the common case harder to read to guard a display-only ambiguity.
+ * Escaped: C0 controls (U+0000–U+001F), DEL, C1 controls (U+0080–U+009F), the
+ * Unicode line and paragraph separators U+2028 / U+2029, which Markdown and
+ * JavaScript both treat as line breaks, and the bidirectional embedding,
+ * override and isolate controls (U+202A–U+202E, U+2066–U+2069), one of which is
+ * enough to make every name after it on the line display reversed. `\n`, `\r`
+ * and `\t` keep their familiar spellings; the rest become `\xHH` or `\uHHHH`.
+ *
+ * NOT reversible, and not meant to be. A backslash is not escaped -- it is an
+ * ordinary character in a POSIX name, and doubling every one would make the
+ * common case harder to read -- so a name containing a real newline and a name
+ * containing the two characters `\` and `n` display the same. The display
+ * keeps a name from acting; it does not identify it. Anything that must name
+ * the file uses the stored value, which is exact.
+ *
+ * Markdown syntax inside the one line (`# `, `[..](..)`, `*`) is not escaped
+ * either: the name can no longer leave its line, but a renderer may still
+ * format what is on it.
  */
 export function displayPath(path: string): string {
   let shown = "";
@@ -45,11 +55,19 @@ export function displayPath(path: string): string {
 }
 
 /**
- * C0 controls, DEL, C1 controls, and the Unicode line / paragraph separators.
+ * C0 controls, DEL, C1 controls, the Unicode line / paragraph separators, and
+ * the bidirectional embedding / override / isolate controls.
  * Written as code points rather than a character class: the two separators are
  * themselves line terminators, and a source file that spells them literally is
  * one editor away from a broken line.
  */
 function isActing(code: number): boolean {
-  return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029;
+  return (
+    code <= 0x1f ||
+    (code >= 0x7f && code <= 0x9f) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2066 && code <= 0x2069)
+  );
 }

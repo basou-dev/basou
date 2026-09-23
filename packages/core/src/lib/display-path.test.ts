@@ -32,8 +32,42 @@ describe("displayPath", () => {
     expect(`- ${shown}`.split("\n")).toHaveLength(1);
   });
 
-  it("does not turn an escaped name into an unescaped one", () => {
-    // `a\nb` (a real newline) and `a b` must not render the same.
+  it("does not show a name with a line break as a name with a space", () => {
     expect(displayPath("a\nb")).not.toBe(displayPath("a b"));
   });
+
+  it("is not reversible: a real newline and a literal backslash-n display alike", () => {
+    // Documented, not a defect: the display keeps a name from acting; the
+    // stored value is what identifies the file.
+    expect(displayPath("a\nb")).toBe(displayPath("a\\nb"));
+  });
+
+  const ch = (code: number) => String.fromCharCode(code);
+
+  it.each([
+    [0x1f, "\\x1f"],
+    [0x0b, "\\x0b"],
+    [0x0c, "\\x0c"],
+    [0x7f, "\\x7f"],
+    [0x80, "\\x80"],
+    [0x9b, "\\x9b"],
+    [0x9d, "\\x9d"],
+    [0x9f, "\\x9f"],
+  ])("escapes U+%s at the edges of the control ranges", (code, shown) => {
+    expect(displayPath(`a${ch(code)}b`)).toBe(`a${shown}b`);
+  });
+
+  it.each([0x20, 0x7e, 0xa0, 0x202f, 0x2065, 0x206a])(
+    "leaves U+%s, just outside a range, alone",
+    (code) => {
+      expect(displayPath(`a${ch(code)}b`)).toBe(`a${ch(code)}b`);
+    },
+  );
+
+  it.each([0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069])(
+    "escapes the bidirectional control U+%s",
+    (code) => {
+      expect(displayPath(`a${ch(code)}b`)).toBe(`a\\u${code.toString(16)}b`);
+    },
+  );
 });
