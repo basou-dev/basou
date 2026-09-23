@@ -160,16 +160,33 @@ hook alone and leaves any SessionStart hook as it is.
 
 Before `basou hook install` could register it, this reference told Claude Code
 users to add a SessionStart hook running `basou orient` by hand. Install
-recognizes that documented shape — `basou orient`, or `node <entry> orient`
-with basou's own entry, optional flags and the `2>/dev/null || true` wrapper —
-and rewrites it in place into `basou hook session-start`, keeping the group's
-matcher; `uninstall` removes it as well. The replacement differs from `basou
-orient` in the two ways described above: it does not rewrite
+recognizes exactly that documented shape — `basou orient`, or `node <entry>
+orient` whose entry path ends in `@basou/cli/dist/index.js` or
+`packages/cli/dist/index.js` as a whole path component (so another monorepo's
+own `packages/cli` would pass it too, while `subpackages/cli` does not), with no
+flags and the
+optional `2>/dev/null || true` wrapper — and rewrites it in place into `basou
+hook session-start`, keeping the group's matcher; `uninstall` removes it as
+well. The replacement differs from `basou orient` in three ways: it speaks only
+for a workspace registered in `~/.basou/portfolio.yaml`, it does not rewrite
 `.basou/orientation.md`, and it withholds a position that names another
-registered workspace. A SessionStart command that runs `basou orient` inside
-anything longer (a `cd` first, an `&&` chain) is not basou's to rewrite: it is
-left exactly as written, and install and status say that the position may now
-arrive twice.
+registered workspace. Install says all three when it replaces one.
+
+Anything else is left exactly as written, because a recognized entry is
+rewritten wholesale and a match inside a longer command would delete what was
+written around it: `basou orient` or `basou hook session-start` inside a longer
+command (a `cd` first, an `&&` chain, node options, `npx`), and `basou orient`
+with a flag (`--quiet` writes the file and prints nothing, so that session
+never received a position; rewriting it would start delivering one). When such
+a command sits beside basou's own hook, install and status say that a session
+may receive the position twice.
+
+If more than one basou SessionStart entry exists, each is rewritten in place,
+and a later one is removed only when an earlier one fires under the same
+matcher. Entries under different matchers are kept, even if the matchers
+overlap: collapsing them would silently stop the hook firing for some session
+source. Install and status name what remains, since a source that more than one
+matches receives the position twice.
 
 Codex trusts hooks by hash and skips a new or changed one until you review it:
 the interactive CLI asks at startup ("Hooks need review"), the desktop app

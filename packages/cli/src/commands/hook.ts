@@ -13,8 +13,9 @@ import {
   evaluateStopHook,
   findBasouSessionStartHook,
   findBasouStopHookCommand,
-  findClaudeSessionStartHook,
-  findUnrecognizedOrientSessionStart,
+  findClaudeSessionStartHooks,
+  findUnrecognizedSessionStart,
+  isClaudeSessionStartMalformed,
   isProtocolUpdateDue,
   ORIENTATION_END,
   ORIENTATION_START,
@@ -240,7 +241,22 @@ export function registerHookCommand(program: Command): void {
     .action(async (target: string | undefined, opts: RawHookInstallOptions) => {
       await dispatchHookTarget(target, opts, {
         claude: () => runHookInstall(opts),
-        codex: () => runCodexHookInstall(opts),
+        codex: async () => {
+          // The Codex registration IS a SessionStart hook; a flag that says to
+          // leave SessionStart out cannot be honoured there, and ignoring it
+          // would install exactly what the operator asked not to.
+          if (opts.sessionStart === false) {
+            renderCliError(
+              new Error(
+                "--no-session-start applies to target claude only; the Codex hook is itself a SessionStart hook.",
+              ),
+              { verbose: isVerbose(opts) },
+            );
+            process.exitCode = 1;
+            return;
+          }
+          await runCodexHookInstall(opts);
+        },
       });
     });
 
@@ -1080,24 +1096,44 @@ export async function doRunHookInstall(
   await assertNotSymlink(settingsPath);
   const { raw, parsed } = await readSettings(settingsPath);
   const stop = upsertStopHook(parsed, command);
-  const sessionStart =
-    options.noSessionStart === true
-      ? null
-      : upsertClaudeSessionStartHook(stop.settings, buildSessionStartHookCommand({ cliEntry }));
-  const settings = sessionStart?.settings ?? stop.settings;
-  const newBody = `${JSON.stringify(settings, null, 2)}\n`;
+
+  // The SessionStart half is new; a settings file it cannot read (a
+  // `hooks.SessionStart` that is not a list) must not cost the operator the
+  // Stop hook, which installed fine before this half existed.
+  let sessionStart: SessionStartInstallOutcome;
+  if (options.noSessionStart === true) {
+    sessionStart = { kind: "skipped" };
+  } else {
+    try {
+      const upsert = upsertClaudeSessionStartHook(
+        stop.settings,
+        buildSessionStartHookCommand({ cliEntry }),
+      );
+      sessionStart = { kind: "done", action: upsert.action, settings: upsert.settings };
+    } catch (error: unknown) {
+      if (!isClaudeSessionStartMalformed(stop.settings)) throw error;
+      sessionStart = { kind: "malformed" };
+    }
+  }
+  const settings = sessionStart.kind === "done" ? sessionStart.settings : stop.settings;
+
+  // Write only when a hook actually changed. Comparing the whole file text
+  // instead would rewrite a file whose hooks are already right but whose
+  // formatting differs -- and report "no change" while doing it. Same rule as
+  // the Codex install.
+  const changed =
+    stop.action !== "unchanged" ||
+    (sessionStart.kind === "done" && sessionStart.action !== "unchanged");
   const dryRun = options.dryRun === true;
-  const noChange = raw !== null && newBody === raw;
 
   const lines = [
-    describeStopInstall(stop.action, mode, dryRun && !noChange),
-    describeSessionStartInstall(sessionStart?.action ?? null, dryRun && !noChange),
+    describeStopInstall(stop.action, mode, dryRun),
+    describeSessionStartInstall(sessionStart, dryRun),
+    ...describeSessionStartLeftovers(settings),
   ];
-  const leftover = findUnrecognizedOrientSessionStart(settings);
 
-  if (noChange || dryRun) {
+  if (!changed || dryRun) {
     for (const line of lines) console.log(line);
-    reportLeftoverOrient(leftover);
     return;
   }
 
@@ -1111,10 +1147,18 @@ export async function doRunHookInstall(
   }
 
   await backupSettingsOnce(settingsPath, raw);
-  await writeFileDurable(settingsPath, newBody);
+  await writeFileDurable(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
   for (const line of lines) console.log(line);
-  reportLeftoverOrient(leftover);
 }
+
+type SessionStartInstallOutcome =
+  | { kind: "skipped" }
+  | { kind: "malformed" }
+  | {
+      kind: "done";
+      action: "installed" | "updated" | "replaced" | "unchanged";
+      settings: Record<string, unknown>;
+    };
 
 function describeStopInstall(
   action: "installed" | "updated" | "unchanged",
@@ -1124,30 +1168,32 @@ function describeStopInstall(
   if (action === "unchanged") {
     return `The basou Stop hook is already registered (${mode}); no change.`;
   }
-  if (dryRun)
+  if (dryRun) {
     return `[dry-run] Would ${action === "installed" ? "install" : "update"} the basou Stop hook (${mode}).`;
+  }
   return `${action === "installed" ? "Installed" : "Updated"} the basou Stop hook (${mode}).`;
 }
 
 /**
  * The SessionStart half of an install, in words that say what the hook is FOR
- * when it is new — the position at session start, and the git baseline without
- * which the session's shell edits are invisible — and what changed when it
- * replaced a hand-registered `basou orient`, whose behaviour differs.
+ * when it is new -- the position at session start, and the git baseline
+ * without which the session's shell edits are invisible -- and every way the
+ * replacement for a hand-registered `basou orient` behaves differently.
  */
-function describeSessionStartInstall(
-  action: "installed" | "updated" | "replaced" | "unchanged" | null,
-  dryRun: boolean,
-): string {
-  if (action === null) {
+function describeSessionStartInstall(outcome: SessionStartInstallOutcome, dryRun: boolean): string {
+  if (outcome.kind === "skipped") {
     return "The SessionStart hook was left as it is (--no-session-start).";
   }
+  if (outcome.kind === "malformed") {
+    return "The basou SessionStart hook was NOT installed: 'hooks.SessionStart' in settings.json is not a list of hook groups. Fix it and re-run 'basou hook install'.";
+  }
+  const action = outcome.action;
   if (action === "unchanged") {
     return "The basou SessionStart hook is already registered; no change.";
   }
   const prefix = dryRun ? "[dry-run] Would " : "";
   if (action === "replaced") {
-    return `${prefix}${dryRun ? "replace" : "Replaced"} the hand-registered 'basou orient' SessionStart hook with 'basou hook session-start': the same position, plus the baseline the Stop hook measures the session's file changes against. It does not rewrite .basou/orientation.md at session start, and it stays silent when the position names another registered workspace.`;
+    return `${prefix}${dryRun ? "replace" : "Replaced"} the hand-registered 'basou orient' SessionStart hook with 'basou hook session-start': the same position, plus the baseline the Stop hook measures the session's file changes against. It differs in three ways: it speaks only for a workspace registered in ~/.basou/portfolio.yaml, it does not rewrite .basou/orientation.md at session start, and it stays silent when the position names another registered workspace.`;
   }
   if (action === "updated") {
     return `${prefix}${dryRun ? "update" : "Updated"} the basou SessionStart hook.`;
@@ -1156,17 +1202,31 @@ function describeSessionStartInstall(
 }
 
 /**
- * Say so when a SessionStart hook runs `basou orient` inside a longer command.
- * Install does not rewrite those (it would delete whatever the user wrote
- * around it), so the position may now arrive twice; the operator is the only
- * one who can decide which to keep.
+ * What the settings still say about SessionStart that a reader should know,
+ * after install has done what it may. Two things, both about the position
+ * arriving twice, and both said only when it actually can:
+ * - a command that runs basou inside something longer, which install does not
+ *   rewrite (it would delete what was written around it), next to a hook of
+ *   basou's own;
+ * - more than one basou entry left under different matchers, which install
+ *   does not collapse (it would narrow when the hook fires).
  */
-function reportLeftoverOrient(commands: readonly string[]): void {
-  for (const command of commands) {
-    console.log(
-      `note: this SessionStart hook runs 'basou orient' inside a longer command, so it was left as written and each session may now receive the position twice: ${command}`,
+function describeSessionStartLeftovers(settings: unknown): string[] {
+  const own = findClaudeSessionStartHooks(settings);
+  if (own.length === 0) return [];
+  const lines: string[] = [];
+  for (const other of findUnrecognizedSessionStart(settings)) {
+    lines.push(
+      `note: this SessionStart hook runs basou '${other.runs === "orient" ? "orient" : "hook session-start"}' inside a longer command, so it was left as written, and a session may receive the position twice: ${other.command}`,
     );
   }
+  if (own.length > 1) {
+    const matchers = own.map((o) => o.matcher ?? "(every source)").join(", ");
+    lines.push(
+      `note: ${own.length} basou SessionStart hooks remain, under different matchers (${matchers}). They were kept so that no session source stops firing; a source that more than one matches receives the position twice. Remove the one you do not want by hand.`,
+    );
+  }
+  return lines;
 }
 
 export async function runHookUninstall(options: RawHookInstallOptions): Promise<void> {
@@ -1253,23 +1313,45 @@ export async function doRunHookStatus(options: HookInstallOptions): Promise<void
  * through the shell — so each state says what it means, not only what it is.
  */
 function reportSessionStartStatus(parsed: unknown): void {
-  const found = findClaudeSessionStartHook(parsed);
-  if (found === null) {
+  if (isClaudeSessionStartMalformed(parsed)) {
     console.log(
-      "basou SessionStart hook: not registered. Sessions get no position at start, and the files a session changes through the shell are not observed. Run 'basou hook install' to register it.",
+      "basou SessionStart hook: cannot tell -- 'hooks.SessionStart' in settings.json is not a list of hook groups.",
     );
-  } else if (found.kind === "orient") {
-    console.log(
-      "basou SessionStart hook: registered by hand as 'basou orient'. It delivers the position but records no git baseline, so the files a session changes through the shell are not observed; 'basou hook install' replaces it with 'basou hook session-start'.",
-    );
-  } else {
-    const fires =
-      found.matcher === undefined || found.matcher === "" || found.matcher === "*"
-        ? "on every session source"
-        : `on ${found.matcher}`;
-    console.log(`basou SessionStart hook: registered, fires ${fires}.`);
+    return;
   }
-  reportLeftoverOrient(findUnrecognizedOrientSessionStart(parsed));
+  const own = findClaudeSessionStartHooks(parsed);
+  const others = findUnrecognizedSessionStart(parsed);
+  // The hook that does the work is reported first: a `hook session-start`
+  // entry records the baseline whatever else sits beside it.
+  for (const hook of own.filter((o) => o.kind === "session-start")) {
+    console.log(`basou SessionStart hook: registered, fires ${describeFiring(hook.matcher)}.`);
+  }
+  for (const hook of own.filter((o) => o.kind === "orient")) {
+    console.log(
+      `basou SessionStart hook: 'basou orient' registered by hand, fires ${describeFiring(hook.matcher)}. It delivers the position but records no git baseline, so the files a session changes through the shell are not observed; 'basou hook install' replaces it with 'basou hook session-start'.`,
+    );
+  }
+  if (own.length === 0) {
+    if (others.length === 0) {
+      console.log(
+        "basou SessionStart hook: not registered. Sessions get no position at start, and the files a session changes through the shell are not observed. Run 'basou hook install' to register it.",
+      );
+    }
+    for (const other of others) {
+      console.log(
+        other.runs === "orient"
+          ? `basou SessionStart hook: not registered by basou. A SessionStart hook runs 'basou orient' inside a longer command, so sessions may get the position, but no git baseline is recorded: ${other.command}`
+          : `basou SessionStart hook: not registered by basou. A SessionStart hook runs 'basou hook session-start' inside a longer command, which basou leaves as written: ${other.command}`,
+      );
+    }
+  }
+  for (const line of describeSessionStartLeftovers(parsed)) console.log(line);
+}
+
+function describeFiring(matcher: string | undefined): string {
+  return matcher === undefined || matcher === "" || matcher === "*"
+    ? "on every session source"
+    : `on ${matcher}`;
 }
 
 /**

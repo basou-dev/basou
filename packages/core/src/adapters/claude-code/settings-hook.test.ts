@@ -7,10 +7,12 @@ import {
 import {
   buildStopHookCommand,
   findBasouStopHookCommand,
-  findClaudeSessionStartHook,
-  findUnrecognizedOrientSessionStart,
+  findClaudeSessionStartHooks,
+  findUnrecognizedSessionStart,
   isBasouOrientSessionStartCommand,
   isBasouStopHookCommand,
+  isClaudeSessionStartHookCommand,
+  isClaudeSessionStartMalformed,
   removeClaudeSessionStartHook,
   removeStopHook,
   STOP_HOOK_TIMEOUT_SECONDS,
@@ -254,22 +256,28 @@ describe("Claude SessionStart hook", () => {
   const canonical = { type: "command", command: SS, timeout: SESSION_START_HOOK_TIMEOUT_SECONDS };
   /** The form basou's own reference told Claude Code users to register by hand. */
   const ORIENT = `node ${ENTRY} orient 2>/dev/null || true`;
+  const ss = (groups: unknown[]) => ({ hooks: { SessionStart: groups } });
 
   describe("isBasouOrientSessionStartCommand", () => {
     it.each([
       ["the documented node form", `node ${ENTRY} orient 2>/dev/null || true`],
-      ["a quoted entry", `node '${ENTRY}' orient 2>/dev/null || true`],
+      ["a single-quoted entry", `node '${ENTRY}' orient 2>/dev/null || true`],
+      ["a double-quoted entry", `node "${ENTRY}" orient`],
       ["the npm path", "node /usr/lib/node_modules/@basou/cli/dist/index.js orient"],
       ["the bare alias", "basou orient"],
-      ["a flag", "basou orient --refresh 2>/dev/null || true"],
     ])("recognizes %s", (_label, command) => {
       expect(isBasouOrientSessionStartCommand(command)).toBe(true);
     });
 
     it.each([
-      ["a cd before it", `cd ~/work && basou orient`],
+      // A flag changes what the hook does; rewriting it would change behaviour.
+      ["--quiet (writes the file, prints nothing)", "basou orient --quiet 2>/dev/null || true"],
+      ["--refresh (imports first)", "basou orient --refresh"],
+      ["a cd before it", "cd ~/work && basou orient"],
       ["a chain after it", "basou orient && echo done"],
+      ["a second command on the next line", "basou orient\necho next"],
       ["a foreign cli path", "node /x/some-cli/dist/index.js orient"],
+      ["a path that merely ends in packages", "node /w/subpackages/cli/dist/index.js orient"],
       ["a different subcommand", "basou refresh"],
       ["hook session-start", SS],
     ])("does not claim %s", (_label, command) => {
@@ -277,13 +285,22 @@ describe("Claude SessionStart hook", () => {
     });
   });
 
+  describe("isClaudeSessionStartHookCommand", () => {
+    it("recognizes the command basou writes", () => {
+      expect(isClaudeSessionStartHookCommand(SS)).toBe(true);
+    });
+
+    it("does not claim `hook session-start` inside a longer command", () => {
+      // Rewriting it wholesale would delete the `cd` and the `echo`.
+      expect(isClaudeSessionStartHookCommand(`cd /x && ${SS} && echo done`)).toBe(false);
+    });
+  });
+
   describe("upsertClaudeSessionStartHook", () => {
     it("installs a group of its own, with basou's matcher", () => {
       const { settings, action } = upsertClaudeSessionStartHook(undefined, SS);
       expect(action).toBe("installed");
-      expect(settings).toEqual({
-        hooks: { SessionStart: [{ matcher: SESSION_START_HOOK_MATCHER, hooks: [canonical] }] },
-      });
+      expect(settings).toEqual(ss([{ matcher: SESSION_START_HOOK_MATCHER, hooks: [canonical] }]));
     });
 
     it("leaves the Stop hook and every other key alone", () => {
@@ -304,135 +321,140 @@ describe("Claude SessionStart hook", () => {
     });
 
     it("replaces the hand-registered `basou orient` in place, keeping its matcher", () => {
-      const before = {
-        hooks: {
-          SessionStart: [
-            { matcher: "*", hooks: [{ type: "command", command: ORIENT, timeout: 20 }] },
-          ],
-        },
-      };
-      const { settings, action } = upsertClaudeSessionStartHook(before, SS);
+      const { settings, action } = upsertClaudeSessionStartHook(
+        ss([{ matcher: "*", hooks: [{ type: "command", command: ORIENT, timeout: 20 }] }]),
+        SS,
+      );
       expect(action).toBe("replaced");
-      // The matcher is when the hook fires, and the person who wrote it chose
-      // "*": basou does not narrow it.
-      expect(settings).toEqual({ hooks: { SessionStart: [{ matcher: "*", hooks: [canonical] }] } });
+      expect(settings).toEqual(ss([{ matcher: "*", hooks: [canonical] }]));
+    });
+
+    it("reports `replaced` even when the orient it rewrote came after a canonical entry", () => {
+      const { action } = upsertClaudeSessionStartHook(
+        ss([
+          { matcher: "startup", hooks: [{ ...canonical }] },
+          { matcher: "resume", hooks: [{ type: "command", command: ORIENT }] },
+        ]),
+        SS,
+      );
+      expect(action).toBe("replaced");
     });
 
     it("updates an out-of-date `hook session-start` entry in place", () => {
       const stale = `node '/old/packages/cli/dist/index.js' hook session-start 2>/dev/null || true`;
-      const before = {
-        hooks: { SessionStart: [{ hooks: [{ type: "command", command: stale, timeout: 20 }] }] },
-      };
-      const { settings, action } = upsertClaudeSessionStartHook(before, SS);
+      const { settings, action } = upsertClaudeSessionStartHook(
+        ss([{ hooks: [{ type: "command", command: stale, timeout: 20 }] }]),
+        SS,
+      );
       expect(action).toBe("updated");
-      expect(settings).toEqual({ hooks: { SessionStart: [{ hooks: [canonical] }] } });
+      expect(settings).toEqual(ss([{ hooks: [canonical] }]));
     });
 
-    it("keeps one basou entry when the two documented setups left two", () => {
-      const before = {
-        hooks: {
-          SessionStart: [
-            { matcher: "*", hooks: [{ type: "command", command: ORIENT }] },
-            { matcher: "startup", hooks: [{ type: "command", command: SS }] },
-          ],
-        },
-      };
-      const { settings, action } = upsertClaudeSessionStartHook(before, SS);
+    it("reports an update, not 'unchanged', when only the timeout is stale", () => {
+      const { action } = upsertClaudeSessionStartHook(
+        ss([{ hooks: [{ type: "command", command: SS, timeout: 20 }] }]),
+        SS,
+      );
+      expect(action).toBe("updated");
+    });
+
+    it("collapses entries only under the SAME matcher", () => {
+      const { settings, action } = upsertClaudeSessionStartHook(
+        ss([
+          { matcher: "*", hooks: [{ ...canonical }] },
+          { hooks: [{ type: "command", command: SS }] }, // no matcher = "*"
+        ]),
+        SS,
+      );
+      expect(action).toBe("updated");
+      expect(settings).toEqual(ss([{ matcher: "*", hooks: [canonical] }]));
+    });
+
+    it("keeps entries under different matchers, so no session source stops firing", () => {
+      const { settings, action } = upsertClaudeSessionStartHook(
+        ss([
+          { matcher: "startup", hooks: [{ type: "command", command: ORIENT }] },
+          { matcher: "resume|clear", hooks: [{ type: "command", command: SS }] },
+        ]),
+        SS,
+      );
       expect(action).toBe("replaced");
-      expect(settings).toEqual({ hooks: { SessionStart: [{ matcher: "*", hooks: [canonical] }] } });
+      expect(settings).toEqual(
+        ss([
+          { matcher: "startup", hooks: [canonical] },
+          { matcher: "resume|clear", hooks: [canonical] },
+        ]),
+      );
+      expect(findClaudeSessionStartHooks(settings).map((h) => h.matcher)).toEqual([
+        "startup",
+        "resume|clear",
+      ]);
     });
 
     it("never deletes the rest of a group it shares with a foreign hook", () => {
       const foreign = { type: "command", command: "echo hello" };
-      const before = {
-        hooks: {
-          SessionStart: [
-            { matcher: "startup", hooks: [foreign, { type: "command", command: ORIENT }] },
-          ],
-        },
-      };
-      const { settings } = upsertClaudeSessionStartHook(before, SS);
-      expect(settings).toEqual({
-        hooks: { SessionStart: [{ matcher: "startup", hooks: [foreign, canonical] }] },
-      });
+      const { settings } = upsertClaudeSessionStartHook(
+        ss([{ matcher: "startup", hooks: [foreign, { type: "command", command: ORIENT }] }]),
+        SS,
+      );
+      expect(settings).toEqual(ss([{ matcher: "startup", hooks: [foreign, canonical] }]));
     });
 
-    it("does not rewrite `basou orient` inside a longer command", () => {
-      const compound = { type: "command", command: "cd ~/work && basou orient" };
-      const before = { hooks: { SessionStart: [{ hooks: [compound] }] } };
-      const { settings, action } = upsertClaudeSessionStartHook(before, SS);
-      // The `cd` is the user's; it is left as written and basou adds its own.
+    it.each([
+      ["orient inside a longer command", "cd ~/work && basou orient", "orient"],
+      ["orient with a flag", "basou orient --quiet 2>/dev/null || true", "orient"],
+      [
+        "session-start inside a longer command",
+        "cd /x && basou hook session-start && echo done",
+        "session-start",
+      ],
+    ])("does not rewrite %s", (_label, command, runs) => {
+      const other = { type: "command", command };
+      const { settings, action } = upsertClaudeSessionStartHook(ss([{ hooks: [other] }]), SS);
       expect(action).toBe("installed");
       const groups = (settings.hooks as { SessionStart: unknown[] }).SessionStart;
-      expect(groups[0]).toEqual({ hooks: [compound] });
+      expect(groups[0]).toEqual({ hooks: [other] });
       expect(groups).toHaveLength(2);
-      expect(findUnrecognizedOrientSessionStart(settings)).toEqual([compound.command]);
+      expect(findUnrecognizedSessionStart(settings)).toEqual([{ command, runs }]);
     });
 
     it("leaves an empty group it did not empty", () => {
-      const before = { hooks: { SessionStart: [{ hooks: [] }] } };
-      const { settings } = upsertClaudeSessionStartHook(before, SS);
+      const { settings } = upsertClaudeSessionStartHook(ss([{ hooks: [] }]), SS);
       expect((settings.hooks as { SessionStart: unknown[] }).SessionStart[0]).toEqual({
         hooks: [],
       });
     });
 
-    it("reports an update, not 'unchanged', when only the timeout is stale", () => {
-      const before = {
-        hooks: { SessionStart: [{ hooks: [{ type: "command", command: SS, timeout: 20 }] }] },
-      };
-      const { settings, action } = upsertClaudeSessionStartHook(before, SS);
-      // The file IS rewritten; saying "no change" would be a false report.
-      expect(action).toBe("updated");
-      expect(settings).toEqual({ hooks: { SessionStart: [{ hooks: [canonical] }] } });
-    });
-
-    it("reports an update when a canonical entry had a duplicate it removed", () => {
-      const before = {
-        hooks: {
-          SessionStart: [
-            { matcher: "*", hooks: [{ ...canonical }] },
-            { hooks: [{ type: "command", command: SS }] },
-          ],
-        },
-      };
-      const { settings, action } = upsertClaudeSessionStartHook(before, SS);
-      expect(action).toBe("updated");
-      expect(settings).toEqual({ hooks: { SessionStart: [{ matcher: "*", hooks: [canonical] }] } });
-    });
-
     it("refuses a SessionStart that is not an array rather than replacing it", () => {
-      expect(() => upsertClaudeSessionStartHook({ hooks: { SessionStart: {} } }, SS)).toThrow(
-        "'hooks.SessionStart'",
-      );
+      const bad = { hooks: { SessionStart: {} } };
+      expect(() => upsertClaudeSessionStartHook(bad, SS)).toThrow("'hooks.SessionStart'");
+      expect(isClaudeSessionStartMalformed(bad)).toBe(true);
+      expect(isClaudeSessionStartMalformed(ss([]))).toBe(false);
+      expect(isClaudeSessionStartMalformed({})).toBe(false);
     });
   });
 
   describe("removeClaudeSessionStartHook", () => {
     it("removes both basou forms and the scaffolding they leave empty", () => {
-      const before = {
-        hooks: {
-          SessionStart: [
-            { matcher: "*", hooks: [{ type: "command", command: ORIENT }] },
-            { hooks: [{ type: "command", command: SS }] },
-          ],
-        },
-      };
-      const { settings, action } = removeClaudeSessionStartHook(before);
+      const { settings, action } = removeClaudeSessionStartHook(
+        ss([
+          { matcher: "*", hooks: [{ type: "command", command: ORIENT }] },
+          { hooks: [{ type: "command", command: SS }] },
+        ]),
+      );
       expect(action).toBe("removed");
       expect(settings).toEqual({});
     });
 
-    it("keeps foreign hooks, the Stop hook, and a compound `orient` it does not own", () => {
+    it("keeps foreign hooks, the Stop hook, and a compound command it does not own", () => {
       const compound = { type: "command", command: "cd ~/work && basou orient" };
       const stop = [{ hooks: [{ type: "command", command: "x" }] }];
-      const before = {
+      const { settings } = removeClaudeSessionStartHook({
         hooks: {
           Stop: stop,
           SessionStart: [{ hooks: [compound, { type: "command", command: SS }] }],
         },
-      };
-      const { settings } = removeClaudeSessionStartHook(before);
+      });
       expect(settings).toEqual({ hooks: { Stop: stop, SessionStart: [{ hooks: [compound] }] } });
     });
 
@@ -441,37 +463,48 @@ describe("Claude SessionStart hook", () => {
     });
   });
 
-  describe("findClaudeSessionStartHook", () => {
-    it("says which form is registered, and under which matcher", () => {
+  describe("findClaudeSessionStartHooks", () => {
+    it("lists every basou entry with its form and matcher, in file order", () => {
       expect(
-        findClaudeSessionStartHook({
-          hooks: {
-            SessionStart: [{ matcher: "*", hooks: [{ type: "command", command: ORIENT }] }],
-          },
-        }),
-      ).toEqual({ command: ORIENT, kind: "orient", matcher: "*" });
+        findClaudeSessionStartHooks(
+          ss([
+            { matcher: "*", hooks: [{ type: "command", command: ORIENT }] },
+            { hooks: [{ type: "command", command: SS }] },
+          ]),
+        ),
+      ).toEqual([
+        { command: ORIENT, kind: "orient", matcher: "*" },
+        { command: SS, kind: "session-start", matcher: undefined },
+      ]);
     });
 
-    it("returns null when neither form is present", () => {
-      expect(findClaudeSessionStartHook({ hooks: { Stop: [] } })).toBeNull();
-    });
-
-    it("distinguishes a group with no matcher from one matching '*'", () => {
-      expect(
-        findClaudeSessionStartHook({
-          hooks: { SessionStart: [{ hooks: [{ type: "command", command: SS }] }] },
-        }),
-      ).toEqual({ command: SS, kind: "session-start", matcher: undefined });
+    it("returns nothing when neither form is present", () => {
+      expect(findClaudeSessionStartHooks({ hooks: { Stop: [] } })).toEqual([]);
     });
   });
 
-  describe("findUnrecognizedOrientSessionStart", () => {
-    it("does not flag the documented form, which install recognizes and replaces", () => {
-      expect(
-        findUnrecognizedOrientSessionStart({
-          hooks: { SessionStart: [{ hooks: [{ type: "command", command: ORIENT }] }] },
-        }),
-      ).toEqual([]);
+  describe("findUnrecognizedSessionStart", () => {
+    it.each([
+      ["node options before the entry", `node --no-warnings '${ENTRY}' orient`, "orient"],
+      ["npx", "npx @basou/cli orient", "orient"],
+      ["npx -y", "npx -y @basou/cli hook session-start", "session-start"],
+      ["a cd before it", "cd ~/work && basou orient", "orient"],
+    ])("reports %s", (_label, command, runs) => {
+      expect(findUnrecognizedSessionStart(ss([{ hooks: [{ type: "command", command }] }]))).toEqual(
+        [{ command, runs }],
+      );
+    });
+
+    it.each([
+      ["the documented form, which install recognizes", ORIENT],
+      ["basou's own command", SS],
+      ["a quoted string that mentions it", "echo 'run basou orient later'"],
+      ["the tail of another word", "notbasou orient"],
+      ["another subcommand that starts the same", "basou orient-foo"],
+    ])("does not report %s", (_label, command) => {
+      expect(findUnrecognizedSessionStart(ss([{ hooks: [{ type: "command", command }] }]))).toEqual(
+        [],
+      );
     });
   });
 });
