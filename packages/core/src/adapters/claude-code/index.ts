@@ -6,16 +6,28 @@ export {
 } from "./claude-code-adapter.js";
 export type {
   BuildStopHookCommandOptions,
+  ClaudeSessionStartHookKind,
+  ClaudeSessionStartHookLocation,
+  ClaudeSessionStartHookRemoval,
+  ClaudeSessionStartHookUpsert,
   ClaudeSettings,
+  ClaudeUnrecognizedSessionStart,
   StopHookRemoval,
   StopHookUpsert,
 } from "./settings-hook.js";
 export {
   buildStopHookCommand,
   findBasouStopHookCommand,
+  findClaudeSessionStartHooks,
+  findUnrecognizedSessionStart,
+  isBasouOrientSessionStartCommand,
   isBasouStopHookCommand,
+  isClaudeSessionStartHookCommand,
+  isClaudeSessionStartMalformed,
+  removeClaudeSessionStartHook,
   removeStopHook,
   STOP_HOOK_TIMEOUT_SECONDS,
+  upsertClaudeSessionStartHook,
   upsertStopHook,
 } from "./settings-hook.js";
 export type {

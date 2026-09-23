@@ -45,8 +45,9 @@ basou review-gaps          # units of work committed with no bound cross-model r
 basou decision gaps        # open decisions that no task carries
 
 # Hooks (handlers an AI tool runs at its own lifecycle points)
-basou hook install [claude|codex]    # register the Claude Code Stop hook (default) or the
-                                     #   Codex SessionStart hook, once, in the tool's user config
+basou hook install [claude|codex]    # register the Claude Code Stop + SessionStart hooks
+                                     #   (default) or the Codex SessionStart hook, once, in
+                                     #   the tool's user config
 basou hook status [claude|codex]     # is it registered (codex: and has Codex trusted it yet)
 basou hook uninstall [claude|codex]
 basou hook stop | session-start      # the handlers themselves — the tool invokes them, not you
@@ -124,11 +125,9 @@ master) and prints the workspace's position — the same text as `basou orient`
 position is computed at that moment and stored nowhere: a Codex opened in
 another workspace gets that workspace's position, and one opened outside any
 basou workspace (or before the desktop app has bound a folder, when `cwd` is
-`/`) gets nothing. One hook, every workspace, no shared file. It is the same
-shape as a Claude Code SessionStart hook that runs `basou orient` (which a
-Claude Code user registers by hand in `~/.claude/settings.json`; basou does not
-install one). It works in the Codex CLI, the desktop app, and the IDE
-extension, which share the hooks system.
+`/`) gets nothing. One hook, every workspace, no shared file. It works in the
+Codex CLI, the desktop app, and the IDE extension, which share the hooks
+system.
 
 The hook speaks only for a workspace **registered in `~/.basou/portfolio.yaml`**
 (the resolved root must be a registered path; a member repo resolves to its
@@ -146,11 +145,48 @@ mentions one. `basou orient` and `basou refresh` report that finding as a stderr
 advisory the operator can read and act on; a hook has no reader for stderr and
 its stdout becomes the session's trusted context, so it withholds the position
 instead — the same outcome as an unregistered workspace. The next `basou
-refresh` says which lines are responsible. Claude Code's SessionStart hook
-sends the same kind of payload (a JSON object with `cwd`) and adds stdout to
-context the same way, so a Claude Code user may register `basou hook
-session-start` in `~/.claude/settings.json` in place of `basou orient` to get
-both gates; basou does not install that one.
+refresh` says which lines are responsible.
+
+**The same hook in Claude Code.** Claude Code's SessionStart hook sends the same
+kind of payload (a JSON object with `cwd`) and adds stdout to context the same
+way, so `basou hook install` (target `claude`) registers `basou hook
+session-start` in `~/.claude/settings.json` beside the Stop hook, with the same
+matcher and timeout as the Codex registration. In Claude Code the hook does one
+more thing: it records where each repository the workspace declares stood when
+the session started, which is the base the Stop hook measures the session's
+file changes against. Without it a session that edits through the shell is
+recorded as having changed no files. `--no-session-start` registers the Stop
+hook alone and leaves any SessionStart hook as it is.
+
+Before `basou hook install` could register it, this reference told Claude Code
+users to add a SessionStart hook running `basou orient` by hand. Install
+recognizes exactly that documented shape — `basou orient`, or `node <entry>
+orient` whose entry path ends in `@basou/cli/dist/index.js` or
+`packages/cli/dist/index.js` as a whole path component (so another monorepo's
+own `packages/cli` would pass it too, while `subpackages/cli` does not), with no
+flags and the
+optional `2>/dev/null || true` wrapper — and rewrites it in place into `basou
+hook session-start`, keeping the group's matcher; `uninstall` removes it as
+well. The replacement differs from `basou orient` in three ways: it speaks only
+for a workspace registered in `~/.basou/portfolio.yaml`, it does not rewrite
+`.basou/orientation.md`, and it withholds a position that names another
+registered workspace. Install says all three when it replaces one.
+
+Anything else is left exactly as written, because a recognized entry is
+rewritten wholesale and a match inside a longer command would delete what was
+written around it: `basou orient` or `basou hook session-start` inside a longer
+command (a `cd` first, an `&&` chain, node options, `npx`), and `basou orient`
+with a flag (`--quiet` writes the file and prints nothing, so that session
+never received a position; rewriting it would start delivering one). When such
+a command sits beside basou's own hook, install and status say that a session
+may receive the position twice.
+
+If more than one basou SessionStart entry exists, each is rewritten in place,
+and a later one is removed only when an earlier one fires under the same
+matcher. Entries under different matchers are kept, even if the matchers
+overlap: collapsing them would silently stop the hook firing for some session
+source. Install and status name what remains, since a source that more than one
+matches receives the position twice.
 
 Codex trusts hooks by hash and skips a new or changed one until you review it:
 the interactive CLI asks at startup ("Hooks need review"), the desktop app

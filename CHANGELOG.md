@@ -3,6 +3,46 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`basou hook install` (target `claude`) now registers the SessionStart hook
+  as well as the Stop hook.** In 0.49.0 the SessionStart registration had to be
+  added by hand, and without it the Stop hook had no baseline to measure a
+  session's file changes against, so the git observation 0.49.0 shipped did
+  nothing anywhere it was not hand-configured. The hook is `basou hook
+  session-start` -- the same command, matcher (`startup|resume|clear`) and
+  timeout as the Codex registration. `--no-session-start` registers the Stop
+  hook alone and leaves any SessionStart hook as it is; `uninstall` removes both
+  and `status` reports both.
+
+  **A hand-registered `basou orient` SessionStart hook is replaced.** Until now
+  the command reference told Claude Code users to add exactly that, so leaving
+  it would put the position into every session twice. Install recognizes the
+  documented shape only -- `basou orient`, or `node <entry> orient` whose entry
+  path ends in `@basou/cli/dist/index.js` or `packages/cli/dist/index.js`, with
+  no flags and the optional `2>/dev/null || true` wrapper -- and rewrites it in
+  place, keeping its group's matcher. It says how the replacement differs: it
+  speaks only for a workspace registered in `~/.basou/portfolio.yaml`, it does
+  not rewrite `.basou/orientation.md` at session start, and it stays silent when
+  the position names another registered workspace.
+
+  **Anything else is left as written.** A recognized entry is rewritten
+  wholesale, so `basou orient` or `basou hook session-start` inside a longer
+  command, and `basou orient` with a flag (`--quiet` never delivered a position
+  at all), are not touched; when one sits beside basou's own hook, install and
+  status say the position may arrive twice. Several basou entries are collapsed
+  only when they fire under the same matcher -- entries under different matchers
+  are kept so that no session source stops firing, and are named.
+
+  Install writes `settings.json` only when a hook actually changed, as the Codex
+  install does, so a file whose hooks are already right is never rewritten for
+  its formatting. A `hooks.SessionStart` that is not a list no longer costs the
+  Stop hook: the Stop hook is installed and the SessionStart half is skipped
+  with the reason. `basou hook install codex --no-session-start` is refused
+  rather than installing the one hook the flag names.
+
 ## 0.49.0 — 2026-09-23
 
 ### Added
