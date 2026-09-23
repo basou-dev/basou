@@ -285,3 +285,115 @@ describe("getChangesSince", () => {
     await expect(getChangesSince(tmpRepo, "HEAD")).rejects.toThrow("Not a git repository");
   });
 });
+
+describe("paths git would quote", () => {
+  // Without `-z`, git renders each of these as a double-quoted, escaped string
+  // (`"\346\227\245.md"`, `"has\"quote.txt"`, ...) that names no file on disk.
+  const NAMES = [
+    ["non-ASCII", "日本語.md"],
+    ["a double quote", 'has"quote.txt'],
+    ["a backslash", "back\\slash.txt"],
+    ["a tab", "tab\there.txt"],
+    ["a newline", "new\nline.txt"],
+  ] as const;
+
+  it.each(NAMES)(
+    "getDiff returns a path with %s exactly as it is on disk",
+    async (_label, name) => {
+      const { head: base, git } = await initRepoWithFiles(tmpRepo);
+      await writeFile(join(tmpRepo, name), "x\n");
+      await git.add(name);
+      await git.commit("add it");
+      const head = (await git.revparse(["HEAD"])).trimEnd();
+
+      const { changed_files } = await getDiff(tmpRepo, base, head);
+      expect(changed_files).toEqual([{ path: name, status: "added" }]);
+    },
+  );
+
+  it.each(NAMES)(
+    "getChangesSince returns a path with %s exactly as it is on disk",
+    async (_label, name) => {
+      const { head: base, git } = await initRepoWithFiles(tmpRepo);
+      await writeFile(join(tmpRepo, name), "x\n");
+      await git.add(name);
+      await git.commit("add it");
+
+      expect(await getChangesSince(tmpRepo, base)).toEqual([{ path: name, status: "added" }]);
+    },
+  );
+
+  it("keeps both halves of a rename between two such names, in the right order", async () => {
+    const from = "日本語.md";
+    const to = 'renamed "日本".md';
+    const { git } = await initRepoWithFiles(tmpRepo, { [from]: "same body\n" });
+    const base = (await git.revparse(["HEAD"])).trimEnd();
+    await git.mv(from, to);
+    await git.commit("rename it");
+    const head = (await git.revparse(["HEAD"])).trimEnd();
+
+    const { changed_files } = await getDiff(tmpRepo, base, head);
+    expect(changed_files).toEqual([{ path: to, status: "renamed", old_path: from }]);
+  });
+
+  it("does not let one entry's fields leak into the next", async () => {
+    // A rename (two paths) followed by ordinary entries (one path each): if the
+    // parser took the wrong number of fields for the rename, every later path
+    // would be shifted by one and read as a status.
+    const { git } = await initRepoWithFiles(tmpRepo, {
+      "a.txt": "a body that stays the same\n",
+      "b.txt": "b\n",
+    });
+    const base = (await git.revparse(["HEAD"])).trimEnd();
+    await git.mv("a.txt", "z-renamed.txt");
+    await writeFile(join(tmpRepo, "b.txt"), "b changed\n");
+    await writeFile(join(tmpRepo, "cé.txt"), "new\n");
+    await git.add(["b.txt", "cé.txt"]);
+    await git.commit("three kinds at once");
+    const head = (await git.revparse(["HEAD"])).trimEnd();
+
+    const { changed_files } = await getDiff(tmpRepo, base, head);
+    expect([...changed_files].sort((x, y) => (x.path < y.path ? -1 : 1))).toEqual([
+      { path: "b.txt", status: "modified" },
+      { path: "cé.txt", status: "added" },
+      { path: "z-renamed.txt", status: "renamed", old_path: "a.txt" },
+    ]);
+  });
+
+  it("skips a copy entry without shifting the ones after it", async () => {
+    // basou never asks for copy detection, but an operator's `diff.renames =
+    // copies` makes git emit `C<score>\0<from>\0<to>` -- two paths, like a
+    // rename. Reading it as one path would turn every later path into a status.
+    const body = "a body long enough for git to call the new file a copy of it\n".repeat(8);
+    const { git } = await initRepoWithFiles(tmpRepo, { "orig.txt": body, "z.txt": "z\n" });
+    await git.addConfig("diff.renames", "copies");
+    const base = (await git.revparse(["HEAD"])).trimEnd();
+    await writeFile(join(tmpRepo, "orig.txt"), `${body}one more line\n`);
+    await writeFile(join(tmpRepo, "copy.txt"), body);
+    await writeFile(join(tmpRepo, "z.txt"), "z changed\n");
+    await git.add(["orig.txt", "copy.txt", "z.txt"]);
+    await git.commit("copy, modify, modify");
+    const head = (await git.revparse(["HEAD"])).trimEnd();
+
+    const raw = await git.raw(["diff", "--name-status", `${base}..${head}`]);
+    expect(raw).toMatch(/^C\d+\t/m); // the fixture really produces a copy entry
+    const { changed_files } = await getDiff(tmpRepo, base, head);
+    expect([...changed_files].sort((x, y) => (x.path < y.path ? -1 : 1))).toEqual([
+      { path: "orig.txt", status: "modified" },
+      { path: "z.txt", status: "modified" },
+    ]);
+  });
+
+  it("reads a deletion of such a name", async () => {
+    const name = "日本語.md";
+    const { git } = await initRepoWithFiles(tmpRepo, { [name]: "x\n", "keep.txt": "k\n" });
+    const base = (await git.revparse(["HEAD"])).trimEnd();
+    await git.rm(name);
+    await git.commit("remove it");
+    const head = (await git.revparse(["HEAD"])).trimEnd();
+
+    expect((await getDiff(tmpRepo, base, head)).changed_files).toEqual([
+      { path: name, status: "deleted" },
+    ]);
+  });
+});

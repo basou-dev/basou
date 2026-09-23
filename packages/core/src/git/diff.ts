@@ -69,7 +69,7 @@ export async function getDiff(
 
   let raw: string;
   try {
-    raw = await git.raw(["diff", "--name-status", `${baseRef}..${headRef}`]);
+    raw = await git.raw(["diff", "--name-status", "-z", `${baseRef}..${headRef}`]);
   } catch (error: unknown) {
     throw translateDiffError(error);
   }
@@ -89,11 +89,7 @@ export async function getDiff(
  *
  * Untracked files are NOT included — `git diff` never reports them — so a
  * caller that wants them unions this with {@link getWorkingTreeChanges}.
- *
- * {@link getDiff} does NOT set `core.quotePath=false` and still returns git's
- * quoted rendering for a non-ASCII path. That is a separate defect on a
- * shipped path (`basou run` / `exec` write those paths into `file_changed`
- * events) and is deliberately not changed here.
+
  *
  * Pathless contract and error vocabulary are identical to {@link getDiff}.
  *
@@ -113,12 +109,11 @@ export async function getChangesSince(repoRoot: string, baseRef: string): Promis
 
   let raw: string;
   try {
-    // `core.quotePath=false` so a non-ASCII path comes back as itself rather
-    // than as git's octal-escaped, double-quoted rendering. The caller unions
-    // this with `git status`, which reports the same path RAW; without this
-    // the two answers spell one file two ways, and nothing downstream —
-    // deduplication, or subtracting what was already dirty — can match them.
-    raw = await git.raw(["-c", "core.quotePath=false", "diff", "--name-status", baseRef]);
+    // `-z` for the reason given on the parser: the caller unions this with
+    // `git status`, which reports every path RAW, so a quoted spelling here
+    // would name the same file twice and defeat the subtraction of what was
+    // already dirty.
+    raw = await git.raw(["diff", "--name-status", "-z", baseRef]);
   } catch (error: unknown) {
     throw translateDiffError(error);
   }
@@ -156,31 +151,47 @@ function translateDiffError(error: unknown): Error {
   return new Error("Failed to compute git diff", { cause: error });
 }
 
+/**
+ * Parse `git diff --name-status -z`: NUL-separated fields, a status, then one
+ * path — or two, old then new, for a rename or copy.
+ *
+ * `-z` is what makes the paths TRUE. Without it git renders any path it
+ * considers unusual as a double-quoted, backslash-escaped string: every
+ * non-ASCII byte as an octal escape (`"\346\227\245.md"`), and `"`, `\`, tab
+ * and newline always, whatever `core.quotePath` says. That string names no
+ * file on disk, and it was written into `file_changed` events and
+ * `related_files` as if it did. With `-z` git quotes nothing, and a path may
+ * even contain a tab or a newline without breaking the record apart.
+ */
 function parseDiffNameStatus(raw: string): FileChange[] {
-  const lines = raw.split("\n").filter((l) => l.trim() !== "");
+  const fields = raw.split("\0");
   const changes: FileChange[] = [];
-  for (const line of lines) {
-    const parts = line.split("\t");
-    const code = parts[0];
-    if (code === undefined || code.length === 0) continue;
-    if (code.startsWith("R") && parts.length >= 3) {
-      const newPath = parts[2];
-      const oldPath = parts[1];
-      if (newPath === undefined) continue;
-      changes.push({
-        path: newPath,
-        status: "renamed",
-        ...(oldPath !== undefined ? { old_path: oldPath } : {}),
-      });
-    } else if (code === "A" && parts[1]) {
-      changes.push({ path: parts[1], status: "added" });
-    } else if (code === "M" && parts[1]) {
-      changes.push({ path: parts[1], status: "modified" });
-    } else if (code === "D" && parts[1]) {
-      changes.push({ path: parts[1], status: "deleted" });
+  let i = 0;
+  while (i < fields.length) {
+    const code = fields[i] ?? "";
+    // Rename and copy carry two paths; every other status carries one. The
+    // field count is decided by the status letter BEFORE deciding whether the
+    // entry is kept, so a skipped entry never shifts the fields that follow.
+    const twoPaths = code.startsWith("R") || code.startsWith("C");
+    const first = fields[i + 1];
+    const second = twoPaths ? fields[i + 2] : undefined;
+    i += twoPaths ? 3 : 2;
+    // The field after the final NUL is empty and has no path after it, so it
+    // ends here -- as would any entry git emitted without one.
+    if (first === undefined || first.length === 0) continue;
+
+    if (code.startsWith("R")) {
+      if (second === undefined || second.length === 0) continue;
+      changes.push({ path: second, status: "renamed", old_path: first });
+    } else if (code === "A") {
+      changes.push({ path: first, status: "added" });
+    } else if (code === "M") {
+      changes.push({ path: first, status: "modified" });
+    } else if (code === "D") {
+      changes.push({ path: first, status: "deleted" });
     }
     // C / U / T / X (copy / unmerged / typechange / unknown) are skipped:
-    // the file_changed status enum does not cover them in v0.1.
+    // the file_changed status enum does not cover them.
   }
   return changes;
 }
