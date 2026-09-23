@@ -46,6 +46,10 @@ async function initRepoWithFiles(
   await git.init();
   await git.addConfig("user.email", "test@example.com");
   await git.addConfig("user.name", "test");
+  // Pinned locally so a machine whose global config sets `diff.renames=false`
+  // does not turn every rename these tests expect into a delete plus an add.
+  // Production reads the operator's own config, and should.
+  await git.addConfig("diff.renames", "true");
   for (const [path, body] of Object.entries(files)) {
     await writeFile(join(dir, path), body);
     await git.add(path);
@@ -295,6 +299,7 @@ describe("paths git would quote", () => {
     ["a backslash", "back\\slash.txt"],
     ["a tab", "tab\there.txt"],
     ["a newline", "new\nline.txt"],
+    ["a leading and a trailing space", " edged .txt "],
   ] as const;
 
   it.each(NAMES)(
@@ -339,24 +344,28 @@ describe("paths git would quote", () => {
   it("does not let one entry's fields leak into the next", async () => {
     // A rename (two paths) followed by ordinary entries (one path each): if the
     // parser took the wrong number of fields for the rename, every later path
-    // would be shifted by one and read as a status.
+    // would be shifted by one and read as a status. git orders entries by the
+    // DESTINATION path, so the rename's target must sort first for anything to
+    // follow it -- `a-renamed.txt` before `b.txt`.
     const { git } = await initRepoWithFiles(tmpRepo, {
       "a.txt": "a body that stays the same\n",
       "b.txt": "b\n",
     });
     const base = (await git.revparse(["HEAD"])).trimEnd();
-    await git.mv("a.txt", "z-renamed.txt");
+    await git.mv("a.txt", "a-renamed.txt");
     await writeFile(join(tmpRepo, "b.txt"), "b changed\n");
     await writeFile(join(tmpRepo, "cé.txt"), "new\n");
     await git.add(["b.txt", "cé.txt"]);
     await git.commit("three kinds at once");
     const head = (await git.revparse(["HEAD"])).trimEnd();
 
+    const raw = await git.raw(["diff", "--name-status", `${base}..${head}`]);
+    expect(raw.split("\n")[0]).toMatch(/^R\d+\t/); // the rename really comes first
     const { changed_files } = await getDiff(tmpRepo, base, head);
-    expect([...changed_files].sort((x, y) => (x.path < y.path ? -1 : 1))).toEqual([
+    expect(changed_files).toEqual([
+      { path: "a-renamed.txt", status: "renamed", old_path: "a.txt" },
       { path: "b.txt", status: "modified" },
       { path: "cé.txt", status: "added" },
-      { path: "z-renamed.txt", status: "renamed", old_path: "a.txt" },
     ]);
   });
 

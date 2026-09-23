@@ -89,7 +89,6 @@ export async function getDiff(
  *
  * Untracked files are NOT included — `git diff` never reports them — so a
  * caller that wants them unions this with {@link getWorkingTreeChanges}.
-
  *
  * Pathless contract and error vocabulary are identical to {@link getDiff}.
  *
@@ -109,10 +108,12 @@ export async function getChangesSince(repoRoot: string, baseRef: string): Promis
 
   let raw: string;
   try {
-    // `-z` for the reason given on the parser: the caller unions this with
-    // `git status`, which reports every path RAW, so a quoted spelling here
+    // `-z` for the reason given on the parser: the caller compares these paths
+    // with the ones it read from the working tree, and a quoted spelling here
     // would name the same file twice and defeat the subtraction of what was
-    // already dirty.
+    // already dirty. (That comparison is still wrong for a name with a leading
+    // or trailing space: the working-tree side goes through simple-git's
+    // status parser, which trims each record.)
     raw = await git.raw(["diff", "--name-status", "-z", baseRef]);
   } catch (error: unknown) {
     throw translateDiffError(error);
