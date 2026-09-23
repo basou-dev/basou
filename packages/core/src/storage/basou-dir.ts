@@ -24,6 +24,20 @@ export type BasouPaths = {
   };
   readonly locks: string;
   readonly logs: string;
+  /**
+   * Per-session git observations: what each vendor session changed on disk,
+   * accumulated by the hooks while it runs and consumed by the import that
+   * merges it into the session's related files. Working state, not a record —
+   * see `session/observation.ts`.
+   *
+   * Lives UNDER `tmp/` on purpose. `basou init` only appends its ignore block
+   * when the file carries no basou block yet, so a store initialized before
+   * this directory existed never learns to ignore a new top-level entry — and
+   * these files carry absolute machine paths. `.basou/tmp/` is in every
+   * generation of that block, so the placement is what keeps them out of git
+   * rather than an upgrade step nobody runs.
+   */
+  readonly observations: string;
   readonly raw: string;
   readonly tmp: string;
   readonly files: {
@@ -61,6 +75,7 @@ export function basouPaths(repositoryRoot: string): BasouPaths {
     logs: join(root, "logs"),
     raw: join(root, "raw"),
     tmp: join(root, "tmp"),
+    observations: join(root, "tmp", "observations"),
     files: {
       manifest: join(root, "manifest.yaml"),
       status: join(root, "status.json"),

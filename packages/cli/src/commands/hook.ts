@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
+  basouPaths,
   buildSessionStartHookCommand,
   buildStopHookCommand,
   type ClaudeTranscriptRecord,
@@ -15,13 +16,17 @@ import {
   isProtocolUpdateDue,
   ORIENTATION_END,
   ORIENTATION_START,
+  observedRepoRoots,
+  observeSessionChanges,
   PROTOCOL_END,
   PROTOCOL_START,
   parseMarkers,
   parseProtocolStamp,
   protocolSectionsFrom,
   protocolUpdateToken,
+  readManifest,
   readMarkdownFile,
+  recordSessionBaseline,
   removeSessionStartHook,
   removeStopHook,
   renderProtocolUpdate,
@@ -83,6 +88,17 @@ type RawHookStopOptions = {
   requireReview?: boolean;
 };
 
+/**
+ * Records what a session changed on disk, for one of the two passes. Injected
+ * so the hook handlers can be tested without a git repository or the
+ * operator's real portfolio.
+ */
+export type ObserveSessionHook = (
+  fields: Record<string, unknown>,
+  pass: "baseline" | "changes",
+  portfolioConfigPath: string | undefined,
+) => Promise<void>;
+
 export type HookStopContext = {
   /**
    * Read the Stop hook's stdin payload to EOF. Defaults to reading
@@ -96,6 +112,14 @@ export type HookStopContext = {
   write?: (text: string) => void;
   /** Path to the file the protocol block is rendered into. Injectable for tests. */
   protocolTargetPath?: string;
+  /** The operator's workspace registry (`~/.basou/portfolio.yaml`). Injectable for tests. */
+  portfolioConfigPath?: string;
+  /**
+   * Observe the session's file changes through git. Defaults to
+   * {@link observeSessionFromPayload}; tests inject a spy (or a no-op) so a
+   * fake payload cannot reach the operator's real portfolio or store.
+   */
+  observe?: ObserveSessionHook;
 };
 
 /**
@@ -378,6 +402,14 @@ export async function doRunHookStop(options: HookStopOptions, ctx: HookStopConte
   if (typeof payload !== "object" || payload === null) return;
   const fields = payload as Record<string, unknown>;
 
+  // Observe BEFORE every gate below, including the continuation-turn guard: the
+  // gates decide whether the agent hears something, which has nothing to do
+  // with whether the session changed files. A session whose last turn is a
+  // continuation (the turn that answers a blocking nudge — often the one that
+  // captures the decisions) would otherwise have its final edits unobserved.
+  const observe = ctx.observe ?? observeSessionFromPayload;
+  await observe(fields, "changes", ctx.portfolioConfigPath).catch(() => undefined);
+
   // A continuation turn (already responding to a prior nudge) can never nudge
   // again, so bail before any transcript I/O — both honoring the loop guard and
   // keeping the continuation turn cheap.
@@ -572,6 +604,12 @@ export type HookSessionStartContext = {
   render?: (cwd: string) => Promise<{ body: string }>;
   /** The operator's workspace registry (`~/.basou/portfolio.yaml`). Injectable for tests. */
   portfolioConfigPath?: string;
+  /**
+   * Observe the session's file changes through git. Defaults to
+   * {@link observeSessionFromPayload}; tests inject a spy (or a no-op) so a
+   * fake payload cannot reach the operator's real portfolio or store.
+   */
+  observe?: ObserveSessionHook;
 };
 
 /**
@@ -685,8 +723,16 @@ export async function doRunHookSessionStart(ctx: HookSessionStartContext): Promi
     return;
   }
   if (typeof payload !== "object" || payload === null) return;
-  const cwd = (payload as Record<string, unknown>).cwd;
+  const fields = payload as Record<string, unknown>;
+  const cwd = fields.cwd;
   if (typeof cwd !== "string" || cwd.length === 0) return;
+
+  // The baseline is recorded independently of what the session is told: the
+  // silence gates below are about what text may enter a session's context,
+  // while this only writes into the operator's own store. Recording it FIRST
+  // also means a render that throws does not cost the session its base.
+  const observe = ctx.observe ?? observeSessionFromPayload;
+  await observe(fields, "baseline", ctx.portfolioConfigPath).catch(() => undefined);
 
   let body: string;
   try {
@@ -696,6 +742,73 @@ export async function doRunHookSessionStart(ctx: HookSessionStartContext): Promi
   }
   if (body.trim().length === 0) return;
   write(`${body.replace(/\s+$/, "")}\n`);
+}
+
+/**
+ * Observe, through git, what a session has changed on disk — the half of its
+ * work no transcript can show.
+ *
+ * A transcript records a file only when the agent edited it with an editing
+ * TOOL. Work done through the shell — a heredoc, a `sed -i`, a script that
+ * computes its own paths — leaves no file path anywhere in it, so a session
+ * that works that way reads as having touched nothing, and every reader built
+ * on `related_files` (the latest-session line, the changed-files line) goes
+ * quiet about real work. Git sees that work, and the hooks are the only place
+ * basou stands inside a vendor session while it happens.
+ *
+ * Two passes, one per hook:
+ * - SessionStart records where each declared repository stood, so there is a
+ *   base to measure from. Without it the only available answer would be "what
+ *   changed in this time window", which attributes by proximity rather than by
+ *   observation.
+ * - Stop recomputes the net change against that base, every turn, so the last
+ *   observation before the session ends is the one the import consumes.
+ *
+ * Gated on the operator's portfolio: a hook is user-global and fires for every
+ * directory on the machine, so only a workspace they registered themselves is
+ * ever written to. Everything else — an unregistered clone, a payload without
+ * the vendor's session id, a store that cannot be written — is silence.
+ *
+ * Never throws: an observation failure must not cost the session its hook.
+ */
+async function observeSessionFromPayload(
+  fields: Record<string, unknown>,
+  pass: "baseline" | "changes",
+  portfolioConfigPath: string | undefined,
+): Promise<void> {
+  const externalId = typeof fields.session_id === "string" ? fields.session_id : "";
+  const cwd = typeof fields.cwd === "string" ? fields.cwd : "";
+  if (externalId.length === 0 || cwd.length === 0) return;
+
+  const configPath = portfolioConfigPath ?? DEFAULT_PORTFOLIO_CONFIG_PATH;
+  let root: string;
+  try {
+    root = await resolveBasouRootForCommand(cwd, "hook observe", {
+      portfolioConfigPath: configPath,
+    });
+  } catch {
+    return; // not a basou workspace => nothing to observe
+  }
+  if (!(await isRegisteredWorkspace(root, configPath))) return;
+
+  const paths = basouPaths(root);
+  const nowIso = new Date().toISOString();
+  if (pass === "changes") {
+    await observeSessionChanges({
+      observationsDir: paths.observations,
+      externalId,
+      nowIso,
+    });
+    return;
+  }
+
+  const manifest = await readManifest(paths);
+  await recordSessionBaseline({
+    observationsDir: paths.observations,
+    repoRoots: observedRepoRoots(root, manifest),
+    externalId,
+    nowIso,
+  });
 }
 
 /** Parse a JSONL transcript into records, skipping blank and malformed lines. */

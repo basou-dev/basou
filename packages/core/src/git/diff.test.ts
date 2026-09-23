@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getDiff } from "./diff.js";
+import { getChangesSince, getDiff } from "./diff.js";
 
 const ENV_GLOBAL = process.platform === "win32" ? "\\\\.\\nul" : "/dev/null";
 const ENV: NodeJS.ProcessEnv = {
@@ -235,5 +235,53 @@ describe("getDiff", () => {
       }
       expect((err as Error).message).toBe("Invalid ref");
     });
+  });
+});
+
+describe("getChangesSince", () => {
+  it("answers with committed AND uncommitted work in one call", async () => {
+    const { head, git } = await initRepoWithFiles(tmpRepo);
+    // Committed after the base.
+    await writeFile(join(tmpRepo, "committed.ts"), "export const a = 1;\n");
+    await git.add("committed.ts");
+    await git.commit("add committed.ts");
+    // Left dirty after that commit.
+    await writeFile(join(tmpRepo, "README.md"), "# edited\n");
+
+    const changes = await getChangesSince(tmpRepo, head);
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        { path: "committed.ts", status: "added" },
+        { path: "README.md", status: "modified" },
+      ]),
+    );
+    expect(changes).toHaveLength(2);
+  });
+
+  it("classifies a file relative to the BASE, not to the last commit", async () => {
+    const { head, git } = await initRepoWithFiles(tmpRepo);
+    await writeFile(join(tmpRepo, "new.ts"), "export const a = 1;\n");
+    await git.add("new.ts");
+    await git.commit("add new.ts");
+    // Changed again after being committed: still `added` as far as the base is
+    // concerned, because it did not exist there.
+    await writeFile(join(tmpRepo, "new.ts"), "export const a = 2;\n");
+
+    expect(await getChangesSince(tmpRepo, head)).toEqual([{ path: "new.ts", status: "added" }]);
+  });
+
+  it("does not report untracked files (the caller unions them in)", async () => {
+    const { head } = await initRepoWithFiles(tmpRepo);
+    await writeFile(join(tmpRepo, "untracked.ts"), "export const a = 1;\n");
+    expect(await getChangesSince(tmpRepo, head)).toEqual([]);
+  });
+
+  it("throws the fixed 'Invalid ref' when the base no longer resolves", async () => {
+    await initRepoWithFiles(tmpRepo);
+    await expect(getChangesSince(tmpRepo, "0".repeat(40))).rejects.toThrow("Invalid ref");
+  });
+
+  it("throws the fixed 'Not a git repository' outside a repository", async () => {
+    await expect(getChangesSince(tmpRepo, "HEAD")).rejects.toThrow("Not a git repository");
   });
 });

@@ -5,6 +5,7 @@ import { normalizeIsoTimestamp } from "../../schemas/iso-timestamp.js";
 import type { Manifest } from "../../schemas/manifest.schema.js";
 import type { SessionImportPayload } from "../../schemas/session-import.schema.js";
 import { SESSION_IMPORT_SCHEMA_VERSION } from "../../schemas/session-import.schema.js";
+import type { ObservedFile } from "../../session/observation.js";
 import {
   ACTIVE_GAP_CAP_MS,
   activeTimeFromTimestamps,
@@ -48,6 +49,26 @@ export type ClaudeTranscriptToPayloadOptions = {
    * matches the imported content. Omitted => the field is not recorded.
    */
   sourceSizeBytes?: number;
+  /**
+   * Files this session changed, observed through git while it ran (see
+   * `session/observe.ts`). A transcript can only report an edit made with an
+   * editing TOOL; work done through the shell — a heredoc, a `sed -i`, a
+   * script — leaves no `file_path` anywhere in it, so a session that edits
+   * that way reads as having touched nothing. These observations join
+   * `related_files`.
+   *
+   * They do NOT become events. An observation is a SNAPSHOT that each pass
+   * recomputes — a file changed and then reverted leaves it — while the event
+   * stream is append-only and a re-import preserves every event it did not
+   * derive itself. Writing snapshots into it would duplicate them on every
+   * re-import of a growing transcript and leave events contradicting the
+   * session record rebuilt beside them. `related_files` is rebuilt from this
+   * derivation each time, which is the same shape the observation has.
+   *
+   * An OPTION rather than something read here: this function is pure, and the
+   * observation lives on disk beside the store.
+   */
+  observedFiles?: ReadonlyArray<ObservedFile>;
 };
 
 /**
@@ -234,7 +255,26 @@ export function claudeTranscriptToImportPayload(
   }
 
   if (minTs === undefined || maxTs === undefined) return null;
+  // The skip gate is decided on the TRANSCRIPT alone, before observations are
+  // merged: an observation must enrich a session that exists, never conjure
+  // one. A transcript that derived nothing is a session basou did not witness,
+  // and git changes made while it sat idle are somebody else's work.
   if (derived.length === 0) return null;
+
+  // Git-observed changes join the session's related files (and nothing else —
+  // see `observedFiles` on the options type for why they are not events).
+  //
+  // Exact string match against what the tool calls recorded. The same file can
+  // be spelled two ways — a tool call made through a workspace view records the
+  // symlinked path, while git answers with the repository's own — and
+  // collapsing those needs a path-identity rule this function has no way to
+  // apply without I/O. The sessions this observation exists for are the ones
+  // with NO tool-derived files at all, so the overlap is the rare case; it
+  // shows as one file listed under both spellings, never as one invented or
+  // lost.
+  for (const observed of options.observedFiles ?? []) {
+    relatedFiles.add(observed.path);
+  }
 
   // Order derived events by occurred_at so the assembled stream is
   // non-decreasing — importSessionFromJson rejects out-of-order events.
