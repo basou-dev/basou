@@ -5,6 +5,7 @@ import {
   appendEventToExistingSession,
   assertBasouRootSafe,
   basouPaths,
+  displayPath,
   EVENT_SCHEMA_VERSION,
   type Event,
   enumerateSessionDirs,
@@ -504,7 +505,8 @@ function formatWorkingDir(
 
 function formatRelatedFiles(files: readonly string[]): string {
   if (files.length === 0) return "0 paths";
-  const head = files.slice(0, 3).join(", ");
+  // Printed to a terminal: an ESC byte in a name would be an instruction to it.
+  const head = files.slice(0, 3).map(displayPath).join(", ");
   const remaining = files.length - 3;
   if (remaining <= 0) return `${files.length} paths (${head})`;
   return `${files.length} paths (${head}, ... +${remaining} more)`;
@@ -541,7 +543,7 @@ function eventVariantSummary(ev: Event): string {
     case "git_snapshot":
       return `branch=${ev.branch} dirty=${ev.dirty}`;
     case "file_changed":
-      return `${ev.change_type} ${ev.path}`;
+      return `${ev.change_type} ${displayPath(ev.path)}`;
     case "session_status_changed":
       return `${ev.from} -> ${ev.to}`;
     case "session_started":

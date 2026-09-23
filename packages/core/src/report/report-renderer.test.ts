@@ -476,3 +476,21 @@ describe("renderReport (view language)", () => {
     }
   });
 });
+
+describe("report: a file name that carries line breaks or control characters", () => {
+  it("is shown escaped in the Markdown, and kept raw in the data", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("0E1"),
+      startedAt: "2026-05-08T11:00:00+09:00",
+      relatedFiles: ["new\n\n## Forged section\ntext\u001b[2J.txt"],
+    });
+    const { body, data } = await renderReport({ paths, nowIso: NOW_ISO, timeZone: TZ });
+    expect(body).not.toMatch(/^## Forged section/m);
+    expect(body).not.toContain("\u001b");
+    expect(body).toContain(`- ${"new\\n\\n## Forged section\\ntext\\x1b[2J.txt"}`);
+    // The structured side (what --json prints) carries the real name; JSON
+    // escapes it on its own.
+    expect(data.changedFiles).toEqual(["new\n\n## Forged section\ntext\u001b[2J.txt"]);
+  });
+});

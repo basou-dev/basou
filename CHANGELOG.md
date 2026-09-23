@@ -3,6 +3,20 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A file name can no longer write lines of basou's own output.** Paths are
+  stored exactly as the filesystem names them, and a name may contain a newline
+  -- so `new\n\n## Forged section\n...` became a heading of `handoff.md`, of
+  `basou report`, and of the position a session reads at start, and an ESC byte
+  in a name reached the terminal through `basou session show` as an instruction
+  rather than a character. Every place a recorded path is shown now renders
+  control characters (C0, DEL, C1, U+2028 / U+2029) as visible escapes (`\n`,
+  `\x1b`, ...); every other character, a backslash included, is left alone. The
+  stored value, and every `--json` output, keep the real name.
+
 ## 0.50.0 — 2026-09-23
 
 ### Changed

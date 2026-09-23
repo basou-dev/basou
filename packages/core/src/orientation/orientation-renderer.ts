@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "../approval/approval-store.js";
 import { countOpenDecisionGaps, type DecisionForGapCount } from "../decision-gaps/index.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
+import { displayPath } from "../lib/display-path.js";
 import { formatDurationMs } from "../lib/format-duration.js";
 import { oneLine } from "../lib/one-line.js";
 import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
@@ -876,7 +877,9 @@ function formatOrientationBody(
     if (summary.relatedFiles.displayed.length > 0) {
       const more =
         summary.relatedFiles.overflow > 0 ? ` (... +${summary.relatedFiles.overflow} more)` : "";
-      parts.push(`${summary.relatedFiles.displayed.join(", ")}${more}`);
+      // Shown, not stored: a raw name can carry a newline, and this line is
+      // what a session reads as its position (see `displayPath`).
+      parts.push(`${summary.relatedFiles.displayed.map(displayPath).join(", ")}${more}`);
     }
     if (summary.relatedFiles.omitted > 0) {
       parts.push(t.orientation.scratchOmitted(summary.relatedFiles.omitted));
@@ -890,7 +893,7 @@ function formatOrientationBody(
       // line above.
       const OUT_OF_ROOT_DISPLAY = 10;
       const out = summary.relatedFiles.outOfRoot;
-      const shownOut = out.slice(0, OUT_OF_ROOT_DISPLAY).join(", ");
+      const shownOut = out.slice(0, OUT_OF_ROOT_DISPLAY).map(displayPath).join(", ");
       const outMore =
         out.length > OUT_OF_ROOT_DISPLAY ? ` (... +${out.length - OUT_OF_ROOT_DISPLAY} more)` : "";
       lines.push(`  - ${t.orientation.outOfRootWarning(out.length, `${shownOut}${outMore}`)}`);
@@ -925,7 +928,9 @@ function formatOrientationBody(
       }
       // Files appear only as the fallback (no decision and no note this session).
       if (s.files.length > 0) {
-        lines.push(`  - ${t.orientation.recentChangedLabel}: ${s.files.join(", ")}`);
+        lines.push(
+          `  - ${t.orientation.recentChangedLabel}: ${s.files.map(displayPath).join(", ")}`,
+        );
       }
     }
   }

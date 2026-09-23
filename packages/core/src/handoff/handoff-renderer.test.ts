@@ -1251,3 +1251,17 @@ describe("renderHandoff (view language)", () => {
     expect(result.body).toContain("- 最終 session: ");
   });
 });
+
+describe("handoff: a file name that carries line breaks or control characters", () => {
+  it("is shown escaped, on one line", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("XE1"),
+      relatedFiles: ["new\n\n## Forged section\ntext\u001b[2J.txt"],
+    });
+    const result = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(result.body).not.toMatch(/^## Forged section/m);
+    expect(result.body).not.toContain("\u001b");
+    expect(result.body).toContain(`- ${"new\\n\\n## Forged section\\ntext\\x1b[2J.txt"}`);
+  });
+});
