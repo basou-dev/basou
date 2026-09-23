@@ -13,6 +13,7 @@ import {
   ensureBasouDirectory,
   type ProcessRunner,
   type RunResult,
+  readSessionYaml,
   upsertSessionStartHook,
   writeManifest,
 } from "@basou/core";
@@ -372,6 +373,46 @@ describe("runClaudeCode", () => {
     expect(fc.source).toBe("git-capability");
     const yaml = await readFile(join(basouPaths(repo).sessions, sessionId, "session.yaml"), "utf8");
     expect(yaml).toContain("added.txt");
+  });
+
+  it("records a committed file whose name contains a backslash under the same name in events and related_files", async () => {
+    const repo = await setupInitedRepo();
+    const name = "back\\slash.txt";
+    const runner: ProcessRunner = {
+      run: async (cmd, args, options) => {
+        await writeFile(join(options.cwd, name), "hello\n");
+        await execFileAsync("git", ["add", "--", name], { cwd: options.cwd, env: ENV });
+        await execFileAsync("git", ["commit", "-m", "add file"], { cwd: options.cwd, env: ENV });
+        return {
+          command: cmd,
+          args: [...args],
+          cwd: options.cwd,
+          exit_code: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          started_at: FIXED_DATE.toISOString(),
+          ended_at: FIXED_DATE.toISOString(),
+          duration_ms: 0,
+          pid: 1,
+        };
+      },
+    };
+    await runClaudeCode(
+      [],
+      { cwd: repo },
+      { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+    );
+    const sessionId = await findOnlySessionId(repo);
+    const lines = await readEventsLines(repo, sessionId);
+    const changed = lines
+      .map((l) => JSON.parse(l))
+      .filter((e) => e.type === "file_changed")
+      .map((e) => e.path);
+    expect(changed).toEqual([name]);
+    const session = await readSessionYaml(basouPaths(repo), sessionId);
+    expect(session.session.related_files).toContain(name);
+    expect(session.session.related_files).not.toContain("back/slash.txt");
   });
 
   // 9

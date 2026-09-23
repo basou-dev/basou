@@ -17,6 +17,7 @@ import {
   basouPaths,
   createManifest,
   ensureBasouDirectory,
+  readSessionYaml,
   readYamlFile,
   writeManifest,
   writeYamlFile,
@@ -943,6 +944,24 @@ describe("runSessionImport", () => {
     await runSessionImport({ format: "json", from: FIXTURE_PATH }, { cwd: repo });
     const stderr = err.mock.calls.map((c) => String(c[0])).join("");
     expect(stderr).not.toContain("path(s) sanitized");
+  });
+
+  it("import-sanitize-4: a related file whose name contains a backslash is stored as given and not reported as sanitized", async () => {
+    const repo = await setupInitedRepo();
+    const fixture = (await readFixture()) as {
+      session: { working_directory: string; related_files: string[] };
+    };
+    fixture.session.related_files = ["src/back\\slash.txt"];
+    const from = await writeImportPayload(fixture, repo);
+    const err = captureStderr();
+    captureStdout();
+    await runSessionImport({ format: "json", from }, { cwd: repo });
+    const stderr = err.mock.calls.map((c) => String(c[0])).join("");
+    expect(stderr).not.toContain("path(s) sanitized");
+    const paths = basouPaths(repo);
+    const [dir] = await readdir(paths.sessions);
+    const session = await readSessionYaml(paths, dir ?? "");
+    expect(session.session.related_files).toEqual(["src/back\\slash.txt"]);
   });
 
   it("import-sanitize-3: dry-run still emits the sanitize warning so the operator previews the rewrite", async () => {

@@ -45,17 +45,19 @@ export type SanitizePathOptions = {
  *   - `..` segments are resolved purely (no fs access) so the prefix
  *     match cannot be defeated by `<wd>/../escape/x.ts` masquerading as
  *     workingDirectory-internal.
- *   - Backslashes are folded to forward slashes so a Windows-style input
- *     can still be matched against POSIX bases. v0.3 targets macOS /
- *     Linux only; full Windows support is a v0.4+ task.
+ *   - A backslash is kept as part of the name. On macOS / Linux it is an
+ *     ordinary filename character, not a separator: `back\slash.txt` is
+ *     one file, and folding it to `back/slash.txt` would name a different
+ *     file in another directory. Windows is not supported, so a
+ *     Windows-style path passes through with its backslashes.
  */
 export function sanitizePath(rawPath: string, opts: SanitizePathOptions): string {
   if (rawPath.includes("\0")) {
     throw new Error("Invalid path: contains null byte");
   }
-  const normalized = path.normalize(rawPath.replace(/\\/g, "/"));
-  const wd = path.normalize(opts.workingDirectory.replace(/\\/g, "/"));
-  const home = path.normalize(opts.homedir.replace(/\\/g, "/"));
+  const normalized = path.normalize(rawPath);
+  const wd = path.normalize(opts.workingDirectory);
+  const home = path.normalize(opts.homedir);
 
   // Only attempt prefix matching for absolute inputs; an already-relative
   // path stays as-is so write paths that pre-relativised do not get

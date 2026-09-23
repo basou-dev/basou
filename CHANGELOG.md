@@ -3,6 +3,33 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A recorded file name that contains a backslash keeps it.** On macOS and
+  Linux a backslash is an ordinary character in a file name, but the path
+  sanitizer that every `related_files` entry and `working_directory` passes
+  through turned each one into a `/`, as if it were a Windows separator. So
+  `back\slash.txt` was recorded in `session.yaml` as `back/slash.txt` -- a
+  different file in another directory -- while its `file_changed` event kept
+  the real name, and a file named `a\..\..\b` was resolved as two parent steps
+  and recorded as a file outside the repository. A backslash is now kept as
+  part of the name. The same applies to the `--file` path that
+  `basou review record` and `basou decision capture` record with the session,
+  and to `sanitizePath`, `sanitizeRelatedFiles` and `sanitizeWorkingDirectory`
+  in `@basou/core`; `basou session import` no longer reports such a name as
+  sanitized.
+
+  Two consequences. A Windows-style path is no longer rewritten with forward
+  slashes; it is stored as given. One with a drive letter (`C:\Users\...`) was
+  never made relative or shortened to `~/` before either -- Windows is not
+  supported. And a session already recorded keeps the folded spelling: a
+  `basou run` session is never rebuilt, and an imported one is rebuilt only
+  when its transcript grows and it is re-imported. So one file can appear under
+  both spellings across the upgrade, and `basou report`, which unions
+  `related_files` across sessions by exact string, counts it twice.
+
 ## 0.51.0 — 2026-09-23
 
 ### Fixed

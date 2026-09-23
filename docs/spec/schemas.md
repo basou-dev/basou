@@ -170,9 +170,11 @@ session:
   System paths outside both (e.g. `/etc/...`) are preserved as-is so an
   operator that deliberately recorded a system file path is not redacted
   by surprise. A null byte in the input is rejected with `Invalid path:
-  contains null byte`; Windows-style backslashes are folded to forward
-  slashes (basou targets macOS / Linux; full Windows support is a future
-  task).
+  contains null byte`. A backslash is kept as part of the name: basou
+  targets macOS / Linux, where it is an ordinary filename character, so
+  `back\slash.txt` is stored as `back\slash.txt` and not as
+  `back/slash.txt` (a different file). A Windows-style path is not
+  translated; full Windows support is a future task.
 - `working_directory` is sanitized via a sentinel-based variant that skips
   rule (1) when applied to the field's own value — feeding the live cwd
   through the general sanitizer with itself as the workingDirectory
