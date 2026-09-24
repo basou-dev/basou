@@ -5,6 +5,29 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- **A session's observed file changes no longer include commits it only
+  pulled.** Since 0.49.0 an imported Claude Code session's `related_files`
+  includes the files git shows changed since the session started, so that
+  edits made through the shell are not invisible. That counted every commit
+  HEAD moved over, including ones that only arrived by a pull or a
+  fast-forward merge: a session that merged and pulled a bot's documentation
+  pull request was recorded as having changed that documentation, and the
+  orientation listed those files first as its most recent work. The observed
+  files are now limited to paths the repository's own activity touched since
+  the start -- commits created there, a merge commit only for what it
+  resolved, and uncommitted changes. The session's own work still counts after
+  it comes back through a squash merge, since its commits were created there
+  first. When the reflog cannot be read, or HEAD moved while it recorded
+  nothing, nothing is filtered. `docs/spec/schemas.md` now states what the
+  observed half claims and its limits: it observes a repository rather than
+  an actor, measures a resumed session from its first start, leaves out files
+  already dirty at the start, and keys observations by the vendor's session
+  id without a namespace. A session observed before the upgrade keeps the
+  files its last observation recorded, re-imported or not: the list is
+  recomputed only when that session's Stop hook runs again.
+
 ### Fixed
 
 - **A path whose first part below its base begins with two dots is no longer

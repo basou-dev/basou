@@ -160,6 +160,32 @@ session:
   observation has. A reader that needs to know a file was WITNESSED being
   edited, rather than observed as a difference, reads the `file_changed` events,
   which still come only from tool calls.
+- What the observed half claims, per repository the workspace declares: the
+  net change since the session started (tracked files against the commit HEAD
+  was on then, plus untracked files), limited to paths the repository's OWN
+  activity touched in that time. A path counts as touched when a commit
+  CREATED in that repository since the start changed it (a commit, an amend, a
+  cherry-pick, a revert, a rebased pick; a merge commit only for what it
+  resolved), or when it differs from HEAD in the working tree now. So a commit
+  that only arrived by a pull or a fast-forward merge -- a bot's pull request,
+  someone else's work -- is not charged to the session, while the session's
+  own commits still are after they come back through a squash merge, because
+  they were created there first. When the reflog cannot be read, or HEAD moved
+  while it recorded nothing, the limit is not applied and every net change is
+  kept.
+- Limits of the observed half, by construction:
+    - It observes a repository, not an actor. Uncommitted edits and local
+      commits made in the same repository by anyone else while the session
+      runs (the operator, another session) are counted too.
+    - A session is measured from its first start. A resumed session's
+      observation includes what happened in the repository while it was not
+      running.
+    - A file already dirty when the session started is not observed for that
+      session at all, even if the session goes on to change it.
+    - Observations are keyed by the vendor's session id as given (a UUID for
+      both Claude Code and Codex); ids from different vendors are not
+      namespaced. Codex's SessionStart hook writes a baseline too, but only the
+      Claude Code import reads observations today.
 - `working_directory` and `related_files[]` are path-sanitized on write so
   no operator-private absolute prefix leaks into the workspace's persistent
   state. The sanitizer applies two rules in order:

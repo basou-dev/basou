@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { getChangesSince } from "../git/diff.js";
+import { getOwnCommitPaths } from "../git/own-commits.js";
 import {
   getUntrackedFiles,
   getWorkingTreeChanges,
@@ -127,7 +128,7 @@ export async function observeSessionChanges(
   for (const repo of existing.repos) {
     let files: ObservedFile[];
     try {
-      files = await changedSinceBaseline(repo);
+      files = await changedSinceBaseline(repo, existing.started_at);
     } catch {
       repos.push(repo); // keep what was already observed
       continue;
@@ -156,10 +157,14 @@ function isBasouStorePath(relativePath: string): boolean {
 
 /**
  * Net change of one repository since the session's baseline: git's own answer
- * for tracked files, plus the untracked files git's diff never reports, minus
- * what was already dirty before the session began.
+ * for tracked files, limited to what this repository's own activity touched,
+ * plus the untracked files git's diff never reports, minus what was already
+ * dirty before the session began.
  */
-async function changedSinceBaseline(repo: ObservedRepo): Promise<ObservedFile[]> {
+async function changedSinceBaseline(
+  repo: ObservedRepo,
+  startedAt: string,
+): Promise<ObservedFile[]> {
   const byPath = new Map<string, ObservedFile>();
 
   // A repository with no commits at session start still has a base: the empty
@@ -167,8 +172,10 @@ async function changedSinceBaseline(repo: ObservedRepo): Promise<ObservedFile[]>
   // session that commits everything it wrote ends with a clean one — reporting
   // nothing, which is the silence this whole mechanism exists to end.
   const base = repo.base_head ?? (await readEmptyTreeSha(repo.path));
+  const own = await ownActivityPaths(repo, startedAt);
   for (const change of await getChangesSince(repo.path, base)) {
     if (isBasouStorePath(change.path)) continue;
+    if (own !== null && !touchedBy(own, change.path, change.old_path)) continue;
     const file = observedFileFrom(repo.path, change);
     byPath.set(file.path, file);
   }
@@ -190,4 +197,47 @@ async function changedSinceBaseline(repo: ObservedRepo): Promise<ObservedFile[]>
   return [...byPath.values()]
     .filter((file) => !preexisting.has(file.path))
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/**
+ * Repository-relative paths the repository's OWN activity touched since the
+ * session started: every path a commit created here in that time changed (see
+ * {@link getOwnCommitPaths}), plus every tracked path that differs from HEAD
+ * right now. The net change since the base is limited to these, so a commit
+ * that arrived by a pull or a fast-forward merge -- written elsewhere, by
+ * someone else or by a bot -- is not charged to the session, while the
+ * session's own commits still are after they come back from a squash merge,
+ * because it created them here first.
+ *
+ * `null` means "cannot tell": the reflog is unreadable, or HEAD moved while the
+ * reflog recorded nothing (reflogs off or expired). The caller then keeps every
+ * net change, since dropping the session's work silently would be worse than
+ * over-reporting it.
+ */
+async function ownActivityPaths(
+  repo: ObservedRepo,
+  startedAt: string,
+): Promise<Set<string> | null> {
+  const sinceMs = Date.parse(startedAt);
+  if (Number.isNaN(sinceMs)) return null;
+  try {
+    const commits = await getOwnCommitPaths(repo.path, sinceMs);
+    if (commits === null) return null;
+    const head = await readHeadSha(repo.path);
+    if (commits.entriesSince === 0 && head !== repo.base_head) return null;
+    const own = new Set(commits.paths);
+    const uncommittedBase = head ?? (await readEmptyTreeSha(repo.path));
+    for (const change of await getChangesSince(repo.path, uncommittedBase)) {
+      own.add(change.path);
+      if (change.old_path !== undefined) own.add(change.old_path);
+    }
+    return own;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a change (or, for a rename, either of its names) is among `own`. */
+function touchedBy(own: ReadonlySet<string>, path: string, oldPath: string | undefined): boolean {
+  return own.has(path) || (oldPath !== undefined && own.has(oldPath));
 }
