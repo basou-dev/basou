@@ -61,6 +61,27 @@ async function initRepo(path: string): Promise<SimpleGit> {
   return repoGit;
 }
 
+/** The fixture repository's git, with every date it writes set to `iso`. */
+function datedAt(iso: string): SimpleGit {
+  return fixtureSimpleGit(repo).env({ ...ENV, GIT_COMMITTER_DATE: iso, GIT_AUTHOR_DATE: iso });
+}
+
+/** The fixture repository's git, dated an hour before the session's start (T0). */
+function beforeStart(): SimpleGit {
+  return datedAt("2026-09-22T09:00:00Z");
+}
+
+/**
+ * The fixture repository's git, with an editor that accepts the message as it
+ * is, plus any other variables (a sequence editor for `rebase -i`).
+ */
+function withEditor(env: NodeJS.ProcessEnv = {}): SimpleGit {
+  return simpleGit({
+    baseDir: repo,
+    unsafe: { allowUnsafeConfigPaths: true, allowUnsafeEditor: true },
+  }).env({ ...ENV, GIT_EDITOR: "true", ...env });
+}
+
 async function baseline(): Promise<void> {
   await recordSessionBaseline({
     observationsDir,
@@ -259,17 +280,63 @@ describe("observeSessionChanges", () => {
     const body = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
     // Dated before the start, so neither name is among the session's commits
     // and only the uncommitted rename can put them there.
-    const early = fixtureSimpleGit(repo).env({
-      ...ENV,
-      GIT_COMMITTER_DATE: "2026-09-22T09:00:00Z",
-      GIT_AUTHOR_DATE: "2026-09-22T09:00:00Z",
-    });
+    const early = beforeStart();
     await writeFile(join(repo, "guide.md"), `${body}\n`);
     await early.add("guide.md");
     await early.commit("add the guide");
     await baseline();
     await git.mv("guide.md", "handbook.md");
     expect(await observe()).toEqual([join(repo, "guide.md"), join(repo, "handbook.md")]);
+  });
+
+  it("does not charge the session with the old name of a rename staged before it started", async () => {
+    const body = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+    const early = beforeStart();
+    await writeFile(join(repo, "guide.md"), `${body}\n`);
+    await early.add("guide.md");
+    await early.commit("add the guide");
+    await git.mv("guide.md", "handbook.md"); // staged, not committed, BEFORE the session
+    await baseline();
+    await writeFile(join(repo, "unrelated.txt"), "u\n");
+    expect(await observe()).toEqual([join(repo, "unrelated.txt")]);
+  });
+
+  it("keeps observing when a branch ref it has nothing to do with is broken", async () => {
+    await baseline();
+    await writeFile(join(repo, ".git", "refs", "heads", "old-experiment"), "");
+    await writeFile(join(repo, "own.ts"), "export const a = 1;\n");
+    await git.add("own.ts");
+    await git.commit("own commit");
+    await writeFile(join(repo, "wip.txt"), "w\n");
+    expect(await observe()).toEqual([join(repo, "own.ts"), join(repo, "wip.txt")]);
+  });
+
+  it("keeps observing a repository with a file named HEAD at its top", async () => {
+    const early = beforeStart();
+    await writeFile(join(repo, "HEAD"), "not a ref\n");
+    await early.add("HEAD");
+    await early.commit("a file named HEAD");
+    await baseline();
+    await writeFile(join(repo, "own.ts"), "export const a = 1;\n");
+    await git.add("own.ts");
+    await git.commit("own commit");
+    await writeFile(join(repo, "wip.txt"), "w\n");
+    expect(await observe()).toEqual([join(repo, "own.ts"), join(repo, "wip.txt")]);
+  });
+
+  it("keeps a commit stamped earlier in the second the session started in", async () => {
+    // Reflog times are whole seconds; the start is not.
+    await recordSessionBaseline({
+      observationsDir,
+      repoRoots: [repo],
+      externalId: EXTERNAL_ID,
+      nowIso: "2026-09-22T10:00:00.500Z",
+    });
+    const dated = datedAt("2026-09-22T10:00:00Z");
+    await writeFile(join(repo, "same-second.ts"), "export const a = 1;\n");
+    await dated.add("same-second.ts");
+    await dated.commit("same second");
+    expect(await observe()).toEqual([join(repo, "same-second.ts")]);
   });
 
   it("spells a non-ASCII path the same way in both passes, so the subtraction holds", async () => {
@@ -412,24 +479,6 @@ describe("observeSessionChanges and commits written elsewhere", () => {
     await writeFile(join(upstream, file), content);
     await upstreamGit.add(file);
     await upstreamGit.commit(`upstream: ${file}`);
-  }
-
-  /** The fixture repository's git, with every date it writes set to `iso`. */
-  function datedAt(iso: string): SimpleGit {
-    return fixtureSimpleGit(repo).env({ ...ENV, GIT_COMMITTER_DATE: iso, GIT_AUTHOR_DATE: iso });
-  }
-
-  /** The fixture repository's git, dated an hour before the session's start (T0). */
-  function beforeStart(): SimpleGit {
-    return datedAt("2026-09-22T09:00:00Z");
-  }
-
-  /** The fixture repository's git, with an editor that accepts the message as it is. */
-  function withEditor(): SimpleGit {
-    return simpleGit({
-      baseDir: repo,
-      unsafe: { allowUnsafeConfigPaths: true, allowUnsafeEditor: true },
-    }).env({ ...ENV, GIT_EDITOR: "true" });
   }
 
   /**
@@ -679,6 +728,135 @@ describe("observeSessionChanges and commits written elsewhere", () => {
     await git.raw(command);
     // The replayed commit is created here; the upstream's bot.md is not.
     expect(await observe()).toEqual([join(repo, "shared.txt")]);
+  });
+
+  it("charges the picks of a pull from a URL", async () => {
+    await divergedOnSharedFile();
+    await baseline();
+    await git.raw(["pull", "--rebase", `file://${upstream}`, "main"]);
+    expect(await observe()).toEqual([join(repo, "shared.txt")]);
+  });
+
+  it("charges a merge a pull from a URL made", async () => {
+    await divergedOnSharedFile();
+    await baseline();
+    await git.raw(["pull", "--no-rebase", "--no-edit", `file://${upstream}`, "main"]);
+    expect(await observe()).toEqual([join(repo, "shared.txt")]);
+  });
+
+  it("charges a merge commit git merge made itself", async () => {
+    await divergedOnSharedFile();
+    await baseline();
+    await git.fetch("origin", "main");
+    await git.raw(["merge", "--no-edit", "origin/main"]);
+    expect(await observe()).toEqual([join(repo, "shared.txt")]);
+  });
+
+  it("charges a rebased commit whose conflict the session resolved and continued", async () => {
+    await upstreamCommits("shared.txt", "base\n");
+    await git.pull("origin", "main", { "--ff-only": null });
+    await writeFile(join(repo, "shared.txt"), "local\n");
+    const early = beforeStart();
+    await early.add("shared.txt");
+    await early.commit("local: shared");
+    await upstreamCommits("shared.txt", "upstream\n");
+    await upstreamCommits("bot.md", "# regenerated by a bot\n");
+    await baseline();
+    await git.fetch("origin", "main");
+    await git.raw(["rebase", "origin/main"]).catch(() => undefined); // conflicts on shared.txt
+    await writeFile(join(repo, "shared.txt"), "resolved\n");
+    await git.add("shared.txt");
+    await withEditor().raw(["rebase", "--continue"]);
+    expect(await observe()).toEqual([join(repo, "shared.txt")]);
+  });
+
+  it.each([["reword"], ["edit"]])(
+    "charges a pick the session marked %s while rebasing",
+    async (step) => {
+      await divergedOnSharedFile();
+      await baseline();
+      await git.fetch("origin", "main");
+      const rebasing = withEditor({ GIT_SEQUENCE_EDITOR: `perl -pi -e 's/^pick/${step}/'` });
+      await rebasing.raw(["rebase", "-i", "origin/main"]);
+      if (step === "edit") await rebasing.raw(["rebase", "--continue"]); // it stopped there
+      expect(await observe()).toEqual([join(repo, "shared.txt")]);
+    },
+  );
+
+  it.each([["fixup!"], ["squash!"]])(
+    "charges what a %s commit the session folded in while rebasing added",
+    async (prefix) => {
+      // Two files both sides change in different places: the upstream at their
+      // ends; before the session, a commit at the start of shared.txt and a
+      // fixup of it at the start of other.txt.
+      const body = Array.from({ length: 10 }, (_, i) => `line ${i}`);
+      const text = (lines: string[]): string => `${lines.join("\n")}\n`;
+      await upstreamCommits("shared.txt", text(body));
+      await upstreamCommits("other.txt", text(body));
+      await git.pull("origin", "main", { "--ff-only": null });
+      await upstreamCommits("shared.txt", text([...body.slice(0, 9), "upstream end"]));
+      await upstreamCommits("other.txt", text([...body.slice(0, 9), "upstream end"]));
+      const early = beforeStart();
+      await writeFile(join(repo, "shared.txt"), text(["local start", ...body.slice(1)]));
+      await early.add("shared.txt");
+      await early.commit("local: first line");
+      await writeFile(join(repo, "other.txt"), text(["local start", ...body.slice(1)]));
+      await early.add("other.txt");
+      await early.commit(`${prefix} local: first line`);
+      await baseline();
+      await git.fetch("origin", "main");
+      await withEditor({ GIT_SEQUENCE_EDITOR: "true" }).raw([
+        "rebase",
+        "-i",
+        "--autosquash",
+        "origin/main",
+      ]);
+      // other.txt is in the session's net change only through the folded commit.
+      expect(await observe()).toEqual([join(repo, "other.txt"), join(repo, "shared.txt")]);
+    },
+  );
+
+  /**
+   * Two commits on a topic branch made before the session, and the upstream's
+   * bot commit pulled into main during it. `git replay` is experimental; a git
+   * that has none, or that only prints the ref updates, skips the test.
+   */
+  async function topicToReplay(): Promise<void> {
+    await git.checkoutLocalBranch("topic");
+    const early = beforeStart();
+    for (const file of ["t1.txt", "t2.txt"]) {
+      await writeFile(join(repo, file), `${file}\n`);
+      await early.add(file);
+      await early.commit(file);
+    }
+    await git.checkout("main");
+    await baseline();
+    await upstreamCommits("docs.md", "# regenerated by a bot\n");
+    await git.pull("origin", "main", { "--ff-only": null });
+  }
+
+  async function replayed(ref: string, args: string[]): Promise<boolean> {
+    const before = (await git.revparse([ref])).trimEnd();
+    const ran = await git.raw(["replay", ...args]).then(
+      () => true,
+      () => false,
+    );
+    return ran && (await git.revparse([ref])).trimEnd() !== before;
+  }
+
+  it("charges every commit git replay --onto replayed, not only the one the branch ends at", async (ctx) => {
+    await topicToReplay();
+    if (!(await replayed("topic", ["--onto", "main", "main..topic"]))) ctx.skip();
+    await git.merge(["--ff-only", "topic"]);
+    expect(await observe()).toEqual([join(repo, "t1.txt"), join(repo, "t2.txt")]);
+  });
+
+  it("charges every commit git replay --advance replayed", async (ctx) => {
+    await topicToReplay();
+    await git.raw(["branch", "target"]);
+    if (!(await replayed("target", ["--advance", "target", "main..topic"]))) ctx.skip();
+    await git.merge(["--ff-only", "target"]);
+    expect(await observe()).toEqual([join(repo, "t1.txt"), join(repo, "t2.txt")]);
   });
 
   it("charges a merge git committed itself with a file it joined from both sides", async () => {

@@ -53,7 +53,17 @@ describe("getOwnCommitPaths", () => {
     expect(result.entriesSince).toBe(6); // HEAD's reflog and main's, three each
   });
 
-  it("throws rather than answer when HEAD has no commit to read a reflog from", async () => {
+  it("reads nothing, rather than failing, when HEAD has no commit yet", async () => {
+    const result = await getOwnCommitPaths(repo, SINCE_MS);
+    expect([...result.paths]).toEqual([]);
+    expect(result.entriesSince).toBe(0);
+  });
+
+  it("throws when git cannot read a commit it was asked about", async () => {
+    await commitFile("a.ts");
+    await commitFile("b.ts");
+    const parent = (await git.revparse(["HEAD~1"])).trimEnd();
+    await rm(join(repo, ".git", "objects", parent.slice(0, 2), parent.slice(2)));
     await expect(getOwnCommitPaths(repo, SINCE_MS)).rejects.toThrow("Failed to read the reflog");
   });
 });

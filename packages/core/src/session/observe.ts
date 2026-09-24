@@ -75,12 +75,15 @@ export async function recordSessionBaseline(
       continue; // not a repository (or git is missing) => nothing to observe here
     }
     // Everything already dirty is the operator's, not this session's. Recording
-    // it now is what lets the later pass subtract it.
+    // it now is what lets the later pass subtract it. Both names of a rename:
+    // git status pairs them, while the later pass does not, and would otherwise
+    // see the old name as a deletion the session made.
     let baseDirty: string[] = [];
     try {
-      baseDirty = (await getWorkingTreeChanges(repoRoot)).map(
-        (change) => observedFileFrom(repoRoot, change).path,
-      );
+      baseDirty = (await getWorkingTreeChanges(repoRoot)).flatMap((change) => {
+        const file = observedFileFrom(repoRoot, change);
+        return file.old_path !== undefined ? [file.path, file.old_path] : [file.path];
+      });
     } catch {
       // A status failure only costs precision: without it the session may
       // claim a file that was already dirty. Keep the repository observed.

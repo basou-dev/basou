@@ -16,15 +16,16 @@ All notable changes to **basou** are recorded here. The project follows
   pull request was recorded as having changed that documentation, and the
   orientation listed those files first as its most recent work. The observed
   files are now limited to paths the repository's own activity touched since
-  the start -- commits created there, in any of its worktrees; a merge commit
-  only for the paths where it differs from all of its parents; and uncommitted
-  changes. The session's own work still counts after it comes back through a
+  the start -- commits created there, including on a branch in another of its
+  worktrees; a merge commit only for the paths where it differs from all of
+  its parents; and uncommitted changes. The session's own work still counts after it comes back through a
   squash merge, since its commits were created there first. Renames are no
   longer paired in the observed files, so a file the session deleted cannot
   bring in a similar one that arrived by a pull: a renamed file appears under
-  both of its names, whatever `diff.renames` says. When HEAD moved while no
-  reflog recorded anything, nothing is filtered; when git fails while working
-  out the limit, the files observed last are kept. `observeSessionChanges` in
+  both of its names, whatever `diff.renames` says, and a rename staged before
+  the session started leaves both names out. When HEAD has no commit, or moved
+  while no reflog recorded anything, nothing is filtered; when git fails while
+  working out the limit, the files observed last are kept. `observeSessionChanges` in
   `@basou/core` behaves the same way, and `getChangesSince` takes a
   `detectRenames` option. `docs/spec/schemas.md` now states what the observed
   half claims and its limits: it observes a repository rather than an actor,

@@ -288,6 +288,40 @@ describe("getChangesSince", () => {
   it("throws the fixed 'Not a git repository' outside a repository", async () => {
     await expect(getChangesSince(tmpRepo, "HEAD")).rejects.toThrow("Not a git repository");
   });
+
+  describe("detectRenames", () => {
+    /** A committed file renamed in the index, with `diff.renames` set to `config`. */
+    async function renamedSinceBase(config: string): Promise<string> {
+      const body = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+      const { head, git } = await initRepoWithFiles(tmpRepo, { "guide.md": `${body}\n` });
+      await git.addConfig("diff.renames", config);
+      await git.mv("guide.md", "handbook.md");
+      return head;
+    }
+    const paired = [{ path: "handbook.md", status: "renamed", old_path: "guide.md" }];
+    const split = [
+      { path: "guide.md", status: "deleted" },
+      { path: "handbook.md", status: "added" },
+    ];
+
+    it("pairs a rename when true, whatever diff.renames says", async () => {
+      const head = await renamedSinceBase("false");
+      expect(await getChangesSince(tmpRepo, head, { detectRenames: true })).toEqual(paired);
+    });
+
+    it("splits a rename when false, whatever diff.renames says", async () => {
+      const head = await renamedSinceBase("true");
+      expect(await getChangesSince(tmpRepo, head, { detectRenames: false })).toEqual(split);
+    });
+
+    it.each([
+      ["true", paired],
+      ["false", split],
+    ])("leaves it to diff.renames=%s when not given", async (config, expected) => {
+      const head = await renamedSinceBase(config);
+      expect(await getChangesSince(tmpRepo, head)).toEqual(expected);
+    });
+  });
 });
 
 describe("paths git would quote", () => {
