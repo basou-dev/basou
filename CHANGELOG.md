@@ -31,6 +31,33 @@ All notable changes to **basou** are recorded here. The project follows
     Only this Working dir line changed: the Related files line and the
     orientation still print such names as recorded.
 
+- **A working directory or home directory written with a trailing slash is
+  still recognised as itself.** The path sanitizer compared a recorded path
+  with the working directory and the home directory as strings, after a
+  normalisation that keeps a trailing slash. So `/Users/<user>/`, as a
+  related file or as a session's `working_directory`, was stored as given --
+  the absolute home path -- instead of `~`, and a related file `<wd>/` was
+  stored as the working directory's `~/...` form instead of `.`. The same
+  happened when the trailing slash was on the directory the sanitizer was
+  given, such as a `$HOME` that ends in `/`. Both sides are now compared
+  through `relative`, which reads the two spellings as one directory. With an
+  absolute working directory and home directory, a path that is not one of
+  the two keeps the output it had (`/etc/foo/` stays `/etc/foo/`, `src/`
+  stays `src/`). `classifyFilesBySourceRoot` in `@basou/core` likewise reads a
+  root spelled with a trailing slash as the root itself; that could differ
+  only when realpath failed for a reason other than a missing path, such as a
+  permission error.
+
+- **A working directory or home directory that is not an absolute path is no
+  longer resolved against the directory basou runs in.** With an empty
+  `$HOME` the sanitizer's home directory was `""`, which `relative` read as
+  the current directory, so a file below it, `<cwd>/f.ts`, was stored as
+  `~/f.ts`. A hand-written `basou session import` payload with a relative
+  `working_directory`, such as `rel`, had its absolute related files below
+  `<cwd>/rel` made relative to that directory. A base that is not absolute now
+  matches nothing: such a path is matched against the other base only, and
+  stored as given when that does not match either.
+
 ## 0.52.0 — 2026-09-24
 
 ### Fixed

@@ -1,11 +1,14 @@
 import { posix as path } from "node:path";
+import { locateRelative } from "./relative-location.js";
 
 /**
- * Options for {@link sanitizePath}. Both `workingDirectory` and `homedir`
- * are absolute POSIX paths the caller has already resolved (typically via
- * `process.cwd()` and `os.homedir()`). Callers are responsible for passing
- * fully normalised values; the sanitizer normalises them again internally
- * so a trailing slash or `.`-segment does not corrupt the prefix match.
+ * Options for {@link sanitizePath}. `workingDirectory` and `homedir` are
+ * expected to be absolute POSIX paths the caller has already resolved
+ * (typically via `process.cwd()` and `os.homedir()`). A base that is not
+ * absolute matches nothing: `os.homedir()` returns `""` for an empty `$HOME`,
+ * and an imported payload may carry a relative `working_directory`. The
+ * sanitizer normalises both again internally, so a trailing slash or a
+ * `.`-segment does not corrupt the match.
  */
 export type SanitizePathOptions = {
   /**
@@ -67,32 +70,31 @@ export function sanitizePath(rawPath: string, opts: SanitizePathOptions): string
     return normalized;
   }
 
+  // Each base is matched through `path.relative`, not by string equality:
+  // `path.normalize` keeps a trailing slash, so `<wd>/` and `<wd>` are the
+  // same directory only to `relative`. A base that is not absolute (an empty
+  // `$HOME`, a relative `working_directory` in an imported payload) matches
+  // nothing: `relative` would resolve it against `process.cwd()`, the
+  // directory basou happens to run in, which says nothing about the session.
+
   // (1) workingDirectory-internal -> repo-relative.
-  if (normalized === wd) return ".";
-  const wdRel = path.relative(wd, normalized);
-  if (isInside(wdRel)) {
-    return wdRel;
+  if (path.isAbsolute(wd)) {
+    const wdRel = path.relative(wd, normalized);
+    const inWd = locateRelative(wdRel);
+    if (inWd === "self") return ".";
+    if (inWd === "inside") return wdRel;
   }
 
   // (2) homedir-internal -> ~/...
-  if (normalized === home) return "~";
-  const homeRel = path.relative(home, normalized);
-  if (isInside(homeRel)) {
-    return `~/${homeRel}`;
+  if (path.isAbsolute(home)) {
+    const homeRel = path.relative(home, normalized);
+    const inHome = locateRelative(homeRel);
+    if (inHome === "self") return "~";
+    if (inHome === "inside") return `~/${homeRel}`;
   }
 
   // (3) preserve as-is.
   return normalized;
-}
-
-/**
- * Whether a `path.relative(base, target)` result names a path strictly
- * inside `base`. A target outside it is spelled `..` or `../...`; testing
- * for a `..` prefix alone would also reject a name that merely begins with
- * two dots (`..notes`, `..\x`) and leave its absolute prefix in place.
- */
-function isInside(rel: string): boolean {
-  return rel !== "" && rel !== ".." && !rel.startsWith("../");
 }
 
 /**

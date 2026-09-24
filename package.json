@@ -19,6 +19,7 @@
     "typecheck": "pnpm -r --parallel typecheck",
     "lint": "biome check .",
     "lint:lang": "node scripts/check-language.mjs",
+    "lint:paths": "node scripts/check-parent-step.mjs",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "test": "pnpm -r run test",

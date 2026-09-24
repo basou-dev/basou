@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -134,6 +134,60 @@ describe("classifyFilesBySourceRoot", () => {
     expect(result.inRoot).toEqual(files);
     expect(result.outOfRoot).toEqual([]);
   });
+
+  it("classifies a root itself as in-root, however it is spelled", async () => {
+    const files = [".", `${masterRoot}/`, "~/sibling", "~/sibling/"];
+    const result = await classifyFilesBySourceRoot({
+      files,
+      workingDirectory: masterRoot,
+      sourceRoots: [".", "../sibling"],
+      masterRoot,
+      homedir,
+    });
+    expect(result.inRoot).toEqual(files);
+    expect(result.outOfRoot).toEqual([]);
+  });
+
+  // realpath strips a trailing slash whenever it succeeds or the path is merely
+  // missing, so only its other failures (a permission error) leave the two
+  // spellings of a root apart. Root ignores directory permissions, so skip.
+  it.skipIf(process.getuid?.() === 0)(
+    "classifies a root spelled with a trailing slash as in-root when realpath cannot read it",
+    async () => {
+      const locked = join(tmp as string, "locked");
+      const root = join(locked, "sub");
+      await mkdir(locked);
+      await chmod(locked, 0o000);
+      try {
+        // The case exists only if realpath fails for a reason other than a
+        // missing path; check that the setup produced one.
+        const code = await realpath(root).then(
+          () => "resolved",
+          (error: NodeJS.ErrnoException) => error.code,
+        );
+        expect(code).not.toBe("resolved");
+        expect(code).not.toBe("ENOENT");
+        const bySlashedFile = await classifyFilesBySourceRoot({
+          files: [`${root}/`, `${root}/.`],
+          workingDirectory: masterRoot,
+          sourceRoots: [root],
+          masterRoot,
+          homedir,
+        });
+        expect(bySlashedFile.outOfRoot).toEqual([]);
+        const bySlashedRoot = await classifyFilesBySourceRoot({
+          files: [root],
+          workingDirectory: masterRoot,
+          sourceRoots: [`${root}/`],
+          masterRoot,
+          homedir,
+        });
+        expect(bySlashedRoot.outOfRoot).toEqual([]);
+      } finally {
+        await chmod(locked, 0o755);
+      }
+    },
+  );
 
   it("classifies a real step out of the root, and the root's parent, as out-of-root", async () => {
     const result = await classifyFilesBySourceRoot({

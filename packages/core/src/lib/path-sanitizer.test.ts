@@ -182,6 +182,49 @@ describe("sanitizePath", () => {
     ).toBe("src/x.ts");
   });
 
+  // `path.posix.normalize` keeps a trailing slash, so `<wd>/` and `<wd>` must
+  // still be recognised as the same directory, on either side.
+  it("rewrites workingDirectory itself as '.' when either side has a trailing slash", () => {
+    expect(sanitizePath(`${WD}/`, { workingDirectory: WD, homedir: HOME })).toBe(".");
+    expect(sanitizePath(WD, { workingDirectory: `${WD}/`, homedir: HOME })).toBe(".");
+  });
+
+  it("rewrites homedir itself as '~' when either side has a trailing slash", () => {
+    expect(sanitizePath(`${HOME}/`, { workingDirectory: WD, homedir: HOME })).toBe("~");
+    expect(sanitizePath(HOME, { workingDirectory: WD, homedir: `${HOME}/` })).toBe("~");
+  });
+
+  it("treats the filesystem root as a base like any other", () => {
+    expect(sanitizePath("/etc/foo", { workingDirectory: "/", homedir: HOME })).toBe("etc/foo");
+    expect(sanitizePath("/", { workingDirectory: "/", homedir: HOME })).toBe(".");
+    expect(sanitizePath("/etc/foo", { workingDirectory: WD, homedir: "/" })).toBe("~/etc/foo");
+    expect(sanitizePath("/", { workingDirectory: WD, homedir: "/" })).toBe("~");
+  });
+
+  // `path.relative` resolves a relative base against `process.cwd()`, which is
+  // where basou runs, not where the session ran.
+  it("matches nothing against a base that is not absolute", () => {
+    const cwd = process.cwd();
+    for (const base of ["", ".", "rel"]) {
+      for (const input of [cwd, `${cwd}/f.ts`, `${cwd}/rel`, `${cwd}/rel/f.ts`]) {
+        expect(sanitizePath(input, { workingDirectory: base, homedir: base }), base).toBe(input);
+      }
+    }
+  });
+
+  it("still applies the other rule when only one base is not absolute", () => {
+    expect(sanitizePath(`${WD}/src/x.ts`, { workingDirectory: WD, homedir: "" })).toBe("src/x.ts");
+    expect(sanitizePath("/Users/u/notes/x.md", { workingDirectory: ".", homedir: HOME })).toBe(
+      "~/notes/x.md",
+    );
+  });
+
+  it("keeps the output of a path that is not a base unchanged by a trailing slash", () => {
+    expect(sanitizePath(`${WD}/src/`, { workingDirectory: WD, homedir: HOME })).toBe("src");
+    expect(sanitizePath("/etc/foo/", { workingDirectory: WD, homedir: HOME })).toBe("/etc/foo/");
+    expect(sanitizePath("src/", { workingDirectory: WD, homedir: HOME })).toBe("src/");
+  });
+
   it("handles an empty string by returning an empty string (no schema check here)", () => {
     // Empty is a degenerate input; the schema layer rejects empty entries,
     // but the sanitizer itself should not crash. path.posix.normalize("") = ".".
@@ -215,6 +258,17 @@ describe("sanitizeWorkingDirectory", () => {
     expect(sanitizeWorkingDirectory("/Users/u/projects/we\\ird", { homedir: HOME })).toBe(
       "~/projects/we\\ird",
     );
+  });
+
+  it("rewrites the homedir itself as '~' when either side has a trailing slash", () => {
+    expect(sanitizeWorkingDirectory(`${HOME}/`, { homedir: HOME })).toBe("~");
+    expect(sanitizeWorkingDirectory(HOME, { homedir: `${HOME}/` })).toBe("~");
+    expect(sanitizeWorkingDirectory(`${WD}/`, { homedir: HOME })).toBe("~/projects/foo");
+  });
+
+  it("keeps the working directory as given when homedir is empty", () => {
+    // `os.homedir()` returns "" for an empty `$HOME`.
+    expect(sanitizeWorkingDirectory(process.cwd(), { homedir: "" })).toBe(process.cwd());
   });
 
   it("rewrites a working directory whose name begins with two dots under homedir", () => {
