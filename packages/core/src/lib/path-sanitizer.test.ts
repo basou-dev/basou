@@ -146,13 +146,19 @@ describe("sanitizePath", () => {
   // `path.relative` spells a target outside the base as `..` or `../...`. A
   // name that merely begins with two dots is still inside.
   it("rewrites a name beginning with two dots under workingDirectory as relative", () => {
-    for (const name of ["..notes", "..\\x.json", "..\\..\\b"]) {
+    for (const name of ["..notes", "..\\x.json", "..\\..\\b", "...", "..cache/x.ts"]) {
+      expect(sanitizePath(`${WD}/${name}`, { workingDirectory: WD, homedir: HOME })).toBe(name);
+    }
+  });
+
+  it("rewrites a name containing or ending with two dots under workingDirectory as relative", () => {
+    for (const name of ["foo..", "foo../bar", "a../b"]) {
       expect(sanitizePath(`${WD}/${name}`, { workingDirectory: WD, homedir: HOME })).toBe(name);
     }
   });
 
   it("rewrites a name beginning with two dots under homedir with the ~/ prefix", () => {
-    for (const name of ["..notes", "..\\notes.md"]) {
+    for (const name of ["..notes", "..\\notes.md", "...", "x.."]) {
       expect(sanitizePath(`${HOME}/${name}`, { workingDirectory: WD, homedir: HOME })).toBe(
         `~/${name}`,
       );

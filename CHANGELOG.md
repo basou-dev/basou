@@ -21,26 +21,28 @@ All notable changes to **basou** are recorded here. The project follows
   in `@basou/core`; `basou session import` no longer reports such a name as
   sanitized.
 
-  Two consequences. A backslash in a Windows-style path is no longer read as
+  What else changes. A backslash in a Windows-style path is no longer read as
   a separator either; `/`-separated segments are still normalised, so
-  `C:\x/../y` becomes `y`. One with a drive letter (`C:\Users\...`) was never
-  made relative or shortened to `~/` before either -- Windows is not
-  supported. And a session already recorded keeps the folded spelling: a
-  `basou run` session is never rebuilt, and an imported one is rebuilt only
-  when it is re-imported -- because its transcript grew, or by
-  `basou import claude-code --force` / `basou import codex --force`. So one
-  file can appear under both spellings across the upgrade, and `basou report`,
+  `C:\x/../y` becomes `y`. A path with a drive letter (`C:\Users\...`) was
+  never made relative or shortened to `~/` before either -- Windows is not
+  supported -- but one that starts with a backslash and has no drive letter
+  was: `\Users\<user>\x.ts` became `~/x.ts`, and is now stored as given,
+  user name included. And a session already recorded keeps the folded
+  spelling until it is rebuilt: a `basou run` session never is, and an
+  imported one is rebuilt only when it is re-imported -- because its
+  transcript grew, or by a forced import or refresh
+  (`basou import claude-code --force`, `basou import codex --force`,
+  `basou refresh --force`, or the same actions in `basou view`). So one file
+  can appear under both spellings across the upgrade, and `basou report`,
   which unions `related_files` across sessions by exact string, counts it
   twice.
 
-- **A file whose name begins with two dots is recognised as inside the
-  working directory or the home directory.** The sanitizer read any
-  relative result starting with `..` as a step out of the directory, so
-  `..notes` directly under the working directory was not made relative, and
-  directly under the home directory it was stored with the absolute home path
-  (`/Users/<user>/..notes`) instead of `~/..notes`. Only `..` itself and a
-  `../` prefix count as outside now. Keeping backslashes made this reachable
-  for more names, such as `..\x.json`.
+- **A path whose first part below the working directory or the home
+  directory begins with two dots is recognised as inside it.** The sanitizer
+  read any relative result starting with `..` as a step out of the
+  directory, so `<wd>/..notes` or `<wd>/..cache/x.ts` was not made relative,
+  and `/Users/<user>/..notes` was stored with the absolute home path instead
+  of `~/..notes`. Only `..` itself and a `../` prefix count as outside now.
 
 ## 0.51.0 — 2026-09-23
 

@@ -196,10 +196,12 @@ session:
   release may introduce `basou session migrate` to sanitize existing data
   on request. Records written while the sanitizer still folded backslashes
   may spell a name that contains one with `/` instead (`back/slash.txt`
-  for `back\slash.txt`), and are not rewritten either. A reader must not
-  treat two paths as the same file by replacing one separator with the
-  other -- on macOS / Linux they can be two different files -- and an
-  exact-string count across sessions is not a count of distinct files.
+  for `back\slash.txt`), and keep that spelling until they are rebuilt: a
+  `basou run` session never is, and an imported one is rebuilt when it is
+  re-imported. A reader must not treat two paths as the same file by
+  replacing one separator with the other -- on macOS / Linux they can be
+  two different files -- and an exact-string count across sessions is not
+  a count of distinct files.
 
 ---
 
