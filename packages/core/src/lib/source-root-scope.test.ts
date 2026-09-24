@@ -119,4 +119,31 @@ describe("classifyFilesBySourceRoot", () => {
     });
     expect(result.outOfRoot).toEqual([join(tmp as string, "outside", "blog.md")]);
   });
+
+  // `path.relative` spells a location outside the root as `..` or `../...`; a
+  // name that merely begins with two dots is still inside it.
+  it("classifies a name that begins, ends or contains two dots under a source root as in-root", async () => {
+    const files = ["..notes", "..\\x.txt", "..cache/x.ts", "...", "x..", "a../b"];
+    const result = await classifyFilesBySourceRoot({
+      files,
+      workingDirectory: masterRoot,
+      sourceRoots: ["."],
+      masterRoot,
+      homedir,
+    });
+    expect(result.inRoot).toEqual(files);
+    expect(result.outOfRoot).toEqual([]);
+  });
+
+  it("classifies a real step out of the root, and the root's parent, as out-of-root", async () => {
+    const result = await classifyFilesBySourceRoot({
+      files: ["../outside/blog.md", ".."],
+      workingDirectory: masterRoot,
+      sourceRoots: ["."],
+      masterRoot,
+      homedir,
+    });
+    expect(result.outOfRoot).toEqual(["../outside/blog.md", ".."]);
+    expect(result.inRoot).toEqual([]);
+  });
 });

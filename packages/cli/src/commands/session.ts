@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import {
   acquireLock,
   appendEventToExistingSession,
@@ -498,8 +498,9 @@ function formatWorkingDir(
   // Outside-repo working directories surface as a `../...` relative path
   // rather than the absolute path so the default-display contract holds
   // even for sessions recorded from a sibling checkout. `--full-path` is
-  // the explicit opt-in for the absolute form.
-  if (rel.startsWith("..")) return rel;
+  // the explicit opt-in for the absolute form. A name that merely begins with
+  // two dots (`..notes`) is inside the repo and keeps the `./` prefix.
+  if (rel === ".." || rel.startsWith(`..${sep}`)) return rel;
   return `./${rel}`;
 }
 

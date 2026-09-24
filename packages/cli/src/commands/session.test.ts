@@ -769,6 +769,27 @@ describe("doRunSessionShow", () => {
     expect(joinCalls(out)).toContain("Working dir:   ./packages/cli");
   });
 
+  it("case 17e: a working_directory under the repo with two dots in a name keeps the ./ prefix", async () => {
+    const repo = await setupInitedRepo();
+    for (const [i, below] of ["..notes", "..\\notes", "x..", "...", "a../b"].entries()) {
+      const id = SES(`Y2${i}`);
+      await createSession(repo, { id, workingDirectory: join(repo, below) });
+      const out = captureStdout();
+      await doRunSessionShow(id, {}, { cwd: repo });
+      expect(joinCalls(out)).toContain(`Working dir:   ./${below}\n`);
+      out.mockRestore();
+    }
+  });
+
+  it("case 17f: the repo root's parent as working_directory prints as `..`", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("Y12");
+    await createSession(repo, { id, workingDirectory: dirname(repo) });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    expect(joinCalls(out)).toContain("Working dir:   ..\n");
+  });
+
   it("case 17d: --full-path forces the absolute working_directory in default text", async () => {
     const repo = await setupInitedRepo();
     const id = SES("Y09");

@@ -3,6 +3,34 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A path whose first part below its base begins with two dots is no longer
+  read as a step out of it in three more places.** 0.52.0 fixed this in the
+  path sanitizer; the same test (a `relative` result starting with `..`) was
+  also used elsewhere. As in the sanitizer, only `..` itself and a `../`
+  prefix count as outside now:
+  - The cross-project warning of `basou import`, `basou decision capture`,
+    `basou decision record` and the orientation flagged a file inside the
+    project, such as `..notes` or `..cache/x.ts`, as resolving outside its
+    `source_roots`. The same change applies to `classifyFilesBySourceRoot` in
+    `@basou/core`, whose `outOfRoot` no longer lists such a file.
+  - `basou view --check` missed an overlap when the workspace sat inside a
+    monitored repo under a first-level directory whose name begins with two
+    dots (`<repo>/..ws`, `<repo>/..a/ws`). It is found now and `--check`
+    exits 1 for that layout, so a `basou view --portfolio` or
+    `basou view --workspace` start that passed before now stops on the
+    overlap, which is what the check is for. `--skip-safety-check` still
+    overrides it.
+  - `basou session show` printed a working directory recorded as an absolute
+    path, such as `<repo>/..notes`, as `..notes`, which reads as outside the
+    repository; it prints `./..notes` now. A working directory under the home
+    directory is recorded as `~/...` and is printed as recorded, as before.
+    Only this Working dir line changed: the Related files line and the
+    orientation still print such names as recorded.
+
 ## 0.52.0 — 2026-09-24
 
 ### Fixed
