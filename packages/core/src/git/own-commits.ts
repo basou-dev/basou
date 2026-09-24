@@ -2,22 +2,35 @@ import type { SimpleGit } from "simple-git";
 import { isGitNotFound, safeSimpleGit } from "./snapshot.js";
 
 /**
- * Reflog subjects of the entries in which this repository CREATED a commit:
- * a commit (initial, amended, or a merge commit), a cherry-pick, a revert, a
- * pick replayed by a rebase, and a merge that git committed itself. Every other
- * entry only moves HEAD to a commit that already existed -- a pull or merge
- * that fast-forwarded to commits made elsewhere, a checkout, a reset -- and
- * says nothing about who wrote what.
+ * Reflog subjects of the entries in which this repository CREATED a commit, as
+ * git itself writes them: a commit (initial, amended, a merge commit, or one
+ * that concludes a cherry-pick), a cherry-pick, a revert, a patch applied by
+ * `git am`, a pick replayed by a rebase or by `git pull --rebase` (whatever its
+ * options were spelled as), and a merge that git committed itself. Every other
+ * entry only moves a ref to a commit that already existed -- a pull or merge
+ * that fast-forwarded to commits made elsewhere, `cherry-pick --ff`, a
+ * checkout, a reset, a branch created at an existing commit -- and says nothing
+ * about who wrote what.
  */
 const COMMIT_CREATED =
-  /^(?:commit(?: \((?:initial|amend|merge)\))?|cherry-pick|revert|(?:rebase|pull --rebase)(?: -i)? \((?:pick|reword|edit|squash|fixup|continue)\)): |^(?:merge|pull)\b[^:]*: Merge made by /;
+  /^(?:commit(?: \((?:initial|amend|merge|cherry-pick)\))?|cherry-pick|revert|am|(?:rebase|pull)\b[^:]*? \((?:pick|reword|edit|squash|fixup|continue|merge)\)): |^(?:merge|pull)\b[^:]*: Merge made by /;
 
-/** What the HEAD reflog says was created in this repository since a point in time. */
+/** `cherry-pick --ff` moves HEAD to the picked commit itself; nothing is created. */
+const FAST_FORWARD_PICK = /^cherry-pick: fast-forward$/;
+
+/**
+ * How many commits one `git log` call is given. Every sha is an argument, and a
+ * session that creates tens of thousands of commits would otherwise exceed the
+ * system's argument-list limit.
+ */
+const COMMITS_PER_CALL = 1000;
+
+/** What the reflogs say was created in this repository since a point in time. */
 export type OwnCommitPaths = {
   /**
    * Paths changed by those commits, repository-relative. A merge commit
-   * contributes only what it resolved (its combined diff), not what it brought
-   * in from the other side.
+   * contributes only the paths where it differs from every parent (its
+   * combined diff), not what it brought in from the other side.
    */
   paths: Set<string>;
   /**
@@ -30,21 +43,25 @@ export type OwnCommitPaths = {
 
 /**
  * The paths changed by the commits this repository created at or after
- * `sinceMs`, read from the HEAD reflog. HEAD's reflog records every commit made
- * while HEAD pointed at any branch, so one read covers them all.
+ * `sinceMs`, read from the reflogs of HEAD and of every local branch. HEAD's
+ * reflog belongs to one worktree; the branches' reflogs are shared by all of
+ * them, so a commit made on a branch in another worktree of the same
+ * repository is found there.
  *
  * Reflog times have one-second resolution; an entry is in the window when its
  * second is not before `sinceMs`'s second, so a commit made in the same second
  * as the start is kept rather than dropped.
  *
- * Returns `null` when the reflog cannot be read (an unborn HEAD, a broken
- * repository): absence of evidence, which the caller must not treat as
- * "nothing was created".
+ * Throws when git fails. The caller cannot tell a failed read from "nothing was
+ * created", so it must not treat either as the other.
+ *
+ * @param commitsPerCall how many commits one `git log` call is given (tests)
  */
 export async function getOwnCommitPaths(
   repoRoot: string,
   sinceMs: number,
-): Promise<OwnCommitPaths | null> {
+  commitsPerCall: number = COMMITS_PER_CALL,
+): Promise<OwnCommitPaths> {
   let git: SimpleGit;
   try {
     git = safeSimpleGit(repoRoot);
@@ -55,14 +72,28 @@ export async function getOwnCommitPaths(
     throw new Error("Not a git repository", { cause: error });
   }
 
+  // One entry per line: reflog subjects are single-line. `%gd` under
+  // `--date=unix` is `<ref>@{<seconds>}`, the time stored with the ref update.
+  // Git takes it from the committer identity, so it is the time of the update
+  // unless the operation was given a date: `GIT_COMMITTER_DATE`, or a commit
+  // that `rebase --continue` concludes under `--committer-date-is-author-date`
+  // (that step carries the author date; the picks around it do not). A pulled
+  // commit's own dates never enter into it. `--no-show-signature` because `log.showSignature` would verify
+  // every commit in every reflog on each call. A ref with no reflog is left
+  // out, not an error.
   let reflog: string;
   try {
-    // One entry per line: reflog subjects are single-line. `%gd` under
-    // `--date=unix` is `HEAD@{<seconds>}`, the time of the ref update itself,
-    // which is what matters here -- a pulled commit keeps its author's dates.
-    reflog = await git.raw(["log", "-g", "--date=unix", "--format=%H%x1f%gd%x1f%gs", "HEAD"]);
-  } catch {
-    return null;
+    reflog = await git.raw([
+      "log",
+      "-g",
+      "--no-show-signature",
+      "--date=unix",
+      "--format=%H%x1f%gd%x1f%gs",
+      "HEAD",
+      "--branches",
+    ]);
+  } catch (error: unknown) {
+    throw new Error("Failed to read the reflog", { cause: error });
   }
 
   const sinceSecond = Math.floor(sinceMs / 1000);
@@ -74,33 +105,41 @@ export async function getOwnCommitPaths(
     const second = Number(/\{(\d+)\}$/.exec(selector)?.[1]);
     if (!Number.isFinite(second) || second < sinceSecond) continue;
     entriesSince += 1;
-    if (COMMIT_CREATED.test(subject)) created.add(sha);
+    if (COMMIT_CREATED.test(subject) && !FAST_FORWARD_PICK.test(subject)) created.add(sha);
   }
-  if (created.size === 0) return { paths: new Set(), entriesSince };
 
-  let raw: string;
-  try {
-    // `--cc` makes a merge commit list only the paths where it differs from
-    // every parent (what was resolved) and leaves other commits' diffs as they
-    // are; `--no-renames` names both sides of a rename; `-z` keeps real names.
-    raw = await git.raw([
-      "log",
-      "--no-walk=unsorted",
-      "--cc",
-      "--format=",
-      "--name-only",
-      "--no-renames",
-      "-z",
-      ...created,
-    ]);
-  } catch {
-    return null;
-  }
-  // With an empty `--format` git writes nothing between commits: the output is
-  // one run of NUL-terminated paths.
   const paths = new Set<string>();
-  for (const path of raw.split("\0")) {
-    if (path.length > 0) paths.add(path);
+  const shas = [...created];
+  for (let start = 0; start < shas.length; start += commitsPerCall) {
+    let raw: string;
+    try {
+      // `--cc` makes a merge commit list only the paths where it differs from
+      // every parent and leaves other commits' diffs as they are;
+      // `--no-renames` names both sides of a rename; `-z` keeps real names.
+      // `--root` and `--no-show-signature` hold the output to that whatever the
+      // repository's `log.showRoot` and `log.showSignature` say: the first
+      // would drop a root commit's files, the second would write signature
+      // checks into the stream of paths.
+      raw = await git.raw([
+        "log",
+        "--no-walk=unsorted",
+        "--no-show-signature",
+        "--root",
+        "--cc",
+        "--format=",
+        "--name-only",
+        "--no-renames",
+        "-z",
+        ...shas.slice(start, start + commitsPerCall),
+      ]);
+    } catch (error: unknown) {
+      throw new Error("Failed to read the reflog", { cause: error });
+    }
+    // With an empty `--format` git writes nothing between commits: the output
+    // is one run of NUL-terminated paths.
+    for (const path of raw.split("\0")) {
+      if (path.length > 0) paths.add(path);
+    }
   }
   return { paths, entriesSince };
 }

@@ -94,8 +94,15 @@ export async function getDiff(
  *
  * @param repoRoot absolute path to the git repository root
  * @param baseRef the ref the session started from (e.g. its session-start HEAD)
+ * @param options.detectRenames `false` reports a rename as a deletion of the old
+ *   name and an addition of the new one, `true` pairs them into one `renamed`
+ *   entry; left out, the repository's `diff.renames` decides
  */
-export async function getChangesSince(repoRoot: string, baseRef: string): Promise<FileChange[]> {
+export async function getChangesSince(
+  repoRoot: string,
+  baseRef: string,
+  options: { detectRenames?: boolean } = {},
+): Promise<FileChange[]> {
   let git: SimpleGit;
   try {
     git = safeSimpleGit(repoRoot);
@@ -114,7 +121,11 @@ export async function getChangesSince(repoRoot: string, baseRef: string): Promis
     // already dirty. (That comparison is still wrong for a name with a leading
     // or trailing space: the working-tree side goes through simple-git's
     // status parser, which trims each record.)
-    raw = await git.raw(["diff", "--name-status", "-z", baseRef]);
+    const renames =
+      options.detectRenames === undefined
+        ? []
+        : [options.detectRenames ? "--find-renames" : "--no-renames"];
+    raw = await git.raw(["diff", "--name-status", "-z", ...renames, baseRef]);
   } catch (error: unknown) {
     throw translateDiffError(error);
   }

@@ -16,17 +16,24 @@ All notable changes to **basou** are recorded here. The project follows
   pull request was recorded as having changed that documentation, and the
   orientation listed those files first as its most recent work. The observed
   files are now limited to paths the repository's own activity touched since
-  the start -- commits created there, a merge commit only for what it
-  resolved, and uncommitted changes. The session's own work still counts after
-  it comes back through a squash merge, since its commits were created there
-  first. When the reflog cannot be read, or HEAD moved while it recorded
-  nothing, nothing is filtered. `docs/spec/schemas.md` now states what the
-  observed half claims and its limits: it observes a repository rather than
-  an actor, measures a resumed session from its first start, leaves out files
-  already dirty at the start, and keys observations by the vendor's session
-  id without a namespace. A session observed before the upgrade keeps the
-  files its last observation recorded, re-imported or not: the list is
-  recomputed only when that session's Stop hook runs again.
+  the start -- commits created there, in any of its worktrees; a merge commit
+  only for the paths where it differs from all of its parents; and uncommitted
+  changes. The session's own work still counts after it comes back through a
+  squash merge, since its commits were created there first. Renames are no
+  longer paired in the observed files, so a file the session deleted cannot
+  bring in a similar one that arrived by a pull: a renamed file appears under
+  both of its names, whatever `diff.renames` says. When HEAD moved while no
+  reflog recorded anything, nothing is filtered; when git fails while working
+  out the limit, the files observed last are kept. `observeSessionChanges` in
+  `@basou/core` behaves the same way, and `getChangesSince` takes a
+  `detectRenames` option. `docs/spec/schemas.md` now states what the observed
+  half claims and its limits: it observes a repository rather than an actor,
+  counts only what is still in the net change, sees a commit only through a
+  reflog entry it reads, measures a resumed session from its first start,
+  leaves out files already dirty at the start, and keys observations by the
+  vendor's session id without a namespace. A session observed before the
+  upgrade keeps the files its last observation recorded, re-imported or not:
+  the list is recomputed only when that session's Stop hook runs again.
 
 ### Fixed
 

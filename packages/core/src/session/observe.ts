@@ -112,7 +112,9 @@ export async function recordSessionBaseline(
  * Per repository, a failure keeps that repository's PREVIOUS file list rather
  * than clearing it: the common cause is a base commit that no longer resolves
  * (a rebase, a reset), and forgetting what was already observed would be a
- * silent loss where a stale list is merely old.
+ * silent loss where a stale list is merely old. A failure to read what the
+ * repository's own activity touched is handled the same way, rather than by
+ * dropping the limit for that pass.
  *
  * Returns `null` when the session has no baseline — it started before the hook
  * was installed, or outside a registered workspace — because inventing one now
@@ -173,9 +175,13 @@ async function changedSinceBaseline(
   // nothing, which is the silence this whole mechanism exists to end.
   const base = repo.base_head ?? (await readEmptyTreeSha(repo.path));
   const own = await ownActivityPaths(repo, startedAt);
-  for (const change of await getChangesSince(repo.path, base)) {
+  // No rename detection: git would pair a file the session deleted with a
+  // similar one that arrived by a pull, and the pair would carry the pulled
+  // name in. Without it, each name stands or falls on its own, and the answer
+  // does not change with the repository's `diff.renames`.
+  for (const change of await getChangesSince(repo.path, base, { detectRenames: false })) {
     if (isBasouStorePath(change.path)) continue;
-    if (own !== null && !touchedBy(own, change.path, change.old_path)) continue;
+    if (own !== null && !own.has(change.path)) continue;
     const file = observedFileFrom(repo.path, change);
     byPath.set(file.path, file);
   }
@@ -209,35 +215,29 @@ async function changedSinceBaseline(
  * session's own commits still are after they come back from a squash merge,
  * because it created them here first.
  *
- * `null` means "cannot tell": the reflog is unreadable, or HEAD moved while the
- * reflog recorded nothing (reflogs off or expired). The caller then keeps every
- * net change, since dropping the session's work silently would be worse than
- * over-reporting it.
+ * `null` means no limit applies, in exactly two cases: HEAD has no commit now,
+ * so nothing on it can have arrived from elsewhere; or HEAD moved while no
+ * reflog recorded anything (reflogs off or expired), so an own commit and a
+ * pulled one cannot be told apart, and dropping the session's work silently
+ * would be worse than over-reporting it.
+ *
+ * A git failure throws instead. Either answer would be a guess -- an empty set
+ * drops the session's work, `null` charges it with every pulled commit -- and
+ * the caller keeps the list it observed last rather than rewrite it from one.
  */
 async function ownActivityPaths(
   repo: ObservedRepo,
   startedAt: string,
 ): Promise<Set<string> | null> {
   const sinceMs = Date.parse(startedAt);
-  if (Number.isNaN(sinceMs)) return null;
-  try {
-    const commits = await getOwnCommitPaths(repo.path, sinceMs);
-    if (commits === null) return null;
-    const head = await readHeadSha(repo.path);
-    if (commits.entriesSince === 0 && head !== repo.base_head) return null;
-    const own = new Set(commits.paths);
-    const uncommittedBase = head ?? (await readEmptyTreeSha(repo.path));
-    for (const change of await getChangesSince(repo.path, uncommittedBase)) {
-      own.add(change.path);
-      if (change.old_path !== undefined) own.add(change.old_path);
-    }
-    return own;
-  } catch {
-    return null;
+  if (Number.isNaN(sinceMs)) throw new Error("Unreadable session start time");
+  const head = await readHeadSha(repo.path);
+  if (head === null) return null;
+  const commits = await getOwnCommitPaths(repo.path, sinceMs);
+  if (commits.entriesSince === 0 && head !== repo.base_head) return null;
+  const own = new Set(commits.paths);
+  for (const change of await getChangesSince(repo.path, head, { detectRenames: false })) {
+    own.add(change.path);
   }
-}
-
-/** Whether a change (or, for a rename, either of its names) is among `own`. */
-function touchedBy(own: ReadonlySet<string>, path: string, oldPath: string | undefined): boolean {
-  return own.has(path) || (oldPath !== undefined && own.has(oldPath));
+  return own;
 }
