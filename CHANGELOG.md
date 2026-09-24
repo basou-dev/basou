@@ -3,6 +3,26 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A name that begins, ends or contains two dots is no longer read as a step
+  out of its directory in three more places.** 0.52.0 fixed this in the path
+  sanitizer; the same test (`relative` result starting with `..`) was also
+  used elsewhere:
+  - The cross-project warning of `basou import`, `basou decision capture` and
+    the orientation flagged a file inside the project, such as `..notes`, as
+    resolving outside its `source_roots`. Only a real `..` step counts as
+    outside now.
+  - `basou view --check` missed an overlap when the workspace sat inside a
+    monitored repo under a directory whose name begins with two dots (such as
+    `..ws`). It is found now, so a `basou view --portfolio` start that passed
+    before can now stop on that overlap, which is what the check is for.
+  - `basou session show` printed a working directory such as
+    `<repo>/..notes` as `..notes`, which reads as outside the repository. It
+    prints `./..notes` now.
+
 ## 0.52.0 — 2026-09-24
 
 ### Fixed

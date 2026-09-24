@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { readManifest } from "@basou/core";
 import type { WorkspaceEntry } from "./view-server.js";
@@ -61,10 +61,13 @@ async function canonical(p: string): Promise<string> {
   }
 }
 
-/** True when `child` is `parent` itself or nested inside it (both expected canonical). */
+/**
+ * True when `child` is `parent` itself or nested inside it (both expected
+ * canonical). Outside is `..` or `../...`, not any name beginning with two dots.
+ */
 function isInside(child: string, parent: string): boolean {
   const rel = relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 /** A tracked path (relative to the repo) that is, or is under, a `.basou/` dir anywhere in the tree. */

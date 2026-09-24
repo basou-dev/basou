@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -85,6 +85,30 @@ describe("checkPortfolioSafety", () => {
     expect(result.findings.some((f) => f.kind === "overlap" && f.monitoredRepo === outer)).toBe(
       true,
     );
+  });
+
+  it("flags a workspace whose path below a monitored repo has two dots in a name", async () => {
+    for (const [i, below] of [["..inner"], ["x.."], ["..."], ["a..", "b"]].entries()) {
+      const outer = join(getParent(), `outer-${i}`);
+      const inner = join(outer, ...below);
+      await initWorkspace(inner, [relative(inner, outer)]);
+
+      const result = await checkPortfolioSafety([wsEntry(inner)]);
+      expect(
+        result.findings.some((f) => f.kind === "overlap" && f.monitoredRepo === outer),
+        below.join("/"),
+      ).toBe(true);
+    }
+  });
+
+  it("does not flag a monitored repo nested inside the workspace as an overlap", async () => {
+    // The workspace is the monitored repo's parent, not inside it.
+    const ws = join(getParent(), "ws");
+    await mkdir(join(ws, "child"), { recursive: true });
+    await initWorkspace(ws, ["child"]);
+
+    const result = await checkPortfolioSafety([wsEntry(ws)]);
+    expect(result.findings.filter((f) => f.kind === "overlap")).toEqual([]);
   });
 
   it("treats an uninitialized workspace as having no monitored repos", async () => {
