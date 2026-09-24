@@ -75,10 +75,102 @@ describe("sanitizePath", () => {
     );
   });
 
-  it("folds backslashes to forward slashes (POSIX target)", () => {
-    expect(sanitizePath("src\\windows\\style\\x.ts", { workingDirectory: WD, homedir: HOME })).toBe(
-      "src/windows/style/x.ts",
+  // On macOS / Linux a backslash is an ordinary filename character, not a
+  // separator: `back\slash.txt` is one file, and `back/slash.txt` is a
+  // different file in another directory.
+  it("keeps a backslash in a relative path as part of the name", () => {
+    expect(sanitizePath("back\\slash.txt", { workingDirectory: WD, homedir: HOME })).toBe(
+      "back\\slash.txt",
     );
+  });
+
+  it("keeps a backslash in a workingDirectory-internal absolute path", () => {
+    expect(
+      sanitizePath("/Users/u/projects/foo/src/back\\slash.txt", {
+        workingDirectory: WD,
+        homedir: HOME,
+      }),
+    ).toBe("src/back\\slash.txt");
+  });
+
+  it("does not read a backslash-separated `..` as a parent directory", () => {
+    // `a\..\..\b` is one name directly under workingDirectory.
+    expect(
+      sanitizePath("/Users/u/projects/foo/a\\..\\..\\b", { workingDirectory: WD, homedir: HOME }),
+    ).toBe("a\\..\\..\\b");
+  });
+
+  it("matches a workingDirectory whose name contains a backslash against that directory only", () => {
+    const wd = "/Users/u/we\\ird";
+    expect(sanitizePath("/Users/u/we\\ird/src/x.ts", { workingDirectory: wd, homedir: HOME })).toBe(
+      "src/x.ts",
+    );
+    // `/Users/u/we/ird` is a different directory, not under workingDirectory.
+    expect(sanitizePath("/Users/u/we/ird/src/x.ts", { workingDirectory: wd, homedir: HOME })).toBe(
+      "~/we/ird/src/x.ts",
+    );
+  });
+
+  it("matches a homedir whose name contains a backslash against that directory only", () => {
+    const home = "/home/a\\b";
+    expect(sanitizePath("/home/a\\b/notes.md", { workingDirectory: WD, homedir: home })).toBe(
+      "~/notes.md",
+    );
+    expect(sanitizePath("/home/a/b/notes.md", { workingDirectory: WD, homedir: home })).toBe(
+      "/home/a/b/notes.md",
+    );
+  });
+
+  it("passes a Windows-style path through unchanged (Windows is not supported)", () => {
+    expect(sanitizePath("C:\\Users\\u\\x.ts", { workingDirectory: WD, homedir: HOME })).toBe(
+      "C:\\Users\\u\\x.ts",
+    );
+  });
+
+  it("does not read a leading backslash as the root", () => {
+    // Both are single relative names on POSIX, not `/server/...` or `/Users/...`.
+    expect(sanitizePath("\\\\server\\share\\x.ts", { workingDirectory: WD, homedir: HOME })).toBe(
+      "\\\\server\\share\\x.ts",
+    );
+    expect(sanitizePath("\\Users\\u\\x.ts", { workingDirectory: WD, homedir: HOME })).toBe(
+      "\\Users\\u\\x.ts",
+    );
+  });
+
+  it("keeps a backslash in an absolute path outside both bases", () => {
+    expect(sanitizePath("/etc/back\\slash", { workingDirectory: WD, homedir: HOME })).toBe(
+      "/etc/back\\slash",
+    );
+  });
+
+  // `path.relative` spells a target outside the base as `..` or `../...`. A
+  // name that merely begins with two dots is still inside.
+  it("rewrites a name beginning with two dots under workingDirectory as relative", () => {
+    for (const name of ["..notes", "..\\x.json", "..\\..\\b", "...", "..cache/x.ts"]) {
+      expect(sanitizePath(`${WD}/${name}`, { workingDirectory: WD, homedir: HOME })).toBe(name);
+    }
+  });
+
+  it("rewrites a name containing or ending with two dots under workingDirectory as relative", () => {
+    for (const name of ["foo..", "foo../bar", "a../b"]) {
+      expect(sanitizePath(`${WD}/${name}`, { workingDirectory: WD, homedir: HOME })).toBe(name);
+    }
+  });
+
+  it("rewrites a name beginning with two dots under homedir with the ~/ prefix", () => {
+    for (const name of ["..notes", "..\\notes.md", "...", "x.."]) {
+      expect(sanitizePath(`${HOME}/${name}`, { workingDirectory: WD, homedir: HOME })).toBe(
+        `~/${name}`,
+      );
+    }
+  });
+
+  it("does not rewrite the parent of workingDirectory or of homedir as inside it", () => {
+    // `path.relative` returns exactly `..` for these two.
+    expect(sanitizePath("/Users/u/projects", { workingDirectory: WD, homedir: HOME })).toBe(
+      "~/projects",
+    );
+    expect(sanitizePath("/Users", { workingDirectory: WD, homedir: HOME })).toBe("/Users");
   });
 
   it("is robust against a trailing slash on workingDirectory / homedir options", () => {
@@ -118,6 +210,16 @@ describe("sanitizeWorkingDirectory", () => {
   it("preserves an already-relative working_directory (e.g. a test fixture passing '.')", () => {
     expect(sanitizeWorkingDirectory(".", { homedir: HOME })).toBe(".");
   });
+
+  it("keeps a backslash in the working directory's name", () => {
+    expect(sanitizeWorkingDirectory("/Users/u/projects/we\\ird", { homedir: HOME })).toBe(
+      "~/projects/we\\ird",
+    );
+  });
+
+  it("rewrites a working directory whose name begins with two dots under homedir", () => {
+    expect(sanitizeWorkingDirectory("/Users/u/..\\w", { homedir: HOME })).toBe("~/..\\w");
+  });
 });
 
 describe("sanitizeRelatedFiles", () => {
@@ -147,6 +249,15 @@ describe("sanitizeRelatedFiles", () => {
     });
     expect(result.mutationCount).toBe(0);
     expect(result.sanitized).toEqual(["src/a.ts", "lib/b.ts"]);
+  });
+
+  it("does not count a relative name containing a backslash as a mutation", () => {
+    const result = sanitizeRelatedFiles(["back\\slash.txt"], {
+      workingDirectory: WD,
+      homedir: HOME,
+    });
+    expect(result.sanitized).toEqual(["back\\slash.txt"]);
+    expect(result.mutationCount).toBe(0);
   });
 
   it("preserves duplicates (= deduplication is the caller's responsibility)", () => {

@@ -45,17 +45,20 @@ export type SanitizePathOptions = {
  *   - `..` segments are resolved purely (no fs access) so the prefix
  *     match cannot be defeated by `<wd>/../escape/x.ts` masquerading as
  *     workingDirectory-internal.
- *   - Backslashes are folded to forward slashes so a Windows-style input
- *     can still be matched against POSIX bases. v0.3 targets macOS /
- *     Linux only; full Windows support is a v0.4+ task.
+ *   - A backslash is kept as part of the name. On macOS / Linux it is an
+ *     ordinary filename character, not a separator: `back\slash.txt` is
+ *     one file, and folding it to `back/slash.txt` would name a different
+ *     file in another directory. Windows is not supported: a backslash in
+ *     a Windows-style path is not read as a separator either, although
+ *     `/`-separated segments are still normalised (`C:\x/../y` → `y`).
  */
 export function sanitizePath(rawPath: string, opts: SanitizePathOptions): string {
   if (rawPath.includes("\0")) {
     throw new Error("Invalid path: contains null byte");
   }
-  const normalized = path.normalize(rawPath.replace(/\\/g, "/"));
-  const wd = path.normalize(opts.workingDirectory.replace(/\\/g, "/"));
-  const home = path.normalize(opts.homedir.replace(/\\/g, "/"));
+  const normalized = path.normalize(rawPath);
+  const wd = path.normalize(opts.workingDirectory);
+  const home = path.normalize(opts.homedir);
 
   // Only attempt prefix matching for absolute inputs; an already-relative
   // path stays as-is so write paths that pre-relativised do not get
@@ -67,19 +70,29 @@ export function sanitizePath(rawPath: string, opts: SanitizePathOptions): string
   // (1) workingDirectory-internal -> repo-relative.
   if (normalized === wd) return ".";
   const wdRel = path.relative(wd, normalized);
-  if (wdRel !== "" && !wdRel.startsWith("..")) {
+  if (isInside(wdRel)) {
     return wdRel;
   }
 
   // (2) homedir-internal -> ~/...
   if (normalized === home) return "~";
   const homeRel = path.relative(home, normalized);
-  if (homeRel !== "" && !homeRel.startsWith("..")) {
+  if (isInside(homeRel)) {
     return `~/${homeRel}`;
   }
 
   // (3) preserve as-is.
   return normalized;
+}
+
+/**
+ * Whether a `path.relative(base, target)` result names a path strictly
+ * inside `base`. A target outside it is spelled `..` or `../...`; testing
+ * for a `..` prefix alone would also reject a name that merely begins with
+ * two dots (`..notes`, `..\x`) and leave its absolute prefix in place.
+ */
+function isInside(rel: string): boolean {
+  return rel !== "" && rel !== ".." && !rel.startsWith("../");
 }
 
 /**
