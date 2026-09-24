@@ -771,7 +771,7 @@ describe("doRunSessionShow", () => {
 
   it("case 17e: a working_directory under the repo with two dots in a name keeps the ./ prefix", async () => {
     const repo = await setupInitedRepo();
-    for (const [i, below] of ["..notes", "x..", "...", "a../b"].entries()) {
+    for (const [i, below] of ["..notes", "..\\notes", "x..", "...", "a../b"].entries()) {
       const id = SES(`Y2${i}`);
       await createSession(repo, { id, workingDirectory: join(repo, below) });
       const out = captureStdout();

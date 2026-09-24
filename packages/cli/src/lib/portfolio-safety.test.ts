@@ -88,7 +88,7 @@ describe("checkPortfolioSafety", () => {
   });
 
   it("flags a workspace whose path below a monitored repo has two dots in a name", async () => {
-    for (const [i, below] of [["..inner"], ["x.."], ["..."], ["a..", "b"]].entries()) {
+    for (const [i, below] of [["..inner"], ["..\\ws"], ["x.."], ["..."], ["a..", "b"]].entries()) {
       const outer = join(getParent(), `outer-${i}`);
       const inner = join(outer, ...below);
       await initWorkspace(inner, [relative(inner, outer)]);

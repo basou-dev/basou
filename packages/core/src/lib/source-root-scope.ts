@@ -111,6 +111,11 @@ function isUnder(child: string, parent: string): boolean {
  * Partition `files` into in-root / out-of-root against the project's
  * `source_roots`.
  *
+ * A file is in-root when its realpath is a root or lies below one. A name
+ * that begins with two dots is a name, not a step: `..notes` or
+ * `..cache/x.ts` directly under a root is inside it, while `..` and `../x`
+ * are outside.
+ *
  * - `sourceRoots` are the manifest's `import.source_roots` (relative to
  *   `masterRoot`). An absent/empty list means "the whole repo root" — matching
  *   the effective-source-roots rule elsewhere — so a solo project never reports
