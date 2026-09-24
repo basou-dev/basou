@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { homedir as osHomedir } from "node:os";
-import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
+import { locateRelative } from "./relative-location.js";
 
 /**
  * Cross-project boundary classification: split a session's `related_files`
@@ -97,14 +98,14 @@ function toAbsolute(p: string, workingDirAbs: string, homedir: string): string {
  * `path.relative` rather than raw `startsWith` so a trailing separator or a
  * `..`/`.` segment in either operand cannot defeat the prefix match (the
  * `startsWith` form is a known foot-gun this codebase moved away from in
- * realpath comparisons elsewhere). A location outside `parent` is spelled
- * `..` or `../...`; a name that merely begins with two dots (`..notes`) is
- * inside it.
+ * realpath comparisons elsewhere). {@link locateRelative} decides what the
+ * result means: an empty one is `parent` itself however either side is
+ * spelled (a trailing slash included), and a name that merely begins with two
+ * dots (`..notes`) is inside it.
  */
 function isUnder(child: string, parent: string): boolean {
-  if (child === parent) return true;
   const rel = relative(parent, child);
-  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  return locateRelative(rel) !== "outside" && !isAbsolute(rel);
 }
 
 /**

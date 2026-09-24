@@ -182,6 +182,24 @@ describe("sanitizePath", () => {
     ).toBe("src/x.ts");
   });
 
+  // `path.posix.normalize` keeps a trailing slash, so `<wd>/` and `<wd>` must
+  // still be recognised as the same directory, on either side.
+  it("rewrites workingDirectory itself as '.' when either side has a trailing slash", () => {
+    expect(sanitizePath(`${WD}/`, { workingDirectory: WD, homedir: HOME })).toBe(".");
+    expect(sanitizePath(WD, { workingDirectory: `${WD}/`, homedir: HOME })).toBe(".");
+  });
+
+  it("rewrites homedir itself as '~' when either side has a trailing slash", () => {
+    expect(sanitizePath(`${HOME}/`, { workingDirectory: WD, homedir: HOME })).toBe("~");
+    expect(sanitizePath(HOME, { workingDirectory: WD, homedir: `${HOME}/` })).toBe("~");
+  });
+
+  it("keeps the output of a path that is not a base unchanged by a trailing slash", () => {
+    expect(sanitizePath(`${WD}/src/`, { workingDirectory: WD, homedir: HOME })).toBe("src");
+    expect(sanitizePath("/etc/foo/", { workingDirectory: WD, homedir: HOME })).toBe("/etc/foo/");
+    expect(sanitizePath("src/", { workingDirectory: WD, homedir: HOME })).toBe("src/");
+  });
+
   it("handles an empty string by returning an empty string (no schema check here)", () => {
     // Empty is a degenerate input; the schema layer rejects empty entries,
     // but the sanitizer itself should not crash. path.posix.normalize("") = ".".
@@ -215,6 +233,12 @@ describe("sanitizeWorkingDirectory", () => {
     expect(sanitizeWorkingDirectory("/Users/u/projects/we\\ird", { homedir: HOME })).toBe(
       "~/projects/we\\ird",
     );
+  });
+
+  it("rewrites the homedir itself as '~' when either side has a trailing slash", () => {
+    expect(sanitizeWorkingDirectory(`${HOME}/`, { homedir: HOME })).toBe("~");
+    expect(sanitizeWorkingDirectory(HOME, { homedir: `${HOME}/` })).toBe("~");
+    expect(sanitizeWorkingDirectory(`${WD}/`, { homedir: HOME })).toBe("~/projects/foo");
   });
 
   it("rewrites a working directory whose name begins with two dots under homedir", () => {

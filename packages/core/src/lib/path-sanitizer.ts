@@ -1,4 +1,5 @@
 import { posix as path } from "node:path";
+import { locateRelative } from "./relative-location.js";
 
 /**
  * Options for {@link sanitizePath}. Both `workingDirectory` and `homedir`
@@ -67,32 +68,24 @@ export function sanitizePath(rawPath: string, opts: SanitizePathOptions): string
     return normalized;
   }
 
+  // Each base is matched through `path.relative`, not by string equality:
+  // `path.normalize` keeps a trailing slash, so `<wd>/` and `<wd>` are the
+  // same directory only to `relative`.
+
   // (1) workingDirectory-internal -> repo-relative.
-  if (normalized === wd) return ".";
   const wdRel = path.relative(wd, normalized);
-  if (isInside(wdRel)) {
-    return wdRel;
-  }
+  const inWd = locateRelative(wdRel);
+  if (inWd === "self") return ".";
+  if (inWd === "inside") return wdRel;
 
   // (2) homedir-internal -> ~/...
-  if (normalized === home) return "~";
   const homeRel = path.relative(home, normalized);
-  if (isInside(homeRel)) {
-    return `~/${homeRel}`;
-  }
+  const inHome = locateRelative(homeRel);
+  if (inHome === "self") return "~";
+  if (inHome === "inside") return `~/${homeRel}`;
 
   // (3) preserve as-is.
   return normalized;
-}
-
-/**
- * Whether a `path.relative(base, target)` result names a path strictly
- * inside `base`. A target outside it is spelled `..` or `../...`; testing
- * for a `..` prefix alone would also reject a name that merely begins with
- * two dots (`..notes`, `..\x`) and leave its absolute prefix in place.
- */
-function isInside(rel: string): boolean {
-  return rel !== "" && rel !== ".." && !rel.startsWith("../");
 }
 
 /**

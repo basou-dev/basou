@@ -135,6 +135,19 @@ describe("classifyFilesBySourceRoot", () => {
     expect(result.outOfRoot).toEqual([]);
   });
 
+  it("classifies a root itself as in-root, however it is spelled", async () => {
+    const files = [".", `${masterRoot}/`, "~/sibling", "~/sibling/"];
+    const result = await classifyFilesBySourceRoot({
+      files,
+      workingDirectory: masterRoot,
+      sourceRoots: [".", "../sibling"],
+      masterRoot,
+      homedir,
+    });
+    expect(result.inRoot).toEqual(files);
+    expect(result.outOfRoot).toEqual([]);
+  });
+
   it("classifies a real step out of the root, and the root's parent, as out-of-root", async () => {
     const result = await classifyFilesBySourceRoot({
       files: ["../outside/blog.md", ".."],

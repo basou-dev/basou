@@ -66,3 +66,9 @@ jobs:
         # English-only convention for basou's public surface (source,
         # comments, errors, CLI output) that biome cannot.
         run: pnpm lint:lang
+      - name: Lint (path containment)
+        # check-parent-step.mjs fails on `startsWith("..")` in packages/*/src
+        # (excluding *.test.ts). That test reads a name that begins with two
+        # dots (`..notes`) as a step out of its base; the mistake once sat in
+        # five places and took two releases to remove.
+        run: pnpm lint:paths

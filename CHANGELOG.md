@@ -31,6 +31,19 @@ All notable changes to **basou** are recorded here. The project follows
     Only this Working dir line changed: the Related files line and the
     orientation still print such names as recorded.
 
+- **A working directory or home directory written with a trailing slash is
+  still recognised as itself.** The path sanitizer compared a recorded path
+  with the working directory and the home directory as strings, after a
+  normalisation that keeps a trailing slash. So `/Users/<user>/`, as a
+  related file or as a session's `working_directory`, was stored as given --
+  the absolute home path -- instead of `~`, and a related file `<wd>/` was
+  stored as the working directory's `~/...` form instead of `.`. The same
+  happened when the trailing slash was on the directory the sanitizer was
+  given, such as a `$HOME` that ends in `/`. Both sides are now compared
+  through `relative`, which reads the two spellings as one directory. A path
+  that is not one of the two directories keeps the output it had
+  (`/etc/foo/` stays `/etc/foo/`, `src/` stays `src/`).
+
 ## 0.52.0 — 2026-09-24
 
 ### Fixed
