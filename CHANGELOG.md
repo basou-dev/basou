@@ -50,12 +50,13 @@ All notable changes to **basou** are recorded here. The project follows
 
 - **A working directory or home directory that is not an absolute path is no
   longer resolved against the directory basou runs in.** With an empty
-  `$HOME` the sanitizer's home directory was `""`, and `relative` read it as
-  the current directory, so `<cwd>/f.ts` was stored as `~/f.ts`; a
-  hand-written `basou session import` payload with a relative
-  `working_directory` had its absolute related files made relative to the
-  importer's current directory. A base that is not absolute now matches
-  nothing, and those paths are stored as given.
+  `$HOME` the sanitizer's home directory was `""`, which `relative` read as
+  the current directory, so a file below it, `<cwd>/f.ts`, was stored as
+  `~/f.ts`. A hand-written `basou session import` payload with a relative
+  `working_directory`, such as `rel`, had its absolute related files below
+  `<cwd>/rel` made relative to that directory. A base that is not absolute now
+  matches nothing: such a path is matched against the other base only, and
+  stored as given when that does not match either.
 
 ## 0.52.0 — 2026-09-24
 

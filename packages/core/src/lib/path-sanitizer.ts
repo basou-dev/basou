@@ -2,11 +2,13 @@ import { posix as path } from "node:path";
 import { locateRelative } from "./relative-location.js";
 
 /**
- * Options for {@link sanitizePath}. Both `workingDirectory` and `homedir`
- * are absolute POSIX paths the caller has already resolved (typically via
- * `process.cwd()` and `os.homedir()`). Callers are responsible for passing
- * fully normalised values; the sanitizer normalises them again internally
- * so a trailing slash or `.`-segment does not corrupt the prefix match.
+ * Options for {@link sanitizePath}. `workingDirectory` and `homedir` are
+ * expected to be absolute POSIX paths the caller has already resolved
+ * (typically via `process.cwd()` and `os.homedir()`). A base that is not
+ * absolute matches nothing: `os.homedir()` returns `""` for an empty `$HOME`,
+ * and an imported payload may carry a relative `working_directory`. The
+ * sanitizer normalises both again internally, so a trailing slash or a
+ * `.`-segment does not corrupt the match.
  */
 export type SanitizePathOptions = {
   /**

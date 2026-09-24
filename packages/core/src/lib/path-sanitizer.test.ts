@@ -205,12 +205,18 @@ describe("sanitizePath", () => {
   // where basou runs, not where the session ran.
   it("matches nothing against a base that is not absolute", () => {
     const cwd = process.cwd();
-    for (const base of ["", "."]) {
-      expect(sanitizePath(cwd, { workingDirectory: base, homedir: base })).toBe(cwd);
-      expect(sanitizePath(`${cwd}/f.ts`, { workingDirectory: base, homedir: base })).toBe(
-        `${cwd}/f.ts`,
-      );
+    for (const base of ["", ".", "rel"]) {
+      for (const input of [cwd, `${cwd}/f.ts`, `${cwd}/rel`, `${cwd}/rel/f.ts`]) {
+        expect(sanitizePath(input, { workingDirectory: base, homedir: base }), base).toBe(input);
+      }
     }
+  });
+
+  it("still applies the other rule when only one base is not absolute", () => {
+    expect(sanitizePath(`${WD}/src/x.ts`, { workingDirectory: WD, homedir: "" })).toBe("src/x.ts");
+    expect(sanitizePath("/Users/u/notes/x.md", { workingDirectory: ".", homedir: HOME })).toBe(
+      "~/notes/x.md",
+    );
   });
 
   it("keeps the output of a path that is not a base unchanged by a trailing slash", () => {

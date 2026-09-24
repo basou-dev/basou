@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -159,6 +159,14 @@ describe("classifyFilesBySourceRoot", () => {
       await mkdir(locked);
       await chmod(locked, 0o000);
       try {
+        // The case exists only if realpath fails for a reason other than a
+        // missing path; check that the setup produced one.
+        const code = await realpath(root).then(
+          () => "resolved",
+          (error: NodeJS.ErrnoException) => error.code,
+        );
+        expect(code).not.toBe("resolved");
+        expect(code).not.toBe("ENOENT");
         const bySlashedFile = await classifyFilesBySourceRoot({
           files: [`${root}/`, `${root}/.`],
           workingDirectory: masterRoot,
