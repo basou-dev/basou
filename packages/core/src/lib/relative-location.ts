@@ -11,8 +11,10 @@
  * targets macOS / Linux, where `/` is the only separator.
  *
  * Internal to `@basou/core`: shared by the path sanitizer and the source-root
- * classifier. `scripts/check-parent-step.mjs` fails CI on the prefix-only test
- * anywhere under `packages/<pkg>/src`.
+ * classifier. `scripts/check-parent-step.mjs` fails CI when a non-test file
+ * under `packages/<pkg>/src` calls `startsWith` with exactly two dots, the
+ * commonest spelling of the prefix-only test; other spellings of it (a regex,
+ * `slice`) are not caught.
  */
 export function locateRelative(rel: string): "self" | "inside" | "outside" {
   if (rel === "") return "self";

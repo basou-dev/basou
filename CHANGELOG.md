@@ -40,9 +40,22 @@ All notable changes to **basou** are recorded here. The project follows
   stored as the working directory's `~/...` form instead of `.`. The same
   happened when the trailing slash was on the directory the sanitizer was
   given, such as a `$HOME` that ends in `/`. Both sides are now compared
-  through `relative`, which reads the two spellings as one directory. A path
-  that is not one of the two directories keeps the output it had
-  (`/etc/foo/` stays `/etc/foo/`, `src/` stays `src/`).
+  through `relative`, which reads the two spellings as one directory. With an
+  absolute working directory and home directory, a path that is not one of
+  the two keeps the output it had (`/etc/foo/` stays `/etc/foo/`, `src/`
+  stays `src/`). `classifyFilesBySourceRoot` in `@basou/core` likewise reads a
+  root spelled with a trailing slash as the root itself; that could differ
+  only when realpath failed for a reason other than a missing path, such as a
+  permission error.
+
+- **A working directory or home directory that is not an absolute path is no
+  longer resolved against the directory basou runs in.** With an empty
+  `$HOME` the sanitizer's home directory was `""`, and `relative` read it as
+  the current directory, so `<cwd>/f.ts` was stored as `~/f.ts`; a
+  hand-written `basou session import` payload with a relative
+  `working_directory` had its absolute related files made relative to the
+  importer's current directory. A base that is not absolute now matches
+  nothing, and those paths are stored as given.
 
 ## 0.52.0 — 2026-09-24
 

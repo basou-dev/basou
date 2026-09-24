@@ -70,19 +70,26 @@ export function sanitizePath(rawPath: string, opts: SanitizePathOptions): string
 
   // Each base is matched through `path.relative`, not by string equality:
   // `path.normalize` keeps a trailing slash, so `<wd>/` and `<wd>` are the
-  // same directory only to `relative`.
+  // same directory only to `relative`. A base that is not absolute (an empty
+  // `$HOME`, a relative `working_directory` in an imported payload) matches
+  // nothing: `relative` would resolve it against `process.cwd()`, the
+  // directory basou happens to run in, which says nothing about the session.
 
   // (1) workingDirectory-internal -> repo-relative.
-  const wdRel = path.relative(wd, normalized);
-  const inWd = locateRelative(wdRel);
-  if (inWd === "self") return ".";
-  if (inWd === "inside") return wdRel;
+  if (path.isAbsolute(wd)) {
+    const wdRel = path.relative(wd, normalized);
+    const inWd = locateRelative(wdRel);
+    if (inWd === "self") return ".";
+    if (inWd === "inside") return wdRel;
+  }
 
   // (2) homedir-internal -> ~/...
-  const homeRel = path.relative(home, normalized);
-  const inHome = locateRelative(homeRel);
-  if (inHome === "self") return "~";
-  if (inHome === "inside") return `~/${homeRel}`;
+  if (path.isAbsolute(home)) {
+    const homeRel = path.relative(home, normalized);
+    const inHome = locateRelative(homeRel);
+    if (inHome === "self") return "~";
+    if (inHome === "inside") return `~/${homeRel}`;
+  }
 
   // (3) preserve as-is.
   return normalized;

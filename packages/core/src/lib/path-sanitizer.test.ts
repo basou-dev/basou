@@ -194,6 +194,25 @@ describe("sanitizePath", () => {
     expect(sanitizePath(HOME, { workingDirectory: WD, homedir: `${HOME}/` })).toBe("~");
   });
 
+  it("treats the filesystem root as a base like any other", () => {
+    expect(sanitizePath("/etc/foo", { workingDirectory: "/", homedir: HOME })).toBe("etc/foo");
+    expect(sanitizePath("/", { workingDirectory: "/", homedir: HOME })).toBe(".");
+    expect(sanitizePath("/etc/foo", { workingDirectory: WD, homedir: "/" })).toBe("~/etc/foo");
+    expect(sanitizePath("/", { workingDirectory: WD, homedir: "/" })).toBe("~");
+  });
+
+  // `path.relative` resolves a relative base against `process.cwd()`, which is
+  // where basou runs, not where the session ran.
+  it("matches nothing against a base that is not absolute", () => {
+    const cwd = process.cwd();
+    for (const base of ["", "."]) {
+      expect(sanitizePath(cwd, { workingDirectory: base, homedir: base })).toBe(cwd);
+      expect(sanitizePath(`${cwd}/f.ts`, { workingDirectory: base, homedir: base })).toBe(
+        `${cwd}/f.ts`,
+      );
+    }
+  });
+
   it("keeps the output of a path that is not a base unchanged by a trailing slash", () => {
     expect(sanitizePath(`${WD}/src/`, { workingDirectory: WD, homedir: HOME })).toBe("src");
     expect(sanitizePath("/etc/foo/", { workingDirectory: WD, homedir: HOME })).toBe("/etc/foo/");
@@ -239,6 +258,11 @@ describe("sanitizeWorkingDirectory", () => {
     expect(sanitizeWorkingDirectory(`${HOME}/`, { homedir: HOME })).toBe("~");
     expect(sanitizeWorkingDirectory(HOME, { homedir: `${HOME}/` })).toBe("~");
     expect(sanitizeWorkingDirectory(`${WD}/`, { homedir: HOME })).toBe("~/projects/foo");
+  });
+
+  it("keeps the working directory as given when homedir is empty", () => {
+    // `os.homedir()` returns "" for an empty `$HOME`.
+    expect(sanitizeWorkingDirectory(process.cwd(), { homedir: "" })).toBe(process.cwd());
   });
 
   it("rewrites a working directory whose name begins with two dots under homedir", () => {
