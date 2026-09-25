@@ -1,7 +1,17 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   basouPaths,
@@ -113,6 +123,43 @@ async function readEvents(repo: string, sid: string): Promise<Array<Record<strin
     .map((l) => JSON.parse(l) as Record<string, unknown>);
 }
 
+async function readNoteBody(repo: string): Promise<unknown> {
+  const sid = await findAdHocSessionId(repo);
+  const note = (await readEvents(repo, sid)).find((e) => e.type === "note_added");
+  return (note as { body?: unknown } | undefined)?.body;
+}
+
+async function readInvocationArgs(repo: string): Promise<unknown> {
+  const sid = await findAdHocSessionId(repo);
+  const parsed = (await readYamlFile(join(basouPaths(repo).sessions, sid, "session.yaml"))) as {
+    session: { invocation: { args: unknown } };
+  };
+  return parsed.session.invocation.args;
+}
+
+async function countSessions(repo: string): Promise<number> {
+  try {
+    return (await readdir(basouPaths(repo).sessions)).filter((d) => d.startsWith("ses_")).length;
+  } catch (error: unknown) {
+    if ((error as { code?: unknown }).code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Text a shell would rewrite if it reached basou inside double quotes: two
+// command substitutions, a parameter expansion, and a history-expansion mark.
+const SHELL_ACTIVE_TEXT =
+  "Next: rebase `topic` onto main, then $(date) and $HOME stay literal!\n  second line";
+
 describe("doRunNote (ad-hoc path)", () => {
   it("creates an ad-hoc session holding a note_added event", async () => {
     const repo = await setupInitedRepo();
@@ -212,5 +259,126 @@ describe("doRunNote (--session attach path)", () => {
     // No note_added event was written to the imported session.
     const events = await readEvents(repo, id);
     expect(events.some((e) => e.type === "note_added")).toBe(false);
+  });
+});
+
+describe("doRunNote (text from stdin or --file)", () => {
+  it("records text read from stdin exactly, dropping only the trailing newlines", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunNote(
+      undefined,
+      {},
+      { cwd: repo, ...FIXED_CTX, readInput: async () => `${SHELL_ACTIVE_TEXT}\n\n` },
+    );
+    expect(await readNoteBody(repo)).toBe(SHELL_ACTIVE_TEXT);
+    // Nothing was passed on the command line, so nothing is recorded as argv.
+    expect(await readInvocationArgs(repo)).toEqual([]);
+  });
+
+  it("records text read from --file exactly, dropping only the trailing newlines", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await writeFile(join(repo, "next.txt"), `${SHELL_ACTIVE_TEXT}\r\n`);
+    await doRunNote(undefined, { file: "next.txt" }, { cwd: repo, ...FIXED_CTX });
+    expect(await readNoteBody(repo)).toBe(SHELL_ACTIVE_TEXT);
+    const args = (await readInvocationArgs(repo)) as string[];
+    expect(args[0]).toBe("--file");
+    expect(args[1]).toMatch(/next\.txt$/);
+    // The path is recorded relative to the workspace, not as an absolute path.
+    expect(args[1]).not.toContain(repo);
+  });
+
+  it("keeps an argument exactly as passed, trailing newline included", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const readInput = vi.fn(async () => "must not be read");
+    await doRunNote("argument text\n", {}, { cwd: repo, ...FIXED_CTX, readInput });
+    expect(await readNoteBody(repo)).toBe("argument text\n");
+    expect(readInput).not.toHaveBeenCalled();
+    expect(await readInvocationArgs(repo)).toEqual(["argument text\n"]);
+  });
+
+  it("refuses an argument together with --file and writes nothing", async () => {
+    const repo = await setupInitedRepo();
+    await writeFile(join(repo, "next.txt"), "from the file");
+    await expect(
+      doRunNote("from the argument", { file: "next.txt" }, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toThrow(/either as an argument or with --file, not both/);
+    expect(await countSessions(repo)).toBe(0);
+  });
+
+  it("says where the text can come from when stdin is empty, and writes nothing", async () => {
+    const repo = await setupInitedRepo();
+    for (const input of ["", "\n", "  \n\n"]) {
+      await expect(
+        doRunNote(undefined, {}, { cwd: repo, ...FIXED_CTX, readInput: async () => input }),
+      ).rejects.toThrow(/No note text: pass it as an argument, on stdin/);
+    }
+    expect(await countSessions(repo)).toBe(0);
+  });
+
+  it("rejects a whitespace-only --file as an empty note", async () => {
+    const repo = await setupInitedRepo();
+    await writeFile(join(repo, "blank.txt"), " \n\n");
+    await expect(
+      doRunNote(undefined, { file: "blank.txt" }, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toThrow(/must not be empty/);
+    expect(await countSessions(repo)).toBe(0);
+  });
+
+  it("reports a missing --file by the path it was given", async () => {
+    const repo = await setupInitedRepo();
+    await expect(
+      doRunNote(undefined, { file: "missing.txt" }, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toThrow("Input file not found: missing.txt");
+  });
+
+  it("attaches text read from stdin to an existing session with --session", async () => {
+    const repo = await setupInitedRepo();
+    const id = await createSession(repo, SES("S03"), "running");
+    captureStdout();
+    await doRunNote(
+      undefined,
+      { session: id },
+      { cwd: repo, ...FIXED_CTX, readInput: async () => `${SHELL_ACTIVE_TEXT}\n` },
+    );
+    const note = (await readEvents(repo, id)).find((e) => e.type === "note_added");
+    expect((note as { body?: unknown }).body).toBe(SHELL_ACTIVE_TEXT);
+  });
+});
+
+describe("basou note through a real shell", () => {
+  // The recommended form is a heredoc whose delimiter is quoted. This runs the
+  // built CLI exactly that way from /bin/sh and checks that the shell ran none
+  // of the substitutions in the text: the note is recorded verbatim and the
+  // commands inside it created nothing. CI builds before it tests; locally run
+  // `pnpm -r build` first.
+  const distEntry = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "dist",
+    "index.js",
+  );
+
+  it("records a quoted-heredoc note verbatim without running what it names", async () => {
+    const repo = await setupInitedRepo();
+    const text = "Next: `touch backtick-ran` then $(touch dollar-ran), keep $HOME literal!";
+    const script = `"$NODE_BIN" "$BASOU_CLI" note <<'EOF'\n${text}\nEOF\n`;
+    try {
+      await execFileAsync("/bin/sh", ["-c", script], {
+        cwd: repo,
+        env: { ...ENV, NODE_BIN: process.execPath, BASOU_CLI: distEntry },
+      });
+    } catch (error: unknown) {
+      throw new Error(
+        `basou note failed from /bin/sh; is ${distEntry} built from this source? (pnpm -r build)`,
+        { cause: error },
+      );
+    }
+    expect(await readNoteBody(repo)).toBe(text);
+    expect(await exists(join(repo, "backtick-ran"))).toBe(false);
+    expect(await exists(join(repo, "dollar-ran"))).toBe(false);
   });
 });

@@ -3,6 +3,33 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **`basou note` reads the note text from stdin or `--file`.** The text could
+  only be passed as an argument, and the Stop hook told agents to write
+  `basou note "<what you would do next>"`. Agents write in Markdown, so the text
+  often held backticks -- and inside double quotes the shell runs backticks and
+  `$(...)` as commands and puts their output in place of the text, with no
+  error. Notes lost those words, and whatever they named ran in the agent's
+  working directory. When the argument is omitted, the text is now read from
+  stdin, or from the file `--file <path>` names, the way `basou decision
+  capture` and `basou review record` already read their input. Through a
+  heredoc whose delimiter is quoted (`basou note <<'EOF'` ... `EOF`) the shell
+  passes the text through untouched. Trailing newlines are dropped from text
+  read this way, since a heredoc always ends with one; everything else is
+  recorded as read. An argument is recorded exactly as before, and passing one
+  together with `--file` is refused.
+
+### Changed
+
+- **The Stop hook recommends the quoted heredoc for the next step.** Its nudge
+  now says to pass the next step to `basou note` on stdin through a quoted
+  heredoc, and why the delimiter must be quoted, instead of showing the
+  double-quoted argument form. `basou note`'s own hint for a body that looks
+  like a subcommand points at the same form.
+
 ## 0.53.0 — 2026-09-25
 
 ### Changed
