@@ -53,10 +53,24 @@ describe("getOwnCommitPaths", () => {
     expect(result.entriesSince).toBe(6); // HEAD's reflog and main's, three each
   });
 
-  it("reads nothing, rather than failing, when HEAD has no commit yet", async () => {
+  it("throws when HEAD has no commit yet, which its caller checks for first", async () => {
+    await expect(getOwnCommitPaths(repo, SINCE_MS)).rejects.toThrow("Failed to read the reflog");
+  });
+
+  it("throws when HEAD's own commit cannot be read, rather than reading only the branches", async () => {
+    await commitFile("a.ts");
+    await git.raw(["checkout", "--detach"]);
+    await commitFile("b.ts"); // recorded in HEAD's reflog only
+    const head = (await git.revparse(["HEAD"])).trimEnd();
+    await rm(join(repo, ".git", "objects", head.slice(0, 2), head.slice(2)));
+    await expect(getOwnCommitPaths(repo, SINCE_MS)).rejects.toThrow("Failed to read the reflog");
+  });
+
+  it("reads past a broken branch ref", async () => {
+    await commitFile("a.ts");
+    await writeFile(join(repo, ".git", "refs", "heads", "broken"), "");
     const result = await getOwnCommitPaths(repo, SINCE_MS);
-    expect([...result.paths]).toEqual([]);
-    expect(result.entriesSince).toBe(0);
+    expect([...result.paths]).toEqual(["a.ts"]);
   });
 
   it("throws when git cannot read a commit it was asked about", async () => {

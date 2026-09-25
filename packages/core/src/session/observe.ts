@@ -1,12 +1,7 @@
 import { resolve } from "node:path";
 import { getChangesSince } from "../git/diff.js";
 import { getOwnCommitPaths } from "../git/own-commits.js";
-import {
-  getUntrackedFiles,
-  getWorkingTreeChanges,
-  readEmptyTreeSha,
-  readHeadSha,
-} from "../git/working-tree.js";
+import { getUntrackedFiles, readEmptyTreeSha, readHeadSha } from "../git/working-tree.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import {
   type ObservedFile,
@@ -75,17 +70,12 @@ export async function recordSessionBaseline(
       continue; // not a repository (or git is missing) => nothing to observe here
     }
     // Everything already dirty is the operator's, not this session's. Recording
-    // it now is what lets the later pass subtract it. Both names of a rename:
-    // git status pairs them, while the later pass does not, and would otherwise
-    // see the old name as a deletion the session made.
+    // it now is what lets the later pass subtract it.
     let baseDirty: string[] = [];
     try {
-      baseDirty = (await getWorkingTreeChanges(repoRoot)).flatMap((change) => {
-        const file = observedFileFrom(repoRoot, change);
-        return file.old_path !== undefined ? [file.path, file.old_path] : [file.path];
-      });
+      baseDirty = await dirtyPaths(repoRoot, baseHead);
     } catch {
-      // A status failure only costs precision: without it the session may
+      // A failure here only costs precision: without it the session may
       // claim a file that was already dirty. Keep the repository observed.
     }
     repos.push({ path: repoRoot, base_head: baseHead, base_dirty: baseDirty, files: [] });
@@ -101,6 +91,22 @@ export async function recordSessionBaseline(
   };
   await writeSessionObservation(input.observationsDir, observation);
   return observation;
+}
+
+/**
+ * Every path that differs from `head` right now, asked of git exactly as the
+ * later pass asks it -- a diff with no rename pairing, plus untracked files --
+ * so the two can never name the same dirty file differently: a conflicted
+ * file, both names of a rename, a name with leading or trailing spaces. An
+ * observation taken straight after the baseline is therefore empty.
+ */
+async function dirtyPaths(repoRoot: string, head: string | null): Promise<string[]> {
+  const base = head ?? (await readEmptyTreeSha(repoRoot));
+  const changes = [
+    ...(await getChangesSince(repoRoot, base, { detectRenames: false })),
+    ...(await getUntrackedFiles(repoRoot)),
+  ];
+  return changes.map((change) => observedFileFrom(repoRoot, change).path);
 }
 
 /**

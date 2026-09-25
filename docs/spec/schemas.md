@@ -163,15 +163,16 @@ session:
 - What the observed half claims, per repository the workspace declares: the
   net change of tracked files since the session started (against the commit
   HEAD was on then), limited to paths the repository's OWN activity touched in
-  that time, plus every untracked file, which is not limited (a pull cannot
-  create one). A path counts as touched when a commit CREATED in that
+  that time, plus every untracked file, which is not limited. A path counts as
+  touched when a commit CREATED in that
   repository since the start changed it, or when it differs from HEAD in the
   working tree now. A commit counts as created when the reflog of HEAD or of a
   local branch records its creation in the words git itself writes: a commit
   (including an amend, and one that concludes a merge or a cherry-pick), a
   cherry-pick, a revert, a patch applied by `git am`, a pick replayed by a
   rebase or by `git pull --rebase`, a merge git committed itself, or a commit
-  `git replay` made. A merge commit counts only for the paths where it differs
+  `git replay` made when it updated the refs itself (its default). A merge
+  commit counts only for the paths where it differs
   from every one of its parents: what it resolved, and also a file git joined
   cleanly from changes made on both sides. So a commit that only arrived by a
   pull, a fast-forward merge or `cherry-pick --ff` -- a bot's pull request,
@@ -186,12 +187,21 @@ session:
   deleted could be paired with a similar file that arrived by a pull, and bring
   that file's name in.
 - The limit is not applied, and every net change is kept, in exactly two
-  cases: HEAD has no commit (the repository is still unborn, or HEAD is on an
-  orphan branch -- where a file that arrived earlier by a pull then counts
-  too), or HEAD moved while no reflog recorded anything (reflogs off or
-  expired), so an own commit and a pulled one cannot be told apart. When
+  cases: HEAD does not resolve to a commit (the repository is still unborn,
+  HEAD is on an orphan branch, or the current branch's ref is broken), or HEAD
+  moved while no reflog recorded anything (reflogs off or expired), so an own
+  commit and a pulled one cannot be told apart. After `git checkout --orphan`
+  a file that arrived earlier by a pull therefore counts; after `git switch
+  --orphan` every file tracked at the start counts as deleted. When
   observing a repository fails -- git fails, or the start time cannot be read
   -- the repository keeps the files its previous observation recorded.
+- Of the above, the claim is the contract: the net change of tracked files,
+  limited to paths that commits created in the repository since the start or
+  uncommitted work touched, plus every untracked file. Which reflog entries
+  are recognised as creating a commit, when the limit is not applied, and the
+  limits below describe how git records its operations (as of git 2.53) and
+  follow it: they may change within a `1.x` line when git's behaviour does,
+  without changing the claim.
 - Limits of the observed half, by construction:
     - It observes a repository, not an actor. Uncommitted edits and local
       commits made in the same repository by anyone else while the session
@@ -201,6 +211,8 @@ session:
       since the start on any local branch changed counts, even when that
       commit never reaches the observed worktree -- so a change to the same
       path that only arrived by a pull counts too.
+    - Untracked files are not limited, so files a pull makes visible -- by
+      changing `.gitignore`, for instance -- count too.
     - Only what is still in the net change counts. Work committed on a branch
       the session then switched away from, or undone by a later commit or a
       reset, is not observed.
@@ -209,11 +221,15 @@ session:
       its picks on that worktree's HEAD), is not seen. One made on a branch in
       another worktree stops counting at the next pass once that branch is
       deleted (as when the worktree is cleaned up after a squash merge); one
-      made in the observed worktree is still seen through HEAD's reflog.
-      A commit recorded under a message git does not write itself (a tool
-      calling `update-ref -m`) is not seen either, nor is a real cherry-pick
-      of a commit whose subject is exactly "fast-forward", which git records
-      the same way as `cherry-pick --ff`.
+      made in the observed worktree is still seen through HEAD's reflog. One
+      made on a branch whose ref is broken is not seen, since that branch's
+      reflog is skipped. A commit recorded under a message git does not write
+      itself (a tool calling `update-ref -m`, or ref updates `git replay`
+      printed and `git update-ref --stdin` applied) is not seen either, nor is
+      a real cherry-pick of a commit whose subject is exactly "fast-forward",
+      which git records the same way as `cherry-pick --ff`. When `git replay`
+      moves a branch that had no reflog before, only the commit it ends at is
+      seen, since where it started is recorded nowhere.
     - The window is drawn by the time a reflog entry carries, which git takes
       from the committer date: an operation given an earlier date
       (`GIT_COMMITTER_DATE`, or a commit that `rebase --continue` concludes
@@ -229,8 +245,10 @@ session:
       observation includes what happened in the repository while it was not
       running.
     - A file already dirty when the session started is not observed for that
-      session at all, even if the session goes on to change it. For a rename
-      staged before the start, that is both of its names.
+      session at all, even if the session goes on to change it. Dirty files
+      are read the same way the session's changes are: for a rename staged
+      before the start that is both of its names, and a file with a conflict
+      at the start stays out even when the session resolves it.
     - Observations are keyed by the vendor's session id as given (a UUID for
       both Claude Code and Codex); ids from different vendors are not
       namespaced. Codex's SessionStart hook writes a baseline too, but only the

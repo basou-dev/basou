@@ -13,13 +13,14 @@ import { isGitNotFound, safeSimpleGit } from "./snapshot.js";
  * commit -- and says nothing about who wrote what. (`git replay` creates
  * commits too, but records only where each ref ends; see {@link REPLAY}.)
  *
- * The part after `pull` may contain colons (`git@host:org/repo`, a refspec
- * `main:refs/...`). It cannot run on into the message: what closes it is a
- * space, a parenthesised step and a colon, and a ref name holds neither a space
- * nor a colon.
+ * A pull's part may contain colons, since it names a repository (a URL,
+ * `git@host:org/repo`) and refspecs (`main:refs/...`). A rebase's may not: its
+ * start entry spells the upstream as typed, which can hold anything, and must
+ * not be read as a pick. A pull's part could only be misread if a repository
+ * path or URL contained a space, a parenthesised step and a colon.
  */
 const COMMIT_CREATED =
-  /^(?:commit(?: \((?:initial|amend|merge|cherry-pick)\))?|cherry-pick|revert|am|(?:rebase|pull)\b.*? \((?:pick|reword|edit|squash|fixup|continue|merge)\)): |^(?:merge|pull)\b.*?: Merge made by /;
+  /^(?:commit(?: \((?:initial|amend|merge|cherry-pick)\))?|cherry-pick|revert|am|(?:rebase\b[^:]*?|pull\b.*?) \((?:pick|reword|edit|squash|fixup|continue|merge)\)): |^(?:merge\b[^:]*|pull\b.*?): Merge made by /;
 
 /**
  * `cherry-pick --ff` moves HEAD to the picked commit itself; nothing is
@@ -71,8 +72,9 @@ export type OwnCommitPaths = {
  * second is not before `sinceMs`'s second, so a commit made in the same second
  * as the start is kept rather than dropped.
  *
- * Throws when git fails. The caller cannot tell a failed read from "nothing was
- * created", so it must not treat either as the other.
+ * Throws when git fails, including when HEAD does not resolve to a commit (the
+ * caller checks for that first). The caller cannot tell a failed read from
+ * "nothing was created", so it must not treat either as the other.
  *
  * @param commitsPerCall how many commits one `git log` call is given (tests)
  */
@@ -92,42 +94,43 @@ export async function getOwnCommitPaths(
   }
 
   // One entry per line: reflog subjects are single-line. Git interleaves the
-  // refs' entries, but each ref's own entries keep their order, newest first,
-  // so the next entry of the same ref is that ref's previous value. `%gd` under
-  // `--date=unix` is
-  // `<ref>@{<seconds>}`, the time stored with the ref update. Git takes it from
-  // the committer identity, so it is the time of the update unless the
-  // operation was given a date: `GIT_COMMITTER_DATE`, or a commit that `rebase
-  // --continue` concludes under `--committer-date-is-author-date` (that step
-  // carries the author date; the picks around it do not). A pulled commit's
-  // own dates never enter into it.
+  // branches' entries, but each ref's own entries keep their order, newest
+  // first, so the next entry of the same ref is that ref's previous value.
+  // `%gd` under `--date=unix` is `<ref>@{<seconds>}`, the time stored with the
+  // ref update. Git takes it from the committer identity, so it is the time of
+  // the update unless the operation was given a date: `GIT_COMMITTER_DATE`, or
+  // a commit that `rebase --continue` concludes under
+  // `--committer-date-is-author-date` (that step carries the author date; the
+  // picks around it do not). A pulled commit's own dates never enter into it.
   //
   // `--no-show-signature` because `log.showSignature` would verify every
-  // commit in every reflog on each call. A branch with no reflog is left out;
-  // `--ignore-missing` leaves out a branch ref that is broken (empty, or naming
-  // a missing object) instead of failing the whole read over it; `--` keeps a
-  // file or directory named `HEAD` (or `head` on a case-insensitive file
-  // system) from making `HEAD` ambiguous.
-  let reflog: string;
-  try {
-    reflog = await git.raw([
-      "log",
-      "-g",
-      "--ignore-missing",
-      "--no-show-signature",
-      "--date=unix",
-      "--format=%H%x1f%gd%x1f%gs",
-      "HEAD",
-      "--branches",
-      "--",
-    ]);
-  } catch (error: unknown) {
-    throw new Error("Failed to read the reflog", { cause: error });
-  }
+  // commit in every reflog on each call; `--` keeps a file or directory named
+  // `HEAD` (or `head` on a case-insensitive file system) from making `HEAD`
+  // ambiguous. HEAD and the branches are read apart: `--ignore-missing` leaves
+  // out a branch ref that is broken (empty, or naming a missing object)
+  // instead of failing the whole read over one unrelated branch, but HEAD must
+  // not be left out that way -- a HEAD that cannot be read is a failure, not a
+  // reflog with nothing in it. A branch with no reflog is left out either way.
+  const read = async (refs: string[]): Promise<string> => {
+    try {
+      return await git.raw([
+        "log",
+        "-g",
+        "--no-show-signature",
+        "--date=unix",
+        "--format=%H%x1f%gd%x1f%gs",
+        ...refs,
+        "--",
+      ]);
+    } catch (error: unknown) {
+      throw new Error("Failed to read the reflog", { cause: error });
+    }
+  };
+  const reflogs = [await read(["HEAD"]), await read(["--ignore-missing", "--branches"])];
 
   const sinceSecond = Math.floor(sinceMs / 1000);
   const entries: { sha: string; ref: string; second: number; subject: string }[] = [];
-  for (const line of reflog.split("\n")) {
+  for (const line of reflogs.join("\n").split("\n")) {
     const [sha, selector, subject] = line.split("\x1f");
     if (sha === undefined || selector === undefined || subject === undefined) continue;
     const match = /^(.*)@\{(\d+)\}$/.exec(selector);
