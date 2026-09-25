@@ -16,19 +16,32 @@ All notable changes to **basou** are recorded here. The project follows
   working directory. When the argument is omitted, the text is now read from
   stdin, or from the file `--file <path>` names, the way `basou decision
   capture` and `basou review record` already read their input. Through a
-  heredoc whose delimiter is quoted (`basou note <<'EOF'` ... `EOF`) the shell
-  passes the text through untouched. Trailing newlines are dropped from text
-  read this way, since a heredoc always ends with one; everything else is
-  recorded as read. An argument is recorded exactly as before, and passing one
-  together with `--file` is refused.
+  heredoc whose delimiter is quoted, with the text on its own lines, the shell
+  passes the text through untouched:
+
+  ```sh
+  basou note <<'EOF'
+  <your note>
+  EOF
+  ```
+
+  Trailing newlines are dropped from text read this way, since a heredoc always
+  ends with one; everything else is recorded as read. An argument is recorded
+  exactly as before, and passing one together with `--file` is refused. A
+  `--file` that cannot be read is reported with a fixed message that names no
+  path.
 
 ### Changed
 
 - **The Stop hook recommends the quoted heredoc for the next step.** Its nudge
-  now says to pass the next step to `basou note` on stdin through a quoted
-  heredoc, and why the delimiter must be quoted, instead of showing the
-  double-quoted argument form. `basou note`'s own hint for a body that looks
-  like a subcommand points at the same form.
+  now shows the heredoc above on three lines and says why the delimiter must be
+  quoted and the text kept off the `<<'EOF'` line, instead of showing the
+  double-quoted argument form. Typed on one line, the words after `<<'EOF'` are
+  ordinary shell words again, so the one-line form would repeat the failure.
+  `basou note`'s own hints point at the same three-line form.
+- **`basou note -` is refused.** It looks like "read stdin", but recorded `-`
+  as the note, which then surfaced as the next step. It now fails and shows the
+  heredoc form; to read stdin, omit the argument.
 
 ## 0.53.0 — 2026-09-25
 

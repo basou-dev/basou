@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -157,8 +158,10 @@ async function exists(path: string): Promise<boolean> {
 
 // Text a shell would rewrite if it reached basou inside double quotes: two
 // command substitutions, a parameter expansion, and a history-expansion mark.
+// It starts and ends with whitespace so a reader that trims (rather than
+// dropping only trailing newlines) is caught.
 const SHELL_ACTIVE_TEXT =
-  "Next: rebase `topic` onto main, then $(date) and $HOME stay literal!\n  second line";
+  "  Next: rebase `topic` onto main, then $(date) and $HOME stay literal!\n  second line\t ";
 
 describe("doRunNote (ad-hoc path)", () => {
   it("creates an ad-hoc session holding a note_added event", async () => {
@@ -282,11 +285,17 @@ describe("doRunNote (text from stdin or --file)", () => {
     await writeFile(join(repo, "next.txt"), `${SHELL_ACTIVE_TEXT}\r\n`);
     await doRunNote(undefined, { file: "next.txt" }, { cwd: repo, ...FIXED_CTX });
     expect(await readNoteBody(repo)).toBe(SHELL_ACTIVE_TEXT);
-    const args = (await readInvocationArgs(repo)) as string[];
-    expect(args[0]).toBe("--file");
-    expect(args[1]).toMatch(/next\.txt$/);
-    // The path is recorded relative to the workspace, not as an absolute path.
-    expect(args[1]).not.toContain(repo);
+    expect(await readInvocationArgs(repo)).toEqual(["--file", "next.txt"]);
+  });
+
+  it("records an absolute --file path relative to the workspace, not as given", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await writeFile(join(repo, "next.txt"), "from an absolute path\n");
+    await doRunNote(undefined, { file: join(repo, "next.txt") }, { cwd: repo, ...FIXED_CTX });
+    expect(await readNoteBody(repo)).toBe("from an absolute path");
+    // An absolute path would put the machine's layout into `.basou/`.
+    expect(await readInvocationArgs(repo)).toEqual(["--file", "next.txt"]);
   });
 
   it("keeps an argument exactly as passed, trailing newline included", async () => {
@@ -313,8 +322,81 @@ describe("doRunNote (text from stdin or --file)", () => {
     for (const input of ["", "\n", "  \n\n"]) {
       await expect(
         doRunNote(undefined, {}, { cwd: repo, ...FIXED_CTX, readInput: async () => input }),
-      ).rejects.toThrow(/No note text: pass it as an argument, on stdin/);
+      ).rejects.toThrow(/^No note text\. Pass it on stdin through a quoted heredoc/);
     }
+    expect(await countSessions(repo)).toBe(0);
+  });
+
+  it("fails fast at a terminal instead of waiting for stdin", async () => {
+    const repo = await setupInitedRepo();
+    const original = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    // A tripwire on the stream: if the terminal check were skipped, reading
+    // would start here (and at a real terminal, wait forever).
+    const stdin = process.stdin as unknown as Record<symbol, unknown>;
+    const originalIterator = Object.getOwnPropertyDescriptor(stdin, Symbol.asyncIterator);
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(stdin, Symbol.asyncIterator, {
+      configurable: true,
+      value: () => {
+        throw new Error("stdin was read");
+      },
+    });
+    try {
+      // No readInput: this is the real stdin path, which must not start reading.
+      await expect(doRunNote(undefined, {}, { cwd: repo, ...FIXED_CTX })).rejects.toThrow(
+        /^No note text\./,
+      );
+    } finally {
+      if (original !== undefined) {
+        Object.defineProperty(process.stdin, "isTTY", original);
+      } else {
+        delete (process.stdin as { isTTY?: boolean }).isTTY;
+      }
+      if (originalIterator !== undefined) {
+        Object.defineProperty(stdin, Symbol.asyncIterator, originalIterator);
+      } else {
+        delete stdin[Symbol.asyncIterator];
+      }
+    }
+    expect(await countSessions(repo)).toBe(0);
+  });
+
+  it("shows the heredoc on three lines wherever it points at stdin", async () => {
+    // Typed on one line, the words after <<'EOF' are unquoted shell words
+    // again, so the hint must show the text on its own line.
+    const repo = await setupInitedRepo();
+    const threeLines = /\n\s*basou note <<'EOF'\n\s*<your note>\n\s*EOF/;
+    await expect(
+      doRunNote(undefined, {}, { cwd: repo, ...FIXED_CTX, readInput: async () => "" }),
+    ).rejects.toThrow(threeLines);
+    await expect(doRunNote("list", {}, { cwd: repo, ...FIXED_CTX })).rejects.toThrow(threeLines);
+    await expect(doRunNote("-", {}, { cwd: repo, ...FIXED_CTX })).rejects.toThrow(threeLines);
+  });
+
+  it("refuses '-' as the note text, from any source, and writes nothing", async () => {
+    // `basou note -` looks like "read stdin" but would record "-" as the next step.
+    const repo = await setupInitedRepo();
+    await writeFile(join(repo, "dash.txt"), "-\n");
+    for (const run of [
+      () => doRunNote("-", {}, { cwd: repo, ...FIXED_CTX }),
+      () => doRunNote(" - ", {}, { cwd: repo, ...FIXED_CTX }),
+      () => doRunNote(undefined, {}, { cwd: repo, ...FIXED_CTX, readInput: async () => "-\n" }),
+      () => doRunNote(undefined, { file: "dash.txt" }, { cwd: repo, ...FIXED_CTX }),
+    ]) {
+      await expect(run()).rejects.toThrow(/'basou note -' does not read stdin/);
+    }
+    expect(await countSessions(repo)).toBe(0);
+  });
+
+  it("applies the subcommand-lookalike guard to text from stdin and --file too", async () => {
+    const repo = await setupInitedRepo();
+    await writeFile(join(repo, "word.txt"), "LS\n");
+    await expect(
+      doRunNote(undefined, {}, { cwd: repo, ...FIXED_CTX, readInput: async () => "list\n" }),
+    ).rejects.toThrow(/has no 'list' subcommand/);
+    await expect(
+      doRunNote(undefined, { file: "word.txt" }, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toThrow(/has no 'LS' subcommand/);
     expect(await countSessions(repo)).toBe(0);
   });
 
@@ -327,11 +409,30 @@ describe("doRunNote (text from stdin or --file)", () => {
     expect(await countSessions(repo)).toBe(0);
   });
 
-  it("reports a missing --file by the path it was given", async () => {
+  it("reports an unreadable --file with a fixed message that carries no path", async () => {
     const repo = await setupInitedRepo();
-    await expect(
-      doRunNote(undefined, { file: "missing.txt" }, { cwd: repo, ...FIXED_CTX }),
-    ).rejects.toThrow("Input file not found: missing.txt");
+    await mkdir(join(repo, "a-directory"));
+    await writeFile(join(repo, "locked.txt"), "secret");
+    await chmod(join(repo, "locked.txt"), 0o000);
+    const cases: Array<[string, RegExp]> = [
+      [join(repo, "missing.txt"), /^--file names a file that does not exist$/],
+      [join(repo, "a-directory"), /^--file names a directory, not a file$/],
+    ];
+    // Root reads a 0o000 file anyway, so the permission case only means
+    // something for an ordinary user.
+    if (process.getuid?.() !== 0) {
+      cases.push([join(repo, "locked.txt"), /^Could not read the file --file names$/]);
+    }
+    for (const [file, message] of cases) {
+      const error = await doRunNote(undefined, { file }, { cwd: repo, ...FIXED_CTX }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(error, file).toBeInstanceOf(Error);
+      expect((error as Error).message, file).toMatch(message);
+      expect((error as Error).message, file).not.toContain(repo);
+    }
+    expect(await countSessions(repo)).toBe(0);
   });
 
   it("attaches text read from stdin to an existing session with --session", async () => {

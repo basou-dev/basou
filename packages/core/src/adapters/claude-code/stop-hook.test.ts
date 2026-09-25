@@ -91,8 +91,13 @@ describe("evaluateStopHook (content-aware trigger)", () => {
     // shell out of the text.
     const result = evaluateStopHook({ records: [edits(2)], stopHookActive: false });
     if (result.kind !== "nudge") throw new Error("expected nudge");
-    expect(result.additionalContext).toContain("basou note <<'EOF'");
     expect(result.additionalContext).not.toContain('basou note "');
+    // Shown on three lines: typed on one line, the words after <<'EOF' are
+    // unquoted shell words again, so backticks there still run.
+    expect(result.additionalContext).toMatch(
+      /\n\s*basou note <<'EOF'\n\s*<what you would do next>\n\s*EOF\n/,
+    );
+    expect(result.additionalContext).not.toContain("basou note <<'EOF' ...");
   });
 
   it("stays silent for a single trivial edit (below the edit threshold)", () => {

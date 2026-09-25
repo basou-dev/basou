@@ -305,7 +305,11 @@ function renderNudge(counts: StopHookCounts): string {
     `This session ${summary} but recorded no decisions or next step.`,
     "If meaningful decisions were made (the chosen approach, rejected alternatives, and why) or there is a clear next step, capture them now so the next session can resume correctly:",
     '  - Decisions: run `basou decision capture` and pipe a JSON array (one object per decision; "title" and "kind" required, plus optional rationale/alternatives/rejected_reason/linked_files). "kind" names the vessel: "track" for an unfinished strategic direction that must resurface until closed, "decision" for a settled point-in-time call.',
-    "  - Next step: run `basou note` with what you would do next on stdin through a quoted heredoc (basou note <<'EOF' ... EOF). Quote the delimiter: inside double quotes or an unquoted heredoc the shell runs backticks and $(...) in the text as commands and records their output instead.",
+    "  - Next step: pass what you would do next to `basou note` on stdin through a quoted heredoc, with the text on its own lines:",
+    "      basou note <<'EOF'",
+    "      <what you would do next>",
+    "      EOF",
+    "    Quote the delimiter and keep the text off the <<'EOF' line: inside double quotes, in an unquoted heredoc, or on that same line, the shell runs backticks and $(...) in the text as commands and records their output instead.",
     "If nothing is worth capturing, just stop — do not invent decisions.",
   ].join("\n");
 }
