@@ -371,6 +371,9 @@ describe("doRunNote (text from stdin or --file)", () => {
     ).rejects.toThrow(threeLines);
     await expect(doRunNote("list", {}, { cwd: repo, ...FIXED_CTX })).rejects.toThrow(threeLines);
     await expect(doRunNote("-", {}, { cwd: repo, ...FIXED_CTX })).rejects.toThrow(threeLines);
+    await expect(
+      doRunNote(undefined, {}, { cwd: repo, ...FIXED_CTX, readInput: async () => "-\n" }),
+    ).rejects.toThrow(threeLines);
   });
 
   it("refuses '-' as an argument and points at omitting it to read stdin", async () => {

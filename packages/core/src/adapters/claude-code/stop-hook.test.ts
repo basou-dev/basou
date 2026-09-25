@@ -102,6 +102,9 @@ describe("evaluateStopHook (content-aware trigger)", () => {
     // heredoc record their output as the text (on the <<'EOF' line the note
     // fails or records something else), so the claim is scoped to those two.
     expect(result.additionalContext).toContain(
+      "or on that same line, the shell runs backticks and $(...) in the text as commands.",
+    );
+    expect(result.additionalContext).toContain(
       "In double quotes or an unquoted heredoc their output is then recorded in place of the text.",
     );
   });
