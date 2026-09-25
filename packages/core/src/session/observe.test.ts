@@ -446,6 +446,21 @@ describe("observeSessionChanges", () => {
     },
   );
 
+  it("records a rename staged before the start as two names, not one name and a stray one", async () => {
+    // With renames paired, git status writes both names in one record, and a
+    // parser expecting one path per record would take the old name for a new
+    // record and cut its first three characters: docs/guide.md -> s/guide.md.
+    await mkdir(join(repo, "docs"));
+    await writeFile(join(repo, "docs", "guide.md"), "guide\n");
+    await git.add("docs/guide.md");
+    await git.commit("guide");
+    await git.mv("docs/guide.md", "handbook.md");
+    await baseline();
+    await mkdir(join(repo, "s"));
+    await writeFile(join(repo, "s", "guide.md"), "the session's own file\n");
+    expect(await observe()).toEqual([join(repo, "s", "guide.md")]);
+  });
+
   it("still records what the other readings find when git status fails at the start", async () => {
     // An invalid status setting fails `git status` but not `git diff` or
     // `git ls-files`, which the later pass uses.

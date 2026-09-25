@@ -17,10 +17,10 @@ import { isGitNotFound, safeSimpleGit } from "./snapshot.js";
  * `git@host:org/repo`) and refspecs (`main:refs/...`), and so may a merge's,
  * since it names a revision as typed (`:/message`, `branch@{date}`). A
  * rebase's may not: its start entry spells the upstream as typed, which can
- * hold anything, and must not be read as a pick. A pull's part could only be
- * misread if a repository path or URL contained a space, a parenthesised step
- * and a colon; a merge's only if the revision it names contained ": Merge made
- * by ".
+ * hold anything, and must not be read as a pick. Either part could only be
+ * misread if what it names contained the text that follows it in a created
+ * entry: a space, a parenthesised step and a colon for a pull's pick, or
+ * ": Merge made by " for a merge or a pull.
  */
 const COMMIT_CREATED =
   /^(?:commit(?: \((?:initial|amend|merge|cherry-pick)\))?|cherry-pick|revert|am|(?:rebase\b[^:]*?|pull\b.*?) \((?:pick|reword|edit|squash|fixup|continue|merge)\)): |^(?:merge|pull)\b.*?: Merge made by /;

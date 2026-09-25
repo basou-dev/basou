@@ -55,7 +55,9 @@ export type ObserveSessionInput = {
  * Re-entrant by design: a SessionStart that fires again for the SAME session id
  * (a resume, a compaction) must NOT re-baseline, or every commit the session
  * has already made would drop out of its own record. An existing observation is
- * therefore left exactly as it is.
+ * therefore left exactly as it is. For the same reason what was dirty is read
+ * once: if git fails to read part of it here, what it could not read is not
+ * left out of the session's files for the rest of the session.
  *
  * Returns the observation in force after the call, or `null` when nothing could
  * be observed (no repository among `repoRoots` was readable).

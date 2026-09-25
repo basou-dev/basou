@@ -161,9 +161,9 @@ session:
   edited, rather than observed as a difference, reads the `file_changed` events,
   which still come only from tool calls.
 - What this section says of git -- which reflog entries it writes, what
-  `git replay` and an orphan checkout do -- was checked with git 2.53. Another
-  version may record some operations differently, and which commits are seen
-  may then differ.
+  `git replay` and an orphan checkout do, what `git status` names -- was
+  checked with git 2.53. Another version may record some operations
+  differently, and what is observed may then differ.
 - What the observed half claims, per repository the workspace declares: the
   net change of tracked files since the session started (against the commit
   HEAD was on then), limited to paths the repository's OWN activity touched in
@@ -245,14 +245,18 @@ session:
       running.
     - A file already dirty when the session started is not observed for that
       session at all, even if the session goes on to change it. Dirty means
-      every path `git status` names at the start, together with every path the
-      session's own reading of changes would name then: both names of a staged
-      rename, a change staged while its working copy was put back, a type
-      change, an untracked nested repository, and a file with a conflict,
-      which stays out even when the session resolves it. A file git is told to
-      leave alone (`assume-unchanged`, `skip-worktree`) is hidden from every
-      reading, so a change to it made before the start counts once that flag
-      is cleared.
+      every path `git status` names at the start -- which covers a change
+      staged while its working copy was put back, a type change, an untracked
+      nested repository, and a file with a conflict, which stays out even when
+      the session resolves it -- together with every path the session's own
+      reading of changes would name then, so the two can never name one file
+      differently (both names of a staged rename, a name with leading or
+      trailing spaces). What is dirty is read once, at the start: if git fails
+      to read part of it then, what it could not read is not left out for the
+      rest of the session. A change in the working copy of a file git is told
+      to leave alone (`assume-unchanged`, `skip-worktree`) is hidden from
+      every reading, so it counts once that flag is cleared; a change already
+      staged is named, and stays out.
     - Observations are keyed by the vendor's session id as given (a UUID for
       both Claude Code and Codex); ids from different vendors are not
       namespaced. Codex's SessionStart hook writes a baseline too, but only the

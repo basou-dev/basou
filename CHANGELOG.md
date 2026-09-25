@@ -27,25 +27,25 @@ All notable changes to **basou** are recorded here. The project follows
   appears under both of its names, whatever `diff.renames` says. Files dirty
   at the start are now every path `git status` names together with every path
   the session's own reading of changes would name, so a file with a conflict
-  at the start, both names of a staged rename, a change staged while its
-  working copy was put back, a type change, an untracked nested repository,
-  and a name with leading or trailing spaces stay out of the session's files.
-  When HEAD does not resolve, or moved while no reflog recorded anything, the
-  own-activity limit is not applied; when git fails while working out the
-  limit, the files observed last are kept. `observeSessionChanges` and
-  `recordSessionBaseline` in `@basou/core` behave the same way, and
-  `getChangesSince` takes a `detectRenames` option. `docs/spec/schemas.md` now
-  states what the observed half claims and its limits: it observes a
-  repository rather than an actor, counts only what is still in the net
-  change, sees a commit only through a reflog entry it reads, measures a
-  resumed session from its first start, leaves out files already dirty at the
-  start, and keys observations by the vendor's session id without a namespace.
-  A session observed before the upgrade keeps the files its last observation
-  recorded, re-imported or not: the list is recomputed only when that
-  session's Stop hook runs again. A session whose start was recorded before
-  the upgrade also keeps the dirty files read then, so a conflict, a name with
-  leading or trailing spaces, or the old name of a rename staged before it
-  started can still count for it.
+  at the start, both names of a staged rename, a type change, an untracked
+  nested repository, and a name with leading or trailing spaces stay out of
+  the session's files. When HEAD does not resolve, or moved while no reflog
+  recorded anything, the own-activity limit is not applied; when git fails
+  while working out the limit, the files observed last are kept.
+  `observeSessionChanges` and `recordSessionBaseline` in `@basou/core` behave
+  the same way, and `getChangesSince` takes a `detectRenames` option.
+  `docs/spec/schemas.md` now states what the observed half claims and its
+  limits: it observes a repository rather than an actor, counts only what is
+  still in the net change, sees a commit only through a reflog entry it reads,
+  measures a resumed session from its first start, leaves out files already
+  dirty at the start, and keys observations by the vendor's session id without
+  a namespace. A session observed before the upgrade keeps the files its last
+  observation recorded, re-imported or not: the list is recomputed only when
+  that session's Stop hook runs again. A session whose start was recorded
+  before the upgrade also keeps the dirty files read then, so a conflict, a
+  type change, an untracked nested repository, or a name with leading or
+  trailing spaces can still count for it, and the old name of a rename staged
+  before it started now can.
 
 ### Fixed
 
