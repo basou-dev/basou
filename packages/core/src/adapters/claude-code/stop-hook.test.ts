@@ -84,6 +84,31 @@ describe("evaluateStopHook (content-aware trigger)", () => {
     expect(result.additionalContext).not.toContain('"title" required, plus optional');
   });
 
+  it("the nudge tells the agent to pass the next step through a quoted heredoc", () => {
+    // Recommending `basou note "<text>"` made agents put Markdown backticks
+    // inside double quotes, where the shell ran them as commands and recorded
+    // their output in place of the text. The recommended form must keep the
+    // shell out of the text.
+    const result = evaluateStopHook({ records: [edits(2)], stopHookActive: false });
+    if (result.kind !== "nudge") throw new Error("expected nudge");
+    expect(result.additionalContext).not.toContain('basou note "');
+    // Shown on three lines: typed on one line, the words after <<'EOF' are
+    // unquoted shell words again, so backticks there still run.
+    expect(result.additionalContext).toMatch(
+      /\n\s*basou note <<'EOF'\n\s*<what you would do next>\n\s*EOF\n/,
+    );
+    expect(result.additionalContext).not.toContain("basou note <<'EOF' ...");
+    // Commands run in all three cases, but only double quotes and an unquoted
+    // heredoc record their output as the text (on the <<'EOF' line the note
+    // fails or records something else), so the claim is scoped to those two.
+    expect(result.additionalContext).toContain(
+      "or on that same line, the shell runs backticks and $(...) in the text as commands.",
+    );
+    expect(result.additionalContext).toContain(
+      "In double quotes or an unquoted heredoc their output is then recorded in place of the text.",
+    );
+  });
+
   it("stays silent for a single trivial edit (below the edit threshold)", () => {
     const result = evaluateStopHook({ records: [edits(1)], stopHookActive: false });
     expect(result.kind).toBe("silent");
@@ -148,6 +173,11 @@ describe("evaluateStopHook (content-aware trigger)", () => {
       "basou decision capture <<'JSON'\n[]\nJSON",
       "basou decision record --title x",
       'basou note "next step"',
+      // The form the nudge recommends (text on stdin through a quoted heredoc),
+      // and the file form.
+      "basou note <<'EOF'\nnext step with `backticks`\nEOF",
+      "basou note --file next.txt",
+      "node /abs/repo/packages/cli/dist/index.js note <<'EOF'\nnext step\nEOF",
       'cd /repo && basou note "from a chained command"',
       'echo prep; basou note "after a semicolon"',
       "false || basou decision capture --file d.json",
