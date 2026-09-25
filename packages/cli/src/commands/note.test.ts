@@ -373,17 +373,31 @@ describe("doRunNote (text from stdin or --file)", () => {
     await expect(doRunNote("-", {}, { cwd: repo, ...FIXED_CTX })).rejects.toThrow(threeLines);
   });
 
-  it("refuses '-' as the note text, from any source, and writes nothing", async () => {
+  it("refuses '-' as an argument and points at omitting it to read stdin", async () => {
     // `basou note -` looks like "read stdin" but would record "-" as the next step.
+    const repo = await setupInitedRepo();
+    for (const body of ["-", " - "]) {
+      await expect(doRunNote(body, {}, { cwd: repo, ...FIXED_CTX })).rejects.toThrow(
+        /^'basou note -' does not read stdin; .*omit the argument/s,
+      );
+    }
+    expect(await countSessions(repo)).toBe(0);
+  });
+
+  it("refuses '-' from stdin or --file without telling the caller to omit the argument", async () => {
+    // Here the argument is already omitted; the text itself is the problem.
     const repo = await setupInitedRepo();
     await writeFile(join(repo, "dash.txt"), "-\n");
     for (const run of [
-      () => doRunNote("-", {}, { cwd: repo, ...FIXED_CTX }),
-      () => doRunNote(" - ", {}, { cwd: repo, ...FIXED_CTX }),
       () => doRunNote(undefined, {}, { cwd: repo, ...FIXED_CTX, readInput: async () => "-\n" }),
       () => doRunNote(undefined, { file: "dash.txt" }, { cwd: repo, ...FIXED_CTX }),
     ]) {
-      await expect(run()).rejects.toThrow(/'basou note -' does not read stdin/);
+      const error = await run().then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect((error as Error).message).toMatch(/^The note text is just '-'/);
+      expect((error as Error).message).not.toContain("omit the argument");
     }
     expect(await countSessions(repo)).toBe(0);
   });

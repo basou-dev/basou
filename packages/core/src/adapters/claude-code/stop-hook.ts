@@ -309,7 +309,7 @@ function renderNudge(counts: StopHookCounts): string {
     "      basou note <<'EOF'",
     "      <what you would do next>",
     "      EOF",
-    "    Quote the delimiter and keep the text off the <<'EOF' line: inside double quotes, in an unquoted heredoc, or on that same line, the shell runs backticks and $(...) in the text as commands and records their output instead.",
+    "    Quote the delimiter and keep the text off the <<'EOF' line: inside double quotes, in an unquoted heredoc, or on that same line, the shell runs backticks and $(...) in the text as commands. In double quotes or an unquoted heredoc their output is then recorded in place of the text.",
     "If nothing is worth capturing, just stop — do not invent decisions.",
   ].join("\n");
 }

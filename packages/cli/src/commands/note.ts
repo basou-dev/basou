@@ -169,10 +169,10 @@ export async function doRunNote(
   if (source === "stdin" && body.trim().length === 0) {
     throw new Error(NO_INPUT_HINT);
   }
-  // The one empty-body check every source passes through: parseBody rejects an
-  // empty argument at the command line, but text from stdin or --file, and a
-  // programmatic call, reach only this. Whitespace-only is treated as empty
-  // (mirrors `basou session note`).
+  // parseBody rejects an empty argument at the command line and the check just
+  // above rejects empty stdin, so this is the only empty-body check for text
+  // from --file and for a programmatic call. Whitespace-only is treated as
+  // empty (mirrors `basou session note`).
   if (body.trim().length === 0) {
     throw new Error("Note body must not be empty");
   }
@@ -190,13 +190,17 @@ export async function doRunNote(
         `with the text on its own lines:\n${HEREDOC_EXAMPLE}`,
     );
   }
-  // `-` is the usual way to say "read stdin", but here it would be recorded as
-  // the note text itself and surface as the next step. Refuse it and point at
-  // the form that does read stdin (omitting the argument).
+  // A note of just `-` would surface as the next step and says nothing. As an
+  // argument it is almost always an attempt to read stdin, so point at the form
+  // that does (omitting the argument); from stdin or --file the text itself is
+  // the problem.
   if (reserved === "-") {
     throw new Error(
-      "'basou note -' does not read stdin; it would record '-' as the note. " +
-        `To pass the note on stdin, omit the argument:\n${HEREDOC_EXAMPLE}`,
+      source === "argument"
+        ? "'basou note -' does not read stdin; it would record '-' as the note. " +
+            `To pass the note on stdin, omit the argument:\n${HEREDOC_EXAMPLE}`
+        : "The note text is just '-', which would be recorded as the next step. " +
+            `Write the note itself, e.g.:\n${HEREDOC_EXAMPLE}`,
     );
   }
 

@@ -98,6 +98,12 @@ describe("evaluateStopHook (content-aware trigger)", () => {
       /\n\s*basou note <<'EOF'\n\s*<what you would do next>\n\s*EOF\n/,
     );
     expect(result.additionalContext).not.toContain("basou note <<'EOF' ...");
+    // Commands run in all three cases, but only double quotes and an unquoted
+    // heredoc record their output as the text (on the <<'EOF' line the note
+    // fails or records something else), so the claim is scoped to those two.
+    expect(result.additionalContext).toContain(
+      "In double quotes or an unquoted heredoc their output is then recorded in place of the text.",
+    );
   });
 
   it("stays silent for a single trivial edit (below the edit threshold)", () => {
