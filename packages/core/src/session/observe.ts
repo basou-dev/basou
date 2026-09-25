@@ -1,8 +1,9 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { getChangesSince } from "../git/diff.js";
+import { getOwnCommitPaths } from "../git/own-commits.js";
 import {
+  getStatusPaths,
   getUntrackedFiles,
-  getWorkingTreeChanges,
   readEmptyTreeSha,
   readHeadSha,
 } from "../git/working-tree.js";
@@ -54,7 +55,9 @@ export type ObserveSessionInput = {
  * Re-entrant by design: a SessionStart that fires again for the SAME session id
  * (a resume, a compaction) must NOT re-baseline, or every commit the session
  * has already made would drop out of its own record. An existing observation is
- * therefore left exactly as it is.
+ * therefore left exactly as it is. For the same reason what was dirty is read
+ * once: if git fails to read part of it here, what it could not read is not
+ * left out of the session's files for the rest of the session.
  *
  * Returns the observation in force after the call, or `null` when nothing could
  * be observed (no repository among `repoRoots` was readable).
@@ -75,15 +78,7 @@ export async function recordSessionBaseline(
     }
     // Everything already dirty is the operator's, not this session's. Recording
     // it now is what lets the later pass subtract it.
-    let baseDirty: string[] = [];
-    try {
-      baseDirty = (await getWorkingTreeChanges(repoRoot)).map(
-        (change) => observedFileFrom(repoRoot, change).path,
-      );
-    } catch {
-      // A status failure only costs precision: without it the session may
-      // claim a file that was already dirty. Keep the repository observed.
-    }
+    const baseDirty = await dirtyPaths(repoRoot, baseHead);
     repos.push({ path: repoRoot, base_head: baseHead, base_dirty: baseDirty, files: [] });
   }
   if (repos.length === 0) return null;
@@ -100,6 +95,46 @@ export async function recordSessionBaseline(
 }
 
 /**
+ * Every path that is dirty right now, by three readings at once. Two ask git
+ * exactly as the later pass asks it -- a diff against `head` with no rename
+ * pairing, and untracked files -- so the two passes can never name the same
+ * file differently. The third is every path `git status` names, which also
+ * catches what a diff against the working tree cannot see now but the later
+ * pass may once the file moves on: a change staged while the working copy was
+ * put back, a conflict whose working copy matches HEAD, a type change. An
+ * observation taken straight after the baseline is therefore empty, and a file
+ * dirty at the start stays out after the session finishes it.
+ *
+ * `git status` runs first: it refreshes the index as any status does, which
+ * keeps the diff after it from re-reading every file whose stat data is stale.
+ *
+ * Each reading can fail on its own (an invalid `status.*` setting fails only
+ * the first). Every one of them names only paths that really are dirty, so
+ * what the others found still stands; a reading that fails costs only the
+ * files it alone would have named, which the session may then be charged with.
+ */
+async function dirtyPaths(repoRoot: string, head: string | null): Promise<string[]> {
+  const readings: (() => Promise<string[]>)[] = [
+    () => getStatusPaths(repoRoot),
+    async () => {
+      const base = head ?? (await readEmptyTreeSha(repoRoot));
+      const changes = await getChangesSince(repoRoot, base, { detectRenames: false });
+      return changes.map((change) => change.path);
+    },
+    async () => (await getUntrackedFiles(repoRoot)).map((change) => change.path),
+  ];
+  const paths = new Set<string>();
+  for (const read of readings) {
+    try {
+      for (const path of await read()) paths.add(path);
+    } catch {
+      // Keep what the other readings found.
+    }
+  }
+  return [...paths].map((path) => join(repoRoot, path));
+}
+
+/**
  * Recompute what the session has changed so far, against the baseline recorded
  * at its start, and persist the result.
  *
@@ -111,7 +146,9 @@ export async function recordSessionBaseline(
  * Per repository, a failure keeps that repository's PREVIOUS file list rather
  * than clearing it: the common cause is a base commit that no longer resolves
  * (a rebase, a reset), and forgetting what was already observed would be a
- * silent loss where a stale list is merely old.
+ * silent loss where a stale list is merely old. A failure to read what the
+ * repository's own activity touched is handled the same way, rather than by
+ * dropping the limit for that pass.
  *
  * Returns `null` when the session has no baseline — it started before the hook
  * was installed, or outside a registered workspace — because inventing one now
@@ -127,7 +164,7 @@ export async function observeSessionChanges(
   for (const repo of existing.repos) {
     let files: ObservedFile[];
     try {
-      files = await changedSinceBaseline(repo);
+      files = await changedSinceBaseline(repo, existing.started_at);
     } catch {
       repos.push(repo); // keep what was already observed
       continue;
@@ -156,10 +193,14 @@ function isBasouStorePath(relativePath: string): boolean {
 
 /**
  * Net change of one repository since the session's baseline: git's own answer
- * for tracked files, plus the untracked files git's diff never reports, minus
- * what was already dirty before the session began.
+ * for tracked files, limited to what this repository's own activity touched,
+ * plus the untracked files git's diff never reports, minus what was already
+ * dirty before the session began.
  */
-async function changedSinceBaseline(repo: ObservedRepo): Promise<ObservedFile[]> {
+async function changedSinceBaseline(
+  repo: ObservedRepo,
+  startedAt: string,
+): Promise<ObservedFile[]> {
   const byPath = new Map<string, ObservedFile>();
 
   // A repository with no commits at session start still has a base: the empty
@@ -167,8 +208,14 @@ async function changedSinceBaseline(repo: ObservedRepo): Promise<ObservedFile[]>
   // session that commits everything it wrote ends with a clean one — reporting
   // nothing, which is the silence this whole mechanism exists to end.
   const base = repo.base_head ?? (await readEmptyTreeSha(repo.path));
-  for (const change of await getChangesSince(repo.path, base)) {
+  const own = await ownActivityPaths(repo, startedAt);
+  // No rename detection: git would pair a file the session deleted with a
+  // similar one that arrived by a pull, and the pair would carry the pulled
+  // name in. Without it, each name stands or falls on its own, and the answer
+  // does not change with the repository's `diff.renames`.
+  for (const change of await getChangesSince(repo.path, base, { detectRenames: false })) {
     if (isBasouStorePath(change.path)) continue;
+    if (own !== null && !own.has(change.path)) continue;
     const file = observedFileFrom(repo.path, change);
     byPath.set(file.path, file);
   }
@@ -190,4 +237,41 @@ async function changedSinceBaseline(repo: ObservedRepo): Promise<ObservedFile[]>
   return [...byPath.values()]
     .filter((file) => !preexisting.has(file.path))
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/**
+ * Repository-relative paths the repository's OWN activity touched since the
+ * session started: every path a commit created here in that time changed (see
+ * {@link getOwnCommitPaths}), plus every tracked path that differs from HEAD
+ * right now. The net change since the base is limited to these, so a commit
+ * that arrived by a pull or a fast-forward merge -- written elsewhere, by
+ * someone else or by a bot -- is not charged to the session, while the
+ * session's own commits still are after they come back from a squash merge,
+ * because it created them here first.
+ *
+ * `null` means no limit applies, in exactly two cases: HEAD has no commit now,
+ * so nothing on it can have arrived from elsewhere; or HEAD moved while no
+ * reflog recorded anything (reflogs off or expired), so an own commit and a
+ * pulled one cannot be told apart, and dropping the session's work silently
+ * would be worse than over-reporting it.
+ *
+ * A git failure throws instead. Either answer would be a guess -- an empty set
+ * drops the session's work, `null` charges it with every pulled commit -- and
+ * the caller keeps the list it observed last rather than rewrite it from one.
+ */
+async function ownActivityPaths(
+  repo: ObservedRepo,
+  startedAt: string,
+): Promise<Set<string> | null> {
+  const sinceMs = Date.parse(startedAt);
+  if (Number.isNaN(sinceMs)) throw new Error("Unreadable session start time");
+  const head = await readHeadSha(repo.path);
+  if (head === null) return null;
+  const commits = await getOwnCommitPaths(repo.path, sinceMs);
+  if (commits.entriesSince === 0 && head !== repo.base_head) return null;
+  const own = new Set(commits.paths);
+  for (const change of await getChangesSince(repo.path, head, { detectRenames: false })) {
+    own.add(change.path);
+  }
+  return own;
 }

@@ -160,6 +160,107 @@ session:
   observation has. A reader that needs to know a file was WITNESSED being
   edited, rather than observed as a difference, reads the `file_changed` events,
   which still come only from tool calls.
+- What this section says of git -- which reflog entries it writes, what
+  `git replay` and an orphan checkout do, what `git status` names -- was
+  checked with git 2.53. Another version may record some operations
+  differently, and what is observed may then differ.
+- What the observed half claims, per repository the workspace declares: the
+  net change of tracked files since the session started (against the commit
+  HEAD was on then), limited to paths the repository's OWN activity touched in
+  that time, plus every untracked file, which is not limited. A path counts as
+  touched when a commit CREATED in that
+  repository since the start changed it, or when it differs from HEAD in the
+  working tree now. A commit counts as created when the reflog of HEAD or of a
+  local branch records its creation in the words git itself writes: a commit
+  (including an amend, and one that concludes a merge or a cherry-pick), a
+  cherry-pick, a revert, a patch applied by `git am`, a pick replayed by a
+  rebase or by `git pull --rebase`, a merge git committed itself, or a commit
+  `git replay` made when it updated the refs itself (its default). A merge
+  commit counts only for the paths where it differs
+  from every one of its parents: what it resolved, and also a file git joined
+  cleanly from changes made on both sides. So a commit that only arrived by a
+  pull, a fast-forward merge or `cherry-pick --ff` -- a bot's pull request,
+  someone else's work -- is not charged to the session unless its paths were
+  also touched (see the limits below), while the session's own commits still
+  are after they come back through a squash merge, because they were created
+  there first. Branch reflogs are shared by every worktree of a repository, so
+  a commit made on a branch in another worktree counts too.
+- Renames are not paired in the observed half: a renamed file appears as its
+  old name deleted and its new name added, and each name counts on its own,
+  whatever the repository's `diff.renames` says. Otherwise a file the session
+  deleted could be paired with a similar file that arrived by a pull, and bring
+  that file's name in.
+- The own-activity limit is not applied in exactly two cases: HEAD does not
+  resolve (the repository is still unborn, HEAD is on an orphan branch, or the
+  current branch's ref is empty or does not hold an object name), or HEAD
+  moved while no reflog recorded anything (reflogs off or expired), so an own
+  commit and a pulled one cannot be told apart. Files dirty at the start and
+  the `.basou/` store are still left out. After `git checkout --orphan` a file
+  that arrived earlier by a pull therefore counts; after `git switch --orphan`
+  every file tracked at the start counts as deleted. When observing a
+  repository fails -- git fails, the start time cannot be read, or HEAD
+  resolves to a commit that is missing -- the repository keeps the files its
+  previous observation recorded.
+- Limits of the observed half, by construction:
+    - It observes a repository, not an actor. Uncommitted edits and local
+      commits made in the same repository by anyone else while the session
+      runs (the operator, another session) are counted too.
+    - The evidence is gathered per path from the whole repository and applied
+      to the observed worktree's net change. A path that a commit created
+      since the start on any local branch changed counts, even when that
+      commit never reaches the observed worktree -- so a change to the same
+      path that only arrived by a pull counts too.
+    - Untracked files are not limited, so files a pull makes visible -- by
+      changing `.gitignore`, for instance -- count too.
+    - Only what is still in the net change counts. Work committed on a branch
+      the session then switched away from, or undone by a later commit or a
+      reset, is not observed.
+    - A commit is seen only through a reflog entry that is read. One made on a
+      detached HEAD in another worktree, or rebased there (a rebase replays
+      its picks on that worktree's HEAD), is not seen. One made on a branch in
+      another worktree stops counting at the next pass once that branch is
+      deleted (as when the worktree is cleaned up after a squash merge); one
+      made in the observed worktree is still seen through HEAD's reflog. One
+      made on a branch whose ref is broken is not seen, since that branch's
+      reflog is skipped. A commit recorded under a message git does not write
+      itself (a tool calling `update-ref -m`, or ref updates `git replay`
+      printed and `git update-ref --stdin` applied) is not seen either, nor is
+      a real cherry-pick of a commit whose subject is exactly "fast-forward",
+      which git records the same way as `cherry-pick --ff`. When `git replay`
+      moves a branch that had no reflog before, only the commit it ends at is
+      seen, since where it started is recorded nowhere.
+    - The window is drawn by the time a reflog entry carries, which git takes
+      from the committer date: an operation given an earlier date
+      (`GIT_COMMITTER_DATE`, or a commit that `rebase --continue` concludes
+      under `--committer-date-is-author-date`) can place a commit before the
+      start, and one made before the start but given a later date can place
+      it inside. A reflog that has partly expired (unreachable entries after
+      30 days by default, so only a session resumed that much later meets it)
+      loses the commits whose entries expired.
+    - A merge still in progress, such as a pull that stopped on a conflict, is
+      not a commit yet: every path it brought in differs from HEAD and counts
+      until it is concluded.
+    - A session is measured from its first start. A resumed session's
+      observation includes what happened in the repository while it was not
+      running.
+    - A file already dirty when the session started is not observed for that
+      session at all, even if the session goes on to change it. Dirty means
+      every path `git status` names at the start -- which covers a change
+      staged while its working copy was put back, a type change, an untracked
+      nested repository, and a file with a conflict, which stays out even when
+      the session resolves it -- together with every path the session's own
+      reading of changes would name then, so the two can never name one file
+      differently (both names of a staged rename, a name with leading or
+      trailing spaces). What is dirty is read once, at the start: if git fails
+      to read part of it then, what it could not read is not left out for the
+      rest of the session. A change in the working copy of a file git is told
+      to leave alone (`assume-unchanged`, `skip-worktree`) is hidden from
+      every reading, so it counts once that flag is cleared; a change already
+      staged is named, and stays out.
+    - Observations are keyed by the vendor's session id as given (a UUID for
+      both Claude Code and Codex); ids from different vendors are not
+      namespaced. Codex's SessionStart hook writes a baseline too, but only the
+      Claude Code import reads observations today.
 - `working_directory` and `related_files[]` are path-sanitized on write so
   no operator-private absolute prefix leaks into the workspace's persistent
   state. The sanitizer applies two rules in order:
