@@ -118,9 +118,7 @@ export async function getChangesSince(
     // `-z` for the reason given on the parser: the caller compares these paths
     // with the ones it read from the working tree, and a quoted spelling here
     // would name the same file twice and defeat the subtraction of what was
-    // already dirty. (That comparison is still wrong for a name with a leading
-    // or trailing space: the working-tree side goes through simple-git's
-    // status parser, which trims each record.)
+    // already dirty.
     const renames =
       options.detectRenames === undefined
         ? []

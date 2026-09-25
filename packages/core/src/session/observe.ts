@@ -1,7 +1,12 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { getChangesSince } from "../git/diff.js";
 import { getOwnCommitPaths } from "../git/own-commits.js";
-import { getUntrackedFiles, readEmptyTreeSha, readHeadSha } from "../git/working-tree.js";
+import {
+  getStatusPaths,
+  getUntrackedFiles,
+  readEmptyTreeSha,
+  readHeadSha,
+} from "../git/working-tree.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import {
   type ObservedFile,
@@ -94,19 +99,25 @@ export async function recordSessionBaseline(
 }
 
 /**
- * Every path that differs from `head` right now, asked of git exactly as the
- * later pass asks it -- a diff with no rename pairing, plus untracked files --
- * so the two can never name the same dirty file differently: a conflicted
- * file, both names of a rename, a name with leading or trailing spaces. An
- * observation taken straight after the baseline is therefore empty.
+ * Every path that is dirty right now, by two readings at once. The first asks
+ * git exactly as the later pass asks it -- a diff against `head` with no rename
+ * pairing, plus untracked files -- so the two can never name the same file
+ * differently: both names of a rename, a name with leading or trailing spaces.
+ * The second is every path `git status` names, which also catches what a diff
+ * against the working tree cannot see now but the later pass may once the file
+ * moves on: a change staged while the working copy was put back, a conflict
+ * whose working copy matches HEAD, a type change. An observation taken
+ * straight after the baseline is therefore empty, and a file dirty at the
+ * start stays out after the session finishes it.
  */
 async function dirtyPaths(repoRoot: string, head: string | null): Promise<string[]> {
   const base = head ?? (await readEmptyTreeSha(repoRoot));
-  const changes = [
-    ...(await getChangesSince(repoRoot, base, { detectRenames: false })),
-    ...(await getUntrackedFiles(repoRoot)),
-  ];
-  return changes.map((change) => observedFileFrom(repoRoot, change).path);
+  const paths = new Set<string>(await getStatusPaths(repoRoot));
+  for (const change of await getChangesSince(repoRoot, base, { detectRenames: false })) {
+    paths.add(change.path);
+  }
+  for (const change of await getUntrackedFiles(repoRoot)) paths.add(change.path);
+  return [...paths].map((path) => join(repoRoot, path));
 }
 
 /**

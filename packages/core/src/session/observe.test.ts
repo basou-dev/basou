@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
@@ -348,6 +348,67 @@ describe("observeSessionChanges", () => {
     async (_what, dirty) => {
       await dirty();
       await baseline();
+      expect(await observe()).toEqual([]);
+    },
+  );
+
+  it.each([
+    [
+      "a change staged while its working copy was put back",
+      async () => {
+        await writeFile(join(repo, "y.txt"), "one\n");
+        await git.add("y.txt");
+        await git.commit("y");
+        await writeFile(join(repo, "y.txt"), "two\n");
+        await git.add("y.txt");
+        await writeFile(join(repo, "y.txt"), "one\n");
+      },
+      async () => {
+        await git.commit("commit what was staged");
+        await git.raw(["checkout", "--", "y.txt"]);
+      },
+    ],
+    [
+      "a conflict whose working copy matches HEAD",
+      async () => {
+        await writeFile(join(repo, "dm.txt"), "base\n");
+        await git.add("dm.txt");
+        await git.commit("dm");
+        await git.checkoutLocalBranch("delete-it");
+        await git.rm("dm.txt");
+        await git.commit("delete");
+        await git.checkout("main");
+        await writeFile(join(repo, "dm.txt"), "modified\n");
+        await git.add("dm.txt");
+        await git.commit("modify");
+        await git.raw(["merge", "delete-it"]).catch(() => undefined); // modify/delete
+      },
+      async () => {
+        await writeFile(join(repo, "dm.txt"), "resolved\n");
+        await git.add("dm.txt");
+        await git.raw(["commit", "--no-edit"]);
+      },
+    ],
+    [
+      "a file turned into a symbolic link",
+      async () => {
+        await writeFile(join(repo, "link"), "a file\n");
+        await git.add("link");
+        await git.commit("link");
+        await unlink(join(repo, "link"));
+        await symlink("README.md", join(repo, "link"));
+      },
+      async () => {
+        await unlink(join(repo, "link"));
+        await writeFile(join(repo, "link"), "a file again\n");
+      },
+    ],
+  ])(
+    "leaves out %s at the start, even after the session finishes it",
+    async (_what, dirty, finish) => {
+      await dirty();
+      await baseline();
+      await finish();
       expect(await observe()).toEqual([]);
     },
   );

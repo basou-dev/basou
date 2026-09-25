@@ -187,22 +187,18 @@ session:
   deleted could be paired with a similar file that arrived by a pull, and bring
   that file's name in.
 - The limit is not applied, and every net change is kept, in exactly two
-  cases: HEAD does not resolve to a commit (the repository is still unborn,
-  HEAD is on an orphan branch, or the current branch's ref is broken), or HEAD
-  moved while no reflog recorded anything (reflogs off or expired), so an own
+  cases: HEAD does not resolve (the repository is still unborn, HEAD is on an
+  orphan branch, or the current branch's ref is empty), or HEAD moved while no
+  reflog recorded anything (reflogs off or expired), so an own
   commit and a pulled one cannot be told apart. After `git checkout --orphan`
   a file that arrived earlier by a pull therefore counts; after `git switch
   --orphan` every file tracked at the start counts as deleted. When
-  observing a repository fails -- git fails, or the start time cannot be read
-  -- the repository keeps the files its previous observation recorded.
-- Of the above, the claim is the contract: the net change of tracked files,
-  limited to paths that commits created in the repository since the start or
-  uncommitted work touched, plus every untracked file. Which reflog entries
-  are recognised as creating a commit, when the limit is not applied, and the
-  limits below describe how git records its operations (as of git 2.53) and
-  follow it: they may change within a `1.x` line when git's behaviour does,
-  without changing the claim.
-- Limits of the observed half, by construction:
+  observing a repository fails -- git fails, the start time cannot be read,
+  or HEAD resolves to a commit that is missing -- the repository keeps the
+  files its previous observation recorded.
+- Limits of the observed half, by construction. What they say of git was
+  checked with git 2.53; another version may record some operations
+  differently, and which commits are seen may then differ.
     - It observes a repository, not an actor. Uncommitted edits and local
       commits made in the same repository by anyone else while the session
       runs (the operator, another session) are counted too.
@@ -245,10 +241,12 @@ session:
       observation includes what happened in the repository while it was not
       running.
     - A file already dirty when the session started is not observed for that
-      session at all, even if the session goes on to change it. Dirty files
-      are read the same way the session's changes are: for a rename staged
-      before the start that is both of its names, and a file with a conflict
-      at the start stays out even when the session resolves it.
+      session at all, even if the session goes on to change it. Dirty means
+      every path `git status` names at the start, together with every path
+      the session's own reading of changes would name then: both names of a
+      staged rename, a change staged while its working copy was put back, a
+      type change, and a file with a conflict, which stays out even when the
+      session resolves it.
     - Observations are keyed by the vendor's session id as given (a UUID for
       both Claude Code and Codex); ids from different vendors are not
       namespaced. Codex's SessionStart hook writes a baseline too, but only the
