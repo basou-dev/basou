@@ -87,14 +87,14 @@ export async function getWorkingTreeChanges(repoRoot: string): Promise<FileChang
 /**
  * Every path `git status` names, whatever its two status letters say: staged
  * or not, conflicted, a type change, untracked (every file inside an untracked
- * directory, not the directory).
+ * directory, not the directory; an untracked nested repository by its own
+ * path, without the trailing slash git gives it).
  *
  * Unlike {@link getWorkingTreeChanges}, which keeps only the entries the
  * `file_changed` event has a class for, this drops none, and it reads git's own
  * `-z` records instead of simple-git's status parser, which trims each one, so
  * a name with a leading or trailing space survives. `--no-renames` lists both
- * names of a rename as entries of their own; `--no-optional-locks` keeps a run
- * from a hook from taking the index lock.
+ * names of a rename as entries of their own.
  *
  * Throws the same fixed strings as {@link getWorkingTreeChanges}.
  */
@@ -112,7 +112,6 @@ export async function getStatusPaths(repoRoot: string): Promise<string[]> {
   let raw: string;
   try {
     raw = await git.raw([
-      "--no-optional-locks",
       "status",
       "--porcelain=v1",
       "-z",
@@ -131,12 +130,11 @@ export async function getStatusPaths(repoRoot: string): Promise<string[]> {
   }
 
   // Each record is `XY <path>`; with `--no-renames` none carries a second path.
-  // A trailing slash is a nested repository, which names no file.
   const paths: string[] = [];
   for (const record of raw.split("\0")) {
     const path = record.slice(3);
-    if (path.length === 0 || path.endsWith("/")) continue;
-    paths.push(path);
+    if (path.length === 0) continue;
+    paths.push(path.endsWith("/") ? path.slice(0, -1) : path);
   }
   return paths;
 }

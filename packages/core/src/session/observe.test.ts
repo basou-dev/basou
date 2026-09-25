@@ -336,10 +336,12 @@ describe("observeSessionChanges", () => {
     [
       "a copy git status reports as a copy",
       async () => {
+        // README.md is "# init\n": changing it and adding its old content under
+        // a new name is what git status reports as `C README.md -> COPY.md`.
         await git.addConfig("status.renames", "copies");
         await git.addConfig("diff.renames", "copies");
-        await writeFile(join(repo, "README.md"), "# init, and more\n");
-        await writeFile(join(repo, "COPY.md"), "# init, and more\n");
+        await writeFile(join(repo, "README.md"), "# init\nand more\n");
+        await writeFile(join(repo, "COPY.md"), "# init\n");
         await git.add(["README.md", "COPY.md"]);
       },
     ],
@@ -390,6 +392,37 @@ describe("observeSessionChanges", () => {
       },
     ],
     [
+      "a conflict on a name with a leading space whose working copy matches HEAD",
+      async () => {
+        await writeFile(join(repo, " dm.txt"), "base\n");
+        await git.add(" dm.txt");
+        await git.commit("dm");
+        await git.checkoutLocalBranch("delete-it");
+        await git.rm(" dm.txt");
+        await git.commit("delete");
+        await git.checkout("main");
+        await writeFile(join(repo, " dm.txt"), "modified\n");
+        await git.add(" dm.txt");
+        await git.commit("modify");
+        await git.raw(["merge", "delete-it"]).catch(() => undefined); // modify/delete
+      },
+      async () => {
+        await writeFile(join(repo, " dm.txt"), "resolved\n");
+        await git.add(" dm.txt");
+        await git.raw(["commit", "--no-edit"]);
+      },
+    ],
+    [
+      "an untracked nested repository",
+      async () => {
+        await initRepo(join(repo, "nested"));
+      },
+      async () => {
+        await git.raw(["add", "nested"]);
+        await git.commit("take the nested repository in");
+      },
+    ],
+    [
       "a file turned into a symbolic link",
       async () => {
         await writeFile(join(repo, "link"), "a file\n");
@@ -412,6 +445,16 @@ describe("observeSessionChanges", () => {
       expect(await observe()).toEqual([]);
     },
   );
+
+  it("still records what the other readings find when git status fails at the start", async () => {
+    // An invalid status setting fails `git status` but not `git diff` or
+    // `git ls-files`, which the later pass uses.
+    await writeFile(join(repo, "README.md"), "# edited before the session\n");
+    await writeFile(join(repo, "scratch.txt"), "notes\n");
+    await git.addConfig("status.renames", "bogus");
+    await baseline();
+    expect(await observe()).toEqual([]);
+  });
 
   it("does not charge the session with the old name of a rename staged before it started", async () => {
     const body = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
@@ -889,6 +932,15 @@ describe("observeSessionChanges and commits written elsewhere", () => {
     await baseline();
     await git.fetch("origin", "main");
     await git.raw(["merge", "--no-edit", "origin/main"]);
+    expect(await observe()).toEqual([join(repo, "shared.txt")]);
+  });
+
+  it("charges a merge git made itself of a revision named with a colon", async () => {
+    await divergedOnSharedFile();
+    await baseline();
+    await git.fetch("origin", "main");
+    // `:/<text>` names the newest commit whose message matches: the bot's.
+    await git.raw(["merge", "--no-edit", ":/upstream: bot.md"]);
     expect(await observe()).toEqual([join(repo, "shared.txt")]);
   });
 

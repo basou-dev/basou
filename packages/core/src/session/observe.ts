@@ -76,13 +76,7 @@ export async function recordSessionBaseline(
     }
     // Everything already dirty is the operator's, not this session's. Recording
     // it now is what lets the later pass subtract it.
-    let baseDirty: string[] = [];
-    try {
-      baseDirty = await dirtyPaths(repoRoot, baseHead);
-    } catch {
-      // A failure here only costs precision: without it the session may
-      // claim a file that was already dirty. Keep the repository observed.
-    }
+    const baseDirty = await dirtyPaths(repoRoot, baseHead);
     repos.push({ path: repoRoot, base_head: baseHead, base_dirty: baseDirty, files: [] });
   }
   if (repos.length === 0) return null;
@@ -99,24 +93,42 @@ export async function recordSessionBaseline(
 }
 
 /**
- * Every path that is dirty right now, by two readings at once. The first asks
- * git exactly as the later pass asks it -- a diff against `head` with no rename
- * pairing, plus untracked files -- so the two can never name the same file
- * differently: both names of a rename, a name with leading or trailing spaces.
- * The second is every path `git status` names, which also catches what a diff
- * against the working tree cannot see now but the later pass may once the file
- * moves on: a change staged while the working copy was put back, a conflict
- * whose working copy matches HEAD, a type change. An observation taken
- * straight after the baseline is therefore empty, and a file dirty at the
- * start stays out after the session finishes it.
+ * Every path that is dirty right now, by three readings at once. Two ask git
+ * exactly as the later pass asks it -- a diff against `head` with no rename
+ * pairing, and untracked files -- so the two passes can never name the same
+ * file differently. The third is every path `git status` names, which also
+ * catches what a diff against the working tree cannot see now but the later
+ * pass may once the file moves on: a change staged while the working copy was
+ * put back, a conflict whose working copy matches HEAD, a type change. An
+ * observation taken straight after the baseline is therefore empty, and a file
+ * dirty at the start stays out after the session finishes it.
+ *
+ * `git status` runs first: it refreshes the index as any status does, which
+ * keeps the diff after it from re-reading every file whose stat data is stale.
+ *
+ * Each reading can fail on its own (an invalid `status.*` setting fails only
+ * the first). Every one of them names only paths that really are dirty, so
+ * what the others found still stands; a reading that fails costs only the
+ * files it alone would have named, which the session may then be charged with.
  */
 async function dirtyPaths(repoRoot: string, head: string | null): Promise<string[]> {
-  const base = head ?? (await readEmptyTreeSha(repoRoot));
-  const paths = new Set<string>(await getStatusPaths(repoRoot));
-  for (const change of await getChangesSince(repoRoot, base, { detectRenames: false })) {
-    paths.add(change.path);
+  const readings: (() => Promise<string[]>)[] = [
+    () => getStatusPaths(repoRoot),
+    async () => {
+      const base = head ?? (await readEmptyTreeSha(repoRoot));
+      const changes = await getChangesSince(repoRoot, base, { detectRenames: false });
+      return changes.map((change) => change.path);
+    },
+    async () => (await getUntrackedFiles(repoRoot)).map((change) => change.path),
+  ];
+  const paths = new Set<string>();
+  for (const read of readings) {
+    try {
+      for (const path of await read()) paths.add(path);
+    } catch {
+      // Keep what the other readings found.
+    }
   }
-  for (const change of await getUntrackedFiles(repoRoot)) paths.add(change.path);
   return [...paths].map((path) => join(repoRoot, path));
 }
 

@@ -160,6 +160,10 @@ session:
   observation has. A reader that needs to know a file was WITNESSED being
   edited, rather than observed as a difference, reads the `file_changed` events,
   which still come only from tool calls.
+- What this section says of git -- which reflog entries it writes, what
+  `git replay` and an orphan checkout do -- was checked with git 2.53. Another
+  version may record some operations differently, and which commits are seen
+  may then differ.
 - What the observed half claims, per repository the workspace declares: the
   net change of tracked files since the session started (against the commit
   HEAD was on then), limited to paths the repository's OWN activity touched in
@@ -186,19 +190,18 @@ session:
   whatever the repository's `diff.renames` says. Otherwise a file the session
   deleted could be paired with a similar file that arrived by a pull, and bring
   that file's name in.
-- The limit is not applied, and every net change is kept, in exactly two
-  cases: HEAD does not resolve (the repository is still unborn, HEAD is on an
-  orphan branch, or the current branch's ref is empty), or HEAD moved while no
-  reflog recorded anything (reflogs off or expired), so an own
-  commit and a pulled one cannot be told apart. After `git checkout --orphan`
-  a file that arrived earlier by a pull therefore counts; after `git switch
-  --orphan` every file tracked at the start counts as deleted. When
-  observing a repository fails -- git fails, the start time cannot be read,
-  or HEAD resolves to a commit that is missing -- the repository keeps the
-  files its previous observation recorded.
-- Limits of the observed half, by construction. What they say of git was
-  checked with git 2.53; another version may record some operations
-  differently, and which commits are seen may then differ.
+- The own-activity limit is not applied in exactly two cases: HEAD does not
+  resolve (the repository is still unborn, HEAD is on an orphan branch, or the
+  current branch's ref is empty or does not hold an object name), or HEAD
+  moved while no reflog recorded anything (reflogs off or expired), so an own
+  commit and a pulled one cannot be told apart. Files dirty at the start and
+  the `.basou/` store are still left out. After `git checkout --orphan` a file
+  that arrived earlier by a pull therefore counts; after `git switch --orphan`
+  every file tracked at the start counts as deleted. When observing a
+  repository fails -- git fails, the start time cannot be read, or HEAD
+  resolves to a commit that is missing -- the repository keeps the files its
+  previous observation recorded.
+- Limits of the observed half, by construction:
     - It observes a repository, not an actor. Uncommitted edits and local
       commits made in the same repository by anyone else while the session
       runs (the operator, another session) are counted too.
@@ -242,11 +245,14 @@ session:
       running.
     - A file already dirty when the session started is not observed for that
       session at all, even if the session goes on to change it. Dirty means
-      every path `git status` names at the start, together with every path
-      the session's own reading of changes would name then: both names of a
-      staged rename, a change staged while its working copy was put back, a
-      type change, and a file with a conflict, which stays out even when the
-      session resolves it.
+      every path `git status` names at the start, together with every path the
+      session's own reading of changes would name then: both names of a staged
+      rename, a change staged while its working copy was put back, a type
+      change, an untracked nested repository, and a file with a conflict,
+      which stays out even when the session resolves it. A file git is told to
+      leave alone (`assume-unchanged`, `skip-worktree`) is hidden from every
+      reading, so a change to it made before the start counts once that flag
+      is cleared.
     - Observations are keyed by the vendor's session id as given (a UUID for
       both Claude Code and Codex); ids from different vendors are not
       namespaced. Codex's SessionStart hook writes a baseline too, but only the

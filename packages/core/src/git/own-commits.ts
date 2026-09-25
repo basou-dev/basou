@@ -14,13 +14,16 @@ import { isGitNotFound, safeSimpleGit } from "./snapshot.js";
  * commits too, but records only where each ref ends; see {@link REPLAY}.)
  *
  * A pull's part may contain colons, since it names a repository (a URL,
- * `git@host:org/repo`) and refspecs (`main:refs/...`). A rebase's may not: its
- * start entry spells the upstream as typed, which can hold anything, and must
- * not be read as a pick. A pull's part could only be misread if a repository
- * path or URL contained a space, a parenthesised step and a colon.
+ * `git@host:org/repo`) and refspecs (`main:refs/...`), and so may a merge's,
+ * since it names a revision as typed (`:/message`, `branch@{date}`). A
+ * rebase's may not: its start entry spells the upstream as typed, which can
+ * hold anything, and must not be read as a pick. A pull's part could only be
+ * misread if a repository path or URL contained a space, a parenthesised step
+ * and a colon; a merge's only if the revision it names contained ": Merge made
+ * by ".
  */
 const COMMIT_CREATED =
-  /^(?:commit(?: \((?:initial|amend|merge|cherry-pick)\))?|cherry-pick|revert|am|(?:rebase\b[^:]*?|pull\b.*?) \((?:pick|reword|edit|squash|fixup|continue|merge)\)): |^(?:merge\b[^:]*|pull\b.*?): Merge made by /;
+  /^(?:commit(?: \((?:initial|amend|merge|cherry-pick)\))?|cherry-pick|revert|am|(?:rebase\b[^:]*?|pull\b.*?) \((?:pick|reword|edit|squash|fixup|continue|merge)\)): |^(?:merge|pull)\b.*?: Merge made by /;
 
 /**
  * `cherry-pick --ff` moves HEAD to the picked commit itself; nothing is
