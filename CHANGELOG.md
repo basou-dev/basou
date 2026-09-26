@@ -15,11 +15,13 @@ All notable changes to **basou** are recorded here. The project follows
   therefore missing from an imported session's observed `related_files`,
   whether or not the change was committed; from `basou run`'s `file_changed`
   events when it was committed during the run; and from that run's
-  `related_files` too, unless it was already dirty when the run started. A
+  `related_files` too, unless it was dirty when the run started or ended. A
   typechange is now reported as `modified`: the path exists on both sides and
   what it holds changed. The event schema is unchanged. Copy and unmerged
-  entries are still skipped. `getWorkingTreeChanges` in `@basou/core`, which
-  dropped a typechange the same way, reports it as `modified` too.
+  entries are still skipped. `getWorkingTreeChanges` in `@basou/core` also
+  dropped a typechange, staged or not; it now reports one as `modified`, or as
+  `added`, `renamed` or `deleted` when the path was also added to the index,
+  renamed in it, or deleted from the working tree.
 
 ## 0.54.0 — 2026-09-25
 

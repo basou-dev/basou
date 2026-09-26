@@ -19,7 +19,8 @@ import { isGitNotFound, safeSimpleGit } from "./snapshot.js";
  *
  * Conflicted entries are skipped, matching {@link getDiff}'s treatment of the
  * `U` status code: the `file_changed` status enum has no class for them. A
- * typechange is reported as `modified`, as {@link getDiff} reports it.
+ * typechange is reported as `modified`, as {@link getDiff} reports it, unless
+ * the path was also added, renamed or deleted, which is then its class.
  *
  * Pathless contract: every thrown message is a fixed string from the set
  * {`Not a git repository`, `Git executable not found in PATH. Install git
@@ -81,13 +82,28 @@ export async function getWorkingTreeChanges(repoRoot: string): Promise<FileChang
     if (conflicted.has(path)) continue;
     put({ path, status: "modified" });
   }
-  // A typechange (`T`, staged or not) is in none of simple-git's lists above,
-  // only in `status.files`. It is `modified`, as {@link getDiff} reports it, so
-  // the two halves of a session agree on the same file.
+  // A typechange (`T`, in either column) puts an entry in none of simple-git's
+  // lists above, whatever the other column says; it is only in `status.files`.
+  // When the other column says more than "changed" -- the path was added to
+  // the index, renamed in it, or deleted from the working tree -- that is its
+  // class, as it would be without the typechange. Otherwise it is `modified`,
+  // as {@link getDiff} reports it, so the two halves of a session agree.
   for (const file of status.files) {
     if (file.index !== "T" && file.working_dir !== "T") continue;
     if (conflicted.has(file.path)) continue;
-    put({ path: file.path, status: "modified" });
+    if (file.index === "R") {
+      put(
+        file.from !== undefined
+          ? { path: file.path, status: "renamed", old_path: file.from }
+          : { path: file.path, status: "added" },
+      );
+    } else if (file.index === "A") {
+      put({ path: file.path, status: "added" });
+    } else if (file.working_dir === "D") {
+      put({ path: file.path, status: "deleted" });
+    } else {
+      put({ path: file.path, status: "modified" });
+    }
   }
 
   return [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -99,10 +115,12 @@ export async function getWorkingTreeChanges(repoRoot: string): Promise<FileChang
  * directory, not the directory; an untracked nested repository by its own
  * path, without the trailing slash git gives it).
  *
- * Unlike {@link getWorkingTreeChanges}, which drops conflicted entries because
- * the `file_changed` event has no class for them, this drops none, and it
- * reads git's own `-z` records instead of simple-git's status parser, which
- * trims each one, so a name with a leading or trailing space survives.
+ * Unlike {@link getWorkingTreeChanges}, which keeps only what it can classify
+ * from simple-git's status lists (it drops conflicted entries, and a staged
+ * modification or rename whose working copy was then deleted), this drops
+ * none, and it reads git's own `-z` records instead of simple-git's status
+ * parser, which trims each one, so a name with a leading or trailing space
+ * survives.
  * `--no-renames` lists both names of a rename as entries of their own.
  *
  * Throws the same fixed strings as {@link getWorkingTreeChanges}.
