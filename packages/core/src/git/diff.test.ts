@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
@@ -171,22 +171,39 @@ describe("getDiff", () => {
     expect((err as Error).message).not.toContain(tmpRepo);
   });
 
-  it("does not classify typechange (T) entries as added/modified/deleted/renamed", async () => {
-    // A typechange between two non-symlink commits is impossible to construct
-    // portably (Windows lacks symlink permissions by default), so we instead
-    // verify the contract negatively: the parser drops anything that does not
-    // match A / M / D / R*. We construct an extremely simple commit-pair where
-    // git produces no T entries; the assertion is that the result remains
-    // strictly within the four allowed statuses.
-    const { head: base, git } = await initRepoWithFiles(tmpRepo);
-    await writeFile(join(tmpRepo, "x.txt"), "x\n");
-    await git.add("x.txt");
-    await git.commit("add x");
+  it("classifies a file replaced by a symlink (typechange) as 'modified'", async () => {
+    // git reports this as `T`, and the path exists on both sides. Skipping the
+    // entry used to drop the file from the diff altogether.
+    const { head: base, git } = await initRepoWithFiles(tmpRepo, {
+      "target.txt": "target\n",
+      "link.txt": "a regular file\n",
+    });
+    await unlink(join(tmpRepo, "link.txt"));
+    await symlink("target.txt", join(tmpRepo, "link.txt"));
+    await git.add("link.txt");
+    await git.commit("turn link.txt into a symlink");
     const head = (await git.revparse(["HEAD"])).trimEnd();
+    expect(await git.raw(["diff", "--name-status", base, head])).toBe("T\tlink.txt\n");
+
     const diff = await getDiff(tmpRepo, base, head);
-    for (const change of diff.changed_files) {
-      expect(["added", "modified", "deleted", "renamed"]).toContain(change.status);
-    }
+    expect(diff.changed_files).toEqual([{ path: "link.txt", status: "modified" }]);
+  });
+
+  it("classifies a symlink replaced by a regular file (typechange) as 'modified'", async () => {
+    const { git } = await initRepoWithFiles(tmpRepo, { "target.txt": "target\n" });
+    await symlink("target.txt", join(tmpRepo, "link.txt"));
+    await git.add("link.txt");
+    await git.commit("add a symlink");
+    const base = (await git.revparse(["HEAD"])).trimEnd();
+    await unlink(join(tmpRepo, "link.txt"));
+    await writeFile(join(tmpRepo, "link.txt"), "now a regular file\n");
+    await git.add("link.txt");
+    await git.commit("turn link.txt into a regular file");
+    const head = (await git.revparse(["HEAD"])).trimEnd();
+    expect(await git.raw(["diff", "--name-status", base, head])).toBe("T\tlink.txt\n");
+
+    const diff = await getDiff(tmpRepo, base, head);
+    expect(diff.changed_files).toEqual([{ path: "link.txt", status: "modified" }]);
   });
 
   describe("message contract (exact match)", () => {
@@ -278,6 +295,28 @@ describe("getChangesSince", () => {
     const { head } = await initRepoWithFiles(tmpRepo);
     await writeFile(join(tmpRepo, "untracked.ts"), "export const a = 1;\n");
     expect(await getChangesSince(tmpRepo, head)).toEqual([]);
+  });
+
+  it("reports an uncommitted typechange in either direction as 'modified'", async () => {
+    const { git } = await initRepoWithFiles(tmpRepo, {
+      "target.txt": "target\n",
+      "was-file.txt": "a regular file\n",
+    });
+    await symlink("target.txt", join(tmpRepo, "was-link.txt"));
+    await git.add("was-link.txt");
+    await git.commit("add a symlink");
+    const base = (await git.revparse(["HEAD"])).trimEnd();
+
+    // Neither change is staged: `git diff <base>` reads the working tree.
+    await unlink(join(tmpRepo, "was-file.txt"));
+    await symlink("target.txt", join(tmpRepo, "was-file.txt"));
+    await unlink(join(tmpRepo, "was-link.txt"));
+    await writeFile(join(tmpRepo, "was-link.txt"), "now a regular file\n");
+
+    expect(await getChangesSince(tmpRepo, base, { detectRenames: false })).toEqual([
+      { path: "was-file.txt", status: "modified" },
+      { path: "was-link.txt", status: "modified" },
+    ]);
   });
 
   it("throws the fixed 'Invalid ref' when the base no longer resolves", async () => {

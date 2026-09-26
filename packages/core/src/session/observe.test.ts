@@ -199,6 +199,22 @@ describe("observeSessionChanges", () => {
     expect(await observe()).toEqual([join(repo, "README.md")]);
   });
 
+  it("sees a tracked file the session replaced with a symlink, before it is committed", async () => {
+    await baseline();
+    await unlink(join(repo, "README.md"));
+    await symlink("elsewhere.md", join(repo, "README.md"));
+    expect(await observe()).toEqual([join(repo, "README.md")]);
+  });
+
+  it("still sees a tracked file replaced with a symlink after the replacement is committed", async () => {
+    await baseline();
+    await unlink(join(repo, "README.md"));
+    await symlink("elsewhere.md", join(repo, "README.md"));
+    await git.add("README.md");
+    await git.commit("make README a symlink");
+    expect(await observe()).toEqual([join(repo, "README.md")]);
+  });
+
   it("subtracts what was already dirty when the session started", async () => {
     await writeFile(join(repo, "README.md"), "# dirty before\n");
     await baseline();

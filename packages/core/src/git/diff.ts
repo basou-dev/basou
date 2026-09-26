@@ -3,9 +3,10 @@ import { isGitNotFound, safeSimpleGit } from "./snapshot.js";
 
 /**
  * Status classification used by the `file_changed` event schema. Limited to
- * the four classes that simple-git's `git diff --name-status` reliably
- * surfaces; copy / unmerged / typechange entries are intentionally dropped
- * to keep the event payload shape narrow.
+ * four classes to keep the event payload shape narrow. A typechange (the path
+ * changed its object type -- a regular file, a symlink, a submodule -- such as a
+ * file replaced by a symlink) is reported as `modified`: the path exists on
+ * both sides and what it holds changed. Copy / unmerged entries are dropped.
  */
 export type FileChangeStatus = "added" | "modified" | "deleted" | "renamed";
 
@@ -44,7 +45,8 @@ export type DiffResult = {
  *
  * Special cases:
  * - `baseRef === headRef` short-circuits to an empty result
- * - copy / unmerged / typechange / unknown status codes are skipped
+ * - a typechange is reported as `modified`
+ * - copy / unmerged / unknown status codes are skipped
  *
  * @param repoRoot absolute path to the git repository root
  * @param baseRef base ref (e.g. session-start HEAD sha)
@@ -195,13 +197,19 @@ function parseDiffNameStatus(raw: string): FileChange[] {
       changes.push({ path: second, status: "renamed", old_path: first });
     } else if (code === "A") {
       changes.push({ path: first, status: "added" });
-    } else if (code === "M") {
+    } else if (code === "M" || code === "T") {
+      // A typechange (a regular file, a symlink or a submodule turned into
+      // another of the three) is a change to a path that exists on both sides,
+      // which is what `modified` says. Skipping it left the path out of every
+      // diff: an imported session's observed files lost it whether or not it
+      // was committed, and `basou run`'s `file_changed` events lost it when it
+      // was committed during the run.
       changes.push({ path: first, status: "modified" });
     } else if (code === "D") {
       changes.push({ path: first, status: "deleted" });
     }
-    // C / U / T / X (copy / unmerged / typechange / unknown) are skipped:
-    // the file_changed status enum does not cover them.
+    // C / U / X (copy / unmerged / unknown) are skipped: the file_changed
+    // status enum does not cover them.
   }
   return changes;
 }

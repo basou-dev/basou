@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
@@ -78,6 +78,55 @@ describe("getWorkingTreeChanges", () => {
     await unlink(join(tmpRepo, "README.md"));
     expect(await getWorkingTreeChanges(tmpRepo)).toEqual([
       { path: "README.md", status: "deleted" },
+    ]);
+  });
+
+  it("reports a typechange as modified, staged or not, as getDiff does", async () => {
+    const { git } = await initRepo(tmpRepo, {
+      "staged.txt": "a regular file\n",
+      "unstaged.txt": "a regular file\n",
+    });
+    for (const name of ["staged.txt", "unstaged.txt"]) {
+      await unlink(join(tmpRepo, name));
+      await symlink("README.md", join(tmpRepo, name));
+    }
+    await git.add("staged.txt");
+    expect(await getWorkingTreeChanges(tmpRepo)).toEqual([
+      { path: "staged.txt", status: "modified" },
+      { path: "unstaged.txt", status: "modified" },
+    ]);
+  });
+
+  it("classifies a typechange by the other column when it says added, renamed or deleted", async () => {
+    const { git } = await initRepo(tmpRepo, {
+      "deleted.txt": "a regular file\n",
+      "old-name.txt": "a regular file\n",
+    });
+    // AT: added to the index, then the working copy became a symlink.
+    await writeFile(join(tmpRepo, "added.txt"), "new\n");
+    await git.add("added.txt");
+    await unlink(join(tmpRepo, "added.txt"));
+    await symlink("README.md", join(tmpRepo, "added.txt"));
+    // TD: a staged typechange whose working copy was then deleted.
+    await unlink(join(tmpRepo, "deleted.txt"));
+    await symlink("README.md", join(tmpRepo, "deleted.txt"));
+    await git.add("deleted.txt");
+    await unlink(join(tmpRepo, "deleted.txt"));
+    // RT: renamed in the index, then the working copy became a symlink.
+    await git.mv("old-name.txt", "new-name.txt");
+    await unlink(join(tmpRepo, "new-name.txt"));
+    await symlink("README.md", join(tmpRepo, "new-name.txt"));
+
+    const porcelain = await git.raw(["status", "--porcelain"]);
+    expect(porcelain.split("\n").filter(Boolean).sort()).toEqual([
+      "AT added.txt",
+      "RT old-name.txt -> new-name.txt",
+      "TD deleted.txt",
+    ]);
+    expect(await getWorkingTreeChanges(tmpRepo)).toEqual([
+      { path: "added.txt", status: "added" },
+      { path: "deleted.txt", status: "deleted" },
+      { path: "new-name.txt", status: "renamed", old_path: "old-name.txt" },
     ]);
   });
 
