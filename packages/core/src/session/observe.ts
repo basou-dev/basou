@@ -101,7 +101,7 @@ export async function recordSessionBaseline(
  * file differently. The third is every path `git status` names, which also
  * catches what a diff against the working tree cannot see now but the later
  * pass may once the file moves on: a change staged while the working copy was
- * put back, a conflict whose working copy matches HEAD, a type change. An
+ * put back, a conflict whose working copy matches HEAD. An
  * observation taken straight after the baseline is therefore empty, and a file
  * dirty at the start stays out after the session finishes it.
  *

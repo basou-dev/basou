@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
@@ -78,6 +78,22 @@ describe("getWorkingTreeChanges", () => {
     await unlink(join(tmpRepo, "README.md"));
     expect(await getWorkingTreeChanges(tmpRepo)).toEqual([
       { path: "README.md", status: "deleted" },
+    ]);
+  });
+
+  it("reports a typechange as modified, staged or not, as getDiff does", async () => {
+    const { git } = await initRepo(tmpRepo, {
+      "staged.txt": "a regular file\n",
+      "unstaged.txt": "a regular file\n",
+    });
+    for (const name of ["staged.txt", "unstaged.txt"]) {
+      await unlink(join(tmpRepo, name));
+      await symlink("README.md", join(tmpRepo, name));
+    }
+    await git.add("staged.txt");
+    expect(await getWorkingTreeChanges(tmpRepo)).toEqual([
+      { path: "staged.txt", status: "modified" },
+      { path: "unstaged.txt", status: "modified" },
     ]);
   });
 

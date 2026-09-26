@@ -3,6 +3,24 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A path that changed its object type -- a tracked file replaced by a
+  symlink, a symlink replaced by a file, or either swapped with a submodule --
+  is no longer left out of the files a session changed.** git reports such a
+  change as a typechange (`T`), and the parser shared by the two git readers
+  skipped it, because the `file_changed` event has no value for it. The path was
+  therefore missing from an imported session's observed `related_files`,
+  whether or not the change was committed; from `basou run`'s `file_changed`
+  events when it was committed during the run; and from that run's
+  `related_files` too, unless it was already dirty when the run started. A
+  typechange is now reported as `modified`: the path exists on both sides and
+  what it holds changed. The event schema is unchanged. Copy and unmerged
+  entries are still skipped. `getWorkingTreeChanges` in `@basou/core`, which
+  dropped a typechange the same way, reports it as `modified` too.
+
 ## 0.54.0 — 2026-09-25
 
 ### Added

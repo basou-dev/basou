@@ -18,7 +18,8 @@ import { isGitNotFound, safeSimpleGit } from "./snapshot.js";
  * session's file list.
  *
  * Conflicted entries are skipped, matching {@link getDiff}'s treatment of the
- * `U` status code: the `file_changed` status enum has no class for them.
+ * `U` status code: the `file_changed` status enum has no class for them. A
+ * typechange is reported as `modified`, as {@link getDiff} reports it.
  *
  * Pathless contract: every thrown message is a fixed string from the set
  * {`Not a git repository`, `Git executable not found in PATH. Install git
@@ -80,6 +81,14 @@ export async function getWorkingTreeChanges(repoRoot: string): Promise<FileChang
     if (conflicted.has(path)) continue;
     put({ path, status: "modified" });
   }
+  // A typechange (`T`, staged or not) is in none of simple-git's lists above,
+  // only in `status.files`. It is `modified`, as {@link getDiff} reports it, so
+  // the two halves of a session agree on the same file.
+  for (const file of status.files) {
+    if (file.index !== "T" && file.working_dir !== "T") continue;
+    if (conflicted.has(file.path)) continue;
+    put({ path: file.path, status: "modified" });
+  }
 
   return [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
@@ -90,11 +99,11 @@ export async function getWorkingTreeChanges(repoRoot: string): Promise<FileChang
  * directory, not the directory; an untracked nested repository by its own
  * path, without the trailing slash git gives it).
  *
- * Unlike {@link getWorkingTreeChanges}, which keeps only the entries the
- * `file_changed` event has a class for, this drops none, and it reads git's own
- * `-z` records instead of simple-git's status parser, which trims each one, so
- * a name with a leading or trailing space survives. `--no-renames` lists both
- * names of a rename as entries of their own.
+ * Unlike {@link getWorkingTreeChanges}, which drops conflicted entries because
+ * the `file_changed` event has no class for them, this drops none, and it
+ * reads git's own `-z` records instead of simple-git's status parser, which
+ * trims each one, so a name with a leading or trailing space survives.
+ * `--no-renames` lists both names of a rename as entries of their own.
  *
  * Throws the same fixed strings as {@link getWorkingTreeChanges}.
  */
