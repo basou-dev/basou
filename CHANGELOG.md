@@ -5,6 +5,82 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- **`docs/spec/compatibility.md` now states what `1.0` freezes in four places
+  it left open, and corrects two sentences that promised more than basou
+  does.**
+    - **Exit codes.** What is guaranteed is that `0` means success and anything
+      else means failure. Every command other than `basou exec` and `basou run`
+      exits `1` on every failure today; within `1.x` those values may be split
+      so a failure can say more (for instance, that nothing was written and a
+      corrected input can be resent), bounded by three rules: `0` stays success
+      in both directions, a new value only divides an existing failure and
+      states the write state it leaves, and flags and `--json` shapes stay
+      additive. `basou exec` and `basou run` pass their child's exit code
+      through, and that is now a promise: a value above `128` when the child is
+      ended by a signal (`128` plus its number for `SIGHUP`, `SIGINT`,
+      `SIGQUIT`, `SIGKILL` and `SIGTERM`), and `1` when basou itself fails.
+      What a failed command prints on stdout is not part of the guarantee.
+    - **The on-disk format's gated changes may be made within `1.x`.** Schemas
+      §7.3 allows widening a required field's domain, and narrowing one to
+      refuse an empty set, behind a `schema_version` bump and a read rule. The
+      compatibility policy did not say whether a `1.x` line may use that gate.
+      It may, bounded by five rules: the version and the `$id` move and the
+      previous artifact is kept, the read rule has one implementation exported
+      from `@basou/core` and `@basou/sdk`, no value on disk changes meaning, the
+      release note names the releases that drop the new lines, and the carve-out
+      reaches the format and the SDK types that mirror it only. Forbidding the
+      gate would not have protected an older reader: a new event type, or a new
+      optional field on a strict event variant, is dropped by a basou that does
+      not know it just as a widened value is. The accepted cost is that a union
+      the SDK re-exports, such as `FileChangedEvent`'s `change_type`, can gain a
+      member at a minor.
+    - **Observed `related_files`: six properties are guaranteed, and how the
+      session's own commits are told apart may improve within `1.x`.** Changes
+      to that attribution are listed in the changelog.
+    - **The warning release before an input field becomes required is a
+      chance to be told, not a guarantee of being told.** The policy said the
+      warning release "lets the eventual error be introduced without
+      discarding work"; a producer that upgrades straight past it, or never
+      reads stderr, sees only the error. A producer should keep its input until
+      the command exits `0`. The `"kind"` example now names `0.48.0`, released
+      the day after the warning release, as the one that began refusing.
+    - **Events do not preserve unknown fields.** The policy said most durable
+      records do, which holds for the manifest, session, task and approval
+      records. An event variant either rejects a key it does not know (the few
+      strict ones) or drops it from what it reads.
+- **`docs/spec/schemas.md` lists the six properties of the observed
+  `related_files`, and says what each `file_changed.change_type` value means.**
+    - §5.2 names the five things the observed files never contain -- a name
+      other than the one git gives with `-z`, a path in the `.basou/` store, a
+      path already dirty at the start, a tracked path that is not a net change
+      since the start's commit, and an emptied or partly read list after a
+      failed observation -- and the one thing they always do: every net change
+      still in the working tree, uncommitted or untracked. The claim above it
+      said "every untracked file"; files already there at the start and the
+      store are left out, and it now says so.
+    - §7.2 states each value per writer. From git (`basou run`), `modified`
+      covers a typechange and `renamed` follows `diff.renames`; copies,
+      unmerged and unknown entries are not recorded. From a Claude Code
+      transcript, `added` is a `Write` call, which may have overwritten an
+      existing file, and `modified` is an `Edit` or `NotebookEdit` call. The
+      event records the call, not its outcome: a call that reported an error is
+      recorded too. §5.2 had described these events as witnessing an edit, and
+      no longer does. A source comment claimed the transcript cannot tell an
+      overwrite from a creation; it can (`toolUseResult.type`), and `added`
+      keeps its meaning because a value may not change it.
+
+### Tests
+
+- The six properties of the observed `related_files` are each asserted
+  against what git itself reports, in one session that exercises all of them:
+  a pulled commit, the session's own commits (one undone by the next), an
+  uncommitted edit to a file the pull changed, names git would quote, a store
+  the workspace commits, files dirty at the start, and an ignored file. They
+  assert properties rather than an exact list, so a change to how commits are
+  attributed is held to the contract and not to today's answer.
+
 ### Fixed
 
 - **A path that changed its object type -- a tracked file replaced by a

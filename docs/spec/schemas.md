@@ -157,9 +157,10 @@ session:
   then reverted leaves it), while the event stream is append-only and a
   re-import preserves every event it did not derive. `related_files` is rebuilt
   from the fresh derivation on every import, which is the same shape the
-  observation has. A reader that needs to know a file was WITNESSED being
-  edited, rather than observed as a difference, reads the `file_changed` events,
-  which still come only from tool calls.
+  observation has. A reader that needs to know a tool call NAMED a file, rather
+  than that git observed a difference, reads the `file_changed` events, which
+  still come only from tool calls. They record the call, not its outcome (see
+  [`file_changed.change_type`](#file_changedchange_type)).
 - What this section says of git -- which reflog entries it writes, what
   `git replay` and an orphan checkout do, what `git status` names -- was
   checked with git 2.53. Another version may record some operations
@@ -167,8 +168,13 @@ session:
 - What the observed half claims, per repository the workspace declares: the
   net change of tracked files since the session started (against the commit
   HEAD was on then), limited to paths the repository's OWN activity touched in
-  that time, plus every untracked file, which is not limited. A path counts as
-  touched when a commit CREATED in that
+  that time, plus every untracked file git does not ignore, which is not
+  limited -- leaving out of both the `.basou/` store and every path already
+  dirty when the session started (an untracked file that was already there is
+  one). Of everything this section says about the observed half, only the six
+  properties listed under "What is guaranteed" below are the contract; the
+  rest describes how the current release decides what the repository's own
+  activity is. A path counts as touched when a commit CREATED in that
   repository since the start changed it, or when it differs from HEAD in the
   working tree now. A commit counts as created when the reflog of HEAD or of a
   local branch records its creation in the words git itself writes: a commit
@@ -261,6 +267,34 @@ session:
       both Claude Code and Codex); ids from different vendors are not
       namespaced. Codex's SessionStart hook writes a baseline too, but only the
       Claude Code import reads observations today.
+- What is guaranteed about the observed half, per observed repository, across
+  a `1.x` line -- everything else in this section may change there (see
+  [Observed files](compatibility.md#observed-files-six-properties-are-guaranteed-the-attribution-may-improve)):
+    1. **Real names.** Every path is the name git reports with `-z`: unquoted
+       and unescaped whatever `core.quotePath` says, including a name that
+       holds a space, a tab, a newline, a quote or a non-ASCII character.
+    2. **Not the store.** No path inside the `.basou/` directory at the top of
+       the repository is recorded.
+    3. **Not what was dirty at the start.** No path that the start's reading of
+       dirty files named is recorded. A path that reading could not name,
+       because git failed on part of it, may be.
+    4. **Only a net change.** Every tracked path recorded differed between the
+       commit HEAD was on at the start (the empty tree, when there was none)
+       and the working tree, when the last observation that succeeded was
+       taken.
+    5. **A failure keeps the previous list.** When observing the repository
+       fails, it keeps the files its previous observation recorded, rather
+       than an empty or a partly read list.
+    6. **The working tree is complete.** An observation that succeeds records
+       every change still in the working tree that is a net change since the
+       start -- an uncommitted change to a tracked file, and an untracked file
+       git does not ignore -- apart from what 2 and 3 leave out. The
+       own-activity limit never removes one of these.
+
+  Properties 1 to 5 say what the list never holds, which a list that is always
+  empty would satisfy; 6 is what rules that out. The session's commits are not
+  covered by 6: which of them count rests on the reflog entries git writes,
+  and that is the attribution that may change.
 - `working_directory` and `related_files[]` are path-sanitized on write so
   no operator-private absolute prefix leaks into the workspace's persistent
   state. The sanitizer applies two rules in order:
@@ -351,7 +385,52 @@ Events written by the import paths additionally carry an optional top-level
 | Review | `review_recorded` | self-reported record that an adversarial / second-opinion review ran. Emitted by `basou review record`. `reviewer` + `target` are required; `repos` (the repository paths reviewed) is what lets `basou review-gaps` bind the record to a unit of work, since the record itself lands in the planning repo. |
 | Adapter | `adapter_output` | adapter output (summary only; raw kept separately) |
 
+### `file_changed.change_type`
+
+`change_type` is one of `added`, `modified`, `deleted` and `renamed`. It says
+what happened at the path. It does not say whether the path holds a regular
+file, a symlink or a submodule. What a value means depends on who wrote the
+event, which its `source` names:
+
+- **From git** (`source: "git-capability"`), written by `basou run` from the
+  diff between the commit HEAD was on when the run started and the one it is on
+  when it ends — so only what was committed during the run:
+    - `added`: the path is new (`A`).
+    - `modified`: the path exists on both sides and what it holds changed — its
+      content, its mode, or the kind of object at it (`M`, and a typechange
+      `T`).
+    - `deleted`: the path is gone (`D`).
+    - `renamed`: git paired a deletion with an addition (`R`), and `old_path`
+      holds the previous name. Whether git pairs them follows the repository's
+      `diff.renames`.
+    - A copy (`C`), an unmerged path (`U`) and an unknown change (`X`) are not
+      recorded.
+- **From a Claude Code transcript** (`source: "claude-code-import"`), one event
+  per `Write`, `Edit` or `NotebookEdit` tool call that names a path:
+    - `added`: a `Write` call, which writes the whole file, named the path.
+      The file may already have existed — an overwrite is `added` too.
+    - `modified`: an `Edit` or `NotebookEdit` call, which changes part of a
+      file, named the path.
+    - `deleted` and `renamed` are never derived from a transcript. A file
+      removed or renamed through the shell appears only in the session's
+      observed `related_files` (§5.2).
+    - The event records the call, not its outcome: a call whose result
+      reported an error is recorded too.
+- A Codex rollout produces no `file_changed` events.
+- `basou session import` stores the events a producer supplies, with the
+  values it gave.
+
+Each value keeps the meaning it has here. A new value can be added only under
+the gate in §7.3 below, which a `1.x` line may use (see
+[compatibility](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor)),
+so a consumer should keep a branch for a value it does not know.
+
 ## §7.3 Extension rules (additive by default; breaking changes are gated)
+
+These rules hold within a `1.x` line of the product as well. Its compatibility
+policy states the bounds under which the two gated exceptions below may be used
+there ([The on-disk format may make its gated changes at a
+minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor)).
 
 - New event types may be added. For an existing type, adding a required field,
   removing one, or narrowing one's domain is forbidden. Two exceptions are

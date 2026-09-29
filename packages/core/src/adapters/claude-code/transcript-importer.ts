@@ -243,9 +243,13 @@ export function claudeTranscriptToImportPayload(
       if (name === "Edit" || name === "Write" || name === "NotebookEdit") {
         const path = readString(input.file_path) ?? readString(input.notebook_path);
         if (path !== undefined) {
-          // Edit / NotebookEdit mutate an existing file; Write is treated as a
-          // creation. The transcript does not reliably distinguish a Write
-          // that overwrites, so "added" is the conservative default.
+          // Edit / NotebookEdit change an existing file. A Write is "added"
+          // whether or not the file existed: the transcript does record which
+          // (the tool result's `toolUseResult.type` is "create" or "update"),
+          // but on disk "added" already means "a Write call named the file",
+          // overwrite or not, and a value may not change meaning (schemas
+          // §7.3). The call is recorded whatever its result, including an
+          // error.
           const changeType = name === "Write" ? "added" : "modified";
           relatedFiles.add(path);
           derived.push(fileChangedEvent(ts, placeholderSessionId, path, changeType));
