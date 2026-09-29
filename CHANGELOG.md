@@ -12,14 +12,17 @@ All notable changes to **basou** are recorded here. The project follows
   does.**
     - **Exit codes.** What is guaranteed is that `0` means success and anything
       else means failure, with two kinds of command following their own rule.
-      `basou hook stop` and `basou hook session-start` always exit `0`, because
-      a hook that fails must not stop the agent. `basou exec` and `basou run`
-      pass their child's exit code through, and that is now a promise: `128`
+      `basou hook stop` and `basou hook session-start` exit `0` once their
+      command line parses, because a hook that fails must not stop the agent.
+      `basou exec` and `basou run` pass their child's exit code through, and
+      that is now a promise: `128`
       plus a signal's number when a signal ends the child (the signal basou
       received, when one reached it, otherwise the child's; exact for five
       signals, some value above `128` for the rest), and `1` when basou itself
-      fails, including after a child that exited `0`. Every other command
-      exits `1` on a failure it reports, and within `1.x` those values may be
+      fails, including after a child that exited `0`; only `basou exec` has
+      `--timeout`. Every other command exits `1` on a failure it reports
+      (`basou view` and `basou refresh --watch` exit `0` on the `SIGINT` or
+      `SIGTERM` that stops them), and within `1.x` those values may be
       split so a failure can say more, bounded by four rules: a split never
       moves an invocation across zero; a new value only divides an existing
       failure and states whether anything had been written; values are
@@ -59,8 +62,10 @@ All notable changes to **basou** are recorded here. The project follows
       after the warning release, as the one that began refusing.
     - **Unknown fields.** The policy said most durable records keep them, so a
       newer minor's fields survive a round-trip. That holds for the manifest,
-      task and approval records. An imported session's `session.yaml` is
-      rebuilt on every re-import, keeping only `task_id` and `summary`. Events
+      task and approval records, apart from `basou init --force`, which
+      replaces the manifest. `session.yaml`'s `integrity` rejects a key it does
+      not know, and an imported session's `session.yaml` is rebuilt on every
+      re-import, keeping only `task_id` and `summary`. Events
       keep one only inside `approval_requested.action`; at the top level an
       event variant either rejects a key it does not know (the few strict ones)
       or drops it from what it reads, and a re-import writes back what it read.
@@ -105,10 +110,11 @@ All notable changes to **basou** are recorded here. The project follows
   rename, names git would quote or that start or end with a space, a file whose
   name starts like the store's, a store the workspace commits, files dirty at
   the start, an ignored file, and an untracked listing that fails once. They
-  are checked against what git itself reports, except the dirty paths (against
-  what was recorded at the start) and the failure case (against the previous
-  list). They assert properties rather than an exact list, so a change to how
-  commits are attributed is held to the contract and not to today's answer.
+  are checked against what git itself reports, except the store (against its
+  name), the dirty paths (against what was recorded at the start) and the
+  failure cases (against the previous list). They assert properties rather
+  than an exact list, so a change to how commits are attributed is held to the
+  contract and not to today's answer.
 
 ### Fixed
 

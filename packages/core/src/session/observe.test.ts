@@ -1240,8 +1240,9 @@ describe("observeSessionChanges whatever the repository's git config says", () =
  * The six properties schemas §5.2 guarantees across a 1.x line. Which commits
  * count as the session's own may change there, so these tests assert the
  * properties, not an exact list: any way of attributing commits must pass
- * them. They are checked against what git itself reports, except 3 (against
- * the dirty paths recorded at the start) and 5 (against the previous list).
+ * them. They are checked against what git itself reports, except 2 (against
+ * the store's name), 3 (against the dirty paths recorded at the start) and 5
+ * (against the previous list).
  */
 describe("observeSessionChanges keeps the six properties schemas §5.2 guarantees", () => {
   let upstream: string;
@@ -1249,7 +1250,7 @@ describe("observeSessionChanges keeps the six properties schemas §5.2 guarantee
 
   const ODD_UNTRACKED = 'new\tname with "quotes"\nand \u00e9.txt';
   const ODD_TRACKED = " tracked\tname \u00e9.ts ";
-  const SPACED = " spaced name .txt";
+  const SPACED = " spaced name .txt ";
   // Starts with ".basou" but is not inside the store.
   const STORE_SIBLING = ".basou-notes.md";
 

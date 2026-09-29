@@ -59,14 +59,18 @@ What an exit code guarantees is exactly this: **`0` means the command
 succeeded, and any other value means it failed** — except for the two kinds of
 command below, which follow their own rule. Every other command exits `1` on a
 failure it reports, and a signal that ends it is reported the way a shell
-reports any process a signal ends (`128` plus the signal's number). The `1` is
-not promised: a caller that tests for exactly `1` may see another non-zero
-value within `1.x`.
+reports any process a signal ends (`128` plus the signal's number) — except
+that `basou view` and `basou refresh --watch` take `SIGINT` and `SIGTERM` as
+the request to stop, and exit `0` on them. The `1` is not promised: a caller
+that tests for exactly `1` may see another non-zero value within `1.x`.
 
-**The hook handlers always exit `0`.** `basou hook stop` and `basou hook
-session-start` are run by an agent's hook runner, and a hook that fails must
-not stop the agent, so they exit `0` whatever happened, including when they
-fail. Their outcome is not reported by their exit code.
+**The hook handlers exit `0` once their command line parses.** `basou hook
+stop` and `basou hook session-start` are run by an agent's hook runner, and a
+hook that fails must not stop the agent, so once their arguments parse they
+exit `0` whatever the payload, the transcript or the workspace, including when
+they fail. Their outcome is not reported by their exit code. A command line
+that does not parse (an unknown option, a missing value) exits `1` as on any
+command, and a signal ends them as it ends any other process.
 
 **`basou exec` and `basou run <adapter>` pass their child's exit code
 through,** because a wrapper that changed it would break a script that
@@ -76,10 +80,10 @@ an error, for instance).
 - When the child exits with a code, basou exits with that code.
 - When the child is ended by a signal, basou exits with `128` plus a signal's
   number: the signal basou itself received while the child ran, when one
-  reached it, and otherwise the signal that ended the child. `--timeout` ends
-  the child with `SIGTERM`, then `SIGKILL`. The number is exact for `SIGHUP`,
-  `SIGINT`, `SIGQUIT`, `SIGKILL` and `SIGTERM`; any other signal gives a value
-  above `128` that does not identify it.
+  reached it, and otherwise the signal that ended the child. `basou exec
+  --timeout` ends the child with `SIGTERM`, then `SIGKILL`. The number is
+  exact for `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGKILL` and `SIGTERM`; any other
+  signal gives a value above `128` that does not identify it.
 - When basou itself fails, it exits `1` — including when it fails after the
   child has exited, so a child that exited `0` is then reported as `1`. A
   caller cannot tell a basou failure apart from a child that exited `1`, and
@@ -277,9 +281,12 @@ a `basou_version`). This tracks the **on-disk format major**, which is
   store through `~/.basou/hosts.yaml` should therefore be upgraded together.
   The manifest, task and approval records are loose objects that keep unknown
   fields when basou rewrites them, so a newer minor's additive fields survive
-  that. `session.yaml` is a loose object too, but an imported session's is
-  rebuilt from its source whenever the source grows, keeping only `task_id`
-  and `summary`, so a field a newer minor added does not survive a re-import.
+  that (`basou init --force` replaces the manifest rather than rewriting it).
+  `session.yaml` is a loose object too, except `integrity`, which rejects a key
+  it does not know and so makes the whole session unreadable. An imported
+  session's `session.yaml` is rebuilt from its source whenever the source
+  grows, keeping only `task_id` and `summary`, so a field a newer minor added
+  does not survive a re-import.
   Events keep an unknown field only inside `approval_requested.action`, which
   passes it through. At the top level, a few event variants are intentionally
   strict and reject a line carrying a key they do not know, and every other
