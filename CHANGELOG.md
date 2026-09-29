@@ -5,6 +5,117 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Changed
+
+- **`docs/spec/compatibility.md` now states what `1.0` freezes in three places
+  it left open, and corrects three passages that promised more than basou
+  does.**
+    - **Exit codes.** What is guaranteed is that `0` means success and anything
+      else means failure, with two kinds of command following their own rule.
+      `basou hook stop` and `basou hook session-start` exit `0` once their
+      command line parses, because a hook that fails must not stop the agent.
+      `basou exec` and `basou run` pass their child's exit code through, and
+      that is now a promise: `128`
+      plus a signal's number when a signal ends the child (the signal basou
+      received, when one reached it, otherwise the child's; exact for five
+      signals, some value above `128` for the rest), and `1` when basou itself
+      fails, including after a child that exited `0`; only `basou exec` has
+      `--timeout`. Every other command exits `1` on a failure it reports
+      (`basou view` and `basou refresh --watch` exit `0` on the `SIGINT` or
+      `SIGTERM` that stops them), and within `1.x` those values may be
+      split so a failure can say more, bounded by four rules: a split never
+      moves an invocation across zero; a new value only divides an existing
+      failure and states whether anything had been written; values are
+      allocated once for the whole CLI, between `2` and `125`; and flags and
+      `--json` shapes stay additive. Only one thing about stdout is left open:
+      a failed command is not promised to print nothing.
+    - **The on-disk format's gated changes may be made within `1.x`.** Schemas
+      §7.3 allows widening a required field's domain, and narrowing one to
+      refuse an empty set, behind a `schema_version` bump and a read rule. The
+      compatibility policy did not say whether a `1.x` line may use that gate.
+      It may, bounded by five rules: the version and the `$id` move and the
+      previous artifact is kept; a read rule that interprets a value has one
+      implementation exported from `@basou/core` and `@basou/sdk`; no value on
+      disk changes meaning; the changelog names the releases that cannot read
+      what is newly written and what they do instead; and the carve-out
+      reaches the format, the SDK types re-exported from it, and `--json`
+      payloads that print stored values as they are stored. Forbidding the
+      gate would not have protected an older reader: a new event type, or a new
+      optional field on a strict event variant, is dropped by a basou that does
+      not know it just as a widened value is. The accepted costs are that a
+      type the SDK re-exports, such as `FileChangedEvent`'s `change_type`, can
+      gain a member or become nullable at a minor, and that an SDK older than
+      the CLI writing a store skips or fails on what it cannot read.
+    - **Observed `related_files`: six properties are guaranteed, and how the
+      session's own commits are told apart may improve within `1.x`.** Changes
+      to that attribution are listed in the changelog, which is the only place
+      that says so: the stored list does not record the release that derived
+      it.
+    - **The warning release before an input field becomes required is a
+      chance to be told, not a guarantee of being told.** The policy said the
+      warning release "lets the eventual error be introduced without
+      discarding work"; a producer that upgrades straight past it, or never
+      reads stderr, sees only the error. A producer should keep its input until
+      the command exits `0`, and a non-zero exit does not by itself say that
+      nothing was written. Within `1.x`, making an input field required waits
+      for `2.0`. The `"kind"` example now names `0.48.0`, released the day
+      after the warning release, as the one that began refusing.
+    - **Unknown fields.** The policy said most durable records keep them, so a
+      newer minor's fields survive a round-trip. That holds for the manifest,
+      task and approval records, apart from `basou init --force`, which
+      replaces the manifest. `session.yaml`'s `integrity` rejects a key it does
+      not know, and an imported session's `session.yaml` is rebuilt on every
+      re-import, keeping only `task_id` and `summary`. Events
+      keep one only inside `approval_requested.action`; at the top level an
+      event variant either rejects a key it does not know (the few strict ones)
+      or drops it from what it reads, and a re-import writes back what it read.
+    - The policy no longer says its sections list every exception to the
+      additive rule; the extension rules of schemas §7.3 hold exceptions too.
+- **`docs/spec/schemas.md` lists the six properties of the observed
+  `related_files`, and says what each `file_changed.change_type` value means.**
+    - §5.2 names five things the observed half never holds -- a name spelled
+      other than git spells it with `-z`, a path whose first component is
+      `.basou`, a path already dirty at the start, a path that is neither a
+      tracked net change since the start's commit nor an untracked file git does
+      not ignore, and an emptied or partly read list after a failed observation
+      -- and the one thing it always holds: every net change git reports in the
+      working tree, uncommitted or untracked. It also states what they do not
+      cover: a change git is told to ignore (`assume-unchanged`,
+      `skip-worktree`), an untracked nested repository, an observation file
+      that is missing or unreadable (the next import then builds
+      `related_files` without the observed half), and the paths the
+      transcript's tool calls add to the same list. The claim above it said
+      "every untracked file"; files already there at the start and the store
+      are left out, and it now says so.
+    - §7.2 states each value per writer. From git (`basou run`), the events are
+      every path that differs between the run's first and last HEAD, including
+      a checkout or a pull during the run; `modified` covers a typechange and
+      `renamed` follows `diff.renames`; copies, unmerged and unknown entries are
+      not recorded today. From a Claude Code transcript, `added` is a call that
+      writes a whole file (today `Write`), which may have overwritten an
+      existing one, and `modified` is a call that changes part of a file (today
+      `Edit` and `NotebookEdit`). The event says that a call named the path, not
+      that it succeeded; today a call that reported an error produces one too.
+      §5.2 had described these events as witnessing an edit, and no longer
+      does. A source comment claimed the transcript cannot tell an overwrite
+      from a creation; it can (`toolUseResult.type`), and `added` keeps its
+      meaning because a value may not change it.
+
+### Tests
+
+- The six properties of the observed `related_files` are each asserted in one
+  session that exercises all of them: a pulled commit, the session's own
+  commits (one undone by the next, one undone in the working tree), an
+  uncommitted edit to a file the pull changed, an uncommitted deletion and
+  rename, names git would quote or that start or end with a space, a file whose
+  name starts like the store's, a store the workspace commits, files dirty at
+  the start, an ignored file, and an untracked listing that fails once. They
+  are checked against what git itself reports, except the store (against its
+  name), the dirty paths (against what was recorded at the start) and the
+  failure cases (against the previous list). They assert properties rather
+  than an exact list, so a change to how commits are attributed is held to the
+  contract and not to today's answer.
+
 ### Fixed
 
 - **A path that changed its object type -- a tracked file replaced by a

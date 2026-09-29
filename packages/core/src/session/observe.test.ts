@@ -3,10 +3,18 @@ import { mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getUntrackedFiles } from "../git/working-tree.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import { readSessionObservation, writeSessionObservation } from "./observation.js";
 import { observedRepoRoots, observeSessionChanges, recordSessionBaseline } from "./observe.js";
+
+// The real implementation, wrapped so a test can make one call fail: no git
+// state makes the untracked listing fail while the diff beside it succeeds.
+vi.mock("../git/working-tree.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../git/working-tree.js")>();
+  return { ...actual, getUntrackedFiles: vi.fn(actual.getUntrackedFiles) };
+});
 
 const ENV_GLOBAL = process.platform === "win32" ? "\\\\.\\nul" : "/dev/null";
 const ENV: NodeJS.ProcessEnv = {
@@ -1226,4 +1234,231 @@ describe("observeSessionChanges whatever the repository's git config says", () =
       expect(await observe()).toEqual([join(repo, "w.ts"), join(repo, "x.ts")]);
     },
   );
+});
+
+/**
+ * The six properties schemas §5.2 guarantees across a 1.x line. Which commits
+ * count as the session's own may change there, so these tests assert the
+ * properties, not an exact list: any way of attributing commits must pass
+ * them. They are checked against what git itself reports, except 2 (against
+ * the store's name), 3 (against the dirty paths recorded at the start) and 5
+ * (against the previous list).
+ */
+describe("observeSessionChanges keeps the six properties schemas §5.2 guarantees", () => {
+  let upstream: string;
+  let upstreamGit: SimpleGit;
+
+  const ODD_UNTRACKED = 'new\tname with "quotes"\nand \u00e9.txt';
+  const ODD_TRACKED = " tracked\tname \u00e9.ts ";
+  const SPACED = " spaced name .txt ";
+  // Starts with ".basou" but is not inside the store.
+  const STORE_SIBLING = ".basou-notes.md";
+
+  // A clone of an upstream, as in the tests of commits written elsewhere, so a
+  // commit can arrive by pull while the session also commits its own.
+  beforeEach(async () => {
+    upstream = join(dir, "upstream");
+    upstreamGit = await initRepo(upstream);
+    await rm(repo, { recursive: true, force: true });
+    await fixtureSimpleGit(dir).clone(upstream, repo);
+    git = fixtureSimpleGit(repo);
+    await git.addConfig("user.email", "test@example.com");
+    await git.addConfig("user.name", "test");
+    // The default, set explicitly: the names below are the ones it would quote.
+    await git.addConfig("core.quotePath", "true");
+  });
+
+  async function upstreamCommits(files: Record<string, string>): Promise<void> {
+    for (const [file, content] of Object.entries(files)) {
+      await mkdir(join(upstream, file, ".."), { recursive: true });
+      await writeFile(join(upstream, file), content);
+    }
+    await upstreamGit.add(Object.keys(files));
+    await upstreamGit.commit(`upstream: ${Object.keys(files).join(", ")}`);
+  }
+
+  /** Repository-relative names, as git itself gives them with `-z`. */
+  function gitNames(args: string[]): string[] {
+    const out = execFileSync("git", ["-C", repo, ...args], { env: ENV, encoding: "utf8" });
+    return out.split("\0").filter((name) => name.length > 0);
+  }
+
+  async function baseHead(): Promise<string> {
+    const stored = await readSessionObservation(observationsDir, EXTERNAL_ID);
+    const head = stored?.repos[0]?.base_head;
+    if (head === undefined || head === null) throw new Error("expected a base commit");
+    return head;
+  }
+
+  async function baseDirty(): Promise<string[]> {
+    const stored = await readSessionObservation(observationsDir, EXTERNAL_ID);
+    return stored?.repos[0]?.base_dirty ?? [];
+  }
+
+  /**
+   * A session that meets every case the properties speak about: a store the
+   * workspace commits, files already dirty at the start, a commit that arrived
+   * by pull, the session's own commits (one undone by a later one, one undone
+   * in the working tree), an uncommitted edit to a file the pull changed, an
+   * uncommitted deletion and rename, names git would quote or that start or
+   * end with a space, a file whose name starts like the store's, and an
+   * ignored file. Returns the absolute paths observed.
+   */
+  async function busySession(): Promise<string[]> {
+    await upstreamCommits({
+      ".basou/handoff.md": "# before\n",
+      "restored.txt": "original\n",
+      "reverted-in-tree.txt": "original\n",
+      "gone.txt": "deleted by the session\n",
+      "moved-from.txt": "renamed by the session\n",
+      [ODD_TRACKED]: "export const a = 1;\n",
+    });
+    await git.pull("origin", "main", { "--ff-only": null });
+    await mkdir(join(repo, ".git", "info"), { recursive: true });
+    await writeFile(join(repo, ".git", "info", "exclude"), "*.log\n");
+    await writeFile(join(repo, "README.md"), "# the operator's edit, before the session\n");
+    await writeFile(join(repo, "already-here.txt"), "untracked before the session\n");
+    await baseline();
+
+    await upstreamCommits({ "pulled.md": "# a bot's file\n", "shared.txt": "upstream\n" });
+    await git.pull("origin", "main", { "--ff-only": null });
+
+    await writeFile(join(repo, "committed.ts"), "export const a = 1;\n");
+    await writeFile(join(repo, "restored.txt"), "changed\n");
+    await writeFile(join(repo, "reverted-in-tree.txt"), "changed\n");
+    await git.add(["committed.ts", "restored.txt", "reverted-in-tree.txt"]);
+    await git.commit("own commit");
+    await writeFile(join(repo, "restored.txt"), "original\n");
+    await git.add("restored.txt");
+    await git.commit("own commit, undone");
+    await writeFile(join(repo, "reverted-in-tree.txt"), "original\n");
+
+    await writeFile(join(repo, "shared.txt"), "upstream, then edited by the session\n");
+    await writeFile(join(repo, ODD_TRACKED), "export const a = 2;\n");
+    await unlink(join(repo, "gone.txt"));
+    await git.mv("moved-from.txt", "moved-to.txt");
+    await writeFile(join(repo, ODD_UNTRACKED), "new\n");
+    await writeFile(join(repo, SPACED), "new\n");
+    await writeFile(join(repo, STORE_SIBLING), "# not the store\n");
+    await mkdir(join(repo, "notes"), { recursive: true });
+    await writeFile(join(repo, "notes", "new.md"), "# new\n");
+    await writeFile(join(repo, "build.log"), "ignored\n");
+    await writeFile(join(repo, "README.md"), "# edited again by the session\n");
+    await writeFile(join(repo, "already-here.txt"), "edited by the session\n");
+    await writeFile(join(repo, ".basou", "handoff.md"), "# rewritten by basou\n");
+    await mkdir(join(repo, ".basou", "tmp", "observations"), { recursive: true });
+    await writeFile(join(repo, ".basou", "tmp", "observations", "some-id.json"), "{}\n");
+
+    return observe();
+  }
+
+  it("1: records every path under the name git gives with -z, whatever core.quotePath says", async () => {
+    const observed = await busySession();
+    const named = new Set(
+      [
+        ...gitNames(["diff", "--name-only", "-z", "--no-renames", await baseHead()]),
+        ...gitNames(["ls-files", "--others", "--exclude-standard", "-z"]),
+      ].map((name) => join(repo, name)),
+    );
+    expect(observed.length).toBeGreaterThan(0);
+    for (const path of observed) expect(named).toContain(path);
+    expect(observed).toContain(join(repo, ODD_UNTRACKED));
+    expect(observed).toContain(join(repo, ODD_TRACKED));
+    expect(observed).toContain(join(repo, SPACED));
+  });
+
+  it("2: records no path whose first component is .basou", async () => {
+    const observed = await busySession();
+    expect(gitNames(["status", "--porcelain=v1", "-z"]).some((e) => e.includes(".basou"))).toBe(
+      true,
+    );
+    for (const path of observed) {
+      expect(path === join(repo, ".basou") || path.startsWith(`${join(repo, ".basou")}/`)).toBe(
+        false,
+      );
+    }
+  });
+
+  it("3: records no path the start's reading of dirty files named", async () => {
+    const observed = await busySession();
+    const dirty = await baseDirty();
+    expect(dirty).toEqual(
+      expect.arrayContaining([join(repo, "README.md"), join(repo, "already-here.txt")]),
+    );
+    for (const path of observed) expect(dirty).not.toContain(path);
+  });
+
+  it("4: records only a tracked net change since the start's commit, or an untracked file git does not ignore", async () => {
+    const observed = await busySession();
+    const untracked = new Set(
+      gitNames(["ls-files", "--others", "--exclude-standard", "-z"]).map((n) => join(repo, n)),
+    );
+    const sinceStart = new Set(
+      gitNames(["diff", "--name-only", "-z", "--no-renames", await baseHead()]).map((n) =>
+        join(repo, n),
+      ),
+    );
+    const tracked = observed.filter((path) => !untracked.has(path));
+    expect(tracked.length).toBeGreaterThan(0);
+    expect(observed.length).toBeGreaterThan(tracked.length);
+    for (const path of tracked) expect(sinceStart).toContain(path);
+    // Changed by the session's own commit and put back by the next one.
+    expect(observed).not.toContain(join(repo, "restored.txt"));
+    // Changed by the session's own commit and put back in the working tree:
+    // it differs from HEAD, and was changed by a commit, but not since the start.
+    expect(observed).not.toContain(join(repo, "reverted-in-tree.txt"));
+  });
+
+  it("5: keeps the previous list when the start's commit no longer resolves", async () => {
+    const observed = await busySession();
+    expect(observed.length).toBeGreaterThan(0);
+    const stored = await readSessionObservation(observationsDir, EXTERNAL_ID);
+    const first = stored?.repos[0];
+    if (stored === null || first === undefined) throw new Error("expected an observation");
+    await writeSessionObservation(observationsDir, {
+      ...stored,
+      repos: [{ ...first, base_head: "0".repeat(40) }],
+    });
+    expect(await observe()).toEqual(observed);
+  });
+
+  it("5: keeps the previous list, not a partly read one, when listing untracked files fails", async () => {
+    const observed = await busySession();
+    expect(observed).toContain(join(repo, ODD_UNTRACKED));
+    vi.mocked(getUntrackedFiles).mockRejectedValueOnce(new Error("listing failed"));
+    expect(await observe()).toEqual(observed);
+  });
+
+  it("6: records every net change still in the working tree, apart from the store and what was dirty", async () => {
+    const observed = await busySession();
+    const base = await baseHead();
+    const sinceStart = new Set(gitNames(["diff", "--name-only", "-z", "--no-renames", base]));
+    const dirty = new Set(await baseDirty());
+    const expected = [
+      ...gitNames(["diff", "--name-only", "-z", "--no-renames", "HEAD"]).filter((name) =>
+        sinceStart.has(name),
+      ),
+      ...gitNames(["ls-files", "--others", "--exclude-standard", "-z"]),
+    ]
+      .filter((name) => name !== ".basou" && !name.startsWith(".basou/"))
+      .map((name) => join(repo, name))
+      .filter((path) => !dirty.has(path));
+    // The edit to a file the pull changed is the case an own-activity limit
+    // could get wrong; the rest are the plain cases.
+    expect(expected).toEqual(
+      expect.arrayContaining([
+        join(repo, "shared.txt"),
+        join(repo, ODD_TRACKED),
+        join(repo, ODD_UNTRACKED),
+        join(repo, SPACED),
+        join(repo, STORE_SIBLING),
+        join(repo, "notes", "new.md"),
+        join(repo, "gone.txt"),
+        join(repo, "moved-from.txt"),
+        join(repo, "moved-to.txt"),
+      ]),
+    );
+    expect(expected).not.toContain(join(repo, "build.log"));
+    for (const path of expected) expect(observed).toContain(path);
+  });
 });
