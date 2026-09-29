@@ -5,6 +5,17 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Added
+
+- **The read rule for a stored timestamp without seconds is exported.**
+  `normalizeIsoTimestamp` reads `2026-09-16T01:23Z` as `2026-09-16T01:23:00Z`,
+  keeping the offset. `@basou/core` exports it together with
+  `normalizeEventTimestamps` and `normalizeSessionTimestamps`, which apply it
+  to a stored event and a stored `session.yaml` before they are parsed, and
+  `@basou/sdk` re-exports `normalizeIsoTimestamp` (SDK API `0.5.0`). A consumer
+  that reads a store's files itself needs the rule; the SDK's own readers
+  already apply it.
+
 ### Changed
 
 - **`docs/spec/compatibility.md` now states what `1.0` freezes in three places
@@ -118,6 +129,23 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Fixed
 
+- **A session a producer imported before `0.45.0` with timestamps that omit
+  seconds can be read again.** Until `0.45.0` the accepted shape let seconds
+  be omitted, and `basou session import` stored a producer's values as given.
+  `0.45.0` began requiring seconds, and from then on such a session was
+  skipped by every listing (`Skipped ...: invalid session schema`), refused by
+  `basou session show`, and reported by `basou verify` as tampered, because its
+  `session.yaml` anchor could not be read; its seconds-less events were
+  dropped. Reproduced with `0.44.0`: a payload whose `started_at`, `ended_at`
+  and three of four `occurred_at` values omitted seconds lost the whole session,
+  and with only the events affected three of the four lines were dropped. The
+  readers of `session.yaml` and events now restore the `:00` before parsing,
+  as the approval reader already did, and change nothing on disk, so the hash
+  chain still verifies. A value the normalizer does not recognize is still
+  refused. `docs/spec/schemas.md` §7.3 corrects the worked example that counted
+  these documents as ones basou writes, and says that "empty by construction"
+  covers every release whose documents may still be on disk and excludes a
+  document basou stores for a producer.
 - **A path that changed its object type -- a tracked file replaced by a
   symlink, a symlink replaced by a file, or either swapped with a submodule --
   is no longer left out of the files a session changed.** git reports such a

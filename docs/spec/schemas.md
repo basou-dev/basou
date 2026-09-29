@@ -483,6 +483,13 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
   happens to be on one operator's disk is not that property — it is evidence
   about one store, and the store that matters may be someone else's.
 
+  "No code path" covers every release whose documents may still be on disk,
+  not only the current tree: a writer removed today still wrote what it wrote.
+  And basou is not the writer of a document it stores on behalf of an outside
+  producer, whichever command put the file there — `basou session import`
+  stores the session and the events a producer supplies, with the values it
+  gave.
+
   **Where basou is NOT the writer**, construction-emptiness is unavailable and
   a measurement is the only evidence there is. Then all of the following are
   required, and a narrowing that cannot supply them does not qualify:
@@ -516,16 +523,25 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
   optional, inherited from the expression zod emitted for
   `.datetime({ offset: true })` rather than chosen.
 
-  *Where basou is the writer* — `event`, `session`, `task`, `manifest` — the
-  refused set is empty by construction: every durable timestamp is either
-  `Date.prototype.toISOString()` output, which always emits seconds, or a CLI
-  option already validated to require them (`--completed-at`). No code path in
-  this repository can emit a seconds-less value. The counts measured before the
-  bump (39,070 timestamps across one store's `events.jsonl`, `session.yaml`,
-  tasks and manifest, all carrying seconds) agree with that, and are recorded as
-  corroboration rather than as the evidence.
+  *Where basou is the writer* — `task`, `manifest`, and the sessions and events
+  basou records or derives itself — the refused set is empty by construction:
+  every durable timestamp is either `Date.prototype.toISOString()` output,
+  which always emits seconds, or a CLI option already validated to require
+  them (`--completed-at`). No code path in this repository can emit a
+  seconds-less value. The counts measured before the bump (39,070 timestamps
+  across one store's `events.jsonl`, `session.yaml`, tasks and manifest, all
+  carrying seconds) agree with that, and are recorded as corroboration rather
+  than as the evidence.
 
-  *Where basou is not the writer* there are two boundaries, and they are not
+  When the bump landed, this example counted all of `event` and `session` on
+  that side, and that was wrong: `basou session import` had accepted
+  seconds-less values from a producer and stored them as given. From `0.45.0`
+  through `0.54.0` such a session was skipped by every listing, refused by
+  `basou session show`, and reported by `basou verify` as tampered (its anchor
+  unreadable), and its seconds-less events were dropped. `0.55.0` added the
+  third boundary below.
+
+  *Where basou is not the writer* there are three boundaries, and they are not
   alike:
 
   - **Adapter imports** (`claude-code`, `codex`) read a vendor's `timestamp`
@@ -535,6 +551,16 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
     seconds. Refusal path: an event line failing validation is dropped with a
     `schema_violation` warning. Normalizer: `normalizeIsoTimestamp`, at both
     read sites.
+  - **Sessions a producer imported**, read back. Population: not measurable
+    from here — the producers are third parties and the stores are theirs.
+    One operator's store held no imported session and no seconds-less value
+    (40,191 event lines), which says nothing about anyone else's. Refusal path:
+    a `session.yaml` that fails validation makes the whole session unreadable,
+    as above, and an event line that fails is dropped. Normalizer:
+    `normalizeSessionTimestamps` and `normalizeEventTimestamps`, applied where
+    `session.yaml` is read, where events are replayed, and in the gate that
+    decides whether a session can be rechained. The import itself now refuses
+    a seconds-less payload loudly, through the envelope's version.
   - **Approvals** are placed by an outside orchestrator; basou only reads them.
     Population: **zero documents** in the measured store — which is not evidence
     that producers agree, only that this store has none, and the read rule says
@@ -546,10 +572,15 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
     the three timestamp fields at the read boundary before the document is
     parsed, so the seconds axis cannot reach the throw.
 
-  **Read rule:** a document at the earlier version means exactly what it meant.
-  Nothing on disk is reinterpreted, and nothing is rewritten in place. The only
-  change is what a writer may newly produce, and what an outside producer's
-  value is repaired to before it is parsed.
+  **Read rule:** a document at the earlier version means exactly what it meant,
+  and a timestamp stored without seconds is read as the same minute with `:00`,
+  its offset kept. The rule has one implementation, `normalizeIsoTimestamp`,
+  exported from `@basou/core` and re-exported from `@basou/sdk`, and basou
+  applies it before parsing wherever it reads a `session.yaml`, an event or an
+  approval that a producer may have written. Reading rewrites nothing, so the
+  bytes the hash chain covers are unchanged. A record basou later rewrites from
+  what it read — a re-import, a rechained `session.yaml` — is written with the
+  seconds restored.
 
 - Redefining a value that already exists on disk is forbidden: it must keep
   meaning what it meant (introduce a new type or a new field instead). A bump

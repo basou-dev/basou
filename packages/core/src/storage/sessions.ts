@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { inspectChainTail } from "../events/chained-append.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { findErrorCode } from "../lib/error-codes.js";
+import { normalizeSessionTimestamps } from "../schemas/iso-timestamp.js";
 import { type Session, SessionSchema } from "../schemas/session.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
@@ -130,7 +131,7 @@ export async function readSessionYaml(paths: BasouPaths, sessionId: string): Pro
     if (error instanceof Error && error.message === "YAML file not found") throw error;
     throw new Error("Failed to read session.yaml", { cause: error });
   }
-  const result = SessionSchema.safeParse(raw);
+  const result = SessionSchema.safeParse(normalizeSessionTimestamps(raw));
   if (!result.success) {
     throw new Error("Failed to read session.yaml", { cause: result.error });
   }

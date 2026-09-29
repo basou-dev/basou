@@ -1,6 +1,108 @@
 import { describe, expect, it } from "vitest";
-import { normalizeIsoTimestamp } from "./iso-timestamp.js";
+import { EventSchema } from "./event.schema.js";
+import {
+  normalizeEventTimestamps,
+  normalizeIsoTimestamp,
+  normalizeSessionTimestamps,
+} from "./iso-timestamp.js";
+import { SessionSchema } from "./session.schema.js";
 import { IsoTimestampSchema } from "./shared.schema.js";
+
+describe("normalizeEventTimestamps", () => {
+  const base = {
+    schema_version: "0.2.0",
+    id: "evt_01M3PWQAZBN24WGZBF29B3F7R9",
+    session_id: "ses_01M3PWQAZBN24WGZBF29B3F7R8",
+    source: "third-party",
+  };
+
+  it("restores occurred_at, so the event parses instead of being dropped", () => {
+    const raw = { ...base, type: "session_started", occurred_at: "2026-09-16T01:23Z" };
+    expect(EventSchema.safeParse(raw).success).toBe(false);
+    const parsed = EventSchema.safeParse(normalizeEventTimestamps(raw));
+    expect(parsed.success && parsed.data.occurred_at).toBe("2026-09-16T01:23:00Z");
+  });
+
+  it("restores an approval request's expires_at as well", () => {
+    const raw = {
+      ...base,
+      type: "approval_requested",
+      occurred_at: "2026-09-16T01:23:00Z",
+      approval_id: "apr_01M3PWQAZBN24WGZBF29B3F7R9",
+      expires_at: "2026-09-16T02:00+09:00",
+      risk_level: "low",
+      action: { kind: "shell_command" },
+      reason: "r",
+    };
+    expect(normalizeEventTimestamps(raw)).toMatchObject({
+      expires_at: "2026-09-16T02:00:00+09:00",
+    });
+  });
+
+  it("leaves a field of the same name alone on any other event type", () => {
+    const raw = { ...base, type: "note_added", occurred_at: "2026-09-16T01:23Z", expires_at: "x" };
+    expect(normalizeEventTimestamps(raw)).toMatchObject({ expires_at: "x" });
+  });
+
+  it("widens nothing: a value it does not recognize is still refused", () => {
+    const raw = { ...base, type: "session_started", occurred_at: "2026-09-16t01:23z" };
+    expect(EventSchema.safeParse(normalizeEventTimestamps(raw)).success).toBe(false);
+  });
+
+  it("passes a non-object through for the schema to refuse", () => {
+    expect(normalizeEventTimestamps(null)).toBeNull();
+    expect(normalizeEventTimestamps(["a"])).toEqual(["a"]);
+  });
+});
+
+describe("normalizeSessionTimestamps", () => {
+  const session = {
+    id: "ses_01M3PWQAZBN24WGZBF29B3F7R8",
+    workspace_id: "ws_01M3PWQ1WYXGYT1T75WFX7D5NQ",
+    source: { kind: "import", version: "0.1.0" },
+    status: "imported",
+    working_directory: "~/somewhere",
+    invocation: { command: "producer", args: [], exit_code: 0 },
+    related_files: [],
+  };
+
+  it("restores started_at, ended_at and every active interval bound", () => {
+    const raw = {
+      schema_version: "0.1.0",
+      session: {
+        ...session,
+        started_at: "2026-09-16T01:23Z",
+        ended_at: "2026-09-16T01:30+09:00",
+        metrics: {
+          output_tokens: 1,
+          active_intervals: [{ start: "2026-09-16T01:23Z", end: "2026-09-16T01:24Z" }],
+        },
+      },
+    };
+    expect(SessionSchema.safeParse(raw).success).toBe(false);
+    const parsed = SessionSchema.safeParse(normalizeSessionTimestamps(raw));
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.session.started_at).toBe("2026-09-16T01:23:00Z");
+    expect(parsed.data.session.ended_at).toBe("2026-09-16T01:30:00+09:00");
+    expect(parsed.data.session.metrics?.active_intervals).toEqual([
+      { start: "2026-09-16T01:23:00Z", end: "2026-09-16T01:24:00Z" },
+    ]);
+    expect(parsed.data.session.metrics?.output_tokens).toBe(1);
+  });
+
+  it("widens nothing: a value it does not recognize is still refused", () => {
+    const raw = { schema_version: "0.1.0", session: { ...session, started_at: "yesterday" } };
+    expect(SessionSchema.safeParse(normalizeSessionTimestamps(raw)).success).toBe(false);
+  });
+
+  it("passes a document without a session object through", () => {
+    expect(normalizeSessionTimestamps({ schema_version: "0.1.0" })).toEqual({
+      schema_version: "0.1.0",
+    });
+    expect(normalizeSessionTimestamps("text")).toBe("text");
+  });
+});
 
 describe("normalizeIsoTimestamp", () => {
   // The point of the boundary: a vendor that omits seconds must not have its
