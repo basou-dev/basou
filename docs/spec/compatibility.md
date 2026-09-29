@@ -32,8 +32,10 @@ Within a `1.x` line these surfaces change **only additively** — a new command,
 a new optional flag, a new optional field, a new SDK export, an added field in a
 `--json` payload. Removing or changing the meaning of anything on a guaranteed
 surface is a breaking change and requires a major bump (`2.0`). The sections
-below state every exception to that rule, each with the bounds that make it
-defensible.
+below, and the extension rules of [schemas
+§7.3](schemas.md#73-extension-rules-additive-by-default-breaking-changes-are-gated)
+for the on-disk format, state the exceptions to that rule and what bounds each
+of them.
 
 ### `--version`: the first token is the contract, the rest is build identity
 
@@ -54,40 +56,61 @@ actually gone unnoticed in practice.
 ### Exit codes: zero is success, and a failure's value may be refined
 
 What an exit code guarantees is exactly this: **`0` means the command
-succeeded, and any other value means it failed.** Every basou command other
-than the two wrappers below exits `1` on every failure today. That value is not
-promised: a caller that tests for exactly `1` may see another non-zero value
-within `1.x`.
+succeeded, and any other value means it failed** — except for the two kinds of
+command below, which follow their own rule. Every other command exits `1` on a
+failure it reports, and a signal that ends it is reported the way a shell
+reports any process a signal ends (`128` plus the signal's number). The `1` is
+not promised: a caller that tests for exactly `1` may see another non-zero
+value within `1.x`.
+
+**The hook handlers always exit `0`.** `basou hook stop` and `basou hook
+session-start` are run by an agent's hook runner, and a hook that fails must
+not stop the agent, so they exit `0` whatever happened, including when they
+fail. Their outcome is not reported by their exit code.
 
 **`basou exec` and `basou run <adapter>` pass their child's exit code
 through,** because a wrapper that changed it would break a script that
 branches on the child's own values (`grep` exits `1` for no match and `2` for
-an error, for instance). When the child exits, basou exits with the child's
-code. When the child is ended by a signal, basou exits with a value above
-`128` — `128` plus the signal's number for `SIGHUP`, `SIGINT`, `SIGQUIT`,
-`SIGKILL` and `SIGTERM`. When basou itself fails, it exits `1`, which a caller
-cannot tell apart from a child that exited `1`.
+an error, for instance).
 
-The non-zero values of every other command may be split within a `1.x` line, so
-that a failure can say more than that it failed — for instance, that a command
-refused its input before writing anything, so resending a corrected input is
-safe. The carve-out is bounded by three things:
+- When the child exits with a code, basou exits with that code.
+- When the child is ended by a signal, basou exits with `128` plus a signal's
+  number: the signal basou itself received while the child ran, when one
+  reached it, and otherwise the signal that ended the child. `--timeout` ends
+  the child with `SIGTERM`, then `SIGKILL`. The number is exact for `SIGHUP`,
+  `SIGINT`, `SIGQUIT`, `SIGKILL` and `SIGTERM`; any other signal gives a value
+  above `128` that does not identify it.
+- When basou itself fails, it exits `1` — including when it fails after the
+  child has exited, so a child that exited `0` is then reported as `1`. A
+  caller cannot tell a basou failure apart from a child that exited `1`, and
+  should not read `1` as "the child ran and failed".
 
-1. **`0` stays success, in both directions.** Nothing that fails today will
-   exit `0`, and nothing that succeeds today will exit non-zero.
-2. **A new value only divides a failure that already exists,** and every value
-   is documented with the write state it leaves behind: whether anything was
-   written before the command stopped.
-3. **It applies to the values of the exit code only** — not to the CLI's
+The non-zero values of every command except these four may be split within a
+`1.x` line, so that a failure can say more than that it failed — for instance,
+that a command refused its input before writing anything, so resending a
+corrected input is safe. The carve-out is bounded by four things:
+
+1. **A split never moves an invocation across zero.** It changes which non-zero
+   value a failure exits with, never whether it exits `0`.
+2. **A new value only divides a failure that already exists,** and is
+   documented with the write state it leaves behind: whether the command had
+   written anything, to the `.basou/` store or to any other file, before it
+   stopped.
+3. **Values are allocated once for the whole CLI.** A new value is between `2`
+   and `125` — `126`, `127` and everything above `128` keep the meanings a
+   shell gives them — and one value means the same thing on every command that
+   uses it.
+4. **It applies to the values of the exit code only** — not to the CLI's
    flags or to any `--json` output shape, which stay under the additive rule
-   above, and not to the values `basou exec` and `basou run` pass through,
-   which are their child's.
+   above.
 
-What a failed command prints on stdout is not part of this guarantee. Decide
-whether a command succeeded from its exit code, not from whether it printed
-anything.
+One thing about stdout is left open: a failed command is not promised to print
+nothing. A documented `--json` shape that a command prints when it exits
+non-zero — `basou verify --json` reporting a tampered session, for instance —
+stays under the additive rule like any other. Decide whether a command
+succeeded from its exit code, not from whether it printed anything.
 
-### One carve-out: the import envelope version may move at a minor
+### The import envelope version may move at a minor
 
 `basou session import` and `basou import` require the envelope's
 `schema_version` to equal exactly one value, published as the `const` in
@@ -141,23 +164,33 @@ five:
 1. **The format's version moves.** Its `schema_version` is bumped, its
    published `$id` moves with it, and the artifact the previous `$id` served is
    kept under `schemas/retired/`.
-2. **The read rule is code, not only prose.** It has one implementation,
-   exported from `@basou/core` and re-exported from `@basou/sdk`, as
-   `readObservedDuration` is for `command_executed.duration_ms`.
+2. **A read rule that interprets a value is code, not only prose.** When the
+   rule says how to read a stored value, rather than that nothing already
+   stored changes, it has one implementation, exported from `@basou/core` and
+   re-exported from `@basou/sdk`, as `readObservedDuration` is for
+   `command_executed.duration_ms`.
 3. **No value already on disk changes meaning.** A bump may only assign a
    meaning to a value the field could not hold before.
-4. **The release note says what an older reader loses.** The change is listed
-   as breaking to that format, and names the releases of basou that drop the
-   new documents or lines and what they drop.
-5. **It applies to the on-disk format, and to the types `@basou/sdk`
-   re-exports from it, only** — not to the CLI's flags, its exit codes, its
-   `--json` output shapes, or the signatures of the SDK's functions, which stay
-   under the rules above.
+4. **The changelog says what an older reader does.** The change is listed as
+   breaking to that format, and names the releases of basou that cannot read
+   what it newly writes and what they do instead: skip the line or the
+   document, or fail the command that reads it.
+5. **It applies to the on-disk format, to the types `@basou/sdk` re-exports
+   from it, and to a `--json` payload that prints stored values as they are
+   stored** (`basou session show --json` prints a session's events, for
+   instance) — not to the CLI's flags, its exit codes, the rest of any `--json`
+   output shape, or the SDK's functions. A function whose signature names a
+   format type (`readEvents` returns `Event[]`) carries the change through that
+   type and is otherwise unchanged.
 
-One consequence is accepted rather than avoided: a union type the SDK
+The consequences are accepted rather than avoided. A union type the SDK
 re-exports from the format (the `change_type` of `FileChangedEvent`, for
-instance) can gain a member at a minor. A consumer that checks such a union
-exhaustively should keep a branch for a value it does not know.
+instance) can gain a member at a minor, and a field can become nullable; a
+consumer that checks such a type exhaustively should keep a branch for a value
+it does not know. And a reader older than the basou that wrote a store skips or
+fails on what it cannot read: keep `@basou/sdk` at least as new as the CLI that
+writes the store it reads, and upgrade together every host that shares a store
+through `~/.basou/hosts.yaml`.
 
 ### Advisory surfacers: the command is guaranteed, the payload evolves
 
@@ -196,8 +229,9 @@ commit being created, the cases in which no limit is applied, and the limits
 1. **What is guaranteed is the six properties §5.2 lists** — five things the
    observed files never contain and one thing they always do — and a change to
    the attribution keeps all six.
-2. **A change to the attribution is listed in the changelog,** so a reader
-   comparing two releases' lists can tell a change of rule from a change of
+2. **A change to the attribution is listed in the changelog.** The stored list
+   does not record which release derived it, so the changelog is the only
+   place that says a list may differ because the rule changed rather than the
    work.
 3. **It applies to the observed half of `related_files` only** — not to the
    paths taken from the transcript's own tool calls, not to `file_changed`
@@ -241,13 +275,17 @@ a `basou_version`). This tracks the **on-disk format major**, which is
   earlier rejects a `0.2.0` event with a null `duration_ms` and drops the line,
   losing the whole event rather than reporting an upgrade. Hosts that share a
   store through `~/.basou/hosts.yaml` should therefore be upgraded together.
-  The manifest, session, task and approval records are loose objects that
-  preserve unknown fields, so a newer minor's additive fields survive a
-  round-trip through them. Events do not: a few event variants are
-  intentionally strict and reject a line carrying a key they do not know, and
-  every other variant accepts the line but drops the unknown field from what it
-  reads. So forward tolerance *within* major 0 is a design goal, not a
-  per-record guarantee.
+  The manifest, task and approval records are loose objects that keep unknown
+  fields when basou rewrites them, so a newer minor's additive fields survive
+  that. `session.yaml` is a loose object too, but an imported session's is
+  rebuilt from its source whenever the source grows, keeping only `task_id`
+  and `summary`, so a field a newer minor added does not survive a re-import.
+  Events keep an unknown field only inside `approval_requested.action`, which
+  passes it through. At the top level, a few event variants are intentionally
+  strict and reject a line carrying a key they do not know, and every other
+  variant accepts the line but drops the unknown field from what it reads —
+  and a re-import writes the events it keeps from what it read. So forward
+  tolerance *within* major 0 is a design goal, not a per-record guarantee.
 - The published JSON Schemas for the durable formats carry the matching
   `pattern` (`^0\.\d+\.\d+$`) in place of an exact `const`, so a cross-language
   validator enforces the same major. (Cache schemas keep an exact `const` — see
@@ -280,7 +318,9 @@ instead of erroring on an unknown option. Deprecated no-op flags are removed at
 > The flag is accepted-and-ignored through `0.x` and dropped at `1.0`.
 
 The same policy covers a field that becomes **required** on a documented JSON
-input shape. It is warned about for at least one release first — the item is
+input shape. Within a `1.x` line that is a breaking change and waits for
+`2.0`; the path below is how it is introduced, at a major or before `1.0`. It
+is warned about for at least one release first — the item is
 still accepted and still written, and the full text of the eventual error goes
 to stderr — before omitting it becomes an error. The warning release is a
 chance to be told, not a guarantee of being told: a producer that upgrades
