@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type ReplayWarning, readAllEvents } from "../events/event-replay.js";
 import { verifyEventsChain } from "../events/verify.js";
 import { type BasouPaths, ensureBasouDirectory } from "./basou-dir.js";
+import { rechainSessionInPlace } from "./session-import.js";
 import { loadSessionEntries, readSessionYaml } from "./sessions.js";
 
 /**
@@ -103,5 +104,49 @@ describe("a session an older basou imported with seconds-less timestamps", () =>
     await verifyEventsChain(paths, SESSION_ID);
     expect(await readFile(join(sessionDir, "session.yaml"), "utf8")).toBe(SESSION_YAML);
     expect(await readFile(join(sessionDir, "events.jsonl"), "utf8")).toBe(EVENTS_JSONL);
+  });
+
+  it("can be rechained once its chain is gone, keeping every event line", async () => {
+    // A copy written before the importer chained its logs: the same events
+    // without `prev_hash`, and a session.yaml without `integrity`.
+    const unchained = EVENTS_JSONL.trimEnd()
+      .split("\n")
+      .map((line) => {
+        const { prev_hash: _dropped, ...rest } = JSON.parse(line) as Record<string, unknown>;
+        return JSON.stringify(rest);
+      });
+    await writeFile(join(sessionDir, "events.jsonl"), `${unchained.join("\n")}\n`);
+    await writeFile(
+      join(sessionDir, "session.yaml"),
+      SESSION_YAML.slice(0, SESSION_YAML.indexOf("  integrity:")),
+    );
+
+    expect(await rechainSessionInPlace(paths, SESSION_ID)).toEqual({
+      status: "rechained",
+      eventCount: 4,
+    });
+    expect((await verifyEventsChain(paths, SESSION_ID)).status).toBe("verified");
+    // The event lines are kept as they were, `prev_hash` aside; the rewritten
+    // session.yaml carries the seconds the reader restored.
+    const rechained = (await readFile(join(sessionDir, "events.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => {
+        const { prev_hash: _chain, ...rest } = JSON.parse(line) as Record<string, unknown>;
+        return JSON.stringify(rest);
+      });
+    expect(rechained).toEqual(unchained);
+    expect(await readFile(join(sessionDir, "session.yaml"), "utf8")).toContain(
+      "started_at: 2026-09-16T01:23:00Z",
+    );
+  });
+
+  it("drops an unterminated last line as a partial write, not as a schema violation", async () => {
+    const lines = EVENTS_JSONL.trimEnd().split("\n");
+    await writeFile(join(sessionDir, "events.jsonl"), lines.join("\n"));
+    const warnings: ReplayWarning[] = [];
+    const events = await readAllEvents(sessionDir, { onWarning: (w) => warnings.push(w) });
+    expect(events).toHaveLength(3);
+    expect(warnings.map((w) => w.kind)).toEqual(["partial_trailing_line"]);
   });
 });

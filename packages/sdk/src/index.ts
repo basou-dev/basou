@@ -81,7 +81,12 @@ export type {
  *   seconds: `2026-09-16T01:23Z` is read as `2026-09-16T01:23:00Z`, with its
  *   offset kept. An older basou accepted such values from a producer and wrote
  *   them as given. The readers behind this facade already apply it, so it is
- *   needed only by a consumer that reads the store's files itself.
+ *   needed only by a consumer that reads the store's files itself, which
+ *   should apply it to the fields docs/spec/schemas.md section 7.3 lists, on
+ *   every document. It changes only a value shaped `YYYY-MM-DDTHH:MM`
+ *   followed by `Z` or `+HH:MM` / `-HH:MM`; every other string is returned
+ *   unchanged, whether or not it is a valid timestamp, and it never converts
+ *   between offsets, so one instant written in two offsets stays two strings.
  */
 export { normalizeIsoTimestamp, readObservedDuration } from "@basou/core";
 export { AmbiguousIdError, BasouSdkError, WorkspaceNotFoundError } from "./errors.js";

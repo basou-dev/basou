@@ -19,6 +19,7 @@ import {
   LOCAL_CLI_EVENT_SOURCE,
   linkYamlFile,
   loadApproval,
+  normalizeApprovalTimestamps,
   prefixedUlid,
   readSessionYaml,
   readYamlFile,
@@ -216,7 +217,7 @@ async function readApprovalListRecord(
     console.error(`Skipped ${shortId(id)}: ${describeReadError(error)}`);
     return null;
   }
-  const parse = ApprovalSchema.safeParse(raw);
+  const parse = ApprovalSchema.safeParse(normalizeApprovalTimestamps(raw));
   if (!parse.success) {
     console.error(`Skipped ${shortId(id)}: invalid approval schema`);
     return null;
@@ -363,7 +364,7 @@ async function doRunApprovalResolve(
   // Wrap zod's parse so a malformed pending YAML surfaces through the
   // pathless `Failed to read approval` contract instead of leaking a raw
   // ZodError through the rendered output.
-  const approvalParse = ApprovalSchema.safeParse(pendingRaw);
+  const approvalParse = ApprovalSchema.safeParse(normalizeApprovalTimestamps(pendingRaw));
   if (!approvalParse.success) {
     throw new Error("Failed to read approval", { cause: approvalParse.error });
   }

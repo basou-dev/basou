@@ -786,7 +786,8 @@ export async function rechainSessionInPlace(
     }
 
     // 4-6. Chain the ORIGINAL lines, write atomically, anchor the yaml read
-    // in step 1 (all other fields preserved as-is). On a yaml failure,
+    // in step 1 (all other fields as read, which restores the seconds of a
+    // timestamp stored without them). On a yaml failure,
     // restore the prior events bytes verbatim — same rollback as the
     // in-place re-import.
     const chainResult = chainRawJsonLines(rawLines, sessionId);

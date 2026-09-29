@@ -40,8 +40,16 @@ describe("normalizeEventTimestamps", () => {
   });
 
   it("leaves a field of the same name alone on any other event type", () => {
-    const raw = { ...base, type: "note_added", occurred_at: "2026-09-16T01:23Z", expires_at: "x" };
-    expect(normalizeEventTimestamps(raw)).toMatchObject({ expires_at: "x" });
+    const raw = {
+      ...base,
+      type: "note_added",
+      occurred_at: "2026-09-16T01:23Z",
+      expires_at: "2026-09-16T02:00Z",
+    };
+    expect(normalizeEventTimestamps(raw)).toMatchObject({
+      occurred_at: "2026-09-16T01:23:00Z",
+      expires_at: "2026-09-16T02:00Z",
+    });
   });
 
   it("widens nothing: a value it does not recognize is still refused", () => {

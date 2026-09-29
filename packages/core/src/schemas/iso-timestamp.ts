@@ -93,3 +93,29 @@ export function normalizeSessionTimestamps(raw: unknown): unknown {
   }
   return { ...raw, session };
 }
+
+/**
+ * Bring an approval's timestamps into the shape the schema accepts, before it
+ * is parsed.
+ *
+ * This is the boundary §7.3 of `docs/spec/schemas.md` names: basou never
+ * WRITES an approval -- they are placed by an outside orchestrator -- so the
+ * refused set cannot be enumerated the way the durable formats basou writes
+ * can be, and the version that required seconds had to come with a normalizer
+ * here. Without it a producer that omits seconds does not merely lose the
+ * line: `loadApproval` throws, and neither the orientation nor the report
+ * renderer catches it, so one such file takes both commands down; and
+ * `approval list` skips it while `approval approve` / `reject` refuse it, so
+ * an approval the orientation reports as pending cannot be resolved. Every
+ * one of those readers applies this before parsing.
+ *
+ * Only the three timestamp fields are touched, only when they are strings, and
+ * only by {@link normalizeIsoTimestamp} -- which restores an omitted `:00` and
+ * changes nothing else. Anything it does not recognize is passed through for
+ * the schema to refuse, so this widens no accepted set; it repairs a spelling
+ * the accepted set used to admit.
+ */
+export function normalizeApprovalTimestamps(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  return withNormalized(raw, ["created_at", "expires_at", "resolved_at"]);
+}

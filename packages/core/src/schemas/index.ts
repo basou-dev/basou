@@ -31,6 +31,7 @@ export type {
 } from "./event.schema.js";
 export { EVENT_SCHEMA_VERSION, EventSchema } from "./event.schema.js";
 export {
+  normalizeApprovalTimestamps,
   normalizeEventTimestamps,
   normalizeIsoTimestamp,
   normalizeSessionTimestamps,
