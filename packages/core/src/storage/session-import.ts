@@ -9,6 +9,7 @@ import { type PrefixedId, prefixedUlid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import { sanitizeRelatedFiles, sanitizeWorkingDirectory } from "../lib/path-sanitizer.js";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
+import { normalizeEventTimestamps } from "../schemas/iso-timestamp.js";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import type { Session, SessionSourceKind, SessionStatus } from "../schemas/session.schema.js";
 import { SESSION_SCHEMA_VERSION } from "../schemas/session.schema.js";
@@ -678,7 +679,10 @@ export type RechainResult =
  * computed). Event ids, order, field sets, values and key order are all
  * preserved exactly — each original line is re-emitted with only `prev_hash`
  * appended (see {@link chainRawJsonLines}); `session.yaml` is rewritten as
- * read with only `integrity` added. Nothing else changes, so cross-session
+ * read with `integrity` added -- "as read" meaning after the schema parse, so
+ * a timestamp stored without seconds is written with the `:00` the reader
+ * restores, and a field the file left out is written with its schema default.
+ * Event ids and every other stored value are kept, so cross-session
  * references (`linked_events`) survive, unlike a `--force` re-import.
  *
  * Rechaining asserts tamper-evidence FROM NOW ON; it does not retroactively
@@ -770,7 +774,7 @@ export async function rechainSessionInPlace(
         return { status: "skipped", reason: "events_unreadable" };
       }
       // Gate ONLY: the parsed/validated output is never written.
-      if (!EventSchema.safeParse(parsed).success) {
+      if (!EventSchema.safeParse(normalizeEventTimestamps(parsed)).success) {
         return { status: "skipped", reason: "events_unreadable" };
       }
       if ((parsed as Record<string, unknown>).session_id !== sessionId) {
@@ -783,7 +787,8 @@ export async function rechainSessionInPlace(
     }
 
     // 4-6. Chain the ORIGINAL lines, write atomically, anchor the yaml read
-    // in step 1 (all other fields preserved as-is). On a yaml failure,
+    // in step 1 (all other fields as read, which restores the seconds of a
+    // timestamp stored without them). On a yaml failure,
     // restore the prior events bytes verbatim — same rollback as the
     // in-place re-import.
     const chainResult = chainRawJsonLines(rawLines, sessionId);

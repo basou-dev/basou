@@ -30,6 +30,12 @@ export type {
   TaskStatusChangedEvent,
 } from "./event.schema.js";
 export { EVENT_SCHEMA_VERSION, EventSchema } from "./event.schema.js";
+export {
+  normalizeApprovalTimestamps,
+  normalizeEventTimestamps,
+  normalizeIsoTimestamp,
+  normalizeSessionTimestamps,
+} from "./iso-timestamp.js";
 export type { JsonSchemaArtifact } from "./json-schema.js";
 export { buildJsonSchemas, JSON_SCHEMA_VERSIONS, serializeJsonSchema } from "./json-schema.js";
 export type { Manifest } from "./manifest.schema.js";

@@ -15,6 +15,7 @@ import {
   importSessionFromJson,
   LOCAL_CLI_EVENT_SOURCE,
   loadSessionEntries,
+  normalizeSessionTimestamps,
   type RechainResult,
   readAllEvents,
   readManifest,
@@ -299,7 +300,7 @@ export async function doRunSessionShow(
   let session: Session;
   try {
     const raw = await readYamlFile(sessionYamlPath);
-    session = SessionSchema.parse(raw);
+    session = SessionSchema.parse(normalizeSessionTimestamps(raw));
   } catch (error: unknown) {
     if (findErrorCode(error, "ENOENT")) {
       throw new Error(`Session not found: ${idInput}`);

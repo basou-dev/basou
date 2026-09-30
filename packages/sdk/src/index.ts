@@ -26,10 +26,11 @@ export { BASOU_SDK_BUILD, type BuildStamp, parseBuildStamp } from "./build-stamp
  * version, which moves in lockstep with the monorepo). `0.2.0` was the first
  * release with a runtime read API; `0.3.0` adds `Workspace.renderReport`;
  * `0.4.0` re-exports `readObservedDuration` and carries the `duration_ms`
- * nullability through the re-exported `CommandExecutedEvent`; `0.1.0` was
- * types-only.
+ * nullability through the re-exported `CommandExecutedEvent`; `0.5.0`
+ * re-exports `normalizeIsoTimestamp`, the read rule for a stored timestamp
+ * without seconds; `0.1.0` was types-only.
  */
-export const BASOU_SDK_VERSION = "0.4.0";
+export const BASOU_SDK_VERSION = "0.5.0";
 
 // Read types re-exported from @basou/core so consumers can type the values the
 // SDK returns without depending on @basou/core directly. These track the
@@ -69,13 +70,25 @@ export type {
   WorkStatsTotals,
 } from "@basou/core";
 /**
- * The read rule for `command_executed.duration_ms`, re-exported from
- * `@basou/core` so a consumer of this facade can apply it without depending on
- * core directly. The field is `number | null` and a stored `0` also means "not
- * observed", so reading it off the event is wrong on both counts; this returns
- * the duration that was actually observed, or null.
+ * Read rules re-exported from `@basou/core`, so a consumer of this facade can
+ * apply them without depending on core directly.
+ *
+ * - `readObservedDuration` is the rule for `command_executed.duration_ms`. The
+ *   field is `number | null` and a stored `0` also means "not observed", so
+ *   reading it off the event is wrong on both counts; this returns the
+ *   duration that was actually observed, or null.
+ * - `normalizeIsoTimestamp` is the rule for a stored timestamp without
+ *   seconds: `2026-09-16T01:23Z` is read as `2026-09-16T01:23:00Z`, with its
+ *   offset kept. An older basou accepted such values from a producer and wrote
+ *   them as given. The readers behind this facade already apply it, so it is
+ *   needed only by a consumer that reads the store's files itself, which
+ *   should apply it to the fields docs/spec/schemas.md section 7.3 lists, on
+ *   every document. It changes only a value shaped `YYYY-MM-DDTHH:MM`
+ *   followed by `Z` or `+HH:MM` / `-HH:MM`; every other string is returned
+ *   unchanged, whether or not it is a valid timestamp, and it never converts
+ *   between offsets, so one instant written in two offsets stays two strings.
  */
-export { readObservedDuration } from "@basou/core";
+export { normalizeIsoTimestamp, readObservedDuration } from "@basou/core";
 export { AmbiguousIdError, BasouSdkError, WorkspaceNotFoundError } from "./errors.js";
 export {
   openWorkspace,

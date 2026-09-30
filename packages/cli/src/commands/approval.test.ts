@@ -924,3 +924,33 @@ describe("attachable-status fence (D-6b)", () => {
     expect((await readEventsLines(repo, sessionId)).length).toBe(1);
   });
 });
+
+describe("an approval an outside orchestrator wrote without seconds", () => {
+  it("is listed, not skipped as an invalid approval", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("T01");
+    await createApproval(repo, { id: approvalId, createdAt: "2026-05-04T10:00+09:00" });
+    const out = captureStdout();
+    const err = captureStderr();
+    await doRunApprovalList({}, { cwd: repo });
+    expect(joinCalls(err)).not.toContain("invalid approval schema");
+    expect(joinCalls(out)).toContain(approvalId.slice("appr_".length, "appr_".length + 6));
+  });
+
+  it("can be approved, rather than failing to be read", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("T02");
+    const sessionId = SES("S01");
+    await createApproval(repo, {
+      id: approvalId,
+      sessionId,
+      createdAt: "2026-05-04T10:00+09:00",
+      expiresAt: "2099-05-04T10:00+09:00",
+    });
+    await appendRequestedEvent(repo, sessionId, approvalId, "2026-05-04T10:00:00+09:00", "E01");
+    captureStdout();
+    await runApprovalApprove(approvalId, {}, { cwd: repo });
+    const resolved = await readdir(basouPaths(repo).approvals.resolved);
+    expect(resolved).toContain(`${approvalId}.yaml`);
+  });
+});

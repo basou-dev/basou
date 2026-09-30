@@ -1616,3 +1616,24 @@ describe("session show: a file name that carries line breaks or control characte
     ).toHaveLength(2);
   });
 });
+
+describe("session show: a session an older basou imported without seconds", () => {
+  it("shows it, with its timestamps read as :00, instead of failing to read it", async () => {
+    const repo = await setupInitedRepo();
+    const id = SES("YS1");
+    const events =
+      SESSION_STARTED_LINE(id, "FS1", "2026-05-08T11:00+09:00") +
+      SESSION_ENDED_LINE(id, "FS2", "2026-05-08T11:30+09:00");
+    await createSession(repo, {
+      id,
+      startedAt: "2026-05-08T11:00+09:00",
+      endedAt: "2026-05-08T11:30+09:00",
+      events,
+    });
+    const out = captureStdout();
+    await doRunSessionShow(id, {}, { cwd: repo });
+    const stdout = joinCalls(out);
+    expect(stdout).toContain("2026-05-08T11:00:00+09:00");
+    expect(stdout).toMatch(/Events:\s+2 total/);
+  });
+});

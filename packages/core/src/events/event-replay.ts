@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
+import { normalizeEventTimestamps } from "../schemas/iso-timestamp.js";
 import { hasRetiredZeroDuration } from "../schemas/observed-duration.js";
 
 /**
@@ -121,7 +122,7 @@ export async function* replayEvents(
     return;
   }
 
-  const result = EventSchema.safeParse(parsed);
+  const result = EventSchema.safeParse(normalizeEventTimestamps(parsed));
   if (!result.success) {
     options.onWarning?.({ kind: "schema_violation", line: lineNo, cause: result.error });
     return;
@@ -142,7 +143,7 @@ function processLine(rawLine: string, lineNo: number, options: ReplayOptions): E
     options.onWarning?.({ kind: "malformed_json", line: lineNo, cause });
     return null;
   }
-  const result = EventSchema.safeParse(parsed);
+  const result = EventSchema.safeParse(normalizeEventTimestamps(parsed));
   if (!result.success) {
     options.onWarning?.({ kind: "schema_violation", line: lineNo, cause: result.error });
     return null;
