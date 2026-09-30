@@ -15,7 +15,7 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runVerify, type VerifyRow } from "./verify.js";
+import { PASSING_STATUSES, runVerify, type VerifyRow } from "./verify.js";
 
 const execFileAsync = promisify(execFile);
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
@@ -309,8 +309,10 @@ describe("basou verify", () => {
 
 // docs/spec/schemas.md §7.5 documents the rows of `basou verify --json`: their
 // fields and the values of `status` and `reason`. These records are exhaustive
-// over the code's types, so a field or value added to the code without being
-// listed there — or listed there without being in the code — fails here.
+// over the code's types, so typecheck fails when a field or value is added to
+// or removed from the code alone, and the test below fails when the doc's
+// lists differ from the records or its Exit column from PASSING_STATUSES. The
+// doc's other columns are not pinned here.
 const ROW_FIELDS: Record<keyof VerifyRow, true> = {
   session_id: true,
   status: true,
@@ -343,19 +345,24 @@ const REASONS: Record<NonNullable<VerifyRow["reason"]>, true> = {
   yaml_missing: true,
 };
 
-// The backticked first cell of each row of the table under `header`.
-function firstColumn(section: string, header: string): string[] {
+// The cells of each row of the table under `header`, with the first cell's
+// backticks removed.
+function tableRows(section: string, header: string): [string, ...string[]][] {
   const lines = section.split("\n");
   const start = lines.indexOf(header);
   if (start === -1) throw new Error(`table not found: ${header}`);
-  const values: string[] = [];
+  const rows: [string, ...string[]][] = [];
   for (const row of lines.slice(start + 2)) {
     if (!row.startsWith("|")) break;
-    const cell = /^\| `([^`]+)` \|/.exec(row);
-    if (cell === null) throw new Error(`row without a backticked first cell: ${row}`);
-    values.push(cell[1] as string);
+    const cells = row
+      .slice(1, -1)
+      .split(" | ")
+      .map((c) => c.trim());
+    const first = /^`([^`]+)`$/.exec(cells[0] ?? "");
+    if (first === null) throw new Error(`row without a backticked first cell: ${row}`);
+    rows.push([first[1] as string, ...cells.slice(1)]);
   }
-  return values;
+  return rows;
 }
 
 describe("basou verify --json as documented", () => {
@@ -365,12 +372,16 @@ describe("basou verify --json as documented", () => {
       "utf8",
     );
     const section = doc.slice(doc.indexOf("## §7.5 "));
-    expect(firstColumn(section, "| Field | Value | Present | Meaning |")).toEqual(
-      Object.keys(ROW_FIELDS),
-    );
-    expect(firstColumn(section, "| Verdict | Meaning | Exit |")).toEqual(Object.keys(STATUSES));
-    expect(firstColumn(section, "| `reason` | `status` | `line` | Meaning |")).toEqual(
-      Object.keys(REASONS),
+    const first = (header: string): string[] => tableRows(section, header).map((r) => r[0]);
+    expect(first("| Field | Value | Present | Meaning |")).toEqual(Object.keys(ROW_FIELDS));
+    expect(first("| `reason` | `status` | `line` | Meaning |")).toEqual(Object.keys(REASONS));
+    const verdicts = tableRows(section, "| Verdict | Meaning | Exit |");
+    expect(verdicts.map((r) => r[0])).toEqual(Object.keys(STATUSES));
+    expect(verdicts.map((r) => [r[0], r[2]])).toEqual(
+      Object.keys(STATUSES).map((status) => [
+        status,
+        PASSING_STATUSES.has(status as VerifyRow["status"]) ? "0" : "non-zero",
+      ]),
     );
   });
 

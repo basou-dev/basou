@@ -39,6 +39,19 @@ export type VerifyRow = {
   session_yaml_invalid?: true;
 };
 
+/**
+ * The statuses that let `basou verify` exit 0. It lists the passing side, so a
+ * status added later fails the command until it is added here — the rule
+ * docs/spec/compatibility.md sets for a new `status` value.
+ */
+export const PASSING_STATUSES: ReadonlySet<VerifyRow["status"]> = new Set<VerifyRow["status"]>([
+  "verified",
+  "unchained",
+  "empty",
+  "incomplete",
+  "in_progress",
+]);
+
 /** Wire `basou verify` onto `program`. */
 export function registerVerifyCommand(program: Command): void {
   program
@@ -90,9 +103,6 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
     });
   }
 
-  const tamperedCount = rows.filter((r) => r.status === "tampered").length;
-  const unsupportedCount = rows.filter((r) => r.status === "unsupported").length;
-
   if (options.json === true) {
     console.log(JSON.stringify(rows, null, 2));
   } else {
@@ -109,14 +119,15 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
       `Sessions: ${rows.length} total — ${tally("verified")} verified, ` +
         `${tally("unchained")} unchained, ${tally("empty")} empty, ` +
         `${tally("incomplete")} incomplete, ${tally("in_progress")} in_progress, ` +
-        `${unsupportedCount} unsupported, ${tamperedCount} tampered`,
+        `${tally("unsupported")} unsupported, ${tally("tampered")} tampered`,
     );
   }
 
   // A real integrity break fails the command, and so does a session this basou
   // is too old to verify (`unsupported`): neither is verified. unchained /
-  // empty / incomplete / in_progress are informational states.
-  if (tamperedCount > 0 || unsupportedCount > 0) {
+  // empty / incomplete / in_progress are informational states. A status not in
+  // PASSING_STATUSES fails, whichever it is.
+  if (rows.some((r) => !PASSING_STATUSES.has(r.status))) {
     process.exitCode = 1;
   }
 }

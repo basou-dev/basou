@@ -1020,34 +1020,44 @@ returning a strict `anchor_mismatch`, so a finalize-in-flight is not reported as
 tampering.
 
 **The `--json` output.** `basou verify --json` prints one JSON array on stdout,
-with one row per session: every session directory under `.basou/sessions/`, in
-ascending order of session id, or the one session `--session` names. A
-workspace with no sessions prints `[]`. The top level stays an array within
-`1.x`, so the output has no place for anything about the run as a whole; a
-count by status is taken from the rows. The array is printed once every session
-has been read. A command that stops before then — on the I/O failure above, a
-`--session` that matches no session or more than one, or a workspace that is
-not initialized — prints no array and reports the error on stderr. Whitespace,
-and the order of the keys in a row, are not part of the shape. Each row is an
-object with these fields:
+with one row per directory directly under `.basou/sessions/`, sorted by name
+in code-unit order, or the one session `--session` names. A workspace with no
+sessions prints `[]`. The top level stays an array within `1.x`, so the output
+has no place for anything about the run as a whole; a count by status is taken
+from the rows. Any error that stops the command before every session has been
+read — for instance the I/O failure above, a `--session` that matches no
+session or more than one, or a workspace that is not initialized — prints no
+array and reports the error on stderr, so an array that is printed is
+complete. Whitespace, and the order of the keys in a row, are not part of the
+shape.
+
+Which directories get a row is not settled yet. Today a directory gets one
+whatever its name, so one that basou did not write is listed too (typically as
+`empty`), and a symlink is not followed, so a session directory that is a
+symlink gets no row. Within `1.x`, a directory whose name is not a session id
+may instead be skipped, or given a row that fails the command.
+
+Each row is an object with these fields:
 
 | Field | Value | Present | Meaning |
 |---|---|---|---|
-| `session_id` | string | always | the session's full id (its directory name), also when `--session` was given a prefix |
+| `session_id` | string | always | the directory's name — the session's full id for a session basou wrote — also when `--session` was given a prefix |
 | `status` | string | always | the verdict, from the table above |
-| `event_count` | non-negative integer | always | the complete (newline-terminated) lines of `events.jsonl`; an unterminated tail is not counted, and a missing or empty file counts `0` |
-| `reason` | string | on every `tampered` and `incomplete` row, and no other | what broke, from the table below |
+| `event_count` | non-negative integer | always | the complete (newline-terminated) lines of `events.jsonl`, as this basou splits the file; an unterminated tail is not counted, and a missing or empty file counts `0`. On an `unsupported` row it counts lines, not necessarily the newer writer's events |
+| `reason` | string | always on `tampered` and `incomplete`; today on no other status | what broke, from the table below; read it together with `status`, never instead of it |
 | `line` | positive integer | when one line of the log broke | the 1-based number of the first line that broke; for `torn_tail`, the number the unterminated tail would have |
 | `session_yaml_invalid` | `true` | when `session.yaml` exists but does not load as a whole document | described above; the field is left out rather than set to `false` |
 
-`reason` takes these values. `unsupported` carries neither `reason` nor `line`,
-also where it stands in for a `tampered` result at a newer version: under the
-newer rules, what broke may not be a break.
+`reason` takes these values today. `unsupported` carries neither `reason` nor
+`line` today, also where it stands in for a `tampered` result at a newer
+version: under the newer rules, what broke may not be a break. Within `1.x` a
+`reason` may be added to any status, a new one included: it refines its status
+and never changes whether that status fails the command.
 
 | `reason` | `status` | `line` | Meaning |
 |---|---|---|---|
 | `torn_tail` | `tampered` | yes | a chained log does not end with `\n` (on a live session this is `in_progress`) |
-| `blank_line` | `tampered` | yes | a chained log has a blank line |
+| `blank_line` | `tampered` | yes | a chained log has an empty line, with nothing between two `\n`; a line of only whitespace is `malformed_line` |
 | `malformed_line` | `tampered` | yes | a line of a chained log is not valid JSON |
 | `missing_prev_hash` | `tampered` | yes | a line of a chained log carries no string `prev_hash` |
 | `genesis_mismatch` | `tampered` | yes (`1`) | line 1's `prev_hash` is not this session's genesis hash |
@@ -1063,16 +1073,21 @@ newer rules, what broke may not be a break.
 [compatibility](compatibility.md#basou-verify-verdicts-may-gain-values-on-the-failing-side)
 allows, so a consumer:
 
-- ignores a field it does not know — a row may gain fields within `1.x`;
-- reads a `status` or a `reason` it does not know as not verified — both may
-  gain values within `1.x`, on the failing side only;
-- decides whether the command passed from its exit code. It is `0` exactly when
-  every row's `status` exits `0` in the verdict table and nothing stopped the
-  command. That says no session failed,
-  not that every session was verified: an `unchained` or `empty` log has no
-  chain to check, an `incomplete` one has no anchor to check it against, and an
-  `in_progress` one is checked up to its still-growing tail. A consumer that
-  needs every session verified checks that every `status` is `verified`.
+- ignores a field it does not know. A row may gain fields within `1.x`, and a
+  field added never changes what `status`, `reason`, `line` or `event_count`
+  mean, nor whether a row passes, so a consumer that ignores it still reads
+  the row correctly;
+- reads a `status` or a `reason` it does not know as not verified. An unknown
+  `status` fails the command — a new `status` is only ever added on the
+  failing side — and an unknown `reason` leaves its status passing or failing
+  as it would without it;
+- decides whether the command passed from its exit code, or from the rows when
+  it has only the array: the command passes exactly when every row's `status`
+  exits `0` in the verdict table and nothing stopped it. That says no session
+  failed, not that every session was verified: an `unchained` or `empty` log
+  has no chain to check, an `incomplete` one has no anchor to check it against,
+  and an `in_progress` one is checked up to its still-growing tail. A consumer
+  that needs every session verified checks that every `status` is `verified`.
 
 A legitimate basou rewrite (in-place re-import, `--force`) recomputes a valid
 chain and anchor; `verify` proves on-disk internal consistency against the

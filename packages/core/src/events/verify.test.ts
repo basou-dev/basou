@@ -231,8 +231,9 @@ describe("verifyEventsChain — event tampering", () => {
     const fixture = await writeChainedSession(paths, SES_ID, 3);
     await writeFile(fixture.eventsPath, fixture.lines.join("\n")); // no trailing \n
     const verdict = await verifyEventsChain(paths, SES_ID);
-    expect(verdict.status).toBe("tampered");
-    expect(verdict.reason).toBe("torn_tail");
+    // The unterminated tail is not counted, and `line` is the number it would
+    // have (docs/spec/schemas.md §7.5).
+    expect(verdict).toEqual({ status: "tampered", eventCount: 2, reason: "torn_tail", line: 3 });
   });
 
   it("detects a blank line inside a chained log", async () => {
