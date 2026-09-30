@@ -1019,6 +1019,61 @@ present an old log with a new anchor; `verify` re-snapshots once before
 returning a strict `anchor_mismatch`, so a finalize-in-flight is not reported as
 tampering.
 
+**The `--json` output.** `basou verify --json` prints one JSON array on stdout,
+with one row per session: every session directory under `.basou/sessions/`, in
+ascending order of session id, or the one session `--session` names. A
+workspace with no sessions prints `[]`. The top level stays an array within
+`1.x`, so the output has no place for anything about the run as a whole; a
+count by status is taken from the rows. The array is printed once every session
+has been read. A command that stops before then — on the I/O failure above, a
+`--session` that matches no session or more than one, or a workspace that is
+not initialized — prints no array and reports the error on stderr. Whitespace,
+and the order of the keys in a row, are not part of the shape. Each row is an
+object with these fields:
+
+| Field | Value | Present | Meaning |
+|---|---|---|---|
+| `session_id` | string | always | the session's full id (its directory name), also when `--session` was given a prefix |
+| `status` | string | always | the verdict, from the table above |
+| `event_count` | non-negative integer | always | the complete (newline-terminated) lines of `events.jsonl`; an unterminated tail is not counted, and a missing or empty file counts `0` |
+| `reason` | string | on every `tampered` and `incomplete` row, and no other | what broke, from the table below |
+| `line` | positive integer | when one line of the log broke | the 1-based number of the first line that broke; for `torn_tail`, the number the unterminated tail would have |
+| `session_yaml_invalid` | `true` | when `session.yaml` exists but does not load as a whole document | described above; the field is left out rather than set to `false` |
+
+`reason` takes these values. `unsupported` carries neither `reason` nor `line`,
+also where it stands in for a `tampered` result at a newer version: under the
+newer rules, what broke may not be a break.
+
+| `reason` | `status` | `line` | Meaning |
+|---|---|---|---|
+| `torn_tail` | `tampered` | yes | a chained log does not end with `\n` (on a live session this is `in_progress`) |
+| `blank_line` | `tampered` | yes | a chained log has a blank line |
+| `malformed_line` | `tampered` | yes | a line of a chained log is not valid JSON |
+| `missing_prev_hash` | `tampered` | yes | a line of a chained log carries no string `prev_hash` |
+| `genesis_mismatch` | `tampered` | yes (`1`) | line 1's `prev_hash` is not this session's genesis hash |
+| `broken_link` | `tampered` | yes | a line's `prev_hash` is not the hash of the line before it |
+| `session_id_mismatch` | `tampered` | yes | a line's `session_id` is not this session's id |
+| `anchor_missing` | `tampered` | no | an at-rest chained log's `session.yaml` has no `integrity` anchor |
+| `anchor_mismatch` | `tampered` | no | the anchor's `head_hash` or `event_count` does not match the log |
+| `anchor_without_chain` | `tampered` | no | `session.yaml` has an `integrity` key, but the log is unchained, empty or missing |
+| `yaml_unreadable` | `tampered` | no | verify cannot read what it needs from a chained log's `session.yaml` (above) |
+| `yaml_missing` | `incomplete` | no | a chained log has no `session.yaml` |
+
+**Reading the output.** The shape changes only as
+[compatibility](compatibility.md#basou-verify-verdicts-may-gain-values-on-the-failing-side)
+allows, so a consumer:
+
+- ignores a field it does not know — a row may gain fields within `1.x`;
+- reads a `status` or a `reason` it does not know as not verified — both may
+  gain values within `1.x`, on the failing side only;
+- decides whether the command passed from its exit code. It is `0` exactly when
+  every row's `status` exits `0` in the verdict table and nothing stopped the
+  command. That says no session failed,
+  not that every session was verified: an `unchained` or `empty` log has no
+  chain to check, an `incomplete` one has no anchor to check it against, and an
+  `in_progress` one is checked up to its still-growing tail. A consumer that
+  needs every session verified checks that every `status` is `verified`.
+
 A legitimate basou rewrite (in-place re-import, `--force`) recomputes a valid
 chain and anchor; `verify` proves on-disk internal consistency against the
 anchor, not provenance against an external notary. The in-place re-import

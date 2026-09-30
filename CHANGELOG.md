@@ -3,6 +3,25 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`docs/spec/schemas.md` §7.5 documents the output of `basou verify
+  --json`**, which `docs/spec/compatibility.md` guarantees only as far as it is
+  documented. The top level is an array of rows, one per session in ascending
+  order of session id, and stays an array within `1.x`, so it has no place for
+  anything about the run as a whole. A row always has `session_id`, `status`
+  and `event_count`; `reason` is on every `tampered` and `incomplete` row and no
+  other, `line` is there when one line of the log broke, and
+  `session_yaml_invalid` only ever appears as `true`. The section lists the
+  seven `status` values with their exit codes and the twelve `reason` values
+  with the `status` each belongs to, and says how to read the output: ignore a
+  field you do not know, read a `status` or `reason` you do not know as not
+  verified, and take a pass from the exit code — which says no session failed,
+  not that every session was `verified`. The shape itself is unchanged. A test
+  now fails when the fields or values listed there differ from the code's.
+
 ## 0.57.0 — 2026-09-30
 
 ### Added
