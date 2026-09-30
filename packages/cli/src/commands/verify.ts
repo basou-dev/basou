@@ -31,8 +31,9 @@ export type VerifyRow = {
   reason?: ChainVerdict["reason"];
   line?: number;
   /**
-   * Present (and `true`) when `session.yaml` fails validation outside the two
-   * fields the verdict reads (its anchor and its status). Does not affect
+   * Present (and `true`) when `session.yaml` exists but does not load as a
+   * whole document — the condition under which the commands that read the
+   * whole document skip the session with the same code. Does not decide
    * `status`.
    */
   session_yaml_invalid?: true;
@@ -97,7 +98,7 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
     for (const row of rows) {
       const note =
         row.session_yaml_invalid === true
-          ? " — session.yaml fails schema validation outside its anchor and status"
+          ? " — session.yaml does not load as a whole document (session_yaml_invalid)"
           : "";
       console.log(`${row.session_id}  ${renderVerdict(row)}${note}`);
     }

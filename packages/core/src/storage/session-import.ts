@@ -360,7 +360,14 @@ export type ReimportResult =
       //   verification (tampered). Aborted so a re-import cannot launder a
       //   broken chain into a freshly-valid one; the operator inspects with
       //   `basou verify` and decides (`--force` rebuilds from scratch).
-      reason: "prior_events_unreadable" | "prior_derived_dropped" | "prior_chain_broken";
+      // `prior_yaml_invalid`: the prior session.yaml does not load as a whole
+      //   document, so the fields the rewrite keeps from it (`task_id`,
+      //   `summary`) cannot be read. Its chain may still verify.
+      reason:
+        | "prior_events_unreadable"
+        | "prior_derived_dropped"
+        | "prior_chain_broken"
+        | "prior_yaml_invalid";
     };
 
 /**
@@ -521,6 +528,9 @@ export async function reimportPreservingId(
     const priorVerdict = await verifyEventsChain(paths, priorSessionId);
     if (priorVerdict.status === "tampered") {
       return { status: "skipped", reason: "prior_chain_broken" };
+    }
+    if (priorVerdict.sessionYamlInvalid === true) {
+      return { status: "skipped", reason: "prior_yaml_invalid" };
     }
 
     // Strict read of the prior events: abort on ANY unpreservable line so the

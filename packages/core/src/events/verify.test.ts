@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -371,6 +371,7 @@ describe("verifyEventsChain — anchor tampering", () => {
     const verdict = await verifyEventsChain(paths, SES_ID);
     expect(verdict.status).toBe("tampered");
     expect(verdict.reason).toBe("yaml_unreadable");
+    expect(verdict.sessionYamlInvalid).toBe(true);
   });
 
   it("flags a chain stripped out from under an anchor (anchor_without_chain)", async () => {
@@ -614,7 +615,12 @@ describe("verifyEventsChain — session.yaml invalid outside the anchor and stat
       inner.integrity = { head_hash: fixture.headHash, event_count: "2" };
     });
     const verdict = await verifyEventsChain(paths, SES_ID);
-    expect(verdict).toEqual({ status: "tampered", eventCount: 2, reason: "yaml_unreadable" });
+    expect(verdict).toEqual({
+      status: "tampered",
+      eventCount: 2,
+      reason: "yaml_unreadable",
+      sessionYamlInvalid: true,
+    });
   });
 
   it("reports a null anchor as yaml_unreadable, not as a stripped one", async () => {
@@ -624,7 +630,12 @@ describe("verifyEventsChain — session.yaml invalid outside the anchor and stat
       inner.integrity = null;
     });
     const verdict = await verifyEventsChain(paths, SES_ID);
-    expect(verdict).toEqual({ status: "tampered", eventCount: 2, reason: "yaml_unreadable" });
+    expect(verdict).toEqual({
+      status: "tampered",
+      eventCount: 2,
+      reason: "yaml_unreadable",
+      sessionYamlInvalid: true,
+    });
   });
 
   it("reports a status outside the enum as yaml_unreadable", async () => {
@@ -634,7 +645,74 @@ describe("verifyEventsChain — session.yaml invalid outside the anchor and stat
       inner.status = "paused";
     });
     const verdict = await verifyEventsChain(paths, SES_ID);
-    expect(verdict).toEqual({ status: "tampered", eventCount: 2, reason: "yaml_unreadable" });
+    expect(verdict).toEqual({
+      status: "tampered",
+      eventCount: 2,
+      reason: "yaml_unreadable",
+      sessionYamlInvalid: true,
+    });
+  });
+
+  it("reads schema_version as the format gate: an unknown major is yaml_unreadable", async () => {
+    const paths = await setupPaths();
+    for (const version of ["1.0.0", "banana"]) {
+      const fixture = await writeChainedSession(paths, SES_ID, 2);
+      const record = parseYaml(await readFile(fixture.yamlPath, "utf8")) as Record<string, unknown>;
+      record.schema_version = version;
+      await writeFile(fixture.yamlPath, stringifyYaml(record));
+      const verdict = await verifyEventsChain(paths, SES_ID);
+      expect(verdict).toEqual({
+        status: "tampered",
+        eventCount: 2,
+        reason: "yaml_unreadable",
+        sessionYamlInvalid: true,
+      });
+    }
+  });
+
+  it("flags an unparseable session.yaml beside an unchained verdict", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSession(paths, SES_ID, 2, { anchor: false });
+    await rewriteLines(
+      fixture,
+      fixture.lines.map((l) => {
+        const obj = JSON.parse(l) as Record<string, unknown>;
+        delete obj.prev_hash;
+        return JSON.stringify(obj);
+      }),
+    );
+    await writeFile(fixture.yamlPath, "schema_version: [unclosed\n");
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "unchained", eventCount: 2, sessionYamlInvalid: true });
+  });
+
+  // POSIX only: chmod 0o000 has no effect under root.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports a session.yaml it cannot read (EACCES) as yaml_unreadable, flagged",
+    async () => {
+      const paths = await setupPaths();
+      const fixture = await writeChainedSession(paths, SES_ID, 2);
+      await chmod(fixture.yamlPath, 0o000);
+      try {
+        const verdict = await verifyEventsChain(paths, SES_ID);
+        expect(verdict).toEqual({
+          status: "tampered",
+          eventCount: 2,
+          reason: "yaml_unreadable",
+          sessionYamlInvalid: true,
+        });
+      } finally {
+        await chmod(fixture.yamlPath, 0o644);
+      }
+    },
+  );
+
+  it("does not flag an absent session.yaml (incomplete)", async () => {
+    const paths = await setupPaths();
+    await writeChainedSession(paths, SES_ID, 2, { yaml: false });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "incomplete", eventCount: 2, reason: "yaml_missing" });
+    expect(verdict).not.toHaveProperty("sessionYamlInvalid");
   });
 
   it("reports a document without a session mapping as yaml_unreadable", async () => {
@@ -642,6 +720,11 @@ describe("verifyEventsChain — session.yaml invalid outside the anchor and stat
     const fixture = await writeChainedSession(paths, SES_ID, 2);
     await writeFile(fixture.yamlPath, "schema_version: 0.2.0\nsession: 3\n");
     const verdict = await verifyEventsChain(paths, SES_ID);
-    expect(verdict).toEqual({ status: "tampered", eventCount: 2, reason: "yaml_unreadable" });
+    expect(verdict).toEqual({
+      status: "tampered",
+      eventCount: 2,
+      reason: "yaml_unreadable",
+      sessionYamlInvalid: true,
+    });
   });
 });

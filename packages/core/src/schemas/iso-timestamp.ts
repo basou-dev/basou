@@ -74,8 +74,9 @@ export function normalizeEventTimestamps(raw: unknown): unknown {
  * Bring a stored `session.yaml`'s timestamps into the shape the schema
  * accepts, before it is parsed -- for the reason given on
  * {@link normalizeEventTimestamps}. Without it the whole session is refused:
- * listings skip it, `session show` fails, and, when the session's log is
- * chained, `basou verify` reports the unreadable anchor as tampering.
+ * listings skip it and `session show` fails. `basou verify` does not read
+ * these fields, so its verdict does not depend on them; it flags the document
+ * as not loading (`sessionYamlInvalid`).
  *
  * Touches `session.started_at`, `session.ended_at` and the `start` / `end` of
  * each `session.metrics.active_intervals` entry, the same way.

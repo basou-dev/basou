@@ -472,7 +472,9 @@ async function importDerivedSessions(
             ? "prior events.jsonl has unreadable lines"
             : outcome.reason === "prior_chain_broken"
               ? "prior events.jsonl failed hash-chain verification (run 'basou verify')"
-              : "source changed in a non-append way (derived events would be dropped)";
+              : outcome.reason === "prior_yaml_invalid"
+                ? "prior session.yaml does not load as a whole document"
+                : "source changed in a non-append way (derived events would be dropped)";
         console.error(`Import: ${externalId} ${detail}; re-import skipped`);
         // The source GREW but a safe in-place re-import was refused: this is NOT
         // a benign no-op. Track it separately so freshness probes can flag that

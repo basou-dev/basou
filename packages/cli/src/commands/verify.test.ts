@@ -144,8 +144,12 @@ describe("basou verify", () => {
     await runVerify({}, { cwd: repo });
 
     const text = joinCalls(out);
-    expect(text).toContain(`${importedId}  verified (3 events)`);
-    expect(text).toContain(`${LIVE_SES_ID}  unchained`);
+    // Whole lines, so a note appended to a valid session's row fails the test.
+    const lines = text.split("\n");
+    expect(lines).toContain(`${importedId}  verified (3 events)`);
+    expect(lines).toContain(
+      `${LIVE_SES_ID}  unchained (session created before event-log chaining)`,
+    );
     expect(text).toContain(
       "Sessions: 2 total — 1 verified, 1 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 tampered",
     );
@@ -200,7 +204,7 @@ describe("basou verify", () => {
     await runVerify({}, { cwd: repo });
     const text = joinCalls(out);
     expect(text).toContain(
-      `${importedId}  verified (3 events) — session.yaml fails schema validation outside its anchor and status`,
+      `${importedId}  verified (3 events) — session.yaml does not load as a whole document (session_yaml_invalid)`,
     );
     expect(text).toContain("1 verified");
     expect(text).toContain("0 tampered");
@@ -212,6 +216,28 @@ describe("basou verify", () => {
       { session_id: importedId, status: "verified", event_count: 3, session_yaml_invalid: true },
     ]);
     expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("reports a session.yaml of an unknown format major as tampered, flagged", async () => {
+    const repo = await setupInitedRepo();
+    const importedId = await importChainedSession(repo);
+    const yamlPath = join(basouPaths(repo).sessions, importedId, "session.yaml");
+    const record = (await readYamlFile(yamlPath)) as Record<string, unknown>;
+    record.schema_version = "1.0.0";
+    await writeYamlFile(yamlPath, record);
+
+    const out = captureStdout();
+    await runVerify({ json: true }, { cwd: repo });
+    expect(JSON.parse(joinCalls(out))).toEqual([
+      {
+        session_id: importedId,
+        status: "tampered",
+        event_count: 3,
+        reason: "yaml_unreadable",
+        session_yaml_invalid: true,
+      },
+    ]);
+    expect(process.exitCode).toBe(1);
   });
 
   it("verifies a single session with --session (prefix resolution)", async () => {
