@@ -3,6 +3,55 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **`basou verify` no longer reports tampering because a field it does not
+  read fails validation.** From `session.yaml` the verifier needs three
+  things: the `schema_version` format gate, the `integrity` anchor, and the
+  `status` that decides whether the anchor is due yet. It parsed the whole
+  document instead, and when anything in it failed validation it treated the
+  anchor as unreadable, so a chained session whose log and anchor were intact
+  was reported `TAMPERED (yaml_unreadable)` and the command exited `1`. That
+  is what happened from `0.45.0` through `0.54.0` to sessions a producer had
+  imported with seconds-less timestamps, and a later narrowing of any other
+  field would have done it again. Reproduced with `0.55.0`: a finalized
+  session whose events and anchor were untouched, with only
+  `session.source.version` changed to `0.2.0`, was reported tampered. The
+  verifier now reads those three fields against their own schemas and decides
+  the verdict on them, and the same session verifies.
+
+  On a chained log, `yaml_unreadable` now means that `session.yaml` cannot be
+  read (an I/O failure other than a missing file, such as a permission error)
+  or does not parse, that it has no `session` mapping, or that its format
+  version, anchor or status fails validation. A format major this basou does
+  not read is still reported that way, as before.
+
+  Whether the whole `session.yaml` loads is now reported beside the verdict:
+  `basou verify --json` adds `"session_yaml_invalid": true` to the row, the
+  human-readable line ends with `session.yaml does not load as a whole
+  document (session_yaml_invalid)`, and `verifyEventsChain` in `@basou/core`
+  returns `sessionYamlInvalid: true`. It is set whenever the file exists but
+  cannot be read, does not parse, or fails the full session schema, which is
+  when `session list` and the other commands that read the whole document skip
+  the session with the same code; it appears on `yaml_unreadable` rows too. The
+  verdict, the tally and the exit code do not depend on it.
+
+  One verdict moves the other way. An unchained log under a `session.yaml`
+  that still carries an anchor means the chain was stripped
+  (`anchor_without_chain`), but when another field of that `session.yaml`
+  failed validation the anchor went unread and the log was reported
+  `unchained`, exit `0`. It is now reported `tampered`.
+
+  `reimportPreservingId` in `@basou/core` used to refuse such a prior session
+  as `prior_chain_broken`, because its verdict was `tampered`. Its chain now
+  verifies, so it returns the new skip `prior_yaml_invalid` instead of
+  throwing when it reads the document; `basou import` reports it as `prior
+  session.yaml does not load as a whole document`. `basou import` does not
+  normally reach this, because it only re-imports sessions whose `session.yaml`
+  loads.
+
 ## 0.55.0 — 2026-09-30
 
 ### Added

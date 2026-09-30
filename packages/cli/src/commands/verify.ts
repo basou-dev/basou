@@ -30,6 +30,13 @@ export type VerifyRow = {
   event_count: number;
   reason?: ChainVerdict["reason"];
   line?: number;
+  /**
+   * Present (and `true`) when `session.yaml` exists but does not load as a
+   * whole document — the condition under which the commands that read the
+   * whole document skip the session with the same code. Does not decide
+   * `status`.
+   */
+  session_yaml_invalid?: true;
 };
 
 /** Wire `basou verify` onto `program`. */
@@ -79,6 +86,7 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
       event_count: verdict.eventCount,
       ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
       ...(verdict.line !== undefined ? { line: verdict.line } : {}),
+      ...(verdict.sessionYamlInvalid === true ? { session_yaml_invalid: true as const } : {}),
     });
   }
 
@@ -88,7 +96,11 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
     console.log(JSON.stringify(rows, null, 2));
   } else {
     for (const row of rows) {
-      console.log(`${row.session_id}  ${renderVerdict(row)}`);
+      const note =
+        row.session_yaml_invalid === true
+          ? " — session.yaml does not load as a whole document (session_yaml_invalid)"
+          : "";
+      console.log(`${row.session_id}  ${renderVerdict(row)}${note}`);
     }
     const tally = (status: VerifyRow["status"]): number =>
       rows.filter((r) => r.status === status).length;

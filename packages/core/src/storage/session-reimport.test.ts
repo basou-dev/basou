@@ -162,6 +162,33 @@ describe("reimportPreservingId — hash chain", () => {
     expect(await readFile(eventsPath, "utf8")).toBe(tamperedBody);
   });
 
+  it("aborts with prior_yaml_invalid when the prior session.yaml does not load", async () => {
+    const paths = await setupPaths();
+    const sessionId = await importPrior(paths);
+    const yamlPath = join(paths.sessions, sessionId, "session.yaml");
+    const record = parseYaml(await readFile(yamlPath, "utf8")) as {
+      session: { source: Record<string, unknown> };
+    };
+    record.session.source.version = "0.2.0";
+    const yamlBody = stringifyYaml(record);
+    await writeFile(yamlPath, yamlBody);
+    const eventsPath = join(paths.sessions, sessionId, "events.jsonl");
+    const eventsBody = await readFile(eventsPath, "utf8");
+
+    for (const dryRun of [true, false]) {
+      const outcome = await reimportPreservingId(
+        paths,
+        makeManifest(),
+        sessionId,
+        makePayload(GROWN_EVENTS),
+        { dryRun },
+      );
+      expect(outcome).toEqual({ status: "skipped", reason: "prior_yaml_invalid" });
+    }
+    expect(await readFile(yamlPath, "utf8")).toBe(yamlBody);
+    expect(await readFile(eventsPath, "utf8")).toBe(eventsBody);
+  });
+
   it("re-imports an unchained legacy session and chains it", async () => {
     const paths = await setupPaths();
     const sessionId = await importPrior(paths);

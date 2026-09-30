@@ -1,9 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
-import type { SessionIntegrity, SessionStatus } from "../schemas/session.schema.js";
+import { normalizeSessionTimestamps } from "../schemas/iso-timestamp.js";
+import {
+  type SessionIntegrity,
+  SessionIntegritySchema,
+  SessionSchema,
+  type SessionStatus,
+  SessionStatusSchema,
+} from "../schemas/session.schema.js";
+import { SchemaVersionSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
-import { readSessionYaml } from "../storage/sessions.js";
+import { readYamlFile } from "../storage/yaml-store.js";
 import { genesisHash, lineHash } from "./chain.js";
 
 /**
@@ -76,7 +84,14 @@ export type ChainBreakReason =
   | "anchor_mismatch"
   /** An integrity anchor exists but the log is unchained, empty, or missing (chain stripped). */
   | "anchor_without_chain"
-  /** `session.yaml` exists but could not be parsed / validated, so the anchor is unreadable. */
+  /**
+   * `session.yaml` exists but the verifier cannot read what it needs from it:
+   * the file cannot be read (an I/O failure other than ENOENT) or does not
+   * parse as YAML, it has no `session` mapping, or its `schema_version`, its
+   * `integrity` anchor or its `status` fails validation. Reported only for a
+   * chained log. A failure in any other field does not produce this (see
+   * {@link ChainVerdict.sessionYamlInvalid}).
+   */
   | "yaml_unreadable"
   /** `incomplete` only: `session.yaml` is entirely absent. */
   | "yaml_missing";
@@ -90,15 +105,31 @@ export type ChainVerdict = {
   reason?: ChainBreakReason;
   /** 1-based line number of the first break, when one specific line broke. */
   line?: number;
+  /**
+   * Present (and `true`) when `session.yaml` exists but does not load as a
+   * whole document: it cannot be read, does not parse, or fails the full
+   * session schema. That is the condition under which the commands that read
+   * the whole document skip the session with `session_yaml_invalid`. It does
+   * not decide the verdict: when the format version, the anchor and the status
+   * were still readable the verdict was decided on them, and otherwise a
+   * chained log is `tampered` / `yaml_unreadable`.
+   */
+  sessionYamlInvalid?: true;
 };
 
 // Three-state view of `session.yaml` as seen by the verifier. The `present`
 // variant carries the session status so the verdict can forgive a live
-// session's still-growing tail / not-yet-written anchor (`in_progress`).
+// session's still-growing tail / not-yet-written anchor (`in_progress`), and
+// whether the whole document validates. An `unreadable` document never does.
 type AnchorState =
   | { kind: "absent" }
   | { kind: "unreadable" }
-  | { kind: "present"; integrity: SessionIntegrity | undefined; status: SessionStatus };
+  | {
+      kind: "present";
+      integrity: SessionIntegrity | undefined;
+      status: SessionStatus;
+      documentValid: boolean;
+    };
 
 /**
  * Verify the tamper-evidence hash chain of `<sessions>/<sessionId>/events.jsonl`
@@ -124,6 +155,14 @@ type AnchorState =
  *   the internal chain is verified but a torn tail / absent / mismatching
  *   anchor is FORGIVEN as `in_progress`: a live session's tail is legitimately
  *   still growing and its anchor is written only at the terminal finalize.
+ *
+ * From `session.yaml` the verifier reads exactly three fields, each against its
+ * own schema: the `schema_version` format gate, the `integrity` anchor, and
+ * the `status` that decides whether the anchor is due yet. A validation
+ * failure anywhere else in the document says nothing about the log, so it
+ * does not change the verdict — otherwise a narrowing of an unrelated field
+ * would report tampering that did not happen. Whether the whole document
+ * loads is reported beside the verdict as `sessionYamlInvalid`.
  *
  * NON-CRYPTOGRAPHIC: the anchor lives in `session.yaml`, which is itself
  * editable; an attacker rewriting BOTH files consistently is not detected.
@@ -162,22 +201,52 @@ async function verifyOnce(paths: BasouPaths, sessionId: string): Promise<ChainVe
     }
   }
 
-  let anchor: AnchorState;
+  const anchor = await readAnchorState(paths, sessionId);
+  const verdict = judgeChain(raw, anchor, sessionId);
+  const documentInvalid =
+    anchor.kind === "unreadable" || (anchor.kind === "present" && !anchor.documentValid);
+  return documentInvalid ? { ...verdict, sessionYamlInvalid: true } : verdict;
+}
+
+// Read the three fields the verdict depends on, each against its own schema,
+// and record separately whether the whole document validates. An I/O failure
+// other than ENOENT is `unreadable`, as a parse failure is.
+async function readAnchorState(paths: BasouPaths, sessionId: string): Promise<AnchorState> {
+  let raw: unknown;
   try {
-    const session = await readSessionYaml(paths, sessionId);
-    anchor = {
-      kind: "present",
-      integrity: session.session.integrity,
-      status: session.session.status,
-    };
+    raw = await readYamlFile(join(paths.sessions, sessionId, "session.yaml"));
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "YAML file not found") {
-      anchor = { kind: "absent" };
-    } else {
-      anchor = { kind: "unreadable" };
+      return { kind: "absent" };
     }
+    return { kind: "unreadable" };
   }
+  if (!isRecord(raw) || !SchemaVersionSchema.safeParse(raw.schema_version).success) {
+    return { kind: "unreadable" };
+  }
+  const inner = isRecord(raw.session) ? raw.session : null;
+  if (inner === null) return { kind: "unreadable" };
+  const status = SessionStatusSchema.safeParse(inner.status);
+  if (!status.success) return { kind: "unreadable" };
+  let integrity: SessionIntegrity | undefined;
+  if (inner.integrity !== undefined) {
+    const parsed = SessionIntegritySchema.safeParse(inner.integrity);
+    if (!parsed.success) return { kind: "unreadable" };
+    integrity = parsed.data;
+  }
+  return {
+    kind: "present",
+    integrity,
+    status: status.data,
+    documentValid: SessionSchema.safeParse(normalizeSessionTimestamps(raw)).success,
+  };
+}
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function judgeChain(raw: Buffer | null, anchor: AnchorState, sessionId: string): ChainVerdict {
   // Split the raw BYTES into complete (newline-terminated) lines plus an
   // optional unterminated tail fragment. A missing or empty file has neither.
   // Splitting and hashing stay at the byte level; decoding to a string
