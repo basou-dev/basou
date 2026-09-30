@@ -490,7 +490,8 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
   inside a document basou built: `basou session import` writes the
   `session.yaml` itself (it mints the id, sets the status, replaces the
   workspace id, sanitizes paths) but copies the producer's timestamps, and
-  stores the producer's events with the values they gave.
+  stores the producer's events with the timestamps they gave (the event ids it
+  mints itself).
 
   "No code path" covers every release whose documents may still be on disk,
   not only the current tree: a writer removed today still wrote what it wrote,
@@ -527,8 +528,9 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
      that THROWS rather than dropping one line is worse than the case this rule
      was written for, and so is one that makes `basou verify` report tampering
      that did not happen: a `session.yaml` that fails validation leaves its
-     integrity anchor unreadable, and verify reports that as `tampered`. A
-     narrowing must not land on either until it is accounted for.
+     integrity anchor unreadable, and when the session's log is chained,
+     verify reports that as `tampered`. A narrowing must not land on either
+     until it is accounted for.
 
   A narrowing that is merely believed to be rare never qualifies by any route.
 
@@ -588,7 +590,9 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
     one after the bump is the optional seconds, so the normalizer brings the
     whole refused set back. Since `0.45.0` the import itself refuses a
     seconds-less payload as an invalid payload.
-  - **Approvals** are placed by an outside orchestrator; basou only reads them.
+  - **Approvals** are placed by an outside orchestrator. basou never writes a
+    pending one; the resolved copy it writes on approve or reject carries the
+    values it read, seconds restored.
     Population: **zero documents** in the measured store — which is not evidence
     that producers agree, only that this store has none, and the read rule says
     so rather than presenting an empty directory as a clean measurement.
@@ -616,15 +620,16 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
   from `@basou/core` and re-exported from `@basou/sdk`; `@basou/core` also
   exports `normalizeEventTimestamps`, `normalizeSessionTimestamps` and
   `normalizeApprovalTimestamps`, which apply it to those fields. basou applies
-  them before parsing wherever it reads a `session.yaml`, an event or an
-  approval, and a reader of the files cannot tell which documents a producer
-  wrote, so it should apply them to every document. The published JSON Schemas
-  describe the shape after this repair: a stored line validated against them
-  without it is refused where basou reads it. What basou prints from a stored
-  document, `basou session show --json` included, is the value after the read
-  rule. Reading rewrites nothing, so the bytes the hash chain covers are
-  unchanged. A record basou later rewrites from what it read — a re-import, a
-  rechained `session.yaml` — is written with the seconds restored.
+  them before parsing wherever it reads a stored `session.yaml`, event or
+  approval (a running `basou exec` or `basou run` rereads only the session it
+  is writing), and a reader of the files cannot tell which documents a
+  producer wrote, so it should apply them to every document. The published
+  JSON Schemas describe the shape after this repair: a stored line validated
+  against them without it is refused, whereas basou reads it. A stored value
+  that basou prints, `basou session show --json` included, is printed as read
+  through this rule. Reading rewrites nothing, so the bytes the hash chain
+  covers are unchanged. A record basou later rewrites from what it read — a
+  re-import, a rechained `session.yaml` — is written with the seconds restored.
 
 - Redefining a value that already exists on disk is forbidden: it must keep
   meaning what it meant (introduce a new type or a new field instead). A bump
@@ -645,15 +650,16 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
   adapters and `loadApproval`.
 
   Documents are never rewritten IN PLACE by a migration: that would break the
-  tamper-evidence chain (§8). They are, however, re-derived — `reimportPreservingId`
+  tamper-evidence chain (§7.5). They are, however, re-derived — `reimportPreservingId`
   rewrites a session's `events.jsonl` and `session.yaml` atomically, with fresh
   content and a fresh chain, whenever its source log has grown. So a stored
   value can be replaced by re-derivation from the source, and cannot be
   replaced by editing what is on disk. Neither path can recover what a source
   never reported. The one exception that edits in place is rechaining (§7.5),
   which appends `prev_hash` to each event line and writes `session.yaml` back
-  as read: that keeps every value, except that a timestamp stored without
-  seconds is written with the `:00` the read rule restores.
+  as read: that keeps every stored value, except that a timestamp stored
+  without seconds is written with the `:00` the read rule restores, and it
+  writes out the defaults the schema supplies for fields the file left out.
 - `schema_version` is per document, not workspace-wide, and so is each
   published schema's `$id` version. Bumping one format must not move the `$id`
   of the formats that did not change, and a document's `$id` version always
@@ -819,7 +825,7 @@ arriving from elsewhere: another host reached through the federation reader, or
 a third party using this package's writers.
 
 The schema still ACCEPTS `0`, because 0.1.0 events carrying it are on disk and
-are not rewritten in place — that would break the tamper-evidence chain (§8).
+are not rewritten in place — that would break the tamper-evidence chain (§7.5).
 (A session IS re-derived when its source log grows, and its events are then
 restamped at the current version; a session whose source is gone, or that has
 not grown, keeps its 0.1.0 lines indefinitely.) Every line read
@@ -981,7 +987,9 @@ migrates them in place: each original event line is re-emitted with ONLY the
 preserved exactly — the migration never re-serializes through the schema
 layer), and the existing `session.yaml` is rewritten as read with the
 `integrity` anchor added — so a timestamp it stored without seconds is written
-with `:00` (§7.3). The event lines keep theirs as stored. Only sessions with status `imported` are eligible
+with `:00` (§7.3), and a field the file left out is written with the default
+the schema supplies. The event lines keep their timestamps as stored. Only
+sessions with status `imported` are eligible
 (the closed, append-rejecting corpus); a `tampered` log is refused rather
 than laundered into a fresh valid chain, and any line that cannot be
 preserved byte-exactly (blank or padded lines, invalid UTF-8, malformed or

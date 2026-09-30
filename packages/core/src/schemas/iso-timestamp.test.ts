@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { ApprovalSchema } from "./approval.schema.js";
 import { EventSchema } from "./event.schema.js";
 import {
+  normalizeApprovalTimestamps,
   normalizeEventTimestamps,
   normalizeIsoTimestamp,
   normalizeSessionTimestamps,
@@ -60,6 +62,33 @@ describe("normalizeEventTimestamps", () => {
   it("passes a non-object through for the schema to refuse", () => {
     expect(normalizeEventTimestamps(null)).toBeNull();
     expect(normalizeEventTimestamps(["a"])).toEqual(["a"]);
+  });
+});
+
+describe("normalizeApprovalTimestamps", () => {
+  it("restores created_at, expires_at and resolved_at, so a resolved approval parses", () => {
+    const raw = {
+      schema_version: "0.1.0",
+      id: "appr_01M3PWQAZBN24WGZBF29B3F7R9",
+      session_id: "ses_01M3PWQAZBN24WGZBF29B3F7R8",
+      created_at: "2026-09-16T01:23Z",
+      status: "approved",
+      risk_level: "low",
+      action: { kind: "shell_command" },
+      reason: "r",
+      expires_at: "2026-09-16T02:00+09:00",
+      resolver: "local-cli",
+      resolved_at: "2026-09-16T01:26Z",
+      note: null,
+      rejection_reason: null,
+    };
+    expect(ApprovalSchema.safeParse(raw).success).toBe(false);
+    const parsed = ApprovalSchema.safeParse(normalizeApprovalTimestamps(raw));
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.created_at).toBe("2026-09-16T01:23:00Z");
+    expect(parsed.data.expires_at).toBe("2026-09-16T02:00:00+09:00");
+    expect(parsed.data.resolved_at).toBe("2026-09-16T01:26:00Z");
   });
 });
 

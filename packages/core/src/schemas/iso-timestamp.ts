@@ -22,9 +22,10 @@
  * Every timestamp basou has been observed to import already carries seconds
  * (226,077 values across both adapters when the narrowing landed), so at the
  * adapters this guards against a vendor changing. At the read boundaries
- * ({@link normalizeEventTimestamps}, {@link normalizeSessionTimestamps}, and
- * the approval store) it repairs values an older basou accepted from a
- * producer and wrote as given.
+ * ({@link normalizeEventTimestamps}, {@link normalizeSessionTimestamps} and
+ * {@link normalizeApprovalTimestamps}) it repairs values an older basou
+ * accepted from a producer and wrote as given, and values an outside
+ * orchestrator wrote.
  */
 export function normalizeIsoTimestamp(raw: string): string {
   const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(Z|[+-]\d{2}:\d{2})$/.exec(raw);
@@ -73,8 +74,8 @@ export function normalizeEventTimestamps(raw: unknown): unknown {
  * Bring a stored `session.yaml`'s timestamps into the shape the schema
  * accepts, before it is parsed -- for the reason given on
  * {@link normalizeEventTimestamps}. Without it the whole session is refused:
- * listings skip it, `session show` fails, and `basou verify` reports the
- * unreadable anchor as tampering.
+ * listings skip it, `session show` fails, and, when the session's log is
+ * chained, `basou verify` reports the unreadable anchor as tampering.
  *
  * Touches `session.started_at`, `session.ended_at` and the `start` / `end` of
  * each `session.metrics.active_intervals` entry, the same way.
@@ -99,7 +100,8 @@ export function normalizeSessionTimestamps(raw: unknown): unknown {
  * is parsed.
  *
  * This is the boundary §7.3 of `docs/spec/schemas.md` names: basou never
- * WRITES an approval -- they are placed by an outside orchestrator -- so the
+ * writes a pending approval -- they are placed by an outside orchestrator,
+ * and basou only writes the resolved copy on approve or reject -- so the
  * refused set cannot be enumerated the way the durable formats basou writes
  * can be, and the version that required seconds had to come with a normalizer
  * here. Without it a producer that omits seconds does not merely lose the

@@ -679,10 +679,11 @@ export type RechainResult =
  * computed). Event ids, order, field sets, values and key order are all
  * preserved exactly — each original line is re-emitted with only `prev_hash`
  * appended (see {@link chainRawJsonLines}); `session.yaml` is rewritten as
- * read with only `integrity` added -- "as read" including a timestamp that
- * was stored without seconds, which the reader restores to `:00`. Nothing
- * else changes, so cross-session references (`linked_events`) survive, unlike
- * a `--force` re-import.
+ * read with `integrity` added -- "as read" meaning after the schema parse, so
+ * a timestamp stored without seconds is written with the `:00` the reader
+ * restores, and a field the file left out is written with its schema default.
+ * Event ids and every other stored value are kept, so cross-session
+ * references (`linked_events`) survive, unlike a `--force` re-import.
  *
  * Rechaining asserts tamper-evidence FROM NOW ON; it does not retroactively
  * prove the pre-existing content was never modified before the migration.
