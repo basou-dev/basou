@@ -8,6 +8,7 @@ import {
   createManifest,
   ensureBasouDirectory,
   importSessionFromJson,
+  readYamlFile,
   type SessionImportPayload,
   writeManifest,
   writeYamlFile,
@@ -182,6 +183,34 @@ describe("basou verify", () => {
       event_count: 3,
     });
     expect(byId.get(LIVE_SES_ID)?.status).toBe("unchained");
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("judges a session on its anchor when another session.yaml field fails validation", async () => {
+    const repo = await setupInitedRepo();
+    const importedId = await importChainedSession(repo);
+    const yamlPath = join(basouPaths(repo).sessions, importedId, "session.yaml");
+    const record = (await readYamlFile(yamlPath)) as {
+      session: { source: Record<string, unknown> };
+    };
+    record.session.source.version = "0.2.0";
+    await writeYamlFile(yamlPath, record);
+
+    const out = captureStdout();
+    await runVerify({}, { cwd: repo });
+    const text = joinCalls(out);
+    expect(text).toContain(
+      `${importedId}  verified (3 events) — session.yaml fails schema validation outside its anchor and status`,
+    );
+    expect(text).toContain("1 verified");
+    expect(text).toContain("0 tampered");
+    expect(process.exitCode ?? 0).toBe(0);
+
+    out.mockClear();
+    await runVerify({ json: true }, { cwd: repo });
+    expect(JSON.parse(joinCalls(out))).toEqual([
+      { session_id: importedId, status: "verified", event_count: 3, session_yaml_invalid: true },
+    ]);
     expect(process.exitCode ?? 0).toBe(0);
   });
 

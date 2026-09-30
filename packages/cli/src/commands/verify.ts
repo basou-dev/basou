@@ -30,6 +30,12 @@ export type VerifyRow = {
   event_count: number;
   reason?: ChainVerdict["reason"];
   line?: number;
+  /**
+   * Present (and `true`) when `session.yaml` fails validation outside the two
+   * fields the verdict reads (its anchor and its status). Does not affect
+   * `status`.
+   */
+  session_yaml_invalid?: true;
 };
 
 /** Wire `basou verify` onto `program`. */
@@ -79,6 +85,7 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
       event_count: verdict.eventCount,
       ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
       ...(verdict.line !== undefined ? { line: verdict.line } : {}),
+      ...(verdict.sessionYamlInvalid === true ? { session_yaml_invalid: true as const } : {}),
     });
   }
 
@@ -88,7 +95,11 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
     console.log(JSON.stringify(rows, null, 2));
   } else {
     for (const row of rows) {
-      console.log(`${row.session_id}  ${renderVerdict(row)}`);
+      const note =
+        row.session_yaml_invalid === true
+          ? " — session.yaml fails schema validation outside its anchor and status"
+          : "";
+      console.log(`${row.session_id}  ${renderVerdict(row)}${note}`);
     }
     const tally = (status: VerifyRow["status"]): number =>
       rows.filter((r) => r.status === status).length;

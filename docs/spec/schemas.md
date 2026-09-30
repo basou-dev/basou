@@ -527,10 +527,12 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
   4. and the refusal path at that boundary must be known and stated. A boundary
      that THROWS rather than dropping one line is worse than the case this rule
      was written for, and so is one that makes `basou verify` report tampering
-     that did not happen: a `session.yaml` that fails validation leaves its
-     integrity anchor unreadable, and when the session's log is chained,
-     verify reports that as `tampered`. A narrowing must not land on either
-     until it is accounted for.
+     that did not happen. Verify reads two fields of `session.yaml`, the
+     `integrity` anchor and the `status`, each against its own schema; when
+     either fails validation the anchor is unreadable, and when the session's
+     log is chained, verify reports that as `tampered`. A failure in any other
+     field is reported beside the verdict and does not change it. A narrowing
+     must not land on either path until it is accounted for.
 
   A narrowing that is merely believed to be rare never qualifies by any route.
 
@@ -581,8 +583,10 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
     from here — the producers are third parties and the stores are theirs.
     One operator's store held no imported session and no seconds-less value
     (40,191 event lines), which says nothing about anyone else's. Refusal path:
-    a `session.yaml` that fails validation makes the whole session unreadable,
-    as above, and an event line that fails is dropped. Normalizer:
+    a `session.yaml` that fails validation makes the whole session unreadable
+    to the commands that read the whole document, as above — `basou verify`
+    now reads only the anchor and the status (clause 4), neither of which
+    holds a timestamp — and an event line that fails is dropped. Normalizer:
     `normalizeSessionTimestamps` and `normalizeEventTimestamps`, applied where
     `session.yaml` is read, where events are replayed, and in the gate that
     decides whether a session can be rechained. This boundary qualifies by
@@ -960,7 +964,17 @@ Per-session verdicts:
 | `empty` | zero events and no anchor | 0 |
 | `incomplete` | chained log but `session.yaml` is entirely absent (an import crashed between the two writes); a re-import repairs it | 0 |
 | `in_progress` | chained log on a still-live session (`initialized` / `running` / `waiting_approval`); the internal chain is verified, the mutable tail and not-yet-written anchor are forgiven | 0 |
-| `tampered` | a real break: bad back-pointer or genesis, foreign `session_id`, torn tail (on an at-rest session), blank or malformed line, anchor missing / mismatching, or an anchor left behind with no chained log | non-zero |
+| `tampered` | a real break: bad back-pointer or genesis, foreign `session_id`, torn tail (on an at-rest session), blank or malformed line, anchor missing / mismatching, an anchor left behind with no chained log, or a `session.yaml` whose anchor or status cannot be read (`yaml_unreadable`) | non-zero |
+
+**What verify reads from `session.yaml`.** Two fields, each against its own
+schema: the `integrity` anchor, and the `status` that decides whether the
+anchor is due yet. `yaml_unreadable` means the file does not parse as YAML, has
+no `session` mapping, or its anchor or status fails validation. A validation
+failure in any other field says nothing about the log, so it does not change
+the verdict or the exit code; it is reported beside the verdict —
+`"session_yaml_invalid": true` on the row of `basou verify --json`, and a note
+on the human-readable line. Such a session is still skipped by the commands
+that read the whole document.
 
 `unchained` / `empty` / `incomplete` / `in_progress` exit 0; an I/O failure
 while reading a log (e.g. permissions) aborts the command with a non-zero exit
