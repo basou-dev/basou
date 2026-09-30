@@ -388,8 +388,9 @@ function judgeChain(raw: Buffer | null, anchor: AnchorState, sessionId: string):
         line: lineNo,
       };
     }
-    const record = parsed as Record<string, unknown>;
-    if (typeof record.prev_hash !== "string") {
+    // A line that parses to something other than an object (`null`, a number,
+    // a string, an array) carries no `prev_hash` either.
+    if (!isRecord(parsed) || typeof parsed.prev_hash !== "string") {
       return {
         status: "tampered",
         eventCount: lines.length,
@@ -397,7 +398,7 @@ function judgeChain(raw: Buffer | null, anchor: AnchorState, sessionId: string):
         line: lineNo,
       };
     }
-    if (record.prev_hash !== expected) {
+    if (parsed.prev_hash !== expected) {
       return {
         status: "tampered",
         eventCount: lines.length,
@@ -405,7 +406,7 @@ function judgeChain(raw: Buffer | null, anchor: AnchorState, sessionId: string):
         line: lineNo,
       };
     }
-    if (record.session_id !== sessionId) {
+    if (parsed.session_id !== sessionId) {
       return {
         status: "tampered",
         eventCount: lines.length,
