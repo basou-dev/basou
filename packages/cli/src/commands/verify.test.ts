@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -151,7 +151,7 @@ describe("basou verify", () => {
       `${LIVE_SES_ID}  unchained (session created before event-log chaining)`,
     );
     expect(text).toContain(
-      "Sessions: 2 total — 1 verified, 1 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 tampered",
+      "Sessions: 2 total — 1 verified, 1 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 unsupported, 0 tampered",
     );
     expect(process.exitCode ?? 0).toBe(0);
   });
@@ -218,7 +218,7 @@ describe("basou verify", () => {
     expect(process.exitCode ?? 0).toBe(0);
   });
 
-  it("reports a session.yaml of an unknown format major as tampered, flagged", async () => {
+  it("reports a session.yaml a newer basou wrote as unsupported and exits non-zero", async () => {
     const repo = await setupInitedRepo();
     const importedId = await importChainedSession(repo);
     const yamlPath = join(basouPaths(repo).sessions, importedId, "session.yaml");
@@ -227,18 +227,45 @@ describe("basou verify", () => {
     await writeYamlFile(yamlPath, record);
 
     const out = captureStdout();
+    await runVerify({}, { cwd: repo });
+    const lines = joinCalls(out).split("\n");
+    expect(lines).toContain(
+      `${importedId}  unsupported (session.yaml written by a newer basou; upgrade basou to verify it) — session.yaml does not load as a whole document (session_yaml_invalid)`,
+    );
+    expect(lines).toContain(
+      "Sessions: 1 total — 0 verified, 0 unchained, 0 empty, 0 incomplete, 0 in_progress, 1 unsupported, 0 tampered",
+    );
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = 0;
+    out.mockClear();
     await runVerify({ json: true }, { cwd: repo });
     expect(JSON.parse(joinCalls(out))).toEqual([
-      {
-        session_id: importedId,
-        status: "tampered",
-        event_count: 3,
-        reason: "yaml_unreadable",
-        session_yaml_invalid: true,
-      },
+      { session_id: importedId, status: "unsupported", event_count: 3, session_yaml_invalid: true },
     ]);
     expect(process.exitCode).toBe(1);
   });
+
+  // POSIX only: chmod 0o000 has no effect under root.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "aborts with an operational error when a session.yaml cannot be read",
+    async () => {
+      const repo = await setupInitedRepo();
+      const importedId = await importChainedSession(repo);
+      const yamlPath = join(basouPaths(repo).sessions, importedId, "session.yaml");
+      await chmod(yamlPath, 0o000);
+      try {
+        const out = captureStdout();
+        const err = captureStderr();
+        await runVerify({}, { cwd: repo });
+        expect(joinCalls(err)).toContain("Failed to read session.yaml");
+        expect(joinCalls(out)).not.toContain("TAMPERED");
+        expect(process.exitCode).toBe(1);
+      } finally {
+        await chmod(yamlPath, 0o644);
+      }
+    },
+  );
 
   it("verifies a single session with --session (prefix resolution)", async () => {
     const repo = await setupInitedRepo();

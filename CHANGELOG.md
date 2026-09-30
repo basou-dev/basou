@@ -3,6 +3,44 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **`basou verify` reports a session a newer basou wrote as `unsupported`,
+  not as tampered.** When `session.yaml`'s format major is not 0, or its
+  version is newer than the one this basou writes and its anchor, status or
+  `session` mapping cannot be read, verify cannot know that writer's rules,
+  so it judges nothing — the log included — and says so:
+  `unsupported (session.yaml written by a newer basou; upgrade basou to verify
+  it)`. It fails the command like `tampered`, because the session was not
+  verified. `0.56.0` and earlier report such a session `tampered` /
+  `yaml_unreadable`. `basou verify --json` can now print `"status":
+  "unsupported"`, the human tally gains an `unsupported` count, and `basou
+  report --json` gains `integrity.unsupported` (the report only verifies
+  sessions whose `session.yaml` loads, so it stays 0 there, and the markdown
+  shows it only when it is not).
+
+### Changed
+
+- **A change to what `basou verify` reads from `session.yaml` moves the
+  session's `schema_version`** (`docs/spec/schemas.md` §7.3): the keys of
+  `integrity`, the values of `status`, and what the anchor means. That holds
+  even for a change the extension rules would otherwise allow without a
+  version, such as an optional key added to `integrity`, which rejects keys
+  it does not know. It is what lets an older verify tell a newer writer's
+  document from a damaged one. A failure at a version this basou knows is
+  still `tampered` / `yaml_unreadable`.
+- **An I/O failure reading `session.yaml` aborts `basou verify`**, as one
+  reading `events.jsonl` already did, instead of being reported as
+  `tampered` / `yaml_unreadable`. A permission error is an environment
+  problem, not tampering. The command still exits non-zero.
+- **An `integrity` key left under an unchained or empty log is
+  `anchor_without_chain` whatever its value.** It used to be caught only when
+  the anchor and the status validated, so `integrity: null`, a malformed
+  anchor, or a `status` outside the enum left the stripped chain reported
+  `unchained`, exit `0`. It is now `tampered`, exit `1`.
+
 ## 0.56.0 — 2026-09-30
 
 ### Fixed

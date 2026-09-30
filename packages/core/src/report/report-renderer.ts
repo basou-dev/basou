@@ -156,6 +156,12 @@ export type ReportData = {
     empty: number;
     incomplete: number;
     in_progress: number;
+    /**
+     * Sessions whose `session.yaml` a newer basou wrote. Zero in practice: the
+     * report only verifies sessions whose `session.yaml` loaded, so the
+     * markdown shows it only when it is not.
+     */
+    unsupported: number;
     tampered: number;
     /** Session ids whose chain is `tampered`, surfaced for follow-up. */
     tamperedSessions: string[];
@@ -279,8 +285,8 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
   const changedFiles = [...changedSet].sort();
 
   // Integrity: verify each session's chain and tally by verdict. A session
-  // whose events.jsonl is unreadable (a non-ENOENT I/O error) makes
-  // verifyEventsChain throw; surface it as a skip and leave it out of the tally
+  // whose events.jsonl or session.yaml is unreadable (a non-ENOENT I/O error)
+  // makes verifyEventsChain throw; surface it as a skip and leave it out of the tally
   // so a single bad file never fails the whole report (a successful render must
   // exit 0). `total` therefore counts only the sessions that could be verified.
   const integrity = {
@@ -290,6 +296,7 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
     empty: 0,
     incomplete: 0,
     in_progress: 0,
+    unsupported: 0,
     tampered: 0,
     tamperedSessions: [] as string[],
   };
@@ -536,7 +543,7 @@ function formatReportBody(data: ReportData, t: ViewStrings): string {
   lines.push("");
   const i = data.integrity;
   lines.push(
-    `Provenance internally tamper-checked: ${i.verified} verified, ${i.unchained} unchained, ${i.empty} empty, ${i.incomplete} incomplete, ${i.in_progress} in_progress, ${i.tampered} tampered (of ${i.total} sessions).`,
+    `Provenance internally tamper-checked: ${i.verified} verified, ${i.unchained} unchained, ${i.empty} empty, ${i.incomplete} incomplete, ${i.in_progress} in_progress, ${i.unsupported > 0 ? `${i.unsupported} unsupported, ` : ""}${i.tampered} tampered (of ${i.total} sessions).`,
   );
   lines.push("");
   lines.push(

@@ -283,7 +283,10 @@ a `basou_version`). This tracks the **on-disk format major**, which is
   fields when basou rewrites them, so a newer minor's additive fields survive
   that (`basou init --force` replaces the manifest rather than rewriting it).
   `session.yaml` is a loose object too, except `integrity`, which rejects a key
-  it does not know and so makes the whole session unreadable. An imported
+  it does not know and so makes the whole session unreadable. Adding a key to
+  it therefore moves the session's `schema_version` (schemas §7.3), and an
+  older `basou verify` reports such a session `unsupported` rather than
+  tampered. An imported
   session's `session.yaml` is rebuilt from its source whenever the source
   grows, keeping only `task_id` and `summary`, so a field a newer minor added
   does not survive a re-import.
