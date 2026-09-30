@@ -33,6 +33,24 @@ All notable changes to **basou** are recorded here. The project follows
   lists, and a test fails when those lists, or the exit codes, differ from the
   ones §7.5 documents.
 
+### Fixed
+
+- **`basou verify` no longer crashes on a chained log with a line that is
+  JSON `null`.** Verify read `prev_hash` from each line without checking that
+  the line was a JSON object, so a line that parses to `null` — with or
+  without whitespace around it, a trailing `\r` included — threw an error,
+  which stopped the command: it printed no verdict for any session, with
+  `--all` or `--json` included, and exited `1` as an operational error. Such a
+  line is now `tampered` / `missing_prev_hash` at that line, like a line that
+  is a number, a string or an array, and every other session is reported as
+  usual. The exit code is unchanged: `1` before and after. Three other paths
+  run the same check and change with it: `basou report generate` (and
+  `@basou/sdk`'s report) counts such a session as tampered instead of skipping
+  it as `events_jsonl_unreadable`; an in-place re-import (`basou import`,
+  `basou refresh`) skips it as `prior_chain_broken` instead of stopping the
+  import of every remaining source; and `basou session rechain` reports it
+  skipped as tampered instead of as an error row.
+
 ## 0.57.0 — 2026-09-30
 
 ### Added

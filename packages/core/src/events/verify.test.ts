@@ -270,6 +270,19 @@ describe("verifyEventsChain — event tampering", () => {
     expect(verdict.line).toBe(2);
   });
 
+  it("reports a chained line that is valid JSON but not an object as missing_prev_hash", async () => {
+    const paths = await setupPaths();
+    for (const second of ["null", "1", '"x"', "[]", "true"]) {
+      const fixture = await writeChainedSession(paths, SES_ID, 3);
+      await rewriteLines(fixture, [fixture.lines[0] as string, second, fixture.lines[2] as string]);
+      const verdict = await verifyEventsChain(paths, SES_ID);
+      expect({ second, verdict }).toEqual({
+        second,
+        verdict: { status: "tampered", eventCount: 3, reason: "missing_prev_hash", line: 2 },
+      });
+    }
+  });
+
   it("detects an invalid-UTF-8 byte substitution that decodes to the same string", async () => {
     const paths = await setupPaths();
     const sessionDir = join(paths.sessions, SES_ID);

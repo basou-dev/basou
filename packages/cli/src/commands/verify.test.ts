@@ -171,6 +171,37 @@ describe("basou verify", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("reports a null line as tampered and still reports every other session", async () => {
+    const repo = await setupInitedRepo();
+    const importedId = await importChainedSession(repo);
+    await writeLiveSession(repo);
+    const eventsPath = join(basouPaths(repo).sessions, importedId, "events.jsonl");
+    const lines = (await readFile(eventsPath, "utf8")).split("\n");
+    lines[1] = "null";
+    await writeFile(eventsPath, lines.join("\n"));
+
+    const out = captureStdout();
+    await runVerify({ json: true }, { cwd: repo });
+
+    const rows = JSON.parse(joinCalls(out)) as VerifyRow[];
+    expect(new Map(rows.map((r) => [r.session_id, r]))).toEqual(
+      new Map<string, VerifyRow>([
+        [
+          importedId,
+          {
+            session_id: importedId,
+            status: "tampered",
+            event_count: 3,
+            reason: "missing_prev_hash",
+            line: 2,
+          },
+        ],
+        [LIVE_SES_ID, { session_id: LIVE_SES_ID, status: "unchained", event_count: 1 }],
+      ]),
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("emits machine-readable rows with --json", async () => {
     const repo = await setupInitedRepo();
     const importedId = await importChainedSession(repo);
