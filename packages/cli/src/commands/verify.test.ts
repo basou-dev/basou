@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   basouPaths,
@@ -14,7 +15,7 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runVerify, type VerifyRow } from "./verify.js";
+import { PASSING_STATUSES, runVerify, type VerifyRow } from "./verify.js";
 
 const execFileAsync = promisify(execFile);
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
@@ -303,5 +304,103 @@ describe("basou verify", () => {
     await runVerify({}, { cwd: repo });
     expect(joinCalls(out)).toContain("Sessions: 0 total");
     expect(process.exitCode ?? 0).toBe(0);
+  });
+});
+
+// docs/spec/schemas.md §7.5 documents the rows of `basou verify --json`: their
+// fields and the values of `status` and `reason`. These records are exhaustive
+// over the code's types, so typecheck fails when a field or value is added to
+// or removed from the code alone, and the test below fails when the doc's
+// lists differ from the records or its Exit column from PASSING_STATUSES. The
+// doc's other columns are not pinned here.
+const ROW_FIELDS: Record<keyof VerifyRow, true> = {
+  session_id: true,
+  status: true,
+  event_count: true,
+  reason: true,
+  line: true,
+  session_yaml_invalid: true,
+};
+const STATUSES: Record<VerifyRow["status"], true> = {
+  verified: true,
+  unchained: true,
+  empty: true,
+  incomplete: true,
+  in_progress: true,
+  unsupported: true,
+  tampered: true,
+};
+const REASONS: Record<NonNullable<VerifyRow["reason"]>, true> = {
+  torn_tail: true,
+  blank_line: true,
+  malformed_line: true,
+  missing_prev_hash: true,
+  genesis_mismatch: true,
+  broken_link: true,
+  session_id_mismatch: true,
+  anchor_missing: true,
+  anchor_mismatch: true,
+  anchor_without_chain: true,
+  yaml_unreadable: true,
+  yaml_missing: true,
+};
+
+// The cells of each row of the table under `header`, with the first cell's
+// backticks removed.
+function tableRows(section: string, header: string): [string, ...string[]][] {
+  const lines = section.split("\n");
+  const start = lines.indexOf(header);
+  if (start === -1) throw new Error(`table not found: ${header}`);
+  const rows: [string, ...string[]][] = [];
+  for (const row of lines.slice(start + 2)) {
+    if (!row.startsWith("|")) break;
+    const cells = row
+      .slice(1, -1)
+      .split(" | ")
+      .map((c) => c.trim());
+    const first = /^`([^`]+)`$/.exec(cells[0] ?? "");
+    if (first === null) throw new Error(`row without a backticked first cell: ${row}`);
+    rows.push([first[1] as string, ...cells.slice(1)]);
+  }
+  return rows;
+}
+
+describe("basou verify --json as documented", () => {
+  it("lists the same fields and values as the code", async () => {
+    const doc = await readFile(
+      join(dirname(fileURLToPath(import.meta.url)), "../../../../docs/spec/schemas.md"),
+      "utf8",
+    );
+    const section = doc.slice(doc.indexOf("## §7.5 "));
+    const first = (header: string): string[] => tableRows(section, header).map((r) => r[0]);
+    expect(first("| Field | Value | Present | Meaning |")).toEqual(Object.keys(ROW_FIELDS));
+    expect(first("| `reason` | `status` | `line` | Meaning |")).toEqual(Object.keys(REASONS));
+    const verdicts = tableRows(section, "| Verdict | Meaning | Exit |");
+    expect(verdicts.map((r) => r[0])).toEqual(Object.keys(STATUSES));
+    expect(verdicts.map((r) => [r[0], r[2]])).toEqual(
+      Object.keys(STATUSES).map((status) => [
+        status,
+        PASSING_STATUSES.has(status as VerifyRow["status"]) ? "0" : "non-zero",
+      ]),
+    );
+  });
+
+  it("prints an empty array for a workspace with no sessions", async () => {
+    const repo = await setupInitedRepo();
+    const out = captureStdout();
+    await runVerify({ json: true }, { cwd: repo });
+    expect(JSON.parse(joinCalls(out))).toEqual([]);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("prints no array when the command stops before verifying", async () => {
+    const repo = await setupInitedRepo();
+    await importChainedSession(repo);
+    const out = captureStdout();
+    const err = captureStderr();
+    await runVerify({ json: true, session: "ses_nomatch" }, { cwd: repo });
+    expect(out).not.toHaveBeenCalled();
+    expect(joinCalls(err)).toContain("Session not found: ses_nomatch");
+    expect(process.exitCode).toBe(1);
   });
 });

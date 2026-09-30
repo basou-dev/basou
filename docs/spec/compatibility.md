@@ -131,7 +131,8 @@ The carve-out is bounded by three things:
    that.
 
 `unsupported`, for a session a newer basou wrote, was added this way before
-`1.0`.
+`1.0`. The row, its fields and today's values of both are listed in [schemas
+§7.5](schemas.md#75-event-log-integrity-hash-chain--head-anchor).
 
 ### The import envelope version may move at a minor
 

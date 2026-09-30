@@ -3,6 +3,36 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`docs/spec/schemas.md` §7.5 documents the output of `basou verify
+  --json`**, which `docs/spec/compatibility.md` guarantees only as far as it is
+  documented. The top level is an array of rows, one per directory under
+  `.basou/sessions/` sorted by name, and stays an array within `1.x`, so it has
+  no place for anything about the run as a whole; an array that is printed is
+  complete. Which directories get a row is left open: today any directory does,
+  whatever its name, and a session directory that is a symlink gets none. A row always has `session_id`,
+  `status` and `event_count`; `reason` is always on `tampered` and `incomplete`
+  and today on no other status, `line` is there when one line of the log broke,
+  and `session_yaml_invalid` only ever appears as `true`. The section lists the
+  seven `status` values with their exit codes and the twelve `reason` values
+  with the `status` each belongs to today, and says how to read the output:
+  ignore a field you do not know (an added field never changes what the others
+  mean or whether a row passes), read a `status` or `reason` you do not know as
+  not verified (an unknown `status` fails; an unknown `reason` leaves its
+  status passing or failing as it would), and take a pass from the exit code — which says no session
+  failed, not that every session was `verified`. The shape itself is
+  unchanged.
+- **`basou verify` decides its exit code from the statuses that pass**, rather
+  than from the ones that fail, so a status added later fails the command
+  unless it is listed as passing — the rule `docs/spec/compatibility.md` sets.
+  Every status exits as before. Typecheck now fails when a row field, `status`
+  or `reason` value is added to or removed from the code without the test's
+  lists, and a test fails when those lists, or the exit codes, differ from the
+  ones §7.5 documents.
+
 ## 0.57.0 — 2026-09-30
 
 ### Added
