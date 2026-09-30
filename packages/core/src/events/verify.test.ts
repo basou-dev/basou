@@ -4,9 +4,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { Event } from "../schemas/event.schema.js";
-import type { Session, SessionIntegrity } from "../schemas/session.schema.js";
+import {
+  SESSION_SCHEMA_VERSION,
+  type Session,
+  type SessionIntegrity,
+  SessionIntegritySchema,
+  SessionStatusSchema,
+} from "../schemas/session.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
-import { chainEvents } from "./chain.js";
+import { chainEvents, genesisHash, lineHash } from "./chain.js";
 import { verifyEventsChain } from "./verify.js";
 
 const SES_ID = "ses_01HXABCDEF1234567890ABCSE1";
@@ -695,7 +701,7 @@ describe("verifyEventsChain — session.yaml invalid outside the anchor and stat
       await chmod(fixture.yamlPath, 0o000);
       try {
         await expect(verifyEventsChain(paths, SES_ID)).rejects.toThrow(
-          "Failed to read session.yaml",
+          `Failed to read session.yaml of ${SES_ID}`,
         );
       } finally {
         await chmod(fixture.yamlPath, 0o644);
@@ -836,6 +842,91 @@ describe("verifyEventsChain — a session.yaml a newer basou wrote (unsupported)
     expect(verdict).toEqual({ status: "verified", eventCount: 3 });
   });
 
+  it("reports a tampered result under a newer minor as unsupported (anchor meaning may differ)", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSession(paths, SES_ID, 3, {
+      anchor: { head_hash: "f".repeat(64), event_count: 3 },
+    });
+    await rewriteSessionYaml(fixture, (record) => {
+      record.schema_version = "0.3.0";
+    });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "unsupported", eventCount: 3 });
+  });
+
+  it("reports a chain it cannot follow under a newer minor as unsupported", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSession(paths, SES_ID, 2);
+    const first = JSON.parse(fixture.lines[0] as string) as Record<string, unknown>;
+    first.prev_hash = "0".repeat(64);
+    await rewriteLines(fixture, [JSON.stringify(first), fixture.lines[1] as string]);
+    await rewriteSessionYaml(fixture, (record) => {
+      record.schema_version = "0.3.0";
+    });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "unsupported", eventCount: 2 });
+  });
+
+  it("keeps a live session under a newer minor in_progress", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSessionWithStatus(paths, SES_ID, "running", {
+      anchor: false,
+    });
+    await rewriteSessionYaml(fixture, (record) => {
+      record.schema_version = "0.3.0";
+    });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "in_progress", eventCount: 3 });
+  });
+
+  it("keeps an empty log without an integrity key empty under a newer minor", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSession(paths, SES_ID, 2, { anchor: false });
+    await writeFile(fixture.eventsPath, "");
+    await rewriteSessionYaml(fixture, (record, inner) => {
+      record.schema_version = "0.3.0";
+      inner.status = "paused";
+    });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "empty", eventCount: 0, sessionYamlInvalid: true });
+  });
+
+  it("reports an integrity key under an unchained log at a newer minor as unsupported", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSession(paths, SES_ID, 2);
+    await stripChain(fixture);
+    await rewriteSessionYaml(fixture, (record, inner) => {
+      record.schema_version = "0.3.0";
+      inner.status = "paused";
+    });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "unsupported", eventCount: 2, sessionYamlInvalid: true });
+  });
+
+  it("reads a pre-release of a foreign major as unsupported", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSession(paths, SES_ID, 2);
+    await rewriteSessionYaml(fixture, (record) => {
+      record.schema_version = "1.0.0-rc.1";
+    });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict.status).toBe("unsupported");
+  });
+
+  it("does not read a version with a leading zero as newer", async () => {
+    const paths = await setupPaths();
+    for (const version of ["0.03.0", "00.3.0", "0.2.00"]) {
+      const fixture = await writeChainedSession(paths, SES_ID, 2);
+      await rewriteSessionYaml(fixture, (record, inner) => {
+        record.schema_version = version;
+        inner.status = "paused";
+      });
+      const verdict = await verifyEventsChain(paths, SES_ID);
+      expect(verdict.status).toBe("tampered");
+      expect(verdict.reason).toBe("yaml_unreadable");
+    }
+  });
+
   it("still reports an unknown status at a known version as yaml_unreadable", async () => {
     const paths = await setupPaths();
     const fixture = await writeChainedSession(paths, SES_ID, 2);
@@ -913,6 +1004,64 @@ describe("verifyEventsChain — an integrity key under an unchained log", () => 
     await rewriteSessionYaml(fixture, (_record, inner) => {
       inner.status = "paused";
     });
+    const verdict = await verifyEventsChain(paths, SES_ID);
+    expect(verdict).toEqual({ status: "unchained", eventCount: 2, sessionYamlInvalid: true });
+  });
+});
+
+// What basou verify reads from session.yaml, and how the chain is hashed, are
+// pinned to the session format version. If this fails, you changed one of
+// them: move SESSION_SCHEMA_VERSION (docs/spec/schemas.md §7.3) and update
+// this snapshot in the same change, so an older verify reports a newer
+// writer's session `unsupported` instead of `tampered`.
+describe("what verify reads is pinned to the session format version", () => {
+  it("matches the snapshot for this format version", () => {
+    expect({
+      version: SESSION_SCHEMA_VERSION,
+      status: SessionStatusSchema.options,
+      integrityKeys: Object.keys(SessionIntegritySchema.shape),
+      genesis: genesisHash(SES_ID),
+      line: lineHash(Buffer.from('{"a":1}')),
+    }).toEqual({
+      version: "0.2.0",
+      status: [
+        "initialized",
+        "running",
+        "waiting_approval",
+        "completed",
+        "failed",
+        "interrupted",
+        "imported",
+        "archived",
+      ],
+      integrityKeys: ["head_hash", "event_count"],
+      genesis: "50d06e5463fea393c7e5cc620d847a40fe64e2b93e476ed3e4903465922b1fcc",
+      line: "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+    });
+  });
+});
+
+describe("verifyEventsChain — a session.yaml whose top level is not a mapping", () => {
+  it("reports a list, a scalar or an empty file on a chained log as yaml_unreadable", async () => {
+    const paths = await setupPaths();
+    for (const body of ["- schema_version: 1.0.0\n", "1.0.0\n", ""]) {
+      const fixture = await writeChainedSession(paths, SES_ID, 2);
+      await writeFile(fixture.yamlPath, body);
+      const verdict = await verifyEventsChain(paths, SES_ID);
+      expect(verdict).toEqual({
+        status: "tampered",
+        eventCount: 2,
+        reason: "yaml_unreadable",
+        sessionYamlInvalid: true,
+      });
+    }
+  });
+
+  it("finds no integrity key in a list under an unchained log", async () => {
+    const paths = await setupPaths();
+    const fixture = await writeChainedSession(paths, SES_ID, 2);
+    await stripChain(fixture);
+    await writeFile(fixture.yamlPath, "- session:\n    integrity: null\n");
     const verdict = await verifyEventsChain(paths, SES_ID);
     expect(verdict).toEqual({ status: "unchained", eventCount: 2, sessionYamlInvalid: true });
   });

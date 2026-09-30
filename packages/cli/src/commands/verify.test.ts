@@ -258,7 +258,7 @@ describe("basou verify", () => {
         const out = captureStdout();
         const err = captureStderr();
         await runVerify({}, { cwd: repo });
-        expect(joinCalls(err)).toContain("Failed to read session.yaml");
+        expect(joinCalls(err)).toContain(`Failed to read session.yaml of ${importedId}`);
         expect(joinCalls(out)).not.toContain("TAMPERED");
         expect(process.exitCode).toBe(1);
       } finally {

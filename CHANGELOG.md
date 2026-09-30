@@ -8,38 +8,56 @@ All notable changes to **basou** are recorded here. The project follows
 ### Added
 
 - **`basou verify` reports a session a newer basou wrote as `unsupported`,
-  not as tampered.** When `session.yaml`'s format major is not 0, or its
-  version is newer than the one this basou writes and its anchor, status or
-  `session` mapping cannot be read, verify cannot know that writer's rules,
-  so it judges nothing — the log included — and says so:
-  `unsupported (session.yaml written by a newer basou; upgrade basou to verify
-  it)`. It fails the command like `tampered`, because the session was not
-  verified. `0.56.0` and earlier report such a session `tampered` /
-  `yaml_unreadable`. `basou verify --json` can now print `"status":
-  "unsupported"`, the human tally gains an `unsupported` count, and `basou
-  report --json` gains `integrity.unsupported` (the report only verifies
-  sessions whose `session.yaml` loads, so it stays 0 there, and the markdown
-  shows it only when it is not).
+  not as tampered.** A newer writer may have changed rules verify relies on,
+  so a result that looks like tampering there may not be. When `session.yaml`'s
+  format major is not 0, verify judges nothing, the log included. When its
+  version is a `0.x.y` newer than the one this basou writes, verify judges the
+  session as usual and reports `unsupported` wherever it would have reported
+  `tampered` — an anchor or status it cannot read, an anchor that does not
+  match, a chain it cannot follow; `verified`, `unchained`, `empty` and
+  `in_progress` stand. The line reads `unsupported (session.yaml written by a
+  newer basou; upgrade basou to verify it)`, the tally gains an `unsupported`
+  count, and the command fails, because the session was not verified.
+  `basou report generate` does not count it: the report only verifies sessions
+  whose `session.yaml` loads, and skips one that stops loading as
+  `session_yaml_invalid`.
 
 ### Changed
 
 - **A change to what `basou verify` reads from `session.yaml` moves the
   session's `schema_version`** (`docs/spec/schemas.md` §7.3): the keys of
-  `integrity`, the values of `status`, and what the anchor means. That holds
-  even for a change the extension rules would otherwise allow without a
-  version, such as an optional key added to `integrity`, which rejects keys
-  it does not know. It is what lets an older verify tell a newer writer's
-  document from a damaged one. A failure at a version this basou knows is
-  still `tampered` / `yaml_unreadable`.
-- **An I/O failure reading `session.yaml` aborts `basou verify`**, as one
-  reading `events.jsonl` already did, instead of being reported as
-  `tampered` / `yaml_unreadable`. A permission error is an environment
-  problem, not tampering. The command still exits non-zero.
-- **An `integrity` key left under an unchained or empty log is
-  `anchor_without_chain` whatever its value.** It used to be caught only when
-  the anchor and the status validated, so `integrity: null`, a malformed
-  anchor, or a `status` outside the enum left the stripped chain reported
-  `unchained`, exit `0`. It is now `tampered`, exit `1`.
+  `integrity`, the values of `status`, and what the anchor means — even a
+  change the extension rules would otherwise allow without a version, such as
+  an optional key added to `integrity`, which rejects keys it does not know.
+  That is what lets verify tell a newer writer's document from a damaged one.
+  A test now pins the version together with the status values, the anchor's
+  keys and the chain's hashing, and fails when one changes alone.
+- **`docs/spec/compatibility.md` lets `basou verify`'s `status` and `reason`
+  gain values within `1.x`**, on the failing side only: a new `status` always
+  exits non-zero, a new `reason` never changes whether its status fails, and a
+  consumer reads a value it does not know as not verified.
+- **Three cases that exited `0` now exit `1`.** In each, `0.56.0` and earlier
+  reported `unchained` or `empty`:
+    - a format major other than 0 over an unchained, empty or missing log,
+      now `unsupported`;
+    - an `integrity` key left under an unchained or empty log when the anchor,
+      the status, the `session` mapping or the `schema_version` (including one
+      that is not a version, or none) failed validation — `integrity: null`,
+      for instance — now `tampered` / `anchor_without_chain`, or `unsupported`
+      at a newer version. The key's presence decides it now, not whether its
+      value validates;
+    - an I/O failure reading `session.yaml` (a permission error, say) under an
+      unchained or empty log, which now aborts the command.
+
+  Over a chained log that I/O failure already failed the command, reported as
+  `tampered` / `yaml_unreadable`; it now aborts too, with `Failed to read
+  session.yaml of <session id>`, as a failure reading `events.jsonl` already
+  did.
+- **Over a chained log, a format major other than 0, or a newer `0.x.y`
+  that verify would have reported `tampered`, is now `unsupported`.** Both
+  exit `1`. A `schema_version` with a leading zero (`0.03.0`) is not read as a
+  newer version, and a pre-release of a foreign major (`1.0.0-rc.1`) is read
+  as that major.
 
 ## 0.56.0 — 2026-09-30
 

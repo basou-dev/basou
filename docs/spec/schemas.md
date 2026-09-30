@@ -461,8 +461,9 @@ minor](compatibility.md#the-on-disk-format-may-make-its-gated-changes-at-a-minor
   moves the session's `schema_version`, even when it would otherwise be
   additive — an optional key added to `integrity`, for instance. `integrity`
   rejects a key it does not know, so without the move an older verify could
-  not tell a newer writer's document from a damaged one; with it, an older
-  verify reports the session `unsupported` rather than `tampered` (§7.5).
+  not tell a newer writer's document from a damaged one; with it, a verify
+  from `0.57.0` on reports the session `unsupported` rather than `tampered`
+  (§7.5). `0.56.0` and earlier report it `tampered` on a chained log.
 - Widening a required field's domain (e.g. making it nullable) is a BREAKING
   change to the event format. From 0.2.0 onward it requires a `schema_version`
   bump and a stated read rule, because a reader cannot otherwise tell which
@@ -973,36 +974,42 @@ Per-session verdicts:
 | `empty` | zero events and no `integrity` key | 0 |
 | `incomplete` | chained log but `session.yaml` is entirely absent (an import crashed between the two writes); a re-import repairs it | 0 |
 | `in_progress` | chained log on a still-live session (`initialized` / `running` / `waiting_approval`); the internal chain is verified, the mutable tail and not-yet-written anchor are forgiven | 0 |
-| `unsupported` | `session.yaml` was written by a newer basou — its format major is not 0, or its version is newer than the one this basou writes and its anchor, status or `session` mapping cannot be read — so verify judges nothing, the log included; upgrade basou to verify it | non-zero |
+| `unsupported` | `session.yaml` was written by a newer basou, whose rules verify does not know: its format major is not 0 (nothing is judged, the log included), or it is a `0.x.y` newer than the one this basou writes and the verdict would otherwise be `tampered`; upgrade basou to verify it | non-zero |
 | `tampered` | a real break: bad back-pointer or genesis, foreign `session_id`, torn tail (on an at-rest session), blank or malformed line, anchor missing / mismatching, an `integrity` key left behind with no chained log, or, on a chained log, a `session.yaml` that verify cannot read what it needs from (`yaml_unreadable`, below) | non-zero |
 
 **What verify reads from `session.yaml`.** Three fields, each against its own
 schema: the `schema_version` format gate, the `integrity` anchor, and the
 `status` that decides whether the anchor is due yet. A validation failure in
 any other field says nothing about the log, so it does not change the verdict
-or the exit code. When one of the three cannot be read, the version decides
-what that means:
+or the exit code. The version decides how the rest is read:
 
-- **A newer version** — a format major other than 0, or a `0.x.y` above the
-  one this basou writes — is `unsupported`. §7.3 requires a change to what
-  verify reads to move the version, so a document it cannot read at a newer
-  version is a newer writer's, not damage.
-- **A version this basou knows**, on a chained log, is `tampered` /
-  `yaml_unreadable`: the file does not parse as YAML, has no `session`
-  mapping, or one of the three fields fails validation. That includes a
-  `schema_version` that is not a version at all.
+- **A format major other than 0** is `unsupported` before anything is judged,
+  the log included — that basou's rules are unknown here.
+- **A newer `0.x.y`** — above the one this basou writes, with no leading
+  zeros — is judged as usual, but a result that would be `tampered` is
+  reported `unsupported`: §7.3 requires a change to what verify reads to move
+  the version, so under a newer version something that looks like tampering
+  may be the newer rules — an anchor or status verify cannot read, an anchor
+  that no longer matches, a chain it cannot follow. `verified`, `unchained`,
+  `empty` and `in_progress` stand.
+- **Any other version** — the one this basou writes, an older one, or a
+  `schema_version` that is not a version at all — on a chained log is
+  `tampered` / `yaml_unreadable` when the file does not parse as YAML, its top
+  level is not a mapping or it has no `session` mapping, or one of the three
+  fields fails validation.
 - **Under an unchained or empty log**, only the presence of an `integrity` key
-  matters: a key left behind, whatever its value, is `anchor_without_chain`.
-  A file that does not parse has no key to find, and gives `unchained` /
+  matters: a key left behind, whatever its value, is `anchor_without_chain`
+  (`unsupported` at a newer version, as above). A file that does not parse, or
+  whose top level is not a mapping, has no key to find, and gives `unchained` /
   `empty` with exit 0.
 
 Whether the whole document loads is reported beside the verdict:
 `"session_yaml_invalid": true` on the row of `basou verify --json`, and a note
 on the human-readable line, whenever `session.yaml` exists but does not parse
 or fails the full session schema — on `unsupported` and `yaml_unreadable` rows
-as well as beside a verdict decided on the three fields. That is the condition
-under which the commands that read the whole document skip the session, and
-they report it with the same code.
+as well as beside a verdict decided on the three fields. The commands that
+read the whole document skip such a session with the same code; they also skip
+an I/O failure under it, which makes verify abort instead.
 
 `unchained` / `empty` / `incomplete` / `in_progress` exit 0; an I/O failure
 while reading a log or its `session.yaml` (e.g. permissions) aborts the command with a non-zero exit

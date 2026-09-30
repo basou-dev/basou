@@ -114,6 +114,25 @@ non-zero — `basou verify --json` reporting a tampered session, for instance �
 stays under the additive rule like any other. Decide whether a command
 succeeded from its exit code, not from whether it printed anything.
 
+### `basou verify` verdicts may gain values on the failing side
+
+The `status` and `reason` of a `basou verify --json` row may gain values within
+a `1.x` line. The additive rule above names added fields, not added values, and
+verify's set of verdicts has to grow as its checks do — signing will need one.
+The carve-out is bounded by three things:
+
+1. **A new `status` value always fails the command.** It exits non-zero and
+   never means a session passed; `verified`, `unchained`, `empty`,
+   `incomplete` and `in_progress` remain the only values that exit `0`.
+2. **A new `reason` only refines an existing `status`,** and never changes
+   whether that status fails the command.
+3. **A consumer reads a value it does not know as not verified.** A consumer
+   that switches exhaustively on `status` or `reason` should keep a branch for
+   that.
+
+`unsupported`, for a session a newer basou wrote, was added this way before
+`1.0`.
+
 ### The import envelope version may move at a minor
 
 `basou session import` and `basou import` require the envelope's
@@ -284,9 +303,9 @@ a `basou_version`). This tracks the **on-disk format major**, which is
   that (`basou init --force` replaces the manifest rather than rewriting it).
   `session.yaml` is a loose object too, except `integrity`, which rejects a key
   it does not know and so makes the whole session unreadable. Adding a key to
-  it therefore moves the session's `schema_version` (schemas §7.3), and an
-  older `basou verify` reports such a session `unsupported` rather than
-  tampered. An imported
+  it therefore moves the session's `schema_version` (schemas §7.3), and a
+  `basou verify` from `0.57.0` on reports such a session `unsupported` rather
+  than tampered (`0.56.0` and earlier report it tampered). An imported
   session's `session.yaml` is rebuilt from its source whenever the source
   grows, keeping only `task_id` and `summary`, so a field a newer minor added
   does not survive a re-import.
