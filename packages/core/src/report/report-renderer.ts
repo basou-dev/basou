@@ -279,10 +279,13 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
   const changedFiles = [...changedSet].sort();
 
   // Integrity: verify each session's chain and tally by verdict. A session
-  // whose events.jsonl is unreadable (a non-ENOENT I/O error) makes
-  // verifyEventsChain throw; surface it as a skip and leave it out of the tally
+  // whose events.jsonl or session.yaml is unreadable (a non-ENOENT I/O error)
+  // makes verifyEventsChain throw; surface it as a skip and leave it out of the tally
   // so a single bad file never fails the whole report (a successful render must
   // exit 0). `total` therefore counts only the sessions that could be verified.
+  // The entries' session.yaml loaded moments ago, so a session.yaml failure or
+  // an `unsupported` verdict here means the file changed since; both are
+  // skipped as `session_yaml_invalid`, the code the loader uses for them.
   const integrity = {
     total: 0,
     verified: 0,
@@ -294,11 +297,24 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
     tamperedSessions: [] as string[],
   };
   for (const entry of entries) {
-    const verdict = await verifyEventsChain(input.paths, entry.sessionId).catch(() => null);
-    if (verdict === null) {
+    let verdictError: unknown;
+    const verdict = await verifyEventsChain(input.paths, entry.sessionId).catch(
+      (error: unknown) => {
+        verdictError = error;
+        return null;
+      },
+    );
+    const yamlUnreadable =
+      verdictError instanceof Error &&
+      verdictError.message.startsWith("Failed to read session.yaml");
+    if (verdict === null && !yamlUnreadable) {
       if (!unreadableEmitted.has(entry.sessionId)) {
         wrappedSkip(entry.sessionId, "events_jsonl_unreadable");
       }
+      continue;
+    }
+    if (verdict === null || verdict.status === "unsupported") {
+      wrappedSkip(entry.sessionId, "session_yaml_invalid");
       continue;
     }
     integrity.total += 1;

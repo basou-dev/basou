@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { normalizeSessionTimestamps } from "../schemas/iso-timestamp.js";
 import {
+  SESSION_SCHEMA_VERSION,
   type SessionIntegrity,
   SessionIntegritySchema,
   SessionSchema,
@@ -51,6 +52,14 @@ function isLiveStatus(status: SessionStatus): boolean {
  *   back-pointer chain is fully verified, but the tail and head anchor are
  *   forgiven because a live session's log is legitimately still growing and its
  *   anchor is not written until the terminal finalize. Informational, exit 0.
+ * - `unsupported` — `session.yaml` was written by a newer basou, whose rules
+ *   this verifier does not know. A format major other than 0 is `unsupported`
+ *   before anything is judged, the log included. A `0.x.y` newer than the one
+ *   this basou writes is judged as usual, and a result that would be
+ *   `tampered` is reported `unsupported` instead: the newer writer may have
+ *   changed the anchor or the chain, or added a status or anchor key. Not
+ *   verified, so it fails the command like `tampered`; the remedy is to
+ *   upgrade basou.
  * - `verified` — every back-pointer, genesis, session-id and line-discipline
  *   check passed AND the head anchor matches the on-disk log.
  */
@@ -60,6 +69,7 @@ export type ChainVerdictStatus =
   | "empty"
   | "incomplete"
   | "in_progress"
+  | "unsupported"
   | "tampered";
 
 /** Machine-readable detail for a `tampered` (or `incomplete`) verdict. */
@@ -82,15 +92,21 @@ export type ChainBreakReason =
   | "anchor_missing"
   /** The anchor's `head_hash` / `event_count` disagree with the on-disk log (edit or truncation). */
   | "anchor_mismatch"
-  /** An integrity anchor exists but the log is unchained, empty, or missing (chain stripped). */
+  /**
+   * The log is unchained, empty, or missing, but `session.yaml` has an
+   * `integrity` key (chain stripped). The key's presence decides it, not
+   * whether its value validates. At a newer version this is `unsupported`.
+   */
   | "anchor_without_chain"
   /**
-   * `session.yaml` exists but the verifier cannot read what it needs from it:
-   * the file cannot be read (an I/O failure other than ENOENT) or does not
-   * parse as YAML, it has no `session` mapping, or its `schema_version`, its
-   * `integrity` anchor or its `status` fails validation. Reported only for a
-   * chained log. A failure in any other field does not produce this (see
-   * {@link ChainVerdict.sessionYamlInvalid}).
+   * `session.yaml` is not at a newer version, but the verifier cannot read
+   * what it needs from it: the file does not parse as YAML, its top level is
+   * not a mapping or it has no `session` mapping, or its `schema_version`
+   * (including one that is not a version at all), its `integrity` anchor or
+   * its `status` fails validation. Reported only for a chained log. A failure
+   * in any other field does not produce this (see
+   * {@link ChainVerdict.sessionYamlInvalid}); at a newer version the result is
+   * `unsupported` instead, and an I/O failure throws.
    */
   | "yaml_unreadable"
   /** `incomplete` only: `session.yaml` is entirely absent. */
@@ -107,28 +123,34 @@ export type ChainVerdict = {
   line?: number;
   /**
    * Present (and `true`) when `session.yaml` exists but does not load as a
-   * whole document: it cannot be read, does not parse, or fails the full
-   * session schema. That is the condition under which the commands that read
-   * the whole document skip the session with `session_yaml_invalid`. It does
-   * not decide the verdict: when the format version, the anchor and the status
-   * were still readable the verdict was decided on them, and otherwise a
-   * chained log is `tampered` / `yaml_unreadable`.
+   * whole document: it does not parse or fails the full session schema. The
+   * commands that read the whole document skip such a session with
+   * `session_yaml_invalid`; they also skip an I/O failure under that code,
+   * which makes this verifier throw instead. It does not decide the verdict:
+   * when the format version, the anchor and the status were still readable
+   * the verdict was decided on them; otherwise it is `unsupported` at a newer
+   * version, and `tampered` / `yaml_unreadable` on a chained log at any other.
    */
   sessionYamlInvalid?: true;
 };
 
-// Three-state view of `session.yaml` as seen by the verifier. The `present`
-// variant carries the session status so the verdict can forgive a live
-// session's still-growing tail / not-yet-written anchor (`in_progress`), and
-// whether the whole document validates. An `unreadable` document never does.
+// View of `session.yaml` as seen by the verifier. The `present` variant
+// carries the session status so the verdict can forgive a live session's
+// still-growing tail / not-yet-written anchor (`in_progress`), and whether the
+// whole document validates. An `unreadable` or `unsupported` document never
+// does; `unreadable` records whether an `integrity` key was there at all, so a
+// stripped chain is caught even when the anchor itself cannot be read.
+// `newer` marks a 0.x.y above the version this basou writes.
 type AnchorState =
   | { kind: "absent" }
-  | { kind: "unreadable" }
+  | { kind: "unreadable"; anchorKeyPresent: boolean; newer: boolean }
+  | { kind: "unsupported" }
   | {
       kind: "present";
       integrity: SessionIntegrity | undefined;
       status: SessionStatus;
       documentValid: boolean;
+      newer: boolean;
     };
 
 /**
@@ -139,7 +161,8 @@ type AnchorState =
  * reader, which silently drops bad lines; and not a decoded string, which
  * would collapse invalid UTF-8 sequences into U+FFFD and let a byte-level
  * substitution survive re-hashing) and hashes exactly the bytes it read.
- * The verdict is decided on the events first, then the anchor:
+ * Apart from a newer writer's document (below), the verdict is decided on the
+ * events first, then the anchor:
  *
  * - No line carries `prev_hash` (or there are zero lines / no file): the log
  *   is unchained. If `session.yaml` nevertheless carries an integrity anchor,
@@ -164,13 +187,23 @@ type AnchorState =
  * would report tampering that did not happen. Whether the whole document
  * loads is reported beside the verdict as `sessionYamlInvalid`.
  *
+ * A document a newer basou wrote is told apart by its version, not by what
+ * fails. A format major other than 0 is `unsupported` before the events are
+ * read. A version newer than {@link SESSION_SCHEMA_VERSION} is judged as
+ * usual, and a `tampered` result becomes `unsupported`: the spec requires a
+ * change to what this verifier reads — the anchor's keys or meaning, the
+ * status values — to move the version, so under a newer version a result
+ * that looks like tampering may be the newer rules. At a version this basou
+ * knows, a failure is damage (`yaml_unreadable`).
+ *
  * NON-CRYPTOGRAPHIC: the anchor lives in `session.yaml`, which is itself
  * editable; an attacker rewriting BOTH files consistently is not detected.
  * Signing is a follow-up.
  *
- * Throws `Error("Failed to read events.jsonl")` only for non-ENOENT I/O
- * failures (EACCES etc.) — an unreadable file is an environment problem, not
- * a verdict.
+ * Throws `Error("Failed to read events.jsonl")`, or an error naming the
+ * session for `session.yaml` (`Failed to read session.yaml of <id>`), only
+ * for non-ENOENT I/O failures (EACCES etc.) — an unreadable file is an
+ * environment problem, not a verdict.
  *
  * READ-ONLY and lock-free: a session being finalized concurrently can leave the
  * two files momentarily out of step (old events read before a finalize, new
@@ -202,15 +235,22 @@ async function verifyOnce(paths: BasouPaths, sessionId: string): Promise<ChainVe
   }
 
   const anchor = await readAnchorState(paths, sessionId);
-  const verdict = judgeChain(raw, anchor, sessionId);
+  const judged = judgeChain(raw, anchor, sessionId);
+  const newer = (anchor.kind === "present" || anchor.kind === "unreadable") && anchor.newer;
+  const verdict: ChainVerdict =
+    newer && judged.status === "tampered"
+      ? { status: "unsupported", eventCount: judged.eventCount }
+      : judged;
   const documentInvalid =
-    anchor.kind === "unreadable" || (anchor.kind === "present" && !anchor.documentValid);
+    anchor.kind === "present" ? !anchor.documentValid : anchor.kind !== "absent";
   return documentInvalid ? { ...verdict, sessionYamlInvalid: true } : verdict;
 }
 
 // Read the three fields the verdict depends on, each against its own schema,
-// and record separately whether the whole document validates. An I/O failure
-// other than ENOENT is `unreadable`, as a parse failure is.
+// and record separately whether the whole document validates. A format major
+// other than 0 is `unsupported` outright; any other failure is `unreadable`,
+// marked `newer` when the version is a 0.x.y above the one this basou writes.
+// An I/O failure other than ENOENT throws.
 async function readAnchorState(paths: BasouPaths, sessionId: string): Promise<AnchorState> {
   let raw: unknown;
   try {
@@ -219,19 +259,29 @@ async function readAnchorState(paths: BasouPaths, sessionId: string): Promise<An
     if (error instanceof Error && error.message === "YAML file not found") {
       return { kind: "absent" };
     }
-    return { kind: "unreadable" };
+    if (error instanceof Error && error.message === "Failed to parse YAML content") {
+      return { kind: "unreadable", anchorKeyPresent: false, newer: false };
+    }
+    throw new Error(`Failed to read session.yaml of ${sessionId}`, { cause: error });
   }
-  if (!isRecord(raw) || !SchemaVersionSchema.safeParse(raw.schema_version).success) {
-    return { kind: "unreadable" };
-  }
+  if (!isRecord(raw)) return { kind: "unreadable", anchorKeyPresent: false, newer: false };
+  const standing = formatStanding(raw.schema_version);
+  if (standing === "foreign_major") return { kind: "unsupported" };
+  const newer = standing === "newer";
   const inner = isRecord(raw.session) ? raw.session : null;
-  if (inner === null) return { kind: "unreadable" };
+  const unreadable: AnchorState = {
+    kind: "unreadable",
+    anchorKeyPresent: inner !== null && Object.hasOwn(inner, "integrity"),
+    newer,
+  };
+  if (!SchemaVersionSchema.safeParse(raw.schema_version).success) return unreadable;
+  if (inner === null) return unreadable;
   const status = SessionStatusSchema.safeParse(inner.status);
-  if (!status.success) return { kind: "unreadable" };
+  if (!status.success) return unreadable;
   let integrity: SessionIntegrity | undefined;
   if (inner.integrity !== undefined) {
     const parsed = SessionIntegritySchema.safeParse(inner.integrity);
-    if (!parsed.success) return { kind: "unreadable" };
+    if (!parsed.success) return unreadable;
     integrity = parsed.data;
   }
   return {
@@ -239,11 +289,33 @@ async function readAnchorState(paths: BasouPaths, sessionId: string): Promise<An
     integrity,
     status: status.data,
     documentValid: SessionSchema.safeParse(normalizeSessionTimestamps(raw)).success,
+    newer,
   };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// How a stored `schema_version` stands against the format this basou writes.
+// `foreign_major`: it starts with a major other than 0 (a pre-release suffix
+// does not change that). `newer`: a plain 0.x.y above SESSION_SCHEMA_VERSION.
+// `other`: an older or equal version, or not a version at all — a number with
+// a leading zero included, so `0.03.0` is not read as 0.3.0.
+function formatStanding(version: unknown): "foreign_major" | "newer" | "other" {
+  if (typeof version !== "string") return "other";
+  const major = /^(0|[1-9]\d*)\./.exec(version);
+  if (major === null) return "other";
+  if (major[1] !== "0") return "foreign_major";
+  const full = /^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+  const stored = full.exec(version);
+  const known = full.exec(SESSION_SCHEMA_VERSION);
+  if (stored === null || known === null) return "other";
+  const [storedMinor, storedPatch] = [Number(stored[1]), Number(stored[2])];
+  const [knownMinor, knownPatch] = [Number(known[1]), Number(known[2])];
+  const isNewer =
+    storedMinor > knownMinor || (storedMinor === knownMinor && storedPatch > knownPatch);
+  return isNewer ? "newer" : "other";
 }
 
 function judgeChain(raw: Buffer | null, anchor: AnchorState, sessionId: string): ChainVerdict {
@@ -255,6 +327,12 @@ function judgeChain(raw: Buffer | null, anchor: AnchorState, sessionId: string):
   const segments = raw === null ? [] : splitLinesBytes(raw);
   const tailFragment = !terminated && segments.length > 0 ? (segments.pop() as Buffer) : null;
   const lines = segments;
+
+  // A format major this basou does not read: its rules are unknown, so
+  // nothing is judged, the log included.
+  if (anchor.kind === "unsupported") {
+    return { status: "unsupported", eventCount: lines.length };
+  }
 
   // Chained-ness: does ANY parseable line (or the tail fragment) carry prev_hash?
   const carriesPrevHash = (s: Buffer): boolean => {
@@ -274,7 +352,10 @@ function judgeChain(raw: Buffer | null, anchor: AnchorState, sessionId: string):
     // a chain that is no longer there (one-file strip / truncate-to-zero /
     // log deletion). Legitimately unchained sessions never have an anchor:
     // only the import writers set one, and they always chain.
-    if (anchor.kind === "present" && anchor.integrity !== undefined) {
+    const anchorPresent =
+      (anchor.kind === "present" && anchor.integrity !== undefined) ||
+      (anchor.kind === "unreadable" && anchor.anchorKeyPresent);
+    if (anchorPresent) {
       return {
         status: "tampered",
         eventCount: lines.length,

@@ -21,7 +21,13 @@ import {
  */
 export const SESSION_SCHEMA_VERSION = "0.2.0" as const;
 
-/** Session lifecycle states. */
+/**
+ * Session lifecycle states.
+ *
+ * `basou verify` reads this field, so adding or removing a value moves
+ * {@link SESSION_SCHEMA_VERSION} (docs/spec/schemas.md §7.3): an older verify
+ * tells a newer writer's document from a damaged one by its version.
+ */
 export const SessionStatusSchema = z.enum([
   "initialized",
   "running",
@@ -138,8 +144,12 @@ export type SessionMetrics = z.infer<typeof SessionMetricsSchema>;
  * Written by the import / in-place re-import writers and, for a live session
  * (`exec` / `run` / ad-hoc), by the finalize once it reaches a terminal status.
  * Absent on a still-live session (the anchor is stamped at finalize) and on a
- * pre-feature unchained session. Additive optional => no schema_version bump.
- * `.strict()` because the writers fully own the shape.
+ * pre-feature unchained session. The field itself was added as an optional one
+ * without a schema_version bump. `.strict()` because the writers fully own the
+ * shape — which is also why a change to its keys, or to what the anchor means,
+ * moves {@link SESSION_SCHEMA_VERSION} (docs/spec/schemas.md §7.3): an older
+ * reader refuses a key it does not know, and `basou verify` tells a newer
+ * writer from damage only by the version.
  */
 export const SessionIntegritySchema = z
   .object({

@@ -91,6 +91,7 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
   }
 
   const tamperedCount = rows.filter((r) => r.status === "tampered").length;
+  const unsupportedCount = rows.filter((r) => r.status === "unsupported").length;
 
   if (options.json === true) {
     console.log(JSON.stringify(rows, null, 2));
@@ -108,13 +109,14 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
       `Sessions: ${rows.length} total — ${tally("verified")} verified, ` +
         `${tally("unchained")} unchained, ${tally("empty")} empty, ` +
         `${tally("incomplete")} incomplete, ${tally("in_progress")} in_progress, ` +
-        `${tamperedCount} tampered`,
+        `${unsupportedCount} unsupported, ${tamperedCount} tampered`,
     );
   }
 
-  // Only a real integrity break fails the command; unchained / empty /
-  // incomplete / in_progress are informational states.
-  if (tamperedCount > 0) {
+  // A real integrity break fails the command, and so does a session this basou
+  // is too old to verify (`unsupported`): neither is verified. unchained /
+  // empty / incomplete / in_progress are informational states.
+  if (tamperedCount > 0 || unsupportedCount > 0) {
     process.exitCode = 1;
   }
 }
@@ -131,6 +133,8 @@ function renderVerdict(row: VerifyRow): string {
       return "incomplete (session.yaml missing; re-import to repair)";
     case "in_progress":
       return `in_progress (${row.event_count} events; live session, anchor written at finalize)`;
+    case "unsupported":
+      return "unsupported (session.yaml written by a newer basou; upgrade basou to verify it)";
     case "unchained":
       return "unchained (session created before event-log chaining)";
     case "empty":
