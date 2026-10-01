@@ -16,17 +16,18 @@ All notable changes to **basou** are recorded here. The project follows
   log there. `approve` and `reject` now stop with the error `--session` gives,
   `Session <id> is not a directory; a symlink or a file there is not
   followed`, and the approval stays pending; `approval show` shows the
-  approval without the session's events and warns, as for a session that is
-  missing; the view's session page answers `404` with the error.
+  approval without the session's events, with a warning naming the entry;
+  the view's session page answers `404` with the error.
 
 ### Changed
 
 - **A `.basou/sessions` that is a symlink stops every command that reads or
   writes the workspace's sessions**, with `.basou/sessions is a symlink;
   refusing to operate`, where they read and wrote through it. One that is a
-  file, which already made them fail (`basou exec` with an error naming an
-  absolute path), now stops them with `.basou/sessions exists but is not a
-  directory`. basou never creates either. `basou verify` stops with the error
+  file, which already made most of them fail (`basou exec` with an error
+  naming an absolute path), now stops them with `.basou/sessions exists but
+  is not a directory`; `basou import --dry-run`, which succeeded with one,
+  stops too. basou never creates either. `basou verify` stops with the error
   instead of printing rows, and `basou import` checks the store before it
   reads or writes any session, `--dry-run` included, though it may list and
   read the source logs first. A federated mirror registered in
@@ -49,19 +50,24 @@ All notable changes to **basou** are recorded here. The project follows
   `manifest`, `status`, `listTasks`, `getTask`, `listApprovals` and
   `getApproval` work as before.
 - **`@basou/core`** exports `assertSessionStoreSafe`, `assertSessionDirSafe`,
-  `inspectSessionEntry` and the type `SessionEntryKind`, the checks above.
-  The functions that read or write a session by id — `readSessionYaml`,
+  `inspectSessionEntry` and the type `SessionEntryKind`, the checks above. The
+  functions that read or write a session by id — `readSessionYaml`,
   `classifySuspect` (for a running session), `inspectChainTail`,
-  `appendChainedEvent` / `appendChainedEventLocked`, `finalizeSessionYaml`,
-  and through them `appendEventToExistingSession` and a task attach — throw
-  `Session <id> is not a directory; a symlink or a file there is not
-  followed` for such an entry and `Invalid session id` for a name that is not
-  a session id, where they read through the entry or failed to find the file.
-  `rechainSessionInPlace` returns `skipped` with the new reasons `symlink` and
-  `not_a_directory`. `enumerateSessionEntries`, `enumerateSessionDirs`,
-  `loadSessionEntries`, `verifyEventsChain`, `importSessionFromJson` and
-  `createAdHocSessionWithEvent` throw the store errors above;
-  `loadFederatedSessionEntries` checks the local store only.
+  `appendChainedEvent` / `appendChainedEventLocked` and `finalizeSessionYaml`
+  — throw `Session <id> is not a directory; a symlink or a file there is not
+  followed` for such an entry, where they read or wrote through it, and so
+  `appendEventToExistingSession` and a task attach refuse it too. Those
+  functions, `verifyEventsChain`, `rechainSessionInPlace` and `acquireLock`
+  for a `session` lock throw `Invalid session id` for a name that is not a
+  session id, where they took the name as a path
+  (`appendEventToExistingSession` and a task attach already rejected such a
+  name with a schema error, and still do). `rechainSessionInPlace` returns
+  `skipped` with the new reasons `symlink` and `not_a_directory`.
+  `enumerateSessionEntries`, `enumerateSessionDirs`, `loadSessionEntries`,
+  `verifyEventsChain`, `rechainSessionInPlace`, `createAdHocSessionWithEvent`
+  and `importSessionFromJson` (except with `dryRun`, which writes nothing)
+  throw the store errors above; `loadFederatedSessionEntries` checks the local
+  store only.
 
 ## 0.58.0 — 2026-10-01
 

@@ -28,6 +28,7 @@ import {
   registerApprovalCommand,
   runApprovalApprove,
   runApprovalReject,
+  runApprovalShow,
 } from "./approval.js";
 
 const execFileAsync = promisify(execFile);
@@ -1072,6 +1073,33 @@ describe.skipIf(process.platform === "win32")("a recorded session that is not a 
     expect(joinCalls(err)).toBe(
       `Warning: session ${sessionId} is not a directory (a symlink or a file is not followed); its events are not shown`,
     );
+  });
+
+  it("show prints the approval in text and exits 0 for a symlink or a file", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P45");
+    const sessionId = SES("S45");
+    await linkedRunningSession(repo, sessionId, approvalId);
+    const warning = `Warning: session ${sessionId} is not a directory (a symlink or a file is not followed); its events are not shown`;
+    const entry = join(basouPaths(repo).sessions, sessionId);
+    for (const makeEntry of [
+      async () => undefined, // the symlink linkedRunningSession left
+      async () => {
+        await rm(entry);
+        await writeFile(entry, "");
+      },
+    ]) {
+      await makeEntry();
+      vi.restoreAllMocks();
+      process.exitCode = 0;
+      const out = captureStdout();
+      const err = captureStderr();
+      await runApprovalShow(approvalId, {}, { cwd: repo });
+      expect(process.exitCode ?? 0).toBe(0);
+      expect(joinCalls(out)).toContain(approvalId);
+      expect(joinCalls(out)).toContain("Related events: 0 total");
+      expect(joinCalls(err)).toBe(warning);
+    }
   });
 
   it("control: the same session as a directory in the store is approved", async () => {

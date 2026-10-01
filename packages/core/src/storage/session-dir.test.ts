@@ -422,6 +422,48 @@ describe("a name that is not a session id", () => {
   });
 });
 
+describe("a name that is not a session id, more closely", () => {
+  it.skipIf(process.platform === "win32")("is refused before the store is looked at", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    const outside = join(getWorkDir(), "outside-store");
+    await mkdir(outside);
+    await rm(paths.sessions, { recursive: true });
+    await symlink(outside, paths.sessions);
+    // The store is a symlink too, but the name is checked first.
+    await expect(inspectSessionEntry(paths, "../x")).rejects.toThrow("Invalid session id");
+    await expect(readSessionYaml(paths, "../x")).rejects.toThrow("Invalid session id");
+  });
+
+  it("is the exact session id shape, not just ses_ and 26 characters", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    // 26 uppercase characters after ses_, but the first is above 7, or one is
+    // outside Crockford base32 (L). Each is a readable session on disk.
+    const firstAboveSeven = `ses_8${REAL.slice(5)}`;
+    const withL = `${REAL.slice(0, -1)}L`;
+    for (const name of [firstAboveSeven, withL]) {
+      await writeSession(join(paths.sessions, name), name, "running");
+      await expect(readSessionYaml(paths, name)).rejects.toThrow("Invalid session id");
+    }
+  });
+
+  it("takes no session lock: a lockfile path is never built from it", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    // A stale-looking .lock outside the store, where the name would point.
+    const victim = join(getWorkDir(), "outside", "victim.lock");
+    await mkdir(join(getWorkDir(), "outside"));
+    await writeFile(victim, "not a lock");
+    const name = "ses_../../../../outside/victim";
+    await expect(
+      appendChainedEvent(paths, name, noteEvent(REAL, "evt_01HXABCDEF1234567890ABCEV5")),
+    ).rejects.toThrow("Invalid session id");
+    await expect(finalizeSessionYaml(paths, "../x", () => undefined)).rejects.toThrow(
+      "Invalid session id",
+    );
+    expect(await readFile(victim, "utf8")).toBe("not a lock");
+    expect(await readdir(paths.locks).catch(() => [])).toEqual([]);
+  });
+});
+
 describe.skipIf(process.platform === "win32")("a federated mirror", () => {
   async function mirrorWithLinkedStore(): Promise<BasouPaths> {
     const mirror = basouPaths(join(getWorkDir(), "mirror"));

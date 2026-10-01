@@ -78,11 +78,12 @@ export async function inspectSessionEntry(
 /**
  * Refuse to read or write session `sessionId` when its entry is a symlink or
  * a file: it is not followed. `readSessionYaml`, `classifySuspect` and the
- * chained append / finalize paths call it, and so do the commands handed an
- * id from elsewhere (an approval's recorded `session_id`). A reader that
- * takes a session directory instead (`replayEvents`, `readAllEvents`) relies
- * on its caller: an id from a listing, from `resolveSessionId`, or from this
- * check or {@link inspectSessionEntry}.
+ * chained append / finalize paths call it, and so do `approval approve` and
+ * `approval reject` for an approval's recorded `session_id`; `approval show`
+ * and `basou view` classify the entry with {@link inspectSessionEntry}
+ * instead. A reader that takes a session directory (`replayEvents`,
+ * `readAllEvents`) relies on its caller: an id from a listing, from
+ * `resolveSessionId`, or from this check or {@link inspectSessionEntry}.
  *
  * A missing entry passes, so each caller keeps its own "not found" handling.
  * The error message matches `resolveSessionId`'s for the same entry.

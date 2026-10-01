@@ -221,7 +221,8 @@ type AnchorState =
  * session.yaml of <id>`), only for non-ENOENT I/O failures (EACCES etc.) — an
  * unreadable file is an environment problem, not a verdict. A
  * `.basou/sessions` that is a symlink or not a directory throws too (the
- * `assertSessionStoreSafe` errors): no session in it is judged.
+ * `assertSessionStoreSafe` errors): no session in it is judged. So does a
+ * `sessionId` that is not a session id (`"Invalid session id"`).
  *
  * READ-ONLY and lock-free: a session being finalized concurrently can leave the
  * two files momentarily out of step (old events read before a finalize, new

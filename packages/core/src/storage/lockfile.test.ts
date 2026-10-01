@@ -59,7 +59,7 @@ describe("acquireLock", () => {
   });
 
   it("uses scope-prefixed filenames so task and session locks never collide on the same ulid tail", async () => {
-    const sharedTail = "01HXCOLLIDE0000000000000XY";
+    const sharedTail = "01HXC0RRDE00000000000000XY";
     const taskHandle = await acquireLock(paths(), "task", `task_${sharedTail}`);
     const sessionHandle = await acquireLock(paths(), "session", `ses_${sharedTail}`);
     const entries = await readdir(paths().locks);
@@ -188,11 +188,11 @@ describe("acquireLock — missing locks directory", () => {
     // first lock-taking command must self-heal instead of failing ENOENT.
     await rm(paths().locks, { recursive: true, force: true });
 
-    const sessionId = "ses_01HXLOCKDIR0000000000000";
+    const sessionId = "ses_01HXR0CKD1R000000000000000";
     const handle = await acquireLock(paths(), "session", sessionId);
     const entries = await readdir(paths().locks);
-    expect(entries).toContain("session_01HXLOCKDIR0000000000000.lock");
+    expect(entries).toContain("session_01HXR0CKD1R000000000000000.lock");
     await handle.release();
-    expect(await readdir(paths().locks)).not.toContain("session_01HXLOCKDIR0000000000000.lock");
+    expect(await readdir(paths().locks)).not.toContain("session_01HXR0CKD1R000000000000000.lock");
   });
 });

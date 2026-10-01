@@ -708,7 +708,9 @@ export type RechainResult =
  * Refuses anything it cannot preserve exactly or that is not the closed
  * imported corpus — see {@link RechainResult} reasons. Throws (rather than
  * returning a skip) on environment-level I/O failures, mirroring
- * `verifyEventsChain`.
+ * `verifyEventsChain`, and on a `sessionId` that is not a session id
+ * (`"Invalid session id"`) or a `.basou/sessions` that is a symlink or a file
+ * (the `assertSessionStoreSafe` errors).
  */
 export async function rechainSessionInPlace(
   paths: BasouPaths,
