@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -117,6 +117,29 @@ async function findOnlySessionId(repo: string): Promise<string> {
 }
 
 describe("runExec", () => {
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "starts no session when .basou/sessions is a symlink",
+    async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      const outside = join(repo, "outside-store");
+      await mkdir(outside);
+      await rm(paths.sessions, { recursive: true });
+      await symlink(outside, paths.sessions);
+      const runner = makeFakeRunner({ exit_code: 0 });
+      await expect(
+        runExec(
+          "node",
+          ["-e", "process.exit(0)"],
+          { cwd: repo, snapshot: false },
+          { runner, now: () => FIXED_DATE },
+        ),
+      ).rejects.toThrow(".basou/sessions is a symlink; refusing to operate");
+      expect(await readdir(outside)).toEqual([]);
+    },
+  );
+
   // 1
   it("records 5 events on the happy path with --no-snapshot", async () => {
     const repo = await setupInitedRepo();

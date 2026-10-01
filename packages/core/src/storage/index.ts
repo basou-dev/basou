@@ -33,6 +33,12 @@ export {
   seedMarkers,
   writeMarkdownFile,
 } from "./markdown-store.js";
+export type { SessionEntryKind } from "./session-dir.js";
+export {
+  assertSessionDirSafe,
+  assertSessionStoreSafe,
+  inspectSessionEntry,
+} from "./session-dir.js";
 export type {
   ImportSessionOptions,
   ImportSessionResult,

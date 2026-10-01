@@ -20,6 +20,7 @@ import {
 import { LOCAL_CLI_EVENT_SOURCE, SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
+import { assertSessionStoreSafe } from "./session-dir.js";
 import { readSessionYaml } from "./sessions.js";
 import { linkYamlFile, overwriteYamlFile } from "./yaml-store.js";
 
@@ -193,6 +194,7 @@ export async function createAdHocSessionWithEvent(
   // attachable; without the lock a foreign attach could append a line into
   // that window which the atomic bulk write would then clobber, breaking the
   // chain. The session id is freshly minted, so no caller already holds it.
+  await assertSessionStoreSafe(input.paths);
   const sessionDir = join(input.paths.sessions, sessionId);
   const sessionYamlPath = join(sessionDir, "session.yaml");
   const lock = await acquireLock(input.paths, "session", sessionId);

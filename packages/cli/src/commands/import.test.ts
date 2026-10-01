@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -1463,3 +1473,66 @@ describe("basou import claude-code (cross-project boundary warning)", () => {
     }
   });
 });
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")(
+  "basou import with an entry named as a session that is not a directory",
+  () => {
+    const WARNING = "not checked for an earlier import";
+
+    it("warns once, with the full id, when a session is imported as new", async () => {
+      const repo = await setupInitedRepo();
+      await writeTranscript(repo, "sess-1", actionTranscript(repo));
+      await writeTranscript(repo, "sess-2", actionTranscript(repo));
+      const ctx = { cwd: repo, claudeProjectsDir: getProjectsRoot() };
+      await doRunImportClaudeCode({ session: "sess-1" }, ctx);
+      const [linked] = await listSessionDirs(repo);
+      if (linked === undefined) throw new Error("fixture import failed");
+      // The earlier import moved out of the store and linked back in.
+      const paths = basouPaths(repo);
+      await rename(join(paths.sessions, linked), join(repo, "moved-session"));
+      await symlink(join(repo, "moved-session"), join(paths.sessions, linked));
+      const fileId = "ses_01HXABCDEF1234567890ABCFX1";
+      await writeFile(join(paths.sessions, fileId), "");
+
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      await doRunImportClaudeCode({ all: true }, ctx);
+      const warnings = err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(WARNING));
+      expect(warnings).toEqual([
+        `Import: ${[linked, fileId].sort().join(", ")} are not directories (a symlink or a file is not followed), so they were not checked for an earlier import; a session imported there may be imported again`,
+      ]);
+      // The link is not followed, so sess-1 is imported again beside it.
+      expect(
+        (await listSessionDirs(repo)).filter((d) => d !== linked && d !== fileId),
+      ).toHaveLength(2);
+
+      // Nothing left to import as new: no warning, and none when --force
+      // replaces sessions whose earlier import was found.
+      for (const options of [{ all: true }, { all: true, force: true }]) {
+        err.mockClear();
+        await doRunImportClaudeCode(options, ctx);
+        expect(err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(WARNING))).toEqual(
+          [],
+        );
+      }
+    });
+
+    it("a .basou/sessions that is a symlink stops the import, --dry-run included", async () => {
+      const repo = await setupInitedRepo();
+      await writeTranscript(repo, "sess-1", actionTranscript(repo));
+      const paths = basouPaths(repo);
+      const outside = join(repo, "outside-store");
+      await mkdir(outside);
+      await rm(paths.sessions, { recursive: true });
+      await symlink(outside, paths.sessions);
+      const ctx = { cwd: repo, claudeProjectsDir: getProjectsRoot() };
+      await expect(doRunImportClaudeCode({ all: true, dryRun: true }, ctx)).rejects.toThrow(
+        ".basou/sessions is a symlink; refusing to operate",
+      );
+      await expect(doRunImportClaudeCode({ all: true }, ctx)).rejects.toThrow(
+        ".basou/sessions is a symlink; refusing to operate",
+      );
+      expect(await readdir(outside)).toEqual([]);
+    });
+  },
+);

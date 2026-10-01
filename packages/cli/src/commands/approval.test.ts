@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -18,6 +28,7 @@ import {
   registerApprovalCommand,
   runApprovalApprove,
   runApprovalReject,
+  runApprovalShow,
 } from "./approval.js";
 
 const execFileAsync = promisify(execFile);
@@ -952,5 +963,156 @@ describe("an approval an outside orchestrator wrote without seconds", () => {
     await runApprovalApprove(approvalId, {}, { cwd: repo });
     const resolved = await readdir(basouPaths(repo).approvals.resolved);
     expect(resolved).toContain(`${approvalId}.yaml`);
+  });
+});
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("a recorded session that is not a directory", () => {
+  const notADirectory = (id: string): string =>
+    `Session ${id} is not a directory; a symlink or a file there is not followed`;
+
+  // A running (attachable) session with one requested event, moved out of the
+  // store and linked back in at its name: following the link would succeed.
+  async function linkedRunningSession(
+    repo: string,
+    sessionId: string,
+    approvalId: string,
+  ): Promise<string> {
+    const paths = basouPaths(repo);
+    await createApproval(repo, { id: approvalId, sessionId });
+    await appendRequestedEvent(repo, sessionId, approvalId, "2026-05-04T10:00:00+09:00", "E41");
+    await writeYamlFile(join(paths.sessions, sessionId, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: {
+        id: sessionId,
+        task_id: null,
+        workspace_id: FIXED_WS_ID,
+        source: { kind: "claude-code", version: "0.1.0" },
+        started_at: "2026-05-04T09:00:00+09:00",
+        status: "running",
+        working_directory: "~/projects/example",
+        invocation: { command: "claude", args: [], exit_code: null },
+        related_files: [],
+        events_log: "events.jsonl",
+        summary: null,
+      },
+    });
+    const outside = join(repo, "moved-session");
+    await rename(join(paths.sessions, sessionId), outside);
+    await symlink(outside, join(paths.sessions, sessionId));
+    return outside;
+  }
+
+  it("approve and reject append nothing through it and leave the approval pending", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P41");
+    const sessionId = SES("S41");
+    const outside = await linkedRunningSession(repo, sessionId, approvalId);
+    const before = await readFile(join(outside, "events.jsonl"), "utf8");
+
+    const err = captureStderr();
+    await runApprovalApprove(approvalId, {}, { cwd: repo });
+    expect(process.exitCode).toBe(1);
+    expect(joinCalls(err)).toContain(notADirectory(sessionId));
+    process.exitCode = 0;
+    await runApprovalReject(approvalId, { reason: "no" }, { cwd: repo });
+    expect(process.exitCode).toBe(1);
+
+    expect(await readFile(join(outside, "events.jsonl"), "utf8")).toBe(before);
+    const paths = basouPaths(repo);
+    expect(await readdir(paths.approvals.pending)).toContain(`${approvalId}.yaml`);
+    expect(await readdir(paths.approvals.resolved).catch(() => [])).not.toContain(
+      `${approvalId}.yaml`,
+    );
+  });
+
+  it("approve reads nothing behind it: a resolution there is not what stops it", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P44");
+    const sessionId = SES("S44");
+    const outside = await linkedRunningSession(repo, sessionId, approvalId);
+    // Were the log behind the link read, the fence would stop on this line.
+    await writeFile(
+      join(outside, "events.jsonl"),
+      `${JSON.stringify({
+        schema_version: "0.1.0",
+        type: "approval_approved",
+        id: EVT("E44"),
+        session_id: sessionId,
+        occurred_at: "2026-05-04T10:05:00+09:00",
+        source: "local-cli",
+        approval_id: approvalId,
+        resolver: "local-cli",
+        note: null,
+      })}\n`,
+      { flag: "a" },
+    );
+    const err = captureStderr();
+    await runApprovalApprove(approvalId, {}, { cwd: repo });
+    expect(process.exitCode).toBe(1);
+    expect(joinCalls(err)).toContain(notADirectory(sessionId));
+    expect(joinCalls(err)).not.toContain("already resolved");
+  });
+
+  it("show prints the approval without the events behind it, and warns", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P42");
+    const sessionId = SES("S42");
+    // The log behind the link holds this approval's requested event.
+    await linkedRunningSession(repo, sessionId, approvalId);
+    const out = captureStdout();
+    const err = captureStderr();
+    await doRunApprovalShow(approvalId, { json: true }, { cwd: repo });
+    const shown = JSON.parse(joinCalls(out)) as {
+      approval: { id: string; session_id: string };
+      events: unknown[];
+    };
+    expect(shown.approval.id).toBe(approvalId);
+    expect(shown.approval.session_id).toBe(sessionId);
+    expect(shown.events).toEqual([]);
+    expect(joinCalls(err)).toBe(
+      `Warning: session ${sessionId} is not a directory (a symlink or a file is not followed); its events are not shown`,
+    );
+  });
+
+  it("show prints the approval in text and exits 0 for a symlink or a file", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P45");
+    const sessionId = SES("S45");
+    await linkedRunningSession(repo, sessionId, approvalId);
+    const warning = `Warning: session ${sessionId} is not a directory (a symlink or a file is not followed); its events are not shown`;
+    const entry = join(basouPaths(repo).sessions, sessionId);
+    for (const makeEntry of [
+      async () => undefined, // the symlink linkedRunningSession left
+      async () => {
+        await rm(entry);
+        await writeFile(entry, "");
+      },
+    ]) {
+      await makeEntry();
+      vi.restoreAllMocks();
+      process.exitCode = 0;
+      const out = captureStdout();
+      const err = captureStderr();
+      await runApprovalShow(approvalId, {}, { cwd: repo });
+      expect(process.exitCode ?? 0).toBe(0);
+      expect(joinCalls(out)).toContain(approvalId);
+      expect(joinCalls(out)).toContain("Related events: 0 total");
+      expect(joinCalls(err)).toBe(warning);
+    }
+  });
+
+  it("control: the same session as a directory in the store is approved", async () => {
+    const repo = await setupInitedRepo();
+    const approvalId = APPR("P43");
+    const sessionId = SES("S43");
+    const outside = await linkedRunningSession(repo, sessionId, approvalId);
+    const paths = basouPaths(repo);
+    await rm(join(paths.sessions, sessionId));
+    await rename(outside, join(paths.sessions, sessionId));
+    captureStdout();
+    await runApprovalApprove(approvalId, {}, { cwd: repo });
+    expect(process.exitCode).not.toBe(1);
+    expect(await readEventsLines(repo, sessionId)).toHaveLength(2);
   });
 });

@@ -1,6 +1,7 @@
 import { mkdir, readFile, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
+import { SessionIdSchema } from "../schemas/shared.schema.js";
 import { atomicCreate } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 
@@ -58,12 +59,19 @@ export type LockHandle = {
  * The caller MUST call `release()` (typically from a `finally` block); the
  * `process.exit()` path or a fatal crash relies on stale-lock detection on
  * the next acquire to recover.
+ *
+ * A `session` lock is taken only for a session id: anything else throws
+ * `"Invalid session id"` before a lockfile path is built, so no name can
+ * point the lockfile (or a stale-lock unlink) outside `paths.locks`.
  */
 export async function acquireLock(
   paths: BasouPaths,
   scope: LockScope,
   resourceId: string,
 ): Promise<LockHandle> {
+  if (scope === "session" && !SessionIdSchema.safeParse(resourceId).success) {
+    throw new Error("Invalid session id");
+  }
   const lockPath = lockfilePath(paths, scope, resourceId);
   const body: LockFileBody = {
     pid: process.pid,

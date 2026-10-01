@@ -4,11 +4,12 @@ import {
   acquireLock,
   appendEventToExistingSession,
   assertBasouRootSafe,
+  type BasouPaths,
   basouPaths,
   displayPath,
   EVENT_SCHEMA_VERSION,
   type Event,
-  enumerateSessionDirs,
+  enumerateSessionEntries,
   findErrorCode,
   type ImportSessionOptions,
   type ImportSessionResult,
@@ -1023,7 +1024,8 @@ export async function runSessionRechain(
  * required (`--session <id>` or `--all`). Per-session outcomes are collected
  * into rows; an I/O failure on one session becomes an `error` row and the
  * sweep CONTINUES, so one unreadable directory cannot hide the rest of the
- * report. Exit is non-zero when any session was found `tampered` or errored
+ * report. Exit is non-zero when any session was found `tampered` (an entry
+ * named as a session that is a symlink or a file counts) or errored
  * operationally; plain skips and successes exit 0.
  */
 export async function doRunSessionRechain(
@@ -1042,10 +1044,13 @@ export async function doRunSessionRechain(
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
+  // `--all` takes the entries named as a session that are not directories
+  // too: they are not followed, and each gets a `symlink` / `not_a_directory`
+  // row instead of dropping out of the report, as in `basou verify`.
   const sessionIds =
     options.session !== undefined
       ? [await resolveSessionId(paths, options.session)]
-      : await enumerateSessionDirs(paths);
+      : await enumerateAllSessionNames(paths);
 
   const dryRun = options.dryRun === true;
   const rows: RechainRow[] = [];
@@ -1068,7 +1073,9 @@ export async function doRunSessionRechain(
     }
   }
 
-  const tamperedCount = rows.filter((r) => r.reason === "tampered").length;
+  const tamperedCount = rows.filter(
+    (r) => r.reason === "tampered" || r.reason === "symlink" || r.reason === "not_a_directory",
+  ).length;
   const errorCount = rows.filter((r) => r.status === "error").length;
 
   if (options.json === true) {
@@ -1085,9 +1092,9 @@ export async function doRunSessionRechain(
     );
   }
 
-  // A tampered session or an operational failure must be visible in the
-  // exit status; ordinary skips (already chained / live / empty) are not
-  // failures.
+  // A tampered session (an entry that is not a directory counts, as in
+  // `basou verify`) or an operational failure must be visible in the exit
+  // status; ordinary skips (already chained / live / empty) are not failures.
   if (tamperedCount > 0 || errorCount > 0) {
     process.exitCode = 1;
   }
@@ -1098,10 +1105,18 @@ function renderRechainRow(row: RechainRow, dryRun: boolean): string {
     case "rechained":
       return `${dryRun ? "would rechain" : "rechained"} (${row.event_count} events)`;
     case "skipped":
-      return row.reason === "tampered"
-        ? "skipped (TAMPERED — inspect with 'basou verify')"
-        : `skipped (${row.reason})`;
+      if (row.reason === "tampered") return "skipped (TAMPERED — inspect with 'basou verify')";
+      if (row.reason === "symlink" || row.reason === "not_a_directory") {
+        return `skipped (${row.reason === "symlink" ? "SYMLINK" : "NOT A DIRECTORY"} — not followed; inspect with 'basou verify')`;
+      }
+      return `skipped (${row.reason})`;
     case "error":
       return `error (${row.message})`;
   }
+}
+
+/** Every entry named as a session id, directories or not, ascending. */
+async function enumerateAllSessionNames(paths: BasouPaths): Promise<string[]> {
+  const { dirs, notDirectories } = await enumerateSessionEntries(paths);
+  return [...dirs, ...notDirectories].sort();
 }

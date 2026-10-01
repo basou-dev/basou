@@ -21,6 +21,7 @@ import { TaskIdSchema } from "../schemas/shared.schema.js";
 import { atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
+import { assertSessionStoreSafe, inspectSessionEntry } from "./session-dir.js";
 import { readSessionYaml } from "./sessions.js";
 import { enumerateTaskIds } from "./tasks.js";
 import { linkYamlFile, overwriteYamlFile } from "./yaml-store.js";
@@ -128,6 +129,7 @@ export async function importSessionFromJson(
   // collision on the new session dir itself is statistically impossible, so
   // the silent EEXIST on an existing directory is acceptable here. Concurrent
   // attempts to write the same session.yaml are caught by linkYamlFile below.
+  await assertSessionStoreSafe(paths);
   const sessionDir = join(paths.sessions, newSessionId);
   try {
     await mkdir(sessionDir, { recursive: true });
@@ -672,6 +674,9 @@ export type RechainResult =
       // `session_id_mismatch`: a line's session_id is not this session's id;
       //   chaining it would manufacture an instantly-tampered session.
       // `yaml_missing` / `yaml_unreadable`: session.yaml absent / unparseable.
+      // `symlink` / `not_a_directory`: the entry named as the session is a
+      //   symlink or a file; it is not followed, so nothing is read or
+      //   rewritten (`basou verify` reports it `tampered`).
       reason:
         | "already_chained"
         | "empty"
@@ -680,7 +685,9 @@ export type RechainResult =
         | "events_unreadable"
         | "session_id_mismatch"
         | "yaml_missing"
-        | "yaml_unreadable";
+        | "yaml_unreadable"
+        | "symlink"
+        | "not_a_directory";
     };
 
 /**
@@ -701,13 +708,19 @@ export type RechainResult =
  * Refuses anything it cannot preserve exactly or that is not the closed
  * imported corpus — see {@link RechainResult} reasons. Throws (rather than
  * returning a skip) on environment-level I/O failures, mirroring
- * `verifyEventsChain`.
+ * `verifyEventsChain`, and on a `sessionId` that is not a session id
+ * (`"Invalid session id"`) or a `.basou/sessions` that is a symlink or a file
+ * (the `assertSessionStoreSafe` errors).
  */
 export async function rechainSessionInPlace(
   paths: BasouPaths,
   sessionId: string,
   options: RechainOptions = {},
 ): Promise<RechainResult> {
+  const entry = await inspectSessionEntry(paths, sessionId);
+  if (entry === "symlink" || entry === "not_a_directory") {
+    return { status: "skipped", reason: entry };
+  }
   const sessionDir = join(paths.sessions, sessionId);
   // Wrap lock-acquisition failures in the fixed pathless vocabulary: the CLI
   // surfaces per-session error messages verbatim, so a raw fs error here

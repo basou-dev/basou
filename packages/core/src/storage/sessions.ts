@@ -9,6 +9,7 @@ import { type Session, SessionSchema } from "../schemas/session.schema.js";
 import { SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
+import { assertSessionDirSafe, assertSessionStoreSafe } from "./session-dir.js";
 import { overwriteYamlFile, readYamlFile } from "./yaml-store.js";
 
 /**
@@ -117,7 +118,9 @@ export type SessionDirEntries = {
  *
  * - Returns empty lists when the sessions directory does not exist (empty
  *   workspace or pre-init state).
- * - Throws `Error("Failed to enumerate sessions", { cause })` on other I/O.
+ * - Throws the {@link assertSessionStoreSafe} errors when `.basou/sessions`
+ *   is a symlink or not a directory, and
+ *   `Error("Failed to enumerate sessions", { cause })` on other I/O.
  * - Whether an entry is a directory is decided without following symlinks.
  *
  * Sort order is `Array.prototype.sort()` default (code-unit compare). ULIDs
@@ -125,6 +128,14 @@ export type SessionDirEntries = {
  * chronological session-start order.
  */
 export async function enumerateSessionEntries(paths: BasouPaths): Promise<SessionDirEntries> {
+  await assertSessionStoreSafe(paths);
+  return readSessionEntries(paths);
+}
+
+// The listing itself, without the store check: a federated mirror is read
+// through it (see loadEntriesFromRoot). Entries are still classified from
+// their own dirent, so one that is not a directory is never followed.
+async function readSessionEntries(paths: BasouPaths): Promise<SessionDirEntries> {
   let dirents: Dirent[];
   try {
     dirents = await readdir(paths.sessions, { withFileTypes: true });
@@ -152,6 +163,8 @@ export async function enumerateSessionDirs(paths: BasouPaths): Promise<string[]>
 /**
  * Read and validate `<paths.sessions>/<sessionId>/session.yaml`.
  *
+ * - Throws the {@link assertSessionDirSafe} errors when the session's entry
+ *   (or `.basou/sessions`) is a symlink or a file: it is not followed.
  * - Re-throws the yaml-store fixed-message `"YAML file not found"` for
  *   ENOENT so the caller can branch on it.
  * - Throws `Error("Failed to read session.yaml", { cause })` for parse
@@ -159,6 +172,13 @@ export async function enumerateSessionDirs(paths: BasouPaths): Promise<string[]>
  *   or the zod error).
  */
 export async function readSessionYaml(paths: BasouPaths, sessionId: string): Promise<Session> {
+  await assertSessionDirSafe(paths, sessionId);
+  return readSessionYamlFile(paths, sessionId);
+}
+
+// The read itself, for a session the caller has already found to be a
+// directory (a listing classified it from its dirent).
+async function readSessionYamlFile(paths: BasouPaths, sessionId: string): Promise<Session> {
   const filePath = join(paths.sessions, sessionId, "session.yaml");
   let raw: unknown;
   try {
@@ -236,8 +256,10 @@ export async function finalizeSessionYaml(
  * Sessions that are not `running` are never suspect.
  *
  * I/O failure on events.jsonl is re-thrown unwrapped so the caller can
- * degrade with a warning instead of treating the session as healthy. The
- * caller is also responsible for surfacing replay warnings via `onWarning`.
+ * degrade with a warning instead of treating the session as healthy, as are
+ * the {@link assertSessionDirSafe} errors for an entry that is not followed.
+ * The caller is also responsible for surfacing replay warnings via
+ * `onWarning`.
  */
 export async function classifySuspect(
   paths: BasouPaths,
@@ -249,6 +271,18 @@ export async function classifySuspect(
   if (session.session.status !== "running") {
     return { suspect: false, suspectReason: null };
   }
+  await assertSessionDirSafe(paths, sessionId);
+  return classifyRunningSession(paths, sessionId, now, onWarning);
+}
+
+// Rules A and B for a `running` session whose entry the caller has already
+// found to be a directory.
+async function classifyRunningSession(
+  paths: BasouPaths,
+  sessionId: string,
+  now: Date,
+  onWarning?: (warning: ReplayWarning) => void,
+): Promise<{ suspect: boolean; suspectReason: SuspectReason | null }> {
   const sessionDir = join(paths.sessions, sessionId);
   let endedFound = false;
   let lastEventOccurredAt: string | null = null;
@@ -283,6 +317,12 @@ export async function classifySuspect(
  * - `session_dir_not_directory`: an entry named as a session id that is not a
  *   directory; it is not read.
  *
+ * The local store (`host: null`) is refused when `.basou/sessions` is a
+ * symlink or a file ({@link assertSessionStoreSafe}); a federated mirror is
+ * not, since it is a read-only copy outside the store to begin with. Each
+ * listed directory is read without being checked again: its dirent already
+ * said it is one.
+ *
  * `options.now` is taken once and threaded into every {@link classifySuspect}
  * call so age comparisons are consistent across sessions.
  */
@@ -291,13 +331,14 @@ async function loadEntriesFromRoot(
   options: LoadSessionEntriesOptions,
 ): Promise<SessionEntry[]> {
   const { paths } = root;
-  const { dirs: sessionIds, notDirectories } = await enumerateSessionEntries(paths);
+  if (root.host === null) await assertSessionStoreSafe(paths);
+  const { dirs: sessionIds, notDirectories } = await readSessionEntries(paths);
   for (const sid of notDirectories) options.onSkip?.(sid, "session_dir_not_directory");
   const entries: SessionEntry[] = [];
   for (const sid of sessionIds) {
     let session: Session;
     try {
-      session = await readSessionYaml(paths, sid);
+      session = await readSessionYamlFile(paths, sid);
     } catch (error: unknown) {
       if (error instanceof Error && error.message === "YAML file not found") {
         options.onSkip?.(sid, "session_yaml_missing");
@@ -309,11 +350,13 @@ async function loadEntriesFromRoot(
     let suspect = false;
     let suspectReason: SuspectReason | null = null;
     try {
-      const r = await classifySuspect(paths, sid, session, options.now, (w) =>
-        options.onWarning?.(w, sid),
-      );
-      suspect = r.suspect;
-      suspectReason = r.suspectReason;
+      if (session.session.status === "running") {
+        const r = await classifyRunningSession(paths, sid, options.now, (w) =>
+          options.onWarning?.(w, sid),
+        );
+        suspect = r.suspect;
+        suspectReason = r.suspectReason;
+      }
     } catch {
       // events.jsonl I/O failure (EACCES etc.) on the suspect check is
       // unrecoverable for the classification but should not drop the session

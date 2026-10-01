@@ -1,4 +1,4 @@
-import { lstat, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { normalizeSessionTimestamps } from "../schemas/iso-timestamp.js";
@@ -12,6 +12,7 @@ import {
 } from "../schemas/session.schema.js";
 import { SchemaVersionSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
+import { inspectSessionEntry } from "../storage/session-dir.js";
 import { readYamlFile } from "../storage/yaml-store.js";
 import { genesisHash, lineHash } from "./chain.js";
 
@@ -218,7 +219,10 @@ type AnchorState =
  * Throws `Error("Failed to read events.jsonl")`, or an error naming the
  * session for the session directory or `session.yaml` (`Failed to read
  * session.yaml of <id>`), only for non-ENOENT I/O failures (EACCES etc.) — an
- * unreadable file is an environment problem, not a verdict.
+ * unreadable file is an environment problem, not a verdict. A
+ * `.basou/sessions` that is a symlink or not a directory throws too (the
+ * `assertSessionStoreSafe` errors): no session in it is judged. So does a
+ * `sessionId` that is not a session id (`"Invalid session id"`).
  *
  * READ-ONLY and lock-free: a session being finalized concurrently can leave the
  * two files momentarily out of step (old events read before a finalize, new
@@ -243,18 +247,9 @@ async function verifyOnce(paths: BasouPaths, sessionId: string): Promise<ChainVe
   // A session is a directory inside the store. Anything else at its name is
   // not followed: reading through a symlink would verify files outside the
   // store, and an absent directory falls through to `empty` as before.
-  try {
-    const entry = await lstat(sessionDir);
-    if (entry.isSymbolicLink()) {
-      return { status: "tampered", eventCount: 0, reason: "symlink" };
-    }
-    if (!entry.isDirectory()) {
-      return { status: "tampered", eventCount: 0, reason: "not_a_directory" };
-    }
-  } catch (error: unknown) {
-    if (!findErrorCode(error, "ENOENT")) {
-      throw new Error(`Failed to read the session directory of ${sessionId}`, { cause: error });
-    }
+  const entry = await inspectSessionEntry(paths, sessionId);
+  if (entry === "symlink" || entry === "not_a_directory") {
+    return { status: "tampered", eventCount: 0, reason: entry };
   }
 
   let raw: Buffer | null = null;

@@ -3,6 +3,72 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A session whose directory is a symlink or a file is no longer read or
+  written through it by a command handed its id from elsewhere.** 0.58.0
+  stopped following such an entry in `basou verify`, the commands that list
+  sessions and `--session`, but the others still did: `basou approval approve`
+  and `reject` appended the resolution to the `events.jsonl` behind the
+  symlink, and `basou approval show` and `basou view`'s session page read the
+  log there. `approve` and `reject` now stop with the error `--session` gives,
+  `Session <id> is not a directory; a symlink or a file there is not
+  followed`, and the approval stays pending; `approval show` shows the
+  approval without the session's events, with a warning naming the entry;
+  the view's session page answers `404` with the error.
+
+### Changed
+
+- **A `.basou/sessions` that is a symlink stops every command that reads or
+  writes the workspace's sessions**, with `.basou/sessions is a symlink;
+  refusing to operate`, where they read and wrote through it. One that is a
+  file, which already made most of them fail (`basou exec` with an error
+  naming an absolute path), now stops them with `.basou/sessions exists but
+  is not a directory`; `basou import --dry-run`, which succeeded with one,
+  stops too. basou never creates either. `basou verify` stops with the error
+  instead of printing rows, and `basou import` checks the store before it
+  reads or writes any session, `--dry-run` included, though it may list and
+  read the source logs first. A federated mirror registered in
+  `~/.basou/hosts.yaml` is read as before, its `.basou/sessions` a symlink or
+  not; an entry in it that is not a directory is still not followed.
+- **`basou session rechain --all` gives a symlink or a file named as a session
+  a row and exits `1` on it**, where it left the entry out and exited `0`. The
+  row is `skipped` with the `reason` `symlink` or `not_a_directory`, matching
+  `basou verify`, which reports such an entry `tampered`; nothing is followed
+  or rewritten.
+- **`basou import` warns when it cannot check such an entry for an earlier
+  import.** The entry is not followed, so an earlier import of a source held
+  there is not seen and the source is imported again as a new session. Before
+  importing a session as new, `basou import` now says so once, naming every
+  such entry by its full id.
+- **`@basou/sdk`: with a `.basou/sessions` that is a symlink or a file,**
+  `listSessions`, `getSession`, `readEvents`, `streamEvents`, `stats`,
+  `renderHandoff`, `renderDecisions` and `renderReport` throw an `Error`
+  carrying the message above, where they read through a symlink.
+  `manifest`, `status`, `listTasks`, `getTask`, `listApprovals` and
+  `getApproval` work as before.
+- **`@basou/core`** exports `assertSessionStoreSafe`, `assertSessionDirSafe`,
+  `inspectSessionEntry` and the type `SessionEntryKind`, the checks above. The
+  functions that read or write a session by id — `readSessionYaml`,
+  `classifySuspect` (for a running session), `inspectChainTail`,
+  `appendChainedEvent` / `appendChainedEventLocked` and `finalizeSessionYaml`
+  — throw `Session <id> is not a directory; a symlink or a file there is not
+  followed` for such an entry, where they read or wrote through it, and so
+  `appendEventToExistingSession` and a task attach refuse it too. Those
+  functions, `verifyEventsChain`, `rechainSessionInPlace` and `acquireLock`
+  for a `session` lock throw `Invalid session id` for a name that is not a
+  session id, where they took the name as a path
+  (`appendEventToExistingSession` and a task attach already rejected such a
+  name with a schema error, and still do). `rechainSessionInPlace` returns
+  `skipped` with the new reasons `symlink` and `not_a_directory`.
+  `enumerateSessionEntries`, `enumerateSessionDirs`, `loadSessionEntries`,
+  `verifyEventsChain`, `rechainSessionInPlace`, `createAdHocSessionWithEvent`
+  and `importSessionFromJson` (except with `dryRun`, which writes nothing)
+  throw the store errors above; `loadFederatedSessionEntries` checks the local
+  store only.
+
 ## 0.58.0 — 2026-10-01
 
 ### Fixed

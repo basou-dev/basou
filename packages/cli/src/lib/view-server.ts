@@ -6,6 +6,7 @@ import {
   computeWorkStats,
   enumerateApprovals,
   findErrorCode,
+  inspectSessionEntry,
   isLazyExpired,
   loadApproval,
   loadSessionEntries,
@@ -581,6 +582,15 @@ async function sessionDetail(
   // or any other name is not served as one.
   if (!SessionIdSchema.safeParse(sessionId).success) {
     throw new HttpError(404, "Session not found");
+  }
+  // An entry at that name that is not a directory (a symlink, a file) is not
+  // followed; the page says so instead of serving what it points to.
+  const entry = await inspectSessionEntry(ws.paths, sessionId);
+  if (entry === "symlink" || entry === "not_a_directory") {
+    throw new HttpError(
+      404,
+      `Session ${sessionId} is not a directory; a symlink or a file there is not followed`,
+    );
   }
   let session: Awaited<ReturnType<typeof readSessionYaml>>;
   try {

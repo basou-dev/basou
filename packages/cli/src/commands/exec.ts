@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   acquireLock,
   assertBasouRootSafe,
+  assertSessionStoreSafe,
   type BasouPaths,
   basouPaths,
   ChildProcessRunner,
@@ -116,7 +117,9 @@ export async function runExec(
   // 3. Read manifest to bind session.workspace_id.
   const manifest = await readManifest(paths);
 
-  // 4. Build a fresh session and persist its initial state.
+  // 4. Build a fresh session and persist its initial state, inside the
+  //    store: a `.basou/sessions` that is a symlink is refused.
+  await assertSessionStoreSafe(paths);
   const sessionId = prefixedUlid("ses");
   const sessionDir = join(paths.sessions, sessionId);
   await mkdir(sessionDir, { recursive: true });

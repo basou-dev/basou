@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 import {
   AGENT_INFRA_DIRS,
   assertBasouRootSafe,
+  assertSessionStoreSafe,
   type BasouPaths,
   basouPaths,
   CLAUDE_IMPORT_SOURCE,
@@ -16,7 +17,7 @@ import {
   claudeTranscriptToImportPayload,
   codexRolloutToImportPayload,
   displayPath,
-  enumerateSessionDirs,
+  enumerateSessionEntries,
   findErrorCode,
   type ImportSessionResult,
   importSessionFromJson,
@@ -364,7 +365,17 @@ async function importDerivedSessions(
   projectPaths: ReadonlyArray<string>,
   boundaryDeclared: boolean,
 ): Promise<void> {
-  const existingByExternalId = await loadExistingByExternalId(paths, sourceKind);
+  // A `.basou/sessions` that is a symlink stops the import before anything is
+  // read from it, `--dry-run` included.
+  await assertSessionStoreSafe(paths);
+  const { byExternalId: existingByExternalId, notDirectories } = await loadExistingByExternalId(
+    paths,
+    sourceKind,
+  );
+  // An entry named as a session that is not a directory is not followed, so
+  // an earlier import it holds is not seen. Said once, when a session is about
+  // to be imported as new.
+  let notDirectoriesWarned = false;
   // Session ids imported earlier in THIS run, so two source files that map to
   // one session id never double-import within a single invocation.
   const seenThisRun = new Set<string>();
@@ -507,6 +518,15 @@ async function importDerivedSessions(
       counts.replaced++;
     }
 
+    if (priors.length === 0 && notDirectories.length > 0 && !notDirectoriesWarned) {
+      notDirectoriesWarned = true;
+      const one = notDirectories.length === 1;
+      console.error(
+        `Import: ${notDirectories.join(", ")} ${one ? "is not a directory" : "are not directories"} ` +
+          `(a symlink or a file is not followed), so ${one ? "it was" : "they were"} not checked ` +
+          "for an earlier import; a session imported there may be imported again",
+      );
+    }
     const result = await importSessionFromJson(paths, manifest, payload, {
       dryRun: options.dryRun === true,
     });
@@ -658,7 +678,9 @@ function firstTranscriptCwd(records: ReadonlyArray<ClaudeTranscriptRecord>): str
  * share an id string. Recognises both the structured `source.external_id`
  * (current imports) and the `claude-code import <id>` label form (sessions
  * imported before external_id existed), so existing dogfood imports are
- * matched either way. Unreadable sessions are skipped.
+ * matched either way. Unreadable sessions are skipped. Also returns the
+ * entries named as a session id that are not directories: they are not
+ * followed, so an earlier import one of them holds is not in the map.
  */
 /**
  * A prior Basou session for an external id, with the source byte size recorded
@@ -670,7 +692,7 @@ type PriorImport = { sessionId: string; sourceSizeBytes?: number };
 async function loadExistingByExternalId(
   paths: BasouPaths,
   sourceKind: SessionSourceKind,
-): Promise<Map<string, PriorImport[]>> {
+): Promise<{ byExternalId: Map<string, PriorImport[]>; notDirectories: string[] }> {
   const byExternalId = new Map<string, PriorImport[]>();
   const add = (externalId: string, prior: PriorImport): void => {
     const list = byExternalId.get(externalId);
@@ -678,10 +700,11 @@ async function loadExistingByExternalId(
     else list.push(prior);
   };
   let sessionIds: string[];
+  let notDirectories: string[];
   try {
-    sessionIds = await enumerateSessionDirs(paths);
+    ({ dirs: sessionIds, notDirectories } = await enumerateSessionEntries(paths));
   } catch {
-    return byExternalId;
+    return { byExternalId, notDirectories: [] };
   }
   for (const sessionId of sessionIds) {
     let session: Session;
@@ -705,7 +728,7 @@ async function loadExistingByExternalId(
     const match = typeof label === "string" ? label.match(/^claude-code import (\S+)$/) : null;
     if (match?.[1] !== undefined) add(match[1], prior);
   }
-  return byExternalId;
+  return { byExternalId, notDirectories };
 }
 
 /**

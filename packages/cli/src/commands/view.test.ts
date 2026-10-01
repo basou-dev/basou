@@ -1,5 +1,16 @@
 import { execFile } from "node:child_process";
-import { access, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { devNull, tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -349,6 +360,35 @@ describe("basou view server", () => {
       expect(copy.status).toBe(404);
     });
   });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "does not serve a session whose entry is a symlink or a file, and says why",
+    async () => {
+      const repo = await setupInitedRepo();
+      await writeCodexRollout(repo);
+      await withServer(repo, {}, async (handle) => {
+        await postJson(handle, "/api/import/codex", {});
+        const listed = await getJson(handle, "/api/sessions");
+        const id = (listed.data as { sessions: Array<{ sessionId: string }> }).sessions[0]
+          ?.sessionId as string;
+        const sessionsDir = join(repo, ".basou", "sessions");
+        await rename(join(sessionsDir, id), join(repo, "moved-session"));
+        await symlink(join(repo, "moved-session"), join(sessionsDir, id));
+        const detail = await getJson(handle, `/api/sessions/${id}`);
+        expect(detail).toEqual({
+          status: 404,
+          data: {
+            error: `Session ${id} is not a directory; a symlink or a file there is not followed`,
+          },
+        });
+        // A file at the name answers the same way.
+        await rm(join(sessionsDir, id));
+        await writeFile(join(sessionsDir, id), "");
+        expect(await getJson(handle, `/api/sessions/${id}`)).toEqual(detail);
+      });
+    },
+  );
 
   it("serves work stats", async () => {
     const repo = await setupInitedRepo();
