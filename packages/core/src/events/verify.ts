@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { normalizeSessionTimestamps } from "../schemas/iso-timestamp.js";
@@ -110,7 +110,13 @@ export type ChainBreakReason =
    */
   | "yaml_unreadable"
   /** `incomplete` only: `session.yaml` is entirely absent. */
-  | "yaml_missing";
+  | "yaml_missing"
+  /**
+   * The entry named as the session is not a directory — a symlink (whatever it
+   * points to) or a file. It is not followed, so nothing is read and
+   * `eventCount` is 0.
+   */
+  | "not_a_directory";
 
 /** Result of {@link verifyEventsChain}. */
 export type ChainVerdict = {
@@ -200,10 +206,14 @@ type AnchorState =
  * editable; an attacker rewriting BOTH files consistently is not detected.
  * Signing is a follow-up.
  *
+ * An entry at the session's name that is not a directory (a symlink, a file)
+ * is `tampered` / `not_a_directory` before anything is read: it is never
+ * followed.
+ *
  * Throws `Error("Failed to read events.jsonl")`, or an error naming the
- * session for `session.yaml` (`Failed to read session.yaml of <id>`), only
- * for non-ENOENT I/O failures (EACCES etc.) — an unreadable file is an
- * environment problem, not a verdict.
+ * session for the session directory or `session.yaml` (`Failed to read
+ * session.yaml of <id>`), only for non-ENOENT I/O failures (EACCES etc.) — an
+ * unreadable file is an environment problem, not a verdict.
  *
  * READ-ONLY and lock-free: a session being finalized concurrently can leave the
  * two files momentarily out of step (old events read before a finalize, new
@@ -224,6 +234,19 @@ export async function verifyEventsChain(
 
 async function verifyOnce(paths: BasouPaths, sessionId: string): Promise<ChainVerdict> {
   const sessionDir = join(paths.sessions, sessionId);
+
+  // A session is a directory inside the store. Anything else at its name is
+  // not followed: reading through a symlink would verify files outside the
+  // store, and an absent directory falls through to `empty` as before.
+  try {
+    if (!(await lstat(sessionDir)).isDirectory()) {
+      return { status: "tampered", eventCount: 0, reason: "not_a_directory" };
+    }
+  } catch (error: unknown) {
+    if (!findErrorCode(error, "ENOENT")) {
+      throw new Error(`Failed to read the session directory of ${sessionId}`, { cause: error });
+    }
+  }
 
   let raw: Buffer | null = null;
   try {

@@ -834,7 +834,7 @@ describe("renderTaskError (pathless contract)", () => {
         }),
       });
     });
-    const sid = await createSession(repo, { id: SES("LNK"), status: "running", taskId: null });
+    const sid = await createSession(repo, { id: SES("KNK"), status: "running", taskId: null });
     const err = captureStderr();
     await runTaskNew({ title: "x", session: sid }, { cwd: repo, ...FIXED_CTX });
     const stderr = joinCalls(err);

@@ -3,6 +3,29 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **An entry under `.basou/sessions/` whose name is not a session id is no
+  longer treated as a session.** Every command took every directory there as
+  one, whatever its name, so a copy such as `ses_<id>.bak` shadowed the
+  original: `--session` with the original's full id reported it ambiguous
+  (`basou verify`, `basou session show` and the other commands that take a
+  session id could not reach it), `basou session list` and `basou report
+  generate` listed the session twice and counted the copy as tampered,
+  `basou verify` failed on the copy, and `basou import --force` deleted the
+  copy along with the prior import it resembled. A directory such as `notes/`
+  became a `basou verify` row reading `empty`. Only an entry named `ses_`
+  followed by a ULID — the form basou gives every session — is a session now;
+  anything else is ignored by every command.
+- **A symlink or a file where a session's directory should be no longer
+  disappears.** It is still not followed, so nothing outside the store is read
+  or written through it, but `basou verify` now reports it as `tampered` /
+  `not_a_directory` (a new `reason`) and fails, where it used to leave it out
+  and exit `0`. The commands that read whole sessions skip it with a warning
+  (`session_dir_not_directory`).
+
 ## 0.57.1 — 2026-10-01
 
 ### Changed

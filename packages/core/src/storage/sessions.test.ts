@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import { type BasouPaths, basouPaths, ensureBasouDirectory } from "./basou-dir.j
 import {
   classifySuspect,
   enumerateSessionDirs,
+  enumerateSessionEntries,
   finalizeSessionYaml,
   loadSessionEntries,
   readSessionYaml,
@@ -218,6 +219,47 @@ describe("storage/sessions", () => {
       const ids = await enumerateSessionDirs(paths);
       expect(ids).toEqual([SES("XA2")]);
     });
+
+    it("leaves out every entry whose name is not a session id", async () => {
+      const paths = await setupPaths();
+      const id = SES("XA5");
+      await placeSession(paths, { id });
+      await cp(join(paths.sessions, id), join(paths.sessions, `${id}.bak`), { recursive: true });
+      for (const name of ["notes", id.toLowerCase(), id.slice(0, -1), "ses_", `x${id}`]) {
+        await mkdir(join(paths.sessions, name), { recursive: true });
+      }
+      await writeFile(join(paths.sessions, ".gitkeep"), "");
+      expect(await enumerateSessionEntries(paths)).toEqual({ dirs: [id], notDirectories: [] });
+      expect(await enumerateSessionDirs(paths)).toEqual([id]);
+    });
+
+    // POSIX only: creating a symlink needs privileges on Windows.
+    it.skipIf(process.platform === "win32")(
+      "reports a symlink or a file named as a session id as not a directory, without following it",
+      async () => {
+        const paths = await setupPaths();
+        const real = SES("XA6");
+        const linked = SES("XA7");
+        const file = SES("XA8");
+        await placeSession(paths, { id: real });
+        const outside = join(getWorkDir(), "moved-session");
+        await placeSession(paths, { id: linked });
+        await cp(join(paths.sessions, linked), outside, { recursive: true });
+        await rm(join(paths.sessions, linked), { recursive: true });
+        await symlink(outside, join(paths.sessions, linked));
+        await writeFile(join(paths.sessions, file), "");
+        expect(await enumerateSessionEntries(paths)).toEqual({
+          dirs: [real],
+          notDirectories: [linked, file],
+        });
+        expect(await enumerateSessionDirs(paths)).toEqual([real]);
+      },
+    );
+
+    it("returns empty lists when the sessions directory does not exist", async () => {
+      const paths = basouPaths(getWorkDir());
+      expect(await enumerateSessionEntries(paths)).toEqual({ dirs: [], notDirectories: [] });
+    });
   });
 
   describe("readSessionYaml", () => {
@@ -304,6 +346,32 @@ describe("storage/sessions", () => {
       expect(entries[0]?.sessionId).toBe(healthy);
       expect(skips).toEqual([{ sid: broken, reason: "session_yaml_missing" }]);
     });
+
+    it.skipIf(process.platform === "win32")(
+      "skips a symlink named as a session id with session_dir_not_directory and ignores other names",
+      async () => {
+        const paths = await setupPaths();
+        const healthy = SES("XD1");
+        const linked = SES("XD2");
+        await placeSession(paths, { id: healthy });
+        await placeSession(paths, { id: linked });
+        const outside = join(getWorkDir(), "moved-session");
+        await cp(join(paths.sessions, linked), outside, { recursive: true });
+        await rm(join(paths.sessions, linked), { recursive: true });
+        await symlink(outside, join(paths.sessions, linked));
+        await cp(join(paths.sessions, healthy), join(paths.sessions, `${healthy}.bak`), {
+          recursive: true,
+        });
+        await mkdir(join(paths.sessions, "notes"));
+        const skips: Array<{ sid: string; reason: SessionSkipReason }> = [];
+        const entries = await loadSessionEntries(paths, {
+          now: new Date("2026-05-09T03:00:00Z"),
+          onSkip: (sid, reason) => skips.push({ sid, reason }),
+        });
+        expect(entries.map((e) => e.sessionId)).toEqual([healthy]);
+        expect(skips).toEqual([{ sid: linked, reason: "session_dir_not_directory" }]);
+      },
+    );
 
     it("case 9: pushes an entry but flags events_jsonl_unreadable when events.jsonl is unreadable", async () => {
       const paths = await setupPaths();

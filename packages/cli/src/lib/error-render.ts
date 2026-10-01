@@ -233,6 +233,9 @@ export function printSessionListSkip(sid: string, reason: SessionSkipReason): vo
     case "events_jsonl_unreadable":
       console.error(`Warning: skipped suspect check for ${short}: events.jsonl unreadable`);
       break;
+    case "session_dir_not_directory":
+      console.error(`Skipped ${short}: not a directory (a symlink or a file is not followed)`);
+      break;
   }
 }
 

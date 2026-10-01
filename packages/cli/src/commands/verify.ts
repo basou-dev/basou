@@ -1,8 +1,9 @@
 import {
   assertBasouRootSafe,
+  type BasouPaths,
   basouPaths,
   type ChainVerdict,
-  enumerateSessionDirs,
+  enumerateSessionEntries,
   findErrorCode,
   resolveRepositoryRoot,
   resolveSessionId,
@@ -85,10 +86,12 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
+  // Every entry named as a session id gets a row, a directory or not: one that
+  // is not a directory is reported (`not_a_directory`) rather than left out.
   const sessionIds =
     options.session !== undefined
       ? [await resolveSessionId(paths, options.session)]
-      : await enumerateSessionDirs(paths);
+      : await enumerateAllSessionNames(paths);
 
   const rows: VerifyRow[] = [];
   for (const sessionId of sessionIds) {
@@ -151,6 +154,11 @@ function renderVerdict(row: VerifyRow): string {
     case "empty":
       return "empty";
   }
+}
+
+async function enumerateAllSessionNames(paths: BasouPaths): Promise<string[]> {
+  const { dirs, notDirectories } = await enumerateSessionEntries(paths);
+  return [...dirs, ...notDirectories].sort();
 }
 
 async function resolveRepositoryRootForVerify(cwd: string): Promise<string> {

@@ -366,11 +366,11 @@ describe("doRunDecisionRecord (attach path)", () => {
 
   it("dec-16: ambiguous --session prefix is rejected with the dedicated message", async () => {
     const repo = await setupInitedRepo();
-    await createSession(repo, { id: SES("D16a"), status: "running" });
-    await createSession(repo, { id: SES("D16b"), status: "running" });
+    await createSession(repo, { id: SES("D1A"), status: "running" });
+    await createSession(repo, { id: SES("D1B"), status: "running" });
     const err = captureStderr();
     await runDecisionRecord(
-      { title: "x", session: "ses_01HXABCDEF1234567890ABCD16" },
+      { title: "x", session: "ses_01HXABCDEF1234567890ABCD1" },
       { cwd: repo, ...FIXED_CTX },
     );
     expect(joinCalls(err)).toContain("Ambiguous session id");

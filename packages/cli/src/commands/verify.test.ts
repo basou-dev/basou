@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,6 +180,49 @@ describe("basou verify", () => {
     expect(joinCalls(out)).toContain("TAMPERED (broken_link at line 3)");
     expect(process.exitCode).toBe(1);
   });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "ignores entries not named as a session id and reports a symlinked session as not_a_directory",
+    async () => {
+      const repo = await setupInitedRepo();
+      const importedId = await importChainedSession(repo);
+      await writeLiveSession(repo);
+      const sessions = basouPaths(repo).sessions;
+      await mkdir(join(sessions, "notes"));
+      await cp(join(sessions, importedId), join(sessions, `${importedId}.bak`), {
+        recursive: true,
+      });
+      const outside = join(repo, "moved-session");
+      await cp(join(sessions, LIVE_SES_ID), outside, { recursive: true });
+      await rm(join(sessions, LIVE_SES_ID), { recursive: true });
+      await symlink(outside, join(sessions, LIVE_SES_ID));
+
+      const out = captureStdout();
+      await runVerify({ json: true }, { cwd: repo });
+      expect(JSON.parse(joinCalls(out))).toEqual(
+        [
+          { session_id: importedId, status: "verified", event_count: 3 },
+          {
+            session_id: LIVE_SES_ID,
+            status: "tampered",
+            event_count: 0,
+            reason: "not_a_directory",
+          },
+        ].sort((a, b) => (a.session_id < b.session_id ? -1 : 1)),
+      );
+      expect(process.exitCode).toBe(1);
+
+      // The copy no longer makes the original's full id ambiguous.
+      process.exitCode = 0;
+      out.mockClear();
+      await runVerify({ json: true, session: importedId }, { cwd: repo });
+      expect(JSON.parse(joinCalls(out))).toEqual([
+        { session_id: importedId, status: "verified", event_count: 3 },
+      ]);
+      expect(process.exitCode ?? 0).toBe(0);
+    },
+  );
 
   it("reports a null line as tampered and still reports every other session", async () => {
     const repo = await setupInitedRepo();
@@ -374,6 +427,7 @@ const REASONS: Record<NonNullable<VerifyRow["reason"]>, true> = {
   anchor_without_chain: true,
   yaml_unreadable: true,
   yaml_missing: true,
+  not_a_directory: true,
 };
 
 // The cells of each row of the table under `header`, with the first cell's
