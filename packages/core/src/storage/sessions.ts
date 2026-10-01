@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { inspectChainTail } from "../events/chained-append.js";
@@ -5,6 +6,7 @@ import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import { normalizeSessionTimestamps } from "../schemas/iso-timestamp.js";
 import { type Session, SessionSchema } from "../schemas/session.schema.js";
+import { SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
 import { overwriteYamlFile, readYamlFile } from "./yaml-store.js";
@@ -50,11 +52,15 @@ export type SessionEntry = {
  *   the session row remains visible to the caller; only the suspect check is
  *   degraded. Matches the existing CLI behaviour at
  *   `packages/cli/src/commands/session.ts` (suspect-check stderr warning).
+ * - `session_dir_not_directory`: an entry named as a session id is not a
+ *   directory (a symlink, a file). It is not followed, and is omitted from the
+ *   result (see {@link enumerateSessionEntries}).
  */
 export type SessionSkipReason =
   | "session_yaml_missing"
   | "session_yaml_invalid"
-  | "events_jsonl_unreadable";
+  | "events_jsonl_unreadable"
+  | "session_dir_not_directory";
 
 export type LoadSessionEntriesOptions = {
   /**
@@ -88,29 +94,59 @@ export type LoadFederatedOptions = LoadSessionEntriesOptions & {
   onRootUnavailable?: (host: string, error: unknown) => void;
 };
 
+/** Result of {@link enumerateSessionEntries}. */
+export type SessionDirEntries = {
+  /** Directories named as a session id, ascending. These are the sessions. */
+  dirs: string[];
+  /**
+   * Entries named as a session id that are not directories — a symlink
+   * (whatever it points to) or a file — ascending. The enumeration does not
+   * follow them; callers report them rather than let them disappear.
+   */
+  notDirectories: string[];
+};
+
 /**
- * List session directory names under `paths.sessions`, ULID ascending.
+ * List the entries directly under `paths.sessions` whose name is a session id
+ * (`ses_` followed by a ULID), split into real directories and everything
+ * else. An entry with any other name — `notes/`, a `ses_<id>.bak` copy,
+ * `.gitkeep` — is not a session and is left out of both lists: basou never
+ * writes such a name, and treating one as a session made a copy shadow the
+ * original (an ambiguous id, a duplicated row, a `--force` re-import deleting
+ * it as a prior import).
  *
- * - Returns `[]` when the sessions directory does not exist (empty workspace
- *   or pre-init state).
+ * - Returns empty lists when the sessions directory does not exist (empty
+ *   workspace or pre-init state).
  * - Throws `Error("Failed to enumerate sessions", { cause })` on other I/O.
- * - Only directories are returned (`.gitkeep` and other files are filtered).
+ * - Whether an entry is a directory is decided without following symlinks.
  *
- * Sort order is `Array.prototype.sort()` default (Unicode code-point
- * compare). ULIDs are Crockford base32 in uppercase, so the natural sort
- * is also chronological session-start order.
+ * Sort order is `Array.prototype.sort()` default (code-unit compare). ULIDs
+ * are Crockford base32 in uppercase, so the natural sort is also
+ * chronological session-start order.
  */
-export async function enumerateSessionDirs(paths: BasouPaths): Promise<string[]> {
+export async function enumerateSessionEntries(paths: BasouPaths): Promise<SessionDirEntries> {
+  let dirents: Dirent[];
   try {
-    const dirents = await readdir(paths.sessions, { withFileTypes: true });
-    return dirents
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name)
-      .sort();
+    dirents = await readdir(paths.sessions, { withFileTypes: true });
   } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) return [];
+    if (findErrorCode(error, "ENOENT")) return { dirs: [], notDirectories: [] };
     throw new Error("Failed to enumerate sessions", { cause: error });
   }
+  const dirs: string[] = [];
+  const notDirectories: string[] = [];
+  for (const dirent of dirents) {
+    if (!SessionIdSchema.safeParse(dirent.name).success) continue;
+    (dirent.isDirectory() ? dirs : notDirectories).push(dirent.name);
+  }
+  return { dirs: dirs.sort(), notDirectories: notDirectories.sort() };
+}
+
+/**
+ * List the sessions under `paths.sessions`: the directories named as a session
+ * id, ascending. See {@link enumerateSessionEntries} for what is left out.
+ */
+export async function enumerateSessionDirs(paths: BasouPaths): Promise<string[]> {
+  return (await enumerateSessionEntries(paths)).dirs;
 }
 
 /**
@@ -244,6 +280,8 @@ export async function classifySuspect(
  *   schema violation): the entry is omitted from the result.
  * - `events_jsonl_unreadable`: the entry is still pushed with `suspect=false`
  *   so callers can render the session row plus a CLI-side warning.
+ * - `session_dir_not_directory`: an entry named as a session id that is not a
+ *   directory; it is not read.
  *
  * `options.now` is taken once and threaded into every {@link classifySuspect}
  * call so age comparisons are consistent across sessions.
@@ -253,7 +291,8 @@ async function loadEntriesFromRoot(
   options: LoadSessionEntriesOptions,
 ): Promise<SessionEntry[]> {
   const { paths } = root;
-  const sessionIds = await enumerateSessionDirs(paths);
+  const { dirs: sessionIds, notDirectories } = await enumerateSessionEntries(paths);
+  for (const sid of notDirectories) options.onSkip?.(sid, "session_dir_not_directory");
   const entries: SessionEntry[] = [];
   for (const sid of sessionIds) {
     let session: Session;

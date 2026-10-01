@@ -975,7 +975,7 @@ Per-session verdicts:
 | `incomplete` | chained log but `session.yaml` is entirely absent (an import crashed between the two writes); a re-import repairs it | 0 |
 | `in_progress` | chained log on a still-live session (`initialized` / `running` / `waiting_approval`); the internal chain is verified, the mutable tail and not-yet-written anchor are forgiven | 0 |
 | `unsupported` | `session.yaml` was written by a newer basou, whose rules verify does not know: its format major is not 0 (nothing is judged, the log included), or it is a `0.x.y` newer than the one this basou writes and the verdict would otherwise be `tampered`; upgrade basou to verify it | non-zero |
-| `tampered` | a real break: bad back-pointer or genesis, foreign `session_id`, torn tail (on an at-rest session), blank or malformed line, anchor missing / mismatching, an `integrity` key left behind with no chained log, or, on a chained log, a `session.yaml` that verify cannot read what it needs from (`yaml_unreadable`, below) | non-zero |
+| `tampered` | a real break: bad back-pointer or genesis, foreign `session_id`, torn tail (on an at-rest session), blank or malformed line, anchor missing / mismatching, an `integrity` key left behind with no chained log, on a chained log a `session.yaml` that verify cannot read what it needs from (`yaml_unreadable`, below), or a symlink or file where the session's directory should be (`symlink`, `not_a_directory`) | non-zero |
 
 **What verify reads from `session.yaml`.** Three fields, each against its own
 schema: the `schema_version` format gate, the `integrity` anchor, and the
@@ -1012,7 +1012,7 @@ read the whole document skip such a session with the same code; they also skip
 an I/O failure under it, which makes verify abort instead.
 
 `unchained` / `empty` / `incomplete` / `in_progress` exit 0; an I/O failure
-while reading a log or its `session.yaml` (e.g. permissions) aborts the command with a non-zero exit
+while reading a session's directory entry, its log or its `session.yaml` (e.g. permissions) aborts the command with a non-zero exit
 as an operational error — distinct from a `tampered` verdict, but still
 fail-closed. A still-live session being finalized concurrently can momentarily
 present an old log with a new anchor; `verify` re-snapshots once before
@@ -1020,8 +1020,9 @@ returning a strict `anchor_mismatch`, so a finalize-in-flight is not reported as
 tampering.
 
 **The `--json` output.** `basou verify --json` prints one JSON array on stdout,
-with one row per directory directly under `.basou/sessions/`, sorted by name
-in code-unit order, or the one session `--session` names. A workspace with no
+with one row per entry directly under `.basou/sessions/` whose name is a
+session id, sorted by name in code-unit order, or the one session `--session`
+names. A workspace with no
 sessions prints `[]`. The top level stays an array within `1.x`, so the output
 has no place for anything about the run as a whole; a count by status is taken
 from the rows. Any error that stops the command before every session has been
@@ -1031,19 +1032,38 @@ array and reports the error on stderr, so an array that is printed is
 complete. Whitespace, and the order of the keys in a row, are not part of the
 shape.
 
-Which directories get a row is not settled yet. Today a directory gets one
-whatever its name, so one that basou did not write is listed too (typically as
-`empty`), and a symlink is not followed, so a session directory that is a
-symlink gets no row. Within `1.x`, a directory whose name is not a session id
-may instead be skipped, or given a row that fails the command.
+Only an entry whose name is a session id is a session. A session id is `ses_`
+followed by 26 uppercase Crockford base32 characters, the first of them `0` to
+`7` (`^ses_[0-7][0-9A-HJKMNP-TV-Z]{25}$`), the form basou gives every session.
+Any other entry, such as a `notes/` directory or a `ses_<id>.bak` copy, is not
+a session: no command lists, counts, verifies, resolves or serves it as one,
+and it gets no row here.
+
+An entry with a session id's name that is not a directory — a symlink, whatever
+it points to, or a file — is not followed by `basou verify`, by the commands
+that list sessions, or by `--session`. (A command handed such an id from
+elsewhere, such as a recorded approval or `basou view`'s session page, is not
+guarded the same way.) Here it
+is reported rather than left out: its row is `tampered` with `reason` `symlink`
+or `not_a_directory` and `event_count` `0`, since nothing is read. Such a row
+judges the store's layout, not the log: the log behind a symlink may be intact,
+and moving the session's directory back into the store repairs it. `--session`
+naming such an entry gives its row here and, on every other command, stops
+with an error saying the entry is not a directory; a prefix it shares with a
+session is ambiguous. The commands that load sessions to list or summarize
+them skip it with a warning naming its full id — `session list`, `orient`,
+`stats`, `handoff generate`, `decisions generate`, `report generate`,
+`review-gaps` and `decision gaps` (which counts it among the sessions it could
+not read in full) — and `task reconcile` and `task refresh-linkage` leave a
+reference to it as it is.
 
 Each row is an object with these fields:
 
 | Field | Value | Present | Meaning |
 |---|---|---|---|
-| `session_id` | string | always | the directory's name — the session's full id for a session basou wrote — also when `--session` was given a prefix |
+| `session_id` | string | always | the session's full id (the entry's name), also when `--session` was given a prefix |
 | `status` | string | always | the verdict, from the table above |
-| `event_count` | non-negative integer | always | the complete (newline-terminated) lines of `events.jsonl`, as this basou splits the file; an unterminated tail is not counted, and a missing or empty file counts `0`. On an `unsupported` row it counts lines, not necessarily the newer writer's events |
+| `event_count` | non-negative integer | always | the complete (newline-terminated) lines of `events.jsonl`, as this basou splits the file; an unterminated tail is not counted, and a missing or empty file counts `0`. On an `unsupported` row it counts lines, not necessarily the newer writer's events; on a `symlink` or `not_a_directory` row it is `0`, as nothing is read |
 | `reason` | string | always on `tampered` and `incomplete`; today on no other status | what broke, from the table below; read it together with `status`, never instead of it |
 | `line` | positive integer | when one line of the log broke | the 1-based number of the first line that broke; for `torn_tail`, the number the unterminated tail would have |
 | `session_yaml_invalid` | `true` | when `session.yaml` exists but does not load as a whole document | described above; the field is left out rather than set to `false` |
@@ -1068,6 +1088,8 @@ and never changes whether that status fails the command.
 | `anchor_without_chain` | `tampered` | no | `session.yaml` has an `integrity` key, but the log is unchained, empty or missing |
 | `yaml_unreadable` | `tampered` | no | verify cannot read what it needs from a chained log's `session.yaml` (above) |
 | `yaml_missing` | `incomplete` | no | a chained log has no `session.yaml` |
+| `symlink` | `tampered` | no | the entry named as the session is a symlink, whatever it points to; it is not followed |
+| `not_a_directory` | `tampered` | no | the entry named as the session is neither a directory nor a symlink (a file, for instance) |
 
 **Reading the output.** The shape changes only as
 [compatibility](compatibility.md#basou-verify-verdicts-may-gain-values-on-the-failing-side)

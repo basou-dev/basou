@@ -51,6 +51,7 @@ export type {
   FederatedRoot,
   LoadFederatedOptions,
   LoadSessionEntriesOptions,
+  SessionDirEntries,
   SessionEntry,
   SessionSkipReason,
   SuspectReason,
@@ -58,6 +59,7 @@ export type {
 export {
   classifySuspect,
   enumerateSessionDirs,
+  enumerateSessionEntries,
   finalizeSessionYaml,
   loadFederatedSessionEntries,
   loadSessionEntries,

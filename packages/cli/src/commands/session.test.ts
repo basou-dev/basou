@@ -681,11 +681,11 @@ describe("doRunSessionShow", () => {
 
   it("case 14: ambiguous prefix throws Ambiguous session id", async () => {
     const repo = await setupInitedRepo();
-    await createSession(repo, { id: "ses_01HXAB2222222222222222Z01" });
-    await createSession(repo, { id: "ses_01HXAB2222222222222222Z02" });
+    await createSession(repo, { id: "ses_01HXAB22222222222222222Z01" });
+    await createSession(repo, { id: "ses_01HXAB22222222222222222Z02" });
     let captured: unknown;
     try {
-      await doRunSessionShow("01HXAB2222222222222222Z", {}, { cwd: repo });
+      await doRunSessionShow("01HXAB22222222222222222Z", {}, { cwd: repo });
     } catch (error: unknown) {
       captured = error;
     }
@@ -1320,7 +1320,7 @@ describe("runSessionImport", () => {
 describe("doRunSessionNote", () => {
   it("note-lock: refuses with 'Lock is held' when the per-session lockfile is held alive", async () => {
     const repo = await setupInitedRepo();
-    const sid = SES("NLK");
+    const sid = SES("NK1");
     await createSession(repo, { id: sid, status: "running" });
     const paths = basouPaths(repo);
     // Lockfile naming mirrors acquireLock: scope + ULID-after-prefix.
@@ -1533,7 +1533,7 @@ describe("doRunSessionNote", () => {
 
   it("note-17b: --from-file - verbose run does not emit 'Caused by:' (hand-crafted error has no cause)", async () => {
     const repo = await setupInitedRepo();
-    const sid = SES("N17b");
+    const sid = SES("N17");
     await createSession(repo, { id: sid, status: "running" });
     const err = captureStderr();
     await runSessionNote(sid, { fromFile: "-", verbose: true }, { cwd: repo });

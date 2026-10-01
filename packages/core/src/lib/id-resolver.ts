@@ -1,5 +1,5 @@
 import type { BasouPaths } from "../storage/basou-dir.js";
-import { enumerateSessionDirs } from "../storage/sessions.js";
+import { enumerateSessionEntries } from "../storage/sessions.js";
 import { enumerateArchivedTaskIds, enumerateTaskIds } from "../storage/tasks.js";
 
 /**
@@ -12,9 +12,20 @@ import { enumerateArchivedTaskIds, enumerateTaskIds } from "../storage/tasks.js"
  *   - `"Session not found: <input>"`
  *   - `"Ambiguous session id '<input>': matched <N> sessions. Disambiguate
  *      with a longer prefix."`
+ *
+ * An entry named as a session id that is not a directory (a symlink, a file)
+ * is matched too, so a prefix it shares with a session is ambiguous. When it
+ * is the one match, the call throws
+ * `"Session <id> is not a directory; a symlink or a file there is not followed"`
+ * unless `options.allowNotDirectory` is set — `basou verify`, which reports
+ * the entry instead of reading it, sets it.
  */
-export async function resolveSessionId(paths: BasouPaths, input: string): Promise<string> {
-  return resolveIdInternal(paths, input, "session");
+export async function resolveSessionId(
+  paths: BasouPaths,
+  input: string,
+  options: { allowNotDirectory?: boolean } = {},
+): Promise<string> {
+  return resolveIdInternal(paths, input, "session", options);
 }
 
 /**
@@ -43,7 +54,8 @@ type KindConfig = {
   noun: string;
   nounPlural: string;
   capNoun: string;
-  enumerate: (paths: BasouPaths) => Promise<string[]>;
+  /** The ids, and the entries named as one that are not directories. */
+  enumerate: (paths: BasouPaths) => Promise<{ ids: string[]; notDirectories: string[] }>;
 };
 
 const KIND_CONFIG: Record<IdKind, KindConfig> = {
@@ -52,14 +64,17 @@ const KIND_CONFIG: Record<IdKind, KindConfig> = {
     noun: "session",
     nounPlural: "sessions",
     capNoun: "Session",
-    enumerate: enumerateSessionDirs,
+    enumerate: async (paths) => {
+      const { dirs, notDirectories } = await enumerateSessionEntries(paths);
+      return { ids: dirs, notDirectories };
+    },
   },
   task: {
     prefix: "task_",
     noun: "task",
     nounPlural: "tasks",
     capNoun: "Task",
-    enumerate: enumerateTaskIds,
+    enumerate: async (paths) => ({ ids: await enumerateTaskIds(paths), notDirectories: [] }),
   },
 };
 
@@ -67,7 +82,7 @@ async function resolveIdInternal(
   paths: BasouPaths,
   input: string,
   kind: IdKind,
-  options: { includeArchived?: boolean } = {},
+  options: { includeArchived?: boolean; allowNotDirectory?: boolean } = {},
 ): Promise<string> {
   const cfg = KIND_CONFIG[kind];
   const trimmed = input.trim();
@@ -78,7 +93,7 @@ async function resolveIdInternal(
   if (normalized.length <= cfg.prefix.length) {
     throw new Error(`${cfg.capNoun} not found: ${input}`);
   }
-  const primary = await cfg.enumerate(paths);
+  const { ids: primary, notDirectories } = await cfg.enumerate(paths);
   // Merge in archived task ids when the caller opts in. Dedupe via a Set so
   // a single id appearing in both surfaces (shouldn't happen but defend
   // anyway) does not falsely register as ambiguous.
@@ -88,6 +103,9 @@ async function resolveIdInternal(
       merged.add(id);
     }
   }
+  // An entry that is not a directory is matched too, so it is reported for
+  // what it is instead of "not found", and a prefix it shares is ambiguous.
+  for (const id of notDirectories) merged.add(id);
   if (merged.size === 0) {
     throw new Error(`${cfg.capNoun} not found: ${input}`);
   }
@@ -100,5 +118,11 @@ async function resolveIdInternal(
       `Ambiguous ${cfg.noun} id '${input}': matched ${matches.length} ${cfg.nounPlural}. Disambiguate with a longer prefix.`,
     );
   }
-  return matches[0] as string;
+  const match = matches[0] as string;
+  if (notDirectories.includes(match) && options.allowNotDirectory !== true) {
+    throw new Error(
+      `${cfg.capNoun} ${match} is not a directory; a symlink or a file there is not followed`,
+    );
+  }
+  return match;
 }

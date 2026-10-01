@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -130,4 +130,42 @@ describe("resolveTaskId", () => {
     const paths = await setupPaths();
     await expect(resolveTaskId(paths, "task_")).rejects.toThrow("Task not found: task_");
   });
+});
+
+describe("resolveSessionId — entries that are not sessions", () => {
+  it("does not let a copy whose name is not a session id make the original ambiguous", async () => {
+    const paths = await setupPaths();
+    await placeSessionDir(paths, SES_A);
+    await cp(join(paths.sessions, SES_A), join(paths.sessions, `${SES_A}.bak`), {
+      recursive: true,
+    });
+    expect(await resolveSessionId(paths, SES_A)).toBe(SES_A);
+  });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "names an entry that is not a directory instead of reporting it not found",
+    async () => {
+      const paths = await setupPaths();
+      const outside = join(workDir as string, "moved-session");
+      await mkdir(outside);
+      await symlink(outside, join(paths.sessions, SES_A));
+      await expect(resolveSessionId(paths, SES_A)).rejects.toThrow(
+        `Session ${SES_A} is not a directory; a symlink or a file there is not followed`,
+      );
+      expect(await resolveSessionId(paths, SES_A, { allowNotDirectory: true })).toBe(SES_A);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "treats a prefix shared by a session and an entry that is not a directory as ambiguous",
+    async () => {
+      const paths = await setupPaths();
+      await placeSessionDir(paths, SES_A);
+      await writeFile(join(paths.sessions, SES_B), "");
+      await expect(resolveSessionId(paths, "ses_01HXABCDEF1234567890ABCDE")).rejects.toThrow(
+        "Ambiguous session id 'ses_01HXABCDEF1234567890ABCDE': matched 2 sessions.",
+      );
+    },
+  );
 });

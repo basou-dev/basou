@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { devNull, tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -340,6 +340,13 @@ describe("basou view server", () => {
 
       const missing = await getJson(handle, "/api/sessions/ses_doesnotexist");
       expect(missing.status).toBe(404);
+
+      // A copy whose name is not a session id is not served as a session.
+      const id = (sessions[0] as { sessionId: string }).sessionId;
+      const sessionsDir = join(repo, ".basou", "sessions");
+      await cp(join(sessionsDir, id), join(sessionsDir, `${id}.bak`), { recursive: true });
+      const copy = await getJson(handle, `/api/sessions/${id}.bak`);
+      expect(copy.status).toBe(404);
     });
   });
 

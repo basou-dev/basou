@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -109,6 +109,51 @@ async function writeChainedSession(
 async function rewriteLines(fixture: SessionFixture, lines: string[]): Promise<void> {
   await writeFile(fixture.eventsPath, lines.length > 0 ? `${lines.join("\n")}\n` : "");
 }
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")(
+  "verifyEventsChain — an entry at the session's name that is not a directory",
+  () => {
+    it("reports a symlink to an intact session as symlink without following it", async () => {
+      const paths = await setupPaths();
+      const fixture = await writeChainedSession(paths, SES_ID, 3);
+      const outside = join(paths.root, "..", "moved-session");
+      await cp(fixture.sessionDir, outside, { recursive: true });
+      await rm(fixture.sessionDir, { recursive: true });
+      await symlink(outside, fixture.sessionDir);
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+        status: "tampered",
+        eventCount: 0,
+        reason: "symlink",
+      });
+    });
+
+    it("reports a dangling symlink as symlink", async () => {
+      const paths = await setupPaths();
+      await symlink(join(paths.root, "..", "nowhere"), join(paths.sessions, SES_ID));
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+        status: "tampered",
+        eventCount: 0,
+        reason: "symlink",
+      });
+    });
+
+    it("reports a file at the session's name as not_a_directory", async () => {
+      const paths = await setupPaths();
+      await writeFile(join(paths.sessions, SES_ID), "");
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+        status: "tampered",
+        eventCount: 0,
+        reason: "not_a_directory",
+      });
+    });
+
+    it("still reports a session with no directory at all as empty", async () => {
+      const paths = await setupPaths();
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({ status: "empty", eventCount: 0 });
+    });
+  },
+);
 
 describe("verifyEventsChain — clean states", () => {
   it("verifies an intact chained session", async () => {
