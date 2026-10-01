@@ -1,6 +1,7 @@
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
+import { SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 
 /**
@@ -49,11 +50,12 @@ export async function assertSessionStoreSafe(paths: BasouPaths): Promise<void> {
 
 /**
  * Classify the entry at `<paths.sessions>/<sessionId>` (see
- * {@link SessionEntryKind}), after checking the store itself with
- * {@link assertSessionStoreSafe}. `sessionId` is a session id; the caller has
- * validated it.
+ * {@link SessionEntryKind}), after checking that `sessionId` is a session id
+ * (so nothing but a name directly under the store is ever looked at) and the
+ * store itself with {@link assertSessionStoreSafe}.
  *
- * Throws the {@link assertSessionStoreSafe} errors, or
+ * Throws `Error("Invalid session id")` for anything that is not a session id,
+ * the {@link assertSessionStoreSafe} errors, or
  * `Error("Failed to read the session directory of <id>", { cause })` on an
  * lstat failure other than ENOENT.
  */
@@ -61,6 +63,7 @@ export async function inspectSessionEntry(
   paths: BasouPaths,
   sessionId: string,
 ): Promise<SessionEntryKind> {
+  if (!SessionIdSchema.safeParse(sessionId).success) throw new Error("Invalid session id");
   await assertSessionStoreSafe(paths);
   try {
     const entry = await lstat(join(paths.sessions, sessionId));
@@ -74,9 +77,12 @@ export async function inspectSessionEntry(
 
 /**
  * Refuse to read or write session `sessionId` when its entry is a symlink or
- * a file: it is not followed. The entry point every read or write of a
- * session by id goes through, whether the id was typed, recorded (an
- * approval's `session_id`) or requested (`basou view`).
+ * a file: it is not followed. `readSessionYaml`, `classifySuspect` and the
+ * chained append / finalize paths call it, and so do the commands handed an
+ * id from elsewhere (an approval's recorded `session_id`). A reader that
+ * takes a session directory instead (`replayEvents`, `readAllEvents`) relies
+ * on its caller: an id from a listing, from `resolveSessionId`, or from this
+ * check or {@link inspectSessionEntry}.
  *
  * A missing entry passes, so each caller keeps its own "not found" handling.
  * The error message matches `resolveSessionId`'s for the same entry.

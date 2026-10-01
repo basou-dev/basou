@@ -1040,33 +1040,38 @@ a session: no command lists, counts, verifies, resolves or serves it as one,
 and it gets no row here.
 
 An entry with a session id's name that is not a directory — a symlink, whatever
-it points to, or a file — is not followed by any command: nothing is read from
-it or written to it, whether its id comes from a listing, from `--session`, or
-from elsewhere, such as a recorded approval or `basou view`'s session page.
-Here it is reported rather than left out: its row is `tampered` with `reason`
-`symlink` or `not_a_directory` and `event_count` `0`, since nothing is read.
-Such a row judges the store's layout, not the log: the log behind a symlink may
-be intact, and moving the session's directory back into the store repairs it.
+it points to, or a file — is not followed: today no command reads a session
+from it or writes one through it, whether its id comes from a listing, from
+`--session`, or from elsewhere, such as a recorded approval or `basou view`'s
+session page. (A command that acts on such an entry, to repair it for
+instance, may be added within `1.x`; its documentation says so.) Here it is
+reported rather than left out: its row is `tampered` with `reason` `symlink`
+or `not_a_directory` and `event_count` `0`, since nothing is read. Such a row
+judges the store's layout, not the log: the log behind a symlink may be
+intact, and moving the session's directory back into the store repairs it.
 `--session` naming such an entry gives its row here and, on every other
 command, stops with an error saying the entry is not a directory; a prefix it
-shares with a session is ambiguous. A command handed such an id from elsewhere
-stops with the same error — `approval show`, and `approval approve` and
-`approval reject`, which leave the approval pending — and `basou view`'s
-session page answers `404` with it. The commands that load sessions to list or
-summarize them skip it with a warning naming its full id — `session list`,
-`orient`, `stats`, `handoff generate`, `decisions generate`, `report generate`,
-`review-gaps` and `decision gaps` (which counts it among the sessions it could
-not read in full). `session rechain --all` gives it a `skipped` row with the
-`reason` `symlink` or `not_a_directory` and, as here, exits non-zero. `import`
-cannot tell whether it holds an earlier import of a source, so before
-importing a session as new it warns once, naming every such entry, that a
-session there may be imported again. `task reconcile` and `task
-refresh-linkage` leave a reference to it as it is.
+shares with a session is ambiguous. A command handed such an id from
+elsewhere reads nothing through it: `approval approve` and `approval reject`
+stop with the same error and leave the approval pending, `approval show`
+shows the approval without the session's events and warns, and `basou view`'s
+session page answers `404` with the error. The commands that load sessions to
+list or summarize them skip it with a warning naming its full id — `session
+list`, `orient`, `stats`, `handoff generate`, `decisions generate`, `report
+generate`, `review-gaps` and `decision gaps` (which counts it among the
+sessions it could not read in full). `session rechain --all` reports it and
+exits non-zero, as here. `import` cannot tell whether it holds an earlier
+import of a source, so before importing a session as new it warns once,
+naming every such entry, that a session there may be imported again. `task
+reconcile` and `task refresh-linkage` leave a reference to it as it is.
 
-`.basou/sessions` itself is not followed either: when it is a symlink or a
-file, every command that reads or writes sessions stops with an error saying
-so — `basou verify` included, which then prints no array — and nothing is
-read or written through it.
+The workspace's own `.basou/sessions` is not followed either: when it is a
+symlink or a file, the commands that read or write the workspace's sessions
+stop with an error saying so — `basou verify` included, which then prints no
+array. A federated mirror, another host's store registered in
+`~/.basou/hosts.yaml`, is a read-only copy kept outside the store to begin
+with, so its `.basou/sessions` may be a symlink; an entry in it that is not a
+directory is still not followed.
 
 Each row is an object with these fields:
 

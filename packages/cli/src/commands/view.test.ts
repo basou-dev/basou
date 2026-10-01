@@ -363,7 +363,7 @@ describe("basou view server", () => {
 
   // POSIX only: creating a symlink needs privileges on Windows.
   it.skipIf(process.platform === "win32")(
-    "does not serve a session whose entry is a symlink, and says why",
+    "does not serve a session whose entry is a symlink or a file, and says why",
     async () => {
       const repo = await setupInitedRepo();
       await writeCodexRollout(repo);
@@ -382,6 +382,10 @@ describe("basou view server", () => {
             error: `Session ${id} is not a directory; a symlink or a file there is not followed`,
           },
         });
+        // A file at the name answers the same way.
+        await rm(join(sessionsDir, id));
+        await writeFile(join(sessionsDir, id), "");
+        expect(await getJson(handle, `/api/sessions/${id}`)).toEqual(detail);
       });
     },
   );

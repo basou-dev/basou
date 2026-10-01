@@ -16,6 +16,7 @@ import {
   type Event,
   enumerateApprovals,
   findErrorCode,
+  inspectSessionEntry,
   isLazyExpired,
   LOCAL_CLI_EVENT_SOURCE,
   linkYamlFile,
@@ -264,19 +265,27 @@ export async function doRunApprovalShow(
     throw new Error(`Approval not found: ${idInput}`);
   }
 
-  // The recorded session is read only when its entry is a directory in the
-  // store; a symlink or a file there stops the command instead of being read.
+  // The recorded session's events are read only when its entry is a
+  // directory in the store. A symlink or a file there is not followed: the
+  // approval itself (which lives in the store) is still shown, without its
+  // events, as for a session that is missing, and a warning names the entry.
   // events.jsonl I/O failure throws "Failed to read events.jsonl" and is
   // converted to exit 1 by the wrapping try/catch — partial / malformed /
   // schema warnings stream through onWarning.
-  await assertSessionDirSafe(paths, loaded.approval.session_id);
-  const sessionDir = join(paths.sessions, loaded.approval.session_id);
+  const sessionId = loaded.approval.session_id;
+  const entry = await inspectSessionEntry(paths, sessionId);
   const relatedEvents: Event[] = [];
-  for await (const ev of replayEvents(sessionDir, {
-    onWarning: (w) => printReplayWarning(w, loaded.approval.session_id),
-  })) {
-    if (isApprovalEvent(ev) && ev.approval_id === id) {
-      relatedEvents.push(ev);
+  if (entry === "symlink" || entry === "not_a_directory") {
+    console.error(
+      `Warning: session ${sessionId} is not a directory (a symlink or a file is not followed); its events are not shown`,
+    );
+  } else {
+    for await (const ev of replayEvents(join(paths.sessions, sessionId), {
+      onWarning: (w) => printReplayWarning(w, sessionId),
+    })) {
+      if (isApprovalEvent(ev) && ev.approval_id === id) {
+        relatedEvents.push(ev);
+      }
     }
   }
 

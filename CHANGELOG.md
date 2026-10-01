@@ -13,20 +13,25 @@ All notable changes to **basou** are recorded here. The project follows
   sessions and `--session`, but the others still did: `basou approval approve`
   and `reject` appended the resolution to the `events.jsonl` behind the
   symlink, and `basou approval show` and `basou view`'s session page read the
-  log there. They now stop with the error `--session` gives, `Session <id> is
-  not a directory; a symlink or a file there is not followed` — the approval
-  stays pending — and the view's session page answers `404` with it. Every
-  read or write of a session by id goes through the same check, including
-  task attach, `session note` and `decision record --session`.
+  log there. `approve` and `reject` now stop with the error `--session` gives,
+  `Session <id> is not a directory; a symlink or a file there is not
+  followed`, and the approval stays pending; `approval show` shows the
+  approval without the session's events and warns, as for a session that is
+  missing; the view's session page answers `404` with the error.
 
 ### Changed
 
-- **A `.basou/sessions` that is a symlink or a file stops every command that
-  reads or writes sessions**, with `.basou/sessions is a symlink; refusing to
-  operate` or `.basou/sessions exists but is not a directory`, where they read
-  and wrote through it. basou never creates one. `basou verify` stops with the
-  error instead of printing rows, and `basou import` stops before reading
-  anything, `--dry-run` included.
+- **A `.basou/sessions` that is a symlink stops every command that reads or
+  writes the workspace's sessions**, with `.basou/sessions is a symlink;
+  refusing to operate`, where they read and wrote through it. One that is a
+  file, which already made them fail (`basou exec` with an error naming an
+  absolute path), now stops them with `.basou/sessions exists but is not a
+  directory`. basou never creates either. `basou verify` stops with the error
+  instead of printing rows, and `basou import` checks the store before it
+  reads or writes any session, `--dry-run` included, though it may list and
+  read the source logs first. A federated mirror registered in
+  `~/.basou/hosts.yaml` is read as before, its `.basou/sessions` a symlink or
+  not; an entry in it that is not a directory is still not followed.
 - **`basou session rechain --all` gives a symlink or a file named as a session
   a row and exits `1` on it**, where it left the entry out and exited `0`. The
   row is `skipped` with the `reason` `symlink` or `not_a_directory`, matching
@@ -37,6 +42,26 @@ All notable changes to **basou** are recorded here. The project follows
   there is not seen and the source is imported again as a new session. Before
   importing a session as new, `basou import` now says so once, naming every
   such entry by its full id.
+- **`@basou/sdk`: with a `.basou/sessions` that is a symlink or a file,**
+  `listSessions`, `getSession`, `readEvents`, `streamEvents`, `stats`,
+  `renderHandoff`, `renderDecisions` and `renderReport` throw an `Error`
+  carrying the message above, where they read through a symlink.
+  `manifest`, `status`, `listTasks`, `getTask`, `listApprovals` and
+  `getApproval` work as before.
+- **`@basou/core`** exports `assertSessionStoreSafe`, `assertSessionDirSafe`,
+  `inspectSessionEntry` and the type `SessionEntryKind`, the checks above.
+  The functions that read or write a session by id — `readSessionYaml`,
+  `classifySuspect` (for a running session), `inspectChainTail`,
+  `appendChainedEvent` / `appendChainedEventLocked`, `finalizeSessionYaml`,
+  and through them `appendEventToExistingSession` and a task attach — throw
+  `Session <id> is not a directory; a symlink or a file there is not
+  followed` for such an entry and `Invalid session id` for a name that is not
+  a session id, where they read through the entry or failed to find the file.
+  `rechainSessionInPlace` returns `skipped` with the new reasons `symlink` and
+  `not_a_directory`. `enumerateSessionEntries`, `enumerateSessionDirs`,
+  `loadSessionEntries`, `verifyEventsChain`, `importSessionFromJson` and
+  `createAdHocSessionWithEvent` throw the store errors above;
+  `loadFederatedSessionEntries` checks the local store only.
 
 ## 0.58.0 — 2026-10-01
 

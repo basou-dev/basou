@@ -350,6 +350,33 @@ describe("basou session rechain", () => {
     },
   );
 
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "exits 1 on a symlink alone and on a file alone",
+    async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      await writeLiveSession(repo);
+      const entry = join(paths.sessions, "ses_01HXABCDEF1234567890ABCSY1");
+      await symlink(join(repo, "nowhere"), entry);
+      captureStdout();
+      await runSessionRechain({ all: true }, { cwd: repo });
+      expect(process.exitCode).toBe(1);
+
+      await rm(entry);
+      await writeFile(entry, "");
+      process.exitCode = 0;
+      await runSessionRechain({ all: true }, { cwd: repo });
+      expect(process.exitCode).toBe(1);
+
+      // Control: with the entry gone, the live session alone exits 0.
+      await rm(entry);
+      process.exitCode = 0;
+      await runSessionRechain({ all: true }, { cwd: repo });
+      expect(process.exitCode ?? 0).toBe(0);
+    },
+  );
+
   it("requires an initialized workspace", async () => {
     const repo = await realpath(tmpRepo as string);
     const err = captureStderr();

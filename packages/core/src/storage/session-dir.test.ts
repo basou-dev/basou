@@ -27,6 +27,7 @@ import {
   classifySuspect,
   enumerateSessionEntries,
   finalizeSessionYaml,
+  loadFederatedSessionEntries,
   loadSessionEntries,
   readSessionYaml,
 } from "./sessions.js";
@@ -403,5 +404,71 @@ describe.skipIf(process.platform === "win32")("a .basou/sessions that is a symli
       }),
     ).rejects.toThrow(STORE_IS_SYMLINK);
     expect(await snapshot(outside)).toEqual(before);
+  });
+});
+
+describe("a name that is not a session id", () => {
+  it("is refused before anything is looked at", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    // A readable session one level up: joining the name would reach it.
+    const escaped = join(paths.sessions, "..", "x");
+    await writeSession(escaped, REAL, "running");
+    await writeSession(join(paths.sessions, `${REAL}.bak`), REAL, "running");
+    for (const name of ["../x", `${REAL}.bak`, ""]) {
+      await expect(inspectSessionEntry(paths, name)).rejects.toThrow("Invalid session id");
+      await expect(assertSessionDirSafe(paths, name)).rejects.toThrow("Invalid session id");
+      await expect(readSessionYaml(paths, name)).rejects.toThrow("Invalid session id");
+    }
+  });
+});
+
+describe.skipIf(process.platform === "win32")("a federated mirror", () => {
+  async function mirrorWithLinkedStore(): Promise<BasouPaths> {
+    const mirror = basouPaths(join(getWorkDir(), "mirror"));
+    const realStore = join(getWorkDir(), "mirror-store");
+    await writeSession(join(realStore, REAL), REAL, "running");
+    await mkdir(mirror.root, { recursive: true });
+    await symlink(realStore, mirror.sessions);
+    return mirror;
+  }
+
+  it("is read when its .basou/sessions is a symlink; its own entries still are not followed", async () => {
+    const local = await ensureBasouDirectory(getWorkDir());
+    const mirror = await mirrorWithLinkedStore();
+    await placeLinkedSession(mirror, LINKED, "running");
+    const unavailable: string[] = [];
+    const skips: string[] = [];
+    const entries = await loadFederatedSessionEntries(
+      [
+        { paths: local, host: null },
+        { paths: mirror, host: "laptop" },
+      ],
+      {
+        now: new Date("2026-05-08T12:00:00+09:00"),
+        onRootUnavailable: (host) => unavailable.push(host),
+        onSkip: (sid, reason) => skips.push(`${sid}:${reason}`),
+      },
+    );
+    expect(entries.map((e) => [e.sessionId, e.host])).toEqual([[REAL, "laptop"]]);
+    expect(unavailable).toEqual([]);
+    expect(skips).toEqual([`${LINKED}:session_dir_not_directory`]);
+  });
+
+  it("does not lift the check from the local store", async () => {
+    const local = await ensureBasouDirectory(getWorkDir());
+    const outside = join(getWorkDir(), "outside-store");
+    await writeSession(join(outside, MISSING), MISSING, "running");
+    await rm(local.sessions, { recursive: true });
+    await symlink(outside, local.sessions);
+    const mirror = await mirrorWithLinkedStore();
+    await expect(
+      loadFederatedSessionEntries(
+        [
+          { paths: local, host: null },
+          { paths: mirror, host: "laptop" },
+        ],
+        { now: new Date() },
+      ),
+    ).rejects.toThrow(STORE_IS_SYMLINK);
   });
 });

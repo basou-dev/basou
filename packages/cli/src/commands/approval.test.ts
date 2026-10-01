@@ -1053,16 +1053,25 @@ describe.skipIf(process.platform === "win32")("a recorded session that is not a 
     expect(joinCalls(err)).not.toContain("already resolved");
   });
 
-  it("show stops instead of reading the events behind it", async () => {
+  it("show prints the approval without the events behind it, and warns", async () => {
     const repo = await setupInitedRepo();
     const approvalId = APPR("P42");
     const sessionId = SES("S42");
+    // The log behind the link holds this approval's requested event.
     await linkedRunningSession(repo, sessionId, approvalId);
     const out = captureStdout();
-    await expect(doRunApprovalShow(approvalId, { json: true }, { cwd: repo })).rejects.toThrow(
-      notADirectory(sessionId),
+    const err = captureStderr();
+    await doRunApprovalShow(approvalId, { json: true }, { cwd: repo });
+    const shown = JSON.parse(joinCalls(out)) as {
+      approval: { id: string; session_id: string };
+      events: unknown[];
+    };
+    expect(shown.approval.id).toBe(approvalId);
+    expect(shown.approval.session_id).toBe(sessionId);
+    expect(shown.events).toEqual([]);
+    expect(joinCalls(err)).toBe(
+      `Warning: session ${sessionId} is not a directory (a symlink or a file is not followed); its events are not shown`,
     );
-    expect(out).not.toHaveBeenCalled();
   });
 
   it("control: the same session as a directory in the store is approved", async () => {
