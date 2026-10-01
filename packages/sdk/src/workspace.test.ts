@@ -373,6 +373,8 @@ describe("a .basou/sessions that is not followed", () => {
       expect(refusal.cause, name).toBeInstanceOf(Error);
       expect(refusal.cause, name).not.toBeInstanceOf(BasouSdkError);
       expect((refusal.cause as Error).message, name).toBe(message);
+      // The cause is the error core's store check threw, not a copy of it.
+      expect((refusal.cause as Error).stack, name).toContain("assertSessionStoreSafe");
     }
   }
 
@@ -405,6 +407,21 @@ describe("a .basou/sessions that is not followed", () => {
     const ws = await openWorkspace(repoRoot);
     await expectEachReadRefused(ws, FILE_MESSAGE);
     await expectOtherReadsUnaffected(ws);
+  });
+
+  it("a session lookup given an empty id, or ses_ alone, yields nothing without reading", async () => {
+    const repoRoot = await setupWorkspace();
+    await replaceStoreWithFile(repoRoot);
+    const ws = await openWorkspace(repoRoot);
+    for (const id of ["", "   ", "ses_", " ses_ "]) {
+      expect(await ws.getSession(id), JSON.stringify(id)).toBeNull();
+      expect(await ws.readEvents(id), JSON.stringify(id)).toEqual([]);
+      const streamed: Event[] = [];
+      for await (const event of ws.streamEvents(id)) streamed.push(event);
+      expect(streamed, JSON.stringify(id)).toEqual([]);
+    }
+    // Any id with something after the prefix reads the store, and is refused.
+    await expect(ws.getSession("ses_0")).rejects.toBeInstanceOf(SessionStoreUnsafeError);
   });
 
   it("is checked on each call, so a workspace opened before the store was replaced throws it", async () => {

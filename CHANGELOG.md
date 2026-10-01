@@ -14,12 +14,16 @@ All notable changes to **basou** are recorded here. The project follows
   is a symlink; refusing to operate` or `.basou/sessions exists but is not a
   directory`, and the original error is its `cause`. The reads that throw it
   are the same as in 0.59.0 — `listSessions`, `getSession`, `readEvents`,
-  `streamEvents`, `stats`, `renderHandoff`, `renderDecisions` and
-  `renderReport`, each when it is called, so a workspace opened before the
-  entry was replaced throws it too; `openWorkspace` still opens such a
-  workspace, and `manifest`, `status`, `listTasks`, `getTask`, `listApprovals`
-  and `getApproval` work as before. A failure to inspect the entry at all,
-  such as a permission error, still propagates from `@basou/core` unchanged.
+  `streamEvents` (from the stream, when it is read), `stats`,
+  `renderHandoff`, `renderDecisions` and `renderReport` — and each checks
+  the entry when it reads, so a workspace opened before the entry was
+  replaced throws it too. As in 0.59.0, a session lookup given an id that is
+  empty once trimmed, or `ses_` alone, returns `null` or nothing without
+  reading. `openWorkspace` still opens such a workspace, and `manifest`,
+  `status`, `listTasks`, `getTask`, `listApprovals` and `getApproval` work as
+  before; `status` reports the entry as a missing directory. A failure to
+  inspect the entry at all, such as a permission error, still propagates
+  from `@basou/core` unchanged.
 
 ## 0.59.0 — 2026-10-01
 

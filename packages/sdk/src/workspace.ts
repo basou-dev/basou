@@ -81,9 +81,14 @@ export type StatsOptions = {
  * The reads that need the workspace's sessions (`listSessions`, `getSession`,
  * `readEvents`, `streamEvents`, `stats`, `renderHandoff`, `renderDecisions`,
  * `renderReport`) throw {@link SessionStoreUnsafeError} when `.basou/sessions`
- * is a symlink or not a directory; `streamEvents` throws it from the stream.
- * `manifest`, `status`, `listTasks`, `getTask`, `listApprovals` and
- * `getApproval` do not read the sessions and are unaffected.
+ * is a symlink or not a directory; `streamEvents` throws it from the stream,
+ * when it is read. The exception is a session lookup (`getSession`,
+ * `readEvents`, `streamEvents`) given an id that is empty once trimmed, or
+ * `ses_` alone: it yields `null` (or nothing) before anything is read, as it
+ * does for any workspace. `manifest`, `listTasks`, `getTask`, `listApprovals`
+ * and `getApproval` do not read the sessions and work as usual. `status` does
+ * not throw either, and reports the entry as a missing directory
+ * (`directories_present.sessions` is `false`).
  */
 export interface Workspace {
   /** Absolute repository root this workspace was opened at. */

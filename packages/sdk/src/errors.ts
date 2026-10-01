@@ -1,8 +1,16 @@
 /**
- * Base class for every error the SDK throws on its own behalf. Errors that
- * originate in `@basou/core` (e.g. a malformed `session.yaml`) propagate as-is;
- * only the SDK's own preconditions are wrapped, so `instanceof BasouSdkError`
- * identifies "the SDK rejected this call" rather than "the data was bad".
+ * Base class for every error by which the SDK rejects a call: an id prefix
+ * that matches more than one record ({@link AmbiguousIdError}), and a
+ * workspace layout it does not read through — no usable `.basou/` at
+ * `openWorkspace` ({@link WorkspaceNotFoundError}), or a
+ * `.basou/sessions` that is a symlink or not a directory
+ * ({@link SessionStoreUnsafeError}). The last two are refusals that
+ * `@basou/core` makes, carried as SDK errors. Every other error from
+ * `@basou/core` propagates as-is — a malformed record (an invalid
+ * `session.yaml`, for instance) or an I/O failure during a read, including a
+ * failure to inspect `.basou/sessions` — so `instanceof BasouSdkError`
+ * identifies "the SDK rejected this call" rather than "the data was bad" or
+ * "the read failed".
  */
 export class BasouSdkError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -35,11 +43,13 @@ export class WorkspaceNotFoundError extends BasouSdkError {
  * `.basou/sessions is a symlink; refusing to operate` or `.basou/sessions
  * exists but is not a directory`.
  *
- * Only the reads that need the sessions throw it, and each one checks when it
- * is called, so a workspace opened before the entry was replaced throws it
- * too. A failure to inspect the entry at all (a permission error, for
- * instance) is not this error: it propagates from `@basou/core` as other I/O
- * failures do.
+ * Only the reads that need the sessions throw it, and each one checks the
+ * entry when it reads, not when the workspace is opened, so a workspace
+ * opened before the entry was replaced throws it too. A session lookup given
+ * an id that is empty once trimmed, or `ses_` alone, reads nothing and does
+ * not throw it. A failure to inspect the entry at all (a permission error,
+ * for instance) is not this error: it propagates from `@basou/core` as other
+ * I/O failures do.
  */
 export class SessionStoreUnsafeError extends BasouSdkError {
   readonly root: string;
