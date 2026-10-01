@@ -3,6 +3,41 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A session whose directory is a symlink or a file is no longer read or
+  written through it by a command handed its id from elsewhere.** 0.58.0
+  stopped following such an entry in `basou verify`, the commands that list
+  sessions and `--session`, but the others still did: `basou approval approve`
+  and `reject` appended the resolution to the `events.jsonl` behind the
+  symlink, and `basou approval show` and `basou view`'s session page read the
+  log there. They now stop with the error `--session` gives, `Session <id> is
+  not a directory; a symlink or a file there is not followed` — the approval
+  stays pending — and the view's session page answers `404` with it. Every
+  read or write of a session by id goes through the same check, including
+  task attach, `session note` and `decision record --session`.
+
+### Changed
+
+- **A `.basou/sessions` that is a symlink or a file stops every command that
+  reads or writes sessions**, with `.basou/sessions is a symlink; refusing to
+  operate` or `.basou/sessions exists but is not a directory`, where they read
+  and wrote through it. basou never creates one. `basou verify` stops with the
+  error instead of printing rows, and `basou import` stops before reading
+  anything, `--dry-run` included.
+- **`basou session rechain --all` gives a symlink or a file named as a session
+  a row and exits `1` on it**, where it left the entry out and exited `0`. The
+  row is `skipped` with the `reason` `symlink` or `not_a_directory`, matching
+  `basou verify`, which reports such an entry `tampered`; nothing is followed
+  or rewritten.
+- **`basou import` warns when it cannot check such an entry for an earlier
+  import.** The entry is not followed, so an earlier import of a source held
+  there is not seen and the source is imported again as a new session. Before
+  importing a session as new, `basou import` now says so once, naming every
+  such entry by its full id.
+
 ## 0.58.0 — 2026-10-01
 
 ### Fixed
