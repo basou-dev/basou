@@ -18,6 +18,7 @@ import {
   readTaskFile,
   renderDecisions,
   renderHandoff,
+  SessionIdSchema,
   summarizeOrientation,
   tryRemoteUrl,
 } from "@basou/core";
@@ -576,6 +577,11 @@ async function sessionDetail(
   ws: WorkspaceEntry,
   sessionId: string,
 ): Promise<Record<string, unknown>> {
+  // Only an entry named as a session id is a session; a `ses_<id>.bak` copy
+  // or any other name is not served as one.
+  if (!SessionIdSchema.safeParse(sessionId).success) {
+    throw new HttpError(404, "Session not found");
+  }
   let session: Awaited<ReturnType<typeof readSessionYaml>>;
   try {
     session = await readSessionYaml(ws.paths, sessionId);

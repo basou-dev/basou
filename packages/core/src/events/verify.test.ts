@@ -114,7 +114,7 @@ async function rewriteLines(fixture: SessionFixture, lines: string[]): Promise<v
 describe.skipIf(process.platform === "win32")(
   "verifyEventsChain — an entry at the session's name that is not a directory",
   () => {
-    it("reports a symlink to an intact session as not_a_directory without following it", async () => {
+    it("reports a symlink to an intact session as symlink without following it", async () => {
       const paths = await setupPaths();
       const fixture = await writeChainedSession(paths, SES_ID, 3);
       const outside = join(paths.root, "..", "moved-session");
@@ -124,7 +124,17 @@ describe.skipIf(process.platform === "win32")(
       expect(await verifyEventsChain(paths, SES_ID)).toEqual({
         status: "tampered",
         eventCount: 0,
-        reason: "not_a_directory",
+        reason: "symlink",
+      });
+    });
+
+    it("reports a dangling symlink as symlink", async () => {
+      const paths = await setupPaths();
+      await symlink(join(paths.root, "..", "nowhere"), join(paths.sessions, SES_ID));
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+        status: "tampered",
+        eventCount: 0,
+        reason: "symlink",
       });
     });
 

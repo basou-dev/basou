@@ -90,7 +90,7 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
   // is not a directory is reported (`not_a_directory`) rather than left out.
   const sessionIds =
     options.session !== undefined
-      ? [await resolveSessionId(paths, options.session)]
+      ? [await resolveSessionId(paths, options.session, { allowNotDirectory: true })]
       : await enumerateAllSessionNames(paths);
 
   const rows: VerifyRow[] = [];

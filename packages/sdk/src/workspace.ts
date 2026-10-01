@@ -317,9 +317,14 @@ async function resolveOrNull(
     if (/^Ambiguous (session|task) id /.test(message)) {
       throw new AmbiguousIdError(input, { cause: error });
     }
+    // An entry named as the session that is not a directory (a symlink, a
+    // file) is not followed, so there is no session to return, as before.
     if (
       /^(Session|Task) not found: /.test(message) ||
-      /^(Session|Task) id is empty$/.test(message)
+      /^(Session|Task) id is empty$/.test(message) ||
+      /^(Session|Task) \S+ is not a directory; a symlink or a file there is not followed$/.test(
+        message,
+      )
     ) {
       return null;
     }

@@ -225,7 +225,10 @@ describe("storage/sessions", () => {
       const id = SES("XA5");
       await placeSession(paths, { id });
       await cp(join(paths.sessions, id), join(paths.sessions, `${id}.bak`), { recursive: true });
-      for (const name of ["notes", id.toLowerCase(), id.slice(0, -1), "ses_", `x${id}`]) {
+      // The lowercase name has no uppercase twin, so it is created even on a
+      // case-insensitive filesystem.
+      const lower = SES("XB9").toLowerCase();
+      for (const name of ["notes", lower, id.slice(0, -1), "ses_", `x${id}`]) {
         await mkdir(join(paths.sessions, name), { recursive: true });
       }
       await writeFile(join(paths.sessions, ".gitkeep"), "");

@@ -1533,7 +1533,7 @@ describe("doRunSessionNote", () => {
 
   it("note-17b: --from-file - verbose run does not emit 'Caused by:' (hand-crafted error has no cause)", async () => {
     const repo = await setupInitedRepo();
-    const sid = SES("N17b");
+    const sid = SES("N17");
     await createSession(repo, { id: sid, status: "running" });
     const err = captureStderr();
     await runSessionNote(sid, { fromFile: "-", verbose: true }, { cwd: repo });

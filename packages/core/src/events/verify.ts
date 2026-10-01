@@ -112,9 +112,14 @@ export type ChainBreakReason =
   /** `incomplete` only: `session.yaml` is entirely absent. */
   | "yaml_missing"
   /**
-   * The entry named as the session is not a directory — a symlink (whatever it
-   * points to) or a file. It is not followed, so nothing is read and
-   * `eventCount` is 0.
+   * The entry named as the session is a symlink, whatever it points to. It is
+   * not followed, so nothing is read and `eventCount` is 0. Usually the
+   * session's storage was moved; moving it back repairs it.
+   */
+  | "symlink"
+  /**
+   * The entry named as the session is neither a directory nor a symlink — a
+   * file, for instance. Nothing is read and `eventCount` is 0.
    */
   | "not_a_directory";
 
@@ -206,9 +211,9 @@ type AnchorState =
  * editable; an attacker rewriting BOTH files consistently is not detected.
  * Signing is a follow-up.
  *
- * An entry at the session's name that is not a directory (a symlink, a file)
- * is `tampered` / `not_a_directory` before anything is read: it is never
- * followed.
+ * An entry at the session's name that is not a directory is `tampered` before
+ * anything is read — `symlink` for a symlink, `not_a_directory` for anything
+ * else (a file) — and is never followed.
  *
  * Throws `Error("Failed to read events.jsonl")`, or an error naming the
  * session for the session directory or `session.yaml` (`Failed to read
@@ -239,7 +244,11 @@ async function verifyOnce(paths: BasouPaths, sessionId: string): Promise<ChainVe
   // not followed: reading through a symlink would verify files outside the
   // store, and an absent directory falls through to `empty` as before.
   try {
-    if (!(await lstat(sessionDir)).isDirectory()) {
+    const entry = await lstat(sessionDir);
+    if (entry.isSymbolicLink()) {
+      return { status: "tampered", eventCount: 0, reason: "symlink" };
+    }
+    if (!entry.isDirectory()) {
       return { status: "tampered", eventCount: 0, reason: "not_a_directory" };
     }
   } catch (error: unknown) {

@@ -183,7 +183,7 @@ describe("basou verify", () => {
 
   // POSIX only: creating a symlink needs privileges on Windows.
   it.skipIf(process.platform === "win32")(
-    "ignores entries not named as a session id and reports a symlinked session as not_a_directory",
+    "ignores entries not named as a session id and reports a symlinked session as symlink",
     async () => {
       const repo = await setupInitedRepo();
       const importedId = await importChainedSession(repo);
@@ -203,14 +203,18 @@ describe("basou verify", () => {
       expect(JSON.parse(joinCalls(out))).toEqual(
         [
           { session_id: importedId, status: "verified", event_count: 3 },
-          {
-            session_id: LIVE_SES_ID,
-            status: "tampered",
-            event_count: 0,
-            reason: "not_a_directory",
-          },
+          { session_id: LIVE_SES_ID, status: "tampered", event_count: 0, reason: "symlink" },
         ].sort((a, b) => (a.session_id < b.session_id ? -1 : 1)),
       );
+      expect(process.exitCode).toBe(1);
+
+      // --session naming the symlink gives its row rather than "not found".
+      process.exitCode = 0;
+      out.mockClear();
+      await runVerify({ json: true, session: LIVE_SES_ID }, { cwd: repo });
+      expect(JSON.parse(joinCalls(out))).toEqual([
+        { session_id: LIVE_SES_ID, status: "tampered", event_count: 0, reason: "symlink" },
+      ]);
       expect(process.exitCode).toBe(1);
 
       // The copy no longer makes the original's full id ambiguous.
@@ -427,6 +431,7 @@ const REASONS: Record<NonNullable<VerifyRow["reason"]>, true> = {
   anchor_without_chain: true,
   yaml_unreadable: true,
   yaml_missing: true,
+  symlink: true,
   not_a_directory: true,
 };
 

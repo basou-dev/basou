@@ -1309,6 +1309,34 @@ describe("reconcileTask", () => {
     expect(ev?.removed_linked_sessions).toEqual([]);
   });
 
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "write: a session whose directory is a symlink is not broken and the task is left as it is",
+    async () => {
+      const paths = await setupPaths();
+      await placeSessionDir(paths, REACHABLE_SES_A);
+      const outside = join(getWorkDir(), "moved-session");
+      await mkdir(outside);
+      await symlink(outside, join(paths.sessions, BROKEN_SES_A));
+      await placeTaskFile(paths, TASK_ID_A, {
+        createdInSession: BROKEN_SES_A,
+        linkedSessions: [REACHABLE_SES_A, BROKEN_SES_A],
+      });
+      const before = await readFile(join(paths.tasks, `${TASK_ID_A}.md`), "utf8");
+      const r = await reconcileTask(paths, makeManifest(), {
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+        write: true,
+      });
+      expect(r.clean).toBe(true);
+      expect(r.brokenCreatedInSession).toBeNull();
+      expect(r.brokenLinkedSessions).toEqual([]);
+      expect(r.reconcileSession).toBeNull();
+      expect(await readFile(join(paths.tasks, `${TASK_ID_A}.md`), "utf8")).toBe(before);
+    },
+  );
+
   // 2
   it("write: broken linked_sessions only -> pops broken + appends reconcile session + fires single event", async () => {
     const paths = await setupPaths();
@@ -1975,6 +2003,29 @@ describe("refreshTaskLinkedSessions", () => {
       removed_linked_sessions: [],
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a link to a session whose directory is a symlink, whose task_id it cannot read",
+    async () => {
+      const { refreshTaskLinkedSessions } = await import("./tasks.js");
+      const paths = await setupPaths();
+      await placeSessionWithTaskId(paths, SES_ID_RUNNING, TASK_ID_A);
+      await placeSessionWithTaskId(paths, SES_ID_OTHER, TASK_ID_A);
+      const outside = join(getWorkDir(), "moved-session");
+      await rename(join(paths.sessions, SES_ID_OTHER), outside);
+      await symlink(outside, join(paths.sessions, SES_ID_OTHER));
+      await placeTaskWithLinkedSessions(paths, [SES_ID_RUNNING, SES_ID_OTHER]);
+      const result = await refreshTaskLinkedSessions(paths, makeManifest(), {
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+        write: true,
+      });
+      expect(result.removedLinkedSessions).toEqual([]);
+      const doc = await readTaskFile(paths, TASK_ID_A);
+      expect(doc.task.task.linked_sessions).toContain(SES_ID_OTHER);
+    },
+  );
 
   it("removes a snapshot entry whose session.yaml no longer links to the task", async () => {
     const { refreshTaskLinkedSessions } = await import("./tasks.js");

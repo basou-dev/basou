@@ -32,7 +32,7 @@ import {
 import { atomicCreate, atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
-import { enumerateSessionDirs, readSessionYaml } from "./sessions.js";
+import { enumerateSessionEntries, readSessionYaml } from "./sessions.js";
 import { readTaskIndex, rebuildTaskIndex, updateTaskIndex } from "./task-index.js";
 import { overwriteYamlFile } from "./yaml-store.js";
 
@@ -1599,19 +1599,23 @@ type DetectedBrokenRefs = {
   brokenLinkedSessions: PrefixedId<"ses">[];
 };
 
-// `enumerateSessionDirs` returns directory names only — it does NOT validate
-// the contents of each `session.yaml`. By treating directory existence alone
+// `enumerateSessionEntries` returns entry names only — it does NOT validate
+// the contents of each `session.yaml`. By treating the entry's existence alone
 // as "reachable", reconcile targets the dogfood failure mode where a session
 // directory is removed entirely and a dangling id remains in task.md, while
 // keeping the "broken" predicate cheap. A directory that exists but whose
 // session.yaml is missing or schema-invalid is intentionally classified as
 // reachable here; that flavour of corruption is the responsibility of session
-// integrity tooling and is out of scope for v0.2 reconcile.
+// integrity tooling and is out of scope for v0.2 reconcile. So is an entry
+// named as the session that is not a directory (a symlink, a file): it is not
+// followed, but it is there, so the reference is not broken and is never
+// rewritten — `basou verify` reports the entry.
 async function detectBrokenRefs(
   paths: BasouPaths,
   task: Task["task"],
 ): Promise<DetectedBrokenRefs> {
-  const sessionDirs = new Set(await enumerateSessionDirs(paths));
+  const { dirs, notDirectories } = await enumerateSessionEntries(paths);
+  const sessionDirs = new Set([...dirs, ...notDirectories]);
   const brokenCreatedInSession = sessionDirs.has(task.created_in_session)
     ? null
     : (task.created_in_session as PrefixedId<"ses">);
@@ -1937,16 +1941,18 @@ type DetectedLinkageDelta = {
 // no longer carries the task_id — that flavour of drift is the
 // `task reconcile` path's concern, not this one).
 //
-// `enumerateSessionDirs` already filters to dir-named-`ses_<ulid>` entries.
+// `enumerateSessionEntries` already filters to `ses_<ulid>`-named entries.
 // Sessions whose `session.yaml` is missing or schema-invalid are silently
 // skipped so a single broken session does not abort the workspace-wide
 // refresh; surfacing those is the responsibility of the session-integrity
-// tooling.
+// tooling. An entry that is not a directory (a symlink, a file) is not
+// followed, so its `task_id` cannot be read; a link to one is kept as it is
+// rather than removed.
 async function detectLinkageDelta(
   paths: BasouPaths,
   task: Task["task"],
 ): Promise<DetectedLinkageDelta> {
-  const sessionIds = await enumerateSessionDirs(paths);
+  const { dirs: sessionIds, notDirectories } = await enumerateSessionEntries(paths);
   const reachable = new Set<string>();
   for (const sid of sessionIds) {
     try {
@@ -1970,6 +1976,9 @@ async function detectLinkageDelta(
   finalSet.add(task.created_in_session);
 
   const currentSet = new Set<string>(task.linked_sessions);
+  for (const sid of notDirectories) {
+    if (currentSet.has(sid)) finalSet.add(sid);
+  }
   const addedLinkedSessions: PrefixedId<"ses">[] = [];
   const removedLinkedSessions: PrefixedId<"ses">[] = [];
   for (const sid of finalSet) {

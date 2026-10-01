@@ -100,9 +100,8 @@ export type SessionDirEntries = {
   dirs: string[];
   /**
    * Entries named as a session id that are not directories — a symlink
-   * (whatever it points to) or a file — ascending. They are never followed, so
-   * reads and writes stay inside the store; callers report them rather than
-   * let them disappear.
+   * (whatever it points to) or a file — ascending. The enumeration does not
+   * follow them; callers report them rather than let them disappear.
    */
   notDirectories: string[];
 };

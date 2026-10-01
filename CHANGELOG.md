@@ -10,21 +10,38 @@ All notable changes to **basou** are recorded here. The project follows
 - **An entry under `.basou/sessions/` whose name is not a session id is no
   longer treated as a session.** Every command took every directory there as
   one, whatever its name, so a copy such as `ses_<id>.bak` shadowed the
-  original: `--session` with the original's full id reported it ambiguous
-  (`basou verify`, `basou session show` and the other commands that take a
-  session id could not reach it), `basou session list` and `basou report
-  generate` listed the session twice and counted the copy as tampered,
-  `basou verify` failed on the copy, and `basou import --force` deleted the
-  copy along with the prior import it resembled. A directory such as `notes/`
-  became a `basou verify` row reading `empty`. Only an entry named `ses_`
-  followed by a ULID — the form basou gives every session — is a session now;
-  anything else is ignored by every command.
-- **A symlink or a file where a session's directory should be no longer
-  disappears.** It is still not followed, so nothing outside the store is read
-  or written through it, but `basou verify` now reports it as `tampered` /
-  `not_a_directory` (a new `reason`) and fails, where it used to leave it out
-  and exit `0`. The commands that read whole sessions skip it with a warning
-  (`session_dir_not_directory`).
+  original: `--session` with the original's full id reported it ambiguous, so
+  `basou verify`, `basou session show` and the other commands that take a
+  session id could not reach it; `basou session list` listed the session twice;
+  `basou report generate` listed it twice and counted the copy as tampered;
+  `basou verify` failed on the copy; `basou view` served the copy by its name;
+  and `basou import --force` deleted the copy along with the prior import it
+  resembled. A directory such as `notes/` became a `basou verify` row reading
+  `empty`. Only an entry named `ses_` followed by 26 uppercase Crockford base32
+  characters — the form basou gives every session — is a session now, and no
+  command lists, counts, verifies, resolves or serves anything else as one.
+- **`basou task reconcile --write` no longer rewrites a task's reference to a
+  session whose directory is a symlink.** Such a session counted as deleted, so
+  `created_in_session` was replaced with a new session and the link was
+  dropped, while the session's files were still behind the symlink. The
+  reference is now left as it is, and `basou task refresh-linkage` keeps such a
+  link too.
+
+### Changed
+
+- **A symlink or a file where a session's directory should be is reported
+  instead of disappearing, and `basou verify` exits `1` on it where it exited
+  `0`.** Such an entry is still not followed. `basou verify` used to leave it
+  out; it now gives it a row, `tampered` with the new `reason` `symlink` or
+  `not_a_directory` and `event_count` `0`. The row judges the store's layout,
+  not the log: moving the session's directory back repairs it. `--session`
+  naming such an entry gives that row in `basou verify`, and on the other
+  commands stops with an error saying the entry is not a directory instead of
+  "Session not found"; a prefix it shares with a session is now ambiguous
+  rather than resolving to the session. `basou session list`, `basou orient`,
+  `basou stats`, `basou handoff generate` and `basou report generate` skip it
+  with a `session_dir_not_directory` warning. `@basou/sdk`'s lookups still
+  return `null` for it.
 
 ## 0.57.1 — 2026-10-01
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { ensureBasouDirectory } from "@basou/core";
@@ -202,6 +202,21 @@ describe("openWorkspace", () => {
       AmbiguousIdError,
     );
   });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "returns null for an entry named as a session that is a symlink, which is not followed",
+    async () => {
+      const root = await setupWorkspace();
+      const linked = "ses_01HXABCDEF1234567890ABCSL1";
+      const outside = join(root, "moved-session");
+      await mkdir(outside);
+      await symlink(outside, join(root, ".basou", "sessions", linked));
+      const ws = await openWorkspace(root);
+      expect(await ws.getSession(linked)).toBeNull();
+      expect((await ws.listSessions()).map((s) => s.sessionId)).not.toContain(linked);
+    },
+  );
 
   it("reads a session's events eagerly and as a stream", async () => {
     const ws = await openWorkspace(await setupWorkspace());
