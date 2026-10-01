@@ -208,7 +208,7 @@ describe("openWorkspace", () => {
     "returns null for an entry named as a session that is a symlink, which is not followed",
     async () => {
       const root = await setupWorkspace();
-      const linked = "ses_01HXABCDEF1234567890ABCSL1";
+      const linked = "ses_01HXABCDEF1234567890ABCSY1";
       const outside = join(root, "moved-session");
       await mkdir(outside);
       await symlink(outside, join(root, ".basou", "sessions", linked));
