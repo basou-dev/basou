@@ -1506,12 +1506,15 @@ describe.skipIf(process.platform === "win32")(
         (await listSessionDirs(repo)).filter((d) => d !== linked && d !== fileId),
       ).toHaveLength(2);
 
-      // Nothing left to import as new: no warning.
-      err.mockClear();
-      await doRunImportClaudeCode({ all: true }, ctx);
-      expect(err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(WARNING))).toEqual(
-        [],
-      );
+      // Nothing left to import as new: no warning, and none when --force
+      // replaces sessions whose earlier import was found.
+      for (const options of [{ all: true }, { all: true, force: true }]) {
+        err.mockClear();
+        await doRunImportClaudeCode(options, ctx);
+        expect(err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(WARNING))).toEqual(
+          [],
+        );
+      }
     });
 
     it("a .basou/sessions that is a symlink stops the import, --dry-run included", async () => {
