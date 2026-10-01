@@ -9,6 +9,7 @@ import {
   acquireLock,
   appendChainedEventLocked,
   assertBasouRootSafe,
+  assertSessionDirSafe,
   type BasouPaths,
   basouPaths,
   EVENT_SCHEMA_VERSION,
@@ -263,9 +264,12 @@ export async function doRunApprovalShow(
     throw new Error(`Approval not found: ${idInput}`);
   }
 
+  // The recorded session is read only when its entry is a directory in the
+  // store; a symlink or a file there stops the command instead of being read.
   // events.jsonl I/O failure throws "Failed to read events.jsonl" and is
   // converted to exit 1 by the wrapping try/catch — partial / malformed /
   // schema warnings stream through onWarning.
+  await assertSessionDirSafe(paths, loaded.approval.session_id);
   const sessionDir = join(paths.sessions, loaded.approval.session_id);
   const relatedEvents: Event[] = [];
   for await (const ev of replayEvents(sessionDir, {
@@ -397,6 +401,11 @@ async function doRunApprovalResolve(
   // section, so the lock-assumed append primitive is used here.
   const sessionLock = await acquireLock(paths, "session", approval.session_id);
   try {
+    // Nothing is read from or appended to the recorded session unless its
+    // entry is a directory in the store: a symlink or a file there is not
+    // followed, and the approval stays pending.
+    await assertSessionDirSafe(paths, approval.session_id);
+
     // Step D-5: events.jsonl fence — if a resolution event already exists
     // for this approval, refuse to fire a second one. This guards the
     // crash-mid-orchestration window where step 8 succeeded but step 10

@@ -9,6 +9,7 @@ import { type Session, SessionSchema } from "../schemas/session.schema.js";
 import { SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
+import { assertSessionDirSafe, assertSessionStoreSafe } from "./session-dir.js";
 import { overwriteYamlFile, readYamlFile } from "./yaml-store.js";
 
 /**
@@ -117,7 +118,9 @@ export type SessionDirEntries = {
  *
  * - Returns empty lists when the sessions directory does not exist (empty
  *   workspace or pre-init state).
- * - Throws `Error("Failed to enumerate sessions", { cause })` on other I/O.
+ * - Throws the {@link assertSessionStoreSafe} errors when `.basou/sessions`
+ *   is a symlink or not a directory, and
+ *   `Error("Failed to enumerate sessions", { cause })` on other I/O.
  * - Whether an entry is a directory is decided without following symlinks.
  *
  * Sort order is `Array.prototype.sort()` default (code-unit compare). ULIDs
@@ -125,6 +128,7 @@ export type SessionDirEntries = {
  * chronological session-start order.
  */
 export async function enumerateSessionEntries(paths: BasouPaths): Promise<SessionDirEntries> {
+  await assertSessionStoreSafe(paths);
   let dirents: Dirent[];
   try {
     dirents = await readdir(paths.sessions, { withFileTypes: true });
@@ -152,6 +156,8 @@ export async function enumerateSessionDirs(paths: BasouPaths): Promise<string[]>
 /**
  * Read and validate `<paths.sessions>/<sessionId>/session.yaml`.
  *
+ * - Throws the {@link assertSessionDirSafe} errors when the session's entry
+ *   (or `.basou/sessions`) is a symlink or a file: it is not followed.
  * - Re-throws the yaml-store fixed-message `"YAML file not found"` for
  *   ENOENT so the caller can branch on it.
  * - Throws `Error("Failed to read session.yaml", { cause })` for parse
@@ -159,6 +165,7 @@ export async function enumerateSessionDirs(paths: BasouPaths): Promise<string[]>
  *   or the zod error).
  */
 export async function readSessionYaml(paths: BasouPaths, sessionId: string): Promise<Session> {
+  await assertSessionDirSafe(paths, sessionId);
   const filePath = join(paths.sessions, sessionId, "session.yaml");
   let raw: unknown;
   try {
@@ -236,8 +243,10 @@ export async function finalizeSessionYaml(
  * Sessions that are not `running` are never suspect.
  *
  * I/O failure on events.jsonl is re-thrown unwrapped so the caller can
- * degrade with a warning instead of treating the session as healthy. The
- * caller is also responsible for surfacing replay warnings via `onWarning`.
+ * degrade with a warning instead of treating the session as healthy, as are
+ * the {@link assertSessionDirSafe} errors for an entry that is not followed.
+ * The caller is also responsible for surfacing replay warnings via
+ * `onWarning`.
  */
 export async function classifySuspect(
   paths: BasouPaths,
@@ -249,6 +258,7 @@ export async function classifySuspect(
   if (session.session.status !== "running") {
     return { suspect: false, suspectReason: null };
   }
+  await assertSessionDirSafe(paths, sessionId);
   const sessionDir = join(paths.sessions, sessionId);
   let endedFound = false;
   let lastEventOccurredAt: string | null = null;

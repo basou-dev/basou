@@ -4,6 +4,7 @@ import { findErrorCode } from "../lib/error-codes.js";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { acquireLock } from "../storage/lockfile.js";
+import { assertSessionDirSafe } from "../storage/session-dir.js";
 import { genesisHash, lineHash, serializeEventLine } from "./chain.js";
 import { assertWritableEvent } from "./event-writer.js";
 
@@ -71,7 +72,9 @@ function carriesPrevHash(line: Buffer): boolean {
  * a crashed prior append) also THROWS so a new line is never glued onto a
  * fragment.
  *
- * Throws `Error("Failed to read events.jsonl")` for non-ENOENT I/O,
+ * Throws the {@link assertSessionDirSafe} errors when the session's entry is
+ * a symlink or a file (it is not followed, so nothing is appended through it),
+ * `Error("Failed to read events.jsonl")` for non-ENOENT I/O,
  * `Error("Unterminated final line in events.jsonl")` for a torn tail, and
  * `Error("events.jsonl is partially chained")` for a mixed first/last line.
  */
@@ -79,6 +82,7 @@ export async function inspectChainTail(
   paths: BasouPaths,
   sessionId: string,
 ): Promise<ChainTailState> {
+  await assertSessionDirSafe(paths, sessionId);
   const filePath = join(paths.sessions, sessionId, "events.jsonl");
   let raw: Buffer;
   try {
@@ -131,9 +135,9 @@ export async function inspectChainTail(
  * as the benign `in_progress`.
  *
  * Throws `"Invalid Basou event payload"` on validation failure, the
- * {@link inspectChainTail} errors on a torn / mixed log, or `"Failed to append
- * event to events.jsonl"` on a disk failure. The native error is attached as
- * `cause`.
+ * {@link inspectChainTail} errors on a torn / mixed log or an entry that is not
+ * followed, or `"Failed to append event to events.jsonl"` on a disk failure.
+ * The native error is attached as `cause`.
  */
 export async function appendChainedEventLocked(
   paths: BasouPaths,
