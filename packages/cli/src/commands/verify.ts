@@ -87,7 +87,8 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
   await assertWorkspaceInitialized(paths.root);
 
   // Every entry named as a session id gets a row, a directory or not: one that
-  // is not a directory is reported (`not_a_directory`) rather than left out.
+  // is not a directory is reported (`symlink` or `not_a_directory`) rather
+  // than left out.
   const sessionIds =
     options.session !== undefined
       ? [await resolveSessionId(paths, options.session, { allowNotDirectory: true })]

@@ -228,7 +228,18 @@ describe("storage/sessions", () => {
       // The lowercase name has no uppercase twin, so it is created even on a
       // case-insensitive filesystem.
       const lower = SES("XB9").toLowerCase();
-      for (const name of ["notes", lower, id.slice(0, -1), "ses_", `x${id}`]) {
+      // 26 characters, but the first is above 7 or one is not Crockford base32.
+      const firstAboveSeven = `ses_8${id.slice(5)}`;
+      const withL = SES("XL9");
+      for (const name of [
+        "notes",
+        lower,
+        firstAboveSeven,
+        withL,
+        id.slice(0, -1),
+        "ses_",
+        `x${id}`,
+      ]) {
         await mkdir(join(paths.sessions, name), { recursive: true });
       }
       await writeFile(join(paths.sessions, ".gitkeep"), "");

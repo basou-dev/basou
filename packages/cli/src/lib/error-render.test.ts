@@ -344,6 +344,14 @@ describe("printSessionSkip", () => {
     printSessionSkip("ses_01HXABCDEFG1234567890ABCDE", "session_yaml_missing");
     expect(joinCalls(err)).toBe("Skipped 01HXAB: session_yaml_missing");
   });
+
+  it("names an entry that is not a directory by its full id", () => {
+    const err = captureStderr();
+    printSessionSkip("ses_01HXABCDEFG1234567890ABCDE", "session_dir_not_directory");
+    expect(joinCalls(err)).toBe(
+      "Skipped ses_01HXABCDEFG1234567890ABCDE: session_dir_not_directory",
+    );
+  });
 });
 
 describe("printSessionListSkip", () => {
@@ -364,6 +372,14 @@ describe("printSessionListSkip", () => {
     printSessionListSkip("ses_01HXABCDEFG1234567890ABCDE", "events_jsonl_unreadable");
     expect(joinCalls(err)).toBe(
       "Warning: skipped suspect check for 01HXAB: events.jsonl unreadable",
+    );
+  });
+
+  it("names an entry that is not a directory by its full id", () => {
+    const err = captureStderr();
+    printSessionListSkip("ses_01HXABCDEFG1234567890ABCDE", "session_dir_not_directory");
+    expect(joinCalls(err)).toBe(
+      "Skipped ses_01HXABCDEFG1234567890ABCDE: not a directory (a symlink or a file is not followed)",
     );
   });
 });

@@ -215,6 +215,10 @@ describe("openWorkspace", () => {
       const ws = await openWorkspace(root);
       expect(await ws.getSession(linked)).toBeNull();
       expect((await ws.listSessions()).map((s) => s.sessionId)).not.toContain(linked);
+      // A prefix it shares with a real session is ambiguous.
+      await expect(ws.getSession("01HXABCDEF1234567890ABCS")).rejects.toBeInstanceOf(
+        AmbiguousIdError,
+      );
     },
   );
 

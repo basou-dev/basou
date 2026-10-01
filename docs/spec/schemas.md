@@ -1042,17 +1042,20 @@ and it gets no row here.
 An entry with a session id's name that is not a directory — a symlink, whatever
 it points to, or a file — is not followed by `basou verify`, by the commands
 that list sessions, or by `--session`. (A command handed such an id from
-elsewhere, such as a recorded approval, is not guarded the same way.) Here it
+elsewhere, such as a recorded approval or `basou view`'s session page, is not
+guarded the same way.) Here it
 is reported rather than left out: its row is `tampered` with `reason` `symlink`
 or `not_a_directory` and `event_count` `0`, since nothing is read. Such a row
 judges the store's layout, not the log: the log behind a symlink may be intact,
 and moving the session's directory back into the store repairs it. `--session`
-naming such an entry gives its row here and stops with an error that says what
-the entry is on every other command; a prefix it shares with a session is
-ambiguous. The commands that load sessions to list or summarize them
-(`session list`, `orient`, `stats`, `handoff generate`, `report generate`)
-skip it with a `session_dir_not_directory` warning, and `task reconcile` and
-`task refresh-linkage` leave a reference to it as it is.
+naming such an entry gives its row here and, on every other command, stops
+with an error saying the entry is not a directory; a prefix it shares with a
+session is ambiguous. The commands that load sessions to list or summarize
+them skip it with a warning naming its full id — `session list`, `orient`,
+`stats`, `handoff generate`, `decisions generate`, `report generate`,
+`review-gaps` and `decision gaps` (which counts it among the sessions it could
+not read in full) — and `task reconcile` and `task refresh-linkage` leave a
+reference to it as it is.
 
 Each row is an object with these fields:
 

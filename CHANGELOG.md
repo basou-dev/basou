@@ -18,8 +18,9 @@ All notable changes to **basou** are recorded here. The project follows
   and `basou import --force` deleted the copy along with the prior import it
   resembled. A directory such as `notes/` became a `basou verify` row reading
   `empty`. Only an entry named `ses_` followed by 26 uppercase Crockford base32
-  characters — the form basou gives every session — is a session now, and no
-  command lists, counts, verifies, resolves or serves anything else as one.
+  characters, the first of them `0` to `7` — the form basou gives every
+  session — is a session now, and no command lists, counts, verifies, resolves
+  or serves anything else as one.
 - **`basou task reconcile --write` no longer rewrites a task's reference to a
   session whose directory is a symlink.** Such a session counted as deleted, so
   `created_in_session` was replaced with a new session and the link was
@@ -31,17 +32,23 @@ All notable changes to **basou** are recorded here. The project follows
 
 - **A symlink or a file where a session's directory should be is reported
   instead of disappearing, and `basou verify` exits `1` on it where it exited
-  `0`.** Such an entry is still not followed. `basou verify` used to leave it
-  out; it now gives it a row, `tampered` with the new `reason` `symlink` or
-  `not_a_directory` and `event_count` `0`. The row judges the store's layout,
-  not the log: moving the session's directory back repairs it. `--session`
-  naming such an entry gives that row in `basou verify`, and on the other
-  commands stops with an error saying the entry is not a directory instead of
-  "Session not found"; a prefix it shares with a session is now ambiguous
-  rather than resolving to the session. `basou session list`, `basou orient`,
-  `basou stats`, `basou handoff generate` and `basou report generate` skip it
-  with a `session_dir_not_directory` warning. `@basou/sdk`'s lookups still
-  return `null` for it.
+  `0`.** Such an entry is still not followed by `basou verify`, by the
+  commands that list sessions, or by `--session`; a command handed its id from
+  elsewhere, such as a recorded approval or `basou view`'s session page, still
+  reads through it. `basou verify` used to leave it out; it now gives it a row,
+  `tampered` with the new `reason` `symlink` or `not_a_directory` and
+  `event_count` `0`. The row judges the store's layout, not the log: moving the
+  session's directory back repairs it. `--session` naming such an entry gives
+  that row in `basou verify`, and on the other commands stops with an error
+  saying the entry is not a directory instead of "Session not found"; a prefix
+  it shares with a session is now ambiguous rather than resolving to the
+  session. `basou session list`, `basou orient`, `basou stats`, `basou handoff
+  generate`, `basou decisions generate`, `basou report generate`, `basou
+  review-gaps` and `basou decision gaps` skip it with a warning naming its full
+  id, and `basou decision gaps` counts it among the sessions it could not read
+  in full. `@basou/sdk`'s lookups still return `null` for it, and throw
+  `AmbiguousIdError` for a prefix it shares with a session, where they returned
+  the session.
 
 ## 0.57.1 — 2026-10-01
 

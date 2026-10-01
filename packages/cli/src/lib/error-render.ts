@@ -209,6 +209,10 @@ export function printSessionSkip(sid: string, reason: SessionSkipReason): void {
   const short = shortSessionId(sid);
   if (reason === "events_jsonl_unreadable") {
     console.error(`Warning: skipped suspect check for ${short}: events.jsonl unreadable`);
+  } else if (reason === "session_dir_not_directory") {
+    // The full id: this names an entry the user has to find and fix, and two
+    // such entries can share a short id.
+    console.error(`Skipped ${sid}: ${reason}`);
   } else {
     console.error(`Skipped ${short}: ${reason}`);
   }
@@ -234,7 +238,7 @@ export function printSessionListSkip(sid: string, reason: SessionSkipReason): vo
       console.error(`Warning: skipped suspect check for ${short}: events.jsonl unreadable`);
       break;
     case "session_dir_not_directory":
-      console.error(`Skipped ${short}: not a directory (a symlink or a file is not followed)`);
+      console.error(`Skipped ${sid}: not a directory (a symlink or a file is not followed)`);
       break;
   }
 }
