@@ -1,15 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   BASOU_SDK_VERSION,
+  BasouSdkError,
   normalizeIsoTimestamp,
   openWorkspace,
   readObservedDuration,
   resolveWorkspaceRoot,
+  SessionStoreUnsafeError,
 } from "./index.js";
 
 describe("@basou/sdk surface", () => {
-  it("exposes BASOU_SDK_VERSION as 0.5.0 (adds normalizeIsoTimestamp)", () => {
-    expect(BASOU_SDK_VERSION).toBe("0.5.0");
+  it("exposes BASOU_SDK_VERSION as 0.6.0 (adds SessionStoreUnsafeError)", () => {
+    expect(BASOU_SDK_VERSION).toBe("0.6.0");
+  });
+
+  it("exports the error for a sessions store that is not followed", () => {
+    expect(new SessionStoreUnsafeError("/r", "m")).toBeInstanceOf(BasouSdkError);
   });
 
   it("re-exports the read rule for a stored timestamp without seconds", () => {

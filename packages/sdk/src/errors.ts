@@ -28,6 +28,28 @@ export class WorkspaceNotFoundError extends BasouSdkError {
 }
 
 /**
+ * A read of the workspace's sessions found `.basou/sessions` to be a symlink
+ * or something other than a directory, and refused to read through it. basou
+ * never creates such an entry. The workspace's repository root is on
+ * {@link root}; the message is the one `@basou/core` gives,
+ * `.basou/sessions is a symlink; refusing to operate` or `.basou/sessions
+ * exists but is not a directory`.
+ *
+ * Only the reads that need the sessions throw it, and each one checks when it
+ * is called, so a workspace opened before the entry was replaced throws it
+ * too. A failure to inspect the entry at all (a permission error, for
+ * instance) is not this error: it propagates from `@basou/core` as other I/O
+ * failures do.
+ */
+export class SessionStoreUnsafeError extends BasouSdkError {
+  readonly root: string;
+  constructor(root: string, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.root = root;
+  }
+}
+
+/**
  * A session / task id prefix matched more than one record. The {@link input}
  * is the prefix as given; the caller should retry with a longer one. (A prefix
  * that matches nothing is NOT an error — the lookup returns `null` instead.)

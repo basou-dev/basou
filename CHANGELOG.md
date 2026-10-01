@@ -3,6 +3,24 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`@basou/sdk`: a `.basou/sessions` that is a symlink or a file makes the
+  reads of the sessions throw `SessionStoreUnsafeError`**, a new
+  `BasouSdkError` with the workspace's root on `.root` (SDK API `0.6.0`),
+  where they threw a plain `Error`. The message is the same, `.basou/sessions
+  is a symlink; refusing to operate` or `.basou/sessions exists but is not a
+  directory`, and the original error is its `cause`. The reads that throw it
+  are the same as in 0.59.0 — `listSessions`, `getSession`, `readEvents`,
+  `streamEvents`, `stats`, `renderHandoff`, `renderDecisions` and
+  `renderReport`, each when it is called, so a workspace opened before the
+  entry was replaced throws it too; `openWorkspace` still opens such a
+  workspace, and `manifest`, `status`, `listTasks`, `getTask`, `listApprovals`
+  and `getApproval` work as before. A failure to inspect the entry at all,
+  such as a permission error, still propagates from `@basou/core` unchanged.
+
 ## 0.59.0 — 2026-10-01
 
 ### Fixed
