@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -293,6 +302,53 @@ describe("basou session rechain", () => {
     expect(text).toContain("1 errors");
     expect(process.exitCode).toBe(1);
   });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "gives a symlink or a file named as a session a row, follows neither, and exits 1",
+    async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      // A legacy session moved out of the store and linked back in: following
+      // the link would rechain it.
+      const linkedId = await importLegacySession(repo);
+      const outside = join(repo, "moved-session");
+      await rename(join(paths.sessions, linkedId), outside);
+      await symlink(outside, join(paths.sessions, linkedId));
+      const before = await readFile(join(outside, "events.jsonl"), "utf8");
+      const fileId = "ses_01HXABCDEF1234567890ABCFX1";
+      await writeFile(join(paths.sessions, fileId), "");
+      await writeLiveSession(repo);
+
+      const out = captureStdout();
+      await runSessionRechain({ all: true }, { cwd: repo });
+      const text = joinCalls(out);
+      expect(text).toContain(
+        `${linkedId}  skipped (SYMLINK — not followed; inspect with 'basou verify')`,
+      );
+      expect(text).toContain(
+        `${fileId}  skipped (NOT A DIRECTORY — not followed; inspect with 'basou verify')`,
+      );
+      expect(text).toContain(`${LIVE_SES_ID}  skipped (not_imported)`);
+      expect(text).toContain("Sessions: 3 total — 0 rechained, 3 skipped, 0 errors");
+      expect(process.exitCode).toBe(1);
+      expect(await readFile(join(outside, "events.jsonl"), "utf8")).toBe(before);
+
+      vi.restoreAllMocks();
+      process.exitCode = 0;
+      const json = captureStdout();
+      await runSessionRechain({ all: true, json: true }, { cwd: repo });
+      const rows = JSON.parse(joinCalls(json)) as RechainRow[];
+      expect(rows.filter((r) => r.session_id !== LIVE_SES_ID)).toEqual(
+        [
+          { session_id: linkedId, status: "skipped", reason: "symlink" },
+          { session_id: fileId, status: "skipped", reason: "not_a_directory" },
+        ].sort((a, b) => a.session_id.localeCompare(b.session_id)),
+      );
+      expect(process.exitCode).toBe(1);
+      expect(await readFile(join(outside, "events.jsonl"), "utf8")).toBe(before);
+    },
+  );
 
   it("requires an initialized workspace", async () => {
     const repo = await realpath(tmpRepo as string);
