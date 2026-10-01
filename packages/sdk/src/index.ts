@@ -28,9 +28,11 @@ export { BASOU_SDK_BUILD, type BuildStamp, parseBuildStamp } from "./build-stamp
  * `0.4.0` re-exports `readObservedDuration` and carries the `duration_ms`
  * nullability through the re-exported `CommandExecutedEvent`; `0.5.0`
  * re-exports `normalizeIsoTimestamp`, the read rule for a stored timestamp
- * without seconds; `0.1.0` was types-only.
+ * without seconds; `0.6.0` adds `SessionStoreUnsafeError`, which the reads of
+ * the sessions throw when `.basou/sessions` is a symlink or not a directory;
+ * `0.1.0` was types-only.
  */
-export const BASOU_SDK_VERSION = "0.5.0";
+export const BASOU_SDK_VERSION = "0.6.0";
 
 // Read types re-exported from @basou/core so consumers can type the values the
 // SDK returns without depending on @basou/core directly. These track the
@@ -89,7 +91,12 @@ export type {
  *   between offsets, so one instant written in two offsets stays two strings.
  */
 export { normalizeIsoTimestamp, readObservedDuration } from "@basou/core";
-export { AmbiguousIdError, BasouSdkError, WorkspaceNotFoundError } from "./errors.js";
+export {
+  AmbiguousIdError,
+  BasouSdkError,
+  SessionStoreUnsafeError,
+  WorkspaceNotFoundError,
+} from "./errors.js";
 export {
   openWorkspace,
   type ReportOptions,

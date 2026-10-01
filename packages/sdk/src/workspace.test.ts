@@ -1,10 +1,15 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { ensureBasouDirectory } from "@basou/core";
+import { type Event, ensureBasouDirectory } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AmbiguousIdError, WorkspaceNotFoundError } from "./errors.js";
-import { openWorkspace } from "./workspace.js";
+import {
+  AmbiguousIdError,
+  BasouSdkError,
+  SessionStoreUnsafeError,
+  WorkspaceNotFoundError,
+} from "./errors.js";
+import { openWorkspace, type Workspace } from "./workspace.js";
 
 // Fixtures are written as JSON, which is valid YAML, so the core readers
 // (yaml-parsed) accept them without pulling `yaml` into the SDK's own deps.
@@ -315,4 +320,137 @@ describe("openWorkspace", () => {
     expect((error as WorkspaceNotFoundError).root).toBe(getRoot());
     expect((error as WorkspaceNotFoundError).cause).toBeDefined();
   });
+});
+
+describe("a .basou/sessions that is not followed", () => {
+  const SYMLINK_MESSAGE = ".basou/sessions is a symlink; refusing to operate";
+  const FILE_MESSAGE = ".basou/sessions exists but is not a directory";
+
+  async function replaceStoreWithSymlink(repoRoot: string): Promise<void> {
+    const sessions = join(repoRoot, ".basou", "sessions");
+    const moved = join(repoRoot, "moved-sessions");
+    await rename(sessions, moved);
+    await symlink(moved, sessions);
+  }
+
+  async function replaceStoreWithFile(repoRoot: string): Promise<void> {
+    const sessions = join(repoRoot, ".basou", "sessions");
+    await rm(sessions, { recursive: true, force: true });
+    await writeFile(sessions, "");
+  }
+
+  // Every read that needs the sessions, driven to completion.
+  const sessionReads: ReadonlyArray<[string, (ws: Workspace) => Promise<unknown>]> = [
+    ["listSessions", (ws) => ws.listSessions()],
+    ["getSession", (ws) => ws.getSession(SES_DONE)],
+    ["readEvents", (ws) => ws.readEvents(SES_DONE)],
+    [
+      "streamEvents",
+      async (ws) => {
+        const events: Event[] = [];
+        for await (const event of ws.streamEvents(SES_DONE)) events.push(event);
+        return events;
+      },
+    ],
+    ["stats", (ws) => ws.stats({ timeZone: "UTC" })],
+    ["renderHandoff", (ws) => ws.renderHandoff()],
+    ["renderDecisions", (ws) => ws.renderDecisions()],
+    ["renderReport", (ws) => ws.renderReport({ timeZone: "UTC" })],
+  ];
+
+  async function expectEachReadRefused(ws: Workspace, message: string): Promise<void> {
+    for (const [name, read] of sessionReads) {
+      const error = await read(ws).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(error, name).toBeInstanceOf(SessionStoreUnsafeError);
+      expect(error, name).toBeInstanceOf(BasouSdkError);
+      const refusal = error as SessionStoreUnsafeError;
+      expect(refusal.message, name).toBe(message);
+      expect(refusal.name, name).toBe("SessionStoreUnsafeError");
+      expect(refusal.root, name).toBe(ws.root);
+      expect(refusal.cause, name).toBeInstanceOf(Error);
+      expect(refusal.cause, name).not.toBeInstanceOf(BasouSdkError);
+      expect((refusal.cause as Error).message, name).toBe(message);
+      // The cause is the error core's store check threw, not a copy of it.
+      expect((refusal.cause as Error).stack, name).toContain("assertSessionStoreSafe");
+    }
+  }
+
+  async function expectOtherReadsUnaffected(ws: Workspace): Promise<void> {
+    expect((await ws.manifest()).workspace.id).toBe(WS_ID);
+    expect((await ws.status()).directories_present.tasks).toBe(true);
+    expect((await ws.listTasks()).map((t) => t.task.task.id)).toEqual([TASK_ID]);
+    expect((await ws.getTask(TASK_ID))?.task.task.title).toBe("fixture task");
+    const { pending, resolved } = await ws.listApprovals();
+    expect(pending.map((a) => a.approval.id)).toEqual([APPR_PENDING]);
+    expect(resolved.map((a) => a.approval.id)).toEqual([APPR_DUP]);
+    expect((await ws.getApproval(APPR_PENDING))?.location).toBe("pending");
+  }
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "a symlink makes each read of the sessions throw SessionStoreUnsafeError",
+    async () => {
+      const repoRoot = await setupWorkspace();
+      await replaceStoreWithSymlink(repoRoot);
+      const ws = await openWorkspace(repoRoot);
+      await expectEachReadRefused(ws, SYMLINK_MESSAGE);
+      await expectOtherReadsUnaffected(ws);
+    },
+  );
+
+  it("a file makes each read of the sessions throw SessionStoreUnsafeError", async () => {
+    const repoRoot = await setupWorkspace();
+    await replaceStoreWithFile(repoRoot);
+    const ws = await openWorkspace(repoRoot);
+    await expectEachReadRefused(ws, FILE_MESSAGE);
+    await expectOtherReadsUnaffected(ws);
+  });
+
+  it("a session lookup given an empty id, or ses_ alone, yields nothing without reading", async () => {
+    const repoRoot = await setupWorkspace();
+    await replaceStoreWithFile(repoRoot);
+    const ws = await openWorkspace(repoRoot);
+    for (const id of ["", "   ", "ses_", " ses_ "]) {
+      expect(await ws.getSession(id), JSON.stringify(id)).toBeNull();
+      expect(await ws.readEvents(id), JSON.stringify(id)).toEqual([]);
+      const streamed: Event[] = [];
+      for await (const event of ws.streamEvents(id)) streamed.push(event);
+      expect(streamed, JSON.stringify(id)).toEqual([]);
+    }
+    // Any id with something after the prefix reads the store, and is refused.
+    await expect(ws.getSession("ses_0")).rejects.toBeInstanceOf(SessionStoreUnsafeError);
+  });
+
+  it("is checked on each call, so a workspace opened before the store was replaced throws it", async () => {
+    const repoRoot = await setupWorkspace();
+    const ws = await openWorkspace(repoRoot);
+    expect((await ws.listSessions()).map((s) => s.sessionId)).toContain(SES_DONE);
+    await replaceStoreWithFile(repoRoot);
+    await expectEachReadRefused(ws, FILE_MESSAGE);
+  });
+
+  // POSIX only, and not as root, who is never denied the lstat.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a failure to inspect the store is not retyped",
+    async () => {
+      const repoRoot = await setupWorkspace();
+      const ws = await openWorkspace(repoRoot);
+      const basouDir = join(repoRoot, ".basou");
+      await chmod(basouDir, 0o000);
+      try {
+        const error = await ws.listSessions().then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(error).toBeInstanceOf(Error);
+        expect(error).not.toBeInstanceOf(BasouSdkError);
+        expect((error as Error).message).toBe("Failed to inspect .basou/sessions");
+      } finally {
+        await chmod(basouDir, 0o755);
+      }
+    },
+  );
 });

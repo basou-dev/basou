@@ -26,7 +26,7 @@ import {
   type TaskDocument,
   type WorkStatsResult,
 } from "@basou/core";
-import { AmbiguousIdError, WorkspaceNotFoundError } from "./errors.js";
+import { AmbiguousIdError, SessionStoreUnsafeError, WorkspaceNotFoundError } from "./errors.js";
 
 /**
  * A degradation the SDK noticed while reading provenance: a malformed event
@@ -77,6 +77,18 @@ export type StatsOptions = {
  * `streamEvents`) accept a full id or a unique prefix: a prefix matching
  * nothing yields `null` (or an empty stream), a prefix matching more than one
  * record throws {@link AmbiguousIdError}. `getApproval` takes an exact id only.
+ *
+ * The reads that need the workspace's sessions (`listSessions`, `getSession`,
+ * `readEvents`, `streamEvents`, `stats`, `renderHandoff`, `renderDecisions`,
+ * `renderReport`) throw {@link SessionStoreUnsafeError} when `.basou/sessions`
+ * is a symlink or not a directory; `streamEvents` throws it from the stream,
+ * when it is read. The exception is a session lookup (`getSession`,
+ * `readEvents`, `streamEvents`) given an id that is empty once trimmed, or
+ * `ses_` alone: it yields `null` (or nothing) before anything is read, as it
+ * does for any workspace. `manifest`, `listTasks`, `getTask`, `listApprovals`
+ * and `getApproval` do not read the sessions and work as usual. `status` does
+ * not throw either, and reports the entry as a missing directory
+ * (`directories_present.sessions` is `false`).
  */
 export interface Workspace {
   /** Absolute repository root this workspace was opened at. */
@@ -149,8 +161,10 @@ export function resolveWorkspaceRoot(cwd: string): Promise<string> {
 /**
  * Open a read-only handle on the Basou workspace rooted at `repoRoot` (the
  * directory that contains `.basou/`). Validates that `.basou/` exists and is a
- * real directory; throws {@link WorkspaceNotFoundError} otherwise. No git is
- * required — point it at any directory holding a `.basou/`.
+ * real directory; throws {@link WorkspaceNotFoundError} otherwise. It does not
+ * check `.basou/sessions`: the reads that need the sessions check it each time
+ * they are called (see {@link Workspace}). No git is required — point it at
+ * any directory holding a `.basou/`.
  */
 export async function openWorkspace(
   repoRoot: string,
@@ -190,34 +204,42 @@ export async function openWorkspace(
       buildStatusSnapshot({ manifest: await readManifest(paths), paths, now: now() }),
 
     listSessions: () =>
-      loadSessionEntries(paths, {
-        now: now(),
-        onWarning: (w, sid) => onWarning(w, sid),
-        onSkip,
+      guardStore(root, () =>
+        loadSessionEntries(paths, {
+          now: now(),
+          onWarning: (w, sid) => onWarning(w, sid),
+          onSkip,
+        }),
+      ),
+
+    getSession: (idOrPrefix) =>
+      guardStore(root, async () => {
+        const id = await resolveSession(idOrPrefix);
+        if (id === null) return null;
+        const entries = await loadSessionEntries(paths, {
+          now: now(),
+          onWarning: (w, sid) => onWarning(w, sid),
+          onSkip,
+        });
+        return entries.find((e) => e.sessionId === id) ?? null;
       }),
 
-    getSession: async (idOrPrefix) => {
-      const id = await resolveSession(idOrPrefix);
-      if (id === null) return null;
-      const entries = await loadSessionEntries(paths, {
-        now: now(),
-        onWarning: (w, sid) => onWarning(w, sid),
-        onSkip,
-      });
-      return entries.find((e) => e.sessionId === id) ?? null;
-    },
-
-    readEvents: async (idOrPrefix) => {
-      const id = await resolveSession(idOrPrefix);
-      if (id === null) return [];
-      return readAllEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
-    },
+    readEvents: (idOrPrefix) =>
+      guardStore(root, async () => {
+        const id = await resolveSession(idOrPrefix);
+        if (id === null) return [];
+        return readAllEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
+      }),
 
     streamEvents: (idOrPrefix): AsyncIterable<Event> => {
       async function* iterate(): AsyncGenerator<Event> {
-        const id = await resolveSession(idOrPrefix);
-        if (id === null) return;
-        yield* replayEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
+        try {
+          const id = await resolveSession(idOrPrefix);
+          if (id === null) return;
+          yield* replayEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
+        } catch (error) {
+          throw toSessionStoreError(root, error);
+        }
       }
       return iterate();
     },
@@ -253,48 +275,85 @@ export async function openWorkspace(
     getApproval: (id) => loadApproval(paths, id),
 
     stats: (statsOptions) =>
-      computeWorkStats({
-        paths,
-        now: now(),
-        ...(statsOptions?.timeZone !== undefined ? { timeZone: statsOptions.timeZone } : {}),
-        onWarning: (w, sid) => onWarning(w, sid),
-        onSessionSkip: onSkip,
+      guardStore(root, () =>
+        computeWorkStats({
+          paths,
+          now: now(),
+          ...(statsOptions?.timeZone !== undefined ? { timeZone: statsOptions.timeZone } : {}),
+          onWarning: (w, sid) => onWarning(w, sid),
+          onSessionSkip: onSkip,
+        }),
+      ),
+
+    renderHandoff: () =>
+      guardStore(root, async () => {
+        const result = await renderHandoff({
+          paths,
+          nowIso: now().toISOString(),
+          onWarning: (w, sid) => onWarning(w, sid),
+          onSessionSkip: onSkip,
+          onTaskSkip: onSkip,
+        });
+        return result.body;
       }),
 
-    renderHandoff: async () => {
-      const result = await renderHandoff({
-        paths,
-        nowIso: now().toISOString(),
-        onWarning: (w, sid) => onWarning(w, sid),
-        onSessionSkip: onSkip,
-        onTaskSkip: onSkip,
-      });
-      return result.body;
-    },
+    renderDecisions: () =>
+      guardStore(root, async () => {
+        const result = await renderDecisions({
+          paths,
+          nowIso: now().toISOString(),
+          onWarning: (w, sid) => onWarning(w, sid),
+          onSessionSkip: onSkip,
+        });
+        return result.body;
+      }),
 
-    renderDecisions: async () => {
-      const result = await renderDecisions({
-        paths,
-        nowIso: now().toISOString(),
-        onWarning: (w, sid) => onWarning(w, sid),
-        onSessionSkip: onSkip,
-      });
-      return result.body;
-    },
-
-    renderReport: async (reportOptions) => {
-      const result = await renderReport({
-        paths,
-        nowIso: now().toISOString(),
-        ...(reportOptions?.title !== undefined ? { title: reportOptions.title } : {}),
-        ...(reportOptions?.timeZone !== undefined ? { timeZone: reportOptions.timeZone } : {}),
-        onWarning: (w, sid) => onWarning(w, sid),
-        onSessionSkip: onSkip,
-        onTaskSkip: onSkip,
-      });
-      return result.body;
-    },
+    renderReport: (reportOptions) =>
+      guardStore(root, async () => {
+        const result = await renderReport({
+          paths,
+          nowIso: now().toISOString(),
+          ...(reportOptions?.title !== undefined ? { title: reportOptions.title } : {}),
+          ...(reportOptions?.timeZone !== undefined ? { timeZone: reportOptions.timeZone } : {}),
+          onWarning: (w, sid) => onWarning(w, sid),
+          onSessionSkip: onSkip,
+          onTaskSkip: onSkip,
+        });
+        return result.body;
+      }),
   };
+}
+
+/**
+ * The messages `@basou/core`'s store check gives when `.basou/sessions` is a
+ * symlink or not a directory. Matched exactly, as {@link resolveOrNull}
+ * matches the resolver's contract strings, so no other error is retyped.
+ */
+const SESSION_STORE_REFUSALS: ReadonlySet<string> = new Set([
+  ".basou/sessions is a symlink; refusing to operate",
+  ".basou/sessions exists but is not a directory",
+]);
+
+/**
+ * Return core's refusal of an unsafe `.basou/sessions` as a
+ * {@link SessionStoreUnsafeError} for the workspace at `root`, keeping its
+ * message and attaching it as the cause. Any other error is returned
+ * unchanged.
+ */
+function toSessionStoreError(root: string, error: unknown): unknown {
+  if (error instanceof Error && SESSION_STORE_REFUSALS.has(error.message)) {
+    return new SessionStoreUnsafeError(root, error.message, { cause: error });
+  }
+  return error;
+}
+
+/** Run a read that needs the sessions, retyping a store refusal it throws. */
+async function guardStore<T>(root: string, read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    throw toSessionStoreError(root, error);
+  }
 }
 
 /**
