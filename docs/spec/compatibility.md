@@ -320,11 +320,14 @@ Four things about an SDK error are not guaranteed, and may change within a
    own**, and a read may begin to throw for a store it did not read before.
 4. **A read may come to refuse, or to stop following, an entry it reads
    through today** when the entry is in a form basou never creates: a symlink
-   anywhere under `.basou/`, or something other than a directory where basou
-   makes a directory ([workspace](workspace.md#the-stores-directories-are-not-followed)).
-   A refused directory of a store throws that store's `StoreUnsafeError`; an
-   entry that is not followed is left out of a list and looked up as `null`,
-   as a session entry that is not a directory is today.
+   under `.basou/` outside a view placed there, or something other than a
+   directory where basou makes a directory
+   ([workspace](workspace.md#the-stores-directories-are-not-followed)). A
+   refused directory of a store throws that store's `StoreUnsafeError`. An
+   entry that is not followed is treated as a session entry that is not a
+   directory is today: it is left out of a list and looked up as `null`, and
+   a prefix it shares with a record is ambiguous, so a prefix lookup of that
+   record throws `AmbiguousIdError`.
 
 The carve-out is bounded by three things:
 

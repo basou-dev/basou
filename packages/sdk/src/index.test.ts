@@ -25,6 +25,33 @@ type Instance<K extends keyof Exports> = Exports[K] extends abstract new (
 ) => infer I
   ? I
   : never;
+/**
+ * The parent of each exported error class. A class missing here fails the
+ * typecheck, through the check that its keys are the exported error classes.
+ */
+type ParentOf = {
+  BasouSdkError: Error;
+  WorkspaceNotFoundError: Instance<"BasouSdkError">;
+  StoreUnsafeError: Instance<"BasouSdkError">;
+  SessionStoreUnsafeError: Instance<"StoreUnsafeError">;
+  TaskStoreUnsafeError: Instance<"StoreUnsafeError">;
+  ApprovalStoreUnsafeError: Instance<"StoreUnsafeError">;
+  AmbiguousIdError: Instance<"BasouSdkError">;
+};
+/**
+ * Every exported error class that has no brand of its own: its parent with
+ * its own public fields added is assignable to it. A class with a brand of its
+ * own is not, whatever its shape.
+ */
+type Unbranded = {
+  [K in ErrorClassName]: K extends keyof ParentOf
+    ? [ParentOf[K] & Pick<Instance<K>, Exclude<keyof Instance<K>, keyof ParentOf[K]>>] extends [
+        Instance<K>,
+      ]
+      ? K
+      : never
+    : K;
+}[ErrorClassName];
 /** `A -> B` for every pair of exported error classes where an A is assignable to a B. */
 type Assignable = {
   [A in ErrorClassName]: {
@@ -87,10 +114,12 @@ describe("@basou/sdk surface", () => {
   });
 
   it("makes a class assignable only to its own parents, over every exported error class (compile-time)", () => {
-    // A class added without a brand of its own would be assignable to or from
-    // a class it does not extend, and appear here; so would one the list
-    // below does not name. Add a new class's edges only once it is branded.
+    // A class added without a brand of its own fails the check that no class
+    // is unbranded, once it has an entry in ParentOf, which it must have. A
+    // class added, branded or not, also changes the assignability pinned below.
     expectTypeOf<ErrorClassName>().toEqualTypeOf<(typeof ERROR_CLASS_NAMES)[number]>();
+    expectTypeOf<keyof ParentOf>().toEqualTypeOf<ErrorClassName>();
+    expectTypeOf<Unbranded>().toBeNever();
     expectTypeOf<Assignable>().toEqualTypeOf<
       | "WorkspaceNotFoundError -> BasouSdkError"
       | "StoreUnsafeError -> BasouSdkError"
@@ -143,12 +172,18 @@ describe("@basou/sdk surface", () => {
         return [this.__ambiguousId];
       }
     }
-    expect(new SessionProbe("/r", "m").brands()).toEqual([undefined, undefined, undefined]);
-    expect(new TaskProbe("/r", "m").brands()).toEqual([undefined]);
-    expect(new ApprovalProbe("/r", "m").brands()).toEqual([undefined]);
-    expect(new WorkspaceProbe("/r").brands()).toEqual([undefined]);
-    expect(new AmbiguousProbe("x").brands()).toEqual([undefined]);
-    expect(Object.keys(new SessionProbe("/r", "m")).sort()).toEqual(["name", "root"]);
+    const probes: ReadonlyArray<[{ brands(): unknown[] }, string[]]> = [
+      [new SessionProbe("/r", "m"), ["name", "root"]],
+      [new TaskProbe("/r", "m"), ["name", "root"]],
+      [new ApprovalProbe("/r", "m"), ["name", "root"]],
+      [new WorkspaceProbe("/r"), ["name", "root"]],
+      [new AmbiguousProbe("x"), ["input", "name"]],
+    ];
+    for (const [probe, keys] of probes) {
+      expect(probe.brands().every((brand) => brand === undefined)).toBe(true);
+      // A brand that emitted a field would add a key here.
+      expect(Object.keys(probe).sort()).toEqual(keys);
+    }
   });
 
   it("names each error class it exports with a string, kept when a build renames the class", () => {

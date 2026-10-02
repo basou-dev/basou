@@ -53,9 +53,10 @@ out on disk.
 
 basou creates `sessions/`, `tasks/`, `tasks/archive/`, `approvals/`,
 `approvals/pending/` and `approvals/resolved/` as directories and never as
-anything else, and it creates no symlink anywhere under `.basou/`. When one of them is a symlink, whatever it points to, or a
-file, the commands that read or write what it holds stop with an error naming
-it: `<directory> is a symlink; refusing to operate` or `<directory> exists but
+anything else, and it creates no symlink under `.basou/`, except in a view
+that `workspace.view` places there. When one of them is a symlink, whatever it
+points to, or a file, the commands that read or write what it holds stop with
+an error naming it: `<directory> is a symlink; refusing to operate` or `<directory> exists but
 is not a directory`, where `<directory>` is the path from the repository root,
 such as `.basou/tasks/archive`. They stop before they read anything from that
 directory, and before they write anything, take a lock or record an event,

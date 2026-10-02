@@ -6,14 +6,14 @@
  * ({@link WorkspaceNotFoundError}), or a directory of the store that is a
  * symlink or not a directory ({@link StoreUnsafeError}). The last two are
  * refusals that `@basou/core` makes, carried as SDK errors. Every other error
- * propagates from `@basou/core` as-is — a malformed record (an invalid
- * `session.yaml`, for instance), a record a newer basou wrote, or an I/O
- * failure during a read, including a failure to inspect a directory of the
- * store — and its class and message are not part of the SDK's contract. So
- * today `instanceof BasouSdkError` identifies "the SDK rejected this call"
- * rather than "the data was bad" or "the read failed". Such a failure may come
- * to be thrown as an SDK error class of its own, which extends this one too, so
- * test for the subclass you handle.
+ * propagates from `@basou/core` as-is — a malformed record (an approval file
+ * that is not a valid approval, for instance), a record a newer basou wrote,
+ * or an I/O failure during a read, including a failure to inspect a directory
+ * of the store — and its class and message are not part of the SDK's
+ * contract. So today `instanceof BasouSdkError` identifies "the SDK rejected
+ * this call" rather than "the data was bad" or "the read failed". Such a
+ * failure may come to be thrown as an SDK error class of its own, which
+ * extends this one too, so test for the subclass you handle.
  *
  * What a caller can rely on is the class, `name` (the name of the class the
  * SDK exports, set as a string so that a build that renames classes does not

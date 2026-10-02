@@ -7,8 +7,8 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Changed
 
-- **Breaking (types): `@basou/sdk`'s error classes are nominal to
-  TypeScript** (SDK API `0.8.0`). `BasouSdkError`, `WorkspaceNotFoundError`,
+- **Breaking (types):** `@basou/sdk`'s error classes are nominal to
+  TypeScript (SDK API `0.8.0`). `BasouSdkError`, `WorkspaceNotFoundError`,
   `AmbiguousIdError`, `StoreUnsafeError` and its three subclasses each carry a
   type-only brand, so one is no longer assignable where another is typed: a
   `TaskStoreUnsafeError` where a `SessionStoreUnsafeError` is expected, a
@@ -36,7 +36,8 @@ All notable changes to **basou** are recorded here. The project follows
   creates, with a brand on every new class, and listed here. Catch
   `StoreUnsafeError` to handle every store, and keep a default branch in a
   switch on `name`. `docs/spec/workspace.md` now states that basou creates no
-  symlink anywhere under `.basou/`.
+  symlink under `.basou/`, except in a view that `workspace.view` places
+  there.
 
 ## 0.61.0 — 2026-10-02
 
