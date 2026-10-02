@@ -14,6 +14,34 @@ All notable changes to **basou** are recorded here. The project follows
   `EACCES: permission denied, open '<absolute path>/.basou/locks/...'`, even
   without `--verbose`. It now prints `Failed to acquire lock`; `--verbose`
   adds the error code as the cause, as for other errors.
+- **`@basou/sdk`: `getApproval` no longer reads an approval file through a
+  symlink.** An `approvals/pending/<id>.yaml` or `approvals/resolved/<id>.yaml`
+  that is a symlink was left out of `listApprovals` and of every `basou
+  approval` command, but `getApproval` read the file it points to, outside the
+  store. It now returns `null` for it, and `listApprovals` reports it to
+  `onDiagnostic` as a skipped approval.
+- **A symlink at an approval's resolved name no longer stands in for the
+  approval, and `approve` no longer records a resolution it cannot finish.**
+  With a pending file and an `approvals/resolved/<id>.yaml` that is a symlink,
+  `approval show`, `orient` and the SDK's `getApproval` showed the file behind
+  the symlink instead of the pending one, and `approval approve` recorded
+  `approval_approved`, failed with `Approval already resolved at the same
+  time`, left the approval pending and refused every later attempt as already
+  resolved. They now read the pending file, and `approve` and `reject` stop
+  before recording anything: `Approval <id> cannot be resolved: its entry in
+  resolved is not a file (a symlink or a directory is not followed)`.
+
+### Changed
+
+- **An approval file that is not followed is named instead of vanishing.**
+  `basou approval list` prints `Skipped <id> in <pending|resolved>: not a file
+  (a symlink or a directory is not followed)` on stderr for an approval file
+  that is a symlink or not a file, and `approval show` adds the same as a
+  warning when the approval it shows has one on the other side. `approval
+  show`, `approve` and `reject` given an id that names only such an entry stop
+  with `Approval <id> is not a file; a symlink or a directory there is not
+  followed` instead of `Approval not found`, and a prefix it shares with an
+  approval is now ambiguous rather than resolved to the approval.
 
 ## 0.62.0 — 2026-10-02
 

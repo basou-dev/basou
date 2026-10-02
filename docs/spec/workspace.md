@@ -91,11 +91,30 @@ a file as missing. It does not yet look at `approvals` itself, so today a
 symlink there leaves the two approval directories reported as present; that
 is a known limitation, not a promise.
 
-A task file or an approval file that is itself a symlink is not covered by
-this rule. A live task file (`tasks/<task_id>.md`) is read through it; an
-archived one (`tasks/archive/<task_id>.md`) is left out of the listing and
-not found. An approval file is left out of the listing and not found by the
-CLI, though the SDK's `getApproval` reads through it.
+A task file that is itself a symlink is not covered by this rule. A live
+task file (`tasks/<task_id>.md`) is read through it; an archived one
+(`tasks/archive/<task_id>.md`) is left out of the listing and not found.
+
+An approval file (`approvals/pending/<approval_id>.yaml` or
+`approvals/resolved/<approval_id>.yaml`) that is a symlink, whatever it
+points to, or anything other than a file is not followed, and nothing is read
+through it:
+
+- `basou approval list` leaves it out and names it on stderr: `Skipped <id>
+  in <pending|resolved>: not a file (a symlink or a directory is not
+  followed)`.
+- `approval show`, `approve` and `reject` given its id stop with `Approval
+  <approval_id> is not a file; a symlink or a directory there is not
+  followed`. A prefix it shares with an approval is ambiguous.
+- When the same id has a file on the other side, that file is the approval;
+  `approval show` adds a warning naming the entry. `approve` and `reject`
+  refuse an approval whose name in `approvals/resolved` such an entry takes,
+  before they record anything, since the resolved file could not be written
+  there.
+- The SDK's `listApprovals` leaves it out and reports it to `onDiagnostic`,
+  and `getApproval` looks it up as `null`.
+- `orient`, `handoff generate`, `report generate` and `basou view` leave it
+  out of what they show.
 
 ### tasks/ details
 

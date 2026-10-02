@@ -680,3 +680,41 @@ describe("a directory of the task or approval store that is not followed", () =>
     expect(thrown).not.toBeInstanceOf(ApprovalStoreUnsafeError);
   });
 });
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("an approval file that is not followed", () => {
+  it("is left out of listApprovals, reported, and looked up as null by getApproval", async () => {
+    const repoRoot = await setupWorkspace();
+    const pending = join(repoRoot, ".basou", "approvals", "pending", `${APPR_PENDING}.yaml`);
+    const outside = join(repoRoot, "outside.yaml");
+    await rename(pending, outside);
+    await symlink(outside, pending);
+    const diagnostics: Array<{ message: string; id?: string }> = [];
+    const ws = await openWorkspace(repoRoot, { onDiagnostic: (d) => diagnostics.push(d) });
+
+    expect(await ws.getApproval(APPR_PENDING)).toBeNull();
+    const listed = await ws.listApprovals();
+    expect(listed.pending.map((a) => a.approval.id)).not.toContain(APPR_PENDING);
+    expect(diagnostics).toContainEqual({
+      message: "skipped: approval_file_not_a_file",
+      id: APPR_PENDING,
+    });
+  });
+
+  it("does not hide a file on the other side: a symlinked resolved file leaves the pending one", async () => {
+    const repoRoot = await setupWorkspace();
+    // APPR_DUP has a file on both sides; its resolved one becomes a symlink.
+    const resolved = join(repoRoot, ".basou", "approvals", "resolved", `${APPR_DUP}.yaml`);
+    const outside = join(repoRoot, "outside.yaml");
+    await rename(resolved, outside);
+    await symlink(outside, resolved);
+    const ws = await openWorkspace(repoRoot);
+
+    const loaded = await ws.getApproval(APPR_DUP);
+    expect(loaded?.location).toBe("pending");
+    expect(loaded?.approval.status).toBe("pending");
+    const listed = await ws.listApprovals();
+    expect(listed.pending.map((a) => a.approval.id)).toContain(APPR_DUP);
+    expect(listed.resolved.map((a) => a.approval.id)).not.toContain(APPR_DUP);
+  });
+});

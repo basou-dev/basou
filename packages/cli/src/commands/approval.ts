@@ -16,6 +16,7 @@ import {
   type Event,
   enumerateApprovals,
   findErrorCode,
+  inspectApprovalEntry,
   inspectSessionEntry,
   isLazyExpired,
   LOCAL_CLI_EVENT_SOURCE,
@@ -27,6 +28,7 @@ import {
   readYamlFile,
   replayEvents,
   resolveRepositoryRoot,
+  type UnfollowedApprovalEntry,
 } from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, printReplayWarning, renderCliError } from "../lib/error-render.js";
@@ -158,6 +160,13 @@ export async function doRunApprovalList(
   await assertWorkspaceInitialized(paths.root);
 
   const ids = await enumerateApprovals(paths);
+  // An approval file that is a symlink or not a file is not followed; it is
+  // named here rather than left to vanish from the listing.
+  for (const entry of ids.unfollowed) {
+    console.error(
+      `Skipped ${shortId(entry.id)} in ${entry.location}: not a file (a symlink or a directory is not followed)`,
+    );
+  }
   // A single `now` shared across every record so that two reads on the
   // same boundary instant cannot disagree (e.g. one record flagged expired
   // and another not when both straddle the same `expires_at`).
@@ -259,7 +268,8 @@ export async function doRunApprovalShow(
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
-  const { id } = await resolveApprovalId(paths, idInput);
+  const { id, unfollowed } = await resolveApprovalId(paths, idInput);
+  for (const entry of unfollowed) console.error(`Warning: ${describeUnfollowed(entry)}`);
   const loaded = await loadApproval(paths, id);
   if (loaded === null) {
     throw new Error(`Approval not found: ${idInput}`);
@@ -361,6 +371,20 @@ async function doRunApprovalResolve(
   // Step D-3: a resolved-side hit means there is nothing left to decide.
   if (location === "resolved") {
     throw new Error(`Approval already resolved: ${idInput}`);
+  }
+  // The resolved-side YAML is created at Step D-10, after the resolution
+  // event. An entry already standing at its name (a symlink or a directory,
+  // which the listing does not follow) would make that create fail with the
+  // event recorded and the approval left pending, so refuse here instead,
+  // before anything is written.
+  const resolvedEntry = await inspectApprovalEntry(paths, "resolved", id);
+  if (resolvedEntry === "file") {
+    throw new Error(`Approval already resolved: ${idInput}`);
+  }
+  if (resolvedEntry !== "missing") {
+    throw new Error(
+      `Approval ${id} cannot be resolved: its entry in resolved is not a file (a symlink or a directory is not followed)`,
+    );
   }
 
   // Step D-4: read + parse the pending YAML.
@@ -563,7 +587,7 @@ async function doRunApprovalResolve(
 async function resolveApprovalId(
   paths: BasouPaths,
   input: string,
-): Promise<{ id: string; location: ApprovalLocation }> {
+): Promise<{ id: string; location: ApprovalLocation; unfollowed: UnfollowedApprovalEntry[] }> {
   const trimmed = input.trim();
   if (trimmed.length === 0) {
     throw new Error("Approval id is empty");
@@ -592,20 +616,36 @@ async function resolveApprovalId(
     byId.set(id, "resolved");
   }
 
-  if (byId.size === 0) {
+  // An entry that is not followed still takes part in matching, so a prefix
+  // it shares with an approval is ambiguous rather than silently resolved to
+  // the other one, and an id naming only such an entry is reported as such.
+  const matched = new Set(byId.keys());
+  for (const entry of enumeration.unfollowed) {
+    if (entry.id.startsWith(normalized)) matched.add(entry.id);
+  }
+
+  if (matched.size === 0) {
     throw new Error(`Approval not found: ${input}`);
   }
-  if (byId.size > 1) {
+  if (matched.size > 1) {
     throw new Error(
-      `Ambiguous approval id '${input}': matched ${byId.size} approvals. Disambiguate with a longer prefix.`,
+      `Ambiguous approval id '${input}': matched ${matched.size} approvals. Disambiguate with a longer prefix.`,
     );
   }
-  const first = byId.entries().next().value;
-  if (first === undefined) {
+  const id = matched.values().next().value;
+  if (id === undefined) {
     throw new Error(`Approval not found: ${input}`);
   }
-  const [id, location] = first;
-  return { id, location };
+  const location = byId.get(id);
+  if (location === undefined) {
+    throw new Error(`Approval ${id} is not a file; a symlink or a directory there is not followed`);
+  }
+  const unfollowed = enumeration.unfollowed.filter((entry) => entry.id === id);
+  return { id, location, unfollowed };
+}
+
+function describeUnfollowed(entry: UnfollowedApprovalEntry): string {
+  return `${shortId(entry.id)} in ${entry.location} is not a file (a symlink or a directory is not followed)`;
 }
 
 function isApprovalEvent(ev: Event): ev is Event & { approval_id: string } {

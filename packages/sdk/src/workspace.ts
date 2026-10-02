@@ -38,7 +38,7 @@ import {
 
 /**
  * A degradation the SDK noticed while reading provenance: a malformed event
- * line, or a session / task that could not be loaded. Best-effort reads skip
+ * line, or a session / task / approval that could not be loaded. Best-effort reads skip
  * these and keep going; pass `onDiagnostic` to {@link openWorkspace} to observe
  * them. `message` is a human-readable summary (it folds in the core
  * `ReplayWarning.kind` or skip-reason); structured fields are intentionally not
@@ -47,7 +47,7 @@ import {
 export type WorkspaceDiagnostic = {
   /** Human-readable summary of the malformed line / skipped record. */
   message: string;
-  /** Session or task id the diagnostic relates to, when known. */
+  /** Session, task or approval id the diagnostic relates to, when known. */
   id?: string;
 };
 
@@ -60,7 +60,7 @@ export type WorkspaceOptions = {
    */
   now?: () => Date;
   /**
-   * Observe a malformed event line or a skipped session / task instead of it
+   * Observe a malformed event line or a skipped session / task / approval instead of it
    * being silently dropped. Reads are still best-effort: a diagnostic does not
    * fail the call.
    */
@@ -138,11 +138,18 @@ export interface Workspace {
   /** One task by id / unique prefix (archived included), or `null`. */
   getTask(idOrPrefix: string): Promise<TaskDocument | null>;
 
-  /** Pending + resolved approvals, fully loaded. */
+  /**
+   * Pending + resolved approvals, fully loaded. An approval file that is a
+   * symlink or not a file is not followed: it is left out and reported as a
+   * skipped approval to `onDiagnostic`.
+   */
   listApprovals(): Promise<{ pending: LoadedApproval[]; resolved: LoadedApproval[] }>;
   /**
    * One approval by exact id (resolved checked first), or `null` — also for a
-   * string that is not an approval id, which is not looked up.
+   * string that is not an approval id, which is not looked up. Only a regular
+   * file is read: an approval file that is a symlink or not a file is not
+   * followed and is looked up as absent, as {@link listApprovals} leaves it
+   * out, so a regular file on the other side is still found.
    */
   getApproval(id: string): Promise<LoadedApproval | null>;
 
@@ -285,6 +292,10 @@ export async function openWorkspace(
     listApprovals: () =>
       guardStore(root, async () => {
         const ids = await enumerateApprovals(paths);
+        // An approval file that is a symlink or not a file is not followed: it
+        // is left out of the lists, and reported like a session entry that is
+        // not a directory.
+        for (const entry of ids.unfollowed) onSkip(entry.id, "approval_file_not_a_file");
         // `loadApproval` searches resolved/ before pending/, so an id present in
         // BOTH (a stale pending file left after resolution) would otherwise load
         // the resolved record into the pending list too. Drop those from pending

@@ -18,6 +18,7 @@ import { writeYamlFile } from "../storage/yaml-store.js";
 import {
   assertApprovalStoreSafe,
   enumerateApprovals,
+  inspectApprovalEntry,
   isLazyExpired,
   loadApproval,
 } from "./approval-store.js";
@@ -298,6 +299,7 @@ describe("assertApprovalStoreSafe", () => {
     expect(await enumerateApprovals(paths)).toEqual({
       pending: [PENDING_FIXTURE.id],
       resolved: [RESOLVED_FIXTURE.id],
+      unfollowed: [],
     });
     expect((await loadApproval(paths, PENDING_FIXTURE.id))?.location).toBe("pending");
     expect((await loadApproval(paths, RESOLVED_FIXTURE.id))?.location).toBe("resolved");
@@ -349,5 +351,93 @@ describe("assertApprovalStoreSafe", () => {
     await expect(assertApprovalStoreSafe(paths)).rejects.toThrow(
       new Error(".basou/approvals exists but is not a directory"),
     );
+  });
+});
+
+// An approval file is read only when it is a regular file. POSIX only:
+// creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("approval files that are not followed", () => {
+  /** A file outside the store holding `approval`, and a symlink to it at `link`. */
+  async function linkOutside(paths: BasouPaths, link: string, approval: Approval): Promise<string> {
+    const outside = join(paths.root, "..", "outside.yaml");
+    await writeYamlFile(outside, { ...approval, reason: "read from outside the store" });
+    await symlink(outside, link);
+    return outside;
+  }
+
+  it("leaves a symlinked pending file out of the listing and looks it up as absent", async () => {
+    const paths = getPaths();
+    const link = join(paths.approvals.pending, `${PENDING_FIXTURE.id}.yaml`);
+    await linkOutside(paths, link, PENDING_FIXTURE);
+
+    expect(await enumerateApprovals(paths)).toEqual({
+      pending: [],
+      resolved: [],
+      unfollowed: [{ id: PENDING_FIXTURE.id, location: "pending", kind: "symlink" }],
+    });
+    expect(await loadApproval(paths, PENDING_FIXTURE.id)).toBeNull();
+    expect(await inspectApprovalEntry(paths, "pending", PENDING_FIXTURE.id)).toBe("symlink");
+  });
+
+  it("reports a dangling symlink and a directory named as an approval", async () => {
+    const paths = getPaths();
+    await symlink(
+      join(paths.root, "..", "nowhere.yaml"),
+      join(paths.approvals.pending, `${PENDING_FIXTURE.id}.yaml`),
+    );
+    await mkdir(join(paths.approvals.resolved, `${RESOLVED_FIXTURE.id}.yaml`));
+
+    const enumeration = await enumerateApprovals(paths);
+    expect(enumeration.pending).toEqual([]);
+    expect(enumeration.resolved).toEqual([]);
+    expect(enumeration.unfollowed).toEqual(
+      expect.arrayContaining([
+        { id: PENDING_FIXTURE.id, location: "pending", kind: "symlink" },
+        { id: RESOLVED_FIXTURE.id, location: "resolved", kind: "not_a_file" },
+      ]),
+    );
+    expect(enumeration.unfollowed).toHaveLength(2);
+    expect(await loadApproval(paths, PENDING_FIXTURE.id)).toBeNull();
+    expect(await loadApproval(paths, RESOLVED_FIXTURE.id)).toBeNull();
+    expect(await inspectApprovalEntry(paths, "resolved", RESOLVED_FIXTURE.id)).toBe("not_a_file");
+    expect(await inspectApprovalEntry(paths, "resolved", PENDING_FIXTURE.id)).toBe("missing");
+  });
+
+  it("reads the pending file when the resolved entry of the same id is a symlink", async () => {
+    const paths = getPaths();
+    await writeYamlFile(
+      join(paths.approvals.pending, `${PENDING_FIXTURE.id}.yaml`),
+      PENDING_FIXTURE,
+    );
+    await linkOutside(paths, join(paths.approvals.resolved, `${PENDING_FIXTURE.id}.yaml`), {
+      ...PENDING_FIXTURE,
+      status: "approved",
+    });
+
+    const loaded = await loadApproval(paths, PENDING_FIXTURE.id);
+    expect(loaded?.location).toBe("pending");
+    expect(loaded?.approval).toEqual(PENDING_FIXTURE);
+    expect(await enumerateApprovals(paths)).toEqual({
+      pending: [PENDING_FIXTURE.id],
+      resolved: [],
+      unfollowed: [{ id: PENDING_FIXTURE.id, location: "resolved", kind: "symlink" }],
+    });
+  });
+
+  it("reads the resolved file when the pending entry of the same id is a symlink", async () => {
+    const paths = getPaths();
+    await writeYamlFile(
+      join(paths.approvals.resolved, `${RESOLVED_FIXTURE.id}.yaml`),
+      RESOLVED_FIXTURE,
+    );
+    await linkOutside(
+      paths,
+      join(paths.approvals.pending, `${RESOLVED_FIXTURE.id}.yaml`),
+      RESOLVED_FIXTURE,
+    );
+
+    const loaded = await loadApproval(paths, RESOLVED_FIXTURE.id);
+    expect(loaded?.location).toBe("resolved");
+    expect(loaded?.approval).toEqual(RESOLVED_FIXTURE);
   });
 });
