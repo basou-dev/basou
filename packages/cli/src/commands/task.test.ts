@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -26,6 +36,7 @@ import {
   runTaskArchive,
   runTaskDelete,
   runTaskEdit,
+  runTaskList,
   runTaskNew,
   runTaskReconcile,
   runTaskRefreshLinkage,
@@ -1728,5 +1739,60 @@ describe("doRunTaskArchive", () => {
     const out = captureStdout();
     await doRunTaskShow(taskId, {}, { cwd: repo, ...FIXED_CTX });
     expect(joinCalls(out)).toContain("[archived]");
+  });
+});
+
+// ============================================================================
+// an unsafe task store
+// ============================================================================
+
+/** Every file under `dir`, with its bytes, so a test can prove nothing changed. */
+async function snapshotTree(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const name of (await readdir(dir, { recursive: true })).sort()) {
+    try {
+      out[name] = await readFile(join(dir, name), "utf8");
+    } catch {
+      out[name] = "<dir>";
+    }
+  }
+  return out;
+}
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("a .basou/tasks that is a symlink", () => {
+  it("t-store-1: every task command stops, writing nothing behind it and recording no event", async () => {
+    const repo = await setupInitedRepo();
+    await doRunTaskNew({ title: "moved out" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const paths = basouPaths(repo);
+    const outside = join(repo, "moved-tasks");
+    await rename(paths.tasks, outside);
+    await symlink(outside, paths.tasks);
+    const outsideBefore = await snapshotTree(outside);
+    const sessionsBefore = await snapshotTree(paths.sessions);
+
+    const commands: Array<[string, () => Promise<void>]> = [
+      ["list", () => runTaskList({}, { cwd: repo })],
+      ["show", () => runTaskShow(taskId, {}, { cwd: repo })],
+      ["new", () => runTaskNew({ title: "x" }, { cwd: repo, ...FIXED_CTX })],
+      ["status", () => runTaskStatus(taskId, "in_progress", {}, { cwd: repo, ...FIXED_CTX })],
+      ["edit", () => runTaskEdit(taskId, { title: "renamed" }, { cwd: repo, ...FIXED_CTX })],
+      ["archive", () => runTaskArchive(taskId, { yes: true }, { cwd: repo, ...FIXED_CTX })],
+      ["delete", () => runTaskDelete(taskId, { yes: true }, { cwd: repo, ...FIXED_CTX })],
+    ];
+    for (const [name, run] of commands) {
+      const err = captureStderr();
+      const out = captureStdout();
+      process.exitCode = 0;
+      await run();
+      expect(process.exitCode, name).toBe(1);
+      expect(joinCalls(err), name).toContain(".basou/tasks is a symlink; refusing to operate");
+      expect(joinCalls(out), name).not.toContain("moved out");
+      err.mockRestore();
+      out.mockRestore();
+    }
+    expect(await snapshotTree(outside)).toEqual(outsideBefore);
+    expect(await snapshotTree(paths.sessions)).toEqual(sessionsBefore);
   });
 });

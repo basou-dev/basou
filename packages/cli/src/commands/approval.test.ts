@@ -27,6 +27,7 @@ import {
   doRunApprovalShow,
   registerApprovalCommand,
   runApprovalApprove,
+  runApprovalList,
   runApprovalReject,
   runApprovalShow,
 } from "./approval.js";
@@ -1114,5 +1115,114 @@ describe.skipIf(process.platform === "win32")("a recorded session that is not a 
     await runApprovalApprove(approvalId, {}, { cwd: repo });
     expect(process.exitCode).not.toBe(1);
     expect(await readEventsLines(repo, sessionId)).toHaveLength(2);
+  });
+});
+
+/** Every file under `dir`, with its bytes, so a test can prove nothing changed. */
+async function snapshotTree(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const name of (await readdir(dir, { recursive: true })).sort()) {
+    try {
+      out[name] = await readFile(join(dir, name), "utf8");
+    } catch {
+      out[name] = "<dir>";
+    }
+  }
+  return out;
+}
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("an unsafe approval store", () => {
+  /**
+   * Two pending approvals of a running session, each resolvable as it stands,
+   * with `relative` (under `.basou/`) moved out of the store and linked back
+   * in: a command that followed the link would find them.
+   */
+  async function linkedApprovals(
+    relative: string,
+  ): Promise<{ repo: string; outside: string; sessionId: string }> {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    const sessionId = SES("S61");
+    for (const suffix of ["P61", "P62"]) {
+      await createApproval(repo, { id: APPR(suffix), sessionId });
+      await appendRequestedEvent(
+        repo,
+        sessionId,
+        APPR(suffix),
+        "2026-05-04T10:00:00+09:00",
+        `E${suffix.slice(1)}`,
+      );
+    }
+    await writeYamlFile(join(paths.sessions, sessionId, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: {
+        id: sessionId,
+        task_id: null,
+        workspace_id: FIXED_WS_ID,
+        source: { kind: "claude-code", version: "0.1.0" },
+        started_at: "2026-05-04T09:00:00+09:00",
+        status: "running",
+        working_directory: "~/projects/example",
+        invocation: { command: "claude", args: [], exit_code: null },
+        related_files: [],
+        events_log: "events.jsonl",
+        summary: null,
+      },
+    });
+    const inside = join(paths.root, relative);
+    const outside = join(repo, "moved-approvals");
+    await mkdir(paths.approvals.resolved, { recursive: true });
+    await rename(inside, outside);
+    await symlink(outside, inside);
+    return { repo, outside, sessionId };
+  }
+
+  for (const relative of ["approvals", "approvals/pending", "approvals/resolved"]) {
+    const label = `.basou/${relative}`;
+
+    it(`a ${label} that is a symlink stops every approval command, moving and appending nothing`, async () => {
+      const { repo, outside, sessionId } = await linkedApprovals(relative);
+      const paths = basouPaths(repo);
+      const outsideBefore = await snapshotTree(outside);
+      const eventsBefore = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+
+      const commands: Array<[string, () => Promise<void>]> = [
+        ["list", () => runApprovalList({}, { cwd: repo })],
+        ["show", () => runApprovalShow(APPR("P61"), {}, { cwd: repo })],
+        ["approve", () => runApprovalApprove(APPR("P61"), {}, { cwd: repo })],
+        ["reject", () => runApprovalReject(APPR("P62"), { reason: "no" }, { cwd: repo })],
+      ];
+      for (const [name, run] of commands) {
+        const err = captureStderr();
+        const out = captureStdout();
+        process.exitCode = 0;
+        await run();
+        expect(process.exitCode, name).toBe(1);
+        expect(joinCalls(err), name).toContain(`${label} is a symlink; refusing to operate`);
+        expect(joinCalls(out), name).toBe("");
+        err.mockRestore();
+        out.mockRestore();
+      }
+      expect(await snapshotTree(outside)).toEqual(outsideBefore);
+      expect(await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8")).toBe(
+        eventsBefore,
+      );
+    });
+  }
+
+  it("control: the same approvals, in the store, are approved and rejected", async () => {
+    const { repo } = await linkedApprovals("approvals");
+    const paths = basouPaths(repo);
+    await rm(join(paths.root, "approvals"));
+    await rename(join(repo, "moved-approvals"), join(paths.root, "approvals"));
+    captureStdout();
+    await runApprovalApprove(APPR("P61"), {}, { cwd: repo });
+    await runApprovalReject(APPR("P62"), { reason: "no" }, { cwd: repo });
+    expect(process.exitCode).not.toBe(1);
+    expect((await readdir(paths.approvals.resolved)).sort()).toEqual([
+      `${APPR("P61")}.yaml`,
+      `${APPR("P62")}.yaml`,
+    ]);
   });
 });

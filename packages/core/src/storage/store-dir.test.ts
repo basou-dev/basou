@@ -1,0 +1,333 @@
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { collectTaskReferences } from "../decision-gaps/decision-gaps.js";
+import type { PrefixedId } from "../ids/ulid.js";
+import { resolveTaskId } from "../lib/id-resolver.js";
+import type { Manifest } from "../schemas/manifest.schema.js";
+import { type BasouPaths, basouPaths, ensureBasouDirectory } from "./basou-dir.js";
+import { assertStoreDirectorySafe } from "./store-dir.js";
+import {
+  archiveTask,
+  assertTaskStoreSafe,
+  createTaskWithEvent,
+  deleteTask,
+  editTask,
+  enumerateArchivedTaskIds,
+  enumerateTaskIds,
+  loadTaskEntries,
+  readTaskFile,
+  readTaskFileWithArchiveFallback,
+  reconcileAllTasks,
+  reconcileTask,
+  refreshTaskLinkedSessions,
+  updateTaskStatusWithEvent,
+  writeTaskFile,
+} from "./tasks.js";
+
+const WS_ID = "ws_01HXABCDEF1234567890ABCWS1" as const;
+// Crockford base32 suffixes (no I/L/O/U), so every id is a valid task id.
+const TASK = (suffix: string): PrefixedId<"task"> =>
+  `task_01HXABCDEF1234567890ABC${suffix}` as PrefixedId<"task">;
+const LIVE = TASK("TK1");
+const ARCHIVED = TASK("TK2");
+const NEW = TASK("TK3");
+const AT = "2026-05-08T12:00:00+09:00";
+const CWD = "/srv/example-project";
+
+const IS_SYMLINK = (label: string): string => `${label} is a symlink; refusing to operate`;
+const IS_FILE = (label: string): string => `${label} exists but is not a directory`;
+
+let workDir: string | undefined;
+
+beforeEach(async () => {
+  workDir = await mkdtemp(join(tmpdir(), "basou-store-dir-test-"));
+});
+
+afterEach(async () => {
+  if (workDir !== undefined) {
+    await rm(workDir, { recursive: true, force: true });
+    workDir = undefined;
+  }
+});
+
+function getWorkDir(): string {
+  if (workDir === undefined) throw new Error("workDir not initialized");
+  return workDir;
+}
+
+function makeManifest(): Manifest {
+  return {
+    schema_version: "0.1.0",
+    basou_version: "0.1.0",
+    workspace: {
+      id: WS_ID,
+      name: "test-workspace",
+      created_at: "2026-05-01T00:00:00+09:00",
+      updated_at: "2026-05-01T00:00:00+09:00",
+    },
+    project: {},
+    capabilities: { enabled: [] },
+    approval: { default_risk_level: "low" },
+    adapters: { "claude-code": { enabled: false } },
+    git: { events_log: "ignore" },
+  };
+}
+
+/** Every file under `dir`, with its bytes, so a test can prove nothing changed. */
+async function snapshot(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const name of (await readdir(dir, { recursive: true })).sort()) {
+    try {
+      out[name] = await readFile(join(dir, name), "utf8");
+    } catch {
+      out[name] = "<dir>";
+    }
+  }
+  return out;
+}
+
+async function createTask(paths: BasouPaths, taskId: PrefixedId<"task">): Promise<void> {
+  await createTaskWithEvent({
+    mode: "ad-hoc",
+    paths,
+    manifest: makeManifest(),
+    occurredAt: AT,
+    taskId,
+    title: `task ${taskId.slice(-3)}`,
+    initialStatus: "planned",
+    description: "",
+    workingDirectory: CWD,
+  });
+}
+
+/** A workspace holding one live task and one archived task. */
+async function seedTasks(): Promise<BasouPaths> {
+  const paths = await ensureBasouDirectory(getWorkDir());
+  await createTask(paths, LIVE);
+  await createTask(paths, ARCHIVED);
+  await archiveTask({
+    paths,
+    manifest: makeManifest(),
+    taskId: ARCHIVED,
+    occurredAt: AT,
+    workingDirectory: CWD,
+  });
+  return paths;
+}
+
+/**
+ * Every exported operation on the task store, each in a form that succeeds on
+ * the seeded workspace. Run against an unsafe store, every one must refuse.
+ */
+function taskOperations(paths: BasouPaths): Array<[string, () => Promise<unknown>]> {
+  const manifest = makeManifest();
+  return [
+    ["readTaskFile", () => readTaskFile(paths, LIVE)],
+    ["readTaskFileWithArchiveFallback", () => readTaskFileWithArchiveFallback(paths, ARCHIVED)],
+    ["enumerateTaskIds", () => enumerateTaskIds(paths)],
+    ["enumerateArchivedTaskIds", () => enumerateArchivedTaskIds(paths)],
+    ["loadTaskEntries", () => loadTaskEntries(paths)],
+    ["resolveTaskId", () => resolveTaskId(paths, LIVE, { includeArchived: true })],
+    ["collectTaskReferences", () => collectTaskReferences(paths)],
+    [
+      "writeTaskFile",
+      async () => {
+        const doc = await readTaskFile(paths, LIVE);
+        await writeTaskFile(paths, NEW, doc, { mode: "create" });
+      },
+    ],
+    ["createTaskWithEvent", () => createTask(paths, NEW)],
+    [
+      "updateTaskStatusWithEvent",
+      () =>
+        updateTaskStatusWithEvent({
+          mode: "ad-hoc",
+          paths,
+          manifest,
+          occurredAt: AT,
+          taskId: LIVE,
+          newStatus: "in_progress",
+          workingDirectory: CWD,
+        }),
+    ],
+    ["editTask", () => editTask({ paths, taskId: LIVE, title: "renamed", occurredAt: AT })],
+    [
+      "reconcileTask",
+      () =>
+        reconcileTask(paths, manifest, {
+          taskId: LIVE,
+          occurredAt: AT,
+          workingDirectory: CWD,
+          write: true,
+        }),
+    ],
+    [
+      "reconcileAllTasks",
+      () =>
+        reconcileAllTasks(paths, manifest, {
+          occurredAt: () => AT,
+          workingDirectory: CWD,
+          write: true,
+        }),
+    ],
+    [
+      "refreshTaskLinkedSessions",
+      () =>
+        refreshTaskLinkedSessions(paths, manifest, {
+          taskId: LIVE,
+          occurredAt: AT,
+          workingDirectory: CWD,
+          write: true,
+        }),
+    ],
+    [
+      "archiveTask",
+      () => archiveTask({ paths, manifest, taskId: LIVE, occurredAt: AT, workingDirectory: CWD }),
+    ],
+    [
+      "deleteTask",
+      () => deleteTask({ paths, manifest, taskId: LIVE, occurredAt: AT, workingDirectory: CWD }),
+    ],
+  ];
+}
+
+describe("assertStoreDirectorySafe", () => {
+  it("passes a directory and an absent path", async () => {
+    await expect(assertStoreDirectorySafe(getWorkDir(), ".basou/x")).resolves.toBeUndefined();
+    await expect(
+      assertStoreDirectorySafe(join(getWorkDir(), "absent"), ".basou/x"),
+    ).resolves.toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a symlink, to a directory or dangling, naming only the label",
+    async () => {
+      const target = join(getWorkDir(), "target");
+      await mkdir(target);
+      await symlink(target, join(getWorkDir(), "to-dir"));
+      await symlink(join(getWorkDir(), "nowhere"), join(getWorkDir(), "dangling"));
+      for (const name of ["to-dir", "dangling"]) {
+        const refusal = assertStoreDirectorySafe(join(getWorkDir(), name), ".basou/x");
+        await expect(refusal).rejects.toThrow(new Error(IS_SYMLINK(".basou/x")));
+      }
+    },
+  );
+
+  it("refuses a file", async () => {
+    await writeFile(join(getWorkDir(), "file"), "");
+    await expect(assertStoreDirectorySafe(join(getWorkDir(), "file"), ".basou/x")).rejects.toThrow(
+      new Error(IS_FILE(".basou/x")),
+    );
+  });
+
+  it("reports any other lstat failure as a failure to inspect, with the cause", async () => {
+    await writeFile(join(getWorkDir(), "file"), "");
+    const error = await assertStoreDirectorySafe(
+      join(getWorkDir(), "file", "child"),
+      ".basou/x",
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Failed to inspect .basou/x");
+    expect(((error as Error).cause as { code?: string }).code).toBe("ENOTDIR");
+  });
+});
+
+describe("assertTaskStoreSafe", () => {
+  it("passes when the task store is absent or holds directories", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    await expect(assertTaskStoreSafe(paths)).resolves.toBeUndefined();
+    await mkdir(join(paths.tasks, "archive"));
+    await expect(assertTaskStoreSafe(paths)).resolves.toBeUndefined();
+    await rm(paths.tasks, { recursive: true });
+    await expect(assertTaskStoreSafe(paths)).resolves.toBeUndefined();
+  });
+
+  it("refuses a .basou/tasks or a .basou/tasks/archive that is a file", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    await writeFile(join(paths.tasks, "archive"), "");
+    await expect(assertTaskStoreSafe(paths)).rejects.toThrow(IS_FILE(".basou/tasks/archive"));
+    await rm(paths.tasks, { recursive: true });
+    await writeFile(paths.tasks, "");
+    await expect(assertTaskStoreSafe(paths)).rejects.toThrow(IS_FILE(".basou/tasks"));
+  });
+});
+
+/** The operation names, read without running anything (the closures are not called). */
+const TASK_OPERATION_NAMES = taskOperations(basouPaths("/unused")).map(([name]) => name);
+
+/** Run operation `name` against a freshly seeded workspace, after `mutate`. */
+async function runOnFreshSeed(
+  name: string,
+  mutate: (paths: BasouPaths) => Promise<void>,
+): Promise<{ paths: BasouPaths; result: Promise<unknown> }> {
+  await rm(getWorkDir(), { recursive: true, force: true });
+  await mkdir(getWorkDir());
+  const paths = await seedTasks();
+  await mutate(paths);
+  const op = taskOperations(paths).find(([n]) => n === name);
+  if (op === undefined) throw new Error(`no operation ${name}`);
+  return { paths, result: op[1]() };
+}
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("an unsafe task store", () => {
+  it("control: every operation succeeds on the seeded workspace", async () => {
+    for (const name of TASK_OPERATION_NAMES) {
+      const { result } = await runOnFreshSeed(name, async () => {});
+      await expect(
+        result.then(() => "ok"),
+        name,
+      ).resolves.toBe("ok");
+    }
+  });
+
+  for (const relative of ["tasks", "tasks/archive"] as const) {
+    const label = `.basou/${relative}`;
+    const outside = (): string => join(getWorkDir(), "outside");
+
+    it(`${label} that is a symlink: every operation refuses and nothing is written`, async () => {
+      for (const name of TASK_OPERATION_NAMES) {
+        let outsideBefore: Record<string, string> = {};
+        let sessionsBefore: Record<string, string> = {};
+        const { paths, result } = await runOnFreshSeed(name, async (paths) => {
+          // Move the directory out of the store and link it back in, so an
+          // operation that followed the link would find what it looks for.
+          const inside = join(paths.root, relative);
+          await rename(inside, outside());
+          await symlink(outside(), inside);
+          outsideBefore = await snapshot(outside());
+          sessionsBefore = await snapshot(paths.sessions);
+        });
+        await expect(result, name).rejects.toThrow(new Error(IS_SYMLINK(label)));
+        expect(await snapshot(outside()), name).toEqual(outsideBefore);
+        // No event was written before the refusal: no ad-hoc session appeared.
+        expect(await snapshot(paths.sessions), name).toEqual(sessionsBefore);
+      }
+    });
+
+    it(`${label} that is a file: every operation refuses and nothing is written`, async () => {
+      for (const name of TASK_OPERATION_NAMES) {
+        let sessionsBefore: Record<string, string> = {};
+        const { paths, result } = await runOnFreshSeed(name, async (paths) => {
+          const inside = join(paths.root, relative);
+          await rm(inside, { recursive: true });
+          await writeFile(inside, "");
+          sessionsBefore = await snapshot(paths.sessions);
+        });
+        await expect(result, name).rejects.toThrow(new Error(IS_FILE(label)));
+        expect(await snapshot(paths.sessions), name).toEqual(sessionsBefore);
+      }
+    });
+  }
+});

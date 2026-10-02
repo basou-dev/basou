@@ -5,7 +5,7 @@ import { findErrorCode } from "../lib/error-codes.js";
 import { LOCAL_CLI_EVENT_SOURCE, TaskIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
-import { ARCHIVE_DIR_NAME } from "../storage/tasks.js";
+import { ARCHIVE_DIR_NAME, assertTaskStoreSafe } from "../storage/tasks.js";
 
 /**
  * Decision-gap surfacer: which recorded decisions are still waiting for someone.
@@ -233,10 +233,14 @@ async function markdownFilesIn(dir: string): Promise<string[]> {
  * longer parses still carries it. Archived tasks count for the same reason —
  * archiving records that work finished, so letting it un-carry a decision would
  * resurrect settled plans.
+ *
+ * A task store that is a symlink or a file throws the `assertTaskStoreSafe`
+ * errors before anything is listed.
  */
 export async function collectTaskReferences(
   paths: BasouPaths,
 ): Promise<{ refs: Set<string>; scanned: number; unreadable: number }> {
+  await assertTaskStoreSafe(paths);
   const files = [
     ...(await markdownFilesIn(paths.tasks)),
     ...(await markdownFilesIn(join(paths.tasks, ARCHIVE_DIR_NAME))),

@@ -71,7 +71,12 @@ export {
   upsertSessionStartHook,
 } from "./adapters/codex/index.js";
 export type { ApprovalLocation, LoadedApproval } from "./approval/index.js";
-export { enumerateApprovals, isLazyExpired, loadApproval } from "./approval/index.js";
+export {
+  assertApprovalStoreSafe,
+  enumerateApprovals,
+  isLazyExpired,
+  loadApproval,
+} from "./approval/index.js";
 export type {
   DecisionGap,
   DecisionGapsExcluded,
@@ -486,6 +491,7 @@ export {
   assertBasouRootSafe,
   assertSessionDirSafe,
   assertSessionStoreSafe,
+  assertTaskStoreSafe,
   basouPaths,
   buildStatusSnapshot,
   classifySuspect,
