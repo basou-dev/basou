@@ -718,3 +718,20 @@ describe.skipIf(process.platform === "win32")("an approval file that is not foll
     expect(listed.resolved.map((a) => a.approval.id)).not.toContain(APPR_DUP);
   });
 });
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("status of a symlinked .basou/approvals", () => {
+  it("reports both approval directories as missing, and the others as present", async () => {
+    const repoRoot = await setupWorkspace();
+    const approvals = join(repoRoot, ".basou", "approvals");
+    const moved = join(repoRoot, "moved-approvals");
+    await rename(approvals, moved);
+    await symlink(moved, approvals);
+    const ws = await openWorkspace(repoRoot);
+    const { directories_present: present } = await ws.status();
+    expect(present.approvals_pending).toBe(false);
+    expect(present.approvals_resolved).toBe(false);
+    expect(present.sessions).toBe(true);
+    expect(present.tasks).toBe(true);
+  });
+});

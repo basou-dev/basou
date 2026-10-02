@@ -87,9 +87,8 @@ on the portfolio page the workspace's card carries the error instead. The
 `session-start` hook, which never fails a session, prints nothing for such a
 workspace. `basou status` does not stop: it reports `sessions`, `tasks`,
 `approvals/pending` and `approvals/resolved` that are themselves a symlink or
-a file as missing. It does not yet look at `approvals` itself, so today a
-symlink there leaves the two approval directories reported as present; that
-is a known limitation, not a promise.
+a file as missing, and reports both approval directories as missing when
+`approvals` itself is a symlink or a file.
 
 A task file that is itself a symlink is not covered by this rule. A live
 task file (`tasks/<task_id>.md`) is read through it; an archived one

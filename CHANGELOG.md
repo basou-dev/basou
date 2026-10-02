@@ -30,6 +30,13 @@ All notable changes to **basou** are recorded here. The project follows
   resolved. They now read the pending file, and `approve` and `reject` stop
   before recording anything: `Approval <id> cannot be resolved: its entry in
   resolved is not a file (a symlink or a directory is not followed)`.
+- **`basou status` no longer reports the approval directories as present
+  behind a symlinked `.basou/approvals`.** With `.basou/approvals` a symlink
+  to a directory holding `pending/` and `resolved/`, `basou status` printed
+  `Subdirectories present: 7/7`, and `approvals_pending` and
+  `approvals_resolved` were `true` in `--json` and in the SDK's `status`. Both
+  are now reported as missing (`5/7`), as they already were when `pending` or
+  `resolved` itself is a symlink.
 
 ### Changed
 

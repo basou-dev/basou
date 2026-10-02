@@ -119,11 +119,11 @@ describe("buildStatusSnapshot", () => {
     expect(snapshot.directories_present.sessions).toBe(false);
   });
 
-  it("reports false when an ancestor of the slot is a regular file (ENOTDIR)", async () => {
+  it("reports false when an ancestor of the slot is a regular file", async () => {
     const paths = await ensureBasouDirectory(getRepoRoot());
-    // Replace .basou/approvals (a directory) with a regular file so that
-    // lstat'ing any child path fails with ENOTDIR rather than ENOENT —
-    // exercising the ENOTDIR branch of dirPresent independently of ENOENT.
+    // Replace .basou/approvals (a directory) with a regular file. The ancestor
+    // is inspected first and is not a directory, so neither child is looked
+    // at (an lstat of one would fail with ENOTDIR).
     await fsp.rm(paths.approvals.pending, { recursive: true });
     await fsp.rm(paths.approvals.resolved, { recursive: true });
     const approvalsBase = join(paths.root, "approvals");
@@ -132,6 +132,21 @@ describe("buildStatusSnapshot", () => {
     const snapshot = await buildStatusSnapshot({ manifest: makeManifest(), paths });
     expect(snapshot.directories_present.approvals_pending).toBe(false);
     expect(snapshot.directories_present.approvals_resolved).toBe(false);
+  });
+
+  it("reports false for both approval slots when .basou/approvals itself is a symlink", async () => {
+    const paths = await ensureBasouDirectory(getRepoRoot());
+    // The directory it points to holds pending/ and resolved/: an lstat of
+    // `approvals/pending` follows `approvals` and finds a directory there.
+    const approvalsBase = join(paths.root, "approvals");
+    const moved = join(getRepoRoot(), "moved-approvals");
+    await fsp.rename(approvalsBase, moved);
+    await fsp.symlink(moved, approvalsBase);
+    const snapshot = await buildStatusSnapshot({ manifest: makeManifest(), paths });
+    expect(snapshot.directories_present.approvals_pending).toBe(false);
+    expect(snapshot.directories_present.approvals_resolved).toBe(false);
+    expect(snapshot.directories_present.sessions).toBe(true);
+    expect(snapshot.directories_present.tasks).toBe(true);
   });
 
   // POSIX: lstat(path) requires traversal (x) permission on the parent

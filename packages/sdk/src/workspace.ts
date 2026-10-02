@@ -111,9 +111,8 @@ export type StatsOptions = {
  * as it does for any workspace. `manifest` reads none of these stores and
  * works as usual. `status` does not throw either: it reports `sessions`,
  * `tasks`, `approvals_pending` and `approvals_resolved` that are themselves a
- * symlink or a file as missing (`false` in `directories_present`). It does not
- * yet look at `.basou/approvals` itself, so today a symlink there leaves the
- * two approval keys `true`; that is a known limitation, not a promise.
+ * symlink or a file as missing (`false` in `directories_present`), and both
+ * approval keys as missing when `.basou/approvals` itself is one.
  */
 export interface Workspace {
   /** Absolute repository root this workspace was opened at. */
