@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -1229,6 +1230,44 @@ describe.skipIf(process.platform === "win32")("an unsafe approval store", () => 
     expect(events).toContain('"type":"approval_approved"');
     expect(events).toContain('"type":"approval_rejected"');
   });
+
+  // POSIX only, and not as root, who is never denied the mkdir.
+  it.skipIf(process.getuid?.() === 0)(
+    "approve and reject that cannot create resolved/ record nothing",
+    async () => {
+      const { repo, sessionId } = await linkedApprovals("approvals");
+      const paths = basouPaths(repo);
+      const approvals = join(paths.root, "approvals");
+      await rm(approvals);
+      await rename(join(repo, "moved-approvals"), approvals);
+      await rm(paths.approvals.resolved, { recursive: true });
+      const eventsBefore = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+      await chmod(approvals, 0o555);
+      try {
+        const commands: Array<[string, () => Promise<void>]> = [
+          ["approve", () => runApprovalApprove(APPR("P61"), {}, { cwd: repo })],
+          ["reject", () => runApprovalReject(APPR("P62"), { reason: "no" }, { cwd: repo })],
+        ];
+        for (const [name, run] of commands) {
+          const err = captureStderr();
+          process.exitCode = 0;
+          await run();
+          expect(process.exitCode, name).toBe(1);
+          expect(joinCalls(err), name).toContain("Failed to create .basou/approvals/resolved");
+          err.mockRestore();
+        }
+      } finally {
+        await chmod(approvals, 0o755);
+      }
+      expect(await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8")).toBe(
+        eventsBefore,
+      );
+      expect((await readdir(paths.approvals.pending)).sort()).toEqual([
+        `${APPR("P61")}.yaml`,
+        `${APPR("P62")}.yaml`,
+      ]);
+    },
+  );
 
   it("control: the same approvals, in the store, are approved and rejected", async () => {
     const { repo } = await linkedApprovals("approvals");

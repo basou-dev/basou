@@ -1,4 +1,5 @@
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -472,3 +473,35 @@ describe("an absent task store", () => {
     expect(await readdir(paths.tasks)).toEqual([`${NEW}.md`]);
   });
 });
+
+// POSIX only, and not as root, who is never denied the mkdir.
+describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "a task store that cannot be created",
+  () => {
+    it("stops task creation before its event is recorded", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      await rm(paths.tasks, { recursive: true });
+      await writeRunningSession(paths, RUNNING, null);
+      const sessionsBefore = await snapshot(paths.sessions);
+      await chmod(paths.root, 0o555);
+      try {
+        await expect(createTask(paths, NEW)).rejects.toThrow("Failed to create .basou/tasks");
+        await expect(
+          createTaskWithEvent({
+            mode: "attach",
+            paths,
+            occurredAt: AT,
+            sessionId: RUNNING,
+            taskId: NEW,
+            title: "attached",
+            initialStatus: "planned",
+            description: "",
+          }),
+        ).rejects.toThrow("Failed to create .basou/tasks");
+      } finally {
+        await chmod(paths.root, 0o755);
+      }
+      expect(await snapshot(paths.sessions)).toEqual(sessionsBefore);
+    });
+  },
+);

@@ -22,7 +22,12 @@ All notable changes to **basou** are recorded here. The project follows
   event and then failed with `Failed to write task file after event was
   persisted`; it now stops with `.basou/tasks exists but is not a directory`
   and records nothing. With no `.basou/tasks` at all, it failed the same way
-  after recording the event; it now creates the directory and the task.
+  after recording the event; it now creates the directory before recording
+  anything.
+- **`basou task archive` no longer records a `task_archived` event for a task
+  it then fails to move.** With a `.basou/tasks/archive` that is a file, it
+  recorded the event and then failed; it now stops with
+  `.basou/tasks/archive exists but is not a directory` and records nothing.
 - **`basou approval approve` and `reject` no longer record a resolution that
   leaves the approval pending** when `.basou/approvals/resolved` is missing.
   They appended the resolution event and then failed to write the resolved
@@ -45,12 +50,14 @@ All notable changes to **basou** are recorded here. The project follows
   `report generate`, `decision gaps` and `session import` of a session that
   names a task; for the approval store, every `basou approval` subcommand,
   `orient`, `handoff generate` and `report generate`. Either store also stops
-  `refresh` and `orient --refresh`, before they import anything; `refresh
-  --dry-run` is not stopped. These commands read through a symlink before.
+  `refresh`, `orient --refresh` and each cycle of `refresh --watch`, before
+  they import anything; `refresh --dry-run` is not stopped. These commands read through a symlink before.
   With a file, most of them already failed (`Failed to enumerate tasks`,
-  `Failed to enumerate approvals`), but a `.basou/tasks/archive` that was a
-  file left them working, apart from `task show` of an archived task; they
-  now stop. `basou view` answers `500` with the error on the pages that read
+  `Failed to enumerate approvals`). A `.basou/tasks/archive` that was a file
+  failed only `task show` (`Failed to enumerate archived tasks`), `decision
+  gaps` and `task archive`, and left `task list`, `orient`, `handoff
+  generate`, `report generate` and the other task commands working; they now
+  all stop. `basou view` answers `500` with the error on the pages that read
   the store, and the portfolio page shows it on the workspace's card. basou
   never creates such an entry, and an absent directory is not refused.
   `basou status` does not stop. A task file or an approval file that is

@@ -75,9 +75,11 @@ write into one create it.
 - `.basou/approvals`, `.basou/approvals/pending` and
   `.basou/approvals/resolved` stop every `basou approval` subcommand,
   `orient`, `handoff generate` and `report generate`.
-- Either store stops `refresh` and `orient --refresh` before they import
-  anything, so a refresh that stops has imported nothing. `refresh --dry-run`
-  imports and regenerates nothing and is not stopped.
+- Either store stops `refresh`, `orient --refresh` and each cycle of `refresh
+  --watch` before they import anything, so a refresh that stops has imported
+  nothing. The watcher's first catch-up fails; a later cycle is skipped and
+  the refusal logged. `refresh --dry-run` imports and regenerates nothing and
+  is not stopped.
 
 `basou view` answers `500` with the error on the pages that read the store;
 on the portfolio page the workspace's card carries the error instead. The

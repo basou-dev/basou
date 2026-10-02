@@ -260,3 +260,34 @@ describe.skipIf(process.platform === "win32")("a store directory that is a symli
     });
   }
 });
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("refresh --dry-run with a symlinked store", () => {
+  for (const relative of [
+    "tasks",
+    "tasks/archive",
+    "approvals",
+    "approvals/pending",
+    "approvals/resolved",
+  ]) {
+    it(`is not stopped by a symlinked .basou/${relative}, and writes nothing`, async () => {
+      const repo = await setupRepo();
+      const paths = basouPaths(repo);
+      const inside = join(paths.root, relative);
+      const outside = join(getTmp(), "outside");
+      await mkdir(inside, { recursive: true });
+      await rename(inside, outside);
+      await symlink(outside, inside);
+      const sessionsBefore = await snapshot(paths.sessions);
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      process.exitCode = 0;
+      await runRefresh({ dryRun: true }, ctxFor(repo));
+      expect(process.exitCode).not.toBe(1);
+      expect(err.mock.calls.map((c) => String(c[0])).join("\n")).not.toContain(
+        "refusing to operate",
+      );
+      expect(await snapshot(paths.sessions)).toEqual(sessionsBefore);
+    });
+  }
+});

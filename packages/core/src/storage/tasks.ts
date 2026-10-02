@@ -935,10 +935,15 @@ export async function createTaskWithEvent(input: CreateTaskInput): Promise<Creat
   if (input.completedAt !== undefined) {
     CompletedAtSchema.parse(input.completedAt);
   }
-  // The event is written before task.md, so the store is checked here rather
-  // than left to writeTaskFile: refusing there would leave a task_created
-  // event with no task behind it.
+  // The event is written before task.md, so the store is checked, and an
+  // absent `.basou/tasks` created, here rather than left to writeTaskFile:
+  // failing there would leave a task_created event with no task behind it.
   await assertTaskStoreSafe(input.paths);
+  try {
+    await mkdir(input.paths.tasks, { recursive: true });
+  } catch (error: unknown) {
+    throw new Error("Failed to create .basou/tasks", { cause: error });
+  }
 
   if (input.mode === "ad-hoc") {
     return createTaskAdHoc(input);
