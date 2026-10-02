@@ -43,6 +43,7 @@ describe("@basou/sdk surface", () => {
     expectTypeOf<StoreUnsafeError>().not.toExtend<WorkspaceNotFoundError>();
     expectTypeOf<WorkspaceNotFoundError>().not.toExtend<StoreUnsafeError>();
     expectTypeOf<BasouSdkError>().not.toExtend<AmbiguousIdError>();
+    expectTypeOf<BasouSdkError & { input: string }>().not.toExtend<AmbiguousIdError>();
     expectTypeOf<Error>().not.toExtend<BasouSdkError>();
     expectTypeOf<Error & { input: string }>().not.toExtend<AmbiguousIdError>();
     expectTypeOf<{
