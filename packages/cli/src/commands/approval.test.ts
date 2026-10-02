@@ -1211,6 +1211,25 @@ describe.skipIf(process.platform === "win32")("an unsafe approval store", () => 
     });
   }
 
+  it("approve and reject create a missing resolved/ before recording the resolution", async () => {
+    const { repo, sessionId } = await linkedApprovals("approvals");
+    const paths = basouPaths(repo);
+    await rm(join(paths.root, "approvals"));
+    await rename(join(repo, "moved-approvals"), join(paths.root, "approvals"));
+    await rm(paths.approvals.resolved, { recursive: true });
+    captureStdout();
+    await runApprovalApprove(APPR("P61"), {}, { cwd: repo });
+    expect(process.exitCode).not.toBe(1);
+    await rm(paths.approvals.resolved, { recursive: true });
+    await runApprovalReject(APPR("P62"), { reason: "no" }, { cwd: repo });
+    expect(process.exitCode).not.toBe(1);
+    expect(await readdir(paths.approvals.resolved)).toEqual([`${APPR("P62")}.yaml`]);
+    expect(await readdir(paths.approvals.pending)).toEqual([]);
+    const events = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+    expect(events).toContain('"type":"approval_approved"');
+    expect(events).toContain('"type":"approval_rejected"');
+  });
+
   it("control: the same approvals, in the store, are approved and rejected", async () => {
     const { repo } = await linkedApprovals("approvals");
     const paths = basouPaths(repo);

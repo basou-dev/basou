@@ -549,6 +549,14 @@ describe("a directory of the task or approval store that is not followed", () =>
       expect(thrown, name).toBeInstanceOf(error);
       expect(thrown, name).toBeInstanceOf(StoreUnsafeError);
       expect(thrown, name).toBeInstanceOf(BasouSdkError);
+      // The three are siblings: catching one store's error catches no other's.
+      for (const other of [
+        SessionStoreUnsafeError,
+        TaskStoreUnsafeError,
+        ApprovalStoreUnsafeError,
+      ]) {
+        if (other !== error) expect(thrown, `${name} vs ${other.name}`).not.toBeInstanceOf(other);
+      }
       const refusal = thrown as StoreUnsafeError;
       expect(refusal.name, name).toBe(error.name);
       expect(refusal.message, name).toBe(message);
@@ -611,12 +619,39 @@ describe("a directory of the task or approval store that is not followed", () =>
     await expect(ws.getTask("task_0")).rejects.toBeInstanceOf(TaskStoreUnsafeError);
   });
 
-  it("an approval lookup checks the store whatever the id", async () => {
+  it("an approval lookup given a string that is not an approval id reads nothing", async () => {
     const repoRoot = await setupWorkspace();
     await rm(join(repoRoot, ".basou", "approvals"), { recursive: true, force: true });
     await writeFile(join(repoRoot, ".basou", "approvals"), "");
     const ws = await openWorkspace(repoRoot);
-    await expect(ws.getApproval("")).rejects.toBeInstanceOf(ApprovalStoreUnsafeError);
+    for (const id of ["", "appr_", APPR_PENDING.slice(0, -1), `${APPR_PENDING} `]) {
+      expect(await ws.getApproval(id), JSON.stringify(id)).toBeNull();
+    }
+    await expect(ws.getApproval(APPR_PENDING)).rejects.toBeInstanceOf(ApprovalStoreUnsafeError);
+  });
+
+  it("an approval lookup does not leave the store: a path in the id is not followed", async () => {
+    const repoRoot = await setupWorkspace();
+    // A well-formed approval outside the store, where `../` from pending/ leads.
+    const outside = join(repoRoot, "outside");
+    await mkdir(outside);
+    await writeFile(
+      join(outside, "evil.yaml"),
+      toYaml({
+        schema_version: "0.1.0",
+        id: APPR_PENDING,
+        session_id: SES_DONE,
+        created_at: "2026-05-10T00:00:00.000Z",
+        status: "pending",
+        risk_level: "low",
+        action: { kind: "command" },
+        reason: "outside the store",
+      }),
+    );
+    const ws = await openWorkspace(repoRoot);
+    // pending/ is .basou/approvals/pending, so three levels up is the repo root.
+    expect(await ws.getApproval("../../../outside/evil")).toBeNull();
+    expect((await ws.getApproval(APPR_PENDING))?.approval.reason).toBe("fixture approval");
   });
 
   it("a session store refusal is a StoreUnsafeError too", async () => {

@@ -54,13 +54,16 @@ out on disk.
 basou creates `sessions/`, `tasks/`, `tasks/archive/`, `approvals/`,
 `approvals/pending/` and `approvals/resolved/` as directories and never as
 anything else. When one of them is a symlink, whatever it points to, or a
-file, the commands that read or write what it holds stop before they read
-anything, take a lock or record an event, with an error naming it:
-`<directory> is a symlink; refusing to operate` or `<directory> exists but is
-not a directory`, where `<directory>` is the path from the repository root,
-such as `.basou/tasks/archive`. So nothing is read from or written to a place
-outside the store through it. An absent directory is not refused: a
-stripped-down workspace may have none, and the writers create them.
+file, the commands that read or write what it holds stop with an error naming
+it: `<directory> is a symlink; refusing to operate` or `<directory> exists but
+is not a directory`, where `<directory>` is the path from the repository root,
+such as `.basou/tasks/archive`. They stop before they read anything from that
+directory, and before they write anything, take a lock or record an event,
+so nothing is read from or written to a place outside the store through it.
+A command that also reads another store may read that one first (`orient`
+reads the sessions before the tasks, for instance). An absent directory is
+not refused: a stripped-down workspace may have none, and the commands that
+write into one create it.
 
 - `.basou/sessions` stops the commands that read or write the workspace's
   sessions; see [schemas](schemas.md) for `basou verify` and for an entry
@@ -68,19 +71,28 @@ stripped-down workspace may have none, and the writers create them.
   `~/.basou/hosts.yaml` is read as before.
 - `.basou/tasks` and `.basou/tasks/archive` stop every `basou task`
   subcommand, `orient`, `handoff generate`, `report generate`, `decision
-  gaps`, a `session import` of a session that names a task, and `refresh`,
-  which imports first and stops when it regenerates the handoff.
+  gaps`, and a `session import` of a session that names a task.
 - `.basou/approvals`, `.basou/approvals/pending` and
   `.basou/approvals/resolved` stop every `basou approval` subcommand,
-  `orient`, `handoff generate`, `report generate` and `refresh`.
+  `orient`, `handoff generate` and `report generate`.
+- Either store stops `refresh` and `orient --refresh` before they import
+  anything, so a refresh that stops has imported nothing. `refresh --dry-run`
+  imports and regenerates nothing and is not stopped.
 
-`basou view` answers `500` with the error on the pages that read the store.
-`basou status` does not stop: it reports `sessions`, `tasks`,
+`basou view` answers `500` with the error on the pages that read the store;
+on the portfolio page the workspace's card carries the error instead. The
+`session-start` hook, which never fails a session, prints nothing for such a
+workspace. `basou status` does not stop: it reports `sessions`, `tasks`,
 `approvals/pending` and `approvals/resolved` that are themselves a symlink or
-a file as missing, and it does not look at `approvals` itself. A task file or
-an approval file that is itself a symlink is not covered by this rule: a task
-file is read through it, and an approval file is left out of the listing and
-not found by the CLI, though the SDK's `getApproval` reads through it.
+a file as missing. It does not yet look at `approvals` itself, so today a
+symlink there leaves the two approval directories reported as present; that
+is a known limitation, not a promise.
+
+A task file or an approval file that is itself a symlink is not covered by
+this rule. A live task file (`tasks/<task_id>.md`) is read through it; an
+archived one (`tasks/archive/<task_id>.md`) is left out of the listing and
+not found. An approval file is left out of the listing and not found by the
+CLI, though the SDK's `getApproval` reads through it.
 
 ### tasks/ details
 

@@ -1,4 +1,4 @@
-import { unlink } from "node:fs/promises";
+import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type Approval,
@@ -402,6 +402,16 @@ async function doRunApprovalResolve(
   const now = new Date();
   const occurredAt = now.toISOString();
   const eventId = prefixedUlid("evt");
+
+  // The resolved-side YAML is written after the resolution event, so its
+  // directory is made now: were it missing then, the trail would record a
+  // resolution that left the approval pending. The store was checked when the
+  // id was resolved, so this cannot follow a symlink basou refuses.
+  try {
+    await mkdir(paths.approvals.resolved, { recursive: true });
+  } catch (error: unknown) {
+    throw new Error("Failed to create .basou/approvals/resolved", { cause: error });
+  }
 
   // Hold the session lock across the replay fence and the resolution append so
   // two concurrent resolvers cannot both pass the fence before either appends

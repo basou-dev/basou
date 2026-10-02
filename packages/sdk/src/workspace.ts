@@ -1,5 +1,6 @@
 import { join, resolve } from "node:path";
 import {
+  ApprovalIdSchema,
   assertBasouRootSafe,
   basouPaths,
   buildStatusSnapshot,
@@ -99,16 +100,17 @@ export type StatsOptions = {
  *
  * A read that needs more than one store throws for the first refused
  * directory it reaches. `streamEvents` throws from the stream, when it is
- * read. The exception is a session or task lookup (`getSession`, `readEvents`,
- * `streamEvents`, `getTask`) given an id that is empty once trimmed, or the
- * prefix (`ses_`, `task_`) alone: it yields `null` (or nothing) before
- * anything is read, as it does for any workspace. `getApproval` checks the
- * store whatever the id. `manifest` reads none of these stores and works as
- * usual. `status` does not throw either: it reports `sessions`, `tasks`,
- * `approvals_pending` and `approvals_resolved` that are themselves a symlink
- * or a file as missing (`false` in `directories_present`). It does not look at
- * `.basou/approvals` itself, so a symlink there leaves the two approval keys
- * `true`.
+ * read. The exception is a lookup given an id that cannot name a record: a
+ * session or task lookup (`getSession`, `readEvents`, `streamEvents`,
+ * `getTask`) given an id that is empty once trimmed, or the prefix (`ses_`,
+ * `task_`) alone, and `getApproval` given a string that is not an approval id
+ * (`appr_` and a ULID). It yields `null` (or nothing) before anything is read,
+ * as it does for any workspace. `manifest` reads none of these stores and
+ * works as usual. `status` does not throw either: it reports `sessions`,
+ * `tasks`, `approvals_pending` and `approvals_resolved` that are themselves a
+ * symlink or a file as missing (`false` in `directories_present`). It does not
+ * yet look at `.basou/approvals` itself, so today a symlink there leaves the
+ * two approval keys `true`; that is a known limitation, not a promise.
  */
 export interface Workspace {
   /** Absolute repository root this workspace was opened at. */
@@ -135,7 +137,10 @@ export interface Workspace {
 
   /** Pending + resolved approvals, fully loaded. */
   listApprovals(): Promise<{ pending: LoadedApproval[]; resolved: LoadedApproval[] }>;
-  /** One approval by exact id (resolved checked first), or `null`. */
+  /**
+   * One approval by exact id (resolved checked first), or `null` — also for a
+   * string that is not an approval id, which is not looked up.
+   */
   getApproval(id: string): Promise<LoadedApproval | null>;
 
   /** Aggregated work / time / token stats across the workspace's sessions. */
@@ -294,7 +299,12 @@ export async function openWorkspace(
         };
       }),
 
-    getApproval: (id) => guardStore(root, () => loadApproval(paths, id)),
+    // The id becomes a file name, so one that is not an approval id (`../x`)
+    // is answered here, without looking at the store or anything outside it.
+    getApproval: async (id) =>
+      ApprovalIdSchema.safeParse(id).success
+        ? guardStore(root, () => loadApproval(paths, id))
+        : null,
 
     stats: (statsOptions) =>
       guardStore(root, () =>

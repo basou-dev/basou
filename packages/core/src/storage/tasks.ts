@@ -200,9 +200,9 @@ async function readTaskFileInCheckedStore(
 export type WriteTaskFileMode = "create" | "overwrite";
 
 /**
- * Atomically write `<paths.tasks>/<taskId>.md`. A task store that is a
- * symlink or a file throws the {@link assertTaskStoreSafe} errors before
- * anything is written.
+ * Atomically write `<paths.tasks>/<taskId>.md`, creating `<paths.tasks>` when
+ * it is absent. A task store that is a symlink or a file throws the
+ * {@link assertTaskStoreSafe} errors before anything is written.
  *
  * `mode: "create"` delegates to {@link atomicCreate} so a pre-existing file
  * fails fast with EEXIST → `"Task file already exists"`.
@@ -227,6 +227,14 @@ export async function writeTaskFile(
   // a malformed task object cannot reach disk.
   const validated = TaskSchema.parse(doc.task);
   await assertTaskStoreSafe(paths);
+  // A workspace without `.basou/tasks` gets one: task creation records its
+  // event first, so a missing directory here would leave the event without
+  // its task.
+  try {
+    await mkdir(paths.tasks, { recursive: true });
+  } catch (error: unknown) {
+    throw new Error("Failed to write task file", { cause: error });
+  }
 
   const filePath = join(paths.tasks, `${taskId}.md`);
   const yamlText = stringifyYaml(validated);

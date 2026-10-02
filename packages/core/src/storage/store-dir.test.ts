@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stringify } from "yaml";
 import { collectTaskReferences } from "../decision-gaps/decision-gaps.js";
 import type { PrefixedId } from "../ids/ulid.js";
 import { resolveTaskId } from "../lib/id-resolver.js";
@@ -43,6 +44,10 @@ const TASK = (suffix: string): PrefixedId<"task"> =>
 const LIVE = TASK("TK1");
 const ARCHIVED = TASK("TK2");
 const NEW = TASK("TK3");
+// Running sessions, so the attach forms of task creation (into a session with
+// no task) and of a status change (in the session that carries the task) run.
+const RUNNING = "ses_01HXABCDEF1234567890ABCRN1" as PrefixedId<"ses">;
+const RUNNING_LIVE = "ses_01HXABCDEF1234567890ABCRN2" as PrefixedId<"ses">;
 const AT = "2026-05-08T12:00:00+09:00";
 const CWD = "/srv/example-project";
 
@@ -119,9 +124,51 @@ function seededDocument(): TaskDocument {
   return seeded;
 }
 
-/** A workspace holding one live task and one archived task. */
+/** A running session holding one unchained `session_started` line. */
+async function writeRunningSession(
+  paths: BasouPaths,
+  id: PrefixedId<"ses">,
+  taskId: PrefixedId<"task"> | null,
+): Promise<void> {
+  const dir = join(paths.sessions, id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, "session.yaml"),
+    stringify({
+      schema_version: "0.1.0",
+      session: {
+        id,
+        label: "running fixture",
+        task_id: taskId,
+        workspace_id: WS_ID,
+        source: { kind: "terminal", version: "0.1.0" },
+        started_at: "2026-05-08T11:00:00+09:00",
+        status: "running",
+        working_directory: CWD,
+        invocation: { command: "echo", args: [], exit_code: null },
+        related_files: [],
+        events_log: "events.jsonl",
+      },
+    }),
+  );
+  await writeFile(
+    join(dir, "events.jsonl"),
+    `${JSON.stringify({
+      schema_version: "0.1.0",
+      type: "session_started",
+      id: "evt_01HXABCDEF1234567890ABCEV1",
+      session_id: id,
+      occurred_at: "2026-05-08T11:00:00+09:00",
+      source: "terminal",
+    })}\n`,
+  );
+}
+
+/** A workspace holding one live task, one archived task and a running session. */
 async function seedTasks(): Promise<BasouPaths> {
   const paths = await ensureBasouDirectory(getWorkDir());
+  await writeRunningSession(paths, RUNNING, null);
+  await writeRunningSession(paths, RUNNING_LIVE, LIVE);
   await createTask(paths, LIVE);
   seeded = await readTaskFile(paths, LIVE);
   await createTask(paths, ARCHIVED);
@@ -156,6 +203,20 @@ function taskOperations(paths: BasouPaths): Array<[string, () => Promise<unknown
     ],
     ["createTaskWithEvent", () => createTask(paths, NEW)],
     [
+      "createTaskWithEvent (attach)",
+      () =>
+        createTaskWithEvent({
+          mode: "attach",
+          paths,
+          occurredAt: AT,
+          sessionId: RUNNING,
+          taskId: NEW,
+          title: "attached",
+          initialStatus: "planned",
+          description: "",
+        }),
+    ],
+    [
       "updateTaskStatusWithEvent",
       () =>
         updateTaskStatusWithEvent({
@@ -166,6 +227,18 @@ function taskOperations(paths: BasouPaths): Array<[string, () => Promise<unknown
           taskId: LIVE,
           newStatus: "in_progress",
           workingDirectory: CWD,
+        }),
+    ],
+    [
+      "updateTaskStatusWithEvent (attach)",
+      () =>
+        updateTaskStatusWithEvent({
+          mode: "attach",
+          paths,
+          occurredAt: AT,
+          sessionId: RUNNING_LIVE,
+          taskId: LIVE,
+          newStatus: "in_progress",
         }),
     ],
     ["editTask", () => editTask({ paths, taskId: LIVE, title: "renamed", occurredAt: AT })],
@@ -338,42 +411,64 @@ describe.skipIf(process.platform === "win32")("an unsafe task store", () => {
     });
   }
 
-  // The operations that take the task's lock check the store before taking it.
-  // Were the lock taken first, a lock held elsewhere would be the error given.
+  // The operations that take a lock (the task's, or the attached session's)
+  // check the store before taking it. Were a lock taken first, a lock held
+  // elsewhere would be the error given.
   const LOCKING_OPERATIONS = [
+    "createTaskWithEvent (attach)",
     "updateTaskStatusWithEvent",
+    "updateTaskStatusWithEvent (attach)",
     "editTask",
     "reconcileTask",
     "refreshTaskLinkedSessions",
     "archiveTask",
     "deleteTask",
   ];
+  const HELD_LOCKS = [
+    `session_${RUNNING.slice("ses_".length)}.lock`,
+    `session_${RUNNING_LIVE.slice("ses_".length)}.lock`,
+    `task_${LIVE.slice("task_".length)}.lock`,
+  ];
 
-  it("refuses before taking the task's lock: a lock held elsewhere is not the error", async () => {
+  /** Hold every lock an operation here could take, as a live holder (this process). */
+  async function holdLocks(paths: BasouPaths): Promise<void> {
+    for (const name of HELD_LOCKS) {
+      await writeFile(
+        join(paths.locks, name),
+        JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }),
+      );
+    }
+  }
+
+  it("refuses before taking a lock: a lock held elsewhere is not the error", async () => {
     for (const name of LOCKING_OPERATIONS) {
       const { paths, result } = await runOnFreshSeed(name, async (paths) => {
         await rm(paths.tasks, { recursive: true });
         await writeFile(paths.tasks, "");
-        // A live holder (this process) owns the lock, so an acquire would fail.
-        await writeFile(
-          join(paths.locks, `task_${LIVE.slice("task_".length)}.lock`),
-          JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }),
-        );
+        await holdLocks(paths);
       });
       await expect(result, name).rejects.toThrow(new Error(IS_FILE(".basou/tasks")));
-      expect(await readdir(paths.locks), name).toEqual([`task_${LIVE.slice("task_".length)}.lock`]);
+      expect((await readdir(paths.locks)).sort(), name).toEqual(HELD_LOCKS);
     }
   });
 
   it("control: with the store intact, the held lock is the error", async () => {
     for (const name of LOCKING_OPERATIONS) {
-      const { result } = await runOnFreshSeed(name, async (paths) => {
-        await writeFile(
-          join(paths.locks, `task_${LIVE.slice("task_".length)}.lock`),
-          JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }),
-        );
-      });
+      const { result } = await runOnFreshSeed(name, holdLocks);
       await expect(result, name).rejects.toThrow("Lock is held by another process");
     }
+  });
+});
+
+describe("an absent task store", () => {
+  it("is created by the first task written into it, so no event is left without its task", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    await rm(paths.tasks, { recursive: true });
+    await createTask(paths, NEW);
+    const doc = await readTaskFile(paths, NEW);
+    expect(doc.task.task.id).toBe(NEW);
+    await rm(paths.tasks, { recursive: true });
+    await writeTaskFile(paths, NEW, doc, { mode: "create" });
+    expect(await readdir(paths.tasks)).toEqual([`${NEW}.md`]);
   });
 });

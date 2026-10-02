@@ -1765,6 +1765,7 @@ describe.skipIf(process.platform === "win32")("a .basou/tasks that is a symlink"
     const repo = await setupInitedRepo();
     await doRunTaskNew({ title: "moved out" }, { cwd: repo, ...FIXED_CTX });
     const taskId = await findCreatedTaskId(repo);
+    const running = await createSession(repo, { id: SES("S71"), status: "running" });
     const paths = basouPaths(repo);
     const outside = join(repo, "moved-tasks");
     await rename(paths.tasks, outside);
@@ -1776,6 +1777,10 @@ describe.skipIf(process.platform === "win32")("a .basou/tasks that is a symlink"
       ["list", () => runTaskList({}, { cwd: repo })],
       ["show", () => runTaskShow(taskId, {}, { cwd: repo })],
       ["new", () => runTaskNew({ title: "x" }, { cwd: repo, ...FIXED_CTX })],
+      [
+        "new --session",
+        () => runTaskNew({ title: "x", session: running }, { cwd: repo, ...FIXED_CTX }),
+      ],
       ["status", () => runTaskStatus(taskId, "in_progress", {}, { cwd: repo, ...FIXED_CTX })],
       ["edit", () => runTaskEdit(taskId, { title: "renamed" }, { cwd: repo, ...FIXED_CTX })],
       ["archive", () => runTaskArchive(taskId, { yes: true }, { cwd: repo, ...FIXED_CTX })],
@@ -1794,5 +1799,17 @@ describe.skipIf(process.platform === "win32")("a .basou/tasks that is a symlink"
     }
     expect(await snapshotTree(outside)).toEqual(outsideBefore);
     expect(await snapshotTree(paths.sessions)).toEqual(sessionsBefore);
+  });
+});
+
+describe("a .basou/tasks that is absent", () => {
+  it("t-store-2: task new creates it, records the event and writes the task", async () => {
+    const repo = await setupInitedRepo();
+    await rm(basouPaths(repo).tasks, { recursive: true });
+    await doRunTaskNew({ title: "first task" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const out = captureStdout();
+    await doRunTaskShow(taskId, {}, { cwd: repo });
+    expect(joinCalls(out)).toContain("first task");
   });
 });

@@ -1,4 +1,6 @@
 import {
+  assertApprovalStoreSafe,
+  assertTaskStoreSafe,
   type BasouPaths,
   readMarkdownFile,
   renderDecisions,
@@ -274,6 +276,14 @@ export async function refreshAll(args: {
 }): Promise<RefreshResult> {
   const { options, ctx, paths, nowIso } = args;
   const dryRun = options.dryRun === true;
+
+  // The regeneration below reads the task and approval stores. Refuse an
+  // unsafe one before importing, so a refresh that stops has written nothing.
+  // A dry run imports and regenerates nothing, so it does not read them.
+  if (!dryRun) {
+    await assertTaskStoreSafe(paths);
+    await assertApprovalStoreSafe(paths);
+  }
 
   const claudeCode = await importClaudeCode(options, ctx);
   const codex = await importCodex(options, ctx);
