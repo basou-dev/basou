@@ -98,8 +98,11 @@ export type StatsOptions = {
  *   `.basou/approvals/pending` or `.basou/approvals/resolved`, from
  *   `listApprovals`, `getApproval`, `renderHandoff` and `renderReport`.
  *
- * A read that needs more than one store throws for the first refused
- * directory it reaches. `streamEvents` throws from the stream, when it is
+ * These are the stores each read needs today; a read that comes to need
+ * another store throws for it too, so catch {@link StoreUnsafeError} rather
+ * than the subclass a read throws today. A read that needs more than one
+ * store throws for the first refused directory it reaches. `streamEvents`
+ * throws from the stream, when it is
  * read. The exception is a lookup given an id that cannot name a record: a
  * session or task lookup (`getSession`, `readEvents`, `streamEvents`,
  * `getTask`) given an id that is empty once trimmed, or the prefix (`ses_`,

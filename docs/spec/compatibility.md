@@ -261,6 +261,55 @@ commit being created, the cases in which no limit is applied, and the limits
    paths taken from the transcript's own tool calls, not to `file_changed`
    events, and not to any other field of `session.yaml`.
 
+### SDK errors: the class is the contract, the message is not
+
+`@basou/sdk` rejects a call by throwing one of its exported error classes, all
+of which extend `BasouSdkError`. What a caller can rely on is what it reads off
+such an error: **its class**, tested with `instanceof`; **its `name`**, the
+name of the class the SDK exports (a bundler that renames classes renames it
+too); **the fields the class documents** (`.root`, `.input`); and **which reads
+throw it, and when**, as the class and `Workspace` document it. The classes are
+nominal to TypeScript — no other class, plain `Error` or object literal of the
+same shape is assignable where one is typed — so a field added to a class is
+additive like any other new field.
+
+Three things about an SDK error are not guaranteed, and may change within a
+`1.x` line:
+
+1. **The message.** It is written for a person to read and may be reworded at
+   any release. A `StoreUnsafeError`'s message is the one `@basou/core` gives,
+   and core is not a guaranteed surface. Tell errors apart by class and by
+   documented field, never by matching the message.
+2. **The constructors.** An SDK error is for the SDK to throw and a caller to
+   catch; constructing one is not covered. A constructor may gain a required
+   parameter — when a class gains a field the SDK fills, for instance — and a
+   test that stands in for the SDK by constructing its errors has to follow
+   that change.
+3. **The `cause`.** When an SDK error carries the error it was made from, that
+   is on `cause`, for diagnosis. Whether there is one, and what it is, may
+   change: the SDK may come to detect a condition itself rather than retype
+   core's error.
+
+**The store errors may grow.** `StoreUnsafeError` has one subclass per store
+the SDK reads: `SessionStoreUnsafeError`, `TaskStoreUnsafeError` and
+`ApprovalStoreUnsafeError` today. When the SDK comes to read a store it does
+not read today, a store may gain a subclass of its own, and a read may begin
+to throw for a store it did not read before. The carve-out is bounded by three
+things:
+
+1. **It applies only to a layout basou never creates** — a directory of the
+   store that is a symlink or not a directory. On a workspace basou laid out, a
+   read that worked keeps working.
+2. **A new refusal is a `StoreUnsafeError`.** A new subclass extends it and
+   names its store as the three above do, and a read that begins to throw for
+   another store throws that store's subclass.
+3. **The changelog lists it**, and the class and `Workspace` documentation list
+   which reads throw for which store.
+
+A consumer that has to handle every refusal catches `StoreUnsafeError`, and
+one that switches on the subclass should keep a branch for a subclass it does
+not know.
+
 ## What is *not* guaranteed
 
 - **`@basou/core` is published on npm but is not a semver-guaranteed API.**

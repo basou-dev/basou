@@ -32,10 +32,11 @@ export { BASOU_SDK_BUILD, type BuildStamp, parseBuildStamp } from "./build-stamp
  * the sessions throw when `.basou/sessions` is a symlink or not a directory;
  * `0.7.0` adds `StoreUnsafeError` as its parent, and its siblings
  * `TaskStoreUnsafeError` and `ApprovalStoreUnsafeError`, which the reads of
- * the tasks and the approvals throw for the same layout; `0.1.0` was
- * types-only.
+ * the tasks and the approvals throw for the same layout; `0.8.0` makes every
+ * error class nominal to TypeScript, so no other class, plain `Error` or
+ * object literal is assignable where one is typed; `0.1.0` was types-only.
  */
-export const BASOU_SDK_VERSION = "0.7.0";
+export const BASOU_SDK_VERSION = "0.8.0";
 
 // Read types re-exported from @basou/core so consumers can type the values the
 // SDK returns without depending on @basou/core directly. These track the

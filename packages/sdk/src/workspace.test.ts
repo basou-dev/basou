@@ -498,9 +498,10 @@ describe("a directory of the task or approval store that is not followed", () =>
     ["getApproval", async (ws) => (await ws.getApproval(APPR_PENDING))?.location],
   ];
 
+  type StoreError = typeof TaskStoreUnsafeError | typeof ApprovalStoreUnsafeError;
   type Store = {
     relative: string;
-    error: typeof TaskStoreUnsafeError;
+    error: StoreError;
     refused: Reads;
     unaffected: Reads;
   };
@@ -538,7 +539,7 @@ describe("a directory of the task or approval store that is not followed", () =>
   async function expectEachReadRefused(
     ws: Workspace,
     reads: Reads,
-    error: typeof TaskStoreUnsafeError,
+    error: StoreError,
     message: string,
   ): Promise<void> {
     for (const [name, read] of reads) {

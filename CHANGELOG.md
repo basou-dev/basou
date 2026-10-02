@@ -3,6 +3,31 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`@basou/sdk`: the error classes are nominal to TypeScript** (SDK API
+  `0.8.0`). `BasouSdkError`, `WorkspaceNotFoundError`, `AmbiguousIdError`,
+  `StoreUnsafeError` and its three subclasses each carry a type-only brand, so
+  one is no longer assignable where another is typed: a
+  `TaskStoreUnsafeError` where a `SessionStoreUnsafeError` is expected, a
+  `StoreUnsafeError` where a `WorkspaceNotFoundError` is (the two had the same
+  shape), or a plain `Error` or an object literal where any SDK error is. Code
+  that did any of these no longer compiles. A subclass is still assignable to
+  its parents, `instanceof` and subclassing work as before, and the emitted
+  JavaScript is unchanged. Without the brand, adding a field to any of these
+  classes would have broken such code at a minor.
+- **`docs/spec/compatibility.md` states what an SDK error guarantees**: its
+  class, its `name`, the fields its class documents and which reads throw it.
+  Its message, its constructor and its `cause` are not guaranteed: the message
+  is for a person to read and may be reworded, a constructor may gain a
+  required parameter, and the `cause` is for diagnosis. The store errors may
+  grow within `1.x`: a store the SDK comes to read may get a
+  `StoreUnsafeError` subclass of its own, and a read may begin to throw for a
+  store it did not read before, only for a layout basou never creates. Catch
+  `StoreUnsafeError` to handle every store.
+
 ## 0.61.0 — 2026-10-02
 
 ### Fixed
