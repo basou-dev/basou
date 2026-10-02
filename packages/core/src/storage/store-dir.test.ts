@@ -31,6 +31,7 @@ import {
   reconcileAllTasks,
   reconcileTask,
   refreshTaskLinkedSessions,
+  type TaskDocument,
   updateTaskStatusWithEvent,
   writeTaskFile,
 } from "./tasks.js";
@@ -111,10 +112,18 @@ async function createTask(paths: BasouPaths, taskId: PrefixedId<"task">): Promis
   });
 }
 
+let seeded: TaskDocument | undefined;
+
+function seededDocument(): TaskDocument {
+  if (seeded === undefined) throw new Error("no task seeded");
+  return seeded;
+}
+
 /** A workspace holding one live task and one archived task. */
 async function seedTasks(): Promise<BasouPaths> {
   const paths = await ensureBasouDirectory(getWorkDir());
   await createTask(paths, LIVE);
+  seeded = await readTaskFile(paths, LIVE);
   await createTask(paths, ARCHIVED);
   await archiveTask({
     paths,
@@ -142,10 +151,8 @@ function taskOperations(paths: BasouPaths): Array<[string, () => Promise<unknown
     ["collectTaskReferences", () => collectTaskReferences(paths)],
     [
       "writeTaskFile",
-      async () => {
-        const doc = await readTaskFile(paths, LIVE);
-        await writeTaskFile(paths, NEW, doc, { mode: "create" });
-      },
+      // The document is read while seeding, so nothing guarded runs first.
+      () => writeTaskFile(paths, NEW, seededDocument(), { mode: "create" }),
     ],
     ["createTaskWithEvent", () => createTask(paths, NEW)],
     [
@@ -330,4 +337,43 @@ describe.skipIf(process.platform === "win32")("an unsafe task store", () => {
       }
     });
   }
+
+  // The operations that take the task's lock check the store before taking it.
+  // Were the lock taken first, a lock held elsewhere would be the error given.
+  const LOCKING_OPERATIONS = [
+    "updateTaskStatusWithEvent",
+    "editTask",
+    "reconcileTask",
+    "refreshTaskLinkedSessions",
+    "archiveTask",
+    "deleteTask",
+  ];
+
+  it("refuses before taking the task's lock: a lock held elsewhere is not the error", async () => {
+    for (const name of LOCKING_OPERATIONS) {
+      const { paths, result } = await runOnFreshSeed(name, async (paths) => {
+        await rm(paths.tasks, { recursive: true });
+        await writeFile(paths.tasks, "");
+        // A live holder (this process) owns the lock, so an acquire would fail.
+        await writeFile(
+          join(paths.locks, `task_${LIVE.slice("task_".length)}.lock`),
+          JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }),
+        );
+      });
+      await expect(result, name).rejects.toThrow(new Error(IS_FILE(".basou/tasks")));
+      expect(await readdir(paths.locks), name).toEqual([`task_${LIVE.slice("task_".length)}.lock`]);
+    }
+  });
+
+  it("control: with the store intact, the held lock is the error", async () => {
+    for (const name of LOCKING_OPERATIONS) {
+      const { result } = await runOnFreshSeed(name, async (paths) => {
+        await writeFile(
+          join(paths.locks, `task_${LIVE.slice("task_".length)}.lock`),
+          JSON.stringify({ pid: process.pid, acquired_at: new Date().toISOString() }),
+        );
+      });
+      await expect(result, name).rejects.toThrow("Lock is held by another process");
+    }
+  });
 });
