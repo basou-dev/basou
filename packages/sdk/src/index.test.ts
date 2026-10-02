@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import * as sdk from "./index.js";
 import {
+  AmbiguousIdError,
   ApprovalStoreUnsafeError,
   BASOU_SDK_VERSION,
   BasouSdkError,
@@ -10,11 +12,66 @@ import {
   SessionStoreUnsafeError,
   StoreUnsafeError,
   TaskStoreUnsafeError,
+  WorkspaceNotFoundError,
 } from "./index.js";
 
+type Exports = typeof sdk;
+/** The name of every error class the SDK exports. */
+type ErrorClassName = {
+  [K in keyof Exports]: Exports[K] extends abstract new (...args: never) => Error ? K : never;
+}[keyof Exports];
+type Instance<K extends keyof Exports> = Exports[K] extends abstract new (
+  ...args: never
+) => infer I
+  ? I
+  : never;
+/**
+ * The parent of each exported error class. A class missing here fails the
+ * typecheck, through the check that its keys are the exported error classes.
+ */
+type ParentOf = {
+  BasouSdkError: Error;
+  WorkspaceNotFoundError: Instance<"BasouSdkError">;
+  StoreUnsafeError: Instance<"BasouSdkError">;
+  SessionStoreUnsafeError: Instance<"StoreUnsafeError">;
+  TaskStoreUnsafeError: Instance<"StoreUnsafeError">;
+  ApprovalStoreUnsafeError: Instance<"StoreUnsafeError">;
+  AmbiguousIdError: Instance<"BasouSdkError">;
+};
+/**
+ * Every exported error class that has no brand of its own: its parent with
+ * its own public fields added is assignable to it. A class with a brand of its
+ * own is not, whatever its shape.
+ */
+type Unbranded = {
+  [K in ErrorClassName]: K extends keyof ParentOf
+    ? [ParentOf[K] & Pick<Instance<K>, Exclude<keyof Instance<K>, keyof ParentOf[K]>>] extends [
+        Instance<K>,
+      ]
+      ? K
+      : never
+    : K;
+}[ErrorClassName];
+/** `A -> B` for every pair of exported error classes where an A is assignable to a B. */
+type Assignable = {
+  [A in ErrorClassName]: {
+    [B in Exclude<ErrorClassName, A>]: [Instance<A>] extends [Instance<B>] ? `${A} -> ${B}` : never;
+  }[Exclude<ErrorClassName, A>];
+}[ErrorClassName];
+
+const ERROR_CLASS_NAMES = [
+  "AmbiguousIdError",
+  "ApprovalStoreUnsafeError",
+  "BasouSdkError",
+  "SessionStoreUnsafeError",
+  "StoreUnsafeError",
+  "TaskStoreUnsafeError",
+  "WorkspaceNotFoundError",
+] as const;
+
 describe("@basou/sdk surface", () => {
-  it("exposes BASOU_SDK_VERSION as 0.7.0 (adds StoreUnsafeError and its task / approval subclasses)", () => {
-    expect(BASOU_SDK_VERSION).toBe("0.7.0");
+  it("exposes BASOU_SDK_VERSION as 0.8.0 (makes the error classes nominal)", () => {
+    expect(BASOU_SDK_VERSION).toBe("0.8.0");
   });
 
   it("exports an error per store that is not followed, under one parent", () => {
@@ -29,6 +86,125 @@ describe("@basou/sdk surface", () => {
       expect(error.name).toBe(StoreError.name);
       expect(error.root).toBe("/r");
     }
+  });
+
+  it("types each error class nominally, so no other class stands in for it (compile-time)", () => {
+    // Without a brand these were all assignable: each pair below has the same
+    // public shape, so a field added to either class later would have broken
+    // a consumer's compilation.
+    expectTypeOf<TaskStoreUnsafeError>().not.toExtend<SessionStoreUnsafeError>();
+    expectTypeOf<SessionStoreUnsafeError>().not.toExtend<ApprovalStoreUnsafeError>();
+    expectTypeOf<StoreUnsafeError>().not.toExtend<TaskStoreUnsafeError>();
+    expectTypeOf<StoreUnsafeError>().not.toExtend<WorkspaceNotFoundError>();
+    expectTypeOf<WorkspaceNotFoundError>().not.toExtend<StoreUnsafeError>();
+    expectTypeOf<BasouSdkError>().not.toExtend<AmbiguousIdError>();
+    expectTypeOf<BasouSdkError & { input: string }>().not.toExtend<AmbiguousIdError>();
+    expectTypeOf<Error>().not.toExtend<BasouSdkError>();
+    expectTypeOf<Error & { input: string }>().not.toExtend<AmbiguousIdError>();
+    expectTypeOf<{
+      name: string;
+      message: string;
+      root: string;
+    }>().not.toExtend<SessionStoreUnsafeError>();
+    // A subclass still stands in for its parents.
+    expectTypeOf<TaskStoreUnsafeError>().toExtend<StoreUnsafeError>();
+    expectTypeOf<StoreUnsafeError>().toExtend<BasouSdkError>();
+    expectTypeOf<AmbiguousIdError>().toExtend<BasouSdkError>();
+    expectTypeOf<WorkspaceNotFoundError>().toExtend<Error>();
+  });
+
+  it("makes a class assignable only to its own parents, over every exported error class (compile-time)", () => {
+    // A class added without a brand of its own fails the check that no class
+    // is unbranded, once it has an entry in ParentOf, which it must have. A
+    // class added, branded or not, also changes the assignability pinned below.
+    expectTypeOf<ErrorClassName>().toEqualTypeOf<(typeof ERROR_CLASS_NAMES)[number]>();
+    expectTypeOf<keyof ParentOf>().toEqualTypeOf<ErrorClassName>();
+    expectTypeOf<Unbranded>().toBeNever();
+    expectTypeOf<Assignable>().toEqualTypeOf<
+      | "WorkspaceNotFoundError -> BasouSdkError"
+      | "StoreUnsafeError -> BasouSdkError"
+      | "SessionStoreUnsafeError -> StoreUnsafeError"
+      | "SessionStoreUnsafeError -> BasouSdkError"
+      | "TaskStoreUnsafeError -> StoreUnsafeError"
+      | "TaskStoreUnsafeError -> BasouSdkError"
+      | "ApprovalStoreUnsafeError -> StoreUnsafeError"
+      | "ApprovalStoreUnsafeError -> BasouSdkError"
+      | "AmbiguousIdError -> BasouSdkError"
+    >();
+  });
+
+  it("keeps each brand private, out of reach of a consumer's subclass, and emits no field for it", () => {
+    // A public or protected brand would compile here, which leaves the
+    // expect-error directive above it unused and fails the typecheck.
+    class SessionProbe extends SessionStoreUnsafeError {
+      brands(): unknown[] {
+        return [
+          // @ts-expect-error the brand is private to BasouSdkError
+          this.__basouSdkError,
+          // @ts-expect-error the brand is private to StoreUnsafeError
+          this.__storeUnsafe,
+          // @ts-expect-error the brand is private to SessionStoreUnsafeError
+          this.__sessionStoreUnsafe,
+        ];
+      }
+    }
+    class TaskProbe extends TaskStoreUnsafeError {
+      brands(): unknown[] {
+        // @ts-expect-error the brand is private to TaskStoreUnsafeError
+        return [this.__taskStoreUnsafe];
+      }
+    }
+    class ApprovalProbe extends ApprovalStoreUnsafeError {
+      brands(): unknown[] {
+        // @ts-expect-error the brand is private to ApprovalStoreUnsafeError
+        return [this.__approvalStoreUnsafe];
+      }
+    }
+    class WorkspaceProbe extends WorkspaceNotFoundError {
+      brands(): unknown[] {
+        // @ts-expect-error the brand is private to WorkspaceNotFoundError
+        return [this.__workspaceNotFound];
+      }
+    }
+    class AmbiguousProbe extends AmbiguousIdError {
+      brands(): unknown[] {
+        // @ts-expect-error the brand is private to AmbiguousIdError
+        return [this.__ambiguousId];
+      }
+    }
+    const probes: ReadonlyArray<[{ brands(): unknown[] }, string[]]> = [
+      [new SessionProbe("/r", "m"), ["name", "root"]],
+      [new TaskProbe("/r", "m"), ["name", "root"]],
+      [new ApprovalProbe("/r", "m"), ["name", "root"]],
+      [new WorkspaceProbe("/r"), ["name", "root"]],
+      [new AmbiguousProbe("x"), ["input", "name"]],
+    ];
+    for (const [probe, keys] of probes) {
+      expect(probe.brands().every((brand) => brand === undefined)).toBe(true);
+      // A brand that emitted a field would add a key here.
+      expect(Object.keys(probe).sort()).toEqual(keys);
+    }
+  });
+
+  it("names each error class it exports with a string, kept when a build renames the class", () => {
+    const errorClasses = Object.entries(sdk as Record<string, unknown>).filter(
+      (entry): entry is [string, new (first: string, second: string) => Error] =>
+        typeof entry[1] === "function" && entry[1].prototype instanceof Error,
+    );
+    expect(errorClasses.map(([key]) => key).sort()).toEqual([...ERROR_CLASS_NAMES]);
+    for (const [key, ErrorClass] of errorClasses) {
+      const original = Object.getOwnPropertyDescriptor(ErrorClass, "name");
+      // What a minifier does to a class: the class stays, its name changes.
+      Object.defineProperty(ErrorClass, "name", { value: "o", configurable: true });
+      try {
+        expect(new ErrorClass("/r", "m").name, key).toBe(key);
+      } finally {
+        if (original !== undefined) Object.defineProperty(ErrorClass, "name", original);
+      }
+    }
+    // A consumer's subclass keeps its own class name.
+    class MyStoreError extends StoreUnsafeError {}
+    expect(new MyStoreError("/r", "m").name).toBe("MyStoreError");
   });
 
   it("re-exports the read rule for a stored timestamp without seconds", () => {

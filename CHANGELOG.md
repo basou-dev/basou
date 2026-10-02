@@ -3,6 +3,42 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **Breaking (types):** `@basou/sdk`'s error classes are nominal to
+  TypeScript (SDK API `0.8.0`). `BasouSdkError`, `WorkspaceNotFoundError`,
+  `AmbiguousIdError`, `StoreUnsafeError` and its three subclasses each carry a
+  type-only brand, so one is no longer assignable where another is typed: a
+  `TaskStoreUnsafeError` where a `SessionStoreUnsafeError` is expected, a
+  `StoreUnsafeError` where a `WorkspaceNotFoundError` is (the two had the same
+  shape), or a plain `Error` or an object literal where any SDK error is. Code
+  that did any of these no longer compiles, and neither does code that passes
+  an error from one installed copy of `@basou/sdk` where a class of another
+  copy at a different version is typed; at runtime that error already failed
+  `instanceof` against the other copy's class. A subclass is still assignable
+  to its parents, and `instanceof` works as before. Without the brand, adding
+  a field to any of these classes would have broken such code at a minor.
+- **`@basou/sdk`: an error's `name` is set from a string per class**, so a
+  build that renames classes (a minifier, or a bundler that resolves a name
+  collision) no longer changes it. The values are the same class names as
+  before; a consumer's subclass still takes its own class name.
+- **`docs/spec/compatibility.md` states what an SDK error guarantees**: its
+  class, its `name`, the fields its class documents and which reads throw it.
+  Its message, its constructor, its `cause` and extending its class are not
+  covered. It also states how the errors may grow within `1.x`: a failure that
+  propagates from `@basou/core` today may get an SDK class of its own, a
+  condition may come to throw a subclass of today's class, a store the SDK
+  comes to read gets a `StoreUnsafeError` subclass, and a read may come to
+  refuse or stop following an entry under `.basou/` in a form basou never
+  creates — only for an error a call already throws or a layout basou never
+  creates, with a brand on every new class, and listed here. Catch
+  `StoreUnsafeError` to handle every store, and keep a default branch in a
+  switch on `name`. `docs/spec/workspace.md` now states that basou creates no
+  symlink under `.basou/`, except in a view that `workspace.view` places
+  there.
+
 ## 0.61.0 — 2026-10-02
 
 ### Fixed
