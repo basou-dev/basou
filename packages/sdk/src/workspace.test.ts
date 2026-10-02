@@ -209,6 +209,14 @@ describe("openWorkspace", () => {
     await expect(ws.getSession("01HXABCDEF1234567890ABCAM")).rejects.toBeInstanceOf(
       AmbiguousIdError,
     );
+    // The prefix is on `.input` as given, with its `ses_` and its spaces.
+    const given = " ses_01HXABCDEF1234567890ABCAM ";
+    const error = await ws.getSession(given).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(AmbiguousIdError);
+    expect((error as AmbiguousIdError).input).toBe(given);
   });
 
   // POSIX only: creating a symlink needs privileges on Windows.
@@ -498,7 +506,9 @@ describe("a directory of the task or approval store that is not followed", () =>
     ["getApproval", async (ws) => (await ws.getApproval(APPR_PENDING))?.location],
   ];
 
-  type StoreError = typeof TaskStoreUnsafeError | typeof ApprovalStoreUnsafeError;
+  // Held for `instanceof` only, so typed by what it constructs, not by its
+  // constructor's parameters, which the SDK does not guarantee.
+  type StoreError = abstract new (...args: never) => StoreUnsafeError;
   type Store = {
     relative: string;
     error: StoreError;

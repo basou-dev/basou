@@ -1,32 +1,41 @@
 /**
- * Base class for every error by which the SDK rejects a call: an id prefix
- * that matches more than one record ({@link AmbiguousIdError}), and a
- * workspace layout it does not read through — no usable `.basou/` at
- * `openWorkspace` ({@link WorkspaceNotFoundError}), or a directory of the
- * store that is a symlink or not a directory ({@link StoreUnsafeError}). The
- * last two are refusals that `@basou/core` makes, carried as SDK errors.
- * Every other error from `@basou/core` propagates as-is — a malformed record
- * (an invalid `session.yaml`, for instance) or an I/O failure during a read,
- * including a failure to inspect a directory of the store — so `instanceof
- * BasouSdkError` identifies "the SDK rejected this call" rather than "the
- * data was bad" or "the read failed".
+ * The root of every error class the SDK defines. Today each of them is a
+ * refusal: an id prefix that matches more than one record
+ * ({@link AmbiguousIdError}), or a workspace layout the SDK does not read
+ * through — no usable `.basou/` at `openWorkspace`
+ * ({@link WorkspaceNotFoundError}), or a directory of the store that is a
+ * symlink or not a directory ({@link StoreUnsafeError}). The last two are
+ * refusals that `@basou/core` makes, carried as SDK errors. Every other error
+ * propagates from `@basou/core` as-is — a malformed record (an invalid
+ * `session.yaml`, for instance), a record a newer basou wrote, or an I/O
+ * failure during a read, including a failure to inspect a directory of the
+ * store — and its class and message are not part of the SDK's contract. So
+ * today `instanceof BasouSdkError` identifies "the SDK rejected this call"
+ * rather than "the data was bad" or "the read failed". Such a failure may come
+ * to be thrown as an SDK error class of its own, which extends this one too, so
+ * test for the subclass you handle.
  *
- * What a caller can rely on is the class, `name` (the class's name) and the
- * fields each class documents. The message is for a person to read and may be
- * reworded at any release, so tell errors apart by class, not by message. A
- * constructor may change too: an SDK error is for the SDK to throw. When an
- * error carries a `cause`, that is for diagnosis only. docs/spec/compatibility.md
+ * What a caller can rely on is the class, `name` (the name of the class the
+ * SDK exports, set as a string so that a build that renames classes does not
+ * change it) and the fields each class documents. The message is for a person
+ * to read and may be reworded at any release, so tell errors apart by class,
+ * not by message. A constructor may change too: an SDK error is for the SDK to
+ * throw. When an error carries a `cause`, that is for diagnosis only, and
+ * extending an SDK error class is not covered. docs/spec/compatibility.md
  * states these terms.
  */
 export class BasouSdkError extends Error {
   // A type-only brand, one per class, that emits nothing. It makes each SDK
   // error class nominal: TypeScript refuses a sibling class, a parent, a plain
-  // `Error` or an object literal where one class is typed, so a field added to
-  // a class later breaks no code that compiles today.
+  // `Error` or an object literal of the same shape where one class is typed.
+  // Without it, adding a field to one class would break code that passes
+  // another class of the same shape where the first is typed. Every SDK error
+  // class declares its own brand from its first release.
   declare private readonly __basouSdkError: never;
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
-    this.name = new.target.name;
+    // A consumer's subclass, which has no entry, keeps its own class name.
+    this.name = SDK_ERROR_NAMES.get(new.target) ?? new.target.name;
   }
 }
 
@@ -75,10 +84,9 @@ export class StoreUnsafeError extends BasouSdkError {
 }
 
 /**
- * The {@link StoreUnsafeError} for `.basou/sessions`: the message is
- * `.basou/sessions is a symlink; refusing to operate` or `.basou/sessions
- * exists but is not a directory`. A session lookup given an id that is empty
- * once trimmed, or `ses_` alone, reads nothing and does not throw it.
+ * The {@link StoreUnsafeError} for `.basou/sessions`, which the message names.
+ * A session lookup given an id that is empty once trimmed, or `ses_` alone,
+ * reads nothing and does not throw it.
  */
 export class SessionStoreUnsafeError extends StoreUnsafeError {
   declare private readonly __sessionStoreUnsafe: never;
@@ -116,3 +124,19 @@ export class AmbiguousIdError extends BasouSdkError {
     this.input = input;
   }
 }
+
+/**
+ * The `name` of each SDK error class, as a string, so that a build that
+ * renames classes (a minifier, or a bundler resolving a name collision) does
+ * not change it. Every SDK error class has an entry.
+ */
+const SDK_ERROR_NAMES: ReadonlyMap<abstract new (...args: never) => BasouSdkError, string> =
+  new Map<abstract new (...args: never) => BasouSdkError, string>([
+    [BasouSdkError, "BasouSdkError"],
+    [WorkspaceNotFoundError, "WorkspaceNotFoundError"],
+    [StoreUnsafeError, "StoreUnsafeError"],
+    [SessionStoreUnsafeError, "SessionStoreUnsafeError"],
+    [TaskStoreUnsafeError, "TaskStoreUnsafeError"],
+    [ApprovalStoreUnsafeError, "ApprovalStoreUnsafeError"],
+    [AmbiguousIdError, "AmbiguousIdError"],
+  ]);
