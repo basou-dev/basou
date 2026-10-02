@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -154,15 +154,41 @@ describe("acquireLock", () => {
     );
   });
 
-  it("propagates unexpected (non-EEXIST, non-ENOENT) atomicCreate errors without translating", async () => {
+  it("wraps an unexpected (non-EEXIST, non-ENOENT) atomicCreate error without mistranslating it", async () => {
     // ENOENT now self-heals (see the missing-locks-directory suite below), so
-    // the no-mistranslation guarantee is exercised with a permission failure.
+    // the no-mistranslation guarantee is exercised with a permission failure:
+    // it is not reported as a held lock, and the native error stays the cause.
     const eacces = Object.assign(new Error("permission denied"), { code: "EACCES" });
     vi.mocked(atomicCreate).mockRejectedValueOnce(eacces);
-    await expect(
-      acquireLock(paths(), "task", "task_01HXGHOST000000000000000"),
-    ).rejects.toMatchObject({ code: "EACCES" });
+    const error = await acquireLock(paths(), "task", "task_01HXGHOST000000000000000").then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Failed to acquire lock");
+    expect((error as Error).cause).toBe(eacces);
   });
+
+  // chmod is ignored for euid 0, so this is skipped on root.
+  it.skipIf(process.geteuid?.() === 0)(
+    "names no path when the locks directory cannot be written (real-fs, chmod)",
+    async () => {
+      await chmod(paths().locks, 0o555);
+      let error: unknown;
+      try {
+        await acquireLock(paths(), "task", "task_01HXCHMDTEST0000000000000");
+      } catch (e: unknown) {
+        error = e;
+      } finally {
+        await chmod(paths().locks, 0o755);
+      }
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("Failed to acquire lock");
+      expect((error as Error).message).not.toContain(getWorkDir());
+      expect(((error as Error).cause as { code?: string }).code).toBe("EACCES");
+      expect(await readdir(paths().locks)).toEqual([]);
+    },
+  );
 });
 
 describe("ensureBasouDirectory + locks", () => {

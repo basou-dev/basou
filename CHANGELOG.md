@@ -3,6 +3,18 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A lock that cannot be taken no longer prints an absolute path.** When
+  `.basou/locks` could not be written (a permission error, for instance), every
+  command that takes a lock — `task status`, `note --session`, `approval
+  approve`, `exec` and the others — printed the native error, such as
+  `EACCES: permission denied, open '<absolute path>/.basou/locks/...'`, even
+  without `--verbose`. It now prints `Failed to acquire lock`; `--verbose`
+  adds the error code as the cause, as for other errors.
+
 ## 0.62.0 — 2026-10-02
 
 ### Changed

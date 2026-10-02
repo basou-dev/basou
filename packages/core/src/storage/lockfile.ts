@@ -55,6 +55,8 @@ export type LockHandle = {
  *        throw `"Lock is held by another process"`.
  *      - If the holder is alive, throw `"Lock is held by another process"`
  *        without retrying.
+ *   3. Any other failure of the create throws the pathless
+ *      `"Failed to acquire lock"`, with the native error as its `cause`.
  *
  * The caller MUST call `release()` (typically from a `finally` block); the
  * `process.exit()` path or a fatal crash relies on stale-lock detection on
@@ -98,8 +100,11 @@ export async function acquireLock(
         throw new Error("Failed to acquire lock", { cause: retryError });
       }
     }
+    // Any other failure (EACCES on the directory, for instance) is wrapped:
+    // the native message names the absolute lockfile path, and callers print
+    // `message` as it is.
     if (!findErrorCode(error, "EEXIST")) {
-      throw error;
+      throw new Error("Failed to acquire lock", { cause: error });
     }
     const stale = await isStaleLock(lockPath);
     if (!stale) {
