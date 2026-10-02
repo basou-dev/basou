@@ -117,6 +117,7 @@ export type {
 } from "./tasks.js";
 export {
   archiveTask,
+  assertTaskStoreSafe,
   createTaskWithEvent,
   deleteTask,
   editTask,

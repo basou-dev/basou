@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -342,5 +342,54 @@ describe("runRefreshWatch", () => {
     const logs = (deps as WatchDeps & { logs: string[] }).logs;
     expect(logs[0]).toContain("watching");
     expect(logs[logs.length - 1]).toBe("watch stopped");
+  });
+});
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("runRefreshWatch with an unsafe task store", () => {
+  async function linkTasksOut(repo: string): Promise<void> {
+    const tasks = basouPaths(repo).tasks;
+    const outside = join(repo, "moved-tasks");
+    await mkdir(tasks, { recursive: true });
+    await rename(tasks, outside);
+    await symlink(outside, tasks);
+  }
+
+  it("fails the initial catch-up before importing anything", async () => {
+    const repo = await setupRepo();
+    await writeCodexRolloutAt(repo, "c-refused");
+    await linkTasksOut(repo);
+    const controller = new AbortController();
+    const deps = watchDeps(repo, controller, scriptedSleep(controller, []));
+
+    await expect(runRefreshWatch(deps)).rejects.toThrow(
+      ".basou/tasks is a symlink; refusing to operate",
+    );
+    expect(await codexSessionIds(repo)).toEqual([]);
+  });
+
+  it("skips a cycle before importing, and logs the refusal", async () => {
+    const repo = await setupRepo();
+    const controller = new AbortController();
+    // Cycle 1: the store is swapped and a rollout appears (not yet stable).
+    // Cycle 2: settled, so the cycle would import: it is refused instead.
+    const sleep = scriptedSleep(controller, [
+      async () => {
+        await linkTasksOut(repo);
+        await writeCodexRolloutAt(repo, "c-refused");
+      },
+      () => {},
+    ]);
+    const deps = watchDeps(repo, controller, sleep);
+
+    await runRefreshWatch(deps);
+
+    expect(await codexSessionIds(repo)).toEqual([]);
+    const logs = (deps as WatchDeps & { logs: string[] }).logs;
+    expect(
+      logs.some((l) =>
+        l.endsWith("refresh cycle skipped: .basou/tasks is a symlink; refusing to operate"),
+      ),
+    ).toBe(true);
   });
 });

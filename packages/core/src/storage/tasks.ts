@@ -33,6 +33,7 @@ import { atomicCreate, atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
 import { enumerateSessionEntries, readSessionYaml } from "./sessions.js";
+import { assertStoreDirectorySafe } from "./store-dir.js";
 import { readTaskIndex, rebuildTaskIndex, updateTaskIndex } from "./task-index.js";
 import { overwriteYamlFile } from "./yaml-store.js";
 
@@ -143,8 +144,23 @@ function splitFrontMatter(raw: string): { yamlText: string; body: string } {
  *   - format violation → throw `"Invalid task file format"`.
  *   - YAML parse / schema violation → throw `"Failed to read task file"`.
  *   - any other I/O failure → throw `"Failed to read task file"` with cause.
+ *   - a task store that is a symlink or a file → the
+ *     {@link assertTaskStoreSafe} errors, before anything is read.
  */
 export async function readTaskFile(paths: BasouPaths, taskId: string): Promise<TaskDocument> {
+  await assertTaskStoreSafe(paths);
+  return readTaskFileInCheckedStore(paths, taskId);
+}
+
+/**
+ * {@link readTaskFile} without the store check, for a caller that has just
+ * made it — a listing reads every file it enumerated, and one check covers
+ * them all.
+ */
+async function readTaskFileInCheckedStore(
+  paths: BasouPaths,
+  taskId: string,
+): Promise<TaskDocument> {
   const filePath = join(paths.tasks, `${taskId}.md`);
   let raw: string;
   try {
@@ -184,7 +200,9 @@ export async function readTaskFile(paths: BasouPaths, taskId: string): Promise<T
 export type WriteTaskFileMode = "create" | "overwrite";
 
 /**
- * Atomically write `<paths.tasks>/<taskId>.md`.
+ * Atomically write `<paths.tasks>/<taskId>.md`, creating `<paths.tasks>` when
+ * it is absent. A task store that is a symlink or a file throws the
+ * {@link assertTaskStoreSafe} errors before anything is written.
  *
  * `mode: "create"` delegates to {@link atomicCreate} so a pre-existing file
  * fails fast with EEXIST → `"Task file already exists"`.
@@ -208,6 +226,15 @@ export async function writeTaskFile(
   // Runtime self-defense: even if a caller bypassed the TypeScript boundary,
   // a malformed task object cannot reach disk.
   const validated = TaskSchema.parse(doc.task);
+  await assertTaskStoreSafe(paths);
+  // A workspace without `.basou/tasks` gets one: task creation records its
+  // event first, so a missing directory here would leave the event without
+  // its task.
+  try {
+    await mkdir(paths.tasks, { recursive: true });
+  } catch (error: unknown) {
+    throw new Error("Failed to write task file", { cause: error });
+  }
 
   const filePath = join(paths.tasks, `${taskId}.md`);
   const yamlText = stringifyYaml(validated);
@@ -256,9 +283,13 @@ const TASK_FILENAME_RE = /^(.+)\.md$/;
  *
  * Empty directory or ENOENT → `[]`. Other I/O failures throw
  * `"Failed to enumerate tasks"`, unless a valid index is available to answer
- * from instead.
+ * from instead. A task store that is a symlink or a file throws the
+ * {@link assertTaskStoreSafe} errors before the index or the directory is
+ * read: the index is no answer then, since it lives in the same directory.
  */
 export async function enumerateTaskIds(paths: BasouPaths): Promise<string[]> {
+  await assertTaskStoreSafe(paths);
+
   // The index is a cache of what the directory holds, so it is reconciled
   // against the directory before it is trusted.
   //
@@ -320,7 +351,7 @@ export async function enumerateTaskIds(paths: BasouPaths): Promise<string[]> {
   let anyUnreadable = false;
   for (const id of onDisk) {
     try {
-      const doc = await readTaskFile(paths, id);
+      const doc = await readTaskFileInCheckedStore(paths, id);
       entries.push(buildTaskIndexEntry(doc.task.task));
     } catch {
       anyUnreadable = true;
@@ -416,11 +447,33 @@ function archiveTasksDir(paths: BasouPaths): string {
 }
 
 /**
+ * Refuse to operate on the task store when `.basou/tasks` or
+ * `.basou/tasks/archive` is a symlink or not a directory, so no task is read
+ * from or written to a place outside the store through it. basou never
+ * creates such an entry. An absent directory passes.
+ *
+ * Every exported function here that reads or writes the store makes this
+ * check first: the readers and the enumerations, and each operation before it
+ * takes a lock or writes an event, so a refusal leaves the trail as it was. A
+ * task FILE that is a symlink is a different matter and is still read
+ * through (see `enumerateTaskIdsFromDisk`).
+ *
+ * Throws the {@link assertStoreDirectorySafe} errors, naming `.basou/tasks`
+ * or `.basou/tasks/archive`.
+ */
+export async function assertTaskStoreSafe(paths: BasouPaths): Promise<void> {
+  await assertStoreDirectorySafe(paths.tasks, ".basou/tasks");
+  await assertStoreDirectorySafe(archiveTasksDir(paths), ".basou/tasks/archive");
+}
+
+/**
  * Enumerate task ids inside `<paths.tasks>/archive/`. Returns `[]` when the
  * archive directory does not exist (= no task has ever been archived).
- * Filtering / ordering rules mirror {@link enumerateTaskIds}.
+ * Filtering / ordering rules mirror {@link enumerateTaskIds}, and so does the
+ * store check.
  */
 export async function enumerateArchivedTaskIds(paths: BasouPaths): Promise<string[]> {
+  await assertTaskStoreSafe(paths);
   let entries: string[];
   try {
     entries = (await readdir(archiveTasksDir(paths), { withFileTypes: true }))
@@ -519,7 +572,7 @@ export async function loadTaskEntries(
   for (const id of ids) {
     let doc: TaskDocument;
     try {
-      doc = await readTaskFile(paths, id);
+      doc = await readTaskFileInCheckedStore(paths, id);
     } catch (error: unknown) {
       if (error instanceof Error && error.message === "Invalid task file format") {
         options.onSkip?.(id, "task_file_invalid");
@@ -882,6 +935,15 @@ export async function createTaskWithEvent(input: CreateTaskInput): Promise<Creat
   if (input.completedAt !== undefined) {
     CompletedAtSchema.parse(input.completedAt);
   }
+  // The event is written before task.md, so the store is checked, and an
+  // absent `.basou/tasks` created, here rather than left to writeTaskFile:
+  // failing there would leave a task_created event with no task behind it.
+  await assertTaskStoreSafe(input.paths);
+  try {
+    await mkdir(input.paths.tasks, { recursive: true });
+  } catch (error: unknown) {
+    throw new Error("Failed to create .basou/tasks", { cause: error });
+  }
 
   if (input.mode === "ad-hoc") {
     return createTaskAdHoc(input);
@@ -1227,6 +1289,7 @@ export async function updateTaskStatusWithEvent(
   input: UpdateTaskStatusInput,
 ): Promise<UpdateTaskStatusResult> {
   TaskIdSchema.parse(input.taskId);
+  await assertTaskStoreSafe(input.paths);
 
   // Per-task lock guards the read-modify-write of task.md against concurrent
   // writers on the same task id (= another `task status` / `task edit` /
@@ -1694,6 +1757,7 @@ export async function reconcileTask(
   input: ReconcileTaskInput,
 ): Promise<ReconcileResult> {
   TaskIdSchema.parse(input.taskId);
+  await assertTaskStoreSafe(paths);
 
   // Per-task lock spans the entire reconcile window (= snapshot read,
   // ad-hoc session + event write, post-write snapshot probe, task.md
@@ -2051,6 +2115,7 @@ export async function refreshTaskLinkedSessions(
   input: RefreshLinkageInput,
 ): Promise<RefreshLinkageResult> {
   TaskIdSchema.parse(input.taskId);
+  await assertTaskStoreSafe(paths);
 
   // Per-task lock spans the entire refresh window so the snapshot taken in
   // stage 2 cannot be invalidated by another writer the helper does not see;
@@ -2259,6 +2324,7 @@ export async function editTask(input: EditTaskInput): Promise<EditTaskResult> {
   if (input.title !== undefined) {
     TaskTitleSchema.parse(input.title);
   }
+  await assertTaskStoreSafe(input.paths);
 
   let statusUpdated = false;
   let previousStatus: TaskStatus | null = null;
@@ -2377,6 +2443,7 @@ export type DeleteTaskResult = {
  */
 export async function deleteTask(input: DeleteTaskInput): Promise<DeleteTaskResult> {
   TaskIdSchema.parse(input.taskId);
+  await assertTaskStoreSafe(input.paths);
 
   // Per-task lock keeps the read → audit event → unlink chain free of a
   // concurrent writer that could otherwise observe task.md after we read it
@@ -2486,6 +2553,7 @@ export type ArchiveTaskResult = {
  */
 export async function archiveTask(input: ArchiveTaskInput): Promise<ArchiveTaskResult> {
   TaskIdSchema.parse(input.taskId);
+  await assertTaskStoreSafe(input.paths);
 
   // Per-task lock spans read → audit event → task.md overwrite → rename so
   // a concurrent writer cannot interleave between the linked_sessions

@@ -3,6 +3,86 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **Tasks and approvals are no longer written through a symlinked store.**
+  With a `.basou/tasks` that is a symlink, `basou task new`, `status`, `edit`,
+  `archive` and `delete` wrote, moved and removed the task files behind it,
+  and `archive` did the same through a symlinked `.basou/tasks/archive`. With
+  a `.basou/approvals`, `.basou/approvals/pending` or
+  `.basou/approvals/resolved` that is a symlink, `basou approval approve` and
+  `reject` removed the pending file and wrote the resolved one behind it. All
+  of them exited `0`. They now stop with `<directory> is a symlink; refusing
+  to operate` before they read anything from it, take a lock or record an
+  event, and the approval stays pending.
+- **`basou task new` no longer records a `task_created` event for a task it
+  then fails to write.** With a `.basou/tasks` that is a file, it recorded the
+  event and then failed with `Failed to write task file after event was
+  persisted`; it now stops with `.basou/tasks exists but is not a directory`
+  and records nothing. With no `.basou/tasks` at all, it failed the same way
+  after recording the event; it now creates the directory before recording
+  anything.
+- **`basou task archive` no longer records a `task_archived` event for a task
+  it then fails to move.** With a `.basou/tasks/archive` that is a file, it
+  recorded the event and then failed; it now stops with
+  `.basou/tasks/archive exists but is not a directory` and records nothing.
+- **`basou approval approve` and `reject` no longer record a resolution that
+  leaves the approval pending** when `.basou/approvals/resolved` is missing.
+  They appended the resolution event and then failed to write the resolved
+  file, and every later attempt was refused as already resolved. They now
+  create the directory before recording anything.
+- **`@basou/sdk`: `getApproval` no longer reads a file outside the store.** The
+  id became a file name as given, so `getApproval("../../x")` opened and
+  parsed a YAML file outside `.basou/approvals`. A string that is not an
+  approval id (`appr_` and a ULID) now returns `null` without reading
+  anything.
+
+### Changed
+
+- **A `.basou/tasks`, `.basou/tasks/archive`, `.basou/approvals`,
+  `.basou/approvals/pending` or `.basou/approvals/resolved` that is a symlink
+  or a file stops the commands that read or write what it holds**, as 0.59.0
+  did for `.basou/sessions`, with `<directory> is a symlink; refusing to
+  operate` or `<directory> exists but is not a directory`. For the task store
+  these are every `basou task` subcommand, `orient`, `handoff generate`,
+  `report generate`, `decision gaps` and `session import` of a session that
+  names a task; for the approval store, every `basou approval` subcommand,
+  `orient`, `handoff generate` and `report generate`. Either store also stops
+  `refresh`, `orient --refresh` and each cycle of `refresh --watch`, before
+  they import anything; `refresh --dry-run` is not stopped. These commands read through a symlink before.
+  With a file, most of them already failed (`Failed to enumerate tasks`,
+  `Failed to enumerate approvals`). A `.basou/tasks/archive` that was a file
+  failed only `task show` (`Failed to enumerate archived tasks`), `decision
+  gaps` and `task archive`, and left `task list`, `orient`, `handoff
+  generate`, `report generate` and the other task commands working; they now
+  all stop. `basou view` answers `500` with the error on the pages that read
+  the store, and the portfolio page shows it on the workspace's card. basou
+  never creates such an entry, and an absent directory is not refused.
+  `basou status` does not stop. A task file or an approval file that is
+  itself a symlink is handled as before.
+- **`@basou/sdk`: the reads of the tasks and the approvals throw
+  `TaskStoreUnsafeError` and `ApprovalStoreUnsafeError` for that layout**, and
+  `SessionStoreUnsafeError` is now a subclass of a new `StoreUnsafeError`, the
+  parent of all three, which carries the workspace's root on `.root` (SDK API
+  `0.7.0`). `listTasks` and `getTask` throw `TaskStoreUnsafeError` for
+  `.basou/tasks` or `.basou/tasks/archive`; `listApprovals` and `getApproval`
+  throw `ApprovalStoreUnsafeError` for `.basou/approvals` or the directories in
+  it; `renderHandoff` and `renderReport` read all three stores and throw for
+  the first refused directory they reach. They read through a symlink before.
+  The message is core's, naming the directory, and core's error is the cause.
+  As for sessions, a task lookup given an id that is empty once trimmed, or
+  `task_` alone, returns `null` without reading. `manifest`, `status`,
+  `renderDecisions`, `stats` and the session reads do not read these stores
+  and work as before.
+- **`@basou/core`** exports `assertTaskStoreSafe` and `assertApprovalStoreSafe`,
+  the checks above. The functions that read or write the task store —
+  `readTaskFile`, `writeTaskFile`, `enumerateTaskIds`,
+  `enumerateArchivedTaskIds`, `loadTaskEntries`, `resolveTaskId` and every task
+  operation — and `loadApproval` and `enumerateApprovals` throw their errors.
+  `writeTaskFile` creates `.basou/tasks` when it is absent.
+
 ## 0.60.0 — 2026-10-01
 
 ### Changed

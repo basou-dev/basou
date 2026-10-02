@@ -5,8 +5,11 @@ import { type Event, ensureBasouDirectory } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AmbiguousIdError,
+  ApprovalStoreUnsafeError,
   BasouSdkError,
   SessionStoreUnsafeError,
+  StoreUnsafeError,
+  TaskStoreUnsafeError,
   WorkspaceNotFoundError,
 } from "./errors.js";
 import { openWorkspace, type Workspace } from "./workspace.js";
@@ -453,4 +456,216 @@ describe("a .basou/sessions that is not followed", () => {
       }
     },
   );
+});
+
+describe("a directory of the task or approval store that is not followed", () => {
+  type Reads = ReadonlyArray<[string, (ws: Workspace) => Promise<unknown>]>;
+  // One clock for the baseline and the refused workspace, so rendered output compares.
+  const clock = { now: () => new Date("2026-05-11T00:00:00.000Z") };
+
+  const taskReads: Reads = [
+    ["listTasks", (ws) => ws.listTasks()],
+    ["getTask", (ws) => ws.getTask(TASK_ID)],
+    ["renderHandoff", (ws) => ws.renderHandoff()],
+    ["renderReport", (ws) => ws.renderReport({ timeZone: "UTC" })],
+  ];
+  const approvalReads: Reads = [
+    ["listApprovals", (ws) => ws.listApprovals()],
+    ["getApproval", (ws) => ws.getApproval(APPR_PENDING)],
+    ["renderHandoff", (ws) => ws.renderHandoff()],
+    ["renderReport", (ws) => ws.renderReport({ timeZone: "UTC" })],
+  ];
+  // What still reads, with the expected result in a form `toEqual` can check.
+  const sessionReads: Reads = [
+    ["manifest", async (ws) => (await ws.manifest()).workspace.id],
+    ["listSessions", async (ws) => (await ws.listSessions()).map((s) => s.sessionId)],
+    ["readEvents", async (ws) => (await ws.readEvents(SES_DONE)).length],
+    ["stats", async (ws) => (await ws.stats({ timeZone: "UTC" })).totals.sessionCount],
+    ["renderDecisions", (ws) => ws.renderDecisions()],
+  ];
+  const taskResults: Reads = [
+    ["listTasks", async (ws) => (await ws.listTasks()).map((t) => t.task.task.id)],
+    ["getTask", async (ws) => (await ws.getTask(TASK_ID))?.task.task.title],
+  ];
+  const approvalResults: Reads = [
+    [
+      "listApprovals",
+      async (ws) => {
+        const { pending, resolved } = await ws.listApprovals();
+        return [pending.map((a) => a.approval.id), resolved.map((a) => a.approval.id)];
+      },
+    ],
+    ["getApproval", async (ws) => (await ws.getApproval(APPR_PENDING))?.location],
+  ];
+
+  type Store = {
+    relative: string;
+    error: typeof TaskStoreUnsafeError;
+    refused: Reads;
+    unaffected: Reads;
+  };
+  const stores: Store[] = [
+    {
+      relative: "tasks",
+      error: TaskStoreUnsafeError,
+      refused: taskReads,
+      unaffected: [...sessionReads, ...approvalResults],
+    },
+    {
+      relative: "tasks/archive",
+      error: TaskStoreUnsafeError,
+      refused: taskReads,
+      unaffected: [...sessionReads, ...approvalResults],
+    },
+    ...["approvals", "approvals/pending", "approvals/resolved"].map((relative) => ({
+      relative,
+      error: ApprovalStoreUnsafeError,
+      refused: approvalReads,
+      unaffected: [...sessionReads, ...taskResults],
+    })),
+  ];
+
+  /** The results of `reads` on the untouched fixture, to compare against. */
+  async function baseline(reads: Reads): Promise<unknown[]> {
+    const ws = await openWorkspace(await setupWorkspace(), clock);
+    const out: unknown[] = [];
+    for (const [, read] of reads) out.push(await read(ws));
+    await rm(getRoot(), { recursive: true, force: true });
+    await mkdir(getRoot());
+    return out;
+  }
+
+  async function expectEachReadRefused(
+    ws: Workspace,
+    reads: Reads,
+    error: typeof TaskStoreUnsafeError,
+    message: string,
+  ): Promise<void> {
+    for (const [name, read] of reads) {
+      const thrown = await read(ws).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(thrown, name).toBeInstanceOf(error);
+      expect(thrown, name).toBeInstanceOf(StoreUnsafeError);
+      expect(thrown, name).toBeInstanceOf(BasouSdkError);
+      // The three are siblings: catching one store's error catches no other's.
+      for (const other of [
+        SessionStoreUnsafeError,
+        TaskStoreUnsafeError,
+        ApprovalStoreUnsafeError,
+      ]) {
+        if (other !== error) expect(thrown, `${name} vs ${other.name}`).not.toBeInstanceOf(other);
+      }
+      const refusal = thrown as StoreUnsafeError;
+      expect(refusal.name, name).toBe(error.name);
+      expect(refusal.message, name).toBe(message);
+      expect(refusal.root, name).toBe(ws.root);
+      expect(refusal.cause, name).toBeInstanceOf(Error);
+      expect(refusal.cause, name).not.toBeInstanceOf(BasouSdkError);
+      expect((refusal.cause as Error).message, name).toBe(message);
+    }
+  }
+
+  for (const { relative, error, refused, unaffected } of stores) {
+    const label = `.basou/${relative}`;
+
+    // POSIX only: creating a symlink needs privileges on Windows.
+    it.skipIf(process.platform === "win32")(
+      `a ${label} that is a symlink makes the reads of that store throw ${error.name}`,
+      async () => {
+        const expected = await baseline(unaffected);
+        const repoRoot = await setupWorkspace();
+        const inside = join(repoRoot, ".basou", relative);
+        await mkdir(inside, { recursive: true });
+        const moved = join(repoRoot, "moved");
+        await rename(inside, moved);
+        await symlink(moved, inside);
+        const ws = await openWorkspace(repoRoot, clock);
+        await expectEachReadRefused(
+          ws,
+          refused,
+          error,
+          `${label} is a symlink; refusing to operate`,
+        );
+        for (const [i, [name, read]] of unaffected.entries()) {
+          expect(await read(ws), name).toEqual(expected[i]);
+        }
+      },
+    );
+
+    it(`a ${label} that is a file makes the reads of that store throw ${error.name}`, async () => {
+      const expected = await baseline(unaffected);
+      const repoRoot = await setupWorkspace();
+      const inside = join(repoRoot, ".basou", relative);
+      await rm(inside, { recursive: true, force: true });
+      await writeFile(inside, "");
+      const ws = await openWorkspace(repoRoot, clock);
+      await expectEachReadRefused(ws, refused, error, `${label} exists but is not a directory`);
+      for (const [i, [name, read]] of unaffected.entries()) {
+        expect(await read(ws), name).toEqual(expected[i]);
+      }
+    });
+  }
+
+  it("a task lookup given an empty id, or task_ alone, yields null without reading", async () => {
+    const repoRoot = await setupWorkspace();
+    await rm(join(repoRoot, ".basou", "tasks"), { recursive: true, force: true });
+    await writeFile(join(repoRoot, ".basou", "tasks"), "");
+    const ws = await openWorkspace(repoRoot);
+    for (const id of ["", "   ", "task_", " task_ "]) {
+      expect(await ws.getTask(id), JSON.stringify(id)).toBeNull();
+    }
+    await expect(ws.getTask("task_0")).rejects.toBeInstanceOf(TaskStoreUnsafeError);
+  });
+
+  it("an approval lookup given a string that is not an approval id reads nothing", async () => {
+    const repoRoot = await setupWorkspace();
+    await rm(join(repoRoot, ".basou", "approvals"), { recursive: true, force: true });
+    await writeFile(join(repoRoot, ".basou", "approvals"), "");
+    const ws = await openWorkspace(repoRoot);
+    for (const id of ["", "appr_", APPR_PENDING.slice(0, -1), `${APPR_PENDING} `]) {
+      expect(await ws.getApproval(id), JSON.stringify(id)).toBeNull();
+    }
+    await expect(ws.getApproval(APPR_PENDING)).rejects.toBeInstanceOf(ApprovalStoreUnsafeError);
+  });
+
+  it("an approval lookup does not leave the store: a path in the id is not followed", async () => {
+    const repoRoot = await setupWorkspace();
+    // A well-formed approval outside the store, where `../` from pending/ leads.
+    const outside = join(repoRoot, "outside");
+    await mkdir(outside);
+    await writeFile(
+      join(outside, "evil.yaml"),
+      toYaml({
+        schema_version: "0.1.0",
+        id: APPR_PENDING,
+        session_id: SES_DONE,
+        created_at: "2026-05-10T00:00:00.000Z",
+        status: "pending",
+        risk_level: "low",
+        action: { kind: "command" },
+        reason: "outside the store",
+      }),
+    );
+    const ws = await openWorkspace(repoRoot);
+    // pending/ is .basou/approvals/pending, so three levels up is the repo root.
+    expect(await ws.getApproval("../../../outside/evil")).toBeNull();
+    expect((await ws.getApproval(APPR_PENDING))?.approval.reason).toBe("fixture approval");
+  });
+
+  it("a session store refusal is a StoreUnsafeError too", async () => {
+    const repoRoot = await setupWorkspace();
+    await rm(join(repoRoot, ".basou", "sessions"), { recursive: true, force: true });
+    await writeFile(join(repoRoot, ".basou", "sessions"), "");
+    const ws = await openWorkspace(repoRoot);
+    const thrown = await ws.listSessions().then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(thrown).toBeInstanceOf(SessionStoreUnsafeError);
+    expect(thrown).toBeInstanceOf(StoreUnsafeError);
+    expect(thrown).not.toBeInstanceOf(TaskStoreUnsafeError);
+    expect(thrown).not.toBeInstanceOf(ApprovalStoreUnsafeError);
+  });
 });

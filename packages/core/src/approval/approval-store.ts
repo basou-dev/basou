@@ -4,6 +4,7 @@ import { findErrorCode } from "../lib/error-codes.js";
 import { type Approval, ApprovalSchema } from "../schemas/approval.schema.js";
 import { normalizeApprovalTimestamps } from "../schemas/iso-timestamp.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
+import { assertStoreDirectorySafe } from "../storage/store-dir.js";
 import { readYamlFile } from "../storage/yaml-store.js";
 
 /** Which side of `.basou/approvals/` an approval YAML lives on. */
@@ -16,18 +17,38 @@ export type LoadedApproval = {
 };
 
 /**
+ * Refuse to operate on the approval store when `.basou/approvals`,
+ * `.basou/approvals/pending` or `.basou/approvals/resolved` is a symlink or
+ * not a directory, so no approval is read from or written to a place outside
+ * the store through it. basou never creates such an entry. An absent
+ * directory passes. {@link loadApproval} and {@link enumerateApprovals} make
+ * this check first, and every command that resolves an approval reaches the
+ * store through one of them.
+ *
+ * Throws the `assertStoreDirectorySafe` errors, naming `.basou/approvals`,
+ * `.basou/approvals/pending` or `.basou/approvals/resolved`.
+ */
+export async function assertApprovalStoreSafe(paths: BasouPaths): Promise<void> {
+  await assertStoreDirectorySafe(join(paths.root, "approvals"), ".basou/approvals");
+  await assertStoreDirectorySafe(paths.approvals.pending, ".basou/approvals/pending");
+  await assertStoreDirectorySafe(paths.approvals.resolved, ".basou/approvals/resolved");
+}
+
+/**
  * Locate and load the approval YAML for `approvalId`. Searches resolved
  * first so that a duplicated YAML (the crash-window scenario where both
  * pending and resolved exist for the same id) returns the resolved-side
  * record — matching the dedupe rule used by `approval list` and
  * `resolveApprovalId`. Returns null if neither directory contains the
  * YAML. Throws with a pathless message on read or schema-validation
- * failure.
+ * failure, and the {@link assertApprovalStoreSafe} errors before anything is
+ * read.
  */
 export async function loadApproval(
   paths: BasouPaths,
   approvalId: string,
 ): Promise<LoadedApproval | null> {
+  await assertApprovalStoreSafe(paths);
   for (const location of ["resolved", "pending"] as const) {
     const filePath = join(paths.approvals[location], `${approvalId}.yaml`);
     let raw: unknown;
@@ -63,12 +84,14 @@ export async function loadApproval(
  * and resolved. ENOENT on either directory is treated as empty (e.g. a
  * workspace that has no resolved approvals yet). YAML parse and schema
  * validation are NOT performed; callers that need the parsed approval
- * should use {@link loadApproval} per ID.
+ * should use {@link loadApproval} per ID. Throws the
+ * {@link assertApprovalStoreSafe} errors before anything is listed.
  */
 export async function enumerateApprovals(paths: BasouPaths): Promise<{
   pending: string[];
   resolved: string[];
 }> {
+  await assertApprovalStoreSafe(paths);
   const [pending, resolved] = await Promise.all([
     enumerateIds(paths.approvals.pending),
     enumerateIds(paths.approvals.resolved),

@@ -81,5 +81,12 @@ The vocabulary fixes four values:
 - `.basou/approvals/pending/<approval_id>.yaml`
 - `.basou/approvals/resolved/<approval_id>.yaml`
 
+`.basou/approvals`, `pending` and `resolved` must be directories. A producer
+that places approvals writes its files into them; it must not make any of
+them a symlink (to a queue kept elsewhere, for instance) or a file. basou
+refuses such a layout: the commands that read or write approvals stop with
+an error naming the directory, with the exceptions that
+[workspace §1.2](workspace.md#the-stores-directories-are-not-followed) lists.
+
 Both directories are **gitignored by default** because approval payloads
 often contain sensitive context.

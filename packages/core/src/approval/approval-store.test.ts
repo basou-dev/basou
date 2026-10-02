@@ -1,11 +1,26 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Approval } from "../schemas/approval.schema.js";
 import { type BasouPaths, basouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { writeYamlFile } from "../storage/yaml-store.js";
-import { enumerateApprovals, isLazyExpired, loadApproval } from "./approval-store.js";
+import {
+  assertApprovalStoreSafe,
+  enumerateApprovals,
+  isLazyExpired,
+  loadApproval,
+} from "./approval-store.js";
 
 let workspace: { paths: BasouPaths; cleanup: () => Promise<void> } | undefined;
 
@@ -232,5 +247,107 @@ describe("approval-store", () => {
     const err = captured as Error;
     expect(err.message).toBe("Failed to read approval");
     expect(err.cause).toBeDefined();
+  });
+});
+
+/** Every file under `dir`, with its bytes, so a test can prove nothing changed. */
+async function snapshot(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const name of (await readdir(dir, { recursive: true })).sort()) {
+    try {
+      out[name] = await readFile(join(dir, name), "utf8");
+    } catch {
+      out[name] = "<dir>";
+    }
+  }
+  return out;
+}
+
+const RESOLVED_FIXTURE: Approval = {
+  ...PENDING_FIXTURE,
+  id: "appr_01HXMA02ABCDEFGHJKMNPQRSTV",
+  status: "approved",
+  resolver: "local-cli",
+  resolved_at: "2026-05-04T11:00:00+09:00",
+};
+
+/** One pending and one resolved approval, each in its directory. */
+async function seedApprovals(paths: BasouPaths): Promise<void> {
+  await writeYamlFile(join(paths.approvals.pending, `${PENDING_FIXTURE.id}.yaml`), PENDING_FIXTURE);
+  await writeYamlFile(
+    join(paths.approvals.resolved, `${RESOLVED_FIXTURE.id}.yaml`),
+    RESOLVED_FIXTURE,
+  );
+}
+
+const APPROVAL_STORE_DIRECTORIES = ["approvals", "approvals/pending", "approvals/resolved"];
+
+describe("assertApprovalStoreSafe", () => {
+  it("passes when the approval store is absent or holds directories", async () => {
+    const paths = getPaths();
+    await expect(assertApprovalStoreSafe(paths)).resolves.toBeUndefined();
+    await rm(paths.approvals.resolved, { recursive: true });
+    await expect(assertApprovalStoreSafe(paths)).resolves.toBeUndefined();
+    await rm(join(paths.root, "approvals"), { recursive: true });
+    await expect(assertApprovalStoreSafe(paths)).resolves.toBeUndefined();
+  });
+
+  it("control: both readers see the seeded approvals", async () => {
+    const paths = getPaths();
+    await seedApprovals(paths);
+    expect(await enumerateApprovals(paths)).toEqual({
+      pending: [PENDING_FIXTURE.id],
+      resolved: [RESOLVED_FIXTURE.id],
+    });
+    expect((await loadApproval(paths, PENDING_FIXTURE.id))?.location).toBe("pending");
+    expect((await loadApproval(paths, RESOLVED_FIXTURE.id))?.location).toBe("resolved");
+  });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  for (const relative of APPROVAL_STORE_DIRECTORIES) {
+    const label = `.basou/${relative}`;
+
+    it.skipIf(process.platform === "win32")(
+      `refuses a ${label} that is a symlink: both readers stop before reading`,
+      async () => {
+        const paths = getPaths();
+        await seedApprovals(paths);
+        const inside = join(paths.root, relative);
+        const outside = join(paths.root, "..", "outside");
+        await rename(inside, outside);
+        await symlink(outside, inside);
+        const before = await snapshot(outside);
+        const refusal = new Error(`${label} is a symlink; refusing to operate`);
+        await expect(assertApprovalStoreSafe(paths)).rejects.toThrow(refusal);
+        await expect(enumerateApprovals(paths)).rejects.toThrow(refusal);
+        await expect(loadApproval(paths, PENDING_FIXTURE.id)).rejects.toThrow(refusal);
+        await expect(loadApproval(paths, RESOLVED_FIXTURE.id)).rejects.toThrow(refusal);
+        expect(await snapshot(outside)).toEqual(before);
+      },
+    );
+
+    it(`refuses a ${label} that is a file: both readers stop before reading`, async () => {
+      const paths = getPaths();
+      await seedApprovals(paths);
+      const inside = join(paths.root, relative);
+      await rm(inside, { recursive: true });
+      await writeFile(inside, "");
+      const refusal = new Error(`${label} exists but is not a directory`);
+      await expect(assertApprovalStoreSafe(paths)).rejects.toThrow(refusal);
+      await expect(enumerateApprovals(paths)).rejects.toThrow(refusal);
+      await expect(loadApproval(paths, PENDING_FIXTURE.id)).rejects.toThrow(refusal);
+    });
+  }
+
+  it("checks .basou/approvals before the directories in it", async () => {
+    const paths = getPaths();
+    await rm(join(paths.root, "approvals"), { recursive: true });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(join(paths.root, "approvals"), "");
+    // pending and resolved cannot be inspected under a file (ENOTDIR); the
+    // refusal names the file, not a failure to inspect what is under it.
+    await expect(assertApprovalStoreSafe(paths)).rejects.toThrow(
+      new Error(".basou/approvals exists but is not a directory"),
+    );
   });
 });

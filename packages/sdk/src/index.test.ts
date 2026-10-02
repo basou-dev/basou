@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ApprovalStoreUnsafeError,
   BASOU_SDK_VERSION,
   BasouSdkError,
   normalizeIsoTimestamp,
@@ -7,15 +8,27 @@ import {
   readObservedDuration,
   resolveWorkspaceRoot,
   SessionStoreUnsafeError,
+  StoreUnsafeError,
+  TaskStoreUnsafeError,
 } from "./index.js";
 
 describe("@basou/sdk surface", () => {
-  it("exposes BASOU_SDK_VERSION as 0.6.0 (adds SessionStoreUnsafeError)", () => {
-    expect(BASOU_SDK_VERSION).toBe("0.6.0");
+  it("exposes BASOU_SDK_VERSION as 0.7.0 (adds StoreUnsafeError and its task / approval subclasses)", () => {
+    expect(BASOU_SDK_VERSION).toBe("0.7.0");
   });
 
-  it("exports the error for a sessions store that is not followed", () => {
-    expect(new SessionStoreUnsafeError("/r", "m")).toBeInstanceOf(BasouSdkError);
+  it("exports an error per store that is not followed, under one parent", () => {
+    for (const StoreError of [
+      SessionStoreUnsafeError,
+      TaskStoreUnsafeError,
+      ApprovalStoreUnsafeError,
+    ]) {
+      const error = new StoreError("/r", "m");
+      expect(error).toBeInstanceOf(StoreUnsafeError);
+      expect(error).toBeInstanceOf(BasouSdkError);
+      expect(error.name).toBe(StoreError.name);
+      expect(error.root).toBe("/r");
+    }
   });
 
   it("re-exports the read rule for a stored timestamp without seconds", () => {

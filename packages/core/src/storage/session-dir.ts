@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
+import { assertStoreDirectorySafe } from "./store-dir.js";
 
 /**
  * What is at a session's name under `paths.sessions`, judged without following
@@ -33,19 +34,7 @@ export type SessionEntryKind = "directory" | "symlink" | "not_a_directory" | "mi
  * not race-proof the filesystem.
  */
 export async function assertSessionStoreSafe(paths: BasouPaths): Promise<void> {
-  let entry: Awaited<ReturnType<typeof lstat>>;
-  try {
-    entry = await lstat(paths.sessions);
-  } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) return;
-    throw new Error("Failed to inspect .basou/sessions", { cause: error });
-  }
-  if (entry.isSymbolicLink()) {
-    throw new Error(".basou/sessions is a symlink; refusing to operate");
-  }
-  if (!entry.isDirectory()) {
-    throw new Error(".basou/sessions exists but is not a directory");
-  }
+  await assertStoreDirectorySafe(paths.sessions, ".basou/sessions");
 }
 
 /**
