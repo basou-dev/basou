@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 import {
   AGENT_INFRA_DIRS,
   assertBasouRootSafe,
+  assertLockStoreSafe,
   assertSessionStoreSafe,
   type BasouPaths,
   basouPaths,
@@ -366,8 +367,11 @@ async function importDerivedSessions(
   boundaryDeclared: boolean,
 ): Promise<void> {
   // A `.basou/sessions` that is a symlink stops the import before anything is
-  // read from it, `--dry-run` included.
+  // read from it, `--dry-run` included. A re-import takes a session lock, so a
+  // `.basou/locks` that is one stops it too, before any session is imported
+  // (a dry run takes no lock and is not stopped).
   await assertSessionStoreSafe(paths);
+  if (options.dryRun !== true) await assertLockStoreSafe(paths);
   const { byExternalId: existingByExternalId, notDirectories } = await loadExistingByExternalId(
     paths,
     sourceKind,

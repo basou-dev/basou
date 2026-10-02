@@ -37,6 +37,23 @@ All notable changes to **basou** are recorded here. The project follows
   `approvals_resolved` were `true` in `--json` and in the SDK's `status`. Both
   are now reported as missing (`5/7`), as they already were when `pending` or
   `resolved` itself is a symlink.
+- **No lockfile is created behind a symlinked `.basou/locks`.** Every command
+  that takes a lock created and removed its lockfile in the directory the
+  symlink points to, outside the store, and one placed there (a live pid, a
+  recent time) made those commands fail as `Lock is held by another process`.
+  They now stop with `.basou/locks is a symlink; refusing to operate` (or
+  `exists but is not a directory`) before they write anything: `exec` and
+  `run` before they start a session, `approval approve` and `reject` before
+  they create `resolved/`, `basou import`, and with it `refresh`, before it
+  imports anything, and `session rechain` once rather than on every row.
+- **The hooks no longer write a session's observation behind a symlinked
+  `.basou/tmp`.** With `.basou/tmp` or `.basou/tmp/observations` a symlink,
+  the `session-start` hook wrote the observation, which names the session's
+  repositories and files by absolute path, into the directory it points to
+  and left it there, and an import read it back. Nothing is written or read
+  there now; as for any observation the hooks cannot write, the session goes
+  on and its import has no observed files. An observation file that is a
+  symlink is not read either.
 
 ### Changed
 

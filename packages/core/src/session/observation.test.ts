@@ -1,4 +1,13 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -135,3 +144,75 @@ describe("observedFileFrom", () => {
     ).toEqual({ path: "/repo/b.ts", change_type: "renamed", old_path: "/repo/a.ts" });
   });
 });
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")(
+  "an observations directory that is not followed",
+  () => {
+    /** `<dir>/store/.basou/tmp/observations`, as `basouPaths` lays it out. */
+    function observationsUnder(): { tmp: string; observations: string } {
+      const tmp = join(dir, "store", ".basou", "tmp");
+      return { tmp, observations: join(tmp, "observations") };
+    }
+
+    it("control: writes and reads under a real .basou/tmp", async () => {
+      const { tmp, observations } = observationsUnder();
+      await mkdir(tmp, { recursive: true });
+      await writeSessionObservation(observations, observation());
+      expect(await readSessionObservation(observations, observation().external_id)).toEqual(
+        observation(),
+      );
+    });
+
+    for (const [label, linked] of [
+      [".basou/tmp", "tmp"],
+      [".basou/tmp/observations", "observations"],
+    ] as const) {
+      it(`writes nothing behind a ${label} that is a symlink, and reads nothing through it`, async () => {
+        const layout = observationsUnder();
+        await mkdir(layout.observations, { recursive: true });
+        await writeSessionObservation(layout.observations, observation());
+        const outside = join(dir, "outside");
+        await rename(layout[linked], outside);
+        await symlink(outside, layout[linked]);
+        const before = await readdir(outside, { recursive: true });
+
+        await expect(
+          writeSessionObservation(layout.observations, observation({ external_id: "another-id" })),
+        ).rejects.toThrow(new Error(`${label} is a symlink; refusing to operate`));
+        expect(await readdir(outside, { recursive: true })).toEqual(before);
+        expect(
+          await readSessionObservation(layout.observations, observation().external_id),
+        ).toBeNull();
+      });
+    }
+
+    it("refuses a .basou/tmp that is a file", async () => {
+      const { tmp, observations } = observationsUnder();
+      await mkdir(join(tmp, ".."), { recursive: true });
+      await writeFile(tmp, "");
+      await expect(writeSessionObservation(observations, observation())).rejects.toThrow(
+        new Error(".basou/tmp exists but is not a directory"),
+      );
+      expect(await readSessionObservation(observations, observation().external_id)).toBeNull();
+    });
+
+    it("reads nothing through an observation file that is a symlink", async () => {
+      const { observations } = observationsUnder();
+      await mkdir(observations, { recursive: true });
+      const outside = join(dir, "outside.json");
+      await writeFile(outside, `${JSON.stringify(observation())}\n`);
+      await symlink(outside, join(observations, `${observation().external_id}.json`));
+      expect(await readSessionObservation(observations, observation().external_id)).toBeNull();
+      // A write replaces the link by rename rather than writing through it.
+      await writeSessionObservation(
+        observations,
+        observation({ updated_at: "2026-09-22T11:00:00.000Z" }),
+      );
+      expect(JSON.parse(await readFile(outside, "utf8"))).toEqual(observation());
+      expect(
+        (await readSessionObservation(observations, observation().external_id))?.updated_at,
+      ).toBe("2026-09-22T11:00:00.000Z");
+    });
+  },
+);

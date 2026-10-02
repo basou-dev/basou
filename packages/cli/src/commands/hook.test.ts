@@ -6,6 +6,7 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -1474,6 +1475,24 @@ describe("the production observer, against a real workspace", () => {
     const entries = await readdir(basouPaths(repo).observations).catch(() => []);
     expect(entries).toEqual([]);
   });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "writes nothing behind a .basou/tmp that is a symlink, and the session goes on",
+    async () => {
+      await writeFile(portfolioPath, `workspaces:\n  - path: ${JSON.stringify(repo)}\n`);
+      const tmp = basouPaths(repo).tmp;
+      const outside = join(dir, "outside-tmp");
+      await mkdir(tmp, { recursive: true });
+      await rename(tmp, outside);
+      await symlink(outside, tmp);
+      await writeFile(join(repo, "written.ts"), "export const a = 1;\n");
+      process.exitCode = 0;
+      await fireBoth("sess-3", repo);
+      expect(process.exitCode).not.toBe(1);
+      expect(await readdir(outside, { recursive: true })).toEqual([]);
+    },
+  );
 });
 
 describe("hook session-start against a real workspace (allowlist, no write)", () => {

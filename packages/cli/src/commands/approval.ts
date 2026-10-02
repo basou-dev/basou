@@ -9,6 +9,7 @@ import {
   acquireLock,
   appendChainedEventLocked,
   assertBasouRootSafe,
+  assertLockStoreSafe,
   assertSessionDirSafe,
   type BasouPaths,
   basouPaths,
@@ -430,7 +431,9 @@ async function doRunApprovalResolve(
   // The resolved-side YAML is written after the resolution event, so its
   // directory is made now: were it missing then, the trail would record a
   // resolution that left the approval pending. The store was checked when the
-  // id was resolved, so this cannot follow a symlink basou refuses.
+  // id was resolved, so this cannot follow a symlink basou refuses. The lock
+  // store is checked first, so a refused one stops the command before this.
+  await assertLockStoreSafe(paths);
   try {
     await mkdir(paths.approvals.resolved, { recursive: true });
   } catch (error: unknown) {

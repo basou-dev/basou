@@ -52,11 +52,12 @@ out on disk.
 ### The store's directories are not followed
 
 basou creates `sessions/`, `tasks/`, `tasks/archive/`, `approvals/`,
-`approvals/pending/` and `approvals/resolved/` as directories and never as
-anything else, and it creates no symlink under `.basou/`, except in a view
-that `workspace.view` places there. When one of them is a symlink, whatever it
-points to, or a file, the commands that read or write what it holds stop with
-an error naming it: `<directory> is a symlink; refusing to operate` or `<directory> exists but
+`approvals/pending/`, `approvals/resolved/`, `locks/`, `tmp/` and
+`tmp/observations/` as directories and never as anything else, and it creates
+no symlink under `.basou/`, except in a view that `workspace.view` places
+there. When one of them is a symlink, whatever it points to, or a file, the
+commands that read or write what it holds stop with an error naming it,
+except where the list below says otherwise: `<directory> is a symlink; refusing to operate` or `<directory> exists but
 is not a directory`, where `<directory>` is the path from the repository root,
 such as `.basou/tasks/archive`. They stop before they read anything from that
 directory, and before they write anything, take a lock or record an event,
@@ -81,6 +82,20 @@ write into one create it.
   nothing. The watcher's first catch-up fails; a later cycle is skipped and
   the refusal logged. `refresh --dry-run` imports and regenerates nothing and
   is not stopped.
+- `.basou/locks` stops the commands that take a lock, before they write
+  anything: `note`, `session note`, `decision record`, `capture` and `void`,
+  the `basou task` subcommands that write, `approval approve` and `reject`,
+  `exec`, `run`, and `session rechain`, a dry run included. It stops `basou
+  import` too, since a re-import takes a lock, so an import stops before it
+  imports anything, and with it `refresh`, `orient --refresh` and each cycle
+  of `refresh --watch` when they import. A `session import` of a new session
+  takes no lock and is not stopped, and neither is a dry run of an import or
+  a refresh.
+- `.basou/tmp` and `.basou/tmp/observations` hold the hooks' observations of
+  what a session changes. The `session-start` and `stop` hooks write none
+  there, silently, as for any observation they cannot write, and an import
+  reads none, as for a session that was not observed. An observation file in
+  it that is not a regular file is not read either.
 
 `basou view` answers `500` with the error on the pages that read the store;
 on the portfolio page the workspace's card carries the error instead. The

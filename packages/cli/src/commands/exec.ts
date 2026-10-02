@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   acquireLock,
   assertBasouRootSafe,
+  assertLockStoreSafe,
   assertSessionStoreSafe,
   type BasouPaths,
   basouPaths,
@@ -118,8 +119,11 @@ export async function runExec(
   const manifest = await readManifest(paths);
 
   // 4. Build a fresh session and persist its initial state, inside the
-  //    store: a `.basou/sessions` that is a symlink is refused.
+  //    store: a `.basou/sessions` that is a symlink is refused, and so is a
+  //    `.basou/locks` one, which the first lock below would meet only after
+  //    the session was written.
   await assertSessionStoreSafe(paths);
+  await assertLockStoreSafe(paths);
   const sessionId = prefixedUlid("ses");
   const sessionDir = join(paths.sessions, sessionId);
   await mkdir(sessionDir, { recursive: true });

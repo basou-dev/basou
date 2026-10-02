@@ -23,12 +23,15 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runDecisionRecord } from "./decision.js";
 import { runDecisionGaps } from "./decision-gaps.js";
 import { runHandoffGenerate } from "./handoff.js";
+import { runImportClaudeCode } from "./import.js";
 import { runOrient } from "./orient.js";
 import { runRefresh } from "./refresh.js";
 import { runReportGenerate } from "./report.js";
-import { runSessionImport } from "./session.js";
+import { runSessionImport, runSessionRechain } from "./session.js";
+import { runTaskNew, runTaskStatus } from "./task.js";
 
 // The commands outside `basou task` and `basou approval` that read the task or
 // approval store, driven through their CLI entry points against a store whose
@@ -290,4 +293,66 @@ describe.skipIf(process.platform === "win32")("refresh --dry-run with a symlinke
       expect(await snapshot(paths.sessions)).toEqual(sessionsBefore);
     });
   }
+});
+
+// Commands that take a lock, against a `.basou/locks` that is a symlink: each
+// stops before it writes anything, rather than creating its lockfile behind
+// the link (or, for the ones that import or start a session first, after
+// writing that). The lock itself is tested in @basou/core.
+const LOCK_TAKERS: Command[] = [
+  ["refresh", (repo) => runRefresh({}, ctxFor(repo))],
+  ["orient --refresh", (repo) => runOrient({ refresh: true }, ctxFor(repo))],
+  ["import claude-code --all", (repo) => runImportClaudeCode({ all: true }, ctxFor(repo))],
+  ["task new", (repo) => runTaskNew({ title: "another task" }, ctxFor(repo))],
+  ["task status", (repo) => runTaskStatus(TASK_ID, "in_progress", {}, ctxFor(repo))],
+  ["decision record", (repo) => runDecisionRecord({ title: "a decision" }, ctxFor(repo))],
+  ["session rechain --all", (repo) => runSessionRechain({ all: true }, ctxFor(repo))],
+];
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("a .basou/locks that is a symlink", () => {
+  async function freshRepo(): Promise<string> {
+    await rm(join(getTmp(), "repo"), { recursive: true, force: true });
+    await rm(join(getTmp(), "outside"), { recursive: true, force: true });
+    await rm(join(getTmp(), "claude"), { recursive: true, force: true });
+    return setupRepo();
+  }
+
+  it("control: with the locks directory intact every command succeeds", async () => {
+    for (const [name, run] of LOCK_TAKERS) {
+      const repo = await freshRepo();
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      process.exitCode = 0;
+      await run(repo);
+      expect(process.exitCode, `${name}: ${err.mock.calls.join(" | ")}`).not.toBe(1);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("each command stops with the refusal and writes nothing", async () => {
+    for (const [name, run] of LOCK_TAKERS) {
+      const repo = await freshRepo();
+      const paths = basouPaths(repo);
+      const outside = join(getTmp(), "outside");
+      await rename(paths.locks, outside);
+      await symlink(outside, paths.locks);
+      const before = await snapshot(paths.root);
+
+      const out = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      process.exitCode = 0;
+      await run(repo);
+      expect(process.exitCode, name).toBe(1);
+      expect(err.mock.calls.map((c) => String(c[0])).join("\n"), name).toContain(
+        ".basou/locks is a symlink; refusing to operate",
+      );
+      // Stopped once, up front: no per-session row, no partial result.
+      expect(out.mock.calls, name).toEqual([]);
+      expect(await readdir(outside), name).toEqual([]);
+      // No session, task or event was written in the store either.
+      expect(await snapshot(paths.root), name).toEqual(before);
+      vi.restoreAllMocks();
+    }
+  });
 });

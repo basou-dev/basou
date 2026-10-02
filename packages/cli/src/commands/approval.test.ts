@@ -1213,6 +1213,35 @@ describe.skipIf(process.platform === "win32")("an unsafe approval store", () => 
     });
   }
 
+  it("a .basou/locks that is a symlink stops approve and reject before they create, lock or record anything", async () => {
+    const { repo, sessionId } = await linkedApprovals("approvals");
+    const paths = basouPaths(repo);
+    await rm(join(paths.root, "approvals"));
+    await rename(join(repo, "moved-approvals"), join(paths.root, "approvals"));
+    await rm(paths.approvals.resolved, { recursive: true });
+    const outsideLocks = join(repo, "outside-locks");
+    await rename(paths.locks, outsideLocks);
+    await symlink(outsideLocks, paths.locks);
+    const eventsBefore = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+    const commands: Array<[string, () => Promise<void>]> = [
+      ["approve", () => runApprovalApprove(APPR("P61"), {}, { cwd: repo })],
+      ["reject", () => runApprovalReject(APPR("P62"), { reason: "no" }, { cwd: repo })],
+    ];
+    for (const [name, run] of commands) {
+      const err = captureStderr();
+      process.exitCode = 0;
+      await run();
+      expect(process.exitCode, name).toBe(1);
+      expect(joinCalls(err), name).toBe(".basou/locks is a symlink; refusing to operate");
+      err.mockRestore();
+    }
+    expect(await readdir(outsideLocks)).toEqual([]);
+    await expect(readdir(paths.approvals.resolved)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8")).toBe(
+      eventsBefore,
+    );
+  });
+
   it("approve and reject create a missing resolved/ before recording the resolution", async () => {
     const { repo, sessionId } = await linkedApprovals("approvals");
     const paths = basouPaths(repo);

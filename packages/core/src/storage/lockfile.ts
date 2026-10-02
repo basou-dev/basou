@@ -4,6 +4,7 @@ import { findErrorCode } from "../lib/error-codes.js";
 import { SessionIdSchema } from "../schemas/shared.schema.js";
 import { atomicCreate } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
+import { assertStoreDirectorySafe } from "./store-dir.js";
 
 /**
  * The two lock scopes basou uses. `task` guards the read-modify-write window
@@ -37,12 +38,29 @@ export type LockHandle = {
 };
 
 /**
+ * Refuse to take or clear a lock when `.basou/locks` is a symlink or not a
+ * directory, so no lockfile is created in, read from or removed from a place
+ * outside the store through it. basou never creates such an entry. An absent
+ * directory passes ({@link acquireLock} creates it). `acquireLock` makes this
+ * check first; a command that writes anything before it takes its first lock
+ * (`exec`, `run`, `approval approve` / `reject`, and an import, which
+ * `refresh` runs) makes it before that write.
+ *
+ * Throws the `assertStoreDirectorySafe` errors, naming `.basou/locks`.
+ */
+export async function assertLockStoreSafe(paths: BasouPaths): Promise<void> {
+  await assertStoreDirectorySafe(paths.locks, ".basou/locks");
+}
+
+/**
  * Acquire an advisory lock at `<paths.locks>/<scope>_<id>.lock` for the
  * lifetime of the returned handle. Lockfile body records the holder's pid
  * and acquire timestamp so a competitor can detect stale locks left by a
  * SIGINT'd CLI run and recover automatically.
  *
  * Acquisition strategy:
+ *   0. {@link assertLockStoreSafe}: a `.basou/locks` that is a symlink or a
+ *      file throws its errors before anything is created.
  *   1. {@link atomicCreate} the lockfile (POSIX link(2) + EEXIST).
  *      On ENOENT (a workspace from before `.basou/locks/` existed), create
  *      the directory and retry once; a retry failure throws the pathless
@@ -74,6 +92,7 @@ export async function acquireLock(
   if (scope === "session" && !SessionIdSchema.safeParse(resourceId).success) {
     throw new Error("Invalid session id");
   }
+  await assertLockStoreSafe(paths);
   const lockPath = lockfilePath(paths, scope, resourceId);
   const body: LockFileBody = {
     pid: process.pid,

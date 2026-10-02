@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -137,6 +137,31 @@ describe("runExec", () => {
         ),
       ).rejects.toThrow(".basou/sessions is a symlink; refusing to operate");
       expect(await readdir(outside)).toEqual([]);
+    },
+  );
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "starts no session when .basou/locks is a symlink",
+    async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      const outside = join(repo, "outside-locks");
+      await rename(paths.locks, outside);
+      await symlink(outside, paths.locks);
+      const runner = makeFakeRunner({ exit_code: 0 });
+      const spawned = vi.spyOn(runner, "run");
+      await expect(
+        runExec(
+          "node",
+          ["-e", "process.exit(0)"],
+          { cwd: repo, snapshot: false },
+          { runner, now: () => FIXED_DATE },
+        ),
+      ).rejects.toThrow(".basou/locks is a symlink; refusing to operate");
+      expect(await readdir(outside)).toEqual([]);
+      expect(await readdir(paths.sessions)).toEqual([]);
+      expect(spawned).not.toHaveBeenCalled();
     },
   );
 

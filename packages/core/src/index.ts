@@ -495,6 +495,7 @@ export {
   appendEventToExistingSession,
   archiveTask,
   assertBasouRootSafe,
+  assertLockStoreSafe,
   assertSessionDirSafe,
   assertSessionStoreSafe,
   assertTaskStoreSafe,

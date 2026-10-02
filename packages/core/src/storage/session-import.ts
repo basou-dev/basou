@@ -722,18 +722,10 @@ export async function rechainSessionInPlace(
     return { status: "skipped", reason: entry };
   }
   const sessionDir = join(paths.sessions, sessionId);
-  // Wrap lock-acquisition failures in the fixed pathless vocabulary: the CLI
-  // surfaces per-session error messages verbatim, so a raw fs error here
-  // would leak an absolute lockfile path.
-  let lock: Awaited<ReturnType<typeof acquireLock>>;
-  try {
-    lock = await acquireLock(paths, "session", sessionId);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Lock is held by another process") {
-      throw error;
-    }
-    throw new Error("Failed to acquire lock", { cause: error });
-  }
+  // The CLI surfaces per-session error messages verbatim. acquireLock's are
+  // pathless ("Lock is held by another process", "Failed to acquire lock", or
+  // a refusal naming `.basou/locks`), so they propagate as they are.
+  const lock = await acquireLock(paths, "session", sessionId);
   try {
     // 1. Status gate: only the imported corpus is closed against appends.
     let record: Session;

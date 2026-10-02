@@ -393,3 +393,24 @@ describe.skipIf(process.platform === "win32")("runRefreshWatch with an unsafe ta
     ).toBe(true);
   });
 });
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("runRefreshWatch with an unsafe lock store", () => {
+  it("fails the initial catch-up before importing anything", async () => {
+    const repo = await setupRepo();
+    await writeCodexRolloutAt(repo, "c-refused");
+    const locks = basouPaths(repo).locks;
+    const outside = join(repo, "moved-locks");
+    await mkdir(locks, { recursive: true });
+    await rename(locks, outside);
+    await symlink(outside, locks);
+    const controller = new AbortController();
+    const deps = watchDeps(repo, controller, scriptedSleep(controller, []));
+
+    await expect(runRefreshWatch(deps)).rejects.toThrow(
+      ".basou/locks is a symlink; refusing to operate",
+    );
+    expect(await codexSessionIds(repo)).toEqual([]);
+    expect(await readdir(outside)).toEqual([]);
+  });
+});
