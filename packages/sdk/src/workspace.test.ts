@@ -12,7 +12,7 @@ import {
   TaskStoreUnsafeError,
   WorkspaceNotFoundError,
 } from "./errors.js";
-import { openWorkspace, type Workspace } from "./workspace.js";
+import { openWorkspace, toStoreError, type Workspace } from "./workspace.js";
 
 // Fixtures are written as JSON, which is valid YAML, so the core readers
 // (yaml-parsed) accept them without pulling `yaml` into the SDK's own deps.
@@ -333,96 +333,208 @@ describe("openWorkspace", () => {
   });
 });
 
-describe("a .basou/sessions that is not followed", () => {
-  const SYMLINK_MESSAGE = ".basou/sessions is a symlink; refusing to operate";
-  const FILE_MESSAGE = ".basou/sessions exists but is not a directory";
+type StoreName = "sessions" | "tasks" | "approvals";
 
-  async function replaceStoreWithSymlink(repoRoot: string): Promise<void> {
-    const sessions = join(repoRoot, ".basou", "sessions");
-    const moved = join(repoRoot, "moved-sessions");
-    await rename(sessions, moved);
-    await symlink(moved, sessions);
-  }
+/**
+ * Every method of a workspace: the stores whose refusal it throws, and a call
+ * that drives it to completion and returns what `toEqual` can compare. Keyed
+ * by the methods of `Workspace`, so a method added without a row here does not
+ * compile, and the first test below checks the object itself.
+ */
+const METHODS: {
+  [K in Exclude<keyof Workspace, "root">]: {
+    stores: readonly StoreName[];
+    call: (ws: Workspace) => Promise<unknown>;
+  };
+} = {
+  manifest: { stores: [], call: async (ws) => (await ws.manifest()).workspace.id },
+  // status throws for no store: it reports a refused directory as missing,
+  // which "status of a symlinked .basou/approvals" checks.
+  status: { stores: [], call: async (ws) => (await ws.status()).workspace },
+  listSessions: {
+    stores: ["sessions"],
+    call: async (ws) => (await ws.listSessions()).map((s) => s.sessionId),
+  },
+  getSession: {
+    stores: ["sessions"],
+    call: async (ws) => (await ws.getSession(SES_DONE))?.sessionId,
+  },
+  readEvents: {
+    stores: ["sessions"],
+    call: async (ws) => (await ws.readEvents(SES_DONE)).map((e) => e.id),
+  },
+  streamEvents: {
+    stores: ["sessions"],
+    call: async (ws) => {
+      const ids: string[] = [];
+      for await (const event of ws.streamEvents(SES_DONE)) ids.push(event.id);
+      return ids;
+    },
+  },
+  listTasks: {
+    stores: ["tasks"],
+    call: async (ws) => (await ws.listTasks()).map((t) => t.task.task.id),
+  },
+  getTask: {
+    stores: ["tasks"],
+    call: async (ws) => (await ws.getTask(TASK_ID))?.task.task.title,
+  },
+  listApprovals: {
+    stores: ["approvals"],
+    call: async (ws) => {
+      const { pending, resolved } = await ws.listApprovals();
+      return [pending.map((a) => a.approval.id), resolved.map((a) => a.approval.id)];
+    },
+  },
+  getApproval: {
+    stores: ["approvals"],
+    call: async (ws) => (await ws.getApproval(APPR_PENDING))?.location,
+  },
+  stats: {
+    stores: ["sessions"],
+    call: async (ws) => (await ws.stats({ timeZone: "UTC" })).totals.sessionCount,
+  },
+  renderHandoff: { stores: ["sessions", "tasks", "approvals"], call: (ws) => ws.renderHandoff() },
+  renderDecisions: { stores: ["sessions"], call: (ws) => ws.renderDecisions() },
+  renderReport: {
+    stores: ["sessions", "tasks", "approvals"],
+    call: (ws) => ws.renderReport({ timeZone: "UTC" }),
+  },
+};
 
-  async function replaceStoreWithFile(repoRoot: string): Promise<void> {
-    const sessions = join(repoRoot, ".basou", "sessions");
-    await rm(sessions, { recursive: true, force: true });
-    await writeFile(sessions, "");
-  }
+describe("a directory of the store that is not followed", () => {
+  // One clock for the baseline and the refused workspace, so rendered output compares.
+  const clock = { now: () => new Date("2026-05-11T00:00:00.000Z") };
+  const methods = Object.entries(METHODS);
 
-  // Every read that needs the sessions, driven to completion.
-  const sessionReads: ReadonlyArray<[string, (ws: Workspace) => Promise<unknown>]> = [
-    ["listSessions", (ws) => ws.listSessions()],
-    ["getSession", (ws) => ws.getSession(SES_DONE)],
-    ["readEvents", (ws) => ws.readEvents(SES_DONE)],
-    [
-      "streamEvents",
-      async (ws) => {
-        const events: Event[] = [];
-        for await (const event of ws.streamEvents(SES_DONE)) events.push(event);
-        return events;
-      },
-    ],
-    ["stats", (ws) => ws.stats({ timeZone: "UTC" })],
-    ["renderHandoff", (ws) => ws.renderHandoff()],
-    ["renderDecisions", (ws) => ws.renderDecisions()],
-    ["renderReport", (ws) => ws.renderReport({ timeZone: "UTC" })],
+  // Held for `instanceof` only, so typed by what it constructs, not by its
+  // constructor's parameters, which the SDK does not guarantee.
+  type StoreError = abstract new (...args: never) => StoreUnsafeError;
+  const STORE_ERRORS: Record<StoreName, StoreError> = {
+    sessions: SessionStoreUnsafeError,
+    tasks: TaskStoreUnsafeError,
+    approvals: ApprovalStoreUnsafeError,
+  };
+  const directories: ReadonlyArray<{ relative: string; store: StoreName }> = [
+    { relative: "sessions", store: "sessions" },
+    { relative: "tasks", store: "tasks" },
+    { relative: "tasks/archive", store: "tasks" },
+    { relative: "approvals", store: "approvals" },
+    { relative: "approvals/pending", store: "approvals" },
+    { relative: "approvals/resolved", store: "approvals" },
   ];
 
-  async function expectEachReadRefused(ws: Workspace, message: string): Promise<void> {
-    for (const [name, read] of sessionReads) {
-      const error = await read(ws).then(
+  async function replaceWithSymlink(repoRoot: string, relative: string): Promise<void> {
+    const inside = join(repoRoot, ".basou", relative);
+    await mkdir(inside, { recursive: true });
+    const moved = join(repoRoot, "moved");
+    await rename(inside, moved);
+    await symlink(moved, inside);
+  }
+
+  async function replaceWithFile(repoRoot: string, relative: string): Promise<void> {
+    const inside = join(repoRoot, ".basou", relative);
+    await rm(inside, { recursive: true, force: true });
+    await writeFile(inside, "");
+  }
+
+  /** What every method returns on the untouched fixture, to compare against. */
+  async function baseline(): Promise<Map<string, unknown>> {
+    const ws = await openWorkspace(await setupWorkspace(), clock);
+    const out = new Map<string, unknown>();
+    for (const [name, { call }] of methods) out.set(name, await call(ws));
+    await rm(getRoot(), { recursive: true, force: true });
+    await mkdir(getRoot());
+    return out;
+  }
+
+  /**
+   * Each method that reads `store` throws its refusal, retyped once with
+   * core's error as the cause; each other method returns what it returned on
+   * the untouched fixture.
+   */
+  async function expectStoreRefused(
+    ws: Workspace,
+    store: StoreName,
+    message: string,
+    expected: Map<string, unknown>,
+  ): Promise<void> {
+    const error = STORE_ERRORS[store];
+    for (const [name, { stores, call }] of methods) {
+      if (!stores.includes(store)) {
+        expect(await call(ws), name).toEqual(expected.get(name));
+        continue;
+      }
+      const thrown = await call(ws).then(
         () => undefined,
         (e: unknown) => e,
       );
-      expect(error, name).toBeInstanceOf(SessionStoreUnsafeError);
-      expect(error, name).toBeInstanceOf(BasouSdkError);
-      const refusal = error as SessionStoreUnsafeError;
+      expect(thrown, name).toBeInstanceOf(error);
+      expect(thrown, name).toBeInstanceOf(StoreUnsafeError);
+      expect(thrown, name).toBeInstanceOf(BasouSdkError);
+      // The three are siblings: catching one store's error catches no other's.
+      for (const other of Object.values(STORE_ERRORS)) {
+        if (other !== error) expect(thrown, `${name} vs ${other.name}`).not.toBeInstanceOf(other);
+      }
+      const refusal = thrown as StoreUnsafeError;
+      expect(refusal.name, name).toBe(error.name);
       expect(refusal.message, name).toBe(message);
-      expect(refusal.name, name).toBe("SessionStoreUnsafeError");
       expect(refusal.root, name).toBe(ws.root);
       expect(refusal.cause, name).toBeInstanceOf(Error);
       expect(refusal.cause, name).not.toBeInstanceOf(BasouSdkError);
       expect((refusal.cause as Error).message, name).toBe(message);
       // The cause is the error core's store check threw, not a copy of it.
-      expect((refusal.cause as Error).stack, name).toContain("assertSessionStoreSafe");
+      expect((refusal.cause as Error).stack, name).toContain("assertStoreDirectorySafe");
     }
   }
 
-  async function expectOtherReadsUnaffected(ws: Workspace): Promise<void> {
-    expect((await ws.manifest()).workspace.id).toBe(WS_ID);
-    expect((await ws.status()).directories_present.tasks).toBe(true);
-    expect((await ws.listTasks()).map((t) => t.task.task.id)).toEqual([TASK_ID]);
-    expect((await ws.getTask(TASK_ID))?.task.task.title).toBe("fixture task");
-    const { pending, resolved } = await ws.listApprovals();
-    expect(pending.map((a) => a.approval.id)).toEqual([APPR_PENDING]);
-    expect(resolved.map((a) => a.approval.id)).toEqual([APPR_DUP]);
-    expect((await ws.getApproval(APPR_PENDING))?.location).toBe("pending");
+  it("classifies every method of a workspace by the stores it reads", async () => {
+    const ws = await openWorkspace(await setupWorkspace());
+    expect(Object.keys(ws).sort()).toEqual(["root", ...Object.keys(METHODS)].sort());
+  });
+
+  for (const { relative, store } of directories) {
+    const label = `.basou/${relative}`;
+    const error = STORE_ERRORS[store];
+
+    // POSIX only: creating a symlink needs privileges on Windows.
+    it.skipIf(process.platform === "win32")(
+      `a ${label} that is a symlink makes the reads of that store throw ${error.name}`,
+      async () => {
+        const expected = await baseline();
+        const repoRoot = await setupWorkspace();
+        await replaceWithSymlink(repoRoot, relative);
+        const ws = await openWorkspace(repoRoot, clock);
+        await expectStoreRefused(ws, store, `${label} is a symlink; refusing to operate`, expected);
+      },
+    );
+
+    it(`a ${label} that is a file makes the reads of that store throw ${error.name}`, async () => {
+      const expected = await baseline();
+      const repoRoot = await setupWorkspace();
+      await replaceWithFile(repoRoot, relative);
+      const ws = await openWorkspace(repoRoot, clock);
+      await expectStoreRefused(ws, store, `${label} exists but is not a directory`, expected);
+    });
   }
 
-  // POSIX only: creating a symlink needs privileges on Windows.
-  it.skipIf(process.platform === "win32")(
-    "a symlink makes each read of the sessions throw SessionStoreUnsafeError",
-    async () => {
-      const repoRoot = await setupWorkspace();
-      await replaceStoreWithSymlink(repoRoot);
-      const ws = await openWorkspace(repoRoot);
-      await expectEachReadRefused(ws, SYMLINK_MESSAGE);
-      await expectOtherReadsUnaffected(ws);
-    },
-  );
-
-  it("a file makes each read of the sessions throw SessionStoreUnsafeError", async () => {
+  it("is checked on each call, so a workspace opened before the store was replaced throws it", async () => {
+    const expected = await baseline();
     const repoRoot = await setupWorkspace();
-    await replaceStoreWithFile(repoRoot);
-    const ws = await openWorkspace(repoRoot);
-    await expectEachReadRefused(ws, FILE_MESSAGE);
-    await expectOtherReadsUnaffected(ws);
+    const ws = await openWorkspace(repoRoot, clock);
+    expect((await ws.listSessions()).map((s) => s.sessionId)).toContain(SES_DONE);
+    await replaceWithFile(repoRoot, "sessions");
+    await expectStoreRefused(
+      ws,
+      "sessions",
+      ".basou/sessions exists but is not a directory",
+      expected,
+    );
   });
 
   it("a session lookup given an empty id, or ses_ alone, yields nothing without reading", async () => {
     const repoRoot = await setupWorkspace();
-    await replaceStoreWithFile(repoRoot);
+    await replaceWithFile(repoRoot, "sessions");
     const ws = await openWorkspace(repoRoot);
     for (const id of ["", "   ", "ses_", " ses_ "]) {
       expect(await ws.getSession(id), JSON.stringify(id)).toBeNull();
@@ -435,194 +547,9 @@ describe("a .basou/sessions that is not followed", () => {
     await expect(ws.getSession("ses_0")).rejects.toBeInstanceOf(SessionStoreUnsafeError);
   });
 
-  it("is checked on each call, so a workspace opened before the store was replaced throws it", async () => {
-    const repoRoot = await setupWorkspace();
-    const ws = await openWorkspace(repoRoot);
-    expect((await ws.listSessions()).map((s) => s.sessionId)).toContain(SES_DONE);
-    await replaceStoreWithFile(repoRoot);
-    await expectEachReadRefused(ws, FILE_MESSAGE);
-  });
-
-  // POSIX only, and not as root, who is never denied the lstat.
-  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "a failure to inspect the store is not retyped",
-    async () => {
-      const repoRoot = await setupWorkspace();
-      const ws = await openWorkspace(repoRoot);
-      const basouDir = join(repoRoot, ".basou");
-      await chmod(basouDir, 0o000);
-      try {
-        const error = await ws.listSessions().then(
-          () => undefined,
-          (e: unknown) => e,
-        );
-        expect(error).toBeInstanceOf(Error);
-        expect(error).not.toBeInstanceOf(BasouSdkError);
-        expect((error as Error).message).toBe("Failed to inspect .basou/sessions");
-      } finally {
-        await chmod(basouDir, 0o755);
-      }
-    },
-  );
-});
-
-describe("a directory of the task or approval store that is not followed", () => {
-  type Reads = ReadonlyArray<[string, (ws: Workspace) => Promise<unknown>]>;
-  // One clock for the baseline and the refused workspace, so rendered output compares.
-  const clock = { now: () => new Date("2026-05-11T00:00:00.000Z") };
-
-  const taskReads: Reads = [
-    ["listTasks", (ws) => ws.listTasks()],
-    ["getTask", (ws) => ws.getTask(TASK_ID)],
-    ["renderHandoff", (ws) => ws.renderHandoff()],
-    ["renderReport", (ws) => ws.renderReport({ timeZone: "UTC" })],
-  ];
-  const approvalReads: Reads = [
-    ["listApprovals", (ws) => ws.listApprovals()],
-    ["getApproval", (ws) => ws.getApproval(APPR_PENDING)],
-    ["renderHandoff", (ws) => ws.renderHandoff()],
-    ["renderReport", (ws) => ws.renderReport({ timeZone: "UTC" })],
-  ];
-  // What still reads, with the expected result in a form `toEqual` can check.
-  const sessionReads: Reads = [
-    ["manifest", async (ws) => (await ws.manifest()).workspace.id],
-    ["listSessions", async (ws) => (await ws.listSessions()).map((s) => s.sessionId)],
-    ["readEvents", async (ws) => (await ws.readEvents(SES_DONE)).length],
-    ["stats", async (ws) => (await ws.stats({ timeZone: "UTC" })).totals.sessionCount],
-    ["renderDecisions", (ws) => ws.renderDecisions()],
-  ];
-  const taskResults: Reads = [
-    ["listTasks", async (ws) => (await ws.listTasks()).map((t) => t.task.task.id)],
-    ["getTask", async (ws) => (await ws.getTask(TASK_ID))?.task.task.title],
-  ];
-  const approvalResults: Reads = [
-    [
-      "listApprovals",
-      async (ws) => {
-        const { pending, resolved } = await ws.listApprovals();
-        return [pending.map((a) => a.approval.id), resolved.map((a) => a.approval.id)];
-      },
-    ],
-    ["getApproval", async (ws) => (await ws.getApproval(APPR_PENDING))?.location],
-  ];
-
-  // Held for `instanceof` only, so typed by what it constructs, not by its
-  // constructor's parameters, which the SDK does not guarantee.
-  type StoreError = abstract new (...args: never) => StoreUnsafeError;
-  type Store = {
-    relative: string;
-    error: StoreError;
-    refused: Reads;
-    unaffected: Reads;
-  };
-  const stores: Store[] = [
-    {
-      relative: "tasks",
-      error: TaskStoreUnsafeError,
-      refused: taskReads,
-      unaffected: [...sessionReads, ...approvalResults],
-    },
-    {
-      relative: "tasks/archive",
-      error: TaskStoreUnsafeError,
-      refused: taskReads,
-      unaffected: [...sessionReads, ...approvalResults],
-    },
-    ...["approvals", "approvals/pending", "approvals/resolved"].map((relative) => ({
-      relative,
-      error: ApprovalStoreUnsafeError,
-      refused: approvalReads,
-      unaffected: [...sessionReads, ...taskResults],
-    })),
-  ];
-
-  /** The results of `reads` on the untouched fixture, to compare against. */
-  async function baseline(reads: Reads): Promise<unknown[]> {
-    const ws = await openWorkspace(await setupWorkspace(), clock);
-    const out: unknown[] = [];
-    for (const [, read] of reads) out.push(await read(ws));
-    await rm(getRoot(), { recursive: true, force: true });
-    await mkdir(getRoot());
-    return out;
-  }
-
-  async function expectEachReadRefused(
-    ws: Workspace,
-    reads: Reads,
-    error: StoreError,
-    message: string,
-  ): Promise<void> {
-    for (const [name, read] of reads) {
-      const thrown = await read(ws).then(
-        () => undefined,
-        (e: unknown) => e,
-      );
-      expect(thrown, name).toBeInstanceOf(error);
-      expect(thrown, name).toBeInstanceOf(StoreUnsafeError);
-      expect(thrown, name).toBeInstanceOf(BasouSdkError);
-      // The three are siblings: catching one store's error catches no other's.
-      for (const other of [
-        SessionStoreUnsafeError,
-        TaskStoreUnsafeError,
-        ApprovalStoreUnsafeError,
-      ]) {
-        if (other !== error) expect(thrown, `${name} vs ${other.name}`).not.toBeInstanceOf(other);
-      }
-      const refusal = thrown as StoreUnsafeError;
-      expect(refusal.name, name).toBe(error.name);
-      expect(refusal.message, name).toBe(message);
-      expect(refusal.root, name).toBe(ws.root);
-      expect(refusal.cause, name).toBeInstanceOf(Error);
-      expect(refusal.cause, name).not.toBeInstanceOf(BasouSdkError);
-      expect((refusal.cause as Error).message, name).toBe(message);
-    }
-  }
-
-  for (const { relative, error, refused, unaffected } of stores) {
-    const label = `.basou/${relative}`;
-
-    // POSIX only: creating a symlink needs privileges on Windows.
-    it.skipIf(process.platform === "win32")(
-      `a ${label} that is a symlink makes the reads of that store throw ${error.name}`,
-      async () => {
-        const expected = await baseline(unaffected);
-        const repoRoot = await setupWorkspace();
-        const inside = join(repoRoot, ".basou", relative);
-        await mkdir(inside, { recursive: true });
-        const moved = join(repoRoot, "moved");
-        await rename(inside, moved);
-        await symlink(moved, inside);
-        const ws = await openWorkspace(repoRoot, clock);
-        await expectEachReadRefused(
-          ws,
-          refused,
-          error,
-          `${label} is a symlink; refusing to operate`,
-        );
-        for (const [i, [name, read]] of unaffected.entries()) {
-          expect(await read(ws), name).toEqual(expected[i]);
-        }
-      },
-    );
-
-    it(`a ${label} that is a file makes the reads of that store throw ${error.name}`, async () => {
-      const expected = await baseline(unaffected);
-      const repoRoot = await setupWorkspace();
-      const inside = join(repoRoot, ".basou", relative);
-      await rm(inside, { recursive: true, force: true });
-      await writeFile(inside, "");
-      const ws = await openWorkspace(repoRoot, clock);
-      await expectEachReadRefused(ws, refused, error, `${label} exists but is not a directory`);
-      for (const [i, [name, read]] of unaffected.entries()) {
-        expect(await read(ws), name).toEqual(expected[i]);
-      }
-    });
-  }
-
   it("a task lookup given an empty id, or task_ alone, yields null without reading", async () => {
     const repoRoot = await setupWorkspace();
-    await rm(join(repoRoot, ".basou", "tasks"), { recursive: true, force: true });
-    await writeFile(join(repoRoot, ".basou", "tasks"), "");
+    await replaceWithFile(repoRoot, "tasks");
     const ws = await openWorkspace(repoRoot);
     for (const id of ["", "   ", "task_", " task_ "]) {
       expect(await ws.getTask(id), JSON.stringify(id)).toBeNull();
@@ -632,8 +559,7 @@ describe("a directory of the task or approval store that is not followed", () =>
 
   it("an approval lookup given a string that is not an approval id reads nothing", async () => {
     const repoRoot = await setupWorkspace();
-    await rm(join(repoRoot, ".basou", "approvals"), { recursive: true, force: true });
-    await writeFile(join(repoRoot, ".basou", "approvals"), "");
+    await replaceWithFile(repoRoot, "approvals");
     const ws = await openWorkspace(repoRoot);
     for (const id of ["", "appr_", APPR_PENDING.slice(0, -1), `${APPR_PENDING} `]) {
       expect(await ws.getApproval(id), JSON.stringify(id)).toBeNull();
@@ -665,19 +591,58 @@ describe("a directory of the task or approval store that is not followed", () =>
     expect((await ws.getApproval(APPR_PENDING))?.approval.reason).toBe("fixture approval");
   });
 
-  it("a session store refusal is a StoreUnsafeError too", async () => {
-    const repoRoot = await setupWorkspace();
-    await rm(join(repoRoot, ".basou", "sessions"), { recursive: true, force: true });
-    await writeFile(join(repoRoot, ".basou", "sessions"), "");
-    const ws = await openWorkspace(repoRoot);
-    const thrown = await ws.listSessions().then(
-      () => undefined,
-      (e: unknown) => e,
+  // POSIX only, and not as root, who is never denied the lstat.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a failure to inspect the store is not retyped",
+    async () => {
+      const repoRoot = await setupWorkspace();
+      const ws = await openWorkspace(repoRoot);
+      const basouDir = join(repoRoot, ".basou");
+      await chmod(basouDir, 0o000);
+      try {
+        const error = await ws.listSessions().then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(error).toBeInstanceOf(Error);
+        expect(error).not.toBeInstanceOf(BasouSdkError);
+        expect((error as Error).message).toBe("Failed to inspect .basou/sessions");
+      } finally {
+        await chmod(basouDir, 0o755);
+      }
+    },
+  );
+});
+
+describe("toStoreError", () => {
+  const ROOT = "/repo";
+
+  it("retypes core's refusal of a store directory, with the refusal as the cause", () => {
+    const refusal = new Error(".basou/tasks/archive exists but is not a directory");
+    const retyped = toStoreError(ROOT, refusal);
+    expect(retyped).toBeInstanceOf(TaskStoreUnsafeError);
+    expect((retyped as TaskStoreUnsafeError).root).toBe(ROOT);
+    expect((retyped as TaskStoreUnsafeError).cause).toBe(refusal);
+  });
+
+  it("does not retype an SDK error, so a refusal is retyped once", () => {
+    const retyped = toStoreError(
+      ROOT,
+      new Error(".basou/sessions is a symlink; refusing to operate"),
     );
-    expect(thrown).toBeInstanceOf(SessionStoreUnsafeError);
-    expect(thrown).toBeInstanceOf(StoreUnsafeError);
-    expect(thrown).not.toBeInstanceOf(TaskStoreUnsafeError);
-    expect(thrown).not.toBeInstanceOf(ApprovalStoreUnsafeError);
+    expect(retyped).toBeInstanceOf(SessionStoreUnsafeError);
+    // It carries core's message, which would match again.
+    expect(toStoreError(ROOT, retyped)).toBe(retyped);
+    const ambiguous = new AmbiguousIdError("ses_01");
+    expect(toStoreError(ROOT, ambiguous)).toBe(ambiguous);
+  });
+
+  it("returns any other error, or a thrown value that is not an Error, unchanged", () => {
+    const other = new Error(".basou/sessions is a symlink");
+    expect(toStoreError(ROOT, other)).toBe(other);
+    expect(toStoreError(ROOT, ".basou/sessions is a symlink; refusing to operate")).toBe(
+      ".basou/sessions is a symlink; refusing to operate",
+    );
   });
 });
 

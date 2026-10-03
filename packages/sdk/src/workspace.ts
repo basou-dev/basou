@@ -30,6 +30,7 @@ import {
 import {
   AmbiguousIdError,
   ApprovalStoreUnsafeError,
+  BasouSdkError,
   SessionStoreUnsafeError,
   type StoreUnsafeError,
   TaskStoreUnsafeError,
@@ -233,146 +234,129 @@ export async function openWorkspace(
   const resolveTask = (input: string): Promise<string | null> =>
     resolveOrNull(() => resolveTaskId(paths, input, { includeArchived: true }), input);
 
-  return {
-    root,
-
+  const reads: Omit<Workspace, "root"> = {
     manifest: () => readManifest(paths),
 
     status: async () =>
       buildStatusSnapshot({ manifest: await readManifest(paths), paths, now: now() }),
 
     listSessions: () =>
-      guardStore(root, () =>
-        loadSessionEntries(paths, {
-          now: now(),
-          onWarning: (w, sid) => onWarning(w, sid),
-          onSkip,
-        }),
-      ),
-
-    getSession: (idOrPrefix) =>
-      guardStore(root, async () => {
-        const id = await resolveSession(idOrPrefix);
-        if (id === null) return null;
-        const entries = await loadSessionEntries(paths, {
-          now: now(),
-          onWarning: (w, sid) => onWarning(w, sid),
-          onSkip,
-        });
-        return entries.find((e) => e.sessionId === id) ?? null;
+      loadSessionEntries(paths, {
+        now: now(),
+        onWarning: (w, sid) => onWarning(w, sid),
+        onSkip,
       }),
 
-    readEvents: (idOrPrefix) =>
-      guardStore(root, async () => {
-        const id = await resolveSession(idOrPrefix);
-        if (id === null) return [];
-        return readAllEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
-      }),
+    getSession: async (idOrPrefix) => {
+      const id = await resolveSession(idOrPrefix);
+      if (id === null) return null;
+      const entries = await loadSessionEntries(paths, {
+        now: now(),
+        onWarning: (w, sid) => onWarning(w, sid),
+        onSkip,
+      });
+      return entries.find((e) => e.sessionId === id) ?? null;
+    },
+
+    readEvents: async (idOrPrefix) => {
+      const id = await resolveSession(idOrPrefix);
+      if (id === null) return [];
+      return readAllEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
+    },
 
     streamEvents: (idOrPrefix): AsyncIterable<Event> => {
       async function* iterate(): AsyncGenerator<Event> {
-        try {
-          const id = await resolveSession(idOrPrefix);
-          if (id === null) return;
-          yield* replayEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
-        } catch (error) {
-          throw toStoreError(root, error);
-        }
+        const id = await resolveSession(idOrPrefix);
+        if (id === null) return;
+        yield* replayEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
       }
       return iterate();
     },
 
-    listTasks: () => guardStore(root, () => loadTaskEntries(paths, { onSkip })),
+    listTasks: () => loadTaskEntries(paths, { onSkip }),
 
-    getTask: (idOrPrefix) =>
-      guardStore(root, async () => {
-        const id = await resolveTask(idOrPrefix);
-        if (id === null) return null;
-        const { doc } = await readTaskFileWithArchiveFallback(paths, id);
-        return doc;
-      }),
+    getTask: async (idOrPrefix) => {
+      const id = await resolveTask(idOrPrefix);
+      if (id === null) return null;
+      const { doc } = await readTaskFileWithArchiveFallback(paths, id);
+      return doc;
+    },
 
-    listApprovals: () =>
-      guardStore(root, async () => {
-        const ids = await enumerateApprovals(paths);
-        // An approval file that is a symlink or not a file is not followed: it
-        // is left out of the lists, and reported like a session entry that is
-        // not a directory.
-        for (const entry of ids.unfollowed) {
-          onSkip(entry.id, `approval_file_not_a_file (${entry.location})`);
-        }
-        // `loadApproval` searches resolved/ before pending/, so an id present in
-        // BOTH (a stale pending file left after resolution) would otherwise load
-        // the resolved record into the pending list too. Drop those from pending
-        // so a resolved approval is reported once, under `resolved`.
-        const resolvedSet = new Set(ids.resolved);
-        const pendingIds = ids.pending.filter((id) => !resolvedSet.has(id));
-        const load = async (id: string): Promise<LoadedApproval | null> => loadApproval(paths, id);
-        const [pending, resolved] = await Promise.all([
-          Promise.all(pendingIds.map(load)),
-          Promise.all(ids.resolved.map(load)),
-        ]);
-        return {
-          pending: pending.filter((a): a is LoadedApproval => a !== null),
-          resolved: resolved.filter((a): a is LoadedApproval => a !== null),
-        };
-      }),
+    listApprovals: async () => {
+      const ids = await enumerateApprovals(paths);
+      // An approval file that is a symlink or not a file is not followed: it
+      // is left out of the lists, and reported like a session entry that is
+      // not a directory.
+      for (const entry of ids.unfollowed) {
+        onSkip(entry.id, `approval_file_not_a_file (${entry.location})`);
+      }
+      // `loadApproval` searches resolved/ before pending/, so an id present in
+      // BOTH (a stale pending file left after resolution) would otherwise load
+      // the resolved record into the pending list too. Drop those from pending
+      // so a resolved approval is reported once, under `resolved`.
+      const resolvedSet = new Set(ids.resolved);
+      const pendingIds = ids.pending.filter((id) => !resolvedSet.has(id));
+      const load = async (id: string): Promise<LoadedApproval | null> => loadApproval(paths, id);
+      const [pending, resolved] = await Promise.all([
+        Promise.all(pendingIds.map(load)),
+        Promise.all(ids.resolved.map(load)),
+      ]);
+      return {
+        pending: pending.filter((a): a is LoadedApproval => a !== null),
+        resolved: resolved.filter((a): a is LoadedApproval => a !== null),
+      };
+    },
 
     // The id becomes a file name, so one that is not an approval id (`../x`)
     // is answered here, without looking at the store or anything outside it.
     getApproval: async (id) =>
-      ApprovalIdSchema.safeParse(id).success
-        ? guardStore(root, () => loadApproval(paths, id))
-        : null,
+      ApprovalIdSchema.safeParse(id).success ? loadApproval(paths, id) : null,
 
     stats: (statsOptions) =>
-      guardStore(root, () =>
-        computeWorkStats({
-          paths,
-          now: now(),
-          ...(statsOptions?.timeZone !== undefined ? { timeZone: statsOptions.timeZone } : {}),
-          onWarning: (w, sid) => onWarning(w, sid),
-          onSessionSkip: onSkip,
-        }),
-      ),
-
-    renderHandoff: () =>
-      guardStore(root, async () => {
-        const result = await renderHandoff({
-          paths,
-          nowIso: now().toISOString(),
-          onWarning: (w, sid) => onWarning(w, sid),
-          onSessionSkip: onSkip,
-          onTaskSkip: onSkip,
-        });
-        return result.body;
+      computeWorkStats({
+        paths,
+        now: now(),
+        ...(statsOptions?.timeZone !== undefined ? { timeZone: statsOptions.timeZone } : {}),
+        onWarning: (w, sid) => onWarning(w, sid),
+        onSessionSkip: onSkip,
       }),
 
-    renderDecisions: () =>
-      guardStore(root, async () => {
-        const result = await renderDecisions({
-          paths,
-          nowIso: now().toISOString(),
-          onWarning: (w, sid) => onWarning(w, sid),
-          onSessionSkip: onSkip,
-        });
-        return result.body;
-      }),
+    renderHandoff: async () => {
+      const result = await renderHandoff({
+        paths,
+        nowIso: now().toISOString(),
+        onWarning: (w, sid) => onWarning(w, sid),
+        onSessionSkip: onSkip,
+        onTaskSkip: onSkip,
+      });
+      return result.body;
+    },
 
-    renderReport: (reportOptions) =>
-      guardStore(root, async () => {
-        const result = await renderReport({
-          paths,
-          nowIso: now().toISOString(),
-          ...(reportOptions?.title !== undefined ? { title: reportOptions.title } : {}),
-          ...(reportOptions?.timeZone !== undefined ? { timeZone: reportOptions.timeZone } : {}),
-          onWarning: (w, sid) => onWarning(w, sid),
-          onSessionSkip: onSkip,
-          onTaskSkip: onSkip,
-        });
-        return result.body;
-      }),
+    renderDecisions: async () => {
+      const result = await renderDecisions({
+        paths,
+        nowIso: now().toISOString(),
+        onWarning: (w, sid) => onWarning(w, sid),
+        onSessionSkip: onSkip,
+      });
+      return result.body;
+    },
+
+    renderReport: async (reportOptions) => {
+      const result = await renderReport({
+        paths,
+        nowIso: now().toISOString(),
+        ...(reportOptions?.title !== undefined ? { title: reportOptions.title } : {}),
+        ...(reportOptions?.timeZone !== undefined ? { timeZone: reportOptions.timeZone } : {}),
+        onWarning: (w, sid) => onWarning(w, sid),
+        onSessionSkip: onSkip,
+        onTaskSkip: onSkip,
+      });
+      return result.body;
+    },
   };
+
+  return { root, ...guardReads(root, reads) };
 }
 
 /**
@@ -410,18 +394,45 @@ const STORE_REFUSALS: ReadonlyMap<string, StoreErrorClass> = new Map(
  * Return core's refusal of a directory of the store as the
  * {@link StoreUnsafeError} subclass for that store, for the workspace at
  * `root`, keeping its message and attaching it as the cause. Any other error
- * is returned unchanged.
+ * is returned unchanged, and so is an SDK error: a refusal already retyped
+ * carries core's message too, and retyping it again would make the SDK error
+ * the cause. Exported for tests.
  */
-function toStoreError(root: string, error: unknown): unknown {
-  if (!(error instanceof Error)) return error;
+export function toStoreError(root: string, error: unknown): unknown {
+  if (!(error instanceof Error) || error instanceof BasouSdkError) return error;
   const StoreError = STORE_REFUSALS.get(error.message);
   return StoreError === undefined ? error : new StoreError(root, error.message, { cause: error });
 }
 
-/** Run a read of the store, retyping a store refusal it throws. */
-async function guardStore<T>(root: string, read: () => Promise<T>): Promise<T> {
+/** A method of {@link Workspace} other than `root`. */
+type Read = (...args: never[]) => Promise<unknown> | AsyncIterable<unknown>;
+
+/**
+ * Wrap every read of `reads` so that a store refusal it throws comes out
+ * retyped (see {@link toStoreError}): a promise when it settles, a stream as
+ * it is read. Every read is wrapped, not only the ones that read a store
+ * today, so a read added later, or one that core comes to check a store on,
+ * is guarded without being named here.
+ */
+function guardReads<T extends Record<keyof T, Read>>(root: string, reads: T): T {
+  const guarded: Record<string, Read> = {};
+  for (const [name, read] of Object.entries(reads as Record<string, Read>)) {
+    guarded[name] = (...args) => {
+      const result = read(...args);
+      return Symbol.asyncIterator in result
+        ? guardStream(root, result)
+        : result.catch((error: unknown) => {
+            throw toStoreError(root, error);
+          });
+    };
+  }
+  return guarded as T;
+}
+
+/** Read `stream` through, retyping a store refusal it throws. */
+async function* guardStream<T>(root: string, stream: AsyncIterable<T>): AsyncGenerator<T> {
   try {
-    return await read();
+    yield* stream;
   } catch (error) {
     throw toStoreError(root, error);
   }
