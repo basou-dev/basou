@@ -14,8 +14,10 @@ All notable changes to **basou** are recorded here. The project follows
   acquire lock` and left a session in `initialized` with no events, which
   `session list` listed and `orient` showed as the last session. They now take
   the session lock before writing anything, and stop with the same error
-  without a session. A `.basou/locks` that is a symlink was already refused
-  before anything was written, and still is.
+  without a session. When `.basou/sessions` cannot be written either, they
+  now print `Failed to acquire lock` where they printed the native error,
+  which named an absolute path. A `.basou/locks` that is a symlink was
+  already refused before anything was written, and still is.
 
 ### Internal
 
