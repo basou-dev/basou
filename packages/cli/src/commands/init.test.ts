@@ -1,5 +1,16 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -125,6 +136,29 @@ describe("doRunInit (pure runner)", () => {
     await doRunInit({}, { cwd: repo });
     await expect(doRunInit({}, { cwd: repo })).rejects.toThrow(/Already initialized/);
   });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "refuses to re-initialize over a .basou/approvals that is a symlink, with or without --force",
+    async () => {
+      const repo = getTmpRepo();
+      await doRunInit({}, { cwd: repo });
+      const paths = basouPaths(repo);
+      const approvals = join(paths.root, "approvals");
+      const outside = join(repo, "outside-approvals");
+      await mkdir(outside);
+      await rename(approvals, join(repo, "moved-approvals"));
+      await symlink(outside, approvals);
+      const before = await readManifest(paths);
+      for (const force of [false, true]) {
+        await expect(doRunInit({ force }, { cwd: repo }), String(force)).rejects.toThrow(
+          ".basou/approvals is a symlink; refusing to operate",
+        );
+      }
+      expect(await readdir(outside)).toEqual([]);
+      expect((await readManifest(paths)).workspace.id).toBe(before.workspace.id);
+    },
+  );
 
   it("--force overwrites manifest with a new workspace_id", async () => {
     const repo = getTmpRepo();

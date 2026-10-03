@@ -1,6 +1,15 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -3247,6 +3256,25 @@ describe("basou project new", () => {
     // The .gitignore block was appended (best-effort step ran).
     expect(await readFile(join(anchor(), ".gitignore"), "utf8")).toContain(".basou");
   });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "--apply over a .basou/approvals that is a symlink creates nothing and writes no manifest",
+    async () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      if (parent === undefined) throw new Error("parent not initialized");
+      const outside = join(parent, "outside-approvals");
+      await mkdir(outside);
+      await mkdir(join(anchor(), ".basou"));
+      await symlink(outside, join(anchor(), ".basou", "approvals"));
+      await expect(doRunProjectNew([], { apply: true }, { cwd: anchor() })).rejects.toThrow(
+        ".basou/approvals is a symlink; refusing to operate",
+      );
+      expect(await readdir(outside)).toEqual([]);
+      expect(existsSync(basouPaths(anchor()).files.manifest)).toBe(false);
+      expect(existsSync(join(anchor(), ".gitignore"))).toBe(false);
+    },
+  );
 
   it("throws (pathless) when a declared repo is not a git repository", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});

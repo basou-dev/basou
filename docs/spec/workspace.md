@@ -76,7 +76,9 @@ write into one create it.
   gaps`, and a `session import` of a session that names a task.
 - `.basou/approvals`, `.basou/approvals/pending` and
   `.basou/approvals/resolved` stop every `basou approval` subcommand,
-  `orient`, `handoff generate` and `report generate`.
+  `orient`, `handoff generate` and `report generate`. `.basou/approvals`
+  also stops `init` and `project new --apply`, which create `pending/` and
+  `resolved/` in it, before they create anything.
 - Either store stops `refresh`, `orient --refresh` and each cycle of `refresh
   --watch` before they import anything, so a refresh that stops has imported
   nothing. The watcher's first catch-up fails; a later cycle is skipped and

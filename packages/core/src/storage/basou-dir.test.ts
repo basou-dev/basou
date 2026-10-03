@@ -127,12 +127,69 @@ describe("ensureBasouDirectory", () => {
     await expect(ensureBasouDirectory(root)).rejects.toThrow(/exists but is not a directory/);
   });
 
-  it("throws when .basou/approvals exists as a file", async () => {
+  it("throws, naming it, when a directory of the layout exists as a file", async () => {
+    const root = getRepoRoot();
+    await mkdir(join(root, ".basou"));
+    await writeFile(join(root, ".basou", "sessions"), "");
+    await expect(ensureBasouDirectory(root)).rejects.toThrow(
+      ".basou/sessions exists but is not a directory",
+    );
+  });
+
+  it("throws when .basou/approvals exists as a file, before it creates anything", async () => {
     const root = getRepoRoot();
     await mkdir(join(root, ".basou"));
     await writeFile(join(root, ".basou", "approvals"), "");
-    await expect(ensureBasouDirectory(root)).rejects.toThrow(/exists but is not a directory/);
+    await expect(ensureBasouDirectory(root)).rejects.toThrow(
+      ".basou/approvals exists but is not a directory",
+    );
+    expect(await readdir(join(root, ".basou"))).toEqual(["approvals"]);
   });
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "refuses a .basou/approvals that is a symlink, and creates nothing through it",
+    async () => {
+      const root = getRepoRoot();
+      await mkdir(join(root, ".basou"));
+      const outside = join(root, "outside");
+      await mkdir(outside);
+      await symlink(outside, join(root, ".basou", "approvals"));
+      await expect(ensureBasouDirectory(root)).rejects.toThrow(
+        ".basou/approvals is a symlink; refusing to operate",
+      );
+      expect(await readdir(outside)).toEqual([]);
+      expect(await readdir(join(root, ".basou"))).toEqual(["approvals"]);
+    },
+  );
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "creates nothing through any other directory that is a symlink",
+    async () => {
+      const root = getRepoRoot();
+      const leaves = [
+        "sessions",
+        "tasks",
+        "approvals/pending",
+        "approvals/resolved",
+        "locks",
+        "logs",
+        "raw",
+        "tmp",
+      ];
+      for (const leaf of leaves) {
+        await mkdir(join(root, ".basou", "approvals"), { recursive: true });
+        const outside = join(root, `outside-${leaf.replace("/", "-")}`);
+        await mkdir(outside);
+        await symlink(outside, join(root, ".basou", leaf));
+      }
+      await ensureBasouDirectory(root);
+      for (const leaf of leaves) {
+        expect(await readdir(join(root, `outside-${leaf.replace("/", "-")}`)), leaf).toEqual([]);
+      }
+    },
+  );
 
   it("rejects when .basou is a symlink (regardless of target)", async () => {
     const root = getRepoRoot();
@@ -161,7 +218,7 @@ describe("ensureBasouDirectory", () => {
   it("emits a pathless error message when a subdirectory is a file (subdirectory-as-file case)", async () => {
     const root = getRepoRoot();
     await mkdir(join(root, ".basou"));
-    await writeFile(join(root, ".basou", "approvals"), "");
+    await writeFile(join(root, ".basou", "sessions"), "");
     let captured: unknown;
     try {
       await ensureBasouDirectory(root);
