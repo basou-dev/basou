@@ -182,6 +182,8 @@ describe("runClaudeCode", () => {
       const outside = join(repo, "outside-locks");
       await rename(paths.locks, outside);
       await symlink(outside, paths.locks);
+      // A stripped-down store: the session directory would be created first.
+      await rm(paths.sessions, { recursive: true });
       const runner = makeFakeRunner({ exit_code: 0 });
       const spawned = vi.spyOn(runner, "run");
       await expect(
@@ -192,7 +194,7 @@ describe("runClaudeCode", () => {
         ),
       ).rejects.toThrow(".basou/locks is a symlink; refusing to operate");
       expect(await readdir(outside)).toEqual([]);
-      expect(await readdir(paths.sessions)).toEqual([]);
+      await expect(readdir(paths.sessions)).rejects.toMatchObject({ code: "ENOENT" });
       expect(spawned).not.toHaveBeenCalled();
     },
   );

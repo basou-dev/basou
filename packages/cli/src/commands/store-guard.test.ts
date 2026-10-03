@@ -23,15 +23,26 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runDecisionRecord } from "./decision.js";
+import { runApprovalApprove, runApprovalReject } from "./approval.js";
+import { runDecisionCapture, runDecisionRecord, runDecisionVoid } from "./decision.js";
 import { runDecisionGaps } from "./decision-gaps.js";
 import { runHandoffGenerate } from "./handoff.js";
 import { runImportClaudeCode } from "./import.js";
+import { runNote } from "./note.js";
 import { runOrient } from "./orient.js";
 import { runRefresh } from "./refresh.js";
 import { runReportGenerate } from "./report.js";
-import { runSessionImport, runSessionRechain } from "./session.js";
-import { runTaskNew, runTaskStatus } from "./task.js";
+import { runReviewRecord } from "./review.js";
+import { runSessionImport, runSessionNote, runSessionRechain } from "./session.js";
+import {
+  runTaskArchive,
+  runTaskDelete,
+  runTaskEdit,
+  runTaskNew,
+  runTaskReconcile,
+  runTaskRefreshLinkage,
+  runTaskStatus,
+} from "./task.js";
 
 // The commands outside `basou task` and `basou approval` that read the task or
 // approval store, driven through their CLI entry points against a store whose
@@ -299,15 +310,187 @@ describe.skipIf(process.platform === "win32")("refresh --dry-run with a symlinke
 // stops before it writes anything, rather than creating its lockfile behind
 // the link (or, for the ones that import or start a session first, after
 // writing that). The lock itself is tested in @basou/core.
-const LOCK_TAKERS: Command[] = [
-  ["refresh", (repo) => runRefresh({}, ctxFor(repo))],
-  ["orient --refresh", (repo) => runOrient({ refresh: true }, ctxFor(repo))],
-  ["import claude-code --all", (repo) => runImportClaudeCode({ all: true }, ctxFor(repo))],
-  ["task new", (repo) => runTaskNew({ title: "another task" }, ctxFor(repo))],
-  ["task status", (repo) => runTaskStatus(TASK_ID, "in_progress", {}, ctxFor(repo))],
-  ["decision record", (repo) => runDecisionRecord({ title: "a decision" }, ctxFor(repo))],
-  ["session rechain --all", (repo) => runSessionRechain({ all: true }, ctxFor(repo))],
+
+/** A running session with one pending approval, for the commands that attach to one. */
+const RUNNING_SESSION_ID = "ses_01HXABCDEF1234567890ABCRN1";
+const RUNNING_APPROVAL_ID = "appr_01HXABCDEF1234567890ABCAP2";
+
+async function addRunningSession(repo: string): Promise<void> {
+  const paths = basouPaths(repo);
+  const dir = join(paths.sessions, RUNNING_SESSION_ID);
+  await mkdir(dir, { recursive: true });
+  await writeYamlFile(join(dir, "session.yaml"), {
+    schema_version: "0.1.0",
+    session: {
+      id: RUNNING_SESSION_ID,
+      task_id: null,
+      workspace_id: FIXED_WS_ID,
+      source: { kind: "claude-code-adapter", version: "0.1.0" },
+      started_at: "2026-05-09T02:00:00.000Z",
+      status: "running",
+      working_directory: "~/projects/example",
+      invocation: { command: "claude", args: [], exit_code: null },
+      related_files: [],
+      events_log: "events.jsonl",
+      summary: null,
+    },
+  });
+  await writeFile(join(dir, "events.jsonl"), "");
+  await writeYamlFile(join(paths.approvals.pending, `${RUNNING_APPROVAL_ID}.yaml`), {
+    schema_version: "0.2.0",
+    id: RUNNING_APPROVAL_ID,
+    session_id: RUNNING_SESSION_ID,
+    created_at: "2026-05-09T03:00:00.000Z",
+    status: "pending",
+    risk_level: "low",
+    action: { kind: "command" },
+    reason: "fixture approval",
+    expires_at: null,
+  });
+}
+
+/** Record one decision through `decision capture` and return its id. */
+async function captureOneDecision(repo: string): Promise<string> {
+  const file = join(getTmp(), "decision.json");
+  await writeFile(file, JSON.stringify([{ title: "to be voided", kind: "decision" }]));
+  const out = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  await runDecisionCapture({ file, json: true }, ctxFor(repo));
+  const id = /decision_[0-9A-HJKMNP-TV-Z]{26}/.exec(out.mock.calls.join("\n"))?.[0];
+  out.mockRestore();
+  if (id === undefined) throw new Error("no decision captured");
+  return id;
+}
+
+type LockTaker = {
+  name: string;
+  /** Run before `.basou/locks` is swapped; returns what `run` needs, if anything. */
+  prepare?: (repo: string) => Promise<string | undefined>;
+  run: (repo: string, prepared: string | undefined) => Promise<unknown>;
+  /** Store directories the command needs to find its input in. */
+  needs?: Array<"tasks" | "sessions">;
+};
+
+const LOCK_TAKERS: LockTaker[] = [
+  { name: "refresh", run: (repo) => runRefresh({}, ctxFor(repo)) },
+  { name: "orient --refresh", run: (repo) => runOrient({ refresh: true }, ctxFor(repo)) },
+  {
+    name: "import claude-code --all",
+    run: (repo) => runImportClaudeCode({ all: true }, ctxFor(repo)),
+  },
+  { name: "task new", run: (repo) => runTaskNew({ title: "another task" }, ctxFor(repo)) },
+  {
+    name: "task status",
+    run: (repo) => runTaskStatus(TASK_ID, "in_progress", {}, ctxFor(repo)),
+    needs: ["tasks"],
+  },
+  {
+    name: "task edit",
+    run: (repo) => runTaskEdit(TASK_ID, { title: "renamed" }, ctxFor(repo)),
+    needs: ["tasks"],
+  },
+  {
+    name: "task archive",
+    prepare: async (repo) => {
+      await runTaskStatus(TASK_ID, "done", {}, ctxFor(repo));
+      return undefined;
+    },
+    run: (repo) => runTaskArchive(TASK_ID, { yes: true }, ctxFor(repo)),
+    needs: ["tasks", "sessions"],
+  },
+  {
+    name: "task delete",
+    run: (repo) => runTaskDelete(TASK_ID, { yes: true }, ctxFor(repo)),
+    needs: ["tasks", "sessions"],
+  },
+  { name: "task reconcile", run: (repo) => runTaskReconcile({}, ctxFor(repo)), needs: ["tasks"] },
+  {
+    name: "task reconcile --write",
+    run: (repo) => runTaskReconcile({ write: true }, ctxFor(repo)),
+    needs: ["tasks", "sessions"],
+  },
+  {
+    name: "task refresh-linkage",
+    run: (repo) => runTaskRefreshLinkage(TASK_ID, {}, ctxFor(repo)),
+    needs: ["tasks", "sessions"],
+  },
+  {
+    name: "decision record",
+    run: (repo) => runDecisionRecord({ title: "a decision" }, ctxFor(repo)),
+  },
+  {
+    name: "decision capture",
+    prepare: async () => {
+      const file = join(getTmp(), "capture.json");
+      await writeFile(file, JSON.stringify([{ title: "captured", kind: "decision" }]));
+      return file;
+    },
+    run: (repo, file) => runDecisionCapture({ file: file ?? "" }, ctxFor(repo)),
+  },
+  {
+    name: "decision void",
+    prepare: (repo) => captureOneDecision(repo),
+    run: (repo, id) => runDecisionVoid(id ?? "", {}, ctxFor(repo)),
+    needs: ["sessions"],
+  },
+  {
+    name: "review record",
+    prepare: async (repo) => {
+      const file = join(getTmp(), "review.json");
+      await writeFile(file, JSON.stringify({ reviewer: "test", target: "branch", repos: [repo] }));
+      return file;
+    },
+    run: (repo, file) => runReviewRecord({ file: file ?? "" }, ctxFor(repo)),
+  },
+  { name: "note", run: (repo) => runNote("a note", {}, ctxFor(repo)) },
+  {
+    name: "note --session",
+    prepare: async (repo) => {
+      await addRunningSession(repo);
+      return undefined;
+    },
+    run: (repo) => runNote("a note", { session: RUNNING_SESSION_ID }, ctxFor(repo)),
+    needs: ["sessions"],
+  },
+  {
+    name: "session note",
+    prepare: async (repo) => {
+      await addRunningSession(repo);
+      return undefined;
+    },
+    run: (repo) => runSessionNote(RUNNING_SESSION_ID, { body: "a note" }, ctxFor(repo)),
+    needs: ["sessions"],
+  },
+  {
+    name: "approval approve",
+    prepare: async (repo) => {
+      await addRunningSession(repo);
+      return undefined;
+    },
+    run: (repo) => runApprovalApprove(RUNNING_APPROVAL_ID, {}, ctxFor(repo)),
+    needs: ["sessions"],
+  },
+  {
+    name: "approval reject",
+    prepare: async (repo) => {
+      await addRunningSession(repo);
+      return undefined;
+    },
+    run: (repo) => runApprovalReject(RUNNING_APPROVAL_ID, { reason: "no" }, ctxFor(repo)),
+    needs: ["sessions"],
+  },
+  {
+    name: "session rechain --all",
+    run: (repo) => runSessionRechain({ all: true }, ctxFor(repo)),
+    needs: ["sessions"],
+  },
 ];
+
+/**
+ * The directories a command can create lazily. A stripped-down store lacks
+ * the ones the command does not read its input from, so a command that
+ * creates one before it checks the lock store is caught.
+ */
+const LAZY_DIRECTORIES = ["tasks", "sessions", "approvals/resolved", "tmp"] as const;
 
 // POSIX only: creating a symlink needs privileges on Windows.
 describe.skipIf(process.platform === "win32")("a .basou/locks that is a symlink", () => {
@@ -319,39 +502,111 @@ describe.skipIf(process.platform === "win32")("a .basou/locks that is a symlink"
   }
 
   it("control: with the locks directory intact every command succeeds", async () => {
-    for (const [name, run] of LOCK_TAKERS) {
+    for (const taker of LOCK_TAKERS) {
       const repo = await freshRepo();
+      const prepared = await taker.prepare?.(repo);
       vi.spyOn(console, "log").mockImplementation(() => undefined);
       const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
       process.exitCode = 0;
-      await run(repo);
-      expect(process.exitCode, `${name}: ${err.mock.calls.join(" | ")}`).not.toBe(1);
+      await taker.run(repo, prepared);
+      expect(process.exitCode, `${taker.name}: ${err.mock.calls.join(" | ")}`).not.toBe(1);
       vi.restoreAllMocks();
     }
   });
 
-  it("each command stops with the refusal and writes nothing", async () => {
-    for (const [name, run] of LOCK_TAKERS) {
-      const repo = await freshRepo();
-      const paths = basouPaths(repo);
-      const outside = join(getTmp(), "outside");
-      await rename(paths.locks, outside);
-      await symlink(outside, paths.locks);
-      const before = await snapshot(paths.root);
+  for (const stripped of [false, true]) {
+    const store = stripped ? "a stripped-down store" : "the full store";
+    it(`on ${store}, each command stops with the refusal and writes nothing`, async () => {
+      for (const taker of LOCK_TAKERS) {
+        const repo = await freshRepo();
+        const prepared = await taker.prepare?.(repo);
+        const paths = basouPaths(repo);
+        if (stripped) {
+          for (const relative of LAZY_DIRECTORIES) {
+            if ((taker.needs as readonly string[] | undefined)?.includes(relative)) continue;
+            await rm(join(paths.root, relative), { recursive: true, force: true });
+          }
+        }
+        const outside = join(getTmp(), "outside");
+        await rename(paths.locks, outside);
+        await symlink(outside, paths.locks);
+        const before = await snapshot(paths.root);
 
-      const out = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const out = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        process.exitCode = 0;
+        await taker.run(repo, prepared);
+        expect(process.exitCode, taker.name).toBe(1);
+        expect(err.mock.calls.map((c) => String(c[0])).join("\n"), taker.name).toContain(
+          ".basou/locks is a symlink; refusing to operate",
+        );
+        // Stopped once, up front: no per-record row, no partial result.
+        expect(out.mock.calls, taker.name).toEqual([]);
+        expect(await readdir(outside), taker.name).toEqual([]);
+        // No session, task, event or directory was written in the store either.
+        expect(await snapshot(paths.root), taker.name).toEqual(before);
+        vi.restoreAllMocks();
+      }
+    });
+  }
+
+  it("refresh is stopped even with nothing to import", async () => {
+    const repo = await freshRepo();
+    await rm(join(getTmp(), "claude"), { recursive: true, force: true });
+    const paths = basouPaths(repo);
+    const outside = join(getTmp(), "outside");
+    await rename(paths.locks, outside);
+    await symlink(outside, paths.locks);
+    const before = await snapshot(paths.root);
+    for (const [name, run] of [
+      ["refresh", () => runRefresh({}, ctxFor(repo))],
+      ["orient --refresh", () => runOrient({ refresh: true }, ctxFor(repo))],
+    ] as const) {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
       const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
       process.exitCode = 0;
-      await run(repo);
+      await run();
       expect(process.exitCode, name).toBe(1);
       expect(err.mock.calls.map((c) => String(c[0])).join("\n"), name).toContain(
         ".basou/locks is a symlink; refusing to operate",
       );
-      // Stopped once, up front: no per-session row, no partial result.
-      expect(out.mock.calls, name).toEqual([]);
+      vi.restoreAllMocks();
+    }
+    expect(await snapshot(paths.root)).toEqual(before);
+  });
+});
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("a dry run with a symlinked .basou/locks", () => {
+  const DRY_RUNS: Command[] = [
+    [
+      "import claude-code --all --dry-run",
+      (repo) => runImportClaudeCode({ all: true, dryRun: true }, ctxFor(repo)),
+    ],
+    ["refresh --dry-run", (repo) => runRefresh({ dryRun: true }, ctxFor(repo))],
+  ];
+
+  it("takes no lock and is not stopped, and writes nothing", async () => {
+    for (const [name, run] of DRY_RUNS) {
+      await rm(join(getTmp(), "repo"), { recursive: true, force: true });
+      await rm(join(getTmp(), "outside"), { recursive: true, force: true });
+      await rm(join(getTmp(), "claude"), { recursive: true, force: true });
+      const repo = await setupRepo();
+      const paths = basouPaths(repo);
+      const outside = join(getTmp(), "outside");
+      await rename(paths.locks, outside);
+      await symlink(outside, paths.locks);
+      const before = await snapshot(paths.sessions);
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      process.exitCode = 0;
+      await run(repo);
+      expect(process.exitCode, name).not.toBe(1);
+      expect(err.mock.calls.map((c) => String(c[0])).join("\n"), name).not.toContain(
+        "refusing to operate",
+      );
       expect(await readdir(outside), name).toEqual([]);
-      // No session, task or event was written in the store either.
-      expect(await snapshot(paths.root), name).toEqual(before);
+      expect(await snapshot(paths.sessions), name).toEqual(before);
       vi.restoreAllMocks();
     }
   });

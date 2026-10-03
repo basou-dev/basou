@@ -1383,10 +1383,10 @@ describe.skipIf(process.platform === "win32")("an approval file that is not foll
     await doRunApprovalList({}, { cwd: repo });
     const stderrText = joinCalls(err);
     expect(stderrText).toContain(
-      "Skipped 01HXAB in pending: not a file (a symlink or a directory is not followed)",
+      `Skipped ${APPR("P71")} in pending: not a file (a symlink or a directory is not followed)`,
     );
     expect(stderrText).toContain(
-      "Skipped 01HXAB in resolved: not a file (a symlink or a directory is not followed)",
+      `Skipped ${APPR("P72")} in resolved: not a file (a symlink or a directory is not followed)`,
     );
     // P72's pending file is the only approval read, and it is still pending.
     const stdoutText = joinCalls(out);
@@ -1442,7 +1442,7 @@ describe.skipIf(process.platform === "win32")("an approval file that is not foll
     expect(joinCalls(out)).toContain(`Approval: ${APPR("P72")}  (status: pending)`);
     expect(joinCalls(out)).not.toContain("outside");
     expect(joinCalls(err)).toContain(
-      "Warning: 01HXAB in resolved is not a file (a symlink or a directory is not followed)",
+      `Warning: ${APPR("P72")} in resolved is not a file (a symlink or a directory is not followed)`,
     );
   });
 
@@ -1473,6 +1473,52 @@ describe.skipIf(process.platform === "win32")("an approval file that is not foll
       eventsBefore,
     );
     expect(await readdir(paths.approvals.pending)).toContain(`${APPR("P72")}.yaml`);
+  });
+
+  it("approve and reject refuse a directory at the resolved name too, recording nothing", async () => {
+    const { repo, sessionId } = await linkedApprovalFiles();
+    const paths = basouPaths(repo);
+    const resolved = join(paths.approvals.resolved, `${APPR("P72")}.yaml`);
+    await rm(resolved);
+    await mkdir(resolved);
+    const eventsBefore = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+    const commands: Array<[string, () => Promise<void>]> = [
+      ["approve", () => runApprovalApprove(APPR("P72"), {}, { cwd: repo })],
+      ["reject", () => runApprovalReject(APPR("P72"), { reason: "no" }, { cwd: repo })],
+    ];
+    for (const [name, run] of commands) {
+      const err = captureStderr();
+      process.exitCode = 0;
+      await run();
+      expect(process.exitCode, name).toBe(1);
+      expect(joinCalls(err), name).toBe(
+        `Approval ${APPR("P72")} cannot be resolved: its entry in resolved is not a file (a symlink or a directory is not followed)`,
+      );
+      err.mockRestore();
+    }
+    expect(await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8")).toBe(
+      eventsBefore,
+    );
+  });
+
+  it("show reads the resolved file, not the symlinked pending one, and says so", async () => {
+    const { repo } = await linkedApprovalFiles();
+    // P71's pending entry is a symlink; give it a resolved file in the store.
+    await createApproval(repo, {
+      id: APPR("P71"),
+      sessionId: SES("S71"),
+      status: "approved",
+      resolver: "local-cli",
+      resolvedAt: "2026-05-04T10:01:23+09:00",
+      location: "resolved",
+    });
+    const err = captureStderr();
+    const out = captureStdout();
+    await doRunApprovalShow(APPR("P71"), {}, { cwd: repo });
+    expect(joinCalls(out)).toContain(`Approval: ${APPR("P71")}  (status: approved)`);
+    expect(joinCalls(err)).toContain(
+      `Warning: ${APPR("P71")} in pending is not a file (a symlink or a directory is not followed)`,
+    );
   });
 
   it("control: with the symlink gone, the same approval is approved", async () => {

@@ -31,7 +31,7 @@ import {
 } from "./ad-hoc-session.js";
 import { atomicCreate, atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
-import { acquireLock } from "./lockfile.js";
+import { acquireLock, assertLockStoreSafe } from "./lockfile.js";
 import { enumerateSessionEntries, readSessionYaml } from "./sessions.js";
 import { assertStoreDirectorySafe } from "./store-dir.js";
 import { readTaskIndex, rebuildTaskIndex, updateTaskIndex } from "./task-index.js";
@@ -938,7 +938,10 @@ export async function createTaskWithEvent(input: CreateTaskInput): Promise<Creat
   // The event is written before task.md, so the store is checked, and an
   // absent `.basou/tasks` created, here rather than left to writeTaskFile:
   // failing there would leave a task_created event with no task behind it.
+  // The lock store is checked first too: the first lock is taken only after
+  // the directory is created.
   await assertTaskStoreSafe(input.paths);
+  await assertLockStoreSafe(input.paths);
   try {
     await mkdir(input.paths.tasks, { recursive: true });
   } catch (error: unknown) {

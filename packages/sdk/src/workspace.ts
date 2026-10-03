@@ -38,7 +38,8 @@ import {
 
 /**
  * A degradation the SDK noticed while reading provenance: a malformed event
- * line, or a session / task / approval that could not be loaded. Best-effort reads skip
+ * line, a session / task that could not be loaded, or an approval file that
+ * `listApprovals` passed over. Best-effort reads skip
  * these and keep going; pass `onDiagnostic` to {@link openWorkspace} to observe
  * them. `message` is a human-readable summary (it folds in the core
  * `ReplayWarning.kind` or skip-reason); structured fields are intentionally not
@@ -60,7 +61,8 @@ export type WorkspaceOptions = {
    */
   now?: () => Date;
   /**
-   * Observe a malformed event line or a skipped session / task / approval instead of it
+   * Observe a malformed event line, a skipped session / task, or an approval file
+   * `listApprovals` passed over, instead of it
    * being silently dropped. Reads are still best-effort: a diagnostic does not
    * fail the call.
    */
@@ -139,8 +141,10 @@ export interface Workspace {
 
   /**
    * Pending + resolved approvals, fully loaded. An approval file that is a
-   * symlink or not a file is not followed: it is left out and reported as a
-   * skipped approval to `onDiagnostic`.
+   * symlink or not a file is not followed: it is passed over and reported to
+   * `onDiagnostic` as a skipped approval file, with where it is (`pending` or
+   * `resolved`). When the other side holds a regular file of the same id, that
+   * file is the approval, and it is listed.
    */
   listApprovals(): Promise<{ pending: LoadedApproval[]; resolved: LoadedApproval[] }>;
   /**
@@ -294,7 +298,9 @@ export async function openWorkspace(
         // An approval file that is a symlink or not a file is not followed: it
         // is left out of the lists, and reported like a session entry that is
         // not a directory.
-        for (const entry of ids.unfollowed) onSkip(entry.id, "approval_file_not_a_file");
+        for (const entry of ids.unfollowed) {
+          onSkip(entry.id, `approval_file_not_a_file (${entry.location})`);
+        }
         // `loadApproval` searches resolved/ before pending/, so an id present in
         // BOTH (a stale pending file left after resolution) would otherwise load
         // the resolved record into the pending list too. Drop those from pending

@@ -696,7 +696,7 @@ describe.skipIf(process.platform === "win32")("an approval file that is not foll
     const listed = await ws.listApprovals();
     expect(listed.pending.map((a) => a.approval.id)).not.toContain(APPR_PENDING);
     expect(diagnostics).toContainEqual({
-      message: "skipped: approval_file_not_a_file",
+      message: "skipped: approval_file_not_a_file (pending)",
       id: APPR_PENDING,
     });
   });
@@ -708,7 +708,8 @@ describe.skipIf(process.platform === "win32")("an approval file that is not foll
     const outside = join(repoRoot, "outside.yaml");
     await rename(resolved, outside);
     await symlink(outside, resolved);
-    const ws = await openWorkspace(repoRoot);
+    const diagnostics: Array<{ message: string; id?: string }> = [];
+    const ws = await openWorkspace(repoRoot, { onDiagnostic: (d) => diagnostics.push(d) });
 
     const loaded = await ws.getApproval(APPR_DUP);
     expect(loaded?.location).toBe("pending");
@@ -716,6 +717,11 @@ describe.skipIf(process.platform === "win32")("an approval file that is not foll
     const listed = await ws.listApprovals();
     expect(listed.pending.map((a) => a.approval.id)).toContain(APPR_DUP);
     expect(listed.resolved.map((a) => a.approval.id)).not.toContain(APPR_DUP);
+    // The file passed over is named with its side, so it is not mistaken for
+    // the approval that is listed.
+    expect(diagnostics).toEqual([
+      { message: "skipped: approval_file_not_a_file (resolved)", id: APPR_DUP },
+    ]);
   });
 });
 

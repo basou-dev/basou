@@ -84,26 +84,32 @@ write into one create it.
   is not stopped.
 - `.basou/locks` stops the commands that take a lock, before they write
   anything: `note`, `session note`, `decision record`, `capture` and `void`,
-  the `basou task` subcommands that write, `approval approve` and `reject`,
-  `exec`, `run`, and `session rechain`, a dry run included. It stops `basou
-  import` too, since a re-import takes a lock, so an import stops before it
-  imports anything, and with it `refresh`, `orient --refresh` and each cycle
-  of `refresh --watch` when they import. A `session import` of a new session
-  takes no lock and is not stopped, and neither is a dry run of an import or
-  a refresh.
+  `review record`, `task new`, `status`, `edit`, `archive`, `delete`,
+  `reconcile` and `refresh-linkage` (the last two in their default dry-run
+  mode too), `approval approve` and `reject`, `exec`, `run`, and `session
+  rechain` (`--dry-run` too). A re-import takes a lock, so it also stops
+  `basou import`, and `refresh`, `orient --refresh` and each cycle of
+  `refresh --watch` as in the item above, before they import anything and
+  whether or not there is anything to import. A `--dry-run` of `import`,
+  `refresh`, `decision capture` or `review record` takes no lock and is not
+  stopped, and neither is a `session import` of a new session.
 - `.basou/tmp` and `.basou/tmp/observations` hold the hooks' observations of
   what a session changes. The `session-start` and `stop` hooks write none
   there, silently, as for any observation they cannot write, and an import
   reads none, as for a session that was not observed. An observation file in
   it that is not a regular file is not read either.
 
-`basou view` answers `500` with the error on the pages that read the store;
-on the portfolio page the workspace's card carries the error instead. The
-`session-start` hook, which never fails a session, prints nothing for such a
-workspace. `basou status` does not stop: it reports `sessions`, `tasks`,
-`approvals/pending` and `approvals/resolved` that are themselves a symlink or
-a file as missing, and reports both approval directories as missing when
-`approvals` itself is a symlink or a file.
+For the session, task and approval stores, `basou view` answers `500` with
+the error on the pages that read the store; on the portfolio page the
+workspace's card carries the error instead. The `session-start` hook, which
+never fails a session, prints nothing for such a workspace. `basou status`
+does not stop: it reports `sessions`, `tasks`, `approvals/pending` and
+`approvals/resolved` that are themselves a symlink or a file as missing, and
+reports both approval directories as missing when `approvals` itself is a
+symlink or a file. Neither `basou view` nor the `session-start` hook's
+orientation reads `.basou/locks` or `.basou/tmp`, so a symlink there leaves
+them as usual. `basou status` reports a `tmp` that is a symlink or a file as
+missing; it has no entry for `locks` or `tmp/observations`.
 
 A task file that is itself a symlink is not covered by this rule. A live
 task file (`tasks/<task_id>.md`) is read through it; an archived one

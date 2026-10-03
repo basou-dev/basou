@@ -162,10 +162,12 @@ export async function doRunApprovalList(
 
   const ids = await enumerateApprovals(paths);
   // An approval file that is a symlink or not a file is not followed; it is
-  // named here rather than left to vanish from the listing.
+  // named here rather than left to vanish from the listing. The full id, as
+  // for a session entry that is not a directory: the short form can be
+  // shared with the approval that IS listed, or with another such entry.
   for (const entry of ids.unfollowed) {
     console.error(
-      `Skipped ${shortId(entry.id)} in ${entry.location}: not a file (a symlink or a directory is not followed)`,
+      `Skipped ${entry.id} in ${entry.location}: not a file (a symlink or a directory is not followed)`,
     );
   }
   // A single `now` shared across every record so that two reads on the
@@ -648,7 +650,7 @@ async function resolveApprovalId(
 }
 
 function describeUnfollowed(entry: UnfollowedApprovalEntry): string {
-  return `${shortId(entry.id)} in ${entry.location} is not a file (a symlink or a directory is not followed)`;
+  return `${entry.id} in ${entry.location} is not a file (a symlink or a directory is not followed)`;
 }
 
 function isApprovalEvent(ev: Event): ev is Event & { approval_id: string } {

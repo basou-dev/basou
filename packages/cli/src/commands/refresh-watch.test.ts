@@ -396,9 +396,12 @@ describe.skipIf(process.platform === "win32")("runRefreshWatch with an unsafe ta
 
 // POSIX only: creating a symlink needs privileges on Windows.
 describe.skipIf(process.platform === "win32")("runRefreshWatch with an unsafe lock store", () => {
-  it("fails the initial catch-up before importing anything", async () => {
+  // No source logs at all, so neither adapter reaches the import's own check:
+  // only the check before the imports stops the catch-up.
+  it("fails the initial catch-up even with nothing to import", async () => {
     const repo = await setupRepo();
-    await writeCodexRolloutAt(repo, "c-refused");
+    await rm(getClaudeRoot(), { recursive: true, force: true });
+    await rm(getCodexRoot(), { recursive: true, force: true });
     const locks = basouPaths(repo).locks;
     const outside = join(repo, "moved-locks");
     await mkdir(locks, { recursive: true });
@@ -410,7 +413,6 @@ describe.skipIf(process.platform === "win32")("runRefreshWatch with an unsafe lo
     await expect(runRefreshWatch(deps)).rejects.toThrow(
       ".basou/locks is a symlink; refusing to operate",
     );
-    expect(await codexSessionIds(repo)).toEqual([]);
     expect(await readdir(outside)).toEqual([]);
   });
 });

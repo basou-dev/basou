@@ -8,18 +8,20 @@ All notable changes to **basou** are recorded here. The project follows
 ### Fixed
 
 - **A lock that cannot be taken no longer prints an absolute path.** When
-  `.basou/locks` could not be written (a permission error, for instance), every
-  command that takes a lock — `task status`, `note --session`, `approval
-  approve`, `exec` and the others — printed the native error, such as
-  `EACCES: permission denied, open '<absolute path>/.basou/locks/...'`, even
-  without `--verbose`. It now prints `Failed to acquire lock`; `--verbose`
-  adds the error code as the cause, as for other errors.
+  `.basou/locks` could not be written (a permission error, for instance), the
+  commands that take a lock and print its error as it is — `task new`, `task
+  status`, `note`, `decision record`, `exec` and others — printed the native
+  error, such as `EACCES: permission denied, open '<absolute
+  path>/.basou/locks/...'`, even without `--verbose`. They now print `Failed
+  to acquire lock`, as `session rechain` already did; `--verbose` adds the
+  error code as the cause, as for other errors.
 - **`@basou/sdk`: `getApproval` no longer reads an approval file through a
   symlink.** An `approvals/pending/<id>.yaml` or `approvals/resolved/<id>.yaml`
   that is a symlink was left out of `listApprovals` and of every `basou
   approval` command, but `getApproval` read the file it points to, outside the
   store. It now returns `null` for it, and `listApprovals` reports it to
-  `onDiagnostic` as a skipped approval.
+  `onDiagnostic` as a skipped approval file, with its side: `skipped:
+  approval_file_not_a_file (pending)`.
 - **A symlink at an approval's resolved name no longer stands in for the
   approval, and `approve` no longer records a resolution it cannot finish.**
   With a pending file and an `approvals/resolved/<id>.yaml` that is a symlink,
@@ -27,9 +29,11 @@ All notable changes to **basou** are recorded here. The project follows
   the symlink instead of the pending one, and `approval approve` recorded
   `approval_approved`, failed with `Approval already resolved at the same
   time`, left the approval pending and refused every later attempt as already
-  resolved. They now read the pending file, and `approve` and `reject` stop
-  before recording anything: `Approval <id> cannot be resolved: its entry in
-  resolved is not a file (a symlink or a directory is not followed)`.
+  resolved. With a directory there instead, `approval show`, `orient` and
+  `getApproval` failed with `Failed to read approval`. They now read the
+  pending file, and `approve` and `reject` stop before recording anything:
+  `Approval <id> cannot be resolved: its entry in resolved is not a file (a
+  symlink or a directory is not followed)`.
 - **`basou status` no longer reports the approval directories as present
   behind a symlinked `.basou/approvals`.** With `.basou/approvals` a symlink
   to a directory holding `pending/` and `resolved/`, `basou status` printed
@@ -43,9 +47,12 @@ All notable changes to **basou** are recorded here. The project follows
   recent time) made those commands fail as `Lock is held by another process`.
   They now stop with `.basou/locks is a symlink; refusing to operate` (or
   `exists but is not a directory`) before they write anything: `exec` and
-  `run` before they start a session, `approval approve` and `reject` before
-  they create `resolved/`, `basou import`, and with it `refresh`, before it
-  imports anything, and `session rechain` once rather than on every row.
+  `run` before they start a session, `task new` before it creates
+  `.basou/tasks`, `approval approve` and `reject` before they create
+  `resolved/`, `basou import`, `refresh`, `orient --refresh` and each cycle of
+  `refresh --watch` before they import anything (whether or not there is
+  anything to import), and `session rechain` and `task reconcile` once rather
+  than on every row.
 - **The hooks no longer write a session's observation behind a symlinked
   `.basou/tmp`.** With `.basou/tmp` or `.basou/tmp/observations` a symlink,
   the `session-start` hook wrote the observation, which names the session's
@@ -60,8 +67,8 @@ All notable changes to **basou** are recorded here. The project follows
 - **An approval file that is not followed is named instead of vanishing.**
   `basou approval list` prints `Skipped <id> in <pending|resolved>: not a file
   (a symlink or a directory is not followed)` on stderr for an approval file
-  that is a symlink or not a file, and `approval show` adds the same as a
-  warning when the approval it shows has one on the other side. `approval
+  that is a symlink or not a file, and `approval show` adds a warning naming
+  it when the approval it shows has one on the other side. `approval
   show`, `approve` and `reject` given an id that names only such an entry stop
   with `Approval <id> is not a file; a symlink or a directory there is not
   followed` instead of `Approval not found`, and a prefix it shares with an
