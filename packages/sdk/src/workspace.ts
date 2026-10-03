@@ -235,12 +235,12 @@ export async function openWorkspace(
     resolveOrNull(() => resolveTaskId(paths, input, { includeArchived: true }), input);
 
   const reads: Omit<Workspace, "root"> = {
-    manifest: () => readManifest(paths),
+    manifest: async () => readManifest(paths),
 
     status: async () =>
       buildStatusSnapshot({ manifest: await readManifest(paths), paths, now: now() }),
 
-    listSessions: () =>
+    listSessions: async () =>
       loadSessionEntries(paths, {
         now: now(),
         onWarning: (w, sid) => onWarning(w, sid),
@@ -273,7 +273,7 @@ export async function openWorkspace(
       return iterate();
     },
 
-    listTasks: () => loadTaskEntries(paths, { onSkip }),
+    listTasks: async () => loadTaskEntries(paths, { onSkip }),
 
     getTask: async (idOrPrefix) => {
       const id = await resolveTask(idOrPrefix);
@@ -312,7 +312,7 @@ export async function openWorkspace(
     getApproval: async (id) =>
       ApprovalIdSchema.safeParse(id).success ? loadApproval(paths, id) : null,
 
-    stats: (statsOptions) =>
+    stats: async (statsOptions) =>
       computeWorkStats({
         paths,
         now: now(),
@@ -408,23 +408,45 @@ export function toStoreError(root: string, error: unknown): unknown {
 type Read = (...args: never[]) => Promise<unknown> | AsyncIterable<unknown>;
 
 /**
- * Wrap every read of `reads` so that a store refusal it throws comes out
- * retyped (see {@link toStoreError}): a promise when it settles, a stream as
- * it is read. Every read is wrapped, not only the ones that read a store
- * today, so a read added later, or one that core comes to check a store on,
- * is guarded without being named here.
+ * Each member of `T` as a {@link Read}, except that a read whose promise can
+ * hold a stream maps to `never`: its promise would be guarded when it
+ * settles, and the stream inside read unguarded.
  */
-function guardReads<T extends Record<keyof T, Read>>(root: string, reads: T): T {
+type Reads<T> = {
+  [K in keyof T]: T[K] extends (...args: never[]) => Promise<infer R>
+    ? [Extract<R, AsyncIterable<unknown>>] extends [never]
+      ? Read
+      : never
+    : Read;
+};
+
+/**
+ * Wrap every read of `reads` so that a store refusal it throws comes out
+ * retyped (see {@link toStoreError}): as it is called, when its promise
+ * settles, or as its stream is read. Every read is wrapped, not only the ones
+ * that read a store today, so a read added later, or one that core comes to
+ * check a store on, is guarded without being named here. A wrapped read keeps
+ * the `name` and `length` of the read it wraps. Exported for tests.
+ */
+export function guardReads<T extends Reads<T>>(root: string, reads: T): T {
   const guarded: Record<string, Read> = {};
   for (const [name, read] of Object.entries(reads as Record<string, Read>)) {
-    guarded[name] = (...args) => {
-      const result = read(...args);
+    const guardedRead: Read = (...args) => {
+      let result: ReturnType<Read>;
+      try {
+        result = read(...args);
+      } catch (error) {
+        throw toStoreError(root, error);
+      }
       return Symbol.asyncIterator in result
         ? guardStream(root, result)
         : result.catch((error: unknown) => {
             throw toStoreError(root, error);
           });
     };
+    Object.defineProperty(guardedRead, "name", { value: read.name });
+    Object.defineProperty(guardedRead, "length", { value: read.length });
+    guarded[name] = guardedRead;
   }
   return guarded as T;
 }

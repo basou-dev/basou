@@ -12,7 +12,7 @@ import {
   TaskStoreUnsafeError,
   WorkspaceNotFoundError,
 } from "./errors.js";
-import { openWorkspace, toStoreError, type Workspace } from "./workspace.js";
+import { guardReads, openWorkspace, toStoreError, type Workspace } from "./workspace.js";
 
 // Fixtures are written as JSON, which is valid YAML, so the core readers
 // (yaml-parsed) accept them without pulling `yaml` into the SDK's own deps.
@@ -402,6 +402,53 @@ const METHODS: {
   },
 };
 
+describe("every method of a workspace", () => {
+  const methodNames = Object.keys(METHODS) as Array<keyof typeof METHODS>;
+  // The methods that take an argument (an id, or options); the others take none.
+  const ONE_PARAMETER = new Set([
+    "getSession",
+    "readEvents",
+    "streamEvents",
+    "getTask",
+    "getApproval",
+    "stats",
+    "renderReport",
+  ]);
+
+  it("keeps its name and its number of parameters", async () => {
+    const ws = await openWorkspace(await setupWorkspace());
+    for (const name of methodNames) {
+      expect(ws[name].name, name).toBe(name);
+      expect(ws[name].length, name).toBe(ONE_PARAMETER.has(name) ? 1 : 0);
+    }
+  });
+
+  it("returns a promise or a stream as it is called, even when the clock throws", async () => {
+    const broken = new Error("clock broke");
+    const ws = await openWorkspace(await setupWorkspace(), {
+      now: () => {
+        throw broken;
+      },
+    });
+    for (const name of methodNames) {
+      let result: unknown;
+      expect(() => {
+        result = (ws[name] as (arg: string) => unknown)(SES_DONE);
+      }, name).not.toThrow();
+      // Let it finish, so nothing is left running.
+      if (result instanceof Promise) {
+        await result.catch(() => undefined);
+      } else {
+        const events: unknown[] = [];
+        for await (const event of result as AsyncIterable<unknown>) events.push(event);
+      }
+    }
+    // The clock fails the reads that use it through their promise.
+    await expect(ws.listSessions()).rejects.toBe(broken);
+    await expect(ws.stats()).rejects.toBe(broken);
+  });
+});
+
 describe("a directory of the store that is not followed", () => {
   // One clock for the baseline and the refused workspace, so rendered output compares.
   const clock = { now: () => new Date("2026-05-11T00:00:00.000Z") };
@@ -415,13 +462,21 @@ describe("a directory of the store that is not followed", () => {
     tasks: TaskStoreUnsafeError,
     approvals: ApprovalStoreUnsafeError,
   };
-  const directories: ReadonlyArray<{ relative: string; store: StoreName }> = [
-    { relative: "sessions", store: "sessions" },
-    { relative: "tasks", store: "tasks" },
-    { relative: "tasks/archive", store: "tasks" },
-    { relative: "approvals", store: "approvals" },
-    { relative: "approvals/pending", store: "approvals" },
-    { relative: "approvals/resolved", store: "approvals" },
+  // `missing`: the keys of `status().directories_present` that turn false
+  // when the directory is replaced; every other key stays as it was.
+  type Directory = { relative: string; store: StoreName; missing: readonly string[] };
+  const SESSIONS: Directory = { relative: "sessions", store: "sessions", missing: ["sessions"] };
+  const directories: readonly Directory[] = [
+    SESSIONS,
+    { relative: "tasks", store: "tasks", missing: ["tasks"] },
+    { relative: "tasks/archive", store: "tasks", missing: [] },
+    {
+      relative: "approvals",
+      store: "approvals",
+      missing: ["approvals_pending", "approvals_resolved"],
+    },
+    { relative: "approvals/pending", store: "approvals", missing: ["approvals_pending"] },
+    { relative: "approvals/resolved", store: "approvals", missing: ["approvals_resolved"] },
   ];
 
   async function replaceWithSymlink(repoRoot: string, relative: string): Promise<void> {
@@ -438,31 +493,42 @@ describe("a directory of the store that is not followed", () => {
     await writeFile(inside, "");
   }
 
-  /** What every method returns on the untouched fixture, to compare against. */
-  async function baseline(): Promise<Map<string, unknown>> {
+  type Baseline = { results: Map<string, unknown>; present: Record<string, boolean> };
+
+  /**
+   * What every method returns on the untouched fixture, and the directories
+   * `status` reports there, to compare against.
+   */
+  async function baseline(): Promise<Baseline> {
     const ws = await openWorkspace(await setupWorkspace(), clock);
-    const out = new Map<string, unknown>();
-    for (const [name, { call }] of methods) out.set(name, await call(ws));
+    const results = new Map<string, unknown>();
+    for (const [name, { call }] of methods) results.set(name, await call(ws));
+    const present = (await ws.status()).directories_present;
     await rm(getRoot(), { recursive: true, force: true });
     await mkdir(getRoot());
-    return out;
+    return { results, present };
   }
 
   /**
-   * Each method that reads `store` throws its refusal, retyped once with
-   * core's error as the cause; each other method returns what it returned on
-   * the untouched fixture.
+   * Each method that reads the directory's store throws its refusal, retyped
+   * once with core's error as the cause; each other method returns what it
+   * returned on the untouched fixture; and `status` reports the directory's
+   * keys as missing and every other key as before.
    */
   async function expectStoreRefused(
     ws: Workspace,
-    store: StoreName,
+    { store, missing }: Directory,
     message: string,
-    expected: Map<string, unknown>,
+    expected: Baseline,
   ): Promise<void> {
+    expect((await ws.status()).directories_present).toEqual({
+      ...expected.present,
+      ...Object.fromEntries(missing.map((key) => [key, false])),
+    });
     const error = STORE_ERRORS[store];
     for (const [name, { stores, call }] of methods) {
       if (!stores.includes(store)) {
-        expect(await call(ws), name).toEqual(expected.get(name));
+        expect(await call(ws), name).toEqual(expected.results.get(name));
         continue;
       }
       const thrown = await call(ws).then(
@@ -493,9 +559,9 @@ describe("a directory of the store that is not followed", () => {
     expect(Object.keys(ws).sort()).toEqual(["root", ...Object.keys(METHODS)].sort());
   });
 
-  for (const { relative, store } of directories) {
-    const label = `.basou/${relative}`;
-    const error = STORE_ERRORS[store];
+  for (const directory of directories) {
+    const label = `.basou/${directory.relative}`;
+    const error = STORE_ERRORS[directory.store];
 
     // POSIX only: creating a symlink needs privileges on Windows.
     it.skipIf(process.platform === "win32")(
@@ -503,18 +569,23 @@ describe("a directory of the store that is not followed", () => {
       async () => {
         const expected = await baseline();
         const repoRoot = await setupWorkspace();
-        await replaceWithSymlink(repoRoot, relative);
+        await replaceWithSymlink(repoRoot, directory.relative);
         const ws = await openWorkspace(repoRoot, clock);
-        await expectStoreRefused(ws, store, `${label} is a symlink; refusing to operate`, expected);
+        await expectStoreRefused(
+          ws,
+          directory,
+          `${label} is a symlink; refusing to operate`,
+          expected,
+        );
       },
     );
 
     it(`a ${label} that is a file makes the reads of that store throw ${error.name}`, async () => {
       const expected = await baseline();
       const repoRoot = await setupWorkspace();
-      await replaceWithFile(repoRoot, relative);
+      await replaceWithFile(repoRoot, directory.relative);
       const ws = await openWorkspace(repoRoot, clock);
-      await expectStoreRefused(ws, store, `${label} exists but is not a directory`, expected);
+      await expectStoreRefused(ws, directory, `${label} exists but is not a directory`, expected);
     });
   }
 
@@ -526,7 +597,7 @@ describe("a directory of the store that is not followed", () => {
     await replaceWithFile(repoRoot, "sessions");
     await expectStoreRefused(
       ws,
-      "sessions",
+      SESSIONS,
       ".basou/sessions exists but is not a directory",
       expected,
     );
@@ -633,8 +704,9 @@ describe("toStoreError", () => {
     expect(retyped).toBeInstanceOf(SessionStoreUnsafeError);
     // It carries core's message, which would match again.
     expect(toStoreError(ROOT, retyped)).toBe(retyped);
-    const ambiguous = new AmbiguousIdError("ses_01");
-    expect(toStoreError(ROOT, ambiguous)).toBe(ambiguous);
+    // Any SDK error, not only a store refusal, is left as it is.
+    const sdkError = new BasouSdkError(".basou/sessions is a symlink; refusing to operate");
+    expect(toStoreError(ROOT, sdkError)).toBe(sdkError);
   });
 
   it("returns any other error, or a thrown value that is not an Error, unchanged", () => {
@@ -643,6 +715,42 @@ describe("toStoreError", () => {
     expect(toStoreError(ROOT, ".basou/sessions is a symlink; refusing to operate")).toBe(
       ".basou/sessions is a symlink; refusing to operate",
     );
+  });
+});
+
+describe("guardReads", () => {
+  const ROOT = "/repo";
+  const REFUSAL = ".basou/sessions is a symlink; refusing to operate";
+
+  it("retypes a refusal a read throws as it is called", () => {
+    const reads = guardReads(ROOT, {
+      read: (): Promise<unknown> => {
+        throw new Error(REFUSAL);
+      },
+    });
+    expect(() => reads.read()).toThrow(SessionStoreUnsafeError);
+  });
+
+  it("passes an early break on to the stream it wraps", async () => {
+    let closed = false;
+    const reads = guardReads(ROOT, {
+      stream: (): AsyncIterable<number> =>
+        (async function* () {
+          try {
+            yield 1;
+            yield 2;
+          } finally {
+            closed = true;
+          }
+        })(),
+    });
+    const seen: number[] = [];
+    for await (const value of reads.stream()) {
+      seen.push(value);
+      break;
+    }
+    expect(seen).toEqual([1]);
+    expect(closed).toBe(true);
   });
 });
 
