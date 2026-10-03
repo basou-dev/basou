@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   assertApprovalStoreSafe,
+  assertLockStoreSafe,
   assertTaskStoreSafe,
   type BasouPaths,
   findErrorCode,
@@ -131,15 +132,16 @@ export type WatchDeps = {
 /**
  * Import both adapters for the workspace's source roots; returns the outcomes +
  * total imported. The regeneration that follows reads the task and approval
- * stores, so an unsafe one is refused here, before anything is imported, as
- * `refresh` does: the initial catch-up then fails, and a steady-state cycle is
- * skipped with the refusal logged.
+ * stores, and a re-import takes a session lock, so an unsafe one is refused
+ * here, before anything is imported, as `refresh` does: the initial catch-up
+ * then fails, and a steady-state cycle is skipped with the refusal logged.
  */
 async function runImports(
   deps: WatchDeps,
 ): Promise<{ claude: ImportOutcome; codex: ImportOutcome; changed: number }> {
   await assertTaskStoreSafe(deps.paths);
   await assertApprovalStoreSafe(deps.paths);
+  await assertLockStoreSafe(deps.paths);
   const claude = await importClaudeCode(deps.importOptions, deps.ctx);
   const codex = await importCodex(deps.importOptions, deps.ctx);
   return { claude, codex, changed: changedCount(claude) + changedCount(codex) };

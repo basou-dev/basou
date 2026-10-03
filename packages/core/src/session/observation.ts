@@ -1,8 +1,9 @@
-import { mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { FileChange } from "../git/diff.js";
 import { atomicReplace } from "../storage/atomic.js";
+import { assertStoreDirectorySafe } from "../storage/store-dir.js";
 
 /**
  * On-disk shape of a session observation. Deliberately NOT one of the durable
@@ -87,10 +88,27 @@ export function sessionObservationPath(observationsDir: string, externalId: stri
 }
 
 /**
+ * Refuse an observations directory that is not where basou keeps it:
+ * `observationsDir` is `.basou/tmp/observations`, and neither it nor
+ * `.basou/tmp` may be a symlink or a file. basou never creates one, and
+ * following it would read observations from, or write them (absolute paths
+ * included) to, a place outside the store. An absent directory passes.
+ *
+ * Throws the `assertStoreDirectorySafe` errors, naming `.basou/tmp` or
+ * `.basou/tmp/observations`.
+ */
+async function assertObservationsDirSafe(observationsDir: string): Promise<void> {
+  await assertStoreDirectorySafe(dirname(observationsDir), ".basou/tmp");
+  await assertStoreDirectorySafe(observationsDir, ".basou/tmp/observations");
+}
+
+/**
  * Read one observation. Returns `null` for every failure mode — absent,
  * unreadable, malformed, or written by a future version — because a caller
  * that cannot read the scratch must fall back to "no observation", never to an
- * error that would break a hook or an import.
+ * error that would break a hook or an import. That includes an observations
+ * directory that is a symlink or a file (see {@link assertObservationsDirSafe})
+ * and an observation file that is not a regular file: neither is followed.
  */
 export async function readSessionObservation(
   observationsDir: string,
@@ -100,6 +118,8 @@ export async function readSessionObservation(
   if (file === null) return null;
   let raw: string;
   try {
+    await assertObservationsDirSafe(observationsDir);
+    if (!(await lstat(file)).isFile()) return null;
     raw = await readFile(file, "utf8");
   } catch {
     return null;
@@ -118,7 +138,11 @@ export async function readSessionObservation(
 
 /**
  * Write one observation atomically. The caller owns the decision to write; a
- * failure propagates so the hook wrapper can swallow it in one place.
+ * failure propagates so the hook wrapper can swallow it in one place. An
+ * observations directory that is a symlink or a file is refused before
+ * anything is written (see {@link assertObservationsDirSafe}). The write
+ * replaces the file by rename, so a symlink standing at its name is replaced,
+ * not written through.
  */
 export async function writeSessionObservation(
   observationsDir: string,
@@ -126,6 +150,7 @@ export async function writeSessionObservation(
 ): Promise<void> {
   const file = sessionObservationPath(observationsDir, observation.external_id);
   if (file === null) return;
+  await assertObservationsDirSafe(observationsDir);
   // The directory is created here rather than by `ensureBasouDirectory`
   // alone: every store initialized before observations existed lacks it, and
   // a hook must work in those without an init step.

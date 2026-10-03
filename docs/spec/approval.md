@@ -87,6 +87,9 @@ them a symlink (to a queue kept elsewhere, for instance) or a file. basou
 refuses such a layout: the commands that read or write approvals stop with
 an error naming the directory, with the exceptions that
 [workspace §1.2](workspace.md#the-stores-directories-are-not-followed) lists.
+Each `<approval_id>.yaml` must be a regular file: one that is a symlink or
+anything else is not followed, and the same section says how each command
+reports it.
 
 Both directories are **gitignored by default** because approval payloads
 often contain sensitive context.

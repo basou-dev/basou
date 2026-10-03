@@ -3,6 +3,7 @@
 // chmod on the parent directory rather than vi.spyOn, because vi.spyOn
 // cannot redefine ESM module exports under vitest 2.x.
 import * as fsp from "node:fs/promises";
+import { join, relative, sep } from "node:path";
 import type { Manifest } from "../schemas/manifest.schema.js";
 import { StatusSchema, type StatusSnapshot } from "../schemas/status.schema.js";
 import { atomicReplace } from "./atomic.js";
@@ -62,23 +63,31 @@ export async function assertBasouRootSafe(rootPath: string): Promise<void> {
 }
 
 /**
- * Probe whether `path` is a directory using `lstat` (without following
- * symlinks, so a symlink-to-directory is reported as `false`).
+ * Probe whether `path`, under `root`, is a directory using `lstat` on it and
+ * on every directory between `root` and it. `lstat` does not follow the last
+ * component but does follow the ones before it, so `approvals/pending` under
+ * an `approvals` that is a symlink would otherwise read as present. A symlink
+ * at any of them (to a directory or not) is reported as `false`.
  *
  * Only ENOENT and ENOTDIR are mapped to `false`; permission-style errors
  * (EACCES, EPERM, ...) are re-thrown so a misleading "not present" answer
  * is never written into status.json. This keeps the snapshot honest about
  * what was actually observed.
  */
-async function dirPresent(path: string): Promise<boolean> {
-  try {
-    return (await fsp.lstat(path)).isDirectory();
-  } catch (error: unknown) {
-    if (hasErrorCode(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
-      return false;
+async function dirPresent(root: string, path: string): Promise<boolean> {
+  let current = root;
+  for (const segment of relative(root, path).split(sep)) {
+    current = join(current, segment);
+    try {
+      if (!(await fsp.lstat(current)).isDirectory()) return false;
+    } catch (error: unknown) {
+      if (hasErrorCode(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+        return false;
+      }
+      throw new Error("Failed to inspect .basou subdirectory", { cause: error });
     }
-    throw new Error("Failed to inspect .basou subdirectory", { cause: error });
   }
+  return true;
 }
 
 /**
@@ -101,7 +110,7 @@ export async function buildStatusSnapshot(input: {
     [keyof StatusSnapshot["directories_present"], (p: BasouPaths) => string]
   >;
   const presence = await Promise.all(
-    entries.map(async ([key, get]) => [key, await dirPresent(get(paths))] as const),
+    entries.map(async ([key, get]) => [key, await dirPresent(paths.root, get(paths))] as const),
   );
   const directoriesEntries = Object.fromEntries(presence) as StatusSnapshot["directories_present"];
 

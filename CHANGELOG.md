@@ -3,6 +3,77 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **A lock that cannot be taken no longer prints an absolute path.** When
+  `.basou/locks` could not be written (a permission error, for instance), the
+  commands that take a lock and print its error as it is — `task new`, `task
+  status`, `note`, `decision record`, `exec` and others — printed the native
+  error, such as `EACCES: permission denied, open '<absolute
+  path>/.basou/locks/...'`, even without `--verbose`. They now print `Failed
+  to acquire lock`, as `session rechain` already did; `--verbose` adds the
+  error code as the cause, as for other errors.
+- **`@basou/sdk`: `getApproval` no longer reads an approval file through a
+  symlink.** An `approvals/pending/<id>.yaml` or `approvals/resolved/<id>.yaml`
+  that is a symlink was left out of `listApprovals` and of every `basou
+  approval` command, but `getApproval` read the file it points to, outside the
+  store. It now returns `null` for it, and `listApprovals` reports it to
+  `onDiagnostic` as a skipped approval file, with its side: `skipped:
+  approval_file_not_a_file (pending)`.
+- **A symlink at an approval's resolved name no longer stands in for the
+  approval, and `approve` no longer records a resolution it cannot finish.**
+  With a pending file and an `approvals/resolved/<id>.yaml` that is a symlink,
+  `approval show`, `orient` and the SDK's `getApproval` showed the file behind
+  the symlink instead of the pending one, and `approval approve` recorded
+  `approval_approved`, failed with `Approval already resolved at the same
+  time`, left the approval pending and refused every later attempt as already
+  resolved. With a directory there instead, `approval show`, `orient` and
+  `getApproval` failed with `Failed to read approval`. They now read the
+  pending file, and `approve` and `reject` stop before recording anything:
+  `Approval <id> cannot be resolved: its entry in resolved is not a file (a
+  symlink or a directory is not followed)`.
+- **`basou status` no longer reports the approval directories as present
+  behind a symlinked `.basou/approvals`.** With `.basou/approvals` a symlink
+  to a directory holding `pending/` and `resolved/`, `basou status` printed
+  `Subdirectories present: 7/7`, and `approvals_pending` and
+  `approvals_resolved` were `true` in `--json` and in the SDK's `status`. Both
+  are now reported as missing (`5/7`), as they already were when `pending` or
+  `resolved` itself is a symlink.
+- **No lockfile is created behind a symlinked `.basou/locks`.** Every command
+  that takes a lock created and removed its lockfile in the directory the
+  symlink points to, outside the store, and one placed there (a live pid, a
+  recent time) made those commands fail as `Lock is held by another process`.
+  They now stop with `.basou/locks is a symlink; refusing to operate` (or
+  `exists but is not a directory`) before they write anything: `exec` and
+  `run` before they start a session, `task new` before it creates
+  `.basou/tasks`, `approval approve` and `reject` before they create
+  `resolved/`, `basou import`, `refresh`, `orient --refresh` and each cycle of
+  `refresh --watch` before they import anything (whether or not there is
+  anything to import), and `session rechain` and `task reconcile` once rather
+  than on every row.
+- **The hooks no longer write a session's observation behind a symlinked
+  `.basou/tmp`.** With `.basou/tmp` or `.basou/tmp/observations` a symlink,
+  the `session-start` hook wrote the observation, which names the session's
+  repositories and files by absolute path, into the directory it points to
+  and left it there, and an import read it back. Nothing is written or read
+  there now; as for any observation the hooks cannot write, the session goes
+  on and its import has no observed files. An observation file that is a
+  symlink is not read either.
+
+### Changed
+
+- **An approval file that is not followed is named instead of vanishing.**
+  `basou approval list` prints `Skipped <id> in <pending|resolved>: not a file
+  (a symlink or a directory is not followed)` on stderr for an approval file
+  that is a symlink or not a file, and `approval show` adds a warning naming
+  it when the approval it shows has one on the other side. `approval
+  show`, `approve` and `reject` given an id that names only such an entry stop
+  with `Approval <id> is not a file; a symlink or a directory there is not
+  followed` instead of `Approval not found`, and a prefix it shares with an
+  approval is now ambiguous rather than resolved to the approval.
+
 ## 0.62.0 — 2026-10-02
 
 ### Changed

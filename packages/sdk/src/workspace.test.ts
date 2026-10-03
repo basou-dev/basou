@@ -680,3 +680,64 @@ describe("a directory of the task or approval store that is not followed", () =>
     expect(thrown).not.toBeInstanceOf(ApprovalStoreUnsafeError);
   });
 });
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("an approval file that is not followed", () => {
+  it("is left out of listApprovals, reported, and looked up as null by getApproval", async () => {
+    const repoRoot = await setupWorkspace();
+    const pending = join(repoRoot, ".basou", "approvals", "pending", `${APPR_PENDING}.yaml`);
+    const outside = join(repoRoot, "outside.yaml");
+    await rename(pending, outside);
+    await symlink(outside, pending);
+    const diagnostics: Array<{ message: string; id?: string }> = [];
+    const ws = await openWorkspace(repoRoot, { onDiagnostic: (d) => diagnostics.push(d) });
+
+    expect(await ws.getApproval(APPR_PENDING)).toBeNull();
+    const listed = await ws.listApprovals();
+    expect(listed.pending.map((a) => a.approval.id)).not.toContain(APPR_PENDING);
+    expect(diagnostics).toContainEqual({
+      message: "skipped: approval_file_not_a_file (pending)",
+      id: APPR_PENDING,
+    });
+  });
+
+  it("does not hide a file on the other side: a symlinked resolved file leaves the pending one", async () => {
+    const repoRoot = await setupWorkspace();
+    // APPR_DUP has a file on both sides; its resolved one becomes a symlink.
+    const resolved = join(repoRoot, ".basou", "approvals", "resolved", `${APPR_DUP}.yaml`);
+    const outside = join(repoRoot, "outside.yaml");
+    await rename(resolved, outside);
+    await symlink(outside, resolved);
+    const diagnostics: Array<{ message: string; id?: string }> = [];
+    const ws = await openWorkspace(repoRoot, { onDiagnostic: (d) => diagnostics.push(d) });
+
+    const loaded = await ws.getApproval(APPR_DUP);
+    expect(loaded?.location).toBe("pending");
+    expect(loaded?.approval.status).toBe("pending");
+    const listed = await ws.listApprovals();
+    expect(listed.pending.map((a) => a.approval.id)).toContain(APPR_DUP);
+    expect(listed.resolved.map((a) => a.approval.id)).not.toContain(APPR_DUP);
+    // The file passed over is named with its side, so it is not mistaken for
+    // the approval that is listed.
+    expect(diagnostics).toEqual([
+      { message: "skipped: approval_file_not_a_file (resolved)", id: APPR_DUP },
+    ]);
+  });
+});
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("status of a symlinked .basou/approvals", () => {
+  it("reports both approval directories as missing, and the others as present", async () => {
+    const repoRoot = await setupWorkspace();
+    const approvals = join(repoRoot, ".basou", "approvals");
+    const moved = join(repoRoot, "moved-approvals");
+    await rename(approvals, moved);
+    await symlink(moved, approvals);
+    const ws = await openWorkspace(repoRoot);
+    const { directories_present: present } = await ws.status();
+    expect(present.approvals_pending).toBe(false);
+    expect(present.approvals_resolved).toBe(false);
+    expect(present.sessions).toBe(true);
+    expect(present.tasks).toBe(true);
+  });
+});

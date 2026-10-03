@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -154,15 +164,41 @@ describe("acquireLock", () => {
     );
   });
 
-  it("propagates unexpected (non-EEXIST, non-ENOENT) atomicCreate errors without translating", async () => {
+  it("wraps an unexpected (non-EEXIST, non-ENOENT) atomicCreate error without mistranslating it", async () => {
     // ENOENT now self-heals (see the missing-locks-directory suite below), so
-    // the no-mistranslation guarantee is exercised with a permission failure.
+    // the no-mistranslation guarantee is exercised with a permission failure:
+    // it is not reported as a held lock, and the native error stays the cause.
     const eacces = Object.assign(new Error("permission denied"), { code: "EACCES" });
     vi.mocked(atomicCreate).mockRejectedValueOnce(eacces);
-    await expect(
-      acquireLock(paths(), "task", "task_01HXGHOST000000000000000"),
-    ).rejects.toMatchObject({ code: "EACCES" });
+    const error = await acquireLock(paths(), "task", "task_01HXGHOST000000000000000").then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Failed to acquire lock");
+    expect((error as Error).cause).toBe(eacces);
   });
+
+  // chmod is ignored for euid 0, so this is skipped on root.
+  it.skipIf(process.geteuid?.() === 0)(
+    "names no path when the locks directory cannot be written (real-fs, chmod)",
+    async () => {
+      await chmod(paths().locks, 0o555);
+      let error: unknown;
+      try {
+        await acquireLock(paths(), "task", "task_01HXCHMDTEST0000000000000");
+      } catch (e: unknown) {
+        error = e;
+      } finally {
+        await chmod(paths().locks, 0o755);
+      }
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("Failed to acquire lock");
+      expect((error as Error).message).not.toContain(getWorkDir());
+      expect(((error as Error).cause as { code?: string }).code).toBe("EACCES");
+      expect(await readdir(paths().locks)).toEqual([]);
+    },
+  );
 });
 
 describe("ensureBasouDirectory + locks", () => {
@@ -194,5 +230,49 @@ describe("acquireLock — missing locks directory", () => {
     expect(entries).toContain("session_01HXR0CKD1R000000000000000.lock");
     await handle.release();
     expect(await readdir(paths().locks)).not.toContain("session_01HXR0CKD1R000000000000000.lock");
+  });
+});
+
+describe("acquireLock — a locks directory that is not followed", () => {
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "refuses a .basou/locks that is a symlink, creating and removing nothing behind it",
+    async () => {
+      const outside = join(getWorkDir(), "outside-locks");
+      await rename(paths().locks, outside);
+      await symlink(outside, paths().locks);
+      // A stale lockfile behind the link: following it would remove this.
+      const stale = join(outside, "task_01HXSTALE000000000000000.lock");
+      await writeFile(
+        stale,
+        JSON.stringify({ pid: 999_999_999, acquired_at: "2020-01-01T00:00:00Z" }),
+      );
+      for (const [scope, id] of [
+        ["task", "task_01HXSTALE000000000000000"],
+        ["session", "ses_01HXR0CKD1R000000000000000"],
+      ] as const) {
+        await expect(acquireLock(paths(), scope, id)).rejects.toThrow(
+          new Error(".basou/locks is a symlink; refusing to operate"),
+        );
+      }
+      expect(await readdir(outside)).toEqual(["task_01HXSTALE000000000000000.lock"]);
+    },
+  );
+
+  it("refuses a .basou/locks that is a file", async () => {
+    await rm(paths().locks, { recursive: true });
+    await writeFile(paths().locks, "");
+    await expect(acquireLock(paths(), "task", "task_01HXACQUIRE0000000000000")).rejects.toThrow(
+      new Error(".basou/locks exists but is not a directory"),
+    );
+    expect(await readFile(paths().locks, "utf8")).toBe("");
+  });
+
+  it("still checks a session id first", async () => {
+    await rm(paths().locks, { recursive: true });
+    await writeFile(paths().locks, "");
+    await expect(acquireLock(paths(), "session", "../escape")).rejects.toThrow(
+      new Error("Invalid session id"),
+    );
   });
 });

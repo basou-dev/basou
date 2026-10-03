@@ -4,6 +4,7 @@ import {
   acquireLock,
   appendEventToExistingSession,
   assertBasouRootSafe,
+  assertLockStoreSafe,
   type BasouPaths,
   basouPaths,
   displayPath,
@@ -1043,6 +1044,9 @@ export async function doRunSessionRechain(
   const repositoryRoot = await resolveRepositoryRootForSession(cwd, "rechain");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
+  // Every session is rechained under its lock, a dry run included; a refused
+  // lock store stops the sweep here once rather than failing each row.
+  await assertLockStoreSafe(paths);
 
   // `--all` takes the entries named as a session that are not directories
   // too: they are not followed, and each gets a `symlink` / `not_a_directory`

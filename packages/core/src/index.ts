@@ -70,10 +70,16 @@ export {
   SESSION_START_HOOK_TIMEOUT_SECONDS,
   upsertSessionStartHook,
 } from "./adapters/codex/index.js";
-export type { ApprovalLocation, LoadedApproval } from "./approval/index.js";
+export type {
+  ApprovalEntryKind,
+  ApprovalLocation,
+  LoadedApproval,
+  UnfollowedApprovalEntry,
+} from "./approval/index.js";
 export {
   assertApprovalStoreSafe,
   enumerateApprovals,
+  inspectApprovalEntry,
   isLazyExpired,
   loadApproval,
 } from "./approval/index.js";
@@ -489,6 +495,7 @@ export {
   appendEventToExistingSession,
   archiveTask,
   assertBasouRootSafe,
+  assertLockStoreSafe,
   assertSessionDirSafe,
   assertSessionStoreSafe,
   assertTaskStoreSafe,

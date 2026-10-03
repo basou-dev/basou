@@ -18,6 +18,7 @@ import {
   basouPaths,
   createManifest,
   ensureBasouDirectory,
+  readYamlFile,
   writeManifest,
   writeYamlFile,
 } from "@basou/core";
@@ -1212,6 +1213,35 @@ describe.skipIf(process.platform === "win32")("an unsafe approval store", () => 
     });
   }
 
+  it("a .basou/locks that is a symlink stops approve and reject before they create, lock or record anything", async () => {
+    const { repo, sessionId } = await linkedApprovals("approvals");
+    const paths = basouPaths(repo);
+    await rm(join(paths.root, "approvals"));
+    await rename(join(repo, "moved-approvals"), join(paths.root, "approvals"));
+    await rm(paths.approvals.resolved, { recursive: true });
+    const outsideLocks = join(repo, "outside-locks");
+    await rename(paths.locks, outsideLocks);
+    await symlink(outsideLocks, paths.locks);
+    const eventsBefore = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+    const commands: Array<[string, () => Promise<void>]> = [
+      ["approve", () => runApprovalApprove(APPR("P61"), {}, { cwd: repo })],
+      ["reject", () => runApprovalReject(APPR("P62"), { reason: "no" }, { cwd: repo })],
+    ];
+    for (const [name, run] of commands) {
+      const err = captureStderr();
+      process.exitCode = 0;
+      await run();
+      expect(process.exitCode, name).toBe(1);
+      expect(joinCalls(err), name).toBe(".basou/locks is a symlink; refusing to operate");
+      err.mockRestore();
+    }
+    expect(await readdir(outsideLocks)).toEqual([]);
+    await expect(readdir(paths.approvals.resolved)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8")).toBe(
+      eventsBefore,
+    );
+  });
+
   it("approve and reject create a missing resolved/ before recording the resolution", async () => {
     const { repo, sessionId } = await linkedApprovals("approvals");
     const paths = basouPaths(repo);
@@ -1282,5 +1312,225 @@ describe.skipIf(process.platform === "win32")("an unsafe approval store", () => 
       `${APPR("P61")}.yaml`,
       `${APPR("P62")}.yaml`,
     ]);
+  });
+});
+
+// POSIX only: creating a symlink needs privileges on Windows.
+describe.skipIf(process.platform === "win32")("an approval file that is not followed", () => {
+  /**
+   * A running session with two pending approvals. P71's pending file is moved
+   * out of the store and linked back in. P72's pending file stays, and an
+   * approved copy of it, outside the store, is linked in as its resolved file.
+   */
+  async function linkedApprovalFiles(): Promise<{
+    repo: string;
+    outside: string;
+    sessionId: string;
+  }> {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    const sessionId = SES("S71");
+    for (const suffix of ["P71", "P72"]) {
+      await createApproval(repo, { id: APPR(suffix), sessionId });
+      await appendRequestedEvent(
+        repo,
+        sessionId,
+        APPR(suffix),
+        "2026-05-04T10:00:00+09:00",
+        `E${suffix.slice(1)}`,
+      );
+    }
+    await writeYamlFile(join(paths.sessions, sessionId, "session.yaml"), {
+      schema_version: "0.1.0",
+      session: {
+        id: sessionId,
+        task_id: null,
+        workspace_id: FIXED_WS_ID,
+        source: { kind: "claude-code", version: "0.1.0" },
+        started_at: "2026-05-04T09:00:00+09:00",
+        status: "running",
+        working_directory: "~/projects/example",
+        invocation: { command: "claude", args: [], exit_code: null },
+        related_files: [],
+        events_log: "events.jsonl",
+        summary: null,
+      },
+    });
+    const outside = join(repo, "outside");
+    await mkdir(outside);
+    const p71 = join(paths.approvals.pending, `${APPR("P71")}.yaml`);
+    await rename(p71, join(outside, "p71.yaml"));
+    await symlink(join(outside, "p71.yaml"), p71);
+    await mkdir(paths.approvals.resolved, { recursive: true });
+    const p72 = await readYamlFile(join(paths.approvals.pending, `${APPR("P72")}.yaml`));
+    await writeYamlFile(join(outside, "p72-approved.yaml"), {
+      ...(p72 as Record<string, unknown>),
+      status: "approved",
+      resolver: "outside",
+      resolved_at: "2026-05-04T10:05:00+09:00",
+    });
+    await symlink(
+      join(outside, "p72-approved.yaml"),
+      join(paths.approvals.resolved, `${APPR("P72")}.yaml`),
+    );
+    return { repo, outside, sessionId };
+  }
+
+  it("list leaves both entries out and names each on stderr", async () => {
+    const { repo } = await linkedApprovalFiles();
+    const err = captureStderr();
+    const out = captureStdout();
+    await doRunApprovalList({}, { cwd: repo });
+    const stderrText = joinCalls(err);
+    expect(stderrText).toContain(
+      `Skipped ${APPR("P71")} in pending: not a file (a symlink or a directory is not followed)`,
+    );
+    expect(stderrText).toContain(
+      `Skipped ${APPR("P72")} in resolved: not a file (a symlink or a directory is not followed)`,
+    );
+    // P72's pending file is the only approval read, and it is still pending.
+    const stdoutText = joinCalls(out);
+    expect(stdoutText).toContain("pending");
+    expect(stdoutText).not.toContain("approved");
+    expect(stdoutText.split("\n")).toHaveLength(2);
+  });
+
+  it("show, approve and reject name an approval that is only a symlink, reading and writing nothing", async () => {
+    const { repo, outside, sessionId } = await linkedApprovalFiles();
+    const paths = basouPaths(repo);
+    const outsideBefore = await snapshotTree(outside);
+    const eventsBefore = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+    const commands: Array<[string, () => Promise<void>]> = [
+      ["show", () => runApprovalShow(APPR("P71"), {}, { cwd: repo })],
+      ["approve", () => runApprovalApprove(APPR("P71"), {}, { cwd: repo })],
+      ["reject", () => runApprovalReject(APPR("P71"), { reason: "no" }, { cwd: repo })],
+    ];
+    for (const [name, run] of commands) {
+      const err = captureStderr();
+      const out = captureStdout();
+      process.exitCode = 0;
+      await run();
+      expect(process.exitCode, name).toBe(1);
+      expect(joinCalls(err), name).toBe(
+        `Approval ${APPR("P71")} is not a file; a symlink or a directory there is not followed`,
+      );
+      expect(joinCalls(out), name).toBe("");
+      err.mockRestore();
+      out.mockRestore();
+    }
+    expect(await snapshotTree(outside)).toEqual(outsideBefore);
+    expect(await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8")).toBe(
+      eventsBefore,
+    );
+  });
+
+  it("a prefix an entry that is not followed shares with an approval is ambiguous", async () => {
+    const { repo } = await linkedApprovalFiles();
+    const err = captureStderr();
+    process.exitCode = 0;
+    // `APPR("P7")` is a prefix of both P71 (a symlink) and P72 (a file).
+    await runApprovalShow(APPR("P7"), {}, { cwd: repo });
+    expect(process.exitCode).toBe(1);
+    expect(joinCalls(err)).toContain("Ambiguous approval id");
+  });
+
+  it("show reads the pending file, not the symlinked resolved one, and says so", async () => {
+    const { repo } = await linkedApprovalFiles();
+    const err = captureStderr();
+    const out = captureStdout();
+    await doRunApprovalShow(APPR("P72"), {}, { cwd: repo });
+    expect(joinCalls(out)).toContain(`Approval: ${APPR("P72")}  (status: pending)`);
+    expect(joinCalls(out)).not.toContain("outside");
+    expect(joinCalls(err)).toContain(
+      `Warning: ${APPR("P72")} in resolved is not a file (a symlink or a directory is not followed)`,
+    );
+  });
+
+  it("approve and reject refuse while a symlink holds the resolved name, recording nothing", async () => {
+    const { repo, outside, sessionId } = await linkedApprovalFiles();
+    const paths = basouPaths(repo);
+    const outsideBefore = await snapshotTree(outside);
+    const eventsBefore = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+    const commands: Array<[string, () => Promise<void>]> = [
+      ["approve", () => runApprovalApprove(APPR("P72"), {}, { cwd: repo })],
+      ["reject", () => runApprovalReject(APPR("P72"), { reason: "no" }, { cwd: repo })],
+    ];
+    for (const [name, run] of commands) {
+      const err = captureStderr();
+      const out = captureStdout();
+      process.exitCode = 0;
+      await run();
+      expect(process.exitCode, name).toBe(1);
+      expect(joinCalls(err), name).toBe(
+        `Approval ${APPR("P72")} cannot be resolved: its entry in resolved is not a file (a symlink or a directory is not followed)`,
+      );
+      expect(joinCalls(out), name).toBe("");
+      err.mockRestore();
+      out.mockRestore();
+    }
+    expect(await snapshotTree(outside)).toEqual(outsideBefore);
+    expect(await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8")).toBe(
+      eventsBefore,
+    );
+    expect(await readdir(paths.approvals.pending)).toContain(`${APPR("P72")}.yaml`);
+  });
+
+  it("approve and reject refuse a directory at the resolved name too, recording nothing", async () => {
+    const { repo, sessionId } = await linkedApprovalFiles();
+    const paths = basouPaths(repo);
+    const resolved = join(paths.approvals.resolved, `${APPR("P72")}.yaml`);
+    await rm(resolved);
+    await mkdir(resolved);
+    const eventsBefore = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+    const commands: Array<[string, () => Promise<void>]> = [
+      ["approve", () => runApprovalApprove(APPR("P72"), {}, { cwd: repo })],
+      ["reject", () => runApprovalReject(APPR("P72"), { reason: "no" }, { cwd: repo })],
+    ];
+    for (const [name, run] of commands) {
+      const err = captureStderr();
+      process.exitCode = 0;
+      await run();
+      expect(process.exitCode, name).toBe(1);
+      expect(joinCalls(err), name).toBe(
+        `Approval ${APPR("P72")} cannot be resolved: its entry in resolved is not a file (a symlink or a directory is not followed)`,
+      );
+      err.mockRestore();
+    }
+    expect(await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8")).toBe(
+      eventsBefore,
+    );
+  });
+
+  it("show reads the resolved file, not the symlinked pending one, and says so", async () => {
+    const { repo } = await linkedApprovalFiles();
+    // P71's pending entry is a symlink; give it a resolved file in the store.
+    await createApproval(repo, {
+      id: APPR("P71"),
+      sessionId: SES("S71"),
+      status: "approved",
+      resolver: "local-cli",
+      resolvedAt: "2026-05-04T10:01:23+09:00",
+      location: "resolved",
+    });
+    const err = captureStderr();
+    const out = captureStdout();
+    await doRunApprovalShow(APPR("P71"), {}, { cwd: repo });
+    expect(joinCalls(out)).toContain(`Approval: ${APPR("P71")}  (status: approved)`);
+    expect(joinCalls(err)).toContain(
+      `Warning: ${APPR("P71")} in pending is not a file (a symlink or a directory is not followed)`,
+    );
+  });
+
+  it("control: with the symlink gone, the same approval is approved", async () => {
+    const { repo, sessionId } = await linkedApprovalFiles();
+    const paths = basouPaths(repo);
+    await rm(join(paths.approvals.resolved, `${APPR("P72")}.yaml`));
+    captureStdout();
+    process.exitCode = 0;
+    await runApprovalApprove(APPR("P72"), {}, { cwd: repo });
+    expect(process.exitCode).toBe(0);
+    expect(await readdir(paths.approvals.resolved)).toEqual([`${APPR("P72")}.yaml`]);
+    const events = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+    expect(events).toContain('"type":"approval_approved"');
   });
 });

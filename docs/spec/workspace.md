@@ -52,11 +52,12 @@ out on disk.
 ### The store's directories are not followed
 
 basou creates `sessions/`, `tasks/`, `tasks/archive/`, `approvals/`,
-`approvals/pending/` and `approvals/resolved/` as directories and never as
-anything else, and it creates no symlink under `.basou/`, except in a view
-that `workspace.view` places there. When one of them is a symlink, whatever it
-points to, or a file, the commands that read or write what it holds stop with
-an error naming it: `<directory> is a symlink; refusing to operate` or `<directory> exists but
+`approvals/pending/`, `approvals/resolved/`, `locks/`, `tmp/` and
+`tmp/observations/` as directories and never as anything else, and it creates
+no symlink under `.basou/`, except in a view that `workspace.view` places
+there. When one of them is a symlink, whatever it points to, or a file, the
+commands that read or write what it holds stop with an error naming it,
+except where the list below says otherwise: `<directory> is a symlink; refusing to operate` or `<directory> exists but
 is not a directory`, where `<directory>` is the path from the repository root,
 such as `.basou/tasks/archive`. They stop before they read anything from that
 directory, and before they write anything, take a lock or record an event,
@@ -81,21 +82,59 @@ write into one create it.
   nothing. The watcher's first catch-up fails; a later cycle is skipped and
   the refusal logged. `refresh --dry-run` imports and regenerates nothing and
   is not stopped.
+- `.basou/locks` stops the commands that take a lock, before they write
+  anything: `note`, `session note`, `decision record`, `capture` and `void`,
+  `review record`, `task new`, `status`, `edit`, `archive`, `delete`,
+  `reconcile` and `refresh-linkage` (the last two in their default dry-run
+  mode too), `approval approve` and `reject`, `exec`, `run`, and `session
+  rechain` (`--dry-run` too). A re-import takes a lock, so it also stops
+  `basou import`, and `refresh`, `orient --refresh` and each cycle of
+  `refresh --watch` as in the item above, before they import anything and
+  whether or not there is anything to import. A `--dry-run` of `import`,
+  `refresh`, `decision capture` or `review record` takes no lock and is not
+  stopped, and neither is a `session import` of a new session.
+- `.basou/tmp` and `.basou/tmp/observations` hold the hooks' observations of
+  what a session changes. The `session-start` and `stop` hooks write none
+  there, silently, as for any observation they cannot write, and an import
+  reads none, as for a session that was not observed. An observation file in
+  it that is not a regular file is not read either.
 
-`basou view` answers `500` with the error on the pages that read the store;
-on the portfolio page the workspace's card carries the error instead. The
-`session-start` hook, which never fails a session, prints nothing for such a
-workspace. `basou status` does not stop: it reports `sessions`, `tasks`,
-`approvals/pending` and `approvals/resolved` that are themselves a symlink or
-a file as missing. It does not yet look at `approvals` itself, so today a
-symlink there leaves the two approval directories reported as present; that
-is a known limitation, not a promise.
+For the session, task and approval stores, `basou view` answers `500` with
+the error on the pages that read the store; on the portfolio page the
+workspace's card carries the error instead. The `session-start` hook, which
+never fails a session, prints nothing for such a workspace. `basou status`
+does not stop: it reports `sessions`, `tasks`, `approvals/pending` and
+`approvals/resolved` that are themselves a symlink or a file as missing, and
+reports both approval directories as missing when `approvals` itself is a
+symlink or a file. Neither `basou view` nor the `session-start` hook's
+orientation reads `.basou/locks` or `.basou/tmp`, so a symlink there leaves
+them as usual. `basou status` reports a `tmp` that is a symlink or a file as
+missing; it has no entry for `locks` or `tmp/observations`.
 
-A task file or an approval file that is itself a symlink is not covered by
-this rule. A live task file (`tasks/<task_id>.md`) is read through it; an
-archived one (`tasks/archive/<task_id>.md`) is left out of the listing and
-not found. An approval file is left out of the listing and not found by the
-CLI, though the SDK's `getApproval` reads through it.
+A task file that is itself a symlink is not covered by this rule. A live
+task file (`tasks/<task_id>.md`) is read through it; an archived one
+(`tasks/archive/<task_id>.md`) is left out of the listing and not found.
+
+An approval file (`approvals/pending/<approval_id>.yaml` or
+`approvals/resolved/<approval_id>.yaml`) that is a symlink, whatever it
+points to, or anything other than a file is not followed, and nothing is read
+through it:
+
+- `basou approval list` leaves it out and names it on stderr: `Skipped <id>
+  in <pending|resolved>: not a file (a symlink or a directory is not
+  followed)`.
+- `approval show`, `approve` and `reject` given its id stop with `Approval
+  <approval_id> is not a file; a symlink or a directory there is not
+  followed`. A prefix it shares with an approval is ambiguous.
+- When the same id has a file on the other side, that file is the approval;
+  `approval show` adds a warning naming the entry. `approve` and `reject`
+  refuse an approval whose name in `approvals/resolved` such an entry takes,
+  before they record anything, since the resolved file could not be written
+  there.
+- The SDK's `listApprovals` leaves it out and reports it to `onDiagnostic`,
+  and `getApproval` looks it up as `null`.
+- `orient`, `handoff generate`, `report generate` and `basou view` leave it
+  out of what they show.
 
 ### tasks/ details
 

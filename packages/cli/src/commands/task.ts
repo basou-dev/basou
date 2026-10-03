@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   archiveTask,
   assertBasouRootSafe,
+  assertLockStoreSafe,
   basouPaths,
   createTaskWithEvent,
   deleteTask,
@@ -875,6 +876,10 @@ export async function doRunTaskReconcile(
   const repositoryRoot = await resolveRepositoryRootForTask(cwd, "reconcile");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
+  // Every task is reconciled under its lock, a dry run included; a refused
+  // lock store stops the command here once, rather than failing each task of
+  // the sweep with a classified error that hides the refusal.
+  await assertLockStoreSafe(paths);
   const manifest = await readManifest(paths);
   const nowProvider = ctx.nowProvider ?? ((): Date => new Date());
   const write = options.write === true;
