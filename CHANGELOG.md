@@ -5,6 +5,18 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Fixed
+
+- **`exec` and `run` no longer leave a session behind when no lock can be
+  taken.** When `.basou/locks` could not be written (a permission error, for
+  instance), `basou exec` and `basou run` wrote the session's directory and
+  `session.yaml` before taking their first lock, then failed with `Failed to
+  acquire lock` and left a session in `initialized` with no events, which
+  `session list` listed and `orient` showed as the last session. They now take
+  the session lock before writing anything, and stop with the same error
+  without a session. A `.basou/locks` that is a symlink was already refused
+  before anything was written, and still is.
+
 ### Internal
 
 - **`@basou/sdk`: a store refusal is retyped by every method of a
