@@ -1,5 +1,6 @@
 import { lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { assertStoreDirectorySafe } from "./store-dir.js";
 
 /**
  * Absolute paths to the standard `.basou/` directory layout, derived from a
@@ -107,6 +108,10 @@ const PATH_LABELS = {
  *
  * Throws if `repositoryRoot/.basou` (or any required subdirectory) exists
  * but is not a directory, or if filesystem permissions prevent creation.
+ * `.basou/approvals`, the one directory whose children it creates, is
+ * checked first: when it is a symlink or a file, this throws the
+ * `assertStoreDirectorySafe` errors before anything is created, so nothing
+ * is created through it outside the store.
  * All thrown error messages are pathless; the original native error is
  * attached as `cause` for diagnostics.
  *
@@ -130,6 +135,11 @@ export async function ensureBasouDirectory(repositoryRoot: string): Promise<Baso
   if (existing !== undefined && !existing.isDirectory()) {
     throw new Error("Basou root .basou exists but is not a directory");
   }
+
+  // `mkdir -p` of `approvals/pending` follows a symlinked `approvals` and
+  // creates the child where it points. Every other directory here is a leaf,
+  // and `mkdir -p` creates nothing through a symlink that is already there.
+  await assertStoreDirectorySafe(join(paths.root, "approvals"), ".basou/approvals");
 
   await Promise.all([
     mkdirLabeled(paths.sessions, PATH_LABELS.sessions),

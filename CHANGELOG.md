@@ -18,6 +18,17 @@ All notable changes to **basou** are recorded here. The project follows
   now print `Failed to acquire lock` where they printed the native error,
   which named an absolute path. A `.basou/locks` that is a symlink was
   already refused before anything was written, and still is.
+- **`init` no longer creates directories through a symlinked
+  `.basou/approvals`.** Run on a workspace whose `.basou/approvals` is a
+  symlink, `basou init` (with or without `--force`) and `basou project new
+  --apply` created `pending/` and `resolved/` where it pointed, outside the
+  store, then stopped with `Already initialized` or, with `--force`,
+  initialized the workspace. They now stop first, with `.basou/approvals is a
+  symlink; refusing to operate`, and create nothing. A `.basou/approvals` that
+  is a file is now reported as `.basou/approvals exists but is not a
+  directory`, where the error named `.basou/approvals/pending` or
+  `.basou/approvals/resolved`, whichever failed first. A symlink at any other
+  directory of the layout had nothing created through it, and still has not.
 
 ### Internal
 
