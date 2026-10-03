@@ -3,6 +3,20 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Internal
+
+- **`@basou/sdk`: a store refusal is retyped by every method of a
+  `Workspace`, from one place.** The retyping was attached by hand to each of
+  the twelve methods that read a store today, so a method added later, or a
+  `manifest` or `status` whose path in `@basou/core` came to check a store,
+  would have let core's untyped `Error` through. It is now applied to every
+  method when the workspace is opened, and an error the SDK has already
+  retyped is not retyped again. The tests list every method with the stores
+  it reads, keyed by the `Workspace` interface, so a method left out does not
+  compile. No change in behavior.
+
 ## 0.63.0 — 2026-10-03
 
 ### Fixed
