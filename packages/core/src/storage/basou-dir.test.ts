@@ -127,6 +127,15 @@ describe("ensureBasouDirectory", () => {
     await expect(ensureBasouDirectory(root)).rejects.toThrow(/exists but is not a directory/);
   });
 
+  it("throws, naming it, when a directory of the layout exists as a file", async () => {
+    const root = getRepoRoot();
+    await mkdir(join(root, ".basou"));
+    await writeFile(join(root, ".basou", "sessions"), "");
+    await expect(ensureBasouDirectory(root)).rejects.toThrow(
+      ".basou/sessions exists but is not a directory",
+    );
+  });
+
   it("throws when .basou/approvals exists as a file, before it creates anything", async () => {
     const root = getRepoRoot();
     await mkdir(join(root, ".basou"));
@@ -209,7 +218,7 @@ describe("ensureBasouDirectory", () => {
   it("emits a pathless error message when a subdirectory is a file (subdirectory-as-file case)", async () => {
     const root = getRepoRoot();
     await mkdir(join(root, ".basou"));
-    await writeFile(join(root, ".basou", "approvals"), "");
+    await writeFile(join(root, ".basou", "sessions"), "");
     let captured: unknown;
     try {
       await ensureBasouDirectory(root);

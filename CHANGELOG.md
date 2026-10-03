@@ -19,16 +19,22 @@ All notable changes to **basou** are recorded here. The project follows
   which named an absolute path. A `.basou/locks` that is a symlink was
   already refused before anything was written, and still is.
 - **`init` no longer creates directories through a symlinked
-  `.basou/approvals`.** Run on a workspace whose `.basou/approvals` is a
-  symlink, `basou init` (with or without `--force`) and `basou project new
-  --apply` created `pending/` and `resolved/` where it pointed, outside the
-  store, then stopped with `Already initialized` or, with `--force`,
-  initialized the workspace. They now stop first, with `.basou/approvals is a
-  symlink; refusing to operate`, and create nothing. A `.basou/approvals` that
-  is a file is now reported as `.basou/approvals exists but is not a
-  directory`, where the error named `.basou/approvals/pending` or
-  `.basou/approvals/resolved`, whichever failed first. A symlink at any other
-  directory of the layout had nothing created through it, and still has not.
+  `.basou/approvals`.** When `.basou/approvals` was a symlink to a directory,
+  `basou init` and `basou project new --apply` created `pending/` and
+  `resolved/` where it pointed, outside the store. On a store without a
+  manifest, or with `--force`, they then initialized the workspace;
+  otherwise they stopped with `Already initialized`. A symlink that pointed
+  nowhere, or at a file, had nothing created through it, and they stopped
+  with an error naming `.basou/approvals/pending` or
+  `.basou/approvals/resolved`. In every case they now stop first, with
+  `.basou/approvals is a symlink; refusing to operate`, and create nothing.
+  A `.basou/approvals` that is a file is now reported as `.basou/approvals
+  exists but is not a directory` before anything is created, where the error
+  named `pending` or `resolved`, whichever failed first. A `.basou` that
+  cannot be searched is now reported as `Failed to inspect .basou/approvals`,
+  where it was `Failed to create` and one of the directories. A symlink at
+  any other directory of the layout had nothing created through it, and
+  still has not.
 
 ### Internal
 
