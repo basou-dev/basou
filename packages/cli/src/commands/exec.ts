@@ -6,7 +6,6 @@ import { join } from "node:path";
 import {
   acquireLock,
   assertBasouRootSafe,
-  assertLockStoreSafe,
   assertSessionStoreSafe,
   type BasouPaths,
   basouPaths,
@@ -119,14 +118,14 @@ export async function runExec(
   const manifest = await readManifest(paths);
 
   // 4. Build a fresh session and persist its initial state, inside the
-  //    store: a `.basou/sessions` that is a symlink is refused, and so is a
-  //    `.basou/locks` one, which the first lock below would meet only after
-  //    the session was written.
+  //    store: a `.basou/sessions` that is a symlink is refused. The session
+  //    lock is taken before anything is written and held while session.yaml
+  //    is first written, so a lock that cannot be taken (a `.basou/locks` that
+  //    is a symlink, or one this process may not write to) stops the command
+  //    before it leaves a session behind.
   await assertSessionStoreSafe(paths);
-  await assertLockStoreSafe(paths);
   const sessionId = prefixedUlid("ses");
   const sessionDir = join(paths.sessions, sessionId);
-  await mkdir(sessionDir, { recursive: true });
 
   // Every append chains onto the on-disk tail under a short-lived session lock
   // (the self-locking wrapper); the lock is NEVER held across the child. Tests
@@ -147,7 +146,13 @@ export async function runExec(
     workspaceId: manifest.workspace.id,
     startedAt,
   });
-  await writeYamlFile(sessionYamlPath, session);
+  const initialLock = await acquireLock(paths, "session", sessionId);
+  try {
+    await mkdir(sessionDir, { recursive: true });
+    await writeYamlFile(sessionYamlPath, session);
+  } finally {
+    await initialLock.release();
+  }
 
   // 5. session_started.
   await appendEvent(sessionDir, {

@@ -1,6 +1,16 @@
 import type { ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -137,6 +147,7 @@ describe("runExec", () => {
         ),
       ).rejects.toThrow(".basou/sessions is a symlink; refusing to operate");
       expect(await readdir(outside)).toEqual([]);
+      expect(await readdir(paths.locks)).toEqual([]);
     },
   );
 
@@ -163,6 +174,59 @@ describe("runExec", () => {
       ).rejects.toThrow(".basou/locks is a symlink; refusing to operate");
       expect(await readdir(outside)).toEqual([]);
       await expect(readdir(paths.sessions)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(spawned).not.toHaveBeenCalled();
+    },
+  );
+
+  // POSIX only, and not as root, who is never refused the write.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "starts no session when no lock can be created in .basou/locks",
+    async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      const runner = makeFakeRunner({ exit_code: 0 });
+      const spawned = vi.spyOn(runner, "run");
+      await chmod(paths.locks, 0o555);
+      try {
+        await expect(
+          runExec(
+            "node",
+            ["-e", "process.exit(0)"],
+            { cwd: repo, snapshot: false },
+            { runner, now: () => FIXED_DATE },
+          ),
+        ).rejects.toThrow("Failed to acquire lock");
+      } finally {
+        await chmod(paths.locks, 0o755);
+      }
+      expect(await readdir(paths.sessions)).toEqual([]);
+      expect(spawned).not.toHaveBeenCalled();
+    },
+  );
+
+  // POSIX only, and not as root, who is never refused the write.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "releases the session lock when the session cannot be written",
+    async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      const runner = makeFakeRunner({ exit_code: 0 });
+      const spawned = vi.spyOn(runner, "run");
+      await chmod(paths.sessions, 0o555);
+      try {
+        await expect(
+          runExec(
+            "node",
+            ["-e", "process.exit(0)"],
+            { cwd: repo, snapshot: false },
+            { runner, now: () => FIXED_DATE },
+          ),
+        ).rejects.toMatchObject({ code: "EACCES" });
+      } finally {
+        await chmod(paths.sessions, 0o755);
+      }
+      expect(await readdir(paths.sessions)).toEqual([]);
+      expect(await readdir(paths.locks)).toEqual([]);
       expect(spawned).not.toHaveBeenCalled();
     },
   );

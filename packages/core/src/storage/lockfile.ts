@@ -43,8 +43,8 @@ export type LockHandle = {
  * outside the store through it. basou never creates such an entry. An absent
  * directory passes ({@link acquireLock} creates it). `acquireLock` makes this
  * check first. A command that writes anything before it takes its first lock
- * makes it before that write: `exec`, `run`, `task new`, `approval approve` /
- * `reject`, and an import. `refresh` makes it before it imports anything, and
+ * makes it before that write: `task new`, `approval approve` / `reject`, and
+ * an import. `refresh` makes it before it imports anything, and
  * a command that sweeps many records under one lock each (`session rechain`,
  * `task reconcile`) once, before the sweep.
  *
