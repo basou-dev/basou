@@ -13,7 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { promisify } from "node:util";
 import {
   appendEvent,
@@ -37,6 +37,13 @@ import {
 } from "../lib/codex-hook-trust.js";
 import { type RunContext, registerRunCommand, runClaudeCode, runCodex } from "./run.js";
 
+// Wrap mkdir in a pass-through vi.fn so a test can make the mkdir of a
+// session's directory fail with an error other than the EACCES a permission
+// bit gives; every other call delegates to the real implementation.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, mkdir: vi.fn(actual.mkdir) };
+});
 const execFileAsync = promisify(execFile);
 
 const ENV = {
@@ -228,24 +235,111 @@ describe("runClaudeCode", () => {
 
   // POSIX only, and not as root, who is never refused the write.
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "releases the session lock when the session cannot be written",
+    "releases the session lock, and fails without a path, when the session directory cannot be created",
     async () => {
       const repo = await setupInitedRepo();
       const paths = basouPaths(repo);
       const runner = makeFakeRunner({ exit_code: 0 });
       const spawned = vi.spyOn(runner, "run");
+      let thrown: unknown;
       await chmod(paths.sessions, 0o555);
       try {
-        await expect(
-          runClaudeCode(
-            [],
-            { cwd: repo, snapshot: false },
-            { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
-          ),
-        ).rejects.toMatchObject({ code: "EACCES" });
+        thrown = await runClaudeCode(
+          [],
+          { cwd: repo, snapshot: false },
+          { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+        ).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
       } finally {
         await chmod(paths.sessions, 0o755);
       }
+      // The native error names the directory by its absolute path, so it is
+      // only the cause.
+      expect((thrown as Error).message).toBe("Failed to create session directory");
+      // An Error, so that --verbose can show its code.
+      expect((thrown as Error).cause).toBeInstanceOf(Error);
+      expect((thrown as Error).cause).toMatchObject({ code: "EACCES" });
+      expect(await readdir(paths.sessions)).toEqual([]);
+      expect(await readdir(paths.locks)).toEqual([]);
+      expect(spawned).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails without a path when the session directory cannot be created for another reason", async () => {
+    const repo = await setupInitedRepo();
+    const runner = makeFakeRunner({ exit_code: 0 });
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.mocked(mkdir).mockImplementation((async (path: string, options?: unknown) => {
+      // exec resolves the repository root through git, which gives its real
+      // path, so the session directory is matched by its tail.
+      if (String(path).includes(`${sep}.basou${sep}sessions${sep}ses_`)) {
+        throw Object.assign(new Error(`EPERM: operation not permitted, mkdir '${path}'`), {
+          code: "EPERM",
+        });
+      }
+      return actual.mkdir(path, options as Parameters<typeof actual.mkdir>[1]);
+    }) as typeof mkdir);
+    let thrown: unknown;
+    try {
+      thrown = await runClaudeCode(
+        [],
+        { cwd: repo, snapshot: false },
+        { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+      ).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    } finally {
+      vi.mocked(mkdir).mockImplementation(actual.mkdir);
+    }
+    expect((thrown as Error).message).toBe("Failed to create session directory");
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
+    expect((thrown as Error).cause).toMatchObject({ code: "EPERM" });
+  });
+
+  it("starts a session when .basou/sessions does not exist yet", async () => {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    await rm(paths.sessions, { recursive: true });
+    const runner = makeFakeRunner({ exit_code: 0 });
+    expect(
+      await runClaudeCode(
+        [],
+        { cwd: repo, snapshot: false },
+        { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+      ),
+    ).toBe(0);
+    expect(await readdir(paths.sessions)).toHaveLength(1);
+  });
+
+  // POSIX only, and not as root, who is never refused the write.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports a session.yaml it cannot write as that, and leaves no session directory behind",
+    async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      const runner = makeFakeRunner({ exit_code: 0 });
+      const spawned = vi.spyOn(runner, "run");
+      let thrown: unknown;
+      // The session's directory is created read-only, so session.yaml cannot
+      // be written into it.
+      const previous = process.umask(0o222);
+      try {
+        thrown = await runClaudeCode(
+          [],
+          { cwd: repo, snapshot: false },
+          { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+        ).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      } finally {
+        process.umask(previous);
+      }
+      expect((thrown as Error).message).toBe("Failed to write YAML file");
+      // No session directory without its session.yaml is left behind.
       expect(await readdir(paths.sessions)).toEqual([]);
       expect(await readdir(paths.locks)).toEqual([]);
       expect(spawned).not.toHaveBeenCalled();

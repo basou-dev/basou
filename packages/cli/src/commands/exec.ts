@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -148,8 +148,23 @@ export async function runExec(
   });
   const initialLock = await acquireLock(paths, "session", sessionId);
   try {
-    await mkdir(sessionDir, { recursive: true });
-    await writeYamlFile(sessionYamlPath, session);
+    // The native error names the directory by its absolute path, so it is
+    // kept as the cause and a pathless message is shown, as for the sessions
+    // other commands create.
+    try {
+      await mkdir(sessionDir, { recursive: true });
+    } catch (error: unknown) {
+      throw new Error("Failed to create session directory", { cause: error });
+    }
+    // A directory without its session.yaml is not a session: it would be
+    // skipped, with a warning, by every later read. Remove it, as the ad-hoc
+    // session writer does.
+    try {
+      await writeYamlFile(sessionYamlPath, session);
+    } catch (error: unknown) {
+      await rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
   } finally {
     await initialLock.release();
   }
