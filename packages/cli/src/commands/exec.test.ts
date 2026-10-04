@@ -297,9 +297,10 @@ describe("runExec", () => {
 
   // POSIX only, and not as root, who is never refused the write.
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "reports a session.yaml it cannot write as that, not as the session directory",
+    "reports a session.yaml it cannot write as that, and leaves no session directory behind",
     async () => {
       const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
       const runner = makeFakeRunner({ exit_code: 0 });
       const spawned = vi.spyOn(runner, "run");
       let thrown: unknown;
@@ -320,6 +321,9 @@ describe("runExec", () => {
         process.umask(previous);
       }
       expect((thrown as Error).message).toBe("Failed to write YAML file");
+      // No session directory without its session.yaml is left behind.
+      expect(await readdir(paths.sessions)).toEqual([]);
+      expect(await readdir(paths.locks)).toEqual([]);
       expect(spawned).not.toHaveBeenCalled();
     },
   );

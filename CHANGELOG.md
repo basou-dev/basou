@@ -25,6 +25,13 @@ All notable changes to **basou** are recorded here. The project follows
   They now print `Failed to create session directory`, as `note`, `decision
   capture`, `review record`, `task new` and the other commands that start a
   session already did.
+- **`exec` and `run` no longer leave an empty session directory behind when
+  they cannot write its `session.yaml`.** When that first write failed (a
+  session directory created read-only under `umask 222`, for instance), they
+  stopped with `Failed to write YAML file` and left the directory without
+  it, and every later `session list` printed `Skipped <id>: session.yaml not
+  found`. They now remove the directory before they stop, as the other
+  commands that start a session already did.
 - **`init` no longer creates directories through a symlinked
   `.basou/approvals`.** When `.basou/approvals` was a symlink to a directory,
   `basou init` and `basou project new --apply` created `pending/` and
