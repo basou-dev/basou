@@ -688,3 +688,105 @@ describe("printRefreshSummary", () => {
     expect(out).not.toContain("basou decision");
   });
 });
+
+// refresh keeps the stderr of the imports it runs to itself, so the line the
+// claude-code import prints about a refused observations directory has to be
+// said by refresh.
+describe.skipIf(process.platform === "win32")(
+  "basou refresh (refused observations directory)",
+  () => {
+    const NOTICE = "not observed there";
+
+    function noticesOf(err: { mock: { calls: unknown[][] } }): string[] {
+      return err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(NOTICE));
+    }
+
+    async function refuseTmp(repo: string): Promise<void> {
+      const paths = basouPaths(repo);
+      await rm(paths.tmp, { recursive: true, force: true });
+      await symlink(join(repo, "outside-tmp"), paths.tmp);
+    }
+
+    function noticeFor(repo: string): string {
+      return `basou: .basou/tmp is a symlink; refusing to operate (in ${repo}). The files a session changes through the shell are not observed there, so a session imported now records only the files its transcript names.`;
+    }
+
+    it("says it once on stderr, --json and --dry-run included", async () => {
+      const repo = await setupInitedRepo();
+      await writeClaudeTranscript(repo);
+      await refuseTmp(repo);
+      const ctx = { ...ctxFor(repo), portfolioConfigPath: join(repo, "absent.yaml") };
+
+      for (const options of [{}, { json: true }, { dryRun: true }]) {
+        const err = vi.spyOn(console, "error").mockImplementation(() => {});
+        const { lines } = await captureLog(() => doRunRefresh(options, ctx));
+        expect(noticesOf(err)).toEqual([noticeFor(repo)]);
+        if ("json" in options) expect(() => JSON.parse(lines.join("\n"))).not.toThrow();
+        err.mockRestore();
+      }
+    });
+
+    it("says nothing when .basou/tmp is a plain directory", async () => {
+      const repo = await setupInitedRepo();
+      await writeClaudeTranscript(repo);
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await captureLog(() =>
+        doRunRefresh({}, { ...ctxFor(repo), portfolioConfigPath: join(repo, "absent.yaml") }),
+      );
+
+      expect(noticesOf(err)).toEqual([]);
+    });
+
+    it("--portfolio names the workspace it is about", async () => {
+      const refused = await setupInitedRepo();
+      const clean = await realpath(await mkdtemp(join(tmpdir(), "basou-refresh-obs-")));
+      try {
+        await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+          cwd: clean,
+          env: ENV,
+        });
+        await writeManifest(
+          await ensureBasouDirectory(clean),
+          createManifest({
+            workspaceName: "clean-ws",
+            now: FIXED_DATE,
+            workspaceId: "ws_01HXABCDEF1234567890PFEEE5",
+          }),
+        );
+        await refuseTmp(refused);
+        const configPath = join(clean, "portfolio.yaml");
+        await writeFile(configPath, `workspaces:\n  - path: ${clean}\n  - path: ${refused}\n`);
+        const err = vi.spyOn(console, "error").mockImplementation(() => {});
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        await doRunRefreshPortfolio(
+          { portfolio: true },
+          { ...ctxFor(refused), portfolioConfigPath: configPath },
+        );
+
+        expect(noticesOf(err)).toEqual([noticeFor(refused)]);
+      } finally {
+        await rm(clean, { recursive: true, force: true });
+      }
+    });
+
+    it("--watch says it once, when it starts", async () => {
+      const repo = await setupInitedRepo();
+      await refuseTmp(repo);
+      // A symlinked .basou/sessions fails the watcher's first catch-up, so the
+      // watcher returns instead of polling.
+      const paths = basouPaths(repo);
+      await rm(paths.sessions, { recursive: true });
+      await symlink(join(repo, "outside-sessions"), paths.sessions);
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "log").mockImplementation(() => {});
+
+      await expect(doRunRefreshWatch({ watch: true }, ctxFor(repo))).rejects.toThrow(
+        ".basou/sessions is a symlink; refusing to operate",
+      );
+
+      expect(noticesOf(err)).toEqual([noticeFor(repo)]);
+    });
+  },
+);

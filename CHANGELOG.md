@@ -3,6 +3,21 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **A refused `.basou/tmp` is said instead of costing sessions their
+  observed files without a sign.** With `.basou/tmp` or
+  `.basou/tmp/observations` a symlink or a file, the hooks write no
+  observation and an import reads none, so a session imported there records
+  only the files its transcript names, and nothing said why. `basou import
+  claude-code` and `basou refresh` now say so in one line on stderr, naming
+  the directory and the workspace: `basou: .basou/tmp is a symlink; refusing
+  to operate (in <workspace>). ...`. `refresh --portfolio` says it for each
+  workspace concerned and `refresh --watch` once, when it starts. `--json`
+  output is unchanged.
+
 ## 0.64.0 — 2026-10-04
 
 ### Fixed

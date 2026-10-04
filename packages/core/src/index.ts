@@ -408,6 +408,7 @@ export type {
   SessionObservation,
 } from "./session/observation.js";
 export {
+  assertObservationsDirSafe,
   observedFilesOf,
   readSessionObservation,
   SESSION_OBSERVATION_SCHEMA_VERSION,

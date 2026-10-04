@@ -98,7 +98,11 @@ write into one create it.
 - `.basou/tmp` and `.basou/tmp/observations` hold the hooks' observations of
   what a session changes. The `session-start` and `stop` hooks write none
   there, silently, as for any observation they cannot write, and an import
-  reads none, as for a session that was not observed. An observation file in
+  reads none, as for a session that was not observed. `basou import
+  claude-code` (the only import that reads observations) and `refresh` say so
+  in one line on stderr, naming the directory and the workspace; `refresh
+  --portfolio` says it for each workspace concerned, and `refresh --watch`
+  once, when it starts. `orient --refresh` does not. An observation file in
   it that is not a regular file is not read either.
 
 For the session, task and approval stores, `basou view` answers `500` with

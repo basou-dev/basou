@@ -8,6 +8,7 @@ import {
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { warnIfPositionNamesOtherWorkspaces } from "../lib/foreign-workspace-warn.js";
+import { warnIfObservationsRefused } from "../lib/observation-warn.js";
 import { loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
@@ -177,6 +178,7 @@ export async function doRunRefreshPortfolio(
         printRefreshSummary(result);
       }
       await warnPosition(paths, result, ctx);
+      await warnIfObservationsRefused(paths);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       rollup.push({ label, path: ws.path, status: "failed", error: message });
@@ -218,6 +220,8 @@ export async function doRunRefreshWatch(
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
+  // Once, when the watcher starts, rather than on every cycle.
+  await warnIfObservationsRefused(paths);
   const intervalMs = (options.interval ?? DEFAULT_WATCH_INTERVAL_SEC) * 1000;
   const controller = new AbortController();
   const onSignal = (): void => controller.abort();
@@ -304,6 +308,9 @@ export async function doRunRefresh(
     if (line !== null) console.log(line);
   }
   await warnPosition(paths, result, ctx);
+  // The import inside refresh prints this too, but refresh keeps an import's
+  // stderr to itself, so it is said here.
+  await warnIfObservationsRefused(paths);
   return reported;
 }
 

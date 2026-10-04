@@ -37,6 +37,7 @@ import {
 } from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { warnIfObservationsRefused } from "../lib/observation-warn.js";
 
 const SES_PREFIX = "ses_";
 const SHORT_ID_LEN = 6;
@@ -268,6 +269,9 @@ export async function doRunImportClaudeCode(
     };
   });
 
+  // Only this adapter reads observations. Said once per run, not per session:
+  // a refused directory costs every session imported here its observed files.
+  await warnIfObservationsRefused(paths);
   await importDerivedSessions(
     paths,
     manifest,
