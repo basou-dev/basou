@@ -288,7 +288,14 @@ async function runTrackedTool(
   });
   const initialLock = await acquireLock(paths, "session", sessionId);
   try {
-    await mkdir(sessionDir, { recursive: true });
+    // The native error names the directory by its absolute path, so it is
+    // kept as the cause and a pathless message is shown, as for the sessions
+    // other commands create.
+    try {
+      await mkdir(sessionDir, { recursive: true });
+    } catch (error: unknown) {
+      throw new Error("Failed to create session directory", { cause: error });
+    }
     await writeYamlFile(sessionYamlPath, session);
   } finally {
     await initialLock.release();

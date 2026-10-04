@@ -18,6 +18,13 @@ All notable changes to **basou** are recorded here. The project follows
   now print `Failed to acquire lock` where they printed the native error,
   which named an absolute path. A `.basou/locks` that is a symlink was
   already refused before anything was written, and still is.
+- **`exec` and `run` no longer print an absolute path when they cannot
+  create the session's directory.** With `.basou/sessions` not writable (a
+  permission error, for instance), they printed the native error, `EACCES:
+  permission denied, mkdir '<absolute path>/.basou/sessions/<session id>'`.
+  They now print `Failed to create session directory`, as `note`, `decision
+  capture`, `review record`, `task new` and the other commands that start a
+  session already did.
 - **`init` no longer creates directories through a symlinked
   `.basou/approvals`.** When `.basou/approvals` was a symlink to a directory,
   `basou init` and `basou project new --apply` created `pending/` and

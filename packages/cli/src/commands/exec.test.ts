@@ -206,25 +206,31 @@ describe("runExec", () => {
 
   // POSIX only, and not as root, who is never refused the write.
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "releases the session lock when the session cannot be written",
+    "releases the session lock, and fails without a path, when the session directory cannot be created",
     async () => {
       const repo = await setupInitedRepo();
       const paths = basouPaths(repo);
       const runner = makeFakeRunner({ exit_code: 0 });
       const spawned = vi.spyOn(runner, "run");
+      let thrown: unknown;
       await chmod(paths.sessions, 0o555);
       try {
-        await expect(
-          runExec(
-            "node",
-            ["-e", "process.exit(0)"],
-            { cwd: repo, snapshot: false },
-            { runner, now: () => FIXED_DATE },
-          ),
-        ).rejects.toMatchObject({ code: "EACCES" });
+        thrown = await runExec(
+          "node",
+          ["-e", "process.exit(0)"],
+          { cwd: repo, snapshot: false },
+          { runner, now: () => FIXED_DATE },
+        ).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
       } finally {
         await chmod(paths.sessions, 0o755);
       }
+      // The native error names the directory by its absolute path, so it is
+      // only the cause.
+      expect((thrown as Error).message).toBe("Failed to create session directory");
+      expect((thrown as Error).cause).toMatchObject({ code: "EACCES" });
       expect(await readdir(paths.sessions)).toEqual([]);
       expect(await readdir(paths.locks)).toEqual([]);
       expect(spawned).not.toHaveBeenCalled();
