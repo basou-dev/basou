@@ -8,6 +8,7 @@ import {
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { warnIfPositionNamesOtherWorkspaces } from "../lib/foreign-workspace-warn.js";
+import { warnIfObservationsRefused } from "../lib/observation-warn.js";
 import { loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
@@ -218,6 +219,8 @@ export async function doRunRefreshWatch(
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
+  // Once, when the watcher starts, rather than on every cycle.
+  await warnIfObservationsRefused(paths);
   const intervalMs = (options.interval ?? DEFAULT_WATCH_INTERVAL_SEC) * 1000;
   const controller = new AbortController();
   const onSignal = (): void => controller.abort();
@@ -260,6 +263,10 @@ async function computeRefresh(
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
+  // Before anything is imported, so a refresh that imports sessions and then
+  // fails has still said why they hold no observed files. The import inside
+  // refresh prints this too, but refresh keeps an import's stderr to itself.
+  await warnIfObservationsRefused(paths);
   const nowIso = (ctx.nowProvider?.() ?? new Date()).toISOString();
   const result = await refreshAll({
     options: {

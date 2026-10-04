@@ -95,9 +95,10 @@ export function sessionObservationPath(observationsDir: string, externalId: stri
  * included) to, a place outside the store. An absent directory passes.
  *
  * Throws the `assertStoreDirectorySafe` errors, naming `.basou/tmp` or
- * `.basou/tmp/observations`.
+ * `.basou/tmp/observations`. Exported so that a command can say why no
+ * observation was read: the readers below fall back to `null` without one.
  */
-async function assertObservationsDirSafe(observationsDir: string): Promise<void> {
+export async function assertObservationsDirSafe(observationsDir: string): Promise<void> {
   await assertStoreDirectorySafe(dirname(observationsDir), ".basou/tmp");
   await assertStoreDirectorySafe(observationsDir, ".basou/tmp/observations");
 }

@@ -1536,3 +1536,130 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+// The hooks that write observations have no reader for stderr, and an import
+// reads a refused directory as no observation at all, so this line is the one
+// place the refusal shows.
+describe.skipIf(process.platform === "win32")(
+  "basou import with an observations directory that is refused",
+  () => {
+    const NOTICE = "not observed there";
+
+    function noticesOf(err: { mock: { calls: unknown[][] } }): string[] {
+      return err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(NOTICE));
+    }
+
+    async function relatedFilesOf(repo: string): Promise<string[][]> {
+      const out: string[][] = [];
+      for (const dir of (await listSessionDirs(repo)).sort()) {
+        const yaml = join(basouPaths(repo).sessions, dir, "session.yaml");
+        out.push(SessionSchema.parse(await readYamlFile(yaml)).session.related_files);
+      }
+      return out;
+    }
+
+    it("says once per run, naming the directory and the workspace, that a symlinked .basou/tmp is not read", async () => {
+      const repo = await setupInitedRepo();
+      await writeTranscript(repo, "sess-1", actionTranscript(repo));
+      await writeTranscript(repo, "sess-2", actionTranscript(repo));
+      const paths = basouPaths(repo);
+      const outside = join(repo, "outside-tmp");
+      // An observation the import would read if it followed the link.
+      await writeSessionObservation(join(outside, "observations"), {
+        schema_version: SESSION_OBSERVATION_SCHEMA_VERSION,
+        external_id: "sess-1",
+        started_at: "2026-05-10T00:00:00.000Z",
+        updated_at: "2026-05-10T00:00:02.000Z",
+        repos: [
+          {
+            path: repo,
+            base_head: null,
+            base_dirty: [],
+            files: [{ path: `${repo}/observed.ts`, change_type: "added" }],
+          },
+        ],
+      });
+      await rm(paths.tmp, { recursive: true });
+      await symlink(outside, paths.tmp);
+
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      await doRunImportClaudeCode(
+        { all: true },
+        { cwd: repo, claudeProjectsDir: getProjectsRoot() },
+      );
+
+      expect(noticesOf(err)).toEqual([
+        `basou: .basou/tmp is a symlink; refusing to operate (in ${repo}). The files a session changes through the shell are not observed there, so a session imported now records only the files its transcript names.`,
+      ]);
+      // What the line says: both sessions hold only what their transcripts name.
+      expect(await relatedFilesOf(repo)).toEqual([["a.ts"], ["a.ts"]]);
+    });
+
+    it("names .basou/tmp/observations when it is a file, --dry-run included", async () => {
+      const repo = await setupInitedRepo();
+      await writeTranscript(repo, "sess-1", actionTranscript(repo));
+      await writeFile(basouPaths(repo).observations, "");
+      const ctx = { cwd: repo, claudeProjectsDir: getProjectsRoot() };
+
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await doRunImportClaudeCode({ all: true, dryRun: true }, ctx);
+      await doRunImportClaudeCode({ all: true }, ctx);
+
+      const expected = `basou: .basou/tmp/observations exists but is not a directory (in ${repo}). The files a session changes through the shell are not observed there, so a session imported now records only the files its transcript names.`;
+      expect(noticesOf(err)).toEqual([expected, expected]);
+    });
+
+    it("says it before the transcripts are looked for, so a run that finds none says it too", async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      await rm(paths.tmp, { recursive: true });
+      await symlink(join(repo, "outside-tmp"), paths.tmp);
+      const ctx = { cwd: repo, claudeProjectsDir: getProjectsRoot() };
+
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      await expect(doRunImportClaudeCode({ all: true }, ctx)).rejects.toThrow(
+        "Claude transcript directory not found for project",
+      );
+
+      expect(noticesOf(err)).toEqual([
+        `basou: .basou/tmp is a symlink; refusing to operate (in ${repo}). The files a session changes through the shell are not observed there, so a session imported now records only the files its transcript names.`,
+      ]);
+    });
+
+    it("says nothing when observations can be read, or when there is no directory", async () => {
+      const repo = await setupInitedRepo();
+      await writeTranscript(repo, "sess-1", actionTranscript(repo));
+      const paths = basouPaths(repo);
+      await writeSessionObservation(paths.observations, {
+        schema_version: SESSION_OBSERVATION_SCHEMA_VERSION,
+        external_id: "sess-1",
+        started_at: "2026-05-10T00:00:00.000Z",
+        updated_at: "2026-05-10T00:00:02.000Z",
+        repos: [{ path: repo, base_head: null, base_dirty: [], files: [] }],
+      });
+      const ctx = { cwd: repo, claudeProjectsDir: getProjectsRoot() };
+
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      await doRunImportClaudeCode({ all: true }, ctx);
+      await rm(paths.tmp, { recursive: true });
+      await doRunImportClaudeCode({ all: true, force: true }, ctx);
+
+      expect(noticesOf(err)).toEqual([]);
+    });
+
+    it("the codex import, which reads no observation, says nothing", async () => {
+      const repo = await setupInitedRepo();
+      await writeRollout("codex-1", codexActionRollout(repo, "codex-1"));
+      const paths = basouPaths(repo);
+      await rm(paths.tmp, { recursive: true });
+      await symlink(join(repo, "outside-tmp"), paths.tmp);
+
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      await doRunImportCodex({ all: true }, { cwd: repo, codexSessionsDir: getCodexRoot() });
+
+      expect(noticesOf(err)).toEqual([]);
+      expect(await listSessionDirs(repo)).toHaveLength(1);
+    });
+  },
+);

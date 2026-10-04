@@ -37,6 +37,7 @@ import {
 } from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { warnIfObservationsRefused } from "../lib/observation-warn.js";
 
 const SES_PREFIX = "ses_";
 const SHORT_ID_LEN = 6;
@@ -223,6 +224,11 @@ export async function doRunImportClaudeCode(
 ): Promise<void> {
   assertSelector(options);
   const { repositoryRoot, paths, manifest } = await resolveImportTarget(ctx);
+  // Only this adapter reads observations. Said once per run, not per session
+  // (a refused directory costs every session imported here its observed
+  // files), and before the transcripts are looked for, so a run that finds
+  // none still says it.
+  await warnIfObservationsRefused(paths);
 
   const projectPaths = resolveSourceRoots({
     projectFlags: options.project ?? [],

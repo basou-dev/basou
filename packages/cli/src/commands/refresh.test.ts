@@ -4,6 +4,7 @@ import {
   access,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -688,3 +689,177 @@ describe("printRefreshSummary", () => {
     expect(out).not.toContain("basou decision");
   });
 });
+
+// refresh keeps the stderr of the imports it runs to itself, so the line the
+// claude-code import prints about a refused observations directory has to be
+// said by refresh.
+describe.skipIf(process.platform === "win32")(
+  "basou refresh (refused observations directory)",
+  () => {
+    const NOTICE = "not observed there";
+
+    function noticesOf(err: { mock: { calls: unknown[][] } }): string[] {
+      return err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(NOTICE));
+    }
+
+    async function refuseTmp(repo: string): Promise<void> {
+      const paths = basouPaths(repo);
+      await rm(paths.tmp, { recursive: true, force: true });
+      await symlink(join(repo, "outside-tmp"), paths.tmp);
+    }
+
+    function noticeFor(repo: string): string {
+      return `basou: .basou/tmp is a symlink; refusing to operate (in ${repo}). The files a session changes through the shell are not observed there, so a session imported now records only the files its transcript names.`;
+    }
+
+    /** A second initialized workspace in its own temp directory. */
+    async function initedRepo(workspaceId: `ws_${string}`): Promise<string> {
+      const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-refresh-obs-")));
+      await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], { cwd: dir, env: ENV });
+      await writeManifest(
+        await ensureBasouDirectory(dir),
+        createManifest({ workspaceName: "obs-ws", now: FIXED_DATE, workspaceId }),
+      );
+      return dir;
+    }
+
+    /** Every key path of a parsed JSON value, array elements under `[]`. */
+    function keyPaths(value: unknown, prefix = ""): string[] {
+      if (Array.isArray(value)) return value.flatMap((v) => keyPaths(v, `${prefix}[]`));
+      if (value === null || typeof value !== "object") return [];
+      return Object.entries(value).flatMap(([key, v]) => [
+        `${prefix}.${key}`,
+        ...keyPaths(v, `${prefix}.${key}`),
+      ]);
+    }
+
+    it("says it once on stderr, --json and --dry-run included", async () => {
+      const repo = await setupInitedRepo();
+      await writeClaudeTranscript(repo);
+      await refuseTmp(repo);
+      const ctx = { ...ctxFor(repo), portfolioConfigPath: join(repo, "absent.yaml") };
+
+      for (const options of [{}, { json: true }, { dryRun: true }]) {
+        const err = vi.spyOn(console, "error").mockImplementation(() => {});
+        const { lines } = await captureLog(() => doRunRefresh(options, ctx));
+        expect(noticesOf(err)).toEqual([noticeFor(repo)]);
+        if ("json" in options) expect(() => JSON.parse(lines.join("\n"))).not.toThrow();
+        err.mockRestore();
+      }
+    });
+
+    it("says it before importing, so a refresh that imports and then fails has said it", async () => {
+      const repo = await setupInitedRepo();
+      await writeClaudeTranscript(repo);
+      await refuseTmp(repo);
+      // Regenerating the handoff fails after the import has written the session.
+      await mkdir(basouPaths(repo).files.handoff);
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(
+        captureLog(() =>
+          doRunRefresh({}, { ...ctxFor(repo), portfolioConfigPath: join(repo, "absent.yaml") }),
+        ),
+      ).rejects.toThrow();
+
+      expect(noticesOf(err)).toEqual([noticeFor(repo)]);
+      expect(await readdir(basouPaths(repo).sessions)).toHaveLength(1);
+    });
+
+    it("leaves the --json output's keys as they are without a refusal", async () => {
+      const repo = await setupInitedRepo();
+      await writeClaudeTranscript(repo);
+      const ctx = { ...ctxFor(repo), portfolioConfigPath: join(repo, "absent.yaml") };
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const keysOfRun = async (): Promise<string[]> => {
+        const { lines } = await captureLog(() => doRunRefresh({ json: true, dryRun: true }, ctx));
+        return [...new Set(keyPaths(JSON.parse(lines.join("\n"))))].sort();
+      };
+
+      const plain = await keysOfRun();
+      await refuseTmp(repo);
+      const refused = await keysOfRun();
+
+      expect(refused).toEqual(plain);
+    });
+
+    it("says nothing when .basou/tmp is a plain directory", async () => {
+      const repo = await setupInitedRepo();
+      await writeClaudeTranscript(repo);
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await captureLog(() =>
+        doRunRefresh({}, { ...ctxFor(repo), portfolioConfigPath: join(repo, "absent.yaml") }),
+      );
+
+      expect(noticesOf(err)).toEqual([]);
+    });
+
+    it("--portfolio says it for each workspace concerned, naming it, a failing one included", async () => {
+      const refusedA = await setupInitedRepo();
+      const clean = await initedRepo("ws_01HXABCDEF1234567890PFEEE5");
+      const refusedB = await initedRepo("ws_01HXABCDEF1234567890PFFFF6");
+      try {
+        await refuseTmp(refusedA);
+        await refuseTmp(refusedB);
+        // refusedB fails its refresh after it has started.
+        await mkdir(basouPaths(refusedB).files.handoff);
+        const configPath = join(clean, "portfolio.yaml");
+        await writeFile(
+          configPath,
+          `workspaces:\n  - path: ${refusedA}\n  - path: ${clean}\n  - path: ${refusedB}\n`,
+        );
+        const err = vi.spyOn(console, "error").mockImplementation(() => {});
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        await doRunRefreshPortfolio(
+          { portfolio: true },
+          { ...ctxFor(refusedA), portfolioConfigPath: configPath },
+        );
+
+        expect(process.exitCode).toBe(1);
+        expect(noticesOf(err)).toEqual([noticeFor(refusedA), noticeFor(refusedB)]);
+      } finally {
+        for (const dir of [clean, refusedB]) await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("--watch says it once, when it starts, however many cycles import", async () => {
+      const repo = await setupInitedRepo();
+      await writeClaudeTranscript(repo);
+      await refuseTmp(repo);
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const logs: string[] = [];
+      vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+        logs.push(a.map(String).join(" "));
+      });
+      // Stop the watcher through its own SIGINT handler rather than a real signal.
+      let stop: (() => void) | undefined;
+      const realOn = process.on.bind(process);
+      vi.spyOn(process, "on").mockImplementation(((
+        event: string | symbol,
+        listener: (...args: unknown[]) => void,
+      ) => {
+        if (event === "SIGINT") {
+          stop = () => listener();
+          return process;
+        }
+        return realOn(event, listener);
+      }) as typeof process.on);
+      const refreshed = (): number => logs.filter((l) => l.includes("refreshed:")).length;
+
+      const watching = doRunRefreshWatch({ watch: true, interval: 0.02 }, ctxFor(repo));
+      try {
+        await vi.waitFor(() => expect(refreshed()).toBe(1), { timeout: 5000 });
+        // A new log the next quiet cycle imports.
+        await writeCodexRollout(repo);
+        await vi.waitFor(() => expect(refreshed()).toBe(2), { timeout: 5000 });
+      } finally {
+        stop?.();
+        await watching;
+      }
+
+      expect(noticesOf(err)).toEqual([noticeFor(repo)]);
+    });
+  },
+);
