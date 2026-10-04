@@ -224,6 +224,11 @@ export async function doRunImportClaudeCode(
 ): Promise<void> {
   assertSelector(options);
   const { repositoryRoot, paths, manifest } = await resolveImportTarget(ctx);
+  // Only this adapter reads observations. Said once per run, not per session
+  // (a refused directory costs every session imported here its observed
+  // files), and before the transcripts are looked for, so a run that finds
+  // none still says it.
+  await warnIfObservationsRefused(paths);
 
   const projectPaths = resolveSourceRoots({
     projectFlags: options.project ?? [],
@@ -269,9 +274,6 @@ export async function doRunImportClaudeCode(
     };
   });
 
-  // Only this adapter reads observations. Said once per run, not per session:
-  // a refused directory costs every session imported here its observed files.
-  await warnIfObservationsRefused(paths);
   await importDerivedSessions(
     paths,
     manifest,

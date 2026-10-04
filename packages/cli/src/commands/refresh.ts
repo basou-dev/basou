@@ -178,7 +178,6 @@ export async function doRunRefreshPortfolio(
         printRefreshSummary(result);
       }
       await warnPosition(paths, result, ctx);
-      await warnIfObservationsRefused(paths);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       rollup.push({ label, path: ws.path, status: "failed", error: message });
@@ -264,6 +263,10 @@ async function computeRefresh(
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
+  // Before anything is imported, so a refresh that imports sessions and then
+  // fails has still said why they hold no observed files. The import inside
+  // refresh prints this too, but refresh keeps an import's stderr to itself.
+  await warnIfObservationsRefused(paths);
   const nowIso = (ctx.nowProvider?.() ?? new Date()).toISOString();
   const result = await refreshAll({
     options: {
@@ -308,9 +311,6 @@ export async function doRunRefresh(
     if (line !== null) console.log(line);
   }
   await warnPosition(paths, result, ctx);
-  // The import inside refresh prints this too, but refresh keeps an import's
-  // stderr to itself, so it is said here.
-  await warnIfObservationsRefused(paths);
   return reported;
 }
 

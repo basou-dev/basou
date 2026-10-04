@@ -1610,6 +1610,23 @@ describe.skipIf(process.platform === "win32")(
       expect(noticesOf(err)).toEqual([expected, expected]);
     });
 
+    it("says it before the transcripts are looked for, so a run that finds none says it too", async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      await rm(paths.tmp, { recursive: true });
+      await symlink(join(repo, "outside-tmp"), paths.tmp);
+      const ctx = { cwd: repo, claudeProjectsDir: getProjectsRoot() };
+
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      await expect(doRunImportClaudeCode({ all: true }, ctx)).rejects.toThrow(
+        "Claude transcript directory not found for project",
+      );
+
+      expect(noticesOf(err)).toEqual([
+        `basou: .basou/tmp is a symlink; refusing to operate (in ${repo}). The files a session changes through the shell are not observed there, so a session imported now records only the files its transcript names.`,
+      ]);
+    });
+
     it("says nothing when observations can be read, or when there is no directory", async () => {
       const repo = await setupInitedRepo();
       await writeTranscript(repo, "sess-1", actionTranscript(repo));
