@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { type BoardDeclarationResult, parseBoardDeclaration } from "./declaration.js";
 
@@ -245,15 +245,14 @@ describe("parseBoardDeclaration: the shape of each key", () => {
     ).toEqual(["stages: unknown key '07'"]);
   });
 
-  it("says to quote stage ids written as bare numbers", () => {
+  it("says to quote a stage id written as a bare number, with where it is", () => {
     const quoted = stringify(board());
-    expect(quoted).toContain('"01":');
-    const text = quoted.replace('"01":', "01:");
-    const errors = errorsOf(parseBoardDeclaration(text, { manifestRepoPaths: REPOS }));
-    expect(errors).toContain(
-      'stages: write the stage ids in quotes ("01" to "06"); unquoted, 01 is read as the number 1',
-    );
-    expect(errors).toContain("stages: unknown key '1'");
+    expect(quoted).toContain('  "01":');
+    const text = quoted.replace('  "01":', "  01:");
+    const line = text.split("\n").indexOf("  01:") + 1;
+    expect(errorsOf(parseBoardDeclaration(text, { manifestRepoPaths: REPOS }))).toEqual([
+      `not valid YAML: the key 01 at line ${line}, column 3 is not a string; write it in quotes`,
+    ]);
   });
 
   it("refuses an empty title, lane name, unit or stage meaning", () => {
@@ -353,7 +352,8 @@ describe("parseBoardDeclaration: paths stay inside the repository", () => {
   it.each([
     ["/etc/passwd", "must be relative to the repository"],
     ["\\\\server\\share", "must be relative to the repository"],
-    ["C:/Windows", "must be relative to the repository"],
+    ["C:/Windows", "must be relative to the repository (a leading 'x:' reads as a Windows drive)"],
+    ["x:y.md", "must be relative to the repository (a leading 'x:' reads as a Windows drive)"],
     ["../other/file", "must not contain a '..' segment"],
     ["docs/../../x", "must not contain a '..' segment"],
     ["docs\\..\\x", "must not contain a '..' segment"],
@@ -689,7 +689,7 @@ describe("parseBoardDeclaration: axis and effort", () => {
       "axis.version: Too small: expected number to be >=1",
       "axis.seed_review.date: must be a calendar date written as YYYY-MM-DD",
       "effort.start: must be a calendar date written as YYYY-MM-DD",
-      "effort.time_zone: must be a time zone name such as Asia/Tokyo",
+      "effort.time_zone: must be a time zone name such as Asia/Tokyo, not an offset such as +09:00",
       "effort.milestones[0].ref: Invalid input: expected string, received undefined",
     ]);
   });
@@ -753,5 +753,448 @@ describe("parseBoardDeclaration: reporting", () => {
       "ratios[0].numerator: no measure has the id 'missing'",
       "components[\"basou/packages/sdk\"].lane[1]: no lane has the id 'cockpit'",
     ]);
+  });
+});
+
+describe("parseBoardDeclaration: strictness and required keys at every level", () => {
+  const extra = (target: Record<string, unknown>) => {
+    target.extra = 1;
+  };
+  it.each<[string, (doc: Record<string, unknown>) => void, string]>([
+    ["a file_count", (d) => extra(entry(d.measures, 0)), "measures[0]"],
+    ["a line_count", (d) => extra(entry(d.measures, 2)), "measures[2]"],
+    ["a match_count", (d) => extra(entry(d.measures, 1)), "measures[1]"],
+    [
+      "a match_count section",
+      (d) => extra(entry(entry(d.measures, 1), "section")),
+      "measures[1].section",
+    ],
+    ["a ratio", (d) => extra(entry(d.ratios, 0)), "ratios[0]"],
+    ["a component", (d) => extra(entry(d.components, "basou")), "components.basou"],
+    ["seed_review", (d) => extra(entry(d.axis, "seed_review")), "axis.seed_review"],
+    ["effort", (d) => extra(entry(d, "effort")), "effort"],
+    ["a milestone", (d) => extra(entry(entry(d.effort, "milestones"), 0)), "effort.milestones[0]"],
+  ])("refuses an unknown key in %s", (_what, change, at) => {
+    const doc = board();
+    change(doc);
+    expect(errorsOf(parse(doc))).toEqual([`${at}: unknown key 'extra'`]);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["dir_count", { id: "a", kind: "dir_count", repo: ".", path: "src", depth: 1, unit: "x" }],
+    [
+      "regex_capture",
+      { id: "a", kind: "regex_capture", repo: ".", file: "a", pattern: "(x)", unit: "x" },
+    ],
+    [
+      "a regex_capture section",
+      {
+        id: "a",
+        kind: "regex_capture",
+        repo: ".",
+        file: "a",
+        pattern: "(x)",
+        section: { start: "^#", on_missing: null },
+        unit: "x",
+      },
+    ],
+    [
+      "json_length",
+      { id: "a", kind: "json_length", repo: ".", file: "a.json", pointer: "", unit: "x" },
+    ],
+    ["trail_count", { id: "a", kind: "trail_count", of: "tasks", unit: "x" }],
+  ])("refuses an unknown key in %s", (what, measure) => {
+    const target = what.endsWith("section")
+      ? (measure.section as Record<string, unknown>)
+      : measure;
+    target.extra = 1;
+    const at = what.endsWith("section") ? "measures[0].section" : "measures[0]";
+    expect(errorsOf(parse(withMeasure(measure)))).toEqual([`${at}: unknown key 'extra'`]);
+  });
+
+  it.each<[string, string, (doc: Record<string, unknown>) => Record<string, unknown>, string]>([
+    ["axis", "version", (d) => entry(d, "axis"), "number"],
+    ["axis", "review_due_days", (d) => entry(d, "axis"), "number"],
+    ["axis.seed_review", "date", (d) => entry(d.axis, "seed_review"), "string"],
+    ["axis.seed_review", "model", (d) => entry(d.axis, "seed_review"), "string"],
+    ["effort", "start", (d) => entry(d, "effort"), "string"],
+    ["effort.milestones[0]", "date", (d) => entry(entry(d.effort, "milestones"), 0), "string"],
+    ["effort.milestones[0]", "label", (d) => entry(entry(d.effort, "milestones"), 0), "string"],
+    ["lanes[1]", "name", (d) => entry(d.lanes, 1), "string"],
+    ["stages.04", "meaning", (d) => entry(d.stages, "04"), "string"],
+    ["measures[0]", "id", (d) => entry(d.measures, 0), "string"],
+    ["ratios[0]", "id", (d) => entry(d.ratios, 0), "string"],
+    ["ratios[0]", "label", (d) => entry(d.ratios, 0), "string"],
+    ["ratios[0]", "numerator", (d) => entry(d.ratios, 0), "string"],
+    ["ratios[0]", "denominator", (d) => entry(d.ratios, 0), "string"],
+  ])("requires %s.%s", (at, key, target, type) => {
+    const doc = board();
+    delete target(doc)[key];
+    expect(errorsOf(parse(doc))).toEqual([
+      `${at}.${key}: Invalid input: expected ${type}, received undefined`,
+    ]);
+  });
+
+  it("requires a lane's id", () => {
+    const doc = board();
+    (doc.lanes as unknown[]).push({ name: "Spare" });
+    expect(errorsOf(parse(doc))).toEqual([
+      "lanes[2].id: Invalid input: expected string, received undefined",
+    ]);
+  });
+
+  it("requires a component's lane", () => {
+    const doc = board();
+    delete entry(doc.components, "basou").lane;
+    expect(errorsOf(parse(doc))).toEqual([
+      "components.basou.lane: must be '-' or a non-empty list of lane ids",
+    ]);
+  });
+
+  it("accepts a board with every optional key left out", () => {
+    const doc = board();
+    doc.lanes = [{ id: "saddle", name: "Saddle" }];
+    doc.measures = [{ id: "a", kind: "file_count", repo: ".", include: ["a"], unit: "files" }];
+    doc.ratios = [];
+    doc.components = { basou: { lane: ["saddle"] } };
+    doc.axis = { version: 1, review_due_days: 60 };
+    doc.effort = { start: "2026-04-28" };
+    expect(parse(doc).ok).toBe(true);
+  });
+
+  it.each<[string, (doc: Record<string, unknown>) => void, string]>([
+    [
+      "a dir_count depth",
+      (d) => {
+        d.measures = [
+          { id: "a", kind: "dir_count", repo: ".", path: "src", depth: 1.5, unit: "x" },
+        ];
+        d.ratios = [];
+      },
+      "measures[0].depth: Invalid input: expected int, received number",
+    ],
+    [
+      "a regex_capture group",
+      (d) => {
+        d.measures = [
+          {
+            id: "a",
+            kind: "regex_capture",
+            repo: ".",
+            file: "a",
+            pattern: "(x)",
+            group: 1.5,
+            unit: "x",
+          },
+        ];
+        d.ratios = [];
+      },
+      "measures[0].group: Invalid input: expected int, received number",
+    ],
+    [
+      "a negative group",
+      (d) => {
+        d.measures = [
+          {
+            id: "a",
+            kind: "regex_capture",
+            repo: ".",
+            file: "a",
+            pattern: "(x)",
+            group: -1,
+            unit: "x",
+          },
+        ];
+        d.ratios = [];
+      },
+      "measures[0].group: Too small: expected number to be >=0",
+    ],
+    [
+      "axis.version",
+      (d) => {
+        entry(d, "axis").version = 1.5;
+      },
+      "axis.version: Invalid input: expected int, received number",
+    ],
+    [
+      "axis.review_due_days",
+      (d) => {
+        entry(d, "axis").review_due_days = 0;
+      },
+      "axis.review_due_days: Too small: expected number to be >=1",
+    ],
+    [
+      "a ratio id",
+      (d) => {
+        entry(d.ratios, 0).id = "Ratio";
+      },
+      "ratios[0].id: must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
+    ],
+    [
+      "a lane note",
+      (d) => {
+        entry(d.lanes, 0).notes = [""];
+      },
+      "lanes[0].notes[0]: must be a non-empty string",
+    ],
+    [
+      "a lane about",
+      (d) => {
+        entry(d.lanes, 0).about = " ";
+      },
+      "lanes[0].about: must be a non-empty string",
+    ],
+    [
+      "a milestone label",
+      (d) => {
+        entry(entry(d.effort, "milestones"), 0).label = "";
+      },
+      "effort.milestones[0].label: must be a non-empty string",
+    ],
+    [
+      "a milestone date",
+      (d) => {
+        entry(entry(d.effort, "milestones"), 0).date = "soon";
+      },
+      "effort.milestones[0].date: must be a calendar date written as YYYY-MM-DD",
+    ],
+    [
+      "a component note",
+      (d) => {
+        entry(d.components, "basou").note = "";
+      },
+      "components.basou.note: must be a non-empty string",
+    ],
+  ])("checks the form of %s", (_what, change, error) => {
+    const doc = board();
+    change(doc);
+    expect(errorsOf(parse(doc))).toEqual([error]);
+  });
+
+  it("takes a ratio over every kind of measure that counts", () => {
+    const measures = [
+      { id: "a", kind: "file_count", repo: ".", include: ["a"], unit: "x" },
+      { id: "b", kind: "dir_count", repo: ".", path: "src", depth: 1, unit: "x" },
+      { id: "c", kind: "line_count", repo: ".", include: ["a"], unit: "x" },
+      { id: "d", kind: "match_count", repo: ".", include: ["a"], pattern: "x", unit: "x" },
+      { id: "e", kind: "json_length", repo: ".", file: "a.json", pointer: "", unit: "x" },
+      { id: "f", kind: "trail_count", of: "tasks", unit: "x" },
+    ];
+    const ratios = measures.map((m) => ({
+      id: `r_${m.id}`,
+      label: "r",
+      numerator: m.id,
+      denominator: "a",
+    }));
+    expect(parse({ ...board(), measures, ratios }).ok).toBe(true);
+  });
+
+  it("refuses an entry that is null, without throwing", () => {
+    const doc = board();
+    doc.lanes = [null, { id: "saddle", name: "Saddle" }, { id: "cockpit", name: "Cockpit" }];
+    doc.measures = [null];
+    doc.ratios = [null];
+    doc.components = { x: null };
+    entry(doc, "effort").milestones = [null];
+    const errors = errorsOf(parse(doc));
+    for (const at of [
+      "lanes[0]",
+      "measures[0]",
+      "ratios[0]",
+      "components.x",
+      "effort.milestones[0]",
+    ]) {
+      expect(errors.some((e) => e.startsWith(`${at}: `))).toBe(true);
+    }
+  });
+
+  it("refuses a document that expands aliases without limit, without throwing", () => {
+    const levels = ["a: &a [x, x, x, x, x, x, x, x, x, x]"];
+    for (let i = 1; i < 9; i++) {
+      const prev = String.fromCharCode(96 + i);
+      const name = String.fromCharCode(97 + i);
+      levels.push(`${name}: &${name} [${Array(10).fill(`*${prev}`).join(", ")}]`);
+    }
+    const errors = errorsOf(
+      parseBoardDeclaration(`${levels.join("\n")}\n`, { manifestRepoPaths: REPOS }),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/^not valid YAML: /);
+  });
+});
+
+describe("parseBoardDeclaration: what the review found", () => {
+  it("refuses a component named __proto__, which the shape check would skip", () => {
+    const text = stringify(board()).replace(
+      "components:\n",
+      "components:\n  __proto__:\n    lane: [saddle]\n    junk: 1\n",
+    );
+    expect(errorsOf(parseBoardDeclaration(text, { manifestRepoPaths: REPOS }))).toEqual([
+      "components.__proto__: a component cannot be named __proto__",
+    ]);
+    expect(({} as Record<string, unknown>).lane).toBeUndefined();
+  });
+
+  it("refuses an empty component key", () => {
+    const doc = board();
+    doc.components = { "": { lane: ["saddle"] }, "  ": { lane: ["saddle"] } };
+    expect(errorsOf(parse(doc))).toEqual([
+      'components[""]: a component key must be a non-empty path',
+      'components["  "]: a component key must be a non-empty path',
+    ]);
+  });
+
+  it("does not look up lane references when lanes is not a list", () => {
+    const doc = board();
+    doc.lanes = { saddle: { name: "Saddle" }, cockpit: { name: "Cockpit" } };
+    // measures[0] and a component still name 'cockpit' and 'saddle'.
+    expect(errorsOf(parse(doc))).toEqual(["lanes: Invalid input: expected array, received object"]);
+  });
+
+  it("does not look up references in a list that is not a list", () => {
+    const doc = board();
+    doc.lanes = { saddle: { name: "Saddle" } };
+    doc.measures = { a: { kind: "file_count" } };
+    const errors = errorsOf(parse(doc));
+    expect(errors).toEqual([
+      "lanes: Invalid input: expected array, received object",
+      "measures: Invalid input: expected array, received object",
+    ]);
+  });
+
+  it.each<[string, Record<string, unknown>, string]>([
+    [
+      "a repo on a kind that takes none",
+      { id: "a", kind: "trail_count", of: "tasks", repo: "nope", unit: "x" },
+      "measures[0]: unknown key 'repo'",
+    ],
+    [
+      "a status when of is not a known count",
+      { id: "a", kind: "trail_count", of: "commits", status: "done", unit: "x" },
+      "measures[0].of: ",
+    ],
+    [
+      "a group over an empty pattern",
+      { id: "a", kind: "regex_capture", repo: ".", file: "a", pattern: "", unit: "x" },
+      "measures[0].pattern: must be a non-empty regular expression",
+    ],
+    [
+      "an empty repo",
+      { id: "a", kind: "file_count", repo: "", include: ["a"], unit: "x" },
+      "measures[0].repo: must be a non-empty string",
+    ],
+    [
+      "a lane that is not an id",
+      { id: "a", kind: "trail_count", of: "tasks", lane: "Saddle", unit: "x" },
+      "measures[0].lane: must start with a lowercase letter",
+    ],
+    [
+      "a group that is not an integer",
+      { id: "a", kind: "regex_capture", repo: ".", file: "a", pattern: "x", group: 1.5, unit: "x" },
+      "measures[0].group: Invalid input: expected int",
+    ],
+  ])("reports %s once", (_what, measure, start) => {
+    const errors = errorsOf(parse(withMeasure(measure)));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.startsWith(start)).toBe(true);
+  });
+
+  it("reports a ratio or component reference that is not an id once", () => {
+    const doc = board();
+    entry(doc.ratios, 0).numerator = "Bad";
+    doc.components = { "x/y": { lane: ["Bad", "-"] } };
+    expect(errorsOf(parse(doc))).toEqual([
+      "ratios[0].numerator: must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
+      "components[\"x/y\"].lane[0]: must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
+      "components[\"x/y\"].lane[1]: must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
+    ]);
+  });
+
+  it("refuses a %YAML directive for another version and accepts one for 1.2", () => {
+    const text = stringify(board());
+    expect(
+      errorsOf(parseBoardDeclaration(`%YAML 1.1\n---\n${text}`, { manifestRepoPaths: REPOS })),
+    ).toEqual(["not valid YAML: a board is read as YAML 1.2; remove the %YAML 1.1 directive"]);
+    expect(parseBoardDeclaration(`%YAML 1.2\n---\n${text}`, { manifestRepoPaths: REPOS }).ok).toBe(
+      true,
+    );
+  });
+
+  it("names an unknown board_version before a YAML warning", () => {
+    const plain = stringify({ ...board(), board_version: 2 });
+    expect(plain).toContain("title: A board\n");
+    const text = plain.replace("title: A board\n", "title: !v2tag A board\n");
+    expect(errorsOf(parseBoardDeclaration(text, { manifestRepoPaths: REPOS }))).toEqual([
+      "board_version: this basou reads board_version 1, not 2",
+    ]);
+  });
+
+  it("gives a YAML error's line and column without a dangling colon", () => {
+    const errors = errorsOf(
+      parseBoardDeclaration(`${stringify(board())}title: Again\n`, { manifestRepoPaths: REPOS }),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/^not valid YAML: Map keys must be unique at line \d+, column \d+$/);
+  });
+
+  it.each(["0050-06-15", "0000-01-01", "2024-02-29"])("accepts the date %j", (date) => {
+    const doc = board();
+    entry(doc, "effort").start = date;
+    expect(parse(doc).ok).toBe(true);
+  });
+
+  it.each(["0050-02-30", "2025-02-29", "2026-13-01"])("refuses the date %j", (date) => {
+    const doc = board();
+    entry(doc, "effort").start = date;
+    expect(errorsOf(parse(doc))).toEqual([
+      "effort.start: must be a calendar date written as YYYY-MM-DD",
+    ]);
+  });
+
+  it.each(["+09:00", "-0500", "+9"])("refuses the offset %j as a time zone", (zone) => {
+    const doc = board();
+    entry(doc, "effort").time_zone = zone;
+    expect(errorsOf(parse(doc))).toEqual([
+      "effort.time_zone: must be a time zone name such as Asia/Tokyo, not an offset such as +09:00",
+    ]);
+  });
+
+  it.each(["UTC", "Etc/GMT-9", "America/New_York"])("accepts the time zone %j", (zone) => {
+    const doc = board();
+    entry(doc, "effort").time_zone = zone;
+    expect(parse(doc).ok).toBe(true);
+  });
+
+  it("refuses a C1 control character in a path and a revision", () => {
+    const measure = {
+      id: "a",
+      kind: "file_count",
+      repo: ".",
+      include: ["a\u0085b"],
+      at: "ma\u0085in",
+      unit: "x",
+    };
+    expect(errorsOf(parse(withMeasure(measure)))).toEqual([
+      "measures[0].at: must be 'worktree' or a git revision with no leading '-', whitespace or ':'",
+      "measures[0].include[0]: must not contain control characters",
+    ]);
+  });
+
+  it.each<[string, string]>([
+    ["  1.50:\n    lane: '-'\n    note: x\n", "not valid YAML: the key 1.50 at line"],
+    ["  0x10:\n    lane: '-'\n    note: x\n", "not valid YAML: the key 0x10 at line"],
+    ["  ~:\n    lane: '-'\n    note: x\n", "not valid YAML: the key ~ at line"],
+    ["  ? [a, b]\n  : { lane: '-', note: x }\n", "not valid YAML: the key at line"],
+  ])("refuses the key in %j instead of renaming it, and prints nothing", (lines, start) => {
+    const warn = vi.spyOn(process, "emitWarning");
+    try {
+      const text = stringify(board()).replace("components:\n", `components:\n${lines}`);
+      const errors = errorsOf(parseBoardDeclaration(text, { manifestRepoPaths: REPOS }));
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.startsWith(start)).toBe(true);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { parseDocument } from "yaml";
+import { isNode, isScalar, LineCounter, parseDocument, visit } from "yaml";
 import { z } from "zod";
 import { TaskStatusSchema } from "../schemas/task.schema.js";
 
@@ -31,10 +31,11 @@ export const BOARD_DEFAULT_CAPTURE_GROUP = 1;
 const ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
+// The C0 controls, DEL and the C1 controls.
 function hasControlCharacter(s: string): boolean {
   for (const ch of s) {
     const code = ch.codePointAt(0) ?? 0;
-    if (code < 0x20 || code === 0x7f) return true;
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return true;
   }
   return false;
 }
@@ -51,7 +52,9 @@ function isCalendarDate(s: string): boolean {
   const m = DATE_PATTERN.exec(s);
   if (m === null) return false;
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const date = new Date(Date.UTC(y, mo - 1, d));
+  // setUTCFullYear, because Date.UTC reads the years 0 to 99 as 1900 to 1999.
+  const date = new Date(0);
+  date.setUTCFullYear(y, mo - 1, d);
   return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
 }
 
@@ -59,7 +62,11 @@ const dateText = z
   .string()
   .refine(isCalendarDate, { error: "must be a calendar date written as YYYY-MM-DD" });
 
+// A name from the time zone database. An offset such as +09:00 is refused
+// although some Node versions accept one, so a declaration reads the same on
+// every version.
 function isTimeZone(s: string): boolean {
+  if (/^[+-]\d/.test(s)) return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: s });
     return true;
@@ -68,9 +75,9 @@ function isTimeZone(s: string): boolean {
   }
 }
 
-const timeZoneText = z
-  .string()
-  .refine(isTimeZone, { error: "must be a time zone name such as Asia/Tokyo" });
+const timeZoneText = z.string().refine(isTimeZone, {
+  error: "must be a time zone name such as Asia/Tokyo, not an offset such as +09:00",
+});
 
 // A path or glob inside a repository. It may not leave the repository, so an
 // absolute path and a `..` segment are refused; a leading ':' would be read
@@ -80,8 +87,13 @@ const repoPath = z.string().superRefine((s, ctx) => {
     ctx.addIssue({ code: "custom", message: "must be a non-empty path" });
   } else if (hasControlCharacter(s)) {
     ctx.addIssue({ code: "custom", message: "must not contain control characters" });
-  } else if (s.startsWith("/") || s.startsWith("\\") || /^[A-Za-z]:/.test(s)) {
+  } else if (s.startsWith("/") || s.startsWith("\\")) {
     ctx.addIssue({ code: "custom", message: "must be relative to the repository" });
+  } else if (/^[A-Za-z]:/.test(s)) {
+    ctx.addIssue({
+      code: "custom",
+      message: "must be relative to the repository (a leading 'x:' reads as a Windows drive)",
+    });
   } else if (s.split(/[/\\]/).includes("..")) {
     ctx.addIssue({ code: "custom", message: "must not contain a '..' segment" });
   } else if (s.startsWith(":")) {
@@ -260,7 +272,8 @@ const boardSchema = z.strictObject({
     .default([]),
   components: z
     .record(
-      nonEmptyText,
+      // An empty key is reported by the cross-check, which can say what it is.
+      z.string(),
       z.strictObject({
         lane: z.union(
           [
@@ -306,35 +319,61 @@ export type BoardDeclarationResult =
 /**
  * Parse and check the text of a `board.yaml`. Nothing is read from disk.
  *
+ * The text is read as YAML 1.2 only. A problem in the YAML itself (a syntax
+ * error, a duplicate key, a tag it cannot resolve, a `%YAML` directive for
+ * another version, a key that is not a string) stops the reading, and each
+ * such error starts with `not valid YAML:` and gives the line and column when
+ * the parser knows them.
+ *
  * An unknown `board_version` stops the reading at once, naming the version,
  * because the rest of the file may follow a shape this basou does not know.
  * Otherwise every problem found is returned together: the shape of each key,
  * and what one key says about another (a duplicate id, a lane or measure
- * that does not exist, a repo the manifest does not declare). Each error
+ * that does not exist, a repo the manifest does not declare). Each of these
  * starts with where it is, such as `measures[2].include[0]`.
  */
 export function parseBoardDeclaration(
   text: string,
   context: BoardDeclarationContext,
 ): BoardDeclarationResult {
-  const doc = parseDocument(text, { version: "1.2", uniqueKeys: true, prettyErrors: true });
-  const yamlProblems = [...doc.errors, ...doc.warnings];
-  if (yamlProblems.length > 0) {
+  const lineCounter = new LineCounter();
+  // logLevel "error": the parser would otherwise print its warnings to stderr.
+  const doc = parseDocument(text, {
+    version: "1.2",
+    uniqueKeys: true,
+    prettyErrors: true,
+    logLevel: "error",
+    lineCounter,
+  });
+  if (doc.errors.length > 0) {
+    return { ok: false, errors: doc.errors.map((e) => `not valid YAML: ${firstLine(e.message)}`) };
+  }
+  // A directive overrides the version passed in, and YAML 1.1 reads dates,
+  // yes/no and 010 differently, so only 1.2 is taken.
+  if (doc.directives?.yaml.version !== "1.2") {
     return {
       ok: false,
-      errors: yamlProblems.map((p) => `not valid YAML: ${p.message.split("\n")[0]}`),
+      errors: [
+        `not valid YAML: a board is read as YAML 1.2; remove the %YAML ${doc.directives?.yaml.version} directive`,
+      ],
     };
   }
   let raw: unknown;
   try {
     raw = doc.toJS({ maxAliasCount: 100 });
   } catch (error: unknown) {
-    const reason = error instanceof Error ? error.message.split("\n")[0] : "unreadable";
-    return { ok: false, errors: [`not valid YAML: ${reason}`] };
+    return {
+      ok: false,
+      errors: [
+        `not valid YAML: ${error instanceof Error ? firstLine(error.message) : "unreadable"}`,
+      ],
+    };
   }
   if (!isRecord(raw)) {
     return { ok: false, errors: ["(top level): must be a mapping of keys to values"] };
   }
+  // Before the warnings and the keys: a file in a newer shape may use what
+  // this basou does not know, and the version is what it should be told.
   const version = raw.board_version;
   if (typeof version === "number" && version !== BOARD_VERSION) {
     return {
@@ -342,6 +381,11 @@ export function parseBoardDeclaration(
       errors: [`board_version: this basou reads board_version ${BOARD_VERSION}, not ${version}`],
     };
   }
+  const yamlErrors = [
+    ...doc.warnings.map((w) => `not valid YAML: ${firstLine(w.message)}`),
+    ...nonStringKeys(doc, text, lineCounter),
+  ];
+  if (yamlErrors.length > 0) return { ok: false, errors: yamlErrors };
 
   const errors: string[] = [];
   const parsed = boardSchema.safeParse(raw);
@@ -351,6 +395,44 @@ export function parseBoardDeclaration(
   errors.push(...crossCheck(raw, context));
   if (errors.length > 0 || !parsed.success) return { ok: false, errors };
   return { ok: true, declaration: parsed.data };
+}
+
+// The first line of a parser message, without the ':' that introduces the
+// excerpt prettyErrors appends.
+function firstLine(message: string): string {
+  return (message.split("\n")[0] ?? "").replace(/:\s*$/, "");
+}
+
+// Every mapping key that is not a string. The parser would turn it into one
+// (01 into "1", a list into "[ a, b ]") and the declaration would then name
+// something else than what was written.
+function nonStringKeys(
+  doc: ReturnType<typeof parseDocument>,
+  text: string,
+  lineCounter: LineCounter,
+): string[] {
+  const errors: string[] = [];
+  visit(doc, {
+    Pair(_, pair) {
+      const key = pair.key;
+      if (isScalar(key) && typeof key.value === "string") return;
+      const range = isNode(key) ? key.range : undefined;
+      let where = "";
+      let written = "";
+      if (range) {
+        const pos = lineCounter.linePos(range[0]);
+        where = ` at line ${pos.line}, column ${pos.col}`;
+        written = text.slice(range[0], range[1]);
+      }
+      const shown = written.length > 40 ? `${written.slice(0, 40)}...` : written;
+      errors.push(
+        isScalar(key)
+          ? `not valid YAML: the key ${shown === "" ? "(empty)" : shown}${where} is not a string; write it in quotes`
+          : `not valid YAML: the key${where} is a list or a mapping; a key must be a string`,
+      );
+    },
+  });
+  return errors;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -379,10 +461,14 @@ function formatIssue(issue: Issue): string {
   return `${formatPath(issue.path)}: ${issue.message}`;
 }
 
-// Read a list from the raw document, keeping each entry's index.
-function entries(raw: Record<string, unknown>, key: string): [number, Record<string, unknown>][] {
+// The entries of a list in the raw document with their indexes, or undefined
+// when the key does not hold a list (the shape check reports that).
+function entries(
+  raw: Record<string, unknown>,
+  key: string,
+): [number, Record<string, unknown>][] | undefined {
   const list = raw[key];
-  if (!Array.isArray(list)) return [];
+  if (!Array.isArray(list)) return undefined;
   const out: [number, Record<string, unknown>][] = [];
   list.forEach((entry, i) => {
     if (isRecord(entry)) out.push([i, entry]);
@@ -395,6 +481,22 @@ function stringAt(entry: Record<string, unknown>, key: string): string | undefin
   return typeof value === "string" ? value : undefined;
 }
 
+// An id as the shape check accepts it. A reference that fails this is
+// reported there, so the cross-check does not look it up as well.
+function isId(value: string | undefined): value is string {
+  return value !== undefined && ID_PATTERN.test(value);
+}
+
+// The kinds of measure that read a repository.
+const REPO_KINDS = new Set([
+  "file_count",
+  "dir_count",
+  "line_count",
+  "match_count",
+  "regex_capture",
+  "json_length",
+]);
+
 // How many capturing groups a pattern has, or undefined when it does not compile.
 function captureGroups(pattern: string): number | undefined {
   try {
@@ -406,21 +508,18 @@ function captureGroups(pattern: string): number | undefined {
 }
 
 // What one key says about another. Run on the raw document, so these are
-// reported even when the shape check found problems elsewhere; a value of the
-// wrong type is skipped here because the shape check already reports it.
+// reported even when the shape check found problems elsewhere. Anything the
+// shape check already refuses is skipped here: a list that is not a list, a
+// key the kind does not take, a value of the wrong type or form.
 function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationContext): string[] {
   const errors: string[] = [];
 
-  const stages = raw.stages;
-  if (isRecord(stages) && Object.keys(stages).some((k) => /^[1-6]$/.test(k))) {
-    errors.push(
-      'stages: write the stage ids in quotes ("01" to "06"); unquoted, 01 is read as the number 1',
-    );
-  }
-
-  const firstSeen = (key: string, what: string): Set<string> => {
+  // The ids of a list, reporting duplicates; undefined when it is not a list.
+  const idsOf = (key: string, what: string): Set<string> | undefined => {
+    const list = entries(raw, key);
+    if (list === undefined) return undefined;
     const seen = new Map<string, number>();
-    for (const [i, entry] of entries(raw, key)) {
+    for (const [i, entry] of list) {
       const id = stringAt(entry, "id");
       if (id === undefined) continue;
       const first = seen.get(id);
@@ -429,9 +528,9 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
     }
     return new Set(seen.keys());
   };
-  const laneIds = firstSeen("lanes", "lane");
-  const measureIds = firstSeen("measures", "measure");
-  firstSeen("ratios", "ratio");
+  const laneIds = idsOf("lanes", "lane");
+  const measureIds = idsOf("measures", "measure");
+  idsOf("ratios", "ratio");
 
   const repoPaths = new Set(context.manifestRepoPaths);
   const declared =
@@ -439,41 +538,59 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
       ? "the manifest declares no repos"
       : `the manifest declares ${context.manifestRepoPaths.map((p) => `'${p}'`).join(", ")}`;
   const measureKinds = new Map<string, unknown>();
-  for (const [i, measure] of entries(raw, "measures")) {
+  for (const [i, measure] of entries(raw, "measures") ?? []) {
     const at = `measures[${i}]`;
     const id = stringAt(measure, "id");
     if (id !== undefined && !measureKinds.has(id)) measureKinds.set(id, measure.kind);
     const repo = stringAt(measure, "repo");
-    if (repo !== undefined && !repoPaths.has(repo)) {
+    if (
+      typeof measure.kind === "string" &&
+      REPO_KINDS.has(measure.kind) &&
+      repo !== undefined &&
+      repo.trim() !== "" &&
+      !repoPaths.has(repo)
+    ) {
       errors.push(`${at}.repo: '${repo}' is not a repo path in the manifest (${declared})`);
     }
     const lane = stringAt(measure, "lane");
-    if (lane !== undefined && !laneIds.has(lane)) {
+    if (laneIds !== undefined && isId(lane) && !laneIds.has(lane)) {
       errors.push(`${at}.lane: no lane has the id '${lane}'`);
     }
     if (measure.kind === "regex_capture") {
       const pattern = stringAt(measure, "pattern");
       const group = measure.group ?? BOARD_DEFAULT_CAPTURE_GROUP;
-      const groups = pattern === undefined ? undefined : captureGroups(pattern);
-      if (typeof group === "number" && groups !== undefined && group > groups) {
+      const groups = pattern === undefined || pattern === "" ? undefined : captureGroups(pattern);
+      if (
+        Number.isInteger(group) &&
+        typeof group === "number" &&
+        groups !== undefined &&
+        group > groups
+      ) {
         errors.push(
           `${at}.group: the pattern has ${groups} capturing group${groups === 1 ? "" : "s"}, so group ${group} does not exist`,
         );
       }
     }
-    if (measure.kind === "trail_count" && measure.status !== undefined && measure.of !== "tasks") {
+    if (
+      measure.kind === "trail_count" &&
+      measure.status !== undefined &&
+      (BOARD_TRAIL_COUNTS as readonly unknown[]).includes(measure.of) &&
+      measure.of !== "tasks"
+    ) {
       errors.push(`${at}.status: only a trail_count of 'tasks' takes a status`);
     }
   }
 
-  for (const [i, ratio] of entries(raw, "ratios")) {
-    for (const side of ["numerator", "denominator"] as const) {
-      const ref = stringAt(ratio, side);
-      if (ref === undefined) continue;
-      if (!measureIds.has(ref)) {
-        errors.push(`ratios[${i}].${side}: no measure has the id '${ref}'`);
-      } else if (measureKinds.get(ref) === "regex_capture") {
-        errors.push(`ratios[${i}].${side}: '${ref}' is a regex_capture, which is not a number`);
+  if (measureIds !== undefined) {
+    for (const [i, ratio] of entries(raw, "ratios") ?? []) {
+      for (const side of ["numerator", "denominator"] as const) {
+        const ref = stringAt(ratio, side);
+        if (!isId(ref)) continue;
+        if (!measureIds.has(ref)) {
+          errors.push(`ratios[${i}].${side}: no measure has the id '${ref}'`);
+        } else if (measureKinds.get(ref) === "regex_capture") {
+          errors.push(`ratios[${i}].${side}: '${ref}' is a regex_capture, which is not a number`);
+        }
       }
     }
   }
@@ -481,15 +598,21 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
   const components = raw.components;
   if (isRecord(components)) {
     for (const [key, component] of Object.entries(components)) {
-      if (!isRecord(component)) continue;
       const at = formatPath(["components", key]);
+      // The schema check skips this key, so nothing else would report it.
+      if (key === "__proto__") {
+        errors.push(`${at}: a component cannot be named __proto__`);
+        continue;
+      }
+      if (key.trim() === "") errors.push(`${at}: a component key must be a non-empty path`);
+      if (!isRecord(component)) continue;
       if (component.lane === "-" && component.note === undefined) {
         errors.push(`${at}.note: a component with lane '-' needs a note saying why`);
       }
-      if (Array.isArray(component.lane)) {
+      if (laneIds !== undefined && Array.isArray(component.lane)) {
         const seen = new Set<string>();
         component.lane.forEach((lane, j) => {
-          if (typeof lane !== "string") return;
+          if (typeof lane !== "string" || !isId(lane)) return;
           if (seen.has(lane)) errors.push(`${at}.lane[${j}]: '${lane}' is listed twice`);
           else if (!laneIds.has(lane))
             errors.push(`${at}.lane[${j}]: no lane has the id '${lane}'`);
