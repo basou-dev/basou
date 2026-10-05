@@ -52,6 +52,9 @@ basou hook status [claude|codex]     # is it registered (codex: and has Codex tr
 basou hook uninstall [claude|codex]
 basou hook stop | session-start      # the handlers themselves — the tool invokes them, not you
 
+# Progress board (experimental: outside every guarantee, see compatibility.md)
+basou board measure        # measure what a board.yaml declares (writes nothing, sends nothing)
+
 # User-global context faces (files every project's AI tool auto-loads)
 basou channel clear codex  # remove an orientation block an older basou left in ~/.codex/AGENTS.md
 ```

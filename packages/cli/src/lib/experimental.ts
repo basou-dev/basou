@@ -12,7 +12,7 @@ import type { Command } from "commander";
  * A command joins only in the release that introduces it. An existing command
  * never joins, and leaving the list is a one-way promotion.
  */
-export const EXPERIMENTAL_COMMANDS: readonly string[] = [];
+export const EXPERIMENTAL_COMMANDS: readonly string[] = ["board"];
 
 export const EXPERIMENTAL_MARK = "[experimental]";
 
@@ -37,4 +37,27 @@ function markSubtree(command: Command): void {
   const summary = command.summary();
   if (summary !== "") command.summary(`${EXPERIMENTAL_MARK} ${summary}`);
   for (const sub of command.commands) markSubtree(sub);
+}
+
+/** The line an experimental command prints to stderr each time it runs. */
+export function experimentalNotice(name: string): string {
+  return `basou ${name} is experimental; its formats may change.`;
+}
+
+/**
+ * Before the action of a listed command, or of any command under it, print
+ * its notice to stderr. Never to stdout, which carries the command's output.
+ */
+export function installExperimentalNotice(
+  program: Command,
+  names: readonly string[] = EXPERIMENTAL_COMMANDS,
+  write: (line: string) => void = (line) => {
+    process.stderr.write(`${line}\n`);
+  },
+): void {
+  program.hook("preAction", (_hooked, action) => {
+    let top: Command = action;
+    while (top.parent !== null && top.parent !== program) top = top.parent;
+    if (top.parent === program && names.includes(top.name())) write(experimentalNotice(top.name()));
+  });
 }

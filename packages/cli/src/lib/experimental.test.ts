@@ -2,11 +2,13 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "../program.js";
 import {
   EXPERIMENTAL_COMMANDS,
   EXPERIMENTAL_MARK,
+  experimentalNotice,
+  installExperimentalNotice,
   markExperimentalCommands,
 } from "./experimental.js";
 
@@ -197,5 +199,56 @@ describe("markExperimentalCommands", () => {
 
     const missing = sample();
     expect(markProblems(missing, ["alpha"])).toContain("alpha beta: mark missing or repeated");
+  });
+});
+
+describe("installExperimentalNotice", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function sample(ran: string[]): Command {
+    const program = new Command("basou").exitOverride();
+    const alpha = program.command("alpha").action(() => {
+      ran.push("alpha");
+    });
+    alpha.command("beta").action(() => {
+      ran.push("alpha beta");
+    });
+    program.command("delta").action(() => {
+      ran.push("delta");
+    });
+    return program;
+  }
+
+  it("prints the notice before the action of a listed command and of any command under it", async () => {
+    const ran: string[] = [];
+    const notices: string[] = [];
+    const program = sample(ran);
+    installExperimentalNotice(program, ["alpha"], (line) => {
+      notices.push(`${line} (before ${ran.length} actions)`);
+    });
+    await program.parseAsync(["node", "basou", "alpha", "beta"]);
+    await program.parseAsync(["node", "basou", "delta"]);
+    expect(ran).toEqual(["alpha beta", "delta"]);
+    expect(notices).toEqual([
+      "basou alpha is experimental; its formats may change. (before 0 actions)",
+    ]);
+  });
+
+  it("writes to stderr, never to stdout, for the commands buildProgram lists", async () => {
+    const program = buildProgram().exitOverride();
+    const measure = program.commands
+      .find((c) => c.name() === "board")
+      ?.commands.find((c) => c.name() === "measure");
+    if (measure === undefined) throw new Error("basou board measure is not registered");
+    measure.action(() => {});
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await program.parseAsync(["node", "basou", "board", "measure"]);
+    expect(err).toHaveBeenCalledWith(`${experimentalNotice("board")}\n`);
+    expect(out).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
   });
 });

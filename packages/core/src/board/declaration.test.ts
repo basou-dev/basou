@@ -325,6 +325,19 @@ describe("parseBoardDeclaration: the shape of each key", () => {
     ).toEqual(["measures[0]: unknown key 'pattern'"]);
   });
 
+  it.each(["src/*", "src/[ab]", "s?c", "a\\b"])(
+    "refuses a dir_count path with a wildcard: %j",
+    (path) => {
+      expect(
+        errorsOf(
+          parse(
+            withMeasure({ id: "a", kind: "dir_count", repo: ".", path, depth: 1, unit: "dirs" }),
+          ),
+        ),
+      ).toEqual(["measures[0].path: must be a directory path, without '*', '?', '[' or '\\'"]);
+    },
+  );
+
   it("refuses a dir_count depth below 1 and an empty include list", () => {
     expect(
       errorsOf(
