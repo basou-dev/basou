@@ -24,3 +24,5 @@ export type {
   MeasureBoardInput,
 } from "./measure.js";
 export { boardDigest, measureBoard } from "./measure.js";
+export type { BoardRepo } from "./repos.js";
+export { BOARD_REPOS_METHOD } from "./repos.js";

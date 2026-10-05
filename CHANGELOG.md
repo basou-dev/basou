@@ -14,8 +14,14 @@ All notable changes to **basou** are recorded here. The project follows
   object) and in its own trail (decisions, open tracks, tasks), with ratios
   between them. `measure` reads the declaration, measures it at the working
   tree or at a revision, and prints the result, or JSON with `--json`. It
-  writes nothing (not even the task index), sends nothing (a partial clone is
-  not fetched from), and runs no import. Include and exclude patterns are
+  also measures each repo the manifest declares: HEAD and its branch, the
+  committer time of HEAD's commit, the commits reachable from HEAD, the files
+  in the working tree, the paths `git status` names, and the commits behind
+  `origin/main` as of the last fetch (a detached HEAD, a branch with no
+  commit yet and a missing `origin/main` are nulls that mean so). It
+  writes nothing (not even the task index or a stale git index), sends
+  nothing (a partial clone is not fetched from), starts no file system
+  monitor, and runs no import. Include and exclude patterns are
   matched as git matches a `:(glob)` pathspec. A value that cannot be
   measured (a missing repo, revision or file, a file or blob that cannot be
   read, a symlink out of the repository, an event line that cannot be read)

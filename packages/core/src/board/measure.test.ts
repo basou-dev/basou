@@ -1,5 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -83,8 +94,12 @@ function declare(
   return result.declaration;
 }
 
-function measure(declaration: BoardDeclaration, now: Date = NOW): Promise<BoardMeasurement> {
-  return measureBoard({ declaration, root, paths, now, measuredWith: WITH });
+function measure(
+  declaration: BoardDeclaration,
+  now: Date = NOW,
+  repos: readonly string[] = [],
+): Promise<BoardMeasurement> {
+  return measureBoard({ declaration, root, repos, paths, now, measuredWith: WITH });
 }
 
 function measured(m: BoardMeasurement, id: string): unknown {
@@ -761,6 +776,7 @@ describe("measureBoard: the workspace's own trail", () => {
     const m = await measureBoard({
       declaration: declare(TRAIL),
       root,
+      repos: [],
       paths,
       now: NOW,
       measuredWith: WITH,
@@ -822,6 +838,8 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "complete",
       "not_found",
       "digest",
+      "methods",
+      "repos",
       "measures",
       "ratios",
     ]);
@@ -1230,5 +1248,432 @@ describe("measureBoard: what the review found", () => {
         reason: `the repo 'app' (at '${tree}') has '${tree}', but it is not a commit`,
       },
     ]);
+  });
+});
+
+describe("measureBoard: the repos section", () => {
+  const POSIX = process.platform !== "win32";
+  const NOTHING = {
+    name: null,
+    head: null,
+    branch: null,
+    last_commit: null,
+    commits: null,
+    files: null,
+    uncommitted: null,
+    behind_main: null,
+  };
+
+  // Measure a declaration with no measures, for a manifest that declares `repos`.
+  function measureRepos(...repos: string[]): Promise<BoardMeasurement> {
+    return measure(declare([], {}, repos), NOW, repos);
+  }
+
+  async function commit(
+    dir: string,
+    files: Record<string, string>,
+    message: string,
+    env: Record<string, string> = {},
+  ): Promise<void> {
+    for (const [path, body] of Object.entries(files)) {
+      await mkdir(join(dir, path, ".."), { recursive: true });
+      await writeFile(join(dir, path), body);
+    }
+    git(dir, "add", "-A");
+    execFileSync("git", ["commit", "-q", "-m", message], {
+      cwd: dir,
+      env: { ...GIT_ENV, ...env },
+    });
+  }
+
+  function hasObject(dir: string, oid: string): boolean {
+    try {
+      execFileSync("git", ["cat-file", "-e", oid], {
+        cwd: dir,
+        env: { ...GIT_ENV, GIT_NO_LAZY_FETCH: "1" },
+        stdio: "ignore",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it("measures each repository the manifest declares, in its order", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n", ".gitignore": "dist/\n" });
+    git(root, "clone", "-q", upstream, "app");
+    const app = join(root, "app");
+    git(app, "config", "user.email", "test@example.com");
+    git(app, "config", "user.name", "test");
+    await commit(upstream, { "b.txt": "1\n" }, "upstream moves on");
+    git(app, "fetch", "-q");
+    await commit(app, { "c.txt": "1\n" }, "local", {
+      GIT_AUTHOR_DATE: "2026-09-01T00:00:00+00:00",
+      GIT_COMMITTER_DATE: "2026-10-04T23:30:00+09:00",
+    });
+    await writeFile(join(app, "a.txt"), "changed\n");
+    await mkdir(join(app, "notes"));
+    await writeFile(join(app, "notes", "x.md"), "x\n");
+    await writeFile(join(app, "notes", "y.md"), "y\n");
+    await mkdir(join(app, "dist"));
+    await writeFile(join(app, "dist", "out.js"), "ignored\n");
+    const lib = await repo("lib", { "l.txt": "1\n" });
+
+    const m = await measureRepos("lib", "app");
+    expect(m.repos).toEqual([
+      {
+        path: "lib",
+        name: "lib",
+        head: git(lib, "rev-parse", "HEAD").trim(),
+        branch: "main",
+        last_commit: git(lib, "log", "-1", "--format=%cI").trim(),
+        commits: 1,
+        files: 1,
+        uncommitted: 0,
+        behind_main: null, // no origin/main
+      },
+      {
+        path: "app",
+        name: "app",
+        head: git(app, "rev-parse", "HEAD").trim(),
+        branch: "main",
+        // The committer's time as git recorded it, not the author's, and not moved to UTC.
+        last_commit: "2026-10-04T23:30:00+09:00",
+        commits: 2,
+        // .gitignore, a.txt, c.txt and the two untracked notes; dist/ is ignored.
+        files: 5,
+        // a.txt and the two notes.
+        uncommitted: 3,
+        // b.txt, fetched but not merged.
+        behind_main: 1,
+      },
+    ]);
+    expect(Object.keys(m.repos[0] ?? {})).toEqual([
+      "path",
+      "name",
+      "head",
+      "branch",
+      "last_commit",
+      "commits",
+      "files",
+      "uncommitted",
+      "behind_main",
+    ]);
+    expect(m.repos[0]?.head).toMatch(/^[0-9a-f]{40}$/);
+    expect(m.not_found).toEqual([]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("counts every commit reachable from HEAD, merges and all", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    git(dir, "checkout", "-q", "-b", "side");
+    await commit(dir, { "s.txt": "1\n" }, "side");
+    git(dir, "checkout", "-q", "main");
+    await commit(dir, { "m.txt": "1\n" }, "main");
+    git(dir, "merge", "-q", "--no-ff", "-m", "merge", "side");
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.commits).toBe(4);
+  });
+
+  it("counts the files a file_count of '**' counts", async () => {
+    const dir = await repo(
+      "app",
+      { ".gitignore": "*.log\n", "a.txt": "1\n", "src/b.ts": "1\n", "old.txt": "1\n" },
+      { "new.txt": "1\n", "x.log": "1\n" },
+    );
+    await unlink(join(dir, "old.txt"));
+    const all = { id: "all", kind: "file_count", repo: "app", include: ["**"], unit: "files" };
+    const m = await measure(declare([all]), NOW, ["app"]);
+    // .gitignore, a.txt, src/b.ts and new.txt: not x.log, which is ignored, or old.txt, deleted.
+    expect(m.repos[0]?.files).toBe(4);
+    expect(m.measures.all?.value).toBe(4);
+  });
+
+  it.skipIf(!POSIX)(
+    "refuses a symlink that leaves the repository as a file_count of '**' does",
+    async () => {
+      const dir = await repo("app", { "a.txt": "1\n" });
+      await symlink("/", join(dir, "out.md"));
+      const all = { id: "all", kind: "file_count", repo: "app", include: ["**"], unit: "files" };
+      const m = await measure(declare([all]), NOW, ["app"]);
+      expect(m.repos[0]?.files).toBeNull();
+      expect(m.not_found).toEqual([
+        { at: "repos[app].files", reason: "'out.md' is a symlink to outside the repository" },
+        { at: "measures.all", reason: "'out.md' is a symlink to outside the repository" },
+      ]);
+    },
+  );
+
+  it("counts each path git status names, whatever git's settings say", async () => {
+    const dir = await repo("app", {
+      ".gitignore": "*.log\n",
+      "a.txt": "a\n",
+      "b.txt": "b\n",
+      "c.txt": "c\n",
+    });
+    git(dir, "config", "status.renames", "true");
+    git(dir, "config", "status.showUntrackedFiles", "no");
+    git(dir, "mv", "a.txt", "moved.txt");
+    await writeFile(join(dir, "b.txt"), "changed\n");
+    await unlink(join(dir, "c.txt"));
+    await mkdir(join(dir, "new"));
+    for (const name of ["1.txt", "2.txt", "3.txt"]) await writeFile(join(dir, "new", name), "n\n");
+    await writeFile(join(dir, "x.log"), "ignored\n");
+    const m = await measureRepos("app");
+    // a.txt and moved.txt, b.txt, c.txt, and each of the three files in new/.
+    expect(m.repos[0]?.uncommitted).toBe(7);
+  });
+
+  it("leaves a stale index as it is, which git status would rewrite", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    const file = join(dir, "a.txt");
+    const old = new Date("2020-01-01T00:00:00Z");
+    await utimes(file, old, old);
+    git(dir, "update-index", "--refresh");
+    const later = new Date("2026-10-01T00:00:00Z");
+    await utimes(file, later, later);
+    const index = join(dir, ".git", "index");
+    const before = await readFile(index);
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.uncommitted).toBe(0);
+    expect((await readFile(index)).equals(before)).toBe(true);
+    git(dir, "status", "--porcelain");
+    expect((await readFile(index)).equals(before)).toBe(false);
+  });
+
+  it.skipIf(!POSIX)("does not run a file system monitor the repository configures", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    const marker = join(root, "monitor-ran");
+    const hook = join(root, "monitor.sh");
+    await writeFile(hook, `#!/bin/sh\necho ran >> '${marker}'\nexit 1\n`);
+    await chmod(hook, 0o755);
+    git(dir, "config", "core.fsmonitor", hook);
+    const all = { id: "all", kind: "file_count", repo: "app", include: ["**"], unit: "files" };
+    const m = await measure(declare([all]), NOW, ["app"]);
+    expect(m.repos[0]).toMatchObject({ files: 1, uncommitted: 0 });
+    await expect(stat(marker)).rejects.toThrow();
+    git(dir, "status", "--porcelain");
+    await expect(stat(marker)).resolves.toBeDefined();
+  });
+
+  it("gives a detached HEAD and a branch with no commit yet nulls with a meaning, not gaps", async () => {
+    const detached = await repo("detached", { "a.txt": "1\n" });
+    const first = git(detached, "rev-parse", "HEAD").trim();
+    await commit(detached, { "b.txt": "1\n" }, "second");
+    git(detached, "checkout", "-q", "--detach", first);
+    const empty = join(root, "empty");
+    await mkdir(empty);
+    git(empty, "init", "-q", "-b", "main");
+    await writeFile(join(empty, "staged.txt"), "1\n");
+    git(empty, "add", "staged.txt");
+    await writeFile(join(empty, "loose.txt"), "1\n");
+    const orphan = await repo("orphan", { "a.txt": "1\n" });
+    git(orphan, "checkout", "-q", "--orphan", "fresh");
+    const m = await measureRepos("detached", "empty", "orphan");
+    expect(m.repos).toEqual([
+      {
+        path: "detached",
+        name: "detached",
+        head: first,
+        branch: null,
+        last_commit: git(detached, "log", "-1", "--format=%cI").trim(),
+        commits: 1,
+        files: 1,
+        uncommitted: 0,
+        behind_main: null,
+      },
+      {
+        path: "empty",
+        name: "empty",
+        head: null,
+        branch: "main",
+        last_commit: null,
+        commits: 0,
+        files: 2,
+        uncommitted: 2,
+        behind_main: null,
+      },
+      {
+        path: "orphan",
+        name: "orphan",
+        head: null,
+        branch: "fresh",
+        last_commit: null,
+        commits: 0,
+        files: 1,
+        uncommitted: 1,
+        behind_main: null,
+      },
+    ]);
+    expect(m.not_found).toEqual([]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("counts all of origin/main as behind when HEAD has no commit yet", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n" });
+    await commit(upstream, { "b.txt": "1\n" }, "second");
+    const empty = join(root, "empty");
+    await mkdir(empty);
+    git(empty, "init", "-q", "-b", "main");
+    git(empty, "fetch", "-q", upstream, "main:refs/remotes/origin/main");
+    const m = await measureRepos("empty");
+    expect(m.repos[0]).toMatchObject({ head: null, commits: 0, behind_main: 2 });
+    expect(m.complete).toBe(true);
+  });
+
+  it("reports a repo that is not there, not a repository, or not the root of one, once", async () => {
+    await repo("app", { "sub/a.txt": "1\n" });
+    await mkdir(join(root, "plain"));
+    const repos = ["gone", "plain", "app/sub"];
+    const gone = { id: "gone", kind: "file_count", repo: "gone", include: ["**"], unit: "files" };
+    const m = await measure(declare([gone], {}, repos), NOW, repos);
+    expect(m.repos).toEqual(repos.map((path) => ({ path, ...NOTHING })));
+    expect(m.not_found).toEqual([
+      { at: "repos[gone]", reason: "the repo 'gone' is not on disk" },
+      { at: "repos[plain]", reason: "the repo 'plain' is not a git repository" },
+      {
+        at: "repos[app/sub]",
+        reason: "the repo 'app/sub' is inside a git repository but is not its root",
+      },
+      { at: "measures.gone", reason: "the repo 'gone' is not on disk" },
+    ]);
+    expect(m.complete).toBe(false);
+  });
+
+  it("does not count the commits of a shallow clone", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n" });
+    await commit(upstream, { "b.txt": "1\n" }, "second");
+    await commit(upstream, { "c.txt": "1\n" }, "third");
+    git(root, "clone", "-q", "--depth", "1", `file://${upstream}`, "app");
+    const app = join(root, "app");
+    const m = await measureRepos("app");
+    expect(m.repos[0]).toEqual({
+      path: "app",
+      name: "app",
+      head: git(app, "rev-parse", "HEAD").trim(),
+      branch: "main",
+      last_commit: git(app, "log", "-1", "--format=%cI").trim(),
+      commits: null,
+      files: 3,
+      uncommitted: 0,
+      behind_main: null,
+    });
+    const cut = "the repo is a shallow clone, so its history is cut short";
+    expect(m.not_found).toEqual([
+      { at: "repos[app].commits", reason: cut },
+      { at: "repos[app].behind_main", reason: cut },
+    ]);
+  });
+
+  it("says when origin/main is not a commit, and when HEAD names no commit", async () => {
+    const odd = await repo("odd", { "a.txt": "1\n" });
+    git(odd, "update-ref", "refs/remotes/origin/main", git(odd, "rev-parse", "HEAD^{tree}").trim());
+    const broken = await repo("broken", { "a.txt": "1\n" });
+    await writeFile(join(broken, ".git", "HEAD"), `${"1234567890".repeat(4)}\n`);
+    const m = await measureRepos("odd", "broken");
+    expect(m.repos[0]).toMatchObject({ commits: 1, behind_main: null });
+    expect(m.repos[1]).toEqual({ path: "broken", ...NOTHING, name: "broken", files: 1 });
+    const noCommit = "HEAD does not name a commit";
+    expect(m.not_found).toEqual([
+      { at: "repos[odd].behind_main", reason: "refs/remotes/origin/main is not a commit" },
+      { at: "repos[broken].head", reason: noCommit },
+      { at: "repos[broken].last_commit", reason: noCommit },
+      { at: "repos[broken].commits", reason: noCommit },
+      {
+        at: "repos[broken].uncommitted",
+        reason: "the working tree could not be compared by git",
+      },
+      { at: "repos[broken].behind_main", reason: noCommit },
+    ]);
+  });
+
+  it.skipIf(!POSIX)("names a repository by the directory it is in after symlinks", async () => {
+    await repo("app", { "a.txt": "1\n" });
+    await symlink(join(root, "app"), join(root, "alias"));
+    const m = await measureRepos("alias");
+    expect(m.repos[0]).toMatchObject({ path: "alias", name: "app", files: 1 });
+  });
+
+  it("names its method's version, and puts the repos in the digest", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    const declaration = declare([], {}, ["app"]);
+    const first = await measure(declaration, NOW, ["app"]);
+    expect(first.methods).toEqual({ repos: 1 });
+    const later = await measure(declaration, new Date("2026-10-06T00:00:00.000Z"), ["app"]);
+    expect(later.digest).toBe(first.digest);
+    await writeFile(join(dir, "b.txt"), "1\n");
+    expect((await measure(declaration, NOW, ["app"])).digest).not.toBe(first.digest);
+  });
+
+  it("measures a partial clone without fetching what it lacks", async () => {
+    const origin = await repo("origin", { "src/f.txt": "1\n2\n" });
+    git(origin, "config", "uploadpack.allowFilter", "true");
+    await writeFile(join(origin, "src/f.txt"), "1\n2\n3\n");
+    git(origin, "commit", "-q", "-am", "three lines");
+    git(root, "clone", "-q", "--filter=blob:none", `file://${origin}`, "app");
+    const app = join(root, "app");
+    const old = git(app, "rev-parse", "main~1:src/f.txt").trim();
+    expect(hasObject(app, old)).toBe(false);
+    await writeFile(join(app, "src/f.txt"), "changed\n");
+    const m = await measureRepos("app");
+    expect(hasObject(app, old)).toBe(false);
+    expect(m.repos[0]).toMatchObject({ commits: 2, files: 1, behind_main: 0 });
+    if (m.repos[0]?.uncommitted === null) {
+      expect(m.not_found[0]?.reason).toMatch(/^the repo is a partial clone/);
+    } else {
+      expect(m.repos[0]?.uncommitted).toBe(1);
+    }
+  });
+
+  it.skipIf(!POSIX)(
+    "does not compare the working tree of a partial clone with a git older than 2.44",
+    async () => {
+      const origin = await repo("origin", { "f.txt": "1\n" });
+      git(origin, "config", "uploadpack.allowFilter", "true");
+      git(root, "clone", "-q", "--filter=blob:none", `file://${origin}`, "app");
+      const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      const bin = join(root, "old-git");
+      await mkdir(bin);
+      // A git that says it is 2.43 and otherwise is the real one.
+      await writeFile(
+        join(bin, "git"),
+        `#!/bin/sh\nfor a in "$@"; do [ "$a" = version ] && { echo "git version 2.43.0"; exit 0; }; done\nexec '${real}' "$@"\n`,
+      );
+      await chmod(join(bin, "git"), 0o755);
+      const saved = process.env.PATH;
+      process.env.PATH = `${bin}:${saved ?? ""}`;
+      try {
+        const m = await measureRepos("app");
+        expect(m.repos[0]).toMatchObject({ commits: 1, files: 1, uncommitted: null });
+        expect(m.not_found).toEqual([
+          {
+            at: "repos[app].uncommitted",
+            reason:
+              "the repo is a partial clone, which this git (older than 2.44) may fetch objects for from its remote",
+          },
+        ]);
+      } finally {
+        process.env.PATH = saved;
+      }
+    },
+  );
+
+  it("ignores a GIT_DIR in the environment", async () => {
+    const app = await repo("app", { "a.txt": "1\n" });
+    const other = await repo("other", { "z.txt": "1\n" });
+    await commit(other, { "y.txt": "1\n" }, "second");
+    const saved = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(other, ".git");
+    try {
+      const m = await measureRepos("app");
+      expect(m.repos[0]).toMatchObject({
+        head: git(app, "rev-parse", "HEAD").trim(),
+        commits: 1,
+        files: 1,
+      });
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved;
+    }
   });
 });

@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import {
   assertBasouRootSafe,
   type BoardMeasurement,
+  type BoardRepo,
   basouPaths,
   displayPath,
   findErrorCode,
@@ -101,9 +102,8 @@ export async function doRunBoardMeasure(
 
   const board = boardPath(options, cwd, root, manifest);
   const text = await readDeclaration(board);
-  const parsed = parseBoardDeclaration(text, {
-    manifestRepoPaths: (manifest.repos ?? []).map((repo) => repo.path),
-  });
+  const repoPaths = (manifest.repos ?? []).map((repo) => repo.path);
+  const parsed = parseBoardDeclaration(text, { manifestRepoPaths: repoPaths });
   if (!parsed.ok) {
     throw new Error(
       `${displayPath(board.shown)} is not a valid board declaration:\n${parsed.errors
@@ -115,6 +115,7 @@ export async function doRunBoardMeasure(
   const measurement = await measureBoard({
     declaration: parsed.declaration,
     root,
+    repos: repoPaths,
     paths,
     now: ctx.nowProvider?.() ?? new Date(),
     measuredWith: { basou: BASOU_CLI_VERSION, build: BASOU_BUILD?.commit ?? null },
@@ -183,10 +184,39 @@ function shownValue(value: number | string | null): string {
   return displayPath(value);
 }
 
+// One line per repository. A null the not_found entries do not explain has
+// the meaning the measurement gives it (a detached HEAD, no commit yet, no
+// origin/main).
+function repoLines(m: BoardMeasurement): string[] {
+  const missing = new Set(m.not_found.map((n) => n.at));
+  return m.repos.map((repo) => {
+    const at = `repos[${repo.path}]`;
+    if (missing.has(at)) return `  ${displayPath(repo.path)}  not measured`;
+    const measured = (field: keyof BoardRepo, shown: (value: string | number) => string) => {
+      const value = repo[field];
+      if (value !== null) return shown(value);
+      return missing.has(`${at}.${field}`) ? "not measured" : undefined;
+    };
+    const name = repo.name === null ? "" : ` (${displayPath(repo.name)})`;
+    const branch = measured("branch", (b) => displayPath(String(b))) ?? "detached HEAD";
+    const head = measured("head", (h) => String(h).slice(0, 7)) ?? "no commit yet";
+    const parts = [
+      `${branch} at ${head}`,
+      `last commit ${measured("last_commit", String) ?? "none"}`,
+      `commits ${measured("commits", String) ?? "not measured"}`,
+      `files ${measured("files", String) ?? "not measured"}`,
+      `uncommitted ${measured("uncommitted", String) ?? "not measured"}`,
+      `behind origin/main ${measured("behind_main", String) ?? "(no origin/main)"}`,
+    ];
+    return `  ${displayPath(repo.path)}${name}  ${parts.join(", ")}`;
+  });
+}
+
 function printMeasurementText(m: BoardMeasurement): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
   lines.push(`Measured ${m.measured_at} with basou ${m.measured_with.basou}${build}`);
+  if (m.repos.length > 0) lines.push("", "Repos:", ...repoLines(m));
   const measures = Object.entries(m.measures);
   if (measures.length > 0) {
     const width = Math.max(...measures.map(([id]) => id.length));

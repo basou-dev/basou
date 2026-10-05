@@ -12,7 +12,14 @@ import {
   type BoardMeasure,
 } from "./declaration.js";
 import { compileGlob, compileGlobs, literalLength, normalizePathspec, toBytes } from "./glob.js";
-import { openRepoScope, type RepoScope, type RepoScopeResult, shownPath } from "./scope.js";
+import { BOARD_REPOS_METHOD, type BoardRepo, measureRepos } from "./repos.js";
+import {
+  blockedAmong,
+  openRepoScope,
+  type RepoScope,
+  type RepoScopeResult,
+  shownPath,
+} from "./scope.js";
 
 /** One thing that could not be measured, and why. */
 export type BoardNotFound = { at: string; reason: string };
@@ -47,6 +54,10 @@ export type BoardMeasurement = {
    * values have the same digest whenever they were taken.
    */
   digest: string;
+  /** The version of how each built-in section measures (see `BOARD_REPOS_METHOD`). */
+  methods: { repos: number };
+  /** Each repository the manifest declares, in its order. */
+  repos: BoardRepo[];
   measures: Record<string, BoardMeasureValue>;
   ratios: Record<string, BoardRatioValue>;
 };
@@ -55,6 +66,8 @@ export type MeasureBoardInput = {
   declaration: BoardDeclaration;
   /** The absolute root the manifest's repo paths are relative to. */
   root: string;
+  /** The paths of the manifest's repos, in its order. */
+  repos: readonly string[];
   paths: BasouPaths;
   now: Date;
   measuredWith: { basou: string; build: string | null };
@@ -85,6 +98,11 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     trail ??= readTrail(input);
     return trail;
   };
+
+  const repos = await measureRepos(input.repos, input.root, (repo) =>
+    scopeOf(repo, BOARD_DEFAULT_AT),
+  );
+  notFound.push(...repos.notFound);
 
   const measures: Record<string, BoardMeasureValue> = {};
   for (const measure of declaration.measures) {
@@ -121,10 +139,12 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     measured_with: input.measuredWith,
     complete: notFound.length === 0,
     not_found: notFound,
+    methods: { repos: BOARD_REPOS_METHOD },
+    repos: repos.repos,
     measures,
     ratios,
   };
-  const { board_version, title, measured_at, measured_with, complete, not_found } = body;
+  const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
   return {
     board_version,
     title,
@@ -133,6 +153,8 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     complete,
     not_found,
     digest: boardDigest(body),
+    methods,
+    repos: body.repos,
     measures,
     ratios,
   };
@@ -201,18 +223,6 @@ function missingInclude(scope: RepoScope, include: readonly string[]): string | 
     } else if (fixed !== "" && !paths.some((p) => p.startsWith(`${fixed}/`))) {
       return `nothing is under '${shownPath(fixed)}' ${where(scope)}`;
     }
-  }
-  return undefined;
-}
-
-// Why the matched paths cannot all be measured: one leaves the repository, or
-// cannot be read.
-function blockedAmong(scope: RepoScope, paths: readonly string[]): string | undefined {
-  for (const p of paths) {
-    const entry = scope.entries.get(p);
-    if (entry?.kind === "outside")
-      return `'${shownPath(p)}' is a symlink to outside the repository`;
-    if (entry?.kind === "unreadable") return `'${shownPath(p)}' ${entry.reason}`;
   }
   return undefined;
 }

@@ -40,7 +40,7 @@ export type RepoScope = {
 
 export type RepoScopeResult = { ok: true; scope: RepoScope } | { ok: false; reason: string };
 
-type GitResult = { code: number | null; stdout: Buffer; spawnError?: string };
+export type GitResult = { code: number | null; stdout: Buffer; spawnError?: string };
 
 // Variables that would point git at another repository, index or object
 // store than the one asked about (git sets some of them for its hooks).
@@ -65,9 +65,14 @@ function gitEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-// Run git with an argument list (no shell). A git that cannot be started is
-// reported in the result, not thrown.
-function runGit(cwd: string, args: readonly string[], input?: string): Promise<GitResult> {
+/**
+ * Run git with an argument list (no shell), without the variables that point
+ * it elsewhere, and without letting it write a lock, fetch, or start a file
+ * system monitor (`core.fsmonitor` runs a hook or a daemon on `ls-files` and
+ * `status`). A git that cannot be started is reported in the result, not
+ * thrown.
+ */
+export function runGit(cwd: string, args: readonly string[], input?: string): Promise<GitResult> {
   return new Promise((resolve) => {
     let settled = false;
     const done = (result: GitResult) => {
@@ -78,7 +83,11 @@ function runGit(cwd: string, args: readonly string[], input?: string): Promise<G
     };
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn("git", args, { cwd, env: gitEnv(), stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn("git", ["-c", "core.fsmonitor=false", ...args], {
+        cwd,
+        env: gitEnv(),
+        stdio: ["pipe", "pipe", "ignore"],
+      });
     } catch (error: unknown) {
       done({ code: null, stdout: Buffer.alloc(0), spawnError: spawnReason(error) });
       return;
@@ -122,12 +131,15 @@ function isAbsent(error: unknown): boolean {
   return findErrorCode(error, "ENOENT") || findErrorCode(error, "ENOTDIR");
 }
 
+export type RepoRootResult = { ok: true; root: Buffer } | { ok: false; reason: string };
+
 /**
- * Open the scope of the repository at `repoRoot` (an absolute path) for `at`.
- * Not being able to is reported, not thrown: the repository is missing, is
- * not the root of a git repository, cannot be read, or has no such commit.
+ * The physical path of the repository at `repoRoot` (an absolute path), when
+ * it is the root of a git repository. Not being one is reported, not thrown:
+ * the directory is missing, cannot be read, is not in a git repository, or is
+ * inside one but not at its root.
  */
-export async function openRepoScope(repoRoot: string, at: string): Promise<RepoScopeResult> {
+export async function locateRepoRoot(repoRoot: string): Promise<RepoRootResult> {
   try {
     if (!(await stat(repoRoot)).isDirectory()) return { ok: false, reason: "is not a directory" };
   } catch (error: unknown) {
@@ -147,7 +159,18 @@ export async function openRepoScope(repoRoot: string, at: string): Promise<RepoS
   if (!topReal.equals(realRoot)) {
     return { ok: false, reason: "is inside a git repository but is not its root" };
   }
-  return at === BOARD_DEFAULT_AT ? openWorktree(realRoot) : openRevision(realRoot, at);
+  return { ok: true, root: realRoot };
+}
+
+/**
+ * Open the scope of the repository at `repoRoot` (an absolute path) for `at`.
+ * Not being able to is reported, not thrown: the repository is missing, is
+ * not the root of a git repository, cannot be read, or has no such commit.
+ */
+export async function openRepoScope(repoRoot: string, at: string): Promise<RepoScopeResult> {
+  const located = await locateRepoRoot(repoRoot);
+  if (!located.ok) return located;
+  return at === BOARD_DEFAULT_AT ? openWorktree(located.root) : openRevision(located.root, at);
 }
 
 function within(root: Buffer, target: Buffer): boolean {
@@ -237,8 +260,8 @@ async function worktreeEntry(root: Buffer, path: string): Promise<ScopeEntry | u
 
 type TreeEntry = { mode: string; type: string; oid: string };
 
-// Whether git at this version honors GIT_NO_LAZY_FETCH (2.44 and later).
-async function gitCanRefuseLazyFetch(cwd: string): Promise<boolean> {
+/** Whether git at this version honors GIT_NO_LAZY_FETCH (2.44 and later). */
+export async function gitCanRefuseLazyFetch(cwd: string): Promise<boolean> {
   const version = await runGit(cwd, ["version"]);
   const m = /(\d+)\.(\d+)/.exec(version.stdout.toString("utf8"));
   if (m === null) return false;
@@ -246,7 +269,8 @@ async function gitCanRefuseLazyFetch(cwd: string): Promise<boolean> {
   return major > 2 || (major === 2 && minor >= 44);
 }
 
-async function isPartialClone(cwd: string): Promise<boolean> {
+/** Whether the repository at `cwd` is a partial clone, which may lack objects. */
+export async function isPartialClone(cwd: string): Promise<boolean> {
   const partial = await runGit(cwd, ["config", "--get", "extensions.partialclone"]);
   if (partial.code === 0) return true;
   const promisor = await runGit(cwd, ["config", "--get-regexp", "^remote\\..*\\.promisor$"]);
@@ -375,6 +399,20 @@ async function catFile(
     pos += size + 1;
   }
   return { blobs };
+}
+
+/**
+ * Why the given paths of a scope cannot all be measured: one is a symlink
+ * that leaves the repository, or cannot be read. undefined when none is.
+ */
+export function blockedAmong(scope: RepoScope, paths: readonly string[]): string | undefined {
+  for (const p of paths) {
+    const entry = scope.entries.get(p);
+    if (entry?.kind === "outside")
+      return `'${shownPath(p)}' is a symlink to outside the repository`;
+    if (entry?.kind === "unreadable") return `'${shownPath(p)}' ${entry.reason}`;
+  }
+  return undefined;
 }
 
 /** The text of a scope path, for a message. */
