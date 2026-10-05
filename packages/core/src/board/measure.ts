@@ -1,10 +1,8 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
-import { type ReplayWarning, readAllEvents } from "../events/event-replay.js";
+import { resolve } from "node:path";
+import type { ReplayWarning } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
-import { enumerateSessionDirs } from "../storage/sessions.js";
-import { loadTaskEntries, type TaskSkipReason } from "../storage/tasks.js";
+import type { TaskSkipReason } from "../storage/tasks.js";
 import {
   BOARD_DEFAULT_AT,
   BOARD_REGEX_FLAGS,
@@ -29,6 +27,15 @@ import {
   shownPath,
   unreadReaching,
 } from "./scope.js";
+import {
+  BOARD_TRAIL_METHOD,
+  type BoardTrail,
+  readDecisions,
+  readTasks,
+  type TrailDecisions,
+  type TrailTasks,
+  trailSection,
+} from "./trail.js";
 
 /** One thing that could not be measured, and why. */
 export type BoardNotFound = { at: string; reason: string };
@@ -66,12 +73,17 @@ export type BoardMeasurement = {
    * values have the same digest whenever they were taken.
    */
   digest: string;
-  /** The version of how each built-in section measures (see `BOARD_REPOS_METHOD`). */
-  methods: { repos: number };
+  /**
+   * The version of how each built-in section measures (see
+   * `BOARD_REPOS_METHOD` and `BOARD_TRAIL_METHOD`).
+   */
+  methods: { repos: number; trail: number };
   /** Each repository the manifest declares, in its order. */
   repos: BoardRepo[];
   measures: Record<string, BoardMeasureValue>;
   ratios: Record<string, BoardRatioValue>;
+  /** The workspace's own decisions and open tracks. */
+  trail: BoardTrail;
 };
 
 export type MeasureBoardInput = {
@@ -105,10 +117,15 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     }
     return scope;
   };
-  let trail: Promise<Trail> | undefined;
-  const trailOf = (): Promise<Trail> => {
-    trail ??= readTrail(input);
-    return trail;
+  let decisions: Promise<TrailDecisions> | undefined;
+  const decisionsOf = (): Promise<TrailDecisions> => {
+    decisions ??= readDecisions(input);
+    return decisions;
+  };
+  let tasks: Promise<TrailTasks> | undefined;
+  const tasksOf = (): Promise<TrailTasks> => {
+    tasks ??= readTasks(input);
+    return tasks;
   };
 
   const repos = await measureRepos(input.repos, input.root, (repo) =>
@@ -118,7 +135,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
 
   const measures: Record<string, BoardMeasureValue> = {};
   for (const measure of declaration.measures) {
-    const outcome = await measureOne(measure, scopeOf, trailOf);
+    const outcome = await measureOne(measure, scopeOf, decisionsOf, tasksOf);
     if (outcome.reason !== undefined) {
       notFound.push({ at: `measures.${measure.id}`, reason: outcome.reason });
     }
@@ -144,6 +161,9 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     ratios[ratio.id] = { value, numerator: ratio.numerator, denominator: ratio.denominator };
   }
 
+  const trailed = trailSection(await decisionsOf());
+  notFound.push(...trailed.notFound);
+
   const body = {
     board_version: declaration.board_version,
     title: declaration.title,
@@ -151,10 +171,11 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     measured_with: input.measuredWith,
     complete: notFound.length === 0,
     not_found: notFound,
-    methods: { repos: BOARD_REPOS_METHOD },
+    methods: { repos: BOARD_REPOS_METHOD, trail: BOARD_TRAIL_METHOD },
     repos: repos.repos,
     measures,
     ratios,
+    trail: trailed.trail,
   };
   const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
   return {
@@ -169,6 +190,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     repos: body.repos,
     measures,
     ratios,
+    trail: body.trail,
   };
 }
 
@@ -287,22 +309,23 @@ function pointAt(document: unknown, pointer: string): unknown {
 async function measureOne(
   measure: BoardMeasure,
   scopeOf: (repo: string, at: string) => Promise<RepoScopeResult>,
-  trailOf: () => Promise<Trail>,
+  decisionsOf: () => Promise<TrailDecisions>,
+  tasksOf: () => Promise<TrailTasks>,
 ): Promise<Outcome> {
   if (measure.kind === "trail_count") {
-    const trail = await trailOf();
     if (measure.of === "tasks") {
-      if (trail.tasks === undefined) return fail(trail.tasksProblem ?? "tasks could not be read");
-      const tasks =
+      const tasks = await tasksOf();
+      if (!tasks.ok) return fail(tasks.reason);
+      const counted =
         measure.status === undefined
-          ? trail.tasks
-          : trail.tasks.filter((status) => status === measure.status);
-      return { value: tasks.length };
+          ? tasks.statuses
+          : tasks.statuses.filter((status) => status === measure.status);
+      return { value: counted.length };
     }
-    if (trail.events === undefined) {
-      return fail(trail.eventsProblem ?? "the trail could not be read");
-    }
-    return { value: trail.events[measure.of] };
+    const decisions = await decisionsOf();
+    if (!decisions.ok) return fail(decisions.reason);
+    if (measure.of === "tracks_open") return { value: decisions.tracks.length };
+    return { value: decisions[measure.of] };
   }
 
   const opened = await scopeOf(measure.repo, measure.at);
@@ -426,93 +449,4 @@ async function measureOne(
     total += lines.filter((line) => pattern.test(line)).length;
   }
   return { value: total };
-}
-
-type Trail = {
-  events?: { decisions_all: number; decisions_live: number; tracks_open: number };
-  eventsProblem?: string;
-  /** The status of every task that is not archived. */
-  tasks?: string[];
-  tasksProblem?: string;
-};
-
-// Event lines that were not read as events. A torn last line is a write in
-// progress, not a recorded event, and a retired zero-duration line is not a
-// decision; anything else may have been one.
-const LOST_LINES = new Set<ReplayWarning["kind"]>(["malformed_json", "schema_violation"]);
-
-// Whether line `lineNo` of an events log is its last line with no newline
-// after it: a write that has not finished, which replay reports as malformed
-// when it is cut in the middle of the JSON.
-async function isTornTail(eventsLog: string, lineNo: number): Promise<boolean> {
-  let body: Buffer;
-  try {
-    body = await readFile(eventsLog);
-  } catch {
-    return false;
-  }
-  if (body.length === 0 || body[body.length - 1] === 0x0a) return false;
-  let newlines = 0;
-  for (const byte of body) if (byte === 0x0a) newlines++;
-  return lineNo === newlines + 1;
-}
-
-// The workspace's own trail: its decisions, open tracks and tasks. Read only:
-// the task index is not rebuilt.
-async function readTrail(input: MeasureBoardInput): Promise<Trail> {
-  const trail: Trail = {};
-  try {
-    const recorded: { id: string; track: boolean }[] = [];
-    const voided = new Set<string>();
-    let lost = 0;
-    for (const sessionId of await enumerateSessionDirs(input.paths)) {
-      const sessionDir = join(input.paths.sessions, sessionId);
-      const lostLines: number[] = [];
-      const events = await readAllEvents(sessionDir, {
-        onWarning: (warning) => {
-          if (LOST_LINES.has(warning.kind)) lostLines.push(warning.line);
-          input.onReplayWarning?.(warning, sessionId);
-        },
-      });
-      for (const lineNo of lostLines) {
-        if (!(await isTornTail(join(sessionDir, "events.jsonl"), lineNo))) lost++;
-      }
-      for (const event of events) {
-        if (event.type === "decision_recorded") {
-          recorded.push({ id: event.decision_id, track: event.kind === "track" });
-        } else if (event.type === "decision_voided") {
-          voided.add(event.decision_id);
-        }
-      }
-    }
-    if (lost > 0) {
-      trail.eventsProblem = `${lost} event line${lost === 1 ? "" : "s"} could not be read, so decisions may be missing`;
-    } else {
-      trail.events = {
-        decisions_all: recorded.length,
-        decisions_live: recorded.filter((d) => !voided.has(d.id)).length,
-        tracks_open: recorded.filter((d) => d.track && !voided.has(d.id)).length,
-      };
-    }
-  } catch {
-    trail.eventsProblem = "the sessions of the workspace could not be read";
-  }
-  try {
-    let skipped = 0;
-    const tasks = await loadTaskEntries(input.paths, {
-      rebuildIndex: false,
-      onSkip: (taskId, reason) => {
-        skipped++;
-        input.onTaskSkip?.(taskId, reason);
-      },
-    });
-    if (skipped > 0) {
-      trail.tasksProblem = `${skipped} task${skipped === 1 ? "" : "s"} could not be read`;
-    } else {
-      trail.tasks = tasks.map((doc) => doc.task.task.status);
-    }
-  } catch {
-    trail.tasksProblem = "the tasks of the workspace could not be read";
-  }
-  return trail;
 }

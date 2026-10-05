@@ -26,3 +26,5 @@ export type {
 export { boardDigest, measureBoard } from "./measure.js";
 export type { BoardRepo } from "./repos.js";
 export { BOARD_REPOS_METHOD } from "./repos.js";
+export type { BoardTrack, BoardTrail } from "./trail.js";
+export { BOARD_TRAIL_METHOD } from "./trail.js";

@@ -81,6 +81,7 @@ function capture(): { out: string[]; err: string[] } {
 }
 
 const ctx = (cwd: string) => ({ cwd, nowProvider: () => NOW });
+const ESC = String.fromCharCode(27);
 
 describe("basou board measure", () => {
   it("reads board/board.yaml when the manifest declares the workspace's own repo private", async () => {
@@ -199,6 +200,7 @@ describe("basou board measure", () => {
     expect(text).toContain(
       "Not measured (1):\n  measures.gone: 'GONE.md' matches no file in the working tree",
     );
+    expect(text).toContain("\nTrail:\n  decisions 0 (live 0)\n  open tracks 0\n");
     expect(text).toContain("Complete: no");
     expect(text).toMatch(/Digest: sha256:[0-9a-f]{64}/);
   });
@@ -236,6 +238,78 @@ describe("basou board measure", () => {
     );
   });
 
+  it("prints the open tracks in the summary, or that the trail was not measured", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const sessionId = "ses_01HXABCDEF1234567890ABCS01";
+    const dir = join(repo, ".basou", "sessions", sessionId);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "session.yaml"),
+      [
+        'schema_version: "0.1.0"',
+        "session:",
+        `  id: ${sessionId}`,
+        "  label: fixture",
+        "  task_id: null",
+        `  workspace_id: ${FIXED_WS_ID}`,
+        "  source: { kind: terminal, version: 0.1.0 }",
+        "  started_at: 2026-10-01T00:00:00Z",
+        "  status: completed",
+        "  working_directory: /tmp/fixture",
+        "  invocation: { command: echo, args: [], exit_code: 0 }",
+        "  related_files: []",
+        "  events_log: events.jsonl",
+        "",
+      ].join("\n"),
+    );
+    const event = (n: string, fields: Record<string, unknown>) =>
+      JSON.stringify({
+        schema_version: "0.1.0",
+        id: `evt_01HXABCDEF1234567890ABCE0${n}`,
+        session_id: sessionId,
+        occurred_at: `2026-10-0${n}T00:00:00Z`,
+        source: "local-cli",
+        ...fields,
+      });
+    const decision = (n: string) => `decision_01HXABCDEF1234567890ABCD0${n}`;
+    const events = [
+      event("1", {
+        type: "decision_recorded",
+        decision_id: decision("1"),
+        title: `open ${ESC}[31m question`,
+        kind: "track",
+      }),
+      event("2", {
+        type: "decision_recorded",
+        decision_id: decision("2"),
+        title: "newer",
+        kind: "track",
+      }),
+      event("3", { type: "decision_recorded", decision_id: decision("3"), title: "voided" }),
+      event("4", { type: "decision_voided", decision_id: decision("3") }),
+      event("5", { type: "decision_recorded", decision_id: decision("5"), title: "settled" }),
+    ];
+    await writeFile(join(dir, "events.jsonl"), `${events.join("\n")}\n`);
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain(
+      `\nTrail:\n  decisions 4 (live 3)\n  open tracks 2\n    ${decision("2")}  newer\n    ${decision("1")}  open `,
+    );
+    expect(text).not.toContain(ESC);
+
+    await writeFile(join(dir, "events.jsonl"), `{"broken\n${events[0]}\n`);
+    out.length = 0;
+    process.exitCode = 0;
+    await runBoardMeasure({ json: true }, ctx(repo));
+    expect(JSON.parse(out.join("\n")).complete).toBe(false);
+    expect(process.exitCode).toBe(1);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain("\nTrail:\n  not measured\n");
+  });
+
   it("refuses a workspace that is not initialized", async () => {
     const repo = await realpath(tmpRepo as string);
     const { out, err } = capture();
@@ -247,8 +321,6 @@ describe("basou board measure", () => {
 });
 
 describe("basou board measure: what the review found", () => {
-  const ESC = String.fromCharCode(27);
-
   it("looks for the workspace's own repo by its path, not at the first entry", async () => {
     const repo = await workspace([
       { path: "../other", visibility: "private" },
