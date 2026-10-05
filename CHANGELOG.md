@@ -18,17 +18,23 @@ All notable changes to **basou** are recorded here. The project follows
   workspace concerned and `refresh --watch` once, when it starts. `--json`
   output is unchanged.
 - **`docs/spec/compatibility.md` now has a list of experimental commands, and
-  states that `basou view`'s routes and pages are not an API.** A command on
-  the list is outside every guarantee of the document, including the `0.x`
-  freeze of the deprecation policy and the exit-code allocation; the
-  invariants still hold for it. A command can join only in the release that
-  introduces it, so no existing command can be moved off the guaranteed
-  surface this way, and leaving the list is a one-way promotion in a minor
-  release. An experimental command exits `1` on every failure it reports and
-  takes no exit-code value. `--help` marks these commands `[experimental]`,
-  but the table decides. The list is empty for now. `basou view`'s HTTP
-  routes and pages are a local UI; read the trail through `@basou/sdk` or a
-  command's `--json` output.
+  states that `basou view`'s routes and pages are not an API.** Each row names
+  a top-level command, which is experimental together with every subcommand
+  under it. Such a command is outside every guarantee of the document,
+  including the `0.x` freeze of the deprecation policy, except four things:
+  it exits `0` when it succeeds and `1` on every failure it reports, taking
+  no value from the CLI-wide exit-code allocation; the invariants hold for
+  it; it writes nothing under `.basou/`; and a guaranteed command keeps every
+  guarantee whatever an experimental command has written. A command can join
+  only in the release that introduces it, so no existing command can be moved
+  off the guaranteed surface this way. Leaving the list is a one-way
+  promotion in a minor release, which guarantees only the files and shapes
+  that release names; a command may instead be removed at any release.
+  `--help` marks these commands `[experimental]`, but the table decides. The
+  list is empty for now. `basou view`'s HTTP routes and pages are a local UI;
+  read the trail through `@basou/sdk` or the `--json` output of a command
+  that is not experimental. The README and the portfolio section of
+  `docs/spec/cli-commands.md` say the same.
 
 ## 0.64.0 — 2026-10-04
 

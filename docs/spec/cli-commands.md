@@ -262,11 +262,12 @@ workspaces:
   - path: /abs/path/to/project-b
 ```
 
-API. Portfolio mode adds `GET /api/portfolio` (the aggregate of per-workspace
+Routes. Portfolio mode adds `GET /api/portfolio` (the aggregate of per-workspace
 "current position" cards) and `/api/ws/<key>/*` (the existing single-workspace
 routes, scoped to one workspace by its stable key). The flat `/api/*` routes are
 unchanged and target the first workspace, so single mode behaves exactly as
-before.
+before. The routes and pages are a local UI, not an API (see
+[compatibility](compatibility.md#what-is-not-guaranteed)).
 
 Boundaries (intentional, kept neutral). Aggregation is **read-only**: a
 portfolio load runs no import (a stale capture is shown as stale; run a refresh

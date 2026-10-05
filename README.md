@@ -183,8 +183,9 @@ zero-network design.
 What that means for you today:
 
 - **The `basou` CLI surface is frozen for the `0.x` line** — commands and
-  flags are stable. Internal `@basou/core` APIs may still change between
-  minor releases.
+  flags are stable, except the experimental commands that
+  [docs/spec/compatibility.md](docs/spec/compatibility.md#what-is-not-guaranteed)
+  lists. Internal `@basou/core` APIs may still change between minor releases.
 - **The on-disk `.basou/` formats are versioned** and ship JSON Schemas;
   `1.0` is where the formats and semver guarantees are committed.
 - **Adopting is low-risk and reversible**: everything lives in a `.basou/`
