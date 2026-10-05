@@ -1827,12 +1827,19 @@ describe("measureBoard: the repos section", () => {
           include: ["src/**"],
           unit: "f",
         };
-        const m = await measure(declare([deep]), NOW, ["app"]);
-        expect(m.measures.deep?.value).toBeNull();
-        expect(m.not_found).toContainEqual({
-          at: "measures.deep",
-          reason: `git could not read all of the working tree ("could not open directory 'src/hidden/': Permission denied")`,
-        });
+        const dirs = {
+          id: "dirs",
+          kind: "dir_count",
+          repo: "app",
+          path: "src",
+          depth: 1,
+          unit: "d",
+        };
+        const m = await measure(declare([deep, dirs]), NOW, ["app"]);
+        expect(m.measures).toMatchObject({ deep: { value: null }, dirs: { value: null } });
+        const reason = `git could not read all of the working tree ("could not open directory 'src/hidden/': Permission denied")`;
+        expect(m.not_found).toContainEqual({ at: "measures.deep", reason });
+        expect(m.not_found).toContainEqual({ at: "measures.dirs", reason });
       } finally {
         await chmod(hidden, 0o755);
       }
