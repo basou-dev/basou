@@ -21,7 +21,10 @@ All notable changes to **basou** are recorded here. The project follows
   commit yet and a missing `origin/main` are nulls that mean so). It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
-  monitor, and runs no import. Include and exclude patterns are
+  monitor, and runs no import. Counting the uncommitted paths runs `git
+  status`, which runs the clean filters a repo configures and looks into
+  its submodules as any `git status` does (git-lfs may then store objects
+  under `.git/lfs`). Include and exclude patterns are
   matched as git matches a `:(glob)` pathspec. A value that cannot be
   measured (a missing repo, revision or file, a file or blob that cannot be
   read, a symlink out of the repository, an event line that cannot be read)

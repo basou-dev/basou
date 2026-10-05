@@ -45,7 +45,9 @@ export type BoardRepo = {
   files: number | null;
   /**
    * The paths `git status` names: each untracked file on its own (not its
-   * directory), and a rename as the two paths it touches.
+   * directory), and a rename as the two paths it touches. `git status` runs
+   * the clean filters the repository configures and looks into its
+   * submodules, as it does for anyone who runs it there.
    */
   uncommitted: number | null;
   /** The commits on `refs/remotes/origin/main` HEAD does not have, as of the last fetch. */
