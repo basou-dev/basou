@@ -1677,18 +1677,8 @@ describe("measureBoard: the repos section", () => {
       const origin = await repo("origin", { "f.txt": "1\n" });
       git(origin, "config", "uploadpack.allowFilter", "true");
       git(root, "clone", "-q", "--filter=blob:none", `file://${origin}`, "app");
-      const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-      const bin = join(root, "old-git");
-      await mkdir(bin);
-      // A git that says it is 2.43 and otherwise is the real one.
-      await writeFile(
-        join(bin, "git"),
-        `#!/bin/sh\nfor a in "$@"; do [ "$a" = version ] && { echo "git version 2.43.0"; exit 0; }; done\nexec '${real}' "$@"\n`,
-      );
-      await chmod(join(bin, "git"), 0o755);
-      const saved = process.env.PATH;
-      process.env.PATH = `${bin}:${saved ?? ""}`;
-      try {
+      const app = join(root, "app");
+      await withWrappedGit(OLD_GIT, async () => {
         const m = await measureRepos("app");
         expect(m.repos[0]).toMatchObject({ commits: 1, files: 1, uncommitted: null });
         expect(m.not_found).toEqual([
@@ -1698,9 +1688,19 @@ describe("measureBoard: the repos section", () => {
               "the repo is a partial clone, which this git (older than 2.44) may fetch objects for from its remote",
           },
         ]);
-      } finally {
-        process.env.PATH = saved;
-      }
+        // Whether an object origin/main names is there is not asked either.
+        git(
+          app,
+          "update-ref",
+          "refs/remotes/origin/main",
+          git(app, "rev-parse", "HEAD^{tree}").trim(),
+        );
+        const odd = await measureRepos("app");
+        expect(odd.not_found).toContainEqual({
+          at: "repos[app].behind_main",
+          reason: "refs/remotes/origin/main is not a commit, or is not in the repository",
+        });
+      });
     },
   );
 
@@ -1780,14 +1780,72 @@ describe("measureBoard: the repos section", () => {
         { "logs/x.log": "1\n" },
       );
       await chmod(join(dir, "logs", ".gitignore"), 0o000);
-      const m = await measureRepos("app");
-      expect(m.repos[0]?.files).toBeNull();
-      expect(m.not_found[0]).toEqual({
-        at: "repos[app].files",
-        reason: `git could not read all of the working tree ("unable to access 'logs/.gitignore': Permission denied")`,
-      });
+      try {
+        const m = await measure(
+          declare(
+            [
+              { id: "logs", kind: "file_count", repo: "app", include: ["logs/*"], unit: "f" },
+              { id: "txt", kind: "file_count", repo: "app", include: ["*.txt"], unit: "f" },
+            ],
+            {},
+            ["app"],
+          ),
+          NOW,
+          ["app"],
+        );
+        expect(m.repos[0]?.files).toBeNull();
+        // Only what may lie under logs/ is in doubt.
+        expect(m.measures).toMatchObject({ logs: { value: null }, txt: { value: 1 } });
+        const unread = `git could not read all of the working tree ("unable to access 'logs/.gitignore': Permission denied")`;
+        expect(m.not_found).toEqual([
+          { at: "repos[app].files", reason: unread },
+          {
+            at: "repos[app].uncommitted",
+            reason: `git could not compare all of the working tree ("unable to access 'logs/.gitignore': Permission denied")`,
+          },
+          { at: "measures.logs", reason: unread },
+        ]);
+      } finally {
+        await chmod(join(dir, "logs", ".gitignore"), 0o644);
+      }
     },
   );
+
+  it.skipIf(!POSIX || ROOT_USER)(
+    "does not count what a pattern may reach in a directory git could not open below it",
+    async () => {
+      const dir = await repo("app", { "src/a.ts": "1\n" });
+      const hidden = join(dir, "src", "hidden");
+      await mkdir(hidden);
+      await writeFile(join(hidden, "b.ts"), "1\n");
+      await chmod(hidden, 0o000);
+      try {
+        const deep = {
+          id: "deep",
+          kind: "file_count",
+          repo: "app",
+          include: ["src/**"],
+          unit: "f",
+        };
+        const m = await measure(declare([deep]), NOW, ["app"]);
+        expect(m.measures.deep?.value).toBeNull();
+        expect(m.not_found).toContainEqual({
+          at: "measures.deep",
+          reason: `git could not read all of the working tree ("could not open directory 'src/hidden/': Permission denied")`,
+        });
+      } finally {
+        await chmod(hidden, 0o755);
+      }
+    },
+  );
+
+  it("does not take a ref under origin/main for it", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    git(dir, "update-ref", "refs/remotes/origin/main/x", "HEAD");
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.not_found).toEqual([]);
+  });
 
   it("does not take a tag or a branch named like origin/main for it", async () => {
     const tagged = await repo("tagged", { "a.txt": "1\n" });

@@ -485,25 +485,26 @@ export function blockedAmong(scope: RepoScope, paths: readonly string[]): string
 }
 
 /**
- * Why a measure whose patterns start at the given fixed directories (byte
- * strings, "" for the root) cannot be trusted: one of them reaches into, or
- * under, a directory git could not list in full. undefined when none does.
+ * Why a measure cannot be trusted: `reach` says it may count what lies under
+ * one of the directories git could not list in full. undefined when it may
+ * not.
  */
-export function unreadReaching(scope: RepoScope, fixed: readonly string[]): string | undefined {
-  for (const [dir, reason] of scope.unread) {
-    if (fixed.some((f) => reaches(f, dir))) return reason;
-  }
+export function unreadReaching(
+  scope: RepoScope,
+  reach: (dir: string) => boolean,
+): string | undefined {
+  for (const [dir, reason] of scope.unread) if (reach(dir)) return reason;
   return undefined;
 }
 
-/** Whether what starts at `fixed` may lie in, or under, `dir` (both byte strings, "" for the root). */
-export function reaches(fixed: string, dir: string): boolean {
+/** Whether the path `path` is `dir`, is under it, or holds it (byte strings, "" for the root). */
+export function reaches(path: string, dir: string): boolean {
   return (
-    fixed === "" ||
+    path === "" ||
     dir === "" ||
-    fixed === dir ||
-    fixed.startsWith(`${dir}/`) ||
-    dir.startsWith(`${fixed}/`)
+    path === dir ||
+    path.startsWith(`${dir}/`) ||
+    dir.startsWith(`${path}/`)
   );
 }
 

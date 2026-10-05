@@ -11,7 +11,14 @@ import {
   type BoardDeclaration,
   type BoardMeasure,
 } from "./declaration.js";
-import { compileGlob, compileGlobs, literalLength, normalizePathspec, toBytes } from "./glob.js";
+import {
+  compileGlob,
+  compileGlobs,
+  literalLength,
+  mayMatchUnder,
+  normalizePathspec,
+  toBytes,
+} from "./glob.js";
 import { BOARD_REPOS_METHOD, type BoardRepo, measureRepos } from "./repos.js";
 import {
   blockedAmong,
@@ -310,7 +317,8 @@ async function measureOne(
     const entry = scope.entries.get(file);
     if (entry === undefined) {
       return fail(
-        unreadReaching(scope, [file]) ?? `'${measure.file}' is not a file ${where(scope)}`,
+        unreadReaching(scope, (dir) => reaches(file, dir)) ??
+          `'${measure.file}' is not a file ${where(scope)}`,
       );
     }
     const blocked = blockedAmong(scope, [file]);
@@ -355,10 +363,13 @@ async function measureOne(
   if (measure.kind === "dir_count") {
     const base = normalizePathspec(toBytes(measure.path)).replace(/\/$/, "");
     const under = (p: string) => base === "" || p.startsWith(`${base}/`);
-    const fixed = measure.include?.map((pattern) => fixedPart(pattern).fixed);
-    const unread = [...scope.unread].find(
-      ([dir]) => reaches(base, dir) && (fixed === undefined || fixed.some((f) => reaches(f, dir))),
-    )?.[1];
+    const include = measure.include;
+    const unread = unreadReaching(
+      scope,
+      (dir) =>
+        reaches(base, dir) &&
+        (include === undefined || include.some((pattern) => mayMatchUnder(pattern, dir))),
+    );
     const all = [...scope.entries.keys()].filter(under);
     if (all.length === 0)
       return fail(unread ?? `nothing is under '${measure.path}' ${where(scope)}`);
@@ -381,9 +392,9 @@ async function measureOne(
 
   // A directory git could not list in full may hold what the patterns match,
   // so nothing under it is known to be missing, and the count is not known.
-  const unread = unreadReaching(
-    scope,
-    measure.include.map((pattern) => fixedPart(pattern).fixed),
+  const include = measure.include;
+  const unread = unreadReaching(scope, (dir) =>
+    include.some((pattern) => mayMatchUnder(pattern, dir)),
   );
   const missing = unread === undefined ? missingInclude(scope, measure.include) : undefined;
   if (missing !== undefined) return fail(missing);

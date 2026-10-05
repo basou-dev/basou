@@ -248,7 +248,7 @@ export async function measureRepos(
       // then a directory git could not list in full.
       const blocked =
         blockedAmong(worktree.scope, [...worktree.scope.entries.keys()]) ??
-        unreadReaching(worktree.scope, [""]);
+        unreadReaching(worktree.scope, () => true);
       if (blocked !== undefined) fail("files", blocked);
       else repo.files = worktree.scope.entries.size;
     }
