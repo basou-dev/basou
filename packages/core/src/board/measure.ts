@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type ReplayWarning, readAllEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
@@ -10,8 +11,8 @@ import {
   type BoardDeclaration,
   type BoardMeasure,
 } from "./declaration.js";
-import { compileGlob, compileGlobs } from "./glob.js";
-import { openRepoScope, type RepoScope, type RepoScopeResult } from "./scope.js";
+import { compileGlob, compileGlobs, literalLength, normalizePathspec, toBytes } from "./glob.js";
+import { openRepoScope, type RepoScope, type RepoScopeResult, shownPath } from "./scope.js";
 
 /** One thing that could not be measured, and why. */
 export type BoardNotFound = { at: string; reason: string };
@@ -163,21 +164,27 @@ function where(scope: RepoScope): string {
   return scope.at === BOARD_DEFAULT_AT ? "in the working tree" : `at '${scope.at}'`;
 }
 
-// The directory a pattern's fixed part names, when it has a wildcard after
-// one; "" when it starts with a wildcard. A pattern with no wildcard is its
-// own fixed part.
+// The directory a pattern names before its first wildcard, with escapes
+// undone, and whether it has a wildcard or an escape at all (then git
+// matches it whole). Both are byte strings.
 function fixedPart(pattern: string): { wildcard: boolean; fixed: string } {
-  let p = pattern.replace(/\/{2,}/g, "/");
-  while (p.startsWith("./")) p = p.slice(2);
-  if (p.endsWith("/")) p = p.slice(0, -1);
+  const p = normalizePathspec(toBytes(pattern));
+  if (literalLength(p) === p.length) return { wildcard: false, fixed: p.replace(/\/$/, "") };
+  let literal = "";
   for (let i = 0; i < p.length; i++) {
-    if (p[i] === "\\") i++;
-    else if (p[i] === "*" || p[i] === "?" || p[i] === "[") {
-      const slash = p.lastIndexOf("/", i);
-      return { wildcard: true, fixed: slash === -1 ? "" : p.slice(0, slash) };
+    const ch = p[i] as string;
+    if (ch === "\\") {
+      literal += p[i + 1] ?? "";
+      i++;
+    } else if (ch === "*" || ch === "?" || ch === "[") {
+      const slash = literal.lastIndexOf("/");
+      return { wildcard: true, fixed: slash === -1 ? "" : literal.slice(0, slash) };
+    } else {
+      literal += ch;
     }
   }
-  return { wildcard: false, fixed: p === "." ? "" : p };
+  const slash = literal.lastIndexOf("/");
+  return { wildcard: true, fixed: slash === -1 ? "" : literal.slice(0, slash) };
 }
 
 // An include that cannot match because what it names is not there is not
@@ -188,22 +195,30 @@ function missingInclude(scope: RepoScope, include: readonly string[]): string | 
   for (const pattern of include) {
     const { wildcard, fixed } = fixedPart(pattern);
     if (!wildcard) {
-      const m = compileGlob(pattern);
-      if (fixed !== "" && !paths.some(m)) return `'${pattern}' matches no file ${where(scope)}`;
+      if (fixed !== "" && !paths.some(compileGlob(pattern))) {
+        return `'${pattern}' matches no file ${where(scope)}`;
+      }
     } else if (fixed !== "" && !paths.some((p) => p.startsWith(`${fixed}/`))) {
-      return `nothing is under '${fixed}' ${where(scope)}`;
+      return `nothing is under '${shownPath(fixed)}' ${where(scope)}`;
     }
   }
   return undefined;
 }
 
-function outsideAmong(scope: RepoScope, paths: readonly string[]): string | undefined {
-  const leaving = paths.find((p) => scope.entries.get(p)?.kind === "outside");
-  return leaving === undefined ? undefined : `'${leaving}' is a symlink to outside the repository`;
+// Why the matched paths cannot all be measured: one leaves the repository, or
+// cannot be read.
+function blockedAmong(scope: RepoScope, paths: readonly string[]): string | undefined {
+  for (const p of paths) {
+    const entry = scope.entries.get(p);
+    if (entry?.kind === "outside")
+      return `'${shownPath(p)}' is a symlink to outside the repository`;
+    if (entry?.kind === "unreadable") return `'${shownPath(p)}' ${entry.reason}`;
+  }
+  return undefined;
 }
 
 function linesOf(content: Buffer): string[] {
-  const text = content.toString("utf8");
+  const text = content.toString("utf8").replace(/^\uFEFF/, "");
   if (text.length === 0) return [];
   const lines = text.split("\n");
   if (lines[lines.length - 1] === "") lines.pop();
@@ -262,8 +277,9 @@ async function measureOne(
           : trail.tasks.filter((status) => status === measure.status);
       return { value: tasks.length };
     }
-    if (trail.events === undefined)
+    if (trail.events === undefined) {
       return fail(trail.eventsProblem ?? "the trail could not be read");
+    }
     return { value: trail.events[measure.of] };
   }
 
@@ -275,12 +291,16 @@ async function measureOne(
   const scope = opened.scope;
 
   if (measure.kind === "regex_capture" || measure.kind === "json_length") {
-    const entry = scope.entries.get(measure.file);
+    const file = normalizePathspec(toBytes(measure.file));
+    const entry = scope.entries.get(file);
     if (entry === undefined) return fail(`'${measure.file}' is not a file ${where(scope)}`);
-    if (entry.kind === "outside")
-      return fail(`'${measure.file}' is a symlink to outside the repository`);
-    const content = (await scope.read([measure.file])).get(measure.file);
-    if (content === undefined) return fail(`'${measure.file}' could not be read ${where(scope)}`);
+    const blocked = blockedAmong(scope, [file]);
+    if (blocked !== undefined) return fail(blocked);
+    const read = await scope.read([file]);
+    const content = read.contents.get(file);
+    if (content === undefined) {
+      return fail(`'${measure.file}' ${read.unreadable.get(file) ?? "could not be read"}`);
+    }
     if (measure.kind === "json_length") {
       let document: unknown;
       try {
@@ -290,8 +310,9 @@ async function measureOne(
       }
       const target = pointAt(document, measure.pointer);
       if (Array.isArray(target)) return { value: target.length };
-      if (target !== null && typeof target === "object")
+      if (target !== null && typeof target === "object") {
         return { value: Object.keys(target).length };
+      }
       return fail(
         target === undefined
           ? `'${measure.pointer}' points at nothing in '${measure.file}'`
@@ -313,7 +334,7 @@ async function measureOne(
   }
 
   if (measure.kind === "dir_count") {
-    const base = fixedPart(measure.path).fixed;
+    const base = normalizePathspec(toBytes(measure.path)).replace(/\/$/, "");
     const under = (p: string) => base === "" || p.startsWith(`${base}/`);
     const all = [...scope.entries.keys()].filter(under);
     if (all.length === 0) return fail(`nothing is under '${measure.path}' ${where(scope)}`);
@@ -321,8 +342,8 @@ async function measureOne(
       measure.include === undefined ? undefined : missingInclude(scope, measure.include);
     if (missing !== undefined) return fail(missing);
     const matched = all.filter(compileGlobs(measure.include, measure.exclude));
-    const leaving = outsideAmong(scope, matched);
-    if (leaving !== undefined) return fail(leaving);
+    const blocked = blockedAmong(scope, matched);
+    if (blocked !== undefined) return fail(blocked);
     const dirs = new Set<string>();
     for (const p of matched) {
       const segments = (base === "" ? p : p.slice(base.length + 1)).split("/");
@@ -334,24 +355,26 @@ async function measureOne(
   const missing = missingInclude(scope, measure.include);
   if (missing !== undefined) return fail(missing);
   const matched = [...scope.entries.keys()].filter(compileGlobs(measure.include, measure.exclude));
-  const leaving = outsideAmong(scope, matched);
-  if (leaving !== undefined) return fail(leaving);
+  const blocked = blockedAmong(scope, matched);
+  if (blocked !== undefined) return fail(blocked);
   if (measure.kind === "file_count") return { value: matched.length };
 
-  const contents = await scope.read(matched);
+  const read = await scope.read(matched);
+  const [unreadable] = read.unreadable;
+  if (unreadable !== undefined) return fail(`'${shownPath(unreadable[0])}' ${unreadable[1]}`);
   if (measure.kind === "line_count") {
     let total = 0;
-    for (const content of contents.values()) total += linesOf(content).length;
+    for (const content of read.contents.values()) total += linesOf(content).length;
     return { value: total };
   }
 
   const pattern = new RegExp(measure.pattern, BOARD_REGEX_FLAGS);
   let total = 0;
-  for (const [path, content] of contents) {
+  for (const [path, content] of read.contents) {
     const lines = sectionOf(linesOf(content), measure.section);
     if (lines === undefined) {
       if (measure.section?.on_missing === null) {
-        return fail(`no line of '${path}' matches the section start`);
+        return fail(`no line of '${shownPath(path)}' matches the section start`);
       }
       continue; // on_missing: zero
     }
@@ -368,16 +391,47 @@ type Trail = {
   tasksProblem?: string;
 };
 
-// The workspace's own trail: its decisions, open tracks and tasks.
+// Event lines that were not read as events. A torn last line is a write in
+// progress, not a recorded event, and a retired zero-duration line is not a
+// decision; anything else may have been one.
+const LOST_LINES = new Set<ReplayWarning["kind"]>(["malformed_json", "schema_violation"]);
+
+// Whether line `lineNo` of an events log is its last line with no newline
+// after it: a write that has not finished, which replay reports as malformed
+// when it is cut in the middle of the JSON.
+async function isTornTail(eventsLog: string, lineNo: number): Promise<boolean> {
+  let body: Buffer;
+  try {
+    body = await readFile(eventsLog);
+  } catch {
+    return false;
+  }
+  if (body.length === 0 || body[body.length - 1] === 0x0a) return false;
+  let newlines = 0;
+  for (const byte of body) if (byte === 0x0a) newlines++;
+  return lineNo === newlines + 1;
+}
+
+// The workspace's own trail: its decisions, open tracks and tasks. Read only:
+// the task index is not rebuilt.
 async function readTrail(input: MeasureBoardInput): Promise<Trail> {
   const trail: Trail = {};
   try {
     const recorded: { id: string; track: boolean }[] = [];
     const voided = new Set<string>();
+    let lost = 0;
     for (const sessionId of await enumerateSessionDirs(input.paths)) {
-      const events = await readAllEvents(join(input.paths.sessions, sessionId), {
-        onWarning: (warning) => input.onReplayWarning?.(warning, sessionId),
+      const sessionDir = join(input.paths.sessions, sessionId);
+      const lostLines: number[] = [];
+      const events = await readAllEvents(sessionDir, {
+        onWarning: (warning) => {
+          if (LOST_LINES.has(warning.kind)) lostLines.push(warning.line);
+          input.onReplayWarning?.(warning, sessionId);
+        },
       });
+      for (const lineNo of lostLines) {
+        if (!(await isTornTail(join(sessionDir, "events.jsonl"), lineNo))) lost++;
+      }
       for (const event of events) {
         if (event.type === "decision_recorded") {
           recorded.push({ id: event.decision_id, track: event.kind === "track" });
@@ -386,25 +440,32 @@ async function readTrail(input: MeasureBoardInput): Promise<Trail> {
         }
       }
     }
-    trail.events = {
-      decisions_all: recorded.length,
-      decisions_live: recorded.filter((d) => !voided.has(d.id)).length,
-      tracks_open: recorded.filter((d) => d.track && !voided.has(d.id)).length,
-    };
+    if (lost > 0) {
+      trail.eventsProblem = `${lost} event line${lost === 1 ? "" : "s"} could not be read, so decisions may be missing`;
+    } else {
+      trail.events = {
+        decisions_all: recorded.length,
+        decisions_live: recorded.filter((d) => !voided.has(d.id)).length,
+        tracks_open: recorded.filter((d) => d.track && !voided.has(d.id)).length,
+      };
+    }
   } catch {
     trail.eventsProblem = "the sessions of the workspace could not be read";
   }
   try {
     let skipped = 0;
     const tasks = await loadTaskEntries(input.paths, {
+      rebuildIndex: false,
       onSkip: (taskId, reason) => {
         skipped++;
         input.onTaskSkip?.(taskId, reason);
       },
     });
-    if (skipped > 0)
+    if (skipped > 0) {
       trail.tasksProblem = `${skipped} task${skipped === 1 ? "" : "s"} could not be read`;
-    else trail.tasks = tasks.map((doc) => doc.task.task.status);
+    } else {
+      trail.tasks = tasks.map((doc) => doc.task.task.status);
+    }
   } catch {
     trail.tasksProblem = "the tasks of the workspace could not be read";
   }

@@ -1,36 +1,70 @@
 /**
- * Glob matching for the `include` and `exclude` of a board measure, in the
- * dialect of git's `:(glob)` pathspec magic:
+ * Glob matching for the `include` and `exclude` of a board measure, ported
+ * from git's own matching of a `:(glob)` pathspec (`match_pathspec_item`,
+ * `git_fnmatch` and `wildmatch` with `WM_PATHNAME`), so a pattern means what
+ * it means to git:
  *
- * - `*` matches any run of characters except `/`, and `?` one character
- *   except `/`; `[...]` is a character class (`[!...]` or `[^...]` negated)
- *   that never matches `/`.
- * - `**` matches across directories when it is a whole path segment: a
- *   leading `**\/` matches in every directory, a trailing `/**` everything
- *   inside, and `/**\/` zero or more directories. Elsewhere it is `*`.
- * - `\` escapes the next character.
- * - A pattern with no wildcard also matches every path under the directory it
- *   names (`docs` matches `docs/a.md`); a pattern with one must match the whole
- *   path (`docs/*` is only the files directly in `docs`).
+ * - A pattern first matches literally, as a path or as a directory a path is
+ *   under (`docs` and `docs/` match `docs/a.md`; `app/[slug]/page.tsx`
+ *   matches that file whatever `[slug]` means as a class).
+ * - Then, when it has a wildcard (`*`, `?`, `[` or `\`), the whole path must
+ *   match it: `*` and `?` never match `/`, `**` matches across directories
+ *   where it stands for whole segments, `[...]` is a byte class (`!` or `^`
+ *   negates; `[:alpha:]` and the other POSIX classes are ASCII), and `\`
+ *   escapes the next character.
+ * - Matching is by byte, as git's is: paths and patterns are compared as
+ *   their UTF-8 bytes, so `?` is one byte and a path that is not valid UTF-8
+ *   still matches as written.
  *
- * The measures match the file list themselves rather than handing the
- * patterns to git: `git ls-tree` refuses the magic, and `git ls-files` drops
- * an exclude that starts with `**\/` once an include has a directory in it.
+ * The measures match the file list themselves rather than handing patterns
+ * to git: `git ls-tree` refuses the magic, and `git ls-files` drops an
+ * exclude that starts with `**\/` once an include names a directory.
  */
 export type GlobMatcher = (path: string) => boolean;
 
-export function compileGlob(pattern: string): GlobMatcher {
-  const under = hasWildcard(normalizePattern(pattern)) ? "" : "(?:/.*)?";
-  const re = new RegExp(`^${globSource(pattern)}${under}$`, "su");
-  return (path) => re.test(path);
+/** A string with one character per byte of the UTF-8 encoding of `s`. */
+export function toBytes(s: string): string {
+  return Buffer.from(s, "utf8").toString("latin1");
 }
 
-function hasWildcard(p: string): boolean {
-  for (let i = 0; i < p.length; i++) {
-    if (p[i] === "\\") i++;
-    else if (p[i] === "*" || p[i] === "?" || p[i] === "[") return true;
-  }
-  return false;
+/** The text a byte string spells, with invalid UTF-8 shown as U+FFFD. */
+export function fromBytes(bytes: string): string {
+  return Buffer.from(bytes, "latin1").toString("utf8");
+}
+
+/**
+ * A path or pattern with `.` segments and repeated slashes removed, as git
+ * normalizes a pathspec; a trailing slash is kept.
+ */
+export function normalizePathspec(pattern: string): string {
+  const trailing = pattern.endsWith("/");
+  const kept = pattern.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (kept.length === 0) return "";
+  return trailing ? `${kept.join("/")}/` : kept.join("/");
+}
+
+const SPECIAL = new Set([0x2a, 0x3f, 0x5b, 0x5c]); // * ? [ \
+
+/** The length of the part of a pattern before its first wildcard or backslash. */
+export function literalLength(p: string): number {
+  for (let i = 0; i < p.length; i++) if (SPECIAL.has(p.charCodeAt(i))) return i;
+  return p.length;
+}
+
+/** Compile a pattern, as a declaration writes it, into a matcher of byte-string paths. */
+export function compileGlob(pattern: string): GlobMatcher {
+  const p = normalizePathspec(toBytes(pattern));
+  const prefix = literalLength(p);
+  return (name) => {
+    if (p === "") return true;
+    if (name === p) return true;
+    if (p.length < name.length && name.startsWith(p)) {
+      if (p.endsWith("/") || name[p.length] === "/") return true;
+    }
+    if (prefix === p.length) return false;
+    if (name.slice(0, prefix) !== p.slice(0, prefix)) return false;
+    return wildmatch(p.slice(prefix), name.slice(prefix)) === MATCH;
+  };
 }
 
 /** A matcher for a list of include patterns minus a list of exclude patterns. */
@@ -44,105 +78,162 @@ export function compileGlobs(
     (include === undefined || includes.some((m) => m(path))) && !excludes.some((m) => m(path));
 }
 
-// A leading "./" and repeated slashes say nothing a path in the list does not.
-function normalizePattern(pattern: string): string {
-  let p = pattern.replace(/\/{2,}/g, "/");
-  while (p.startsWith("./")) p = p.slice(2);
-  if (p === ".") return "";
-  return p.endsWith("/") ? p.slice(0, -1) : p;
+const MATCH = 0;
+const NOMATCH = 1;
+const ABORT_ALL = -1;
+const ABORT_TO_STARSTAR = -2;
+
+const isUpper = (c: number) => c >= 0x41 && c <= 0x5a;
+const isLower = (c: number) => c >= 0x61 && c <= 0x7a;
+const isDigit = (c: number) => c >= 0x30 && c <= 0x39;
+const isAlpha = (c: number) => isUpper(c) || isLower(c);
+const isAlnum = (c: number) => isAlpha(c) || isDigit(c);
+const isGraph = (c: number) => c >= 0x21 && c <= 0x7e;
+
+const POSIX_CLASSES: Record<string, (c: number) => boolean> = {
+  alnum: isAlnum,
+  alpha: isAlpha,
+  blank: (c) => c === 0x20 || c === 0x09,
+  cntrl: (c) => c < 0x20 || c === 0x7f,
+  digit: isDigit,
+  graph: isGraph,
+  lower: isLower,
+  print: (c) => c >= 0x20 && c <= 0x7e,
+  punct: (c) => isGraph(c) && !isAlnum(c),
+  space: (c) => c === 0x20 || (c >= 0x09 && c <= 0x0d),
+  upper: isUpper,
+  xdigit: (c) => isDigit(c) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66),
+};
+
+/** git's `wildmatch` with `WM_PATHNAME`, over byte strings: 0 when `text` matches. */
+export function wildmatch(pattern: string, text: string): number {
+  return dowild(pattern, 0, text, 0);
 }
 
-// Under the u flag only syntax characters may be escaped; `\-` is an error.
-function escapeRegex(ch: string): string {
-  return /[\\^$.*+?()[\]{}|/]/.test(ch) ? `\\${ch}` : ch;
-}
+const SLASH = 0x2f;
 
-function globSource(pattern: string): string {
-  const p = normalizePattern(pattern);
-  if (p === "") return ".*";
-  let out = "";
-  let i = 0;
-  while (i < p.length) {
-    const ch = p[i] as string;
-    if (ch === "\\" && i + 1 < p.length) {
-      out += escapeRegex(p[i + 1] as string);
-      i += 2;
+// A port of git's dowild(). Indexes stand for the C pointers, and reading
+// past the end gives 0, as the terminating NUL does.
+function dowild(pat: string, pStart: number, text: string, tStart: number): number {
+  const at = (s: string, i: number): number => (i < s.length ? s.charCodeAt(i) : 0);
+  let p = pStart;
+  let t = tStart;
+  for (; at(pat, p) !== 0; t++, p++) {
+    let pCh = at(pat, p);
+    let tCh = at(text, t);
+    if (tCh === 0 && pCh !== 0x2a) return ABORT_ALL;
+    if (pCh === 0x5c) {
+      // '\': the next character, literally.
+      pCh = at(pat, ++p);
+      if (tCh !== pCh) return NOMATCH;
       continue;
     }
-    if (ch === "*") {
-      let j = i;
-      while (p[j] === "*") j++;
-      const run = j - i;
-      const atStart = i === 0 || p[i - 1] === "/";
-      const atEnd = j === p.length || p[j] === "/";
-      if (run >= 2 && atStart && atEnd) {
-        if (j === p.length) {
-          // "a/**" is everything inside a; a bare "**" is everything.
-          out += i === 0 ? ".*" : ".+";
-          i = j;
-        } else {
-          // "**/" matches zero or more whole directories.
-          out += "(?:[^/]*/)*";
-          i = j + 1;
+    if (pCh === 0x3f) {
+      // '?': anything but '/'.
+      if (tCh === SLASH) return NOMATCH;
+      continue;
+    }
+    if (pCh === 0x2a) {
+      // '*' and '**'.
+      let matchSlash = false;
+      if (at(pat, ++p) === 0x2a) {
+        const prev = p - 2;
+        while (at(pat, ++p) === 0x2a) {}
+        const next = at(pat, p);
+        if (
+          (prev < pStart || at(pat, prev) === SLASH) &&
+          (next === 0 || next === SLASH || (next === 0x5c && at(pat, p + 1) === SLASH))
+        ) {
+          if (next === SLASH && dowild(pat, p + 1, text, t) === MATCH) return MATCH;
+          matchSlash = true;
         }
+      }
+      if (at(pat, p) === 0) {
+        if (!matchSlash && text.indexOf("/", t) !== -1) return NOMATCH;
+        return MATCH;
+      }
+      if (!matchSlash && at(pat, p) === SLASH) {
+        const slash = text.indexOf("/", t);
+        if (slash === -1) return NOMATCH;
+        t = slash; // the slash is consumed by the loop
         continue;
       }
-      out += "[^/]*";
-      i = j;
-      continue;
-    }
-    if (ch === "?") {
-      out += "[^/]";
-      i++;
-      continue;
-    }
-    if (ch === "[") {
-      const close = classEnd(p, i);
-      if (close !== -1) {
-        out += classSource(p.slice(i + 1, close));
-        i = close + 1;
-        continue;
+      for (;;) {
+        if (tCh === 0) break;
+        const literal = at(pat, p);
+        if (!SPECIAL.has(literal)) {
+          for (;;) {
+            tCh = at(text, t);
+            if (tCh === 0 || (!matchSlash && tCh === SLASH) || tCh === literal) break;
+            t++;
+          }
+          if (tCh !== literal) return matchSlash ? ABORT_ALL : ABORT_TO_STARSTAR;
+        }
+        const matched = dowild(pat, p, text, t);
+        if (matched !== NOMATCH) {
+          if (!matchSlash || matched !== ABORT_TO_STARSTAR) return matched;
+        } else if (!matchSlash && tCh === SLASH) {
+          return ABORT_TO_STARSTAR;
+        }
+        tCh = at(text, ++t);
       }
+      return ABORT_ALL;
     }
-    out += escapeRegex(ch);
-    i++;
-  }
-  return out;
-}
-
-// The index of the ']' that closes the class opened at `open`, or -1.
-function classEnd(p: string, open: number): number {
-  let i = open + 1;
-  if (p[i] === "!" || p[i] === "^") i++;
-  if (p[i] === "]") i++;
-  while (i < p.length) {
-    if (p[i] === "\\") i += 2;
-    else if (p[i] === "]") return i;
-    else i++;
-  }
-  return -1;
-}
-
-function classSource(body: string): string {
-  let negate = false;
-  let b = body;
-  if (b.startsWith("!") || b.startsWith("^")) {
-    negate = true;
-    b = b.slice(1);
-  }
-  let out = "";
-  for (let i = 0; i < b.length; i++) {
-    const ch = b[i] as string;
-    if (ch === "\\" && i + 1 < b.length) {
-      const next = b[i + 1] as string;
-      out += /[\\\]^[-]/.test(next) ? `\\${next}` : next;
-      i++;
-    } else if (ch === "-" && i > 0 && i < b.length - 1) {
-      out += "-";
-    } else {
-      out += /[\\\]^[-]/.test(ch) ? `\\${ch}` : ch;
+    if (pCh === 0x5b) {
+      // '[...]'
+      pCh = at(pat, ++p);
+      if (pCh === 0x5e) pCh = 0x21; // '^' negates as '!' does
+      const negated = pCh === 0x21;
+      if (negated) pCh = at(pat, ++p);
+      let prevCh = 0;
+      let matched = false;
+      for (;;) {
+        if (pCh === 0) return ABORT_ALL;
+        if (pCh === 0x5c) {
+          pCh = at(pat, ++p);
+          if (pCh === 0) return ABORT_ALL;
+          if (tCh === pCh) matched = true;
+        } else if (
+          pCh === 0x2d &&
+          prevCh !== 0 &&
+          at(pat, p + 1) !== 0 &&
+          at(pat, p + 1) !== 0x5d
+        ) {
+          pCh = at(pat, ++p);
+          if (pCh === 0x5c) {
+            pCh = at(pat, ++p);
+            if (pCh === 0) return ABORT_ALL;
+          }
+          if (tCh <= pCh && tCh >= prevCh) matched = true;
+          pCh = 0; // so that prevCh becomes 0
+        } else if (pCh === 0x5b && at(pat, p + 1) === 0x3a) {
+          const s = p + 2;
+          p = s;
+          while (at(pat, p) !== 0 && at(pat, p) !== 0x5d) p++;
+          if (at(pat, p) === 0) return ABORT_ALL;
+          const len = p - s - 1;
+          if (len < 0 || at(pat, p - 1) !== 0x3a) {
+            // No ":]": a plain '[' in the set.
+            p = s - 2;
+            pCh = 0x5b;
+            if (tCh === pCh) matched = true;
+          } else {
+            const test = POSIX_CLASSES[pat.slice(s, s + len)];
+            if (test === undefined) return ABORT_ALL;
+            if (test(tCh)) matched = true;
+            pCh = 0; // so that prevCh becomes 0
+          }
+        } else if (tCh === pCh) {
+          matched = true;
+        }
+        prevCh = pCh;
+        pCh = at(pat, ++p);
+        if (pCh === 0x5d) break;
+      }
+      if (matched === negated || tCh === SLASH) return NOMATCH;
+      continue;
     }
+    if (tCh !== pCh) return NOMATCH;
   }
-  // A class never matches '/', negated or not.
-  return negate ? `[^/${out}]` : `(?:(?!/)[${out}])`;
+  return t < text.length ? NOMATCH : MATCH;
 }

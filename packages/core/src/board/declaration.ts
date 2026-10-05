@@ -82,23 +82,22 @@ const timeZoneText = z.string().refine(isTimeZone, {
 // A path or glob inside a repository. It may not leave the repository, so an
 // absolute path and a `..` segment are refused; a leading ':' would be read
 // as git pathspec magic, which the measures do not take from the declaration.
-const repoPath = z.string().superRefine((s, ctx) => {
-  if (s.length === 0) {
-    ctx.addIssue({ code: "custom", message: "must be a non-empty path" });
-  } else if (hasControlCharacter(s)) {
-    ctx.addIssue({ code: "custom", message: "must not contain control characters" });
-  } else if (s.startsWith("/") || s.startsWith("\\")) {
-    ctx.addIssue({ code: "custom", message: "must be relative to the repository" });
-  } else if (/^[A-Za-z]:/.test(s)) {
-    ctx.addIssue({
-      code: "custom",
-      message: "must be relative to the repository (a leading 'x:' reads as a Windows drive)",
-    });
-  } else if (s.split(/[/\\]/).includes("..")) {
-    ctx.addIssue({ code: "custom", message: "must not contain a '..' segment" });
-  } else if (s.startsWith(":")) {
-    ctx.addIssue({ code: "custom", message: "must not start with ':' (pathspec magic)" });
+// Why a path or glob would leave the repository, or undefined.
+function repoPathProblem(s: string): string | undefined {
+  if (s.length === 0) return "must be a non-empty path";
+  if (hasControlCharacter(s)) return "must not contain control characters";
+  if (s.startsWith("/") || s.startsWith("\\")) return "must be relative to the repository";
+  if (/^[A-Za-z]:/.test(s)) {
+    return "must be relative to the repository (a leading 'x:' reads as a Windows drive)";
   }
+  if (s.split(/[/\\]/).includes("..")) return "must not contain a '..' segment";
+  if (s.startsWith(":")) return "must not start with ':' (pathspec magic)";
+  return undefined;
+}
+
+const repoPath = z.string().superRefine((s, ctx) => {
+  const problem = repoPathProblem(s);
+  if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
 });
 
 const regexText = z.string().superRefine((s, ctx) => {
@@ -165,11 +164,20 @@ const fileCountSchema = z.strictObject({
   exclude: globs.optional(),
 });
 
+// A dir_count's directory is a path, not a pattern: a wildcard would name
+// several directories, and the count would silently use only its fixed part.
+const directoryPath = z.string().superRefine((s, ctx) => {
+  const problem =
+    repoPathProblem(s) ??
+    (/[*?[\\]/.test(s) ? "must be a directory path, without '*', '?', '[' or '\\'" : undefined);
+  if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
+});
+
 const dirCountSchema = z.strictObject({
   kind: z.literal("dir_count"),
   ...measureCommon,
   ...fileScope,
-  path: repoPath,
+  path: directoryPath,
   depth: z.number().int().min(1),
   include: globs.optional(),
   exclude: globs.optional(),

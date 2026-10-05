@@ -287,7 +287,10 @@ const TASK_FILENAME_RE = /^(.+)\.md$/;
  * {@link assertTaskStoreSafe} errors before the index or the directory is
  * read: the index is no answer then, since it lives in the same directory.
  */
-export async function enumerateTaskIds(paths: BasouPaths): Promise<string[]> {
+export async function enumerateTaskIds(
+  paths: BasouPaths,
+  options: { rebuildIndex?: boolean } = {},
+): Promise<string[]> {
   await assertTaskStoreSafe(paths);
 
   // The index is a cache of what the directory holds, so it is reconciled
@@ -336,6 +339,8 @@ export async function enumerateTaskIds(paths: BasouPaths): Promise<string[]> {
   if (onDisk.length === 0) {
     return onDisk;
   }
+  // A caller that promises to write nothing gets the scan without the rebuild.
+  if (options.rebuildIndex === false) return onDisk;
 
   // Lazy rebuild: scan each task.md and write the resulting index. Every id
   // found on disk is returned either way, so `loadTaskEntries` can surface its
@@ -554,6 +559,11 @@ export type TaskSkipReason = "task_file_invalid" | "task_file_unreadable";
 
 export type LoadTaskEntriesOptions = {
   onSkip?: (taskId: string, reason: TaskSkipReason) => void;
+  /**
+   * When false, the task index is never rebuilt, so loading writes nothing
+   * (`basou board measure` promises that). Defaults to true.
+   */
+  rebuildIndex?: boolean;
 };
 
 /**
@@ -567,7 +577,10 @@ export async function loadTaskEntries(
   paths: BasouPaths,
   options: LoadTaskEntriesOptions = {},
 ): Promise<TaskDocument[]> {
-  const ids = await enumerateTaskIds(paths);
+  const ids = await enumerateTaskIds(
+    paths,
+    options.rebuildIndex === false ? { rebuildIndex: false } : {},
+  );
   const entries: TaskDocument[] = [];
   for (const id of ids) {
     let doc: TaskDocument;

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -855,5 +855,380 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
     const b = { a: { c: null, d: [1, { x: 1, y: 2 }] }, b: 1 };
     expect(boardDigest(a)).toBe(boardDigest(b));
     expect(boardDigest({ ...a, measured_at: "x", digest: "y" })).toBe(boardDigest(a));
+  });
+});
+
+describe("measureBoard: what the review found", () => {
+  const POSIX = process.platform !== "win32";
+  const ROOT_USER = typeof process.getuid === "function" && process.getuid() === 0;
+
+  it("writes nothing under .basou/ when it counts tasks", async () => {
+    await placeTask(TASK("T01"), "done");
+    const index = join(paths.tasks, "index.json");
+    const m = await measure(
+      declare([{ id: "tasks", kind: "trail_count", of: "tasks", unit: "tasks" }]),
+    );
+    expect(m.measures.tasks?.value).toBe(1);
+    await expect(stat(index)).rejects.toThrow();
+  });
+
+  it("does not fetch from the remote of a partial clone, and reports what it lacks", async () => {
+    const origin = await repo("origin", { "src/f.txt": "1\n2\n" });
+    git(origin, "config", "uploadpack.allowFilter", "true");
+    await writeFile(join(origin, "src/f.txt"), "1\n2\n3\n");
+    git(origin, "commit", "-q", "-am", "three lines");
+    git(root, "clone", "-q", "--filter=blob:none", `file://${origin}`, "app");
+    const app = join(root, "app");
+    const old = git(app, "rev-parse", "main~1:src/f.txt").trim();
+    const has = (oid: string) => {
+      try {
+        execFileSync("git", ["cat-file", "-e", oid], {
+          cwd: app,
+          env: { ...GIT_ENV, GIT_NO_LAZY_FETCH: "1" },
+          stdio: "ignore",
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(has(old)).toBe(false);
+    const m = await measure(
+      declare([
+        {
+          id: "old",
+          kind: "line_count",
+          repo: "app",
+          include: ["src/f.txt"],
+          at: "main~1",
+          unit: "lines",
+        },
+      ]),
+    );
+    expect(has(old)).toBe(false);
+    expect(m.measures.old?.value).toBeNull();
+    expect(m.not_found[0]?.reason).toMatch(
+      /^('src\/f\.txt' could not be read at 'main~1'|the repo 'app' \(at 'main~1'\) is a partial clone)/,
+    );
+  });
+
+  it("reports a blob it cannot read at a revision instead of leaving it out", async () => {
+    const dir = await repo("app", { "one.txt": "1\n2\n3\n", "two.txt": "1\n" });
+    const oid = git(dir, "rev-parse", "main:one.txt").trim();
+    await unlink(join(dir, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
+    const m = await measure(
+      declare([
+        {
+          id: "lines",
+          kind: "line_count",
+          repo: "app",
+          include: ["*.txt"],
+          at: "main",
+          unit: "lines",
+        },
+      ]),
+    );
+    expect(m.not_found).toEqual([
+      { at: "measures.lines", reason: "'one.txt' could not be read at 'main'" },
+    ]);
+  });
+
+  it.skipIf(!POSIX || ROOT_USER)("reports a file, directory or repo it cannot read", async () => {
+    const dir = await repo("app", { "src/a.ts": "1\n", "locked/b.ts": "1\n" });
+    await mkdir(join(root, "sealed"));
+    git(join(root, "sealed"), "init", "-q");
+    await chmod(join(dir, "src/a.ts"), 0o000);
+    await chmod(join(dir, "locked"), 0o000);
+    await chmod(join(root, "sealed"), 0o000);
+    try {
+      const m = await measure(
+        declare(
+          [
+            { id: "lines", kind: "line_count", repo: "app", include: ["src/*.ts"], unit: "lines" },
+            {
+              id: "files",
+              kind: "file_count",
+              repo: "app",
+              include: ["locked/*.ts"],
+              unit: "files",
+            },
+            { id: "sealed", kind: "file_count", repo: "sealed", include: ["*"], unit: "files" },
+            { id: "fine", kind: "trail_count", of: "decisions_all", unit: "decisions" },
+          ],
+          {},
+          ["app", "sealed"],
+        ),
+      );
+      expect(m.measures.fine?.value).toBe(0);
+      expect(m.not_found.map((n) => n.at)).toEqual([
+        "measures.lines",
+        "measures.files",
+        "measures.sealed",
+      ]);
+      expect(m.not_found[0]?.reason).toBe("'src/a.ts' could not be read (EACCES)");
+      expect(m.not_found[1]?.reason).toBe("'locked/b.ts' could not be read (EACCES)");
+      expect(m.not_found[2]?.reason).toMatch(/^the repo 'sealed' /);
+    } finally {
+      await chmod(join(dir, "src/a.ts"), 0o644);
+      await chmod(join(dir, "locked"), 0o755);
+      await chmod(join(root, "sealed"), 0o755);
+    }
+  });
+
+  it("matches an escaped include, normalizes a file path, and keeps '/' as a boundary", async () => {
+    await repo("app", {
+      "app/[slug]/page.tsx": "x\n",
+      "docs/x.md": "a\nb\n",
+      "library/a.ts": "x\n",
+    });
+    const m = await measure(
+      declare([
+        {
+          id: "escaped",
+          kind: "file_count",
+          repo: "app",
+          include: ["app/\\[slug\\]/*.tsx"],
+          unit: "files",
+        },
+        {
+          id: "literal",
+          kind: "file_count",
+          repo: "app",
+          include: ["app/[slug]/page.tsx"],
+          unit: "files",
+        },
+        {
+          id: "dotted",
+          kind: "regex_capture",
+          repo: "app",
+          file: "./docs/x.md",
+          pattern: "^(b)",
+          unit: "x",
+        },
+        {
+          id: "doubled",
+          kind: "json_length",
+          repo: "app",
+          file: "docs//x.md",
+          pointer: "",
+          unit: "x",
+        },
+        { id: "lib", kind: "file_count", repo: "app", include: ["lib/*.ts"], unit: "files" },
+      ]),
+    );
+    expect(m.measures).toMatchObject({
+      escaped: { value: 1 },
+      literal: { value: 1 },
+      dotted: { value: "b" },
+      lib: { value: null },
+    });
+    expect(m.not_found).toEqual([
+      { at: "measures.doubled", reason: "'docs//x.md' is not valid JSON in the working tree" },
+      { at: "measures.lib", reason: "nothing is under 'lib' in the working tree" },
+    ]);
+  });
+
+  it.skipIf(!POSIX)(
+    "follows a link through a directory link at a revision, to inside or outside",
+    async () => {
+      const dir = await repo("app", { "real/f.txt": "1\n2\n3\n" });
+      await mkdir(join(dir, "links"));
+      await mkdir(join(root, "outdir"));
+      await writeFile(join(root, "outdir", "o.txt"), "o\n");
+      await symlink("../real", join(dir, "links/alias"));
+      await symlink("alias/f.txt", join(dir, "links/via_alias.txt"));
+      await symlink("../../outdir", join(dir, "links/outalias"));
+      await symlink("outalias/o.txt", join(dir, "links/via_out.txt"));
+      await symlink("..", join(dir, "links/root")); // the repository root: a directory, not a file
+      await symlink("..", join(dir, "up")); // above the repository
+      git(dir, "add", "-A");
+      git(dir, "commit", "-q", "-m", "links");
+      const at = (id: string, include: string[]) => ({
+        id,
+        kind: "line_count",
+        repo: "app",
+        include,
+        at: "main",
+        unit: "lines",
+      });
+      const m = await measure(
+        declare([
+          at("via_alias", ["links/via_alias.txt"]),
+          at("via_out", ["links/via_out.txt"]),
+          at("up", ["u*"]),
+          at("root", ["links/r*"]),
+        ]),
+      );
+      expect(m.measures.via_alias?.value).toBe(3);
+      expect(m.measures.root?.value).toBe(0);
+      expect(m.not_found).toEqual([
+        {
+          at: "measures.via_out",
+          reason: "'links/via_out.txt' is a symlink to outside the repository",
+        },
+        { at: "measures.up", reason: "'up' is a symlink to outside the repository" },
+      ]);
+    },
+  );
+
+  it("keeps two names that differ only in bytes that are not UTF-8 apart", async () => {
+    const dir = await repo("app", { "keep.txt": "x\n" });
+    const blob = (body: string) =>
+      execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: dir, env: GIT_ENV, input: body })
+        .toString()
+        .trim();
+    const info = Buffer.concat([
+      Buffer.from(`100644 ${blob("1\n")}\tn/bad`),
+      Buffer.from([0xff]),
+      Buffer.from(".txt\n"),
+      Buffer.from(`100644 ${blob("1\n2\n")}\tn/bad`),
+      Buffer.from([0xfe]),
+      Buffer.from(".txt\n"),
+    ]);
+    execFileSync("git", ["update-index", "--add", "--index-info"], {
+      cwd: dir,
+      env: GIT_ENV,
+      input: info,
+    });
+    git(dir, "commit", "-q", "-m", "odd names");
+    const m = await measure(
+      declare([
+        {
+          id: "files",
+          kind: "file_count",
+          repo: "app",
+          include: ["n/*.txt"],
+          at: "main",
+          unit: "files",
+        },
+        {
+          id: "lines",
+          kind: "line_count",
+          repo: "app",
+          include: ["n/*.txt"],
+          at: "main",
+          unit: "lines",
+        },
+      ]),
+    );
+    expect(m.measures).toMatchObject({ files: { value: 2 }, lines: { value: 3 } });
+  });
+
+  it("does not count a submodule at a revision, or an unmerged path more than once", async () => {
+    const dir = await repo("app", { "a.txt": "base\n" });
+    const head = git(dir, "rev-parse", "HEAD").trim();
+    git(dir, "update-index", "--add", "--cacheinfo", `160000,${head},sub`);
+    git(dir, "commit", "-q", "-m", "submodule");
+    git(dir, "checkout", "-q", "-b", "other");
+    await writeFile(join(dir, "a.txt"), "other\n");
+    git(dir, "commit", "-q", "-am", "other");
+    git(dir, "checkout", "-q", "main");
+    await writeFile(join(dir, "a.txt"), "main\n");
+    git(dir, "commit", "-q", "-am", "main");
+    expect(() => git(dir, "merge", "-q", "other")).toThrow();
+    const m = await measure(
+      declare([
+        {
+          id: "at_main",
+          kind: "file_count",
+          repo: "app",
+          include: ["*"],
+          at: "main",
+          unit: "files",
+        },
+        { id: "conflicted", kind: "file_count", repo: "app", include: ["a.txt"], unit: "files" },
+      ]),
+    );
+    expect(m.measures).toMatchObject({ at_main: { value: 1 }, conflicted: { value: 1 } });
+  });
+
+  it("counts a decision only when every event line was read, but not a torn last line", async () => {
+    const s1 = SES("S01");
+    const torn = line(s1, "E02", {
+      type: "decision_recorded",
+      decision_id: DEC("D02"),
+      title: "b",
+    }).slice(0, 30);
+    await placeSession(
+      s1,
+      line(s1, "E01", { type: "decision_recorded", decision_id: DEC("D01"), title: "a" }) + torn,
+    );
+    const counts = [
+      { id: "all", kind: "trail_count", of: "decisions_all", unit: "decisions" },
+      { id: "tracks", kind: "trail_count", of: "tracks_open", unit: "tracks" },
+    ];
+    expect((await measure(declare(counts))).measures).toMatchObject({
+      all: { value: 1 },
+      tracks: { value: 0 },
+    });
+    const s2 = SES("S02");
+    await placeSession(
+      s2,
+      `{"bad json\n${line(s2, "E03", { type: "decision_recorded", decision_id: DEC("D03"), title: "c" })}`,
+    );
+    const m = await measure(declare(counts));
+    expect(m.measures).toMatchObject({ all: { value: null }, tracks: { value: null } });
+    expect(m.not_found[0]).toEqual({
+      at: "measures.all",
+      reason: "1 event line could not be read, so decisions may be missing",
+    });
+  });
+
+  it("drops a leading BOM before matching lines", async () => {
+    await repo("app", { "v.txt": "\uFEFFversion: 1.2\n" });
+    const m = await measure(
+      declare([
+        {
+          id: "v",
+          kind: "regex_capture",
+          repo: "app",
+          file: "v.txt",
+          pattern: "^version: (.*)$",
+          unit: "x",
+        },
+      ]),
+    );
+    expect(m.measures.v?.value).toBe("1.2");
+  });
+
+  it("ignores a GIT_DIR in the environment", async () => {
+    await repo("app", { "a.txt": "1\n", "b.txt": "1\n" });
+    const other = await repo("other", { "z.txt": "1\n" });
+    const saved = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(other, ".git");
+    try {
+      const m = await measure(
+        declare([
+          {
+            id: "n",
+            kind: "file_count",
+            repo: "app",
+            include: ["*.txt"],
+            at: "main",
+            unit: "files",
+          },
+        ]),
+      );
+      expect(m.measures.n?.value).toBe(2);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved;
+    }
+  });
+
+  it("says when a revision names something that is not a commit", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    const tree = git(dir, "rev-parse", "main^{tree}").trim();
+    const m = await measure(
+      declare([
+        { id: "n", kind: "file_count", repo: "app", include: ["*"], at: tree, unit: "files" },
+      ]),
+    );
+    expect(m.not_found).toEqual([
+      {
+        at: "measures.n",
+        reason: `the repo 'app' (at '${tree}') has '${tree}', but it is not a commit`,
+      },
+    ]);
   });
 });

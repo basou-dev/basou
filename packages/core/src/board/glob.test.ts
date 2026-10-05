@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileGlob, compileGlobs } from "./glob.js";
+import { compileGlob, compileGlobs, fromBytes, normalizePathspec, toBytes } from "./glob.js";
 
 const FILES = [
   "CHANGELOG.md",
@@ -106,11 +106,61 @@ describe("compileGlob", () => {
     expect(compileGlob("(a)+{b}|-c$")("(a)+{b}|-c$")).toBe(true);
     expect(compileGlob("[a-]x")("-x")).toBe(true);
     expect(compileGlob("[\\]]x")("]x")).toBe(true);
-    expect(compileGlob("caf\u00e9/*.md")("caf\u00e9/a.md")).toBe(true);
+    expect(compileGlob("caf\u00e9/*.md")(toBytes("caf\u00e9/a.md"))).toBe(true);
   });
 
-  it("matches a '[' with no closing ']' literally", () => {
+  it("matches a '[' with no closing ']' literally, as a path and never as a class", () => {
     expect(compileGlob("a[b")("a[b")).toBe(true);
+    expect(compileGlob("a[b*")("a[bc")).toBe(false);
+  });
+
+  it("matches a pattern literally before matching it as a glob", () => {
+    const m = compileGlob("app/[slug]/page.tsx");
+    expect(m("app/[slug]/page.tsx")).toBe(true);
+    expect(m("app/s/page.tsx")).toBe(true);
+    expect(compileGlob("app/[slug]")("app/[slug]/page.tsx")).toBe(true);
+    // An escape makes it a glob, which must match the whole path.
+    expect(compileGlob("app/\\[slug\\]")("app/[slug]/page.tsx")).toBe(false);
+    expect(compileGlob("app/\\[slug\\]/*.tsx")("app/[slug]/page.tsx")).toBe(true);
+  });
+
+  it("keeps a trailing slash: a directory only, and never a file", () => {
+    expect(compileGlob("docs/")("docs/a.md")).toBe(true);
+    expect(compileGlob("docs/")("docs")).toBe(false);
+    expect(compileGlob("*/")("docs/a.md")).toBe(false);
+    expect(compileGlob("**/")("docs/a.md")).toBe(false);
+  });
+
+  it("lets '**' right after a literal prefix match across directories, as git does", () => {
+    expect(compileGlob("docs**")("docs/spec/b.md")).toBe(true);
+    expect(compileGlob("docs**")("docsx")).toBe(true);
+    expect(compileGlob("a/**b")("a/x/b")).toBe(false);
+  });
+
+  it("supports the POSIX classes and a ']' first in a class", () => {
+    expect(compileGlob("[[:upper:]]*")("README.md")).toBe(true);
+    expect(compileGlob("[[:upper:]]*")("package.json")).toBe(false);
+    expect(compileGlob("x[[:digit:]]")("x7")).toBe(true);
+    expect(compileGlob("[]]x")("]x")).toBe(true);
+    expect(compileGlob("[[:bogus:]]")("b")).toBe(false);
+  });
+
+  it("matches bytes, so '?' is one byte of a multibyte character", () => {
+    expect(compileGlob("caf?/a.md")(toBytes("caf\u00e9/a.md"))).toBe(false);
+    expect(compileGlob("caf??/a.md")(toBytes("caf\u00e9/a.md"))).toBe(true);
+  });
+
+  it("matches a path that is not valid UTF-8 as its bytes", () => {
+    const bad = Buffer.from([0x6e, 0x2f, 0x62, 0xff]).toString("latin1");
+    expect(compileGlob("n/*")(bad)).toBe(true);
+    expect(compileGlob("n/b?")(bad)).toBe(true);
+    expect(fromBytes(bad)).toBe("n/b\ufffd");
+  });
+
+  it("normalizes '.' segments and repeated slashes, and keeps a trailing slash", () => {
+    expect(normalizePathspec("./docs//a.md")).toBe("docs/a.md");
+    expect(normalizePathspec("docs/./spec/")).toBe("docs/spec/");
+    expect(normalizePathspec(".")).toBe("");
   });
 });
 

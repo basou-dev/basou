@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -200,5 +200,64 @@ describe("basou board measure", () => {
     expect(out).toEqual([]);
     expect(err.join("\n")).toContain("Workspace not initialized. Run 'basou init' first.");
     expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("basou board measure: what the review found", () => {
+  const ESC = String.fromCharCode(27);
+
+  it("looks for the workspace's own repo by its path, not at the first entry", async () => {
+    const repo = await workspace([
+      { path: "../other", visibility: "private" },
+      { path: ".", visibility: "public" },
+    ]);
+    await placeBoard(repo, boardYaml([]));
+    const { out, err } = capture();
+    await runBoardMeasure({ json: true }, ctx(repo));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain("No --board given");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "escapes a control character in a reason and in the board path",
+    async () => {
+      const repo = await workspace([{ path: ".", visibility: "private" }]);
+      await symlink("/", join(repo, `e${ESC}.md`));
+      await placeBoard(repo, boardYaml([MD]));
+      const { out, err } = capture();
+      await runBoardMeasure({}, ctx(repo));
+      expect(out.join("\n")).toContain("measures.md: 'e");
+      expect(out.join("\n")).toContain("is a symlink to outside the repository");
+      expect(out.join("\n")).not.toContain(ESC);
+      await runBoardMeasure({ board: `missing${ESC}.yaml` }, ctx(repo));
+      expect(err.join("\n")).toContain("No board declaration at missing");
+      expect(err.join("\n")).not.toContain(ESC);
+    },
+  );
+
+  it("says when --board names a directory", async () => {
+    const repo = await workspace([{ path: "." }]);
+    await mkdir(join(repo, "boards"));
+    const { err } = capture();
+    await runBoardMeasure({ board: "boards" }, ctx(repo));
+    expect(err.join("\n")).toContain("boards is a directory, not a board declaration.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("rounds a ratio in the summary", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await writeFile(join(repo, "ONE.md"), "1\n");
+    await writeFile(join(repo, "THREE.md"), "1\n2\n3\n");
+    const text = JSON.parse(
+      boardYaml([
+        { id: "one", kind: "line_count", repo: ".", include: ["ONE.md"], unit: "lines" },
+        { id: "three", kind: "line_count", repo: ".", include: ["THREE.md"], unit: "lines" },
+      ]),
+    );
+    text.ratios = [{ id: "third", label: "r", numerator: "one", denominator: "three" }];
+    await placeBoard(repo, JSON.stringify(text, null, 2));
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain("third  0.3333  (one / three)");
   });
 });

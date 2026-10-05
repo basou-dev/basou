@@ -14,10 +14,12 @@ All notable changes to **basou** are recorded here. The project follows
   object) and in its own trail (decisions, open tracks, tasks), with ratios
   between them. `measure` reads the declaration, measures it at the working
   tree or at a revision, and prints the result, or JSON with `--json`. It
-  writes nothing, sends nothing, and runs no import. A value that cannot be
-  measured (a missing repo, revision or file, a symlink out of the
-  repository) is `null`, with a reason under `not_found`, and is never
-  counted as zero. The result carries a digest of its values. The
+  writes nothing (not even the task index), sends nothing (a partial clone is
+  not fetched from), and runs no import. Include and exclude patterns are
+  matched as git matches a `:(glob)` pathspec. A value that cannot be
+  measured (a missing repo, revision or file, a file or blob that cannot be
+  read, a symlink out of the repository, an event line that cannot be read)
+  is `null`, with a reason under `not_found`, and is never counted as zero. The result carries a digest of its values. The
   declaration is read from `board/board.yaml` in the workspace only when the
   manifest declares the workspace's own repo private; otherwise `--board` is
   required. Exit codes: `0` when everything was measured, `1` when something
@@ -25,7 +27,8 @@ All notable changes to **basou** are recorded here. The project follows
   be read (nothing is printed on stdout). `basou board` is the first command
   on the experimental list of `docs/spec/compatibility.md`: its flags, output
   and files may change at any release, `--help` marks it `[experimental]`, and
-  each run says so on stderr.
+  each time one of its subcommands starts it says so on stderr (a command
+  line that does not parse stops before that).
 
 ### Changed
 
