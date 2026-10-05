@@ -36,6 +36,17 @@ All notable changes to **basou** are recorded here. The project follows
   that is not experimental. The README and the portfolio section of
   `docs/spec/cli-commands.md` say the same.
 
+### Internal
+
+- **`@basou/core` reads the declaration file of a progress board.**
+  `parseBoardDeclaration` checks the text of a `board.yaml` (its lanes,
+  stages, measures, ratios, components, axis and effort) against the
+  manifest's repo paths, and reports every problem it finds at once, each
+  starting with where it is. An unknown key anywhere is refused, and an
+  unknown `board_version` stops the reading at once. The file is read as YAML
+  1.2 only, and a key that is not a string is refused rather than renamed.
+  No command reads a board yet, and the shape has no published JSON Schema.
+
 ## 0.64.0 — 2026-10-04
 
 ### Fixed

@@ -84,6 +84,22 @@ export {
   loadApproval,
 } from "./approval/index.js";
 export type {
+  BoardDeclaration,
+  BoardDeclarationContext,
+  BoardDeclarationResult,
+  BoardMeasure,
+  BoardMeasureKind,
+} from "./board/index.js";
+export {
+  BOARD_DEFAULT_AT,
+  BOARD_DEFAULT_CAPTURE_GROUP,
+  BOARD_REGEX_FLAGS,
+  BOARD_STAGE_IDS,
+  BOARD_TRAIL_COUNTS,
+  BOARD_VERSION,
+  parseBoardDeclaration,
+} from "./board/index.js";
+export type {
   DecisionGap,
   DecisionGapsExcluded,
   DecisionGapsIncomplete,
