@@ -288,13 +288,14 @@ describe("basou board measure", () => {
       }),
       event("3", { type: "decision_recorded", decision_id: decision("3"), title: "voided" }),
       event("4", { type: "decision_voided", decision_id: decision("3") }),
+      event("5", { type: "decision_recorded", decision_id: decision("5"), title: "settled" }),
     ];
     await writeFile(join(dir, "events.jsonl"), `${events.join("\n")}\n`);
     const { out } = capture();
     await runBoardMeasure({}, ctx(repo));
     const text = out.join("\n");
     expect(text).toContain(
-      `\nTrail:\n  decisions 3 (live 2)\n  open tracks 2\n    ${decision("2")}  newer\n    ${decision("1")}  open `,
+      `\nTrail:\n  decisions 4 (live 3)\n  open tracks 2\n    ${decision("2")}  newer\n    ${decision("1")}  open `,
     );
     expect(text).not.toContain(ESC);
 
