@@ -1253,6 +1253,41 @@ describe("measureBoard: what the review found", () => {
 
 describe("measureBoard: the repos section", () => {
   const POSIX = process.platform !== "win32";
+  const ROOT_USER = typeof process.getuid === "function" && process.getuid() === 0;
+  const VERSION = /(\d+)\.(\d+)/.exec(execFileSync("git", ["version"], { encoding: "utf8" }));
+  const REFUSES_LAZY_FETCH =
+    Number(VERSION?.[1]) > 2 || (Number(VERSION?.[1]) === 2 && Number(VERSION?.[2]) >= 44);
+  const SSH_KEYGEN = (() => {
+    try {
+      execFileSync("sh", ["-c", "command -v ssh-keygen"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  const SHALLOW = "the repo is a shallow clone, so its history is cut short";
+  // Shell lines for a wrapped git: answer as a git older than 2.44, or as one
+  // that does not know --is-shallow-repository and prints it back.
+  const OLD_GIT =
+    'for a in "$@"; do [ "$a" = version ] && { echo "git version 2.43.0"; exit 0; }; done';
+  const NO_SHALLOW_OPTION =
+    'for a in "$@"; do [ "$a" = --is-shallow-repository ] && { echo "$a"; exit 0; }; done';
+
+  // Run `body` with a git first in PATH that runs `snippet` and then the real git.
+  async function withWrappedGit(snippet: string, body: () => Promise<void>): Promise<void> {
+    const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const bin = join(root, "wrapped-git");
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, "git"), `#!/bin/sh\n${snippet}\nexec '${real}' "$@"\n`);
+    await chmod(join(bin, "git"), 0o755);
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}:${saved ?? ""}`;
+    try {
+      await body();
+    } finally {
+      process.env.PATH = saved;
+    }
+  }
   const NOTHING = {
     name: null,
     head: null,
@@ -1627,10 +1662,12 @@ describe("measureBoard: the repos section", () => {
     const m = await measureRepos("app");
     expect(hasObject(app, old)).toBe(false);
     expect(m.repos[0]).toMatchObject({ commits: 2, files: 1, behind_main: 0 });
-    if (m.repos[0]?.uncommitted === null) {
-      expect(m.not_found[0]?.reason).toMatch(/^the repo is a partial clone/);
-    } else {
+    if (REFUSES_LAZY_FETCH) {
       expect(m.repos[0]?.uncommitted).toBe(1);
+      expect(m.not_found).toEqual([]);
+    } else {
+      expect(m.repos[0]?.uncommitted).toBeNull();
+      expect(m.not_found[0]?.reason).toMatch(/^the repo is a partial clone/);
     }
   });
 
@@ -1666,6 +1703,295 @@ describe("measureBoard: the repos section", () => {
       }
     },
   );
+
+  it("is not complete when only a repo could not be measured", async () => {
+    const m = await measureRepos("gone");
+    expect(m.measures).toEqual({});
+    expect(m.complete).toBe(false);
+  });
+
+  it.skipIf(!POSIX || ROOT_USER)(
+    "does not count what may lie in a directory git could not open, and counts the rest",
+    async () => {
+      const dir = await repo("app", { "src/a.ts": "1\n", "src/lib/b.ts": "1\n" });
+      const secret = join(dir, "secret");
+      await mkdir(secret);
+      await writeFile(join(secret, "one"), "version: 1\n");
+      await chmod(secret, 0o000);
+      try {
+        const m = await measure(
+          declare(
+            [
+              { id: "all", kind: "file_count", repo: "app", include: ["**"], unit: "files" },
+              { id: "src", kind: "file_count", repo: "app", include: ["src/*.ts"], unit: "files" },
+              { id: "inside", kind: "file_count", repo: "app", include: ["secret/*"], unit: "f" },
+              {
+                id: "capture",
+                kind: "regex_capture",
+                repo: "app",
+                file: "secret/one",
+                pattern: "^version: (.*)$",
+                unit: "v",
+              },
+              { id: "src_dirs", kind: "dir_count", repo: "app", path: "src", depth: 1, unit: "d" },
+              { id: "top_dirs", kind: "dir_count", repo: "app", path: ".", depth: 1, unit: "d" },
+            ],
+            {},
+            ["app"],
+          ),
+          NOW,
+          ["app"],
+        );
+        expect(m.repos[0]).toMatchObject({ files: null, uncommitted: null });
+        expect(m.measures).toMatchObject({
+          all: { value: null },
+          src: { value: 1 },
+          inside: { value: null },
+          capture: { value: null },
+          src_dirs: { value: 1 },
+          top_dirs: { value: null },
+        });
+        const warned = `("could not open directory 'secret/': Permission denied")`;
+        const listed = `git could not read all of the working tree ${warned}`;
+        expect(m.not_found).toEqual([
+          { at: "repos[app].files", reason: listed },
+          {
+            at: "repos[app].uncommitted",
+            reason: `git could not compare all of the working tree ${warned}`,
+          },
+          { at: "measures.all", reason: listed },
+          { at: "measures.inside", reason: listed },
+          { at: "measures.capture", reason: listed },
+          { at: "measures.top_dirs", reason: listed },
+        ]);
+        expect(m.complete).toBe(false);
+      } finally {
+        await chmod(secret, 0o755);
+      }
+    },
+  );
+
+  it.skipIf(!POSIX || ROOT_USER)(
+    "does not count the files of a working tree whose ignore file git could not read",
+    async () => {
+      const dir = await repo(
+        "app",
+        { "a.txt": "1\n", "logs/.gitignore": "*.log\n" },
+        { "logs/x.log": "1\n" },
+      );
+      await chmod(join(dir, "logs", ".gitignore"), 0o000);
+      const m = await measureRepos("app");
+      expect(m.repos[0]?.files).toBeNull();
+      expect(m.not_found[0]).toEqual({
+        at: "repos[app].files",
+        reason: `git could not read all of the working tree ("unable to access 'logs/.gitignore': Permission denied")`,
+      });
+    },
+  );
+
+  it("does not take a tag or a branch named like origin/main for it", async () => {
+    const tagged = await repo("tagged", { "a.txt": "1\n" });
+    git(tagged, "tag", "refs/remotes/origin/main");
+    const branched = await repo("branched", { "a.txt": "1\n" });
+    git(branched, "branch", "refs/remotes/origin/main");
+    const m = await measureRepos("tagged", "branched");
+    expect(m.repos.map((r) => r.behind_main)).toEqual([null, null]);
+    expect(m.not_found).toEqual([]);
+  });
+
+  it("does not take a tag named like an orphan branch for it", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    git(dir, "tag", "refs/heads/fresh");
+    git(dir, "checkout", "-q", "--orphan", "fresh");
+    const m = await measureRepos("app");
+    expect(m.repos[0]).toMatchObject({ head: null, branch: "fresh", commits: 0 });
+    expect(m.not_found).toEqual([]);
+  });
+
+  it("tells a broken origin/main, and one at an object that is not there, from a missing one", async () => {
+    const broken = await repo("broken", { "a.txt": "1\n" });
+    await mkdir(join(broken, ".git", "refs", "remotes", "origin"), { recursive: true });
+    await writeFile(join(broken, ".git", "refs", "remotes", "origin", "main"), "garbage\n");
+    const lost = await repo("lost", { "a.txt": "1\n" });
+    await mkdir(join(lost, ".git", "refs", "remotes", "origin"), { recursive: true });
+    await writeFile(
+      join(lost, ".git", "refs", "remotes", "origin", "main"),
+      `${"1234567890".repeat(4)}\n`,
+    );
+    const m = await measureRepos("broken", "lost");
+    expect(m.repos.map((r) => r.behind_main)).toEqual([null, null]);
+    expect(m.not_found).toEqual([
+      { at: "repos[broken].behind_main", reason: "refs/remotes/origin/main is a broken ref" },
+      {
+        at: "repos[lost].behind_main",
+        reason: "refs/remotes/origin/main points at an object that is not in the repository",
+      },
+    ]);
+  });
+
+  it("does not read a branch at an object that is not there as one with no commit yet", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    await writeFile(join(dir, ".git", "refs", "heads", "main"), `${"1234567890".repeat(4)}\n`);
+    const m = await measureRepos("app");
+    expect(m.repos[0]).toMatchObject({ head: null, branch: "main", commits: null });
+    expect(m.not_found).toContainEqual({
+      at: "repos[app].head",
+      reason: "HEAD does not name a commit",
+    });
+    expect(m.not_found).toContainEqual({
+      at: "repos[app].commits",
+      reason: "HEAD does not name a commit",
+    });
+  });
+
+  it("does not read a HEAD git cannot resolve as a detached one", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    await writeFile(join(dir, ".git", "HEAD"), "ref: refs/heads/a..b\n");
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.branch).toBeNull();
+    expect(m.not_found).toContainEqual({
+      at: "repos[app].branch",
+      reason: "HEAD could not be read",
+    });
+  });
+
+  it("does not count the files of a working tree whose index is broken", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    await writeFile(join(dir, ".git", "index"), "garbage");
+    const m = await measureRepos("app");
+    expect(m.repos[0]).toMatchObject({ files: null, uncommitted: null });
+    expect(m.not_found).toContainEqual({
+      at: "repos[app].files",
+      reason: "the working tree could not be listed by git",
+    });
+  });
+
+  it("keeps a branch name with a slash or a letter outside ASCII as it is", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    const name = "feature/caf\u00e9";
+    git(dir, "checkout", "-q", "-b", name);
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.branch).toBe(name);
+  });
+
+  it("does not give a branch name that is not valid UTF-8", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    const head = git(dir, "rev-parse", "HEAD").trim();
+    const name = Buffer.concat([
+      Buffer.from("refs/heads/x"),
+      Buffer.from([0xff]),
+      Buffer.from("y"),
+    ]);
+    await writeFile(
+      join(dir, ".git", "packed-refs"),
+      Buffer.concat([Buffer.from(`${head} `), name, Buffer.from("\n")]),
+    );
+    await writeFile(
+      join(dir, ".git", "HEAD"),
+      Buffer.concat([Buffer.from("ref: "), name, Buffer.from("\n")]),
+    );
+    const m = await measureRepos("app");
+    expect(m.repos[0]).toMatchObject({ head, branch: null, commits: 1 });
+    expect(m.not_found).toEqual([
+      { at: "repos[app].branch", reason: "the name of HEAD's branch is not valid UTF-8" },
+    ]);
+  });
+
+  it("counts no commit for a shallow repository with no commit yet", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n" });
+    await commit(upstream, { "b.txt": "1\n" }, "second");
+    const empty = join(root, "empty");
+    await mkdir(empty);
+    git(empty, "init", "-q", "-b", "main");
+    git(
+      empty,
+      "fetch",
+      "-q",
+      "--depth",
+      "1",
+      `file://${upstream}`,
+      "main:refs/remotes/origin/main",
+    );
+    const m = await measureRepos("empty");
+    expect(m.repos[0]).toMatchObject({ head: null, commits: 0, behind_main: null });
+    expect(m.not_found).toEqual([{ at: "repos[empty].behind_main", reason: SHALLOW }]);
+  });
+
+  it.skipIf(!POSIX)(
+    "does not compare a repo with a submodule with a git older than 2.44",
+    async () => {
+      const dir = await repo("app", { "a.txt": "1\n" });
+      const head = git(dir, "rev-parse", "HEAD").trim();
+      git(dir, "update-index", "--add", "--cacheinfo", `160000,${head},sub`);
+      git(dir, "commit", "-q", "-m", "submodule");
+      await withWrappedGit(OLD_GIT, async () => {
+        const m = await measureRepos("app");
+        expect(m.repos[0]?.uncommitted).toBeNull();
+        expect(m.not_found).toEqual([
+          {
+            at: "repos[app].uncommitted",
+            reason:
+              "the repo has a submodule, which git status looks into, and this git (older than 2.44) may fetch objects for it from its remote",
+          },
+        ]);
+      });
+      if (REFUSES_LAZY_FETCH) {
+        expect((await measureRepos("app")).repos[0]?.uncommitted).toEqual(expect.any(Number));
+      }
+    },
+  );
+
+  it.skipIf(!POSIX)(
+    "does not count commits when git cannot say whether the history is cut short",
+    async () => {
+      await repo("app", { "a.txt": "1\n" });
+      await withWrappedGit(NO_SHALLOW_OPTION, async () => {
+        const m = await measureRepos("app");
+        expect(m.repos[0]).toMatchObject({ commits: null, behind_main: null, files: 1 });
+        const unknown = "could not tell whether the history of the repo is complete";
+        expect(m.not_found).toEqual([
+          { at: "repos[app].commits", reason: unknown },
+          { at: "repos[app].behind_main", reason: unknown },
+        ]);
+      });
+    },
+  );
+
+  it.skipIf(!POSIX || !SSH_KEYGEN)(
+    "reads the time of a signed commit without its signature",
+    async () => {
+      const dir = await repo("app", { "a.txt": "1\n" });
+      const key = join(root, "key");
+      execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "test", "-f", key]);
+      const pub = (await readFile(`${key}.pub`, "utf8")).trim();
+      await writeFile(join(root, "allowed"), `test@example.com ${pub}\n`);
+      git(dir, "config", "gpg.format", "ssh");
+      git(dir, "config", "user.signingkey", key);
+      git(dir, "config", "gpg.ssh.allowedSignersFile", join(root, "allowed"));
+      execFileSync("git", ["commit", "-q", "--allow-empty", "-S", "-m", "signed"], {
+        cwd: dir,
+        env: { ...GIT_ENV, GIT_COMMITTER_DATE: "2026-10-04T23:30:00+09:00" },
+      });
+      git(dir, "config", "log.showSignature", "true");
+      // What the date would read with the signature in the way.
+      expect(git(dir, "log", "-1", "--format=%cI")).toContain("Good");
+      const m = await measureRepos("app");
+      expect(m.repos[0]?.last_commit).toBe("2026-10-04T23:30:00+09:00");
+    },
+  );
+
+  it("counts every commit origin/main has that HEAD does not, merges and all", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n" });
+    git(root, "clone", "-q", upstream, "app");
+    git(upstream, "checkout", "-q", "-b", "side");
+    await commit(upstream, { "s.txt": "1\n" }, "side");
+    git(upstream, "checkout", "-q", "main");
+    await commit(upstream, { "m.txt": "1\n" }, "main");
+    git(upstream, "merge", "-q", "--no-ff", "-m", "merge", "side");
+    git(join(root, "app"), "fetch", "-q");
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.behind_main).toBe(3);
+  });
 
   it("ignores a GIT_DIR in the environment", async () => {
     const app = await repo("app", { "a.txt": "1\n" });

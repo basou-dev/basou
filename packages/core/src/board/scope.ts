@@ -34,13 +34,26 @@ export type RepoScope = {
   /** `worktree`, or the revision as the declaration wrote it. */
   at: string;
   entries: ReadonlyMap<string, ScopeEntry>;
+  /**
+   * The directories git could not list in full in the working tree (one it
+   * could not open, or whose ignore file it could not read), as byte strings
+   * without a trailing '/' ("" for all of it), each with why. Files under one
+   * may be missing from `entries`, or ignored ones present. Empty at a
+   * revision.
+   */
+  unread: ReadonlyMap<string, string>;
   /** The contents of the given file entries, read together. */
   read(paths: readonly string[]): Promise<ScopeRead>;
 };
 
 export type RepoScopeResult = { ok: true; scope: RepoScope } | { ok: false; reason: string };
 
-export type GitResult = { code: number | null; stdout: Buffer; spawnError?: string };
+export type GitResult = {
+  code: number | null;
+  stdout: Buffer;
+  stderr: Buffer;
+  spawnError?: string;
+};
 
 // Variables that would point git at another repository, index or object
 // store than the one asked about (git sets some of them for its hooks).
@@ -62,6 +75,8 @@ function gitEnv(): NodeJS.ProcessEnv {
   // partial clone would otherwise fetch the objects it lacks from its remote.
   env.GIT_OPTIONAL_LOCKS = "0";
   env.GIT_NO_LAZY_FETCH = "1";
+  // Messages in English, so the warnings below can be recognized.
+  env.LC_ALL = "C";
   return env;
 }
 
@@ -86,23 +101,68 @@ export function runGit(cwd: string, args: readonly string[], input?: string): Pr
       child = spawn("git", ["-c", "core.fsmonitor=false", ...args], {
         cwd,
         env: gitEnv(),
-        stdio: ["pipe", "pipe", "ignore"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error: unknown) {
-      done({ code: null, stdout: Buffer.alloc(0), spawnError: spawnReason(error) });
+      const empty = Buffer.alloc(0);
+      done({ code: null, stdout: empty, stderr: empty, spawnError: spawnReason(error) });
       return;
     }
     const out: Buffer[] = [];
+    const err: Buffer[] = [];
     child.stdout?.on("data", (chunk: Buffer) => out.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => err.push(chunk));
     child.on("error", (error) => {
-      done({ code: null, stdout: Buffer.alloc(0), spawnError: spawnReason(error) });
+      const empty = Buffer.alloc(0);
+      done({ code: null, stdout: empty, stderr: empty, spawnError: spawnReason(error) });
     });
-    child.on("close", (code) => done({ code, stdout: Buffer.concat(out) }));
+    child.on("close", (code) =>
+      done({ code, stdout: Buffer.concat(out), stderr: Buffer.concat(err) }),
+    );
     child.stdin?.on("error", () => {
       // git may exit before reading all of stdin; its exit code says why.
     });
     child.stdin?.end(input ?? "");
   });
+}
+
+// What git says, still exiting 0, when it could not read part of the working
+// tree: a directory it could not open, an ignore file it could not read, a
+// file it could not look at.
+const UNREAD =
+  /could not open directory|unable to access|Permission denied|Operation not permitted|Input\/output error/;
+
+const OPEN_DIRECTORY = /^warning: could not open directory '(.*)': [^']*$/;
+const ACCESS_FILE = /^warning: unable to access '(.*)': [^']*$/;
+
+/**
+ * Each warning in `result` that git could not read part of the working tree,
+ * as a byte string. Git lists what it could see and exits 0 regardless, so a
+ * listing with such a warning may leave files out (or count ignored ones in)
+ * without a sign.
+ */
+export function unreadWarnings(result: GitResult): string[] {
+  return result.stderr
+    .toString("latin1")
+    .split("\n")
+    .filter((message) => UNREAD.test(message));
+}
+
+/** A warning of {@link unreadWarnings}, as text without its `warning: ` prefix. */
+export function shownWarning(message: string): string {
+  return fromBytes(message).replace(/^(warning|error): /, "");
+}
+
+// The directory a warning says git could not list in full: the one it could
+// not open, or the one whose .gitignore it could not read; "" (all of the
+// working tree) for anything else.
+function unreadDirectory(message: string): string {
+  const opened = OPEN_DIRECTORY.exec(message);
+  if (opened !== null) return (opened[1] as string).replace(/\/$/, "");
+  const accessed = ACCESS_FILE.exec(message)?.[1];
+  if (accessed === undefined || accessed.startsWith("/") || accessed.startsWith(".git/")) return "";
+  if (accessed === ".gitignore") return "";
+  return accessed.endsWith("/.gitignore") ? accessed.slice(0, -"/.gitignore".length) : "";
 }
 
 function spawnReason(error: unknown): string {
@@ -198,6 +258,13 @@ async function openWorktree(root: Buffer): Promise<RepoScopeResult> {
   ]);
   if (listed.spawnError !== undefined) return { ok: false, reason: listed.spawnError };
   if (listed.code !== 0) return { ok: false, reason: "could not be listed by git" };
+  const unread = new Map<string, string>();
+  for (const message of unreadWarnings(listed)) {
+    const dir = unreadDirectory(message);
+    if (!unread.has(dir)) {
+      unread.set(dir, `git could not read all of the working tree ("${shownWarning(message)}")`);
+    }
+  }
   const entries = new Map<string, ScopeEntry>();
   // An unmerged path is listed once for each of its stages.
   const paths = [...new Set(splitNul(listed.stdout))];
@@ -215,6 +282,7 @@ async function openWorktree(root: Buffer): Promise<RepoScopeResult> {
     scope: {
       at: BOARD_DEFAULT_AT,
       entries,
+      unread,
       async read(want) {
         const result: ScopeRead = { contents: new Map(), unreadable: new Map() };
         for (const p of want) {
@@ -321,6 +389,7 @@ async function openRevision(root: Buffer, at: string): Promise<RepoScopeResult> 
     scope: {
       at,
       entries,
+      unread: new Map(),
       async read(want) {
         const oids = new Map<string, string>();
         for (const p of want) {
@@ -413,6 +482,29 @@ export function blockedAmong(scope: RepoScope, paths: readonly string[]): string
     if (entry?.kind === "unreadable") return `'${shownPath(p)}' ${entry.reason}`;
   }
   return undefined;
+}
+
+/**
+ * Why a measure whose patterns start at the given fixed directories (byte
+ * strings, "" for the root) cannot be trusted: one of them reaches into, or
+ * under, a directory git could not list in full. undefined when none does.
+ */
+export function unreadReaching(scope: RepoScope, fixed: readonly string[]): string | undefined {
+  for (const [dir, reason] of scope.unread) {
+    if (fixed.some((f) => reaches(f, dir))) return reason;
+  }
+  return undefined;
+}
+
+/** Whether what starts at `fixed` may lie in, or under, `dir` (both byte strings, "" for the root). */
+export function reaches(fixed: string, dir: string): boolean {
+  return (
+    fixed === "" ||
+    dir === "" ||
+    fixed === dir ||
+    fixed.startsWith(`${dir}/`) ||
+    dir.startsWith(`${fixed}/`)
+  );
 }
 
 /** The text of a scope path, for a message. */

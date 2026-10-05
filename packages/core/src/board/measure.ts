@@ -18,7 +18,9 @@ import {
   openRepoScope,
   type RepoScope,
   type RepoScopeResult,
+  reaches,
   shownPath,
+  unreadReaching,
 } from "./scope.js";
 
 /** One thing that could not be measured, and why. */
@@ -37,9 +39,12 @@ export type BoardRatioValue = {
 };
 
 /**
- * What `basou board measure` reports. A value is `null` only when it could
- * not be measured, and then `not_found` says why and `complete` is false: a
- * missing repository, revision or file is never counted as zero.
+ * What `basou board measure` reports. A value is `null` when it could not be
+ * measured, and then `not_found` says why and `complete` is false: a missing
+ * repository, revision or file is never counted as zero. The one exception is
+ * the three nulls of the repos section that mean something of their own (a
+ * detached HEAD, no commit yet, no origin/main; see {@link BoardRepo}), which
+ * have no entry and leave `complete` as it is.
  */
 export type BoardMeasurement = {
   board_version: number;
@@ -303,7 +308,11 @@ async function measureOne(
   if (measure.kind === "regex_capture" || measure.kind === "json_length") {
     const file = normalizePathspec(toBytes(measure.file));
     const entry = scope.entries.get(file);
-    if (entry === undefined) return fail(`'${measure.file}' is not a file ${where(scope)}`);
+    if (entry === undefined) {
+      return fail(
+        unreadReaching(scope, [file]) ?? `'${measure.file}' is not a file ${where(scope)}`,
+      );
+    }
     const blocked = blockedAmong(scope, [file]);
     if (blocked !== undefined) return fail(blocked);
     const read = await scope.read([file]);
@@ -346,14 +355,22 @@ async function measureOne(
   if (measure.kind === "dir_count") {
     const base = normalizePathspec(toBytes(measure.path)).replace(/\/$/, "");
     const under = (p: string) => base === "" || p.startsWith(`${base}/`);
+    const fixed = measure.include?.map((pattern) => fixedPart(pattern).fixed);
+    const unread = [...scope.unread].find(
+      ([dir]) => reaches(base, dir) && (fixed === undefined || fixed.some((f) => reaches(f, dir))),
+    )?.[1];
     const all = [...scope.entries.keys()].filter(under);
-    if (all.length === 0) return fail(`nothing is under '${measure.path}' ${where(scope)}`);
+    if (all.length === 0)
+      return fail(unread ?? `nothing is under '${measure.path}' ${where(scope)}`);
     const missing =
-      measure.include === undefined ? undefined : missingInclude(scope, measure.include);
+      unread !== undefined || measure.include === undefined
+        ? undefined
+        : missingInclude(scope, measure.include);
     if (missing !== undefined) return fail(missing);
     const matched = all.filter(compileGlobs(measure.include, measure.exclude));
     const blocked = blockedAmong(scope, matched);
     if (blocked !== undefined) return fail(blocked);
+    if (unread !== undefined) return fail(unread);
     const dirs = new Set<string>();
     for (const p of matched) {
       const segments = (base === "" ? p : p.slice(base.length + 1)).split("/");
@@ -362,11 +379,18 @@ async function measureOne(
     return { value: dirs.size };
   }
 
-  const missing = missingInclude(scope, measure.include);
+  // A directory git could not list in full may hold what the patterns match,
+  // so nothing under it is known to be missing, and the count is not known.
+  const unread = unreadReaching(
+    scope,
+    measure.include.map((pattern) => fixedPart(pattern).fixed),
+  );
+  const missing = unread === undefined ? missingInclude(scope, measure.include) : undefined;
   if (missing !== undefined) return fail(missing);
   const matched = [...scope.entries.keys()].filter(compileGlobs(measure.include, measure.exclude));
   const blocked = blockedAmong(scope, matched);
   if (blocked !== undefined) return fail(blocked);
+  if (unread !== undefined) return fail(unread);
   if (measure.kind === "file_count") return { value: matched.length };
 
   const read = await scope.read(matched);

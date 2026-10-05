@@ -27,6 +27,7 @@ All notable changes to **basou** are recorded here. The project follows
   under `.git/lfs`). Include and exclude patterns are
   matched as git matches a `:(glob)` pathspec. A value that cannot be
   measured (a missing repo, revision or file, a file or blob that cannot be
+  read, a directory git could not open or whose ignore file it could not
   read, a symlink out of the repository, an event line that cannot be read)
   is `null`, with a reason under `not_found`, and is never counted as zero. The result carries a digest of its values. The
   declaration is read from `board/board.yaml` in the workspace only when the

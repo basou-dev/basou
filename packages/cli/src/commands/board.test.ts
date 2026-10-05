@@ -216,6 +216,7 @@ describe("basou board measure", () => {
       ),
     );
     expect(unborn).toContain("repos[../gone]: the repo '../gone' is not on disk");
+    expect(process.exitCode).toBe(1);
 
     await execFileAsync("git", ["add", "README.md"], { cwd: repo, env: ENV });
     await execFileAsync(
