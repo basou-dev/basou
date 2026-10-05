@@ -132,6 +132,15 @@ describe("basou board measure", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("prints no repos when the manifest declares none", async () => {
+    const repo = await workspace();
+    await placeBoard(repo, boardYaml([]));
+    const { out } = capture();
+    const result = await doRunBoardMeasure({ board: "board/board.yaml" }, ctx(repo));
+    expect(result.repos).toEqual([]);
+    expect(out.join("\n")).not.toContain("Repos:");
+  });
+
   it("prints nothing on stdout and every problem on stderr for a declaration it cannot read", async () => {
     const repo = await workspace([{ path: ".", visibility: "private" }]);
     await placeBoard(
@@ -185,6 +194,7 @@ describe("basou board measure", () => {
     await runBoardMeasure({}, ctx(repo));
     const text = out.join("\n");
     expect(text).toContain("md    2 files  [core]");
+    expect(text).toContain(`\nRepos:\n  . (${basename(repo)})  `);
     expect(text).toContain("gone  not measured");
     expect(text).toContain(
       "Not measured (1):\n  measures.gone: 'GONE.md' matches no file in the working tree",
