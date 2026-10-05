@@ -1306,6 +1306,7 @@ describe("measureBoard: the repos section", () => {
     git(app, "config", "user.email", "test@example.com");
     git(app, "config", "user.name", "test");
     await commit(upstream, { "b.txt": "1\n" }, "upstream moves on");
+    await commit(upstream, { "b.txt": "2\n" }, "and on");
     git(app, "fetch", "-q");
     await commit(app, { "c.txt": "1\n" }, "local", {
       GIT_AUTHOR_DATE: "2026-09-01T00:00:00+00:00",
@@ -1344,8 +1345,8 @@ describe("measureBoard: the repos section", () => {
         files: 5,
         // a.txt and the two notes.
         uncommitted: 3,
-        // b.txt, fetched but not merged.
-        behind_main: 1,
+        // The two upstream commits, fetched but not merged (HEAD is one ahead).
+        behind_main: 2,
       },
     ]);
     expect(Object.keys(m.repos[0] ?? {})).toEqual([
@@ -1519,6 +1520,14 @@ describe("measureBoard: the repos section", () => {
     const m = await measureRepos("empty");
     expect(m.repos[0]).toMatchObject({ head: null, commits: 0, behind_main: 2 });
     expect(m.complete).toBe(true);
+  });
+
+  it("reads origin/main as the remote-tracking ref, not a branch of that name", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    git(dir, "branch", "origin/main");
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.not_found).toEqual([]);
   });
 
   it("reports a repo that is not there, not a repository, or not the root of one, once", async () => {
