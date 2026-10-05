@@ -17,6 +17,18 @@ All notable changes to **basou** are recorded here. The project follows
   to operate (in <workspace>). ...`. `refresh --portfolio` says it for each
   workspace concerned and `refresh --watch` once, when it starts. `--json`
   output is unchanged.
+- **`docs/spec/compatibility.md` now has a list of experimental commands, and
+  states that `basou view`'s routes and pages are not an API.** A command on
+  the list is outside every guarantee of the document, including the `0.x`
+  freeze of the deprecation policy and the exit-code allocation; the
+  invariants still hold for it. A command can join only in the release that
+  introduces it, so no existing command can be moved off the guaranteed
+  surface this way, and leaving the list is a one-way promotion in a minor
+  release. An experimental command exits `1` on every failure it reports and
+  takes no exit-code value. `--help` marks these commands `[experimental]`,
+  but the table decides. The list is empty for now. `basou view`'s HTTP
+  routes and pages are a local UI; read the trail through `@basou/sdk` or a
+  command's `--json` output.
 
 ## 0.64.0 — 2026-10-04
 

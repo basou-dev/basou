@@ -108,6 +108,9 @@ corrected input is safe. The carve-out is bounded by four things:
    flags or to any `--json` output shape, which stay under the additive rule
    above.
 
+An [experimental command](#what-is-not-guaranteed) exits `1` on every failure
+it reports and takes no value from this allocation.
+
 One thing about stdout is left open: a failed command is not promised to print
 nothing. A documented `--json` shape that a command prints when it exits
 non-zero — `basou verify --json` reporting a tampered session, for instance —
@@ -366,6 +369,26 @@ it does not know and for a subclass of one it does.
   time — do not scrape it. Machine consumers have two covered read paths
   instead: **`@basou/sdk`**, and the **`--json`** output of the commands that
   offer it (part of the guaranteed CLI surface above).
+- **Experimental commands are outside every guarantee in this document.** The
+  commands in the table below may change their flags, exit codes, output and
+  input shapes, and the files they read or write, or disappear, at any
+  release. This overrides the [deprecation policy](#deprecation-policy)
+  (including the `0.x` freeze) and the [exit-code allocation
+  rule](#exit-codes-zero-is-success-and-a-failures-value-may-be-refined). The
+  [invariants](#invariants-that-hold-regardless-of-version) still apply to
+  them. A command can be experimental only from the release that introduces
+  it; an existing command is never moved onto this list. Promotion is one-way:
+  a command leaves the list in a minor release, and from that release the
+  normal rules apply to it, together with whatever files and shapes the
+  promoting release names as guaranteed. `--help` marks each of these commands
+  `[experimental]`; the table, not the mark, is what decides. No command is
+  experimental yet.
+
+  | Command | Experimental since |
+  |---|---|
+
+- **`basou view`'s HTTP routes and pages are a local UI, not an API.** Read the
+  trail through `@basou/sdk` or the `--json` output of a command instead.
 
 ## On-disk format versioning
 
@@ -432,7 +455,8 @@ flags are stable. When a flag becomes obsolete before `1.0`, it is **kept as a
 deprecated no-op** (still accepted, prints a warning that it is now ignored)
 rather than removed, so an existing script that passes the flag keeps working
 instead of erroring on an unknown option. Deprecated no-op flags are removed at
-`1.0`.
+`1.0`. This does not apply to the experimental commands listed under [What is
+*not* guaranteed](#what-is-not-guaranteed).
 
 > Example: `basou init --repo-url` became a no-op when `project.repository_url`
 > was removed from the manifest (a value nothing read and that drifted silently).
