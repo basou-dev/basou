@@ -32,6 +32,7 @@ import { registerStatusCommand } from "./commands/status.js";
 import { registerTaskCommand } from "./commands/task.js";
 import { registerVerifyCommand } from "./commands/verify.js";
 import { registerViewCommand } from "./commands/view.js";
+import { markExperimentalCommands } from "./lib/experimental.js";
 
 /**
  * The identity of the build that is RUNNING, frozen into the bundle by
@@ -149,6 +150,8 @@ export function buildProgram(): Command {
   registerProtocolCommand(program);
   registerChannelCommand(program);
   registerHookCommand(program);
+
+  markExperimentalCommands(program);
 
   return program;
 }

@@ -89,8 +89,8 @@ an error, for instance).
   caller cannot tell a basou failure apart from a child that exited `1`, and
   should not read `1` as "the child ran and failed".
 
-The non-zero values of every command except these four may be split within a
-`1.x` line, so that a failure can say more than that it failed — for instance,
+The non-zero values of every command except these four and the [experimental
+commands](#what-is-not-guaranteed) may be split within a `1.x` line, so that a failure can say more than that it failed — for instance,
 that a command refused its input before writing anything, so resending a
 corrected input is safe. The carve-out is bounded by four things:
 
@@ -107,6 +107,10 @@ corrected input is safe. The carve-out is bounded by four things:
 4. **It applies to the values of the exit code only** — not to the CLI's
    flags or to any `--json` output shape, which stay under the additive rule
    above.
+
+An [experimental command](#what-is-not-guaranteed) exits `0` when it succeeds
+and `1` on every failure it reports, and takes no value from this allocation.
+A signal ends it as it ends any other command.
 
 One thing about stdout is left open: a failed command is not promised to print
 nothing. A documented `--json` shape that a command prints when it exits
@@ -365,7 +369,43 @@ it does not know and for a subclass of one it does.
   orientation narrative, nudges, and other rendered prose may be refined at any
   time — do not scrape it. Machine consumers have two covered read paths
   instead: **`@basou/sdk`**, and the **`--json`** output of the commands that
-  offer it (part of the guaranteed CLI surface above).
+  offer it, other than the experimental commands below (part of the
+  guaranteed CLI surface above).
+- **Experimental commands are outside every guarantee in this document, except
+  the ones stated here.** Each row of the table below names a top-level
+  command. It and every subcommand under it, including one added later, are
+  experimental; a subcommand or flag added to a command that is not in the
+  table is guaranteed from its first release. An experimental command may
+  change its flags, its output and input shapes, and the files it reads or
+  writes, or disappear, at any release. This overrides the [deprecation
+  policy](#deprecation-policy), including the `0.x` freeze. What still holds:
+    - Its exit codes follow the rule stated for experimental commands under
+      [exit codes](#exit-codes-zero-is-success-and-a-failures-value-may-be-refined),
+      which replaces the allocation for them.
+    - The [invariants](#invariants-that-hold-regardless-of-version).
+    - It may read the `.basou/` store but writes nothing under `.basou/`.
+    - Only an invocation of a listed command is exempt. A guaranteed command
+      keeps every guarantee whatever an experimental command has written: it
+      does not fail, exit differently, or change a documented `--json` shape
+      because such a file exists, is missing or has changed shape. It may show
+      what one wrote only in prose or on a `basou view` page.
+
+  A command can be experimental only from the release that introduces it; an
+  existing command is never moved onto this list. Promotion is one-way: a
+  command leaves the list in a minor release, and from that release the
+  normal rules apply to it, together with the files and shapes the promoting
+  release names as guaranteed; anything it does not name stays outside every
+  guarantee. A listed command may instead be removed at any release, and its
+  row with it. Removal is not promotion, and a name that returns later is a
+  new command. `--help` marks each of these commands `[experimental]`; the
+  table, not the mark, is what decides. No command is experimental yet.
+
+  | Command | Experimental since |
+  |---|---|
+
+- **`basou view`'s HTTP routes and pages are a local UI, not an API.** Read the
+  trail through `@basou/sdk` or the `--json` output of a command that is not
+  experimental instead.
 
 ## On-disk format versioning
 
@@ -432,7 +472,8 @@ flags are stable. When a flag becomes obsolete before `1.0`, it is **kept as a
 deprecated no-op** (still accepted, prints a warning that it is now ignored)
 rather than removed, so an existing script that passes the flag keeps working
 instead of erroring on an unknown option. Deprecated no-op flags are removed at
-`1.0`.
+`1.0`. None of this paragraph applies to the experimental commands listed
+under [What is *not* guaranteed](#what-is-not-guaranteed).
 
 > Example: `basou init --repo-url` became a no-op when `project.repository_url`
 > was removed from the manifest (a value nothing read and that drifted silently).
