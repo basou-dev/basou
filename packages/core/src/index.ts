@@ -89,6 +89,11 @@ export type {
   BoardDeclarationResult,
   BoardMeasure,
   BoardMeasureKind,
+  BoardMeasurement,
+  BoardMeasureValue,
+  BoardNotFound,
+  BoardRatioValue,
+  MeasureBoardInput,
 } from "./board/index.js";
 export {
   BOARD_DEFAULT_AT,
@@ -97,6 +102,8 @@ export {
   BOARD_STAGE_IDS,
   BOARD_TRAIL_COUNTS,
   BOARD_VERSION,
+  boardDigest,
+  measureBoard,
   parseBoardDeclaration,
 } from "./board/index.js";
 export type {

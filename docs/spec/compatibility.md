@@ -398,10 +398,11 @@ it does not know and for a subclass of one it does.
   guarantee. A listed command may instead be removed at any release, and its
   row with it. Removal is not promotion, and a name that returns later is a
   new command. `--help` marks each of these commands `[experimental]`; the
-  table, not the mark, is what decides. No command is experimental yet.
+  table, not the mark, is what decides.
 
   | Command | Experimental since |
   |---|---|
+  | `basou board` | 0.65.0 |
 
 - **`basou view`'s HTTP routes and pages are a local UI, not an API.** Read the
   trail through `@basou/sdk` or the `--json` output of a command that is not
