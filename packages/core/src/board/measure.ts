@@ -11,8 +11,24 @@ import {
   type BoardDeclaration,
   type BoardMeasure,
 } from "./declaration.js";
-import { compileGlob, compileGlobs, literalLength, normalizePathspec, toBytes } from "./glob.js";
-import { openRepoScope, type RepoScope, type RepoScopeResult, shownPath } from "./scope.js";
+import {
+  compileGlob,
+  compileGlobs,
+  literalLength,
+  mayMatchUnder,
+  normalizePathspec,
+  toBytes,
+} from "./glob.js";
+import { BOARD_REPOS_METHOD, type BoardRepo, measureRepos } from "./repos.js";
+import {
+  blockedAmong,
+  openRepoScope,
+  type RepoScope,
+  type RepoScopeResult,
+  reaches,
+  shownPath,
+  unreadReaching,
+} from "./scope.js";
 
 /** One thing that could not be measured, and why. */
 export type BoardNotFound = { at: string; reason: string };
@@ -30,9 +46,12 @@ export type BoardRatioValue = {
 };
 
 /**
- * What `basou board measure` reports. A value is `null` only when it could
- * not be measured, and then `not_found` says why and `complete` is false: a
- * missing repository, revision or file is never counted as zero.
+ * What `basou board measure` reports. A value is `null` when it could not be
+ * measured, and then `not_found` says why and `complete` is false: a missing
+ * repository, revision or file is never counted as zero. The one exception is
+ * the three nulls of the repos section that mean something of their own (a
+ * detached HEAD, no commit yet, no origin/main; see {@link BoardRepo}), which
+ * have no entry and leave `complete` as it is.
  */
 export type BoardMeasurement = {
   board_version: number;
@@ -47,6 +66,10 @@ export type BoardMeasurement = {
    * values have the same digest whenever they were taken.
    */
   digest: string;
+  /** The version of how each built-in section measures (see `BOARD_REPOS_METHOD`). */
+  methods: { repos: number };
+  /** Each repository the manifest declares, in its order. */
+  repos: BoardRepo[];
   measures: Record<string, BoardMeasureValue>;
   ratios: Record<string, BoardRatioValue>;
 };
@@ -55,6 +78,8 @@ export type MeasureBoardInput = {
   declaration: BoardDeclaration;
   /** The absolute root the manifest's repo paths are relative to. */
   root: string;
+  /** The paths of the manifest's repos, in its order. */
+  repos: readonly string[];
   paths: BasouPaths;
   now: Date;
   measuredWith: { basou: string; build: string | null };
@@ -85,6 +110,11 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     trail ??= readTrail(input);
     return trail;
   };
+
+  const repos = await measureRepos(input.repos, input.root, (repo) =>
+    scopeOf(repo, BOARD_DEFAULT_AT),
+  );
+  notFound.push(...repos.notFound);
 
   const measures: Record<string, BoardMeasureValue> = {};
   for (const measure of declaration.measures) {
@@ -121,10 +151,12 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     measured_with: input.measuredWith,
     complete: notFound.length === 0,
     not_found: notFound,
+    methods: { repos: BOARD_REPOS_METHOD },
+    repos: repos.repos,
     measures,
     ratios,
   };
-  const { board_version, title, measured_at, measured_with, complete, not_found } = body;
+  const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
   return {
     board_version,
     title,
@@ -133,6 +165,8 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     complete,
     not_found,
     digest: boardDigest(body),
+    methods,
+    repos: body.repos,
     measures,
     ratios,
   };
@@ -201,18 +235,6 @@ function missingInclude(scope: RepoScope, include: readonly string[]): string | 
     } else if (fixed !== "" && !paths.some((p) => p.startsWith(`${fixed}/`))) {
       return `nothing is under '${shownPath(fixed)}' ${where(scope)}`;
     }
-  }
-  return undefined;
-}
-
-// Why the matched paths cannot all be measured: one leaves the repository, or
-// cannot be read.
-function blockedAmong(scope: RepoScope, paths: readonly string[]): string | undefined {
-  for (const p of paths) {
-    const entry = scope.entries.get(p);
-    if (entry?.kind === "outside")
-      return `'${shownPath(p)}' is a symlink to outside the repository`;
-    if (entry?.kind === "unreadable") return `'${shownPath(p)}' ${entry.reason}`;
   }
   return undefined;
 }
@@ -293,7 +315,12 @@ async function measureOne(
   if (measure.kind === "regex_capture" || measure.kind === "json_length") {
     const file = normalizePathspec(toBytes(measure.file));
     const entry = scope.entries.get(file);
-    if (entry === undefined) return fail(`'${measure.file}' is not a file ${where(scope)}`);
+    if (entry === undefined) {
+      return fail(
+        unreadReaching(scope, (dir) => reaches(file, dir)) ??
+          `'${measure.file}' is not a file ${where(scope)}`,
+      );
+    }
     const blocked = blockedAmong(scope, [file]);
     if (blocked !== undefined) return fail(blocked);
     const read = await scope.read([file]);
@@ -336,14 +363,25 @@ async function measureOne(
   if (measure.kind === "dir_count") {
     const base = normalizePathspec(toBytes(measure.path)).replace(/\/$/, "");
     const under = (p: string) => base === "" || p.startsWith(`${base}/`);
+    const include = measure.include;
+    const unread = unreadReaching(
+      scope,
+      (dir) =>
+        reaches(base, dir) &&
+        (include === undefined || include.some((pattern) => mayMatchUnder(pattern, dir))),
+    );
     const all = [...scope.entries.keys()].filter(under);
-    if (all.length === 0) return fail(`nothing is under '${measure.path}' ${where(scope)}`);
+    if (all.length === 0)
+      return fail(unread ?? `nothing is under '${measure.path}' ${where(scope)}`);
     const missing =
-      measure.include === undefined ? undefined : missingInclude(scope, measure.include);
+      unread !== undefined || measure.include === undefined
+        ? undefined
+        : missingInclude(scope, measure.include);
     if (missing !== undefined) return fail(missing);
     const matched = all.filter(compileGlobs(measure.include, measure.exclude));
     const blocked = blockedAmong(scope, matched);
     if (blocked !== undefined) return fail(blocked);
+    if (unread !== undefined) return fail(unread);
     const dirs = new Set<string>();
     for (const p of matched) {
       const segments = (base === "" ? p : p.slice(base.length + 1)).split("/");
@@ -352,11 +390,18 @@ async function measureOne(
     return { value: dirs.size };
   }
 
-  const missing = missingInclude(scope, measure.include);
+  // A directory git could not list in full may hold what the patterns match,
+  // so nothing under it is known to be missing, and the count is not known.
+  const include = measure.include;
+  const unread = unreadReaching(scope, (dir) =>
+    include.some((pattern) => mayMatchUnder(pattern, dir)),
+  );
+  const missing = unread === undefined ? missingInclude(scope, measure.include) : undefined;
   if (missing !== undefined) return fail(missing);
   const matched = [...scope.entries.keys()].filter(compileGlobs(measure.include, measure.exclude));
   const blocked = blockedAmong(scope, matched);
   if (blocked !== undefined) return fail(blocked);
+  if (unread !== undefined) return fail(unread);
   if (measure.kind === "file_count") return { value: matched.length };
 
   const read = await scope.read(matched);

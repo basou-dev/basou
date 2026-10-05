@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { compileGlob, compileGlobs, fromBytes, normalizePathspec, toBytes } from "./glob.js";
+import {
+  compileGlob,
+  compileGlobs,
+  fromBytes,
+  mayMatchUnder,
+  normalizePathspec,
+  toBytes,
+} from "./glob.js";
 
 const FILES = [
   "CHANGELOG.md",
@@ -179,5 +186,56 @@ describe("compileGlobs", () => {
       "docs/a.md",
       "docs/spec/b.md",
     ]);
+  });
+});
+
+describe("mayMatchUnder", () => {
+  it.each<[string, string, boolean]>([
+    ["**", "secret", true],
+    ["*.txt", "logs", false],
+    ["*/x.ts", "secret", true],
+    ["src/*.ts", "src/hidden", false],
+    ["src/**/*.ts", "src/hidden", true],
+    ["src/*", "src/hidden", false],
+    ["src/*", "src", true],
+    ["src", "src/hidden", true],
+    ["src/a.ts", "src", true],
+    ["docs/a.md", "src", false],
+    ["s*/x", "src/hidden", false],
+    ["s*/*/x", "src/hidden", true],
+    ["s?c/**", "src", true],
+    ["[a-c]*/x", "src", false],
+    ["a\\*b/x", "src", true],
+    ["anything", "", true],
+  ])("'%s' under '%s' is %s", (pattern, dir, expected) => {
+    expect(mayMatchUnder(pattern, dir)).toBe(expected);
+  });
+
+  it("never says no when a path under the directory matches", () => {
+    const dirs = ["docs", "docs/spec", "packages", "packages/cli", "packages/cli/src", "x"];
+    const names = ["a.md", "b.ts", "package.json", "deep/c.ts", "deep/er/d.md", "x"];
+    const patterns = [
+      "*",
+      "*.md",
+      "**",
+      "**/*.ts",
+      "docs/*",
+      "docs/**",
+      "*/spec/*",
+      "packages/*/src/*",
+      "packages/*/src/**/*.ts",
+      "p*/c?i/**",
+      "x",
+      "x/*",
+      "*/*/*",
+      "[dp]*/**/d.md",
+    ];
+    for (const dir of dirs) {
+      const under = names.map((name) => `${dir}/${name}`);
+      for (const pattern of patterns) {
+        if (under.some(compileGlob(pattern)))
+          expect([pattern, dir, mayMatchUnder(pattern, dir)]).toEqual([pattern, dir, true]);
+      }
+    }
   });
 });

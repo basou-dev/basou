@@ -67,6 +67,33 @@ export function compileGlob(pattern: string): GlobMatcher {
   };
 }
 
+/**
+ * Whether a pattern, as a declaration writes it, may match a path under the
+ * directory `dir` (a byte string without a trailing '/'; "" for the root).
+ * Used when git could not list `dir`: what is under it is not known, so a
+ * pattern that could reach in cannot be counted. Errs towards true.
+ */
+export function mayMatchUnder(pattern: string, dir: string): boolean {
+  if (dir === "") return true;
+  const p = normalizePathspec(toBytes(pattern)).replace(/\/$/, "");
+  if (p === "") return true;
+  // As a literal path, a pattern takes in what is under it.
+  if (dir === p || dir.startsWith(`${p}/`) || p.startsWith(`${dir}/`)) return true;
+  if (literalLength(p) === p.length) return false;
+  // An escape may stand for a '/': do not split on a guess.
+  if (p.includes("\\")) return true;
+  const patternSegments = p.split("/");
+  const dirSegments = dir.split("/");
+  for (let i = 0; i < patternSegments.length; i++) {
+    const segment = patternSegments[i] as string;
+    if (segment === "**") return true; // crosses any number of directories
+    if (i >= dirSegments.length) return true; // the rest may match under `dir`
+    if (wildmatch(segment, dirSegments[i] as string) !== MATCH) return false;
+  }
+  // The pattern ends at `dir` or above it, so no path under `dir` matches.
+  return false;
+}
+
 /** A matcher for a list of include patterns minus a list of exclude patterns. */
 export function compileGlobs(
   include: readonly string[] | undefined,

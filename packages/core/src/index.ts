@@ -93,12 +93,14 @@ export type {
   BoardMeasureValue,
   BoardNotFound,
   BoardRatioValue,
+  BoardRepo,
   MeasureBoardInput,
 } from "./board/index.js";
 export {
   BOARD_DEFAULT_AT,
   BOARD_DEFAULT_CAPTURE_GROUP,
   BOARD_REGEX_FLAGS,
+  BOARD_REPOS_METHOD,
   BOARD_STAGE_IDS,
   BOARD_TRAIL_COUNTS,
   BOARD_VERSION,

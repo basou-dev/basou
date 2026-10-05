@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { createManifest, ensureBasouDirectory, type RepoEntry, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,6 +132,15 @@ describe("basou board measure", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("prints no repos when the manifest declares none", async () => {
+    const repo = await workspace();
+    await placeBoard(repo, boardYaml([]));
+    const { out } = capture();
+    const result = await doRunBoardMeasure({ board: "board/board.yaml" }, ctx(repo));
+    expect(result.repos).toEqual([]);
+    expect(out.join("\n")).not.toContain("Repos:");
+  });
+
   it("prints nothing on stdout and every problem on stderr for a declaration it cannot read", async () => {
     const repo = await workspace([{ path: ".", visibility: "private" }]);
     await placeBoard(
@@ -185,12 +194,46 @@ describe("basou board measure", () => {
     await runBoardMeasure({}, ctx(repo));
     const text = out.join("\n");
     expect(text).toContain("md    2 files  [core]");
+    expect(text).toContain(`\nRepos:\n  . (${basename(repo)})  `);
     expect(text).toContain("gone  not measured");
     expect(text).toContain(
       "Not measured (1):\n  measures.gone: 'GONE.md' matches no file in the working tree",
     );
     expect(text).toContain("Complete: no");
     expect(text).toMatch(/Digest: sha256:[0-9a-f]{64}/);
+  });
+
+  it("prints each repo in the summary, saying what a null means", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }, { path: "../gone" }]);
+    await placeBoard(repo, boardYaml([]));
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    const name = basename(repo);
+    const unborn = out.join("\n");
+    expect(unborn).toMatch(
+      new RegExp(
+        `Repos:\\n  \\. \\(${name}\\)  main at no commit yet, last commit none, commits 0, files \\d+, uncommitted \\d+, behind origin/main \\(no origin/main\\)\\n  \\.\\./gone  not measured\\n`,
+      ),
+    );
+    expect(unborn).toContain("repos[../gone]: the repo '../gone' is not on disk");
+    expect(process.exitCode).toBe(1);
+
+    await execFileAsync("git", ["add", "README.md"], { cwd: repo, env: ENV });
+    await execFileAsync(
+      "git",
+      ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "one"],
+      {
+        cwd: repo,
+        env: { ...ENV, GIT_COMMITTER_DATE: "2026-10-04T23:30:00+09:00" },
+      },
+    );
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repo, env: ENV });
+    await execFileAsync("git", ["checkout", "-q", "--detach"], { cwd: repo, env: ENV });
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      `  . (${name})  detached HEAD at ${stdout.slice(0, 7)}, last commit 2026-10-04T23:30:00+09:00, commits 1, files `,
+    );
   });
 
   it("refuses a workspace that is not initialized", async () => {
