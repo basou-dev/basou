@@ -212,6 +212,19 @@ function repoLines(m: BoardMeasurement): string[] {
   });
 }
 
+function trailLines(m: BoardMeasurement): string[] {
+  const { decisions_all, decisions_live, tracks_open } = m.trail;
+  if (decisions_all === null || decisions_live === null || tracks_open === null) {
+    return ["  not measured"];
+  }
+  const lines = [
+    `  decisions ${decisions_all} (live ${decisions_live})`,
+    `  open tracks ${tracks_open.length}`,
+  ];
+  for (const track of tracks_open) lines.push(`    ${track.id}  ${displayPath(track.title)}`);
+  return lines;
+}
+
 function printMeasurementText(m: BoardMeasurement): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
@@ -237,6 +250,7 @@ function printMeasurementText(m: BoardMeasurement): void {
       );
     }
   }
+  lines.push("", "Trail:", ...trailLines(m));
   if (m.not_found.length > 0) {
     lines.push("", `Not measured (${m.not_found.length}):`);
     for (const missing of m.not_found)

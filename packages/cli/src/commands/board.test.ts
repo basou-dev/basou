@@ -199,6 +199,7 @@ describe("basou board measure", () => {
     expect(text).toContain(
       "Not measured (1):\n  measures.gone: 'GONE.md' matches no file in the working tree",
     );
+    expect(text).toContain("\nTrail:\n  decisions 0 (live 0)\n  open tracks 0\n");
     expect(text).toContain("Complete: no");
     expect(text).toMatch(/Digest: sha256:[0-9a-f]{64}/);
   });

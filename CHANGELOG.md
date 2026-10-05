@@ -18,7 +18,10 @@ All notable changes to **basou** are recorded here. The project follows
   committer time of HEAD's commit, the commits reachable from HEAD, the files
   in the working tree, the paths `git status` names, and the commits behind
   `origin/main` as of the last fetch (a detached HEAD, a branch with no
-  commit yet and a missing `origin/main` are nulls that mean so). It
+  commit yet and a missing `origin/main` are nulls that mean so); and the
+  workspace's own decisions, live decisions and open tracks with their ids
+  and titles, newest first as `basou orient` lists them, read from the
+  events (a decision recorded twice under one id counts once). It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git

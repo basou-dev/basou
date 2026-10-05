@@ -94,6 +94,8 @@ export type {
   BoardNotFound,
   BoardRatioValue,
   BoardRepo,
+  BoardTrack,
+  BoardTrail,
   MeasureBoardInput,
 } from "./board/index.js";
 export {
@@ -103,6 +105,7 @@ export {
   BOARD_REPOS_METHOD,
   BOARD_STAGE_IDS,
   BOARD_TRAIL_COUNTS,
+  BOARD_TRAIL_METHOD,
   BOARD_VERSION,
   boardDigest,
   measureBoard,

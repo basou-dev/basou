@@ -766,6 +766,11 @@ describe("measureBoard: the workspace's own trail", () => {
       tasks: { value: 3 },
       doing: { value: 2 },
     });
+    expect(m.trail).toEqual({
+      decisions_all: 4,
+      decisions_live: 3,
+      tracks_open: [{ id: DEC("D02"), title: "b" }],
+    });
     expect(m.complete).toBe(true);
   });
 
@@ -842,6 +847,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "repos",
       "measures",
       "ratios",
+      "trail",
     ]);
     expect(m).toMatchObject({
       board_version: 1,
@@ -1186,10 +1192,13 @@ describe("measureBoard: what the review found", () => {
     );
     const m = await measure(declare(counts));
     expect(m.measures).toMatchObject({ all: { value: null }, tracks: { value: null } });
-    expect(m.not_found[0]).toEqual({
-      at: "measures.all",
-      reason: "1 event line could not be read, so decisions may be missing",
-    });
+    const lost = "1 event line could not be read, so decisions may be missing";
+    expect(m.not_found).toEqual([
+      { at: "measures.all", reason: lost },
+      { at: "measures.tracks", reason: lost },
+      { at: "trail", reason: lost },
+    ]);
+    expect(m.trail).toEqual({ decisions_all: null, decisions_live: null, tracks_open: null });
   });
 
   it("drops a leading BOM before matching lines", async () => {
@@ -1642,7 +1651,7 @@ describe("measureBoard: the repos section", () => {
     const dir = await repo("app", { "a.txt": "1\n" });
     const declaration = declare([], {}, ["app"]);
     const first = await measure(declaration, NOW, ["app"]);
-    expect(first.methods).toEqual({ repos: 1 });
+    expect(first.methods).toEqual({ repos: 1, trail: 1 });
     const later = await measure(declaration, new Date("2026-10-06T00:00:00.000Z"), ["app"]);
     expect(later.digest).toBe(first.digest);
     await writeFile(join(dir, "b.txt"), "1\n");
@@ -2075,5 +2084,120 @@ describe("measureBoard: the repos section", () => {
       if (saved === undefined) delete process.env.GIT_DIR;
       else process.env.GIT_DIR = saved;
     }
+  });
+});
+
+describe("measureBoard: the trail section", () => {
+  const decided = (
+    sessionId: string,
+    evt: string,
+    id: string,
+    title: string,
+    occurredAt: string,
+    kind?: "decision" | "track",
+  ): string =>
+    line(sessionId, evt, {
+      type: "decision_recorded",
+      decision_id: id,
+      title,
+      occurred_at: occurredAt,
+      ...(kind === undefined ? {} : { kind }),
+    });
+
+  it("lists the open tracks newest first, then by id, with their titles as recorded", async () => {
+    const s1 = SES("S01");
+    const s2 = SES("S02");
+    await placeSession(
+      s1,
+      decided(s1, "E01", DEC("D01"), "  oldest, with spaces  ", "2026-09-01T00:00:00Z", "track") +
+        decided(s1, "E02", DEC("D02"), "a decision", "2026-09-05T00:00:00Z") +
+        decided(s1, "E03", DEC("D03"), "same time, lower id", "2026-09-10T00:00:00Z", "track"),
+    );
+    await placeSession(
+      s2,
+      decided(s2, "E04", DEC("D04"), "same time, higher id", "2026-09-10T00:00:00Z", "track") +
+        decided(s2, "E05", DEC("D05"), "voided", "2026-09-20T00:00:00Z", "track") +
+        line(s2, "E06", { type: "decision_voided", decision_id: DEC("D05") }),
+    );
+    const m = await measure(declare([]));
+    expect(m.trail).toEqual({
+      decisions_all: 5,
+      decisions_live: 4,
+      tracks_open: [
+        { id: DEC("D04"), title: "same time, higher id" },
+        { id: DEC("D03"), title: "same time, lower id" },
+        { id: DEC("D01"), title: "  oldest, with spaces  " },
+      ],
+    });
+    expect(m.complete).toBe(true);
+  });
+
+  it("counts a decision recorded twice under one id once, by its earliest record", async () => {
+    const s1 = SES("S01");
+    const s2 = SES("S02");
+    await placeSession(
+      s1,
+      decided(s1, "E01", DEC("D01"), "later copy", "2026-09-02T00:00:00Z", "track"),
+    );
+    await placeSession(
+      s2,
+      decided(s2, "E02", DEC("D01"), "first", "2026-09-01T00:00:00Z", "track"),
+    );
+    const counts = [
+      { id: "all", kind: "trail_count", of: "decisions_all", unit: "decisions" },
+      { id: "live", kind: "trail_count", of: "decisions_live", unit: "decisions" },
+      { id: "tracks", kind: "trail_count", of: "tracks_open", unit: "tracks" },
+    ];
+    const m = await measure(declare(counts));
+    expect(m.trail).toEqual({
+      decisions_all: 1,
+      decisions_live: 1,
+      tracks_open: [{ id: DEC("D01"), title: "first" }],
+    });
+    expect(m.measures).toMatchObject({
+      all: { value: 1 },
+      live: { value: 1 },
+      tracks: { value: 1 },
+    });
+  });
+
+  it("closes a track voided before it was recorded", async () => {
+    const s1 = SES("S01");
+    const s2 = SES("S02");
+    await placeSession(s1, line(s1, "E01", { type: "decision_voided", decision_id: DEC("D01") }));
+    await placeSession(s2, decided(s2, "E02", DEC("D01"), "t", "2026-09-01T00:00:00Z", "track"));
+    const m = await measure(declare([]));
+    expect(m.trail).toEqual({ decisions_all: 1, decisions_live: 0, tracks_open: [] });
+  });
+
+  it("is in the digest", async () => {
+    const declaration = declare([]);
+    const first = await measure(declaration);
+    const s1 = SES("S01");
+    await placeSession(s1, decided(s1, "E01", DEC("D01"), "t", "2026-09-01T00:00:00Z", "track"));
+    expect((await measure(declaration)).digest).not.toBe(first.digest);
+  });
+
+  it("does not read the tasks unless a measure counts them", async () => {
+    await writeFile(join(paths.tasks, `${TASK("T01")}.md`), "not a task\n");
+    const skipped: string[] = [];
+    const run = (measures: Record<string, unknown>[]) =>
+      measureBoard({
+        declaration: declare(measures),
+        root,
+        repos: [],
+        paths,
+        now: NOW,
+        measuredWith: WITH,
+        onTaskSkip: (taskId) => skipped.push(taskId),
+      });
+    const quiet = await run([]);
+    expect(skipped).toEqual([]);
+    expect(quiet.complete).toBe(true);
+    const counted = await run([{ id: "tasks", kind: "trail_count", of: "tasks", unit: "tasks" }]);
+    expect(skipped).toEqual([TASK("T01")]);
+    expect(counted.not_found).toEqual([
+      { at: "measures.tasks", reason: "1 task could not be read" },
+    ]);
   });
 });
