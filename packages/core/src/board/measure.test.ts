@@ -2133,16 +2133,17 @@ describe("measureBoard: the trail section", () => {
   });
 
   it("counts a decision recorded twice under one id once, by its earliest record", async () => {
-    const s1 = SES("S01");
-    const s2 = SES("S02");
+    // The earliest record is neither the first nor the last one read.
+    const [s1, s2, s3] = [SES("S01"), SES("S02"), SES("S03")];
     await placeSession(
       s1,
-      decided(s1, "E01", DEC("D01"), "later copy", "2026-09-02T00:00:00Z", "track"),
+      decided(s1, "E01", DEC("D01"), "middle", "2026-09-02T00:00:00Z", "track"),
     );
     await placeSession(
       s2,
       decided(s2, "E02", DEC("D01"), "first", "2026-09-01T00:00:00Z", "track"),
     );
+    await placeSession(s3, decided(s3, "E03", DEC("D01"), "last", "2026-09-03T00:00:00Z", "track"));
     const counts = [
       { id: "all", kind: "trail_count", of: "decisions_all", unit: "decisions" },
       { id: "live", kind: "trail_count", of: "decisions_live", unit: "decisions" },

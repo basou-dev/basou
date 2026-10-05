@@ -81,6 +81,7 @@ function capture(): { out: string[]; err: string[] } {
 }
 
 const ctx = (cwd: string) => ({ cwd, nowProvider: () => NOW });
+const ESC = String.fromCharCode(27);
 
 describe("basou board measure", () => {
   it("reads board/board.yaml when the manifest declares the workspace's own repo private", async () => {
@@ -237,6 +238,58 @@ describe("basou board measure", () => {
     );
   });
 
+  it("prints the open tracks in the summary, or that the trail was not measured", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const sessionId = "ses_01HXABCDEF1234567890ABCS01";
+    const dir = join(repo, ".basou", "sessions", sessionId);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "session.yaml"),
+      [
+        'schema_version: "0.1.0"',
+        "session:",
+        `  id: ${sessionId}`,
+        "  label: fixture",
+        "  task_id: null",
+        `  workspace_id: ${FIXED_WS_ID}`,
+        "  source: { kind: terminal, version: 0.1.0 }",
+        "  started_at: 2026-10-01T00:00:00Z",
+        "  status: completed",
+        "  working_directory: /tmp/fixture",
+        "  invocation: { command: echo, args: [], exit_code: 0 }",
+        "  related_files: []",
+        "  events_log: events.jsonl",
+        "",
+      ].join("\n"),
+    );
+    const decision = "decision_01HXABCDEF1234567890ABCD01";
+    const event = JSON.stringify({
+      schema_version: "0.1.0",
+      id: "evt_01HXABCDEF1234567890ABCE01",
+      session_id: sessionId,
+      occurred_at: "2026-10-01T00:00:00Z",
+      source: "local-cli",
+      type: "decision_recorded",
+      decision_id: decision,
+      title: `open ${ESC}[31m question`,
+      kind: "track",
+    });
+    await writeFile(join(dir, "events.jsonl"), `${event}\n`);
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain(
+      `\nTrail:\n  decisions 1 (live 1)\n  open tracks 1\n    ${decision}  open `,
+    );
+    expect(text).not.toContain(ESC);
+
+    await writeFile(join(dir, "events.jsonl"), `{"broken\n${event}\n`);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain("\nTrail:\n  not measured\n");
+  });
+
   it("refuses a workspace that is not initialized", async () => {
     const repo = await realpath(tmpRepo as string);
     const { out, err } = capture();
@@ -248,8 +301,6 @@ describe("basou board measure", () => {
 });
 
 describe("basou board measure: what the review found", () => {
-  const ESC = String.fromCharCode(27);
-
   it("looks for the workspace's own repo by its path, not at the first entry", async () => {
     const repo = await workspace([
       { path: "../other", visibility: "private" },
