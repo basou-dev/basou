@@ -2171,6 +2171,144 @@ describe("measureBoard: the trail section", () => {
     expect(m.trail).toEqual({ decisions_all: 1, decisions_live: 0, tracks_open: [] });
   });
 
+  it("orders the tracks by instant, whatever offset each time is written with", async () => {
+    const s1 = SES("S01");
+    await placeSession(
+      s1,
+      // 09:00+09:00 is 00:00Z, an hour before 01:00Z, though it sorts after it as text.
+      decided(s1, "E01", DEC("D01"), "earlier", "2026-09-10T09:00:00+09:00", "track") +
+        decided(s1, "E02", DEC("D02"), "later", "2026-09-10T01:00:00.500Z", "track"),
+    );
+    const m = await measure(declare([]));
+    expect(m.trail.tracks_open?.map((t) => t.title)).toEqual(["later", "earlier"]);
+  });
+
+  it("takes whether a decision is a track from its earliest record too", async () => {
+    const [s1, s2] = [SES("S01"), SES("S02")];
+    await placeSession(
+      s1,
+      decided(s1, "E01", DEC("D01"), "a decision first", "2026-09-01T00:00:00Z", "decision") +
+        decided(s1, "E02", DEC("D02"), "a track first", "2026-09-01T00:00:00Z", "track"),
+    );
+    await placeSession(
+      s2,
+      decided(s2, "E03", DEC("D01"), "then a track", "2026-09-02T00:00:00Z", "track") +
+        decided(s2, "E04", DEC("D02"), "then a decision", "2026-09-02T00:00:00Z", "decision"),
+    );
+    const m = await measure(declare([]));
+    expect(m.trail.tracks_open).toEqual([{ id: DEC("D02"), title: "a track first" }]);
+  });
+
+  it("does not let a void of a decision never recorded take a live one away", async () => {
+    const s1 = SES("S01");
+    await placeSession(
+      s1,
+      decided(s1, "E01", DEC("D01"), "kept", "2026-09-01T00:00:00Z") +
+        line(s1, "E02", { type: "decision_voided", decision_id: DEC("D99") }),
+    );
+    const m = await measure(declare([]));
+    expect(m.trail).toMatchObject({ decisions_all: 1, decisions_live: 1 });
+  });
+
+  it("is not measured when a complete line is not an event, even as the last line", async () => {
+    const s1 = SES("S01");
+    const good = decided(s1, "E01", DEC("D01"), "a", "2026-09-01T00:00:00Z");
+    // Complete JSON, but not an event of the schema: not a write in progress.
+    const off = line(s1, "E02", {
+      type: "decision_recorded",
+      decision_id: DEC("D02"),
+      title: "b",
+      kind: "plan",
+    }).trimEnd();
+    await placeSession(s1, good + off);
+    const m = await measure(declare([]));
+    expect(m.trail).toEqual({ decisions_all: null, decisions_live: null, tracks_open: null });
+    expect(m.not_found).toEqual([
+      { at: "trail", reason: "1 event line could not be read, so decisions may be missing" },
+    ]);
+    expect(m.complete).toBe(false);
+  });
+
+  it("counts every line that is not JSON but a torn last one", async () => {
+    const [s1, s2, s3] = [SES("S01"), SES("S02"), SES("S03")];
+    const ok = (sessionId: string, evt: string, id: string) =>
+      decided(sessionId, evt, id, "t", "2026-09-01T00:00:00Z");
+    // Torn: the last line, with no newline after it.
+    await placeSession(s1, `${ok(s1, "E01", DEC("D01"))}{"torn`);
+    expect((await measure(declare([]))).trail.decisions_all).toBe(1);
+    // Not torn: a last line that is not JSON but ends with a newline.
+    await placeSession(s2, `${ok(s2, "E02", DEC("D02"))}{"ended\n`);
+    // Not torn: not the last line, in a file that does not end with a newline.
+    await placeSession(s3, `{"early\n${ok(s3, "E03", DEC("D03")).trimEnd()}`);
+    const m = await measure(declare([]));
+    expect(m.not_found).toEqual([
+      { at: "trail", reason: "2 event lines could not be read, so decisions may be missing" },
+    ]);
+  });
+
+  it("counts many lines that are not JSON, each once", async () => {
+    const s1 = SES("S01");
+    await placeSession(s1, `${'{"bad\n'.repeat(3000)}{"torn`);
+    const m = await measure(declare([]));
+    expect(m.not_found).toEqual([
+      { at: "trail", reason: "3000 event lines could not be read, so decisions may be missing" },
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "is not measured when an entry named as a session is not a directory",
+    async () => {
+      const s1 = SES("S01");
+      await placeSession(s1, decided(s1, "E01", DEC("D01"), "t", "2026-09-01T00:00:00Z", "track"));
+      await symlink(join(paths.sessions, s1), join(paths.sessions, SES("S02")));
+      await writeFile(join(paths.sessions, SES("S03")), "not a session\n");
+      const m = await measure(declare([]));
+      expect(m.trail).toEqual({ decisions_all: null, decisions_live: null, tracks_open: null });
+      expect(m.not_found).toEqual([
+        {
+          at: "trail",
+          reason:
+            "2 session entries are not a directory (a symlink or a file), so decisions may be missing",
+        },
+      ]);
+    },
+  );
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("is not measured when the sessions cannot be listed", async () => {
+    await chmod(paths.sessions, 0o000);
+    try {
+      const m = await measure(declare([]));
+      expect(m.trail).toEqual({ decisions_all: null, decisions_live: null, tracks_open: null });
+      expect(m.not_found).toEqual([
+        { at: "trail", reason: "the sessions of the workspace could not be read" },
+      ]);
+    } finally {
+      await chmod(paths.sessions, 0o755);
+    }
+  });
+
+  it("reads the decisions once for the section and every measure", async () => {
+    const s1 = SES("S01");
+    await placeSession(s1, `{"bad\n${decided(s1, "E01", DEC("D01"), "t", "2026-09-01T00:00:00Z")}`);
+    const warned: number[] = [];
+    await measureBoard({
+      declaration: declare([
+        { id: "all", kind: "trail_count", of: "decisions_all", unit: "decisions" },
+        { id: "live", kind: "trail_count", of: "decisions_live", unit: "decisions" },
+      ]),
+      root,
+      repos: [],
+      paths,
+      now: NOW,
+      measuredWith: WITH,
+      onReplayWarning: (warning) => warned.push(warning.line),
+    });
+    expect(warned).toEqual([1]);
+  });
+
   it("is in the digest", async () => {
     const declaration = declare([]);
     const first = await measure(declaration);

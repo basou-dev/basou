@@ -263,28 +263,47 @@ describe("basou board measure", () => {
         "",
       ].join("\n"),
     );
-    const decision = "decision_01HXABCDEF1234567890ABCD01";
-    const event = JSON.stringify({
-      schema_version: "0.1.0",
-      id: "evt_01HXABCDEF1234567890ABCE01",
-      session_id: sessionId,
-      occurred_at: "2026-10-01T00:00:00Z",
-      source: "local-cli",
-      type: "decision_recorded",
-      decision_id: decision,
-      title: `open ${ESC}[31m question`,
-      kind: "track",
-    });
-    await writeFile(join(dir, "events.jsonl"), `${event}\n`);
+    const event = (n: string, fields: Record<string, unknown>) =>
+      JSON.stringify({
+        schema_version: "0.1.0",
+        id: `evt_01HXABCDEF1234567890ABCE0${n}`,
+        session_id: sessionId,
+        occurred_at: `2026-10-0${n}T00:00:00Z`,
+        source: "local-cli",
+        ...fields,
+      });
+    const decision = (n: string) => `decision_01HXABCDEF1234567890ABCD0${n}`;
+    const events = [
+      event("1", {
+        type: "decision_recorded",
+        decision_id: decision("1"),
+        title: `open ${ESC}[31m question`,
+        kind: "track",
+      }),
+      event("2", {
+        type: "decision_recorded",
+        decision_id: decision("2"),
+        title: "newer",
+        kind: "track",
+      }),
+      event("3", { type: "decision_recorded", decision_id: decision("3"), title: "voided" }),
+      event("4", { type: "decision_voided", decision_id: decision("3") }),
+    ];
+    await writeFile(join(dir, "events.jsonl"), `${events.join("\n")}\n`);
     const { out } = capture();
     await runBoardMeasure({}, ctx(repo));
     const text = out.join("\n");
     expect(text).toContain(
-      `\nTrail:\n  decisions 1 (live 1)\n  open tracks 1\n    ${decision}  open `,
+      `\nTrail:\n  decisions 3 (live 2)\n  open tracks 2\n    ${decision("2")}  newer\n    ${decision("1")}  open `,
     );
     expect(text).not.toContain(ESC);
 
-    await writeFile(join(dir, "events.jsonl"), `{"broken\n${event}\n`);
+    await writeFile(join(dir, "events.jsonl"), `{"broken\n${events[0]}\n`);
+    out.length = 0;
+    process.exitCode = 0;
+    await runBoardMeasure({ json: true }, ctx(repo));
+    expect(JSON.parse(out.join("\n")).complete).toBe(false);
+    expect(process.exitCode).toBe(1);
     out.length = 0;
     await runBoardMeasure({}, ctx(repo));
     expect(out.join("\n")).toContain("\nTrail:\n  not measured\n");

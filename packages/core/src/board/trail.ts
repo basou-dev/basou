@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type ReplayWarning, readAllEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
-import { enumerateSessionDirs } from "../storage/sessions.js";
+import { enumerateSessionEntries } from "../storage/sessions.js";
 import { loadTaskEntries, type TaskSkipReason } from "../storage/tasks.js";
 
 /**
@@ -18,8 +18,8 @@ export type BoardTrack = { id: string; title: string };
  * The workspace's own decisions, read from its events (not from
  * decisions.md), on this host only. A decision recorded twice under one id
  * counts once. All three are null, with one not_found entry at `trail`, when
- * an event line could not be read; a torn last line, a write in progress, is
- * not counted as one.
+ * an event line could not be read (a torn last line, a write in progress, is
+ * not counted as one) or an entry named as a session is not a directory.
  */
 export type BoardTrail = {
   decisions_all: number | null;
@@ -46,25 +46,20 @@ export type TrailInput = {
   onTaskSkip?: (taskId: string, reason: TaskSkipReason) => void;
 };
 
-// Event lines that were not read as events. A torn last line is a write in
-// progress, not a recorded event, and a retired zero-duration line is not a
-// decision; anything else may have been one.
-const LOST_LINES = new Set<ReplayWarning["kind"]>(["malformed_json", "schema_violation"]);
-
-// Whether line `lineNo` of an events log is its last line with no newline
-// after it: a write that has not finished, which replay reports as malformed
-// when it is cut in the middle of the JSON.
-async function isTornTail(eventsLog: string, lineNo: number): Promise<boolean> {
+// How many of the lines of an events log that were not JSON were lost
+// events: all but a torn last line, one with no newline after it, which is a
+// write that has not finished. The log is read once, however many there are.
+async function lostAmong(eventsLog: string, malformed: readonly number[]): Promise<number> {
   let body: Buffer;
   try {
     body = await readFile(eventsLog);
   } catch {
-    return false;
+    return malformed.length;
   }
-  if (body.length === 0 || body[body.length - 1] === 0x0a) return false;
+  if (body.length === 0 || body[body.length - 1] === 0x0a) return malformed.length;
   let newlines = 0;
   for (const byte of body) if (byte === 0x0a) newlines++;
-  return lineNo === newlines + 1;
+  return malformed.filter((lineNo) => lineNo !== newlines + 1).length;
 }
 
 type Recorded = { track: boolean; title: string; occurredAt: number };
@@ -75,18 +70,22 @@ export async function readDecisions(input: TrailInput): Promise<TrailDecisions> 
     const recorded = new Map<string, Recorded>();
     const voided = new Set<string>();
     let lost = 0;
-    for (const sessionId of await enumerateSessionDirs(input.paths)) {
+    const { dirs, notDirectories } = await enumerateSessionEntries(input.paths);
+    for (const sessionId of dirs) {
       const sessionDir = join(input.paths.sessions, sessionId);
-      const lostLines: number[] = [];
+      // A line that is not JSON may be a write in progress; one that is JSON
+      // but not an event of the schema is complete, so it is a lost event
+      // wherever it is. A retired zero-duration line is not a decision.
+      const malformed: number[] = [];
       const events = await readAllEvents(sessionDir, {
         onWarning: (warning) => {
-          if (LOST_LINES.has(warning.kind)) lostLines.push(warning.line);
+          if (warning.kind === "malformed_json") malformed.push(warning.line);
+          else if (warning.kind === "schema_violation") lost++;
           input.onReplayWarning?.(warning, sessionId);
         },
       });
-      for (const lineNo of lostLines) {
-        if (!(await isTornTail(join(sessionDir, "events.jsonl"), lineNo))) lost++;
-      }
+      if (malformed.length > 0)
+        lost += await lostAmong(join(sessionDir, "events.jsonl"), malformed);
       for (const event of events) {
         if (event.type === "decision_recorded") {
           // One id is one decision: the earliest record of it stands.
@@ -104,11 +103,16 @@ export async function readDecisions(input: TrailInput): Promise<TrailDecisions> 
         }
       }
     }
-    if (lost > 0) {
-      return {
-        ok: false,
-        reason: `${lost} event line${lost === 1 ? "" : "s"} could not be read, so decisions may be missing`,
-      };
+    const problems: string[] = [];
+    if (lost > 0) problems.push(`${lost} event line${lost === 1 ? "" : "s"} could not be read`);
+    if (notDirectories.length > 0) {
+      const n = notDirectories.length;
+      problems.push(
+        `${n} session ${n === 1 ? "entry is" : "entries are"} not a directory (a symlink or a file)`,
+      );
+    }
+    if (problems.length > 0) {
+      return { ok: false, reason: `${problems.join(", and ")}, so decisions may be missing` };
     }
     const live = [...recorded].filter(([id]) => !voided.has(id));
     const tracks = live
