@@ -3641,11 +3641,12 @@ describe("measureBoard: the components section", () => {
         "packages/x/pyproject.toml": "\n",
         "tools/Taskfile.yml": "\n",
         "svc/Dockerfile.dev": "FROM x\n",
-        "svc/compose.override.yaml": "\n",
+        "stack/compose.override.yaml": "\n",
         "edge/wrangler.jsonc": "{}\n",
         "infra/main.tf": "\n",
         "terraform/net/vpc.tf": "\n",
         "terraform/migrations/1.sql": "\n",
+        "migrations/terraform/notes.txt": "\n",
         ".github/workflows/ci.yml": "\n",
         ".github/workflows/nested/release.yaml": "\n",
         ".github/workflows/README.md": "\n",
@@ -3678,9 +3679,12 @@ describe("measureBoard: the components section", () => {
       "app/edge": ["edge"],
       "app/infra": ["iac"],
       "app/late": ["container"],
+      // Under migrations first: not infrastructure.
+      "app/migrations": ["db"],
       "app/packages/x": ["manifest"],
       "app/prisma": ["db"],
       "app/sql": ["sql"],
+      "app/stack": ["container"],
       "app/supabase": ["db"],
       "app/svc": ["container"],
       // The first directory of either sort on the way down wins.
@@ -3720,7 +3724,8 @@ describe("measureBoard: the components section", () => {
       gone: [],
       kind_changed: null,
     });
-    await repo("app", { "README.md": "\n" });
+    // Only a workflow is a CI marker, not any file beside them.
+    await repo("app", { "README.md": "\n", ".github/workflows/README.md": "\n" });
     const bare = await measure(declare([], { components: registry(["app"]) }, ["app"]), NOW, [
       "app",
     ]);
