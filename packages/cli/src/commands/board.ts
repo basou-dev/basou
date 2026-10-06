@@ -225,6 +225,17 @@ function trailLines(m: BoardMeasurement): string[] {
   return lines;
 }
 
+function integrityLines(m: BoardMeasurement): string[] {
+  const { by_status, not_verified } = m.integrity;
+  if (by_status === null || not_verified === null) return ["  not measured"];
+  const counts = Object.entries(by_status);
+  const total = counts.reduce((sum, [, count]) => sum + count, 0);
+  return [
+    `  sessions ${total}: ${counts.map(([status, count]) => `${count} ${status}`).join(", ")}`,
+    `  not verified ${not_verified}`,
+  ];
+}
+
 function printMeasurementText(m: BoardMeasurement): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
@@ -251,6 +262,7 @@ function printMeasurementText(m: BoardMeasurement): void {
     }
   }
   lines.push("", "Trail:", ...trailLines(m));
+  lines.push("", "Integrity:", ...integrityLines(m));
   if (m.not_found.length > 0) {
     lines.push("", `Not measured (${m.not_found.length}):`);
     for (const missing of m.not_found)

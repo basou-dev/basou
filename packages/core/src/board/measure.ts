@@ -17,6 +17,7 @@ import {
   normalizePathspec,
   toBytes,
 } from "./glob.js";
+import { BOARD_INTEGRITY_METHOD, type BoardIntegrity, measureIntegrity } from "./integrity.js";
 import { BOARD_REPOS_METHOD, type BoardRepo, measureRepos } from "./repos.js";
 import {
   blockedAmong,
@@ -75,15 +76,17 @@ export type BoardMeasurement = {
   digest: string;
   /**
    * The version of how each built-in section measures (see
-   * `BOARD_REPOS_METHOD` and `BOARD_TRAIL_METHOD`).
+   * `BOARD_REPOS_METHOD`, `BOARD_TRAIL_METHOD` and `BOARD_INTEGRITY_METHOD`).
    */
-  methods: { repos: number; trail: number };
+  methods: { repos: number; trail: number; integrity: number };
   /** Each repository the manifest declares, in its order. */
   repos: BoardRepo[];
   measures: Record<string, BoardMeasureValue>;
   ratios: Record<string, BoardRatioValue>;
   /** The workspace's own decisions and open tracks. */
   trail: BoardTrail;
+  /** What `basou verify` finds in the workspace's own sessions. */
+  integrity: BoardIntegrity;
 };
 
 export type MeasureBoardInput = {
@@ -163,6 +166,8 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
 
   const trailed = trailSection(await decisionsOf());
   notFound.push(...trailed.notFound);
+  const verified = await measureIntegrity(input.paths);
+  notFound.push(...verified.notFound);
 
   const body = {
     board_version: declaration.board_version,
@@ -171,11 +176,16 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     measured_with: input.measuredWith,
     complete: notFound.length === 0,
     not_found: notFound,
-    methods: { repos: BOARD_REPOS_METHOD, trail: BOARD_TRAIL_METHOD },
+    methods: {
+      repos: BOARD_REPOS_METHOD,
+      trail: BOARD_TRAIL_METHOD,
+      integrity: BOARD_INTEGRITY_METHOD,
+    },
     repos: repos.repos,
     measures,
     ratios,
     trail: trailed.trail,
+    integrity: verified.integrity,
   };
   const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
   return {
@@ -191,6 +201,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     measures,
     ratios,
     trail: body.trail,
+    integrity: body.integrity,
   };
 }
 

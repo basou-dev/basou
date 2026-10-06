@@ -16,6 +16,8 @@ export {
 } from "./declaration.js";
 export type { GlobMatcher } from "./glob.js";
 export { compileGlob, compileGlobs } from "./glob.js";
+export type { BoardIntegrity } from "./integrity.js";
+export { BOARD_INTEGRITY_METHOD } from "./integrity.js";
 export type {
   BoardMeasurement,
   BoardMeasureValue,

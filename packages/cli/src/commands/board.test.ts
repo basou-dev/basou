@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { createManifest, ensureBasouDirectory, type RepoEntry, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doRunBoardMeasure, runBoardMeasure } from "./board.js";
+import { runVerify } from "./verify.js";
 
 const execFileAsync = promisify(execFile);
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
@@ -201,6 +202,9 @@ describe("basou board measure", () => {
       "Not measured (1):\n  measures.gone: 'GONE.md' matches no file in the working tree",
     );
     expect(text).toContain("\nTrail:\n  decisions 0 (live 0)\n  open tracks 0\n");
+    expect(text).toContain(
+      "\nIntegrity:\n  sessions 0: 0 verified, 0 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 unsupported, 0 tampered\n  not verified 0\n",
+    );
     expect(text).toContain("Complete: no");
     expect(text).toMatch(/Digest: sha256:[0-9a-f]{64}/);
   });
@@ -308,6 +312,60 @@ describe("basou board measure", () => {
     out.length = 0;
     await runBoardMeasure({}, ctx(repo));
     expect(out.join("\n")).toContain("\nTrail:\n  not measured\n");
+  });
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("counts what basou verify reports, and prints it or that it was not measured", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const sessions = join(repo, ".basou", "sessions");
+    const sessionId = "ses_01HXABCDEF1234567890ABCS01";
+    await mkdir(join(sessions, sessionId), { recursive: true });
+    await writeFile(
+      join(sessions, sessionId, "events.jsonl"),
+      `${JSON.stringify({
+        schema_version: "0.1.0",
+        id: "evt_01HXABCDEF1234567890ABCE01",
+        session_id: sessionId,
+        occurred_at: "2026-10-01T00:00:00Z",
+        source: "local-cli",
+        type: "note_added",
+        body: "x",
+      })}\n`,
+    );
+    await symlink(join(sessions, sessionId), join(sessions, "ses_01HXABCDEF1234567890ABCS02"));
+    await writeFile(join(sessions, "ses_01HXABCDEF1234567890ABCS03"), "not a session\n");
+    const { out } = capture();
+    await runVerify({ json: true }, { cwd: repo });
+    const rows = JSON.parse(out.join("\n")) as { status: string }[];
+    const tally: Record<string, number> = {};
+    for (const row of rows) tally[row.status] = (tally[row.status] ?? 0) + 1;
+    out.length = 0;
+    process.exitCode = 0;
+    const result = await doRunBoardMeasure({ json: true }, ctx(repo));
+    expect(rows).toHaveLength(3);
+    expect(
+      Object.fromEntries(Object.entries(result.integrity.by_status ?? {}).filter(([, n]) => n > 0)),
+    ).toEqual(tally);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      "\nIntegrity:\n  sessions 3: 0 verified, 1 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 unsupported, 2 tampered\n  not verified 3\n",
+    );
+
+    const events = join(sessions, sessionId, "events.jsonl");
+    await chmod(events, 0o000);
+    try {
+      out.length = 0;
+      process.exitCode = 0;
+      await runBoardMeasure({}, ctx(repo));
+      expect(out.join("\n")).toContain("\nIntegrity:\n  not measured\n");
+      expect(process.exitCode).toBe(1);
+    } finally {
+      await chmod(events, 0o644);
+    }
   });
 
   it("refuses a workspace that is not initialized", async () => {
