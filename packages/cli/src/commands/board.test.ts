@@ -518,7 +518,13 @@ describe("basou board measure", () => {
     await placeBoard(repo, boardYaml([]));
     const config = join(repo, ".portfolio.yaml");
     const absent = join(repo, "gone");
-    await writeFile(config, `workspaces:\n  - { path: ${repo} }\n  - { path: ${absent} }\n`);
+    // There, but with no `.basou` directory of its own.
+    const bare = join(repo, "bare");
+    await mkdir(bare);
+    await writeFile(
+      config,
+      `workspaces:\n  - { path: ${repo} }\n  - { path: ${bare} }\n  - { path: ${absent} }\n`,
+    );
     const { out } = capture();
     const listed = await doRunPortfolioList({ json: true }, { configPath: config });
     out.length = 0;
@@ -527,10 +533,10 @@ describe("basou board measure", () => {
       workspaces: listed.workspaces.length,
       initialized: listed.workspaces.filter((w) => w.initialized).length,
     });
-    expect(result.portfolio).toEqual({ workspaces: 2, initialized: 1 });
+    expect(result.portfolio).toEqual({ workspaces: 3, initialized: 1 });
     out.length = 0;
     await runBoardMeasure({}, ctx(repo));
-    expect(out.join("\n")).toContain("\nPortfolio:\n  workspaces 2 (initialized 1)\n");
+    expect(out.join("\n")).toContain("\nPortfolio:\n  workspaces 3 (initialized 1)\n");
 
     await writeFile(config, "workspaces: []\n");
     out.length = 0;
