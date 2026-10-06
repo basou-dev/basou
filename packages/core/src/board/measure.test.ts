@@ -2741,17 +2741,36 @@ describe("measureBoard: the review_gaps section", () => {
 
   it("counts a line once, though the events of a running session are read twice", async () => {
     const s1 = SES("C01");
+    // Complete JSON, but not an event of the schema.
+    const off = line(s1, "E02", { type: "command_executed", command: 1 });
     await placeWork(
       s1,
       "claude-code-import",
-      `{"bad\n${ran(s1, "E01", "2026-10-01T10:05:00Z", "git commit -m a", ALPHA)}`,
+      `{"bad\n${off}${ran(s1, "E01", "2026-10-01T10:05:00Z", "git commit -m a", ALPHA)}`,
       "running",
     );
     const m = await measure(declare([]));
     expect(m.review_gaps).toEqual({ by_verdict: null, gaps: null });
     expect(m.not_found.filter((n) => n.at === "review_gaps")).toEqual([
-      { at: "review_gaps", reason: "1 event line could not be read, so the counts are not known" },
+      { at: "review_gaps", reason: "2 event lines could not be read, so the counts are not known" },
     ]);
+  });
+
+  it("looks for a review in the 24 hours before a commit, as basou review-gaps does by default", async () => {
+    const [r1, r2, c1, c2] = ["R01", "R02", "C01", "C02"].map(SES) as string[];
+    const commit = "2026-10-02T10:00:00Z";
+    await placeWork(r1, "codex-import", ran(r1, "E01", "2026-10-01T11:00:00Z", "git diff", ALPHA));
+    await placeWork(r2, "codex-import", ran(r2, "E02", "2026-10-01T09:00:00Z", "git diff", BETA));
+    await placeWork(c1, "claude-code-import", ran(c1, "E03", commit, "git commit -m a", ALPHA));
+    await placeWork(c2, "claude-code-import", ran(c2, "E04", commit, "git commit -m b", BETA));
+    const m = await measure(declare([]));
+    // 23 hours before binds; 25 hours before is out of the window.
+    expect(m.review_gaps.by_verdict).toEqual({
+      omission: 1,
+      near_unbound: 0,
+      candidate: 1,
+      unknown: 0,
+    });
   });
 
   it("is not measured when a session.yaml is missing or is not a session", async () => {
