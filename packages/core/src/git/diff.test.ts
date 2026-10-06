@@ -14,8 +14,9 @@ const ENV: NodeJS.ProcessEnv = {
   GIT_CONFIG_SYSTEM: ENV_GLOBAL,
 };
 
-// Test-only SimpleGit factory: needs `unsafe.allowUnsafeConfigPaths` so the
-// isolated GIT_CONFIG_GLOBAL/SYSTEM paths are honoured. Production code paths
+// Test-only SimpleGit factory: needs `unsafe.allowUnsafeConfigPaths` and
+// `allowEnvironment` so the isolated GIT_CONFIG_GLOBAL/SYSTEM paths reach git
+// and are honoured. Production code paths
 // in diff.ts use the production `safeSimpleGit` from snapshot.ts which does
 // not opt into unsafe options. Named distinctly to avoid shadowing the
 // production export inside this module.

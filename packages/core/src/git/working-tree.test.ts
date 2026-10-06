@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  unlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SimpleGit, simpleGit } from "simple-git";
@@ -204,6 +214,56 @@ describe("getUntrackedFiles", () => {
   it("throws the fixed 'Not a git repository' outside a repository", async () => {
     await expect(getUntrackedFiles(tmpRepo)).rejects.toThrow("Not a git repository");
   });
+
+  it("does not read the global config the caller's GIT_CONFIG_GLOBAL names", async () => {
+    // simple-git leaves the variable out of the git it runs, so the excludes
+    // file that config names does not hide the file.
+    await initRepo(tmpRepo);
+    const name = "basou-config-probe.ts";
+    await writeFile(join(tmpRepo, name), "export const a = 1;\n");
+    const elsewhere = await mkdtemp(join(tmpdir(), "basou-worktree-config-"));
+    const saved = process.env.GIT_CONFIG_GLOBAL;
+    try {
+      await writeFile(join(elsewhere, "excludes"), `${name}\n`);
+      await writeFile(
+        join(elsewhere, "config"),
+        `[core]\n\texcludesFile = ${join(elsewhere, "excludes").replaceAll("\\", "/")}\n`,
+      );
+      process.env.GIT_CONFIG_GLOBAL = join(elsewhere, "config");
+      expect(await getUntrackedFiles(tmpRepo)).toEqual([{ path: name, status: "added" }]);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = saved;
+      await rm(elsewhere, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the git simple-git runs", () => {
+  it.skipIf(process.platform === "win32")(
+    "refuses abbreviated long options, and the programs git starts inherit that",
+    async () => {
+      // A clean filter git runs to tell whether a file whose stat changed
+      // changed, recording what it sees of the variable.
+      await initRepo(tmpRepo, { ".gitattributes": "a.txt filter=probe\n", "a.txt": "x\n" });
+      const elsewhere = await mkdtemp(join(tmpdir(), "basou-worktree-probe-"));
+      try {
+        const seen = join(elsewhere, "seen");
+        // Written into .git/config directly: simple-git refuses to configure
+        // a filter without an unsafe opt-in. (A ';' would start a comment.)
+        await appendFile(
+          join(tmpRepo, ".git", "config"),
+          `[filter "probe"]\n\tclean = printf %s \\"$GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS\\" > '${seen}' && cat\n`,
+        );
+        const later = new Date(Date.now() + 60_000);
+        await utimes(join(tmpRepo, "a.txt"), later, later);
+        expect(await getWorkingTreeChanges(tmpRepo)).toEqual([]);
+        expect(await readFile(seen, "utf8")).toBe("true");
+      } finally {
+        await rm(elsewhere, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("readEmptyTreeSha", () => {

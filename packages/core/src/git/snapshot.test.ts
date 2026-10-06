@@ -93,8 +93,8 @@ describe("resolveRepositoryRoot", () => {
   });
 
   it("does not let the caller's GIT_ variables steer it", async () => {
-    // simple-git leaves them out of the git it runs: a ceiling above the
-    // subdirectory, or a GIT_DIR at another repository, changes nothing.
+    // simple-git leaves them out of the git it runs: a ceiling at the
+    // repository, or a GIT_DIR that names no repository, changes nothing.
     await initRepoWithCommit(tmpRepo);
     const subdir = join(tmpRepo, "subdir");
     await mkdir(subdir);
