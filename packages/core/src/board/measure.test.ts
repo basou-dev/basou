@@ -3440,8 +3440,12 @@ describe("measureBoard: the effort section", () => {
     await placeWorked(SES("C02"), "codex-adapter", "2026-09-01T00:00:00Z", [
       ["2026-09-01T00:00:00Z", "2026-09-01T00:30:00Z"],
     ]);
+    // And Claude Code's launcher is Claude's, on 10-03.
+    await placeWorked(SES("C03"), "claude-code-adapter", "2026-10-03T00:00:00Z", [
+      ["2026-10-03T00:00:00Z", "2026-10-03T00:15:00Z"],
+    ]);
     const idle = await measure(declare([], TOKYO));
-    expect(idle.effort.active_ms).toEqual(active(30, 30, 0));
+    expect(idle.effort.active_ms).toEqual(active(45, 45, 0));
     expect(idle.effort.daily.every((row) => row.active_ms.codex === 0)).toBe(true);
   });
 

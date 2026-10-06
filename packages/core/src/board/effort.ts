@@ -113,7 +113,6 @@ export async function measureEffort(input: EffortInput): Promise<{
   const today = calendar.dateOf(input.now.getTime());
   const days = datesFrom(input.start, today);
   const elapsedDays = Math.round((utcOf(today) - utcOf(input.start)) / 86_400_000);
-  const startMs = calendar.midnightOf(input.start);
 
   // Commits, each repository apart.
   const commits: Record<string, number | null> = {};
@@ -168,9 +167,9 @@ export async function measureEffort(input: EffortInput): Promise<{
     const hasCodex = all.some((s) => VENDOR[s.sourceKind] === "codex");
     const vendorOf = (wanted: "claude" | "codex") =>
       all.filter((s) => VENDOR[s.sourceKind] === wanted);
-    const union = byDay(all, calendar, startMs, days);
-    const claude = byDay(vendorOf("claude"), calendar, startMs, days);
-    const codex = byDay(vendorOf("codex"), calendar, startMs, days);
+    const union = byDay(all, calendar, days);
+    const claude = byDay(vendorOf("claude"), calendar, days);
+    const codex = byDay(vendorOf("codex"), calendar, days);
 
     const tokensByDay = new Map<string, number>();
     for (const day of days) tokensByDay.set(day, 0);
@@ -275,11 +274,11 @@ async function readSessions(
   return { ok: true, sessions };
 }
 
-// The merged active time of `sessions` on each of `days`, from the start on.
+// The merged active time of `sessions` on each of `days`. Time on a day
+// before the first or after the last has no row, so it is not counted.
 function byDay(
   sessions: readonly SessionWorkStats[],
   calendar: Calendar,
-  startMs: number,
   days: readonly string[],
 ): Map<string, number> {
   const totals = new Map<string, number>();
@@ -287,7 +286,7 @@ function byDay(
   const intervals: IntervalMs[] = [];
   for (const session of sessions) intervals.push(...intervalsIsoToMs(session.activeIntervals));
   for (const [from, to] of mergeIntervals(intervals)) {
-    let begin = Math.max(from, startMs);
+    let begin = from;
     while (begin < to) {
       const day = calendar.dateOf(begin);
       const next = Math.min(to, calendar.midnightOf(nextDate(day)));
