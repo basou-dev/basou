@@ -1,4 +1,10 @@
 export type {
+  BoardComponent,
+  BoardComponentChange,
+  BoardComponents,
+} from "./components.js";
+export { BOARD_COMPONENTS_METHOD } from "./components.js";
+export type {
   BoardDeclaration,
   BoardDeclarationContext,
   BoardDeclarationResult,

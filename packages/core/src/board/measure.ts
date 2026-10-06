@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { ReplayWarning } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import type { TaskSkipReason } from "../storage/tasks.js";
+import { BOARD_COMPONENTS_METHOD, type BoardComponents, measureComponents } from "./components.js";
 import {
   BOARD_DEFAULT_AT,
   BOARD_REGEX_FLAGS,
@@ -95,7 +96,8 @@ export type BoardMeasurement = {
    * The version of how each built-in section measures (see
    * `BOARD_REPOS_METHOD`, `BOARD_TRAIL_METHOD`, `BOARD_INTEGRITY_METHOD`,
    * `BOARD_REVIEW_GAPS_METHOD`, `BOARD_PORTFOLIO_METHOD`,
-   * `BOARD_FRESHNESS_METHOD` and `BOARD_EFFORT_METHOD`).
+   * `BOARD_FRESHNESS_METHOD`, `BOARD_EFFORT_METHOD` and
+   * `BOARD_COMPONENTS_METHOD`).
    */
   methods: {
     repos: number;
@@ -105,6 +107,7 @@ export type BoardMeasurement = {
     portfolio: number;
     freshness: number;
     effort: number;
+    components: number;
   };
   /** Each repository the manifest declares, in its order. */
   repos: BoardRepo[];
@@ -122,6 +125,8 @@ export type BoardMeasurement = {
   freshness: BoardFreshness;
   /** The work since the board's start: active time, tokens and commits, by day. */
   effort: BoardEffort;
+  /** The components the markers find, held against the declaration's. */
+  components: BoardComponents;
 };
 
 export type MeasureBoardInput = {
@@ -225,6 +230,13 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     authorDates: repos.authorDates,
   });
   notFound.push(...worked.notFound);
+  const built = await measureComponents({
+    repos: input.repos,
+    names: new Map(repos.repos.map((repo) => [repo.path, repo.name])),
+    worktreeOf: (repo) => scopeOf(repo, BOARD_DEFAULT_AT),
+    registered: declaration.components,
+  });
+  notFound.push(...built.notFound);
 
   const body = {
     board_version: declaration.board_version,
@@ -241,6 +253,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
       portfolio: BOARD_PORTFOLIO_METHOD,
       freshness: BOARD_FRESHNESS_METHOD,
       effort: BOARD_EFFORT_METHOD,
+      components: BOARD_COMPONENTS_METHOD,
     },
     repos: repos.repos,
     measures,
@@ -251,6 +264,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     portfolio: registered.portfolio,
     freshness: current.freshness,
     effort: worked.effort,
+    components: built.components,
   };
   const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
   return {
@@ -271,6 +285,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     portfolio: body.portfolio,
     freshness: body.freshness,
     effort: body.effort,
+    components: body.components,
   };
 }
 

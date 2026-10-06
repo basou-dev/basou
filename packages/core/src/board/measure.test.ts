@@ -877,6 +877,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "portfolio",
       "freshness",
       "effort",
+      "components",
     ]);
     expect(m).toMatchObject({
       board_version: 1,
@@ -1636,6 +1637,7 @@ describe("measureBoard: the repos section", () => {
         at: "effort.commits[app/sub]",
         reason: "the repo 'app/sub' is inside a git repository but is not its root",
       },
+      { at: "components", reason: "the repo 'gone' is not on disk" },
     ]);
     expect(m.complete).toBe(false);
   });
@@ -1708,6 +1710,7 @@ describe("measureBoard: the repos section", () => {
       portfolio: 1,
       freshness: 1,
       effort: 1,
+      components: 1,
     });
     const later = await measure(declaration, new Date("2026-10-05T09:00:00.000Z"), ["app"]);
     expect(later.digest).toBe(first.digest);
@@ -1829,6 +1832,7 @@ describe("measureBoard: the repos section", () => {
           { at: "measures.inside", reason: listed },
           { at: "measures.capture", reason: listed },
           { at: "measures.top_dirs", reason: listed },
+          { at: "components", reason: `in the repo 'app', ${listed}` },
         ]);
         expect(m.complete).toBe(false);
       } finally {
@@ -1870,6 +1874,7 @@ describe("measureBoard: the repos section", () => {
             reason: `git could not compare all of the working tree ("unable to access 'logs/.gitignore': Permission denied")`,
           },
           { at: "measures.logs", reason: unread },
+          { at: "components", reason: `in the repo 'app', ${unread}` },
         ]);
       } finally {
         await chmod(join(dir, "logs", ".gitignore"), 0o644);
@@ -2743,6 +2748,7 @@ describe("measureBoard: the integrity section", () => {
       portfolio: 1,
       freshness: 1,
       effort: 1,
+      components: 1,
     });
     await placeChained(SES("S01"));
     const verified = await measure(declaration);
@@ -3001,6 +3007,7 @@ describe("measureBoard: the review_gaps section", () => {
       portfolio: 1,
       freshness: 1,
       effort: 1,
+      components: 1,
     });
     await placeWork(
       s1,
@@ -3119,6 +3126,7 @@ describe("measureBoard: the portfolio section", () => {
       portfolio: 1,
       freshness: 1,
       effort: 1,
+      components: 1,
     });
     expect(bare.portfolio).toEqual({ workspaces: 1, initialized: 0 });
     await mkdir(join(master, ".basou"));
@@ -3614,5 +3622,151 @@ describe("measureBoard: the effort section", () => {
       m.digest,
     );
     expect(boardDigest({ ...m, effort: { ...m.effort, output_tokens: 9 } })).not.toBe(m.digest);
+  });
+});
+
+describe("measureBoard: the components section", () => {
+  const POSIX = process.platform !== "win32";
+  const registry = (keys: string[]) =>
+    Object.fromEntries(keys.map((key) => [key, { lane: "-", note: "fixture" }]));
+
+  it("finds each kind of marker in the working tree, by the directory of the component", async () => {
+    const dir = await repo(
+      "app",
+      {
+        ".gitignore": "ignored/\n",
+        "package.json": "{}\n",
+        Makefile: "all:\n",
+        ".env.example": "A=1\n",
+        "packages/x/pyproject.toml": "\n",
+        "tools/Taskfile.yml": "\n",
+        "svc/Dockerfile.dev": "FROM x\n",
+        "svc/compose.override.yaml": "\n",
+        "edge/wrangler.jsonc": "{}\n",
+        "infra/main.tf": "\n",
+        "terraform/net/vpc.tf": "\n",
+        "terraform/migrations/1.sql": "\n",
+        ".github/workflows/ci.yml": "\n",
+        ".github/workflows/nested/release.yaml": "\n",
+        ".github/workflows/README.md": "\n",
+        "supabase/config.toml": "\n",
+        "other/config.toml": "\n",
+        "prisma/schema.prisma": "\n",
+        "db/drizzle.config.ts": "\n",
+        "db/migrations/001_init.sql": "\n",
+        "sql/seed.sql": "\n",
+        "vendor/lib/package.json": "{}\n",
+        "web/dist/Dockerfile": "\n",
+      },
+      {
+        // Not tracked yet, but on disk and not ignored.
+        "late/Dockerfile": "FROM x\n",
+        "ignored/package.json": "{}\n",
+        "node_modules/x/package.json": "{}\n",
+      },
+    );
+    expect(dir).toBe(join(root, "app"));
+    const m = await measure(declare([], {}, ["app"]), NOW, ["app"]);
+    const kinds = Object.fromEntries(
+      Object.entries(m.components.found ?? {}).map(([key, found]) => [key, found.kinds]),
+    );
+    expect(kinds).toEqual({
+      app: ["build", "env", "manifest"],
+      "app/.github/workflows": ["ci"],
+      "app/db": ["db"],
+      "app/db/migrations": ["db"],
+      "app/edge": ["edge"],
+      "app/infra": ["iac"],
+      "app/late": ["container"],
+      "app/packages/x": ["manifest"],
+      "app/prisma": ["db"],
+      "app/sql": ["sql"],
+      "app/supabase": ["db"],
+      "app/svc": ["container"],
+      // The first directory of either sort on the way down wins.
+      "app/terraform": ["iac"],
+      "app/terraform/net": ["iac"],
+      "app/tools": ["build"],
+    });
+    expect(Object.keys(m.components.found ?? {})).toEqual(Object.keys(kinds).sort());
+    expect(m.complete).toBe(true);
+  });
+
+  it("holds what it finds against the declaration's components", async () => {
+    await repo("app", { "package.json": "{}\n", "svc/Dockerfile": "FROM x\n" });
+    const m = await measure(
+      declare([], { components: registry(["app", "app/gone", "app/also-gone"]) }, ["app"]),
+      NOW,
+      ["app"],
+    );
+    expect(m.components).toEqual({
+      found: {
+        app: { kinds: ["manifest"], status: "known" },
+        "app/svc": { kinds: ["container"], status: "unacknowledged" },
+      },
+      unacknowledged: ["app/svc"],
+      gone: ["app/also-gone", "app/gone"],
+      // There is no previous record to hold the kinds against.
+      kind_changed: null,
+    });
+    expect(m.not_found).toEqual([]);
+  });
+
+  it("finds nothing, and no gap, with no repository or no marker", async () => {
+    const none = await measure(declare([]));
+    expect(none.components).toEqual({
+      found: {},
+      unacknowledged: [],
+      gone: [],
+      kind_changed: null,
+    });
+    await repo("app", { "README.md": "\n" });
+    const bare = await measure(declare([], { components: registry(["app"]) }, ["app"]), NOW, [
+      "app",
+    ]);
+    expect(bare.components).toMatchObject({ found: {}, unacknowledged: [], gone: ["app"] });
+  });
+
+  it.skipIf(!POSIX)(
+    "names a component by the directory the repository is in after symlinks, as text",
+    async () => {
+      await repo("app", { "データ/package.json": "{}\n" });
+      await symlink(join(root, "app"), join(root, "alias"));
+      const m = await measure(declare([], {}, ["alias"]), NOW, ["alias"]);
+      expect(Object.keys(m.components.found ?? {})).toEqual(["app/データ"]);
+    },
+  );
+
+  it("is not measured when two repositories are in directories of the same name", async () => {
+    await repo("one/app", { "package.json": "{}\n" });
+    await repo("two/app", { "package.json": "{}\n" });
+    const repos = ["one/app", "two/app"];
+    const m = await measure(declare([], {}, repos), NOW, repos);
+    expect(m.components).toEqual({
+      found: null,
+      unacknowledged: null,
+      gone: null,
+      kind_changed: null,
+    });
+    expect(m.not_found).toEqual([
+      {
+        at: "components",
+        reason:
+          "the repos 'one/app' and 'two/app' are both in a directory named 'app', so their components cannot be told apart",
+      },
+    ]);
+  });
+
+  it("names its method's version, and is in the digest", async () => {
+    const dir = await repo("app", { "package.json": "{}\n" });
+    const declaration = declare([], {}, ["app"]);
+    const first = await measure(declaration, NOW, ["app"]);
+    expect(first.methods.components).toBe(1);
+    await mkdir(join(dir, "svc"));
+    await writeFile(join(dir, "svc", "Dockerfile"), "FROM x\n");
+    const second = await measure(declaration, NOW, ["app"]);
+    expect(second.components.unacknowledged).toEqual(["app", "app/svc"]);
+    expect(second.digest).not.toBe(first.digest);
+    expect(boardDigest({ ...second, components: first.components })).not.toBe(second.digest);
   });
 });

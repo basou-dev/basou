@@ -43,7 +43,13 @@ All notable changes to **basou** are recorded here. The project follows
   at all is a null that means so), the output tokens of the sessions that
   recorded them, with how many Claude Code and Codex imports recorded none,
   and in each repository the manifest declares, the commits reachable from
-  HEAD authored each day. It
+  HEAD authored each day; and the components that built-in markers (a
+  package manifest, a build file, a container, an edge or hosting config, an
+  env example, infrastructure as code, a CI workflow, a database schema or
+  migrations, SQL) find in the working tree of each repository, each keyed
+  by the name of the repository's directory and the component's directory,
+  and held against the declaration's `components`: those it does not
+  register, and those it registers that were not found. It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git
@@ -61,7 +67,8 @@ All notable changes to **basou** are recorded here. The project follows
   `events.jsonl` that cannot be read, a
   `~/.basou/portfolio.yaml` that `basou portfolio` refuses, a dry run of an
   import that cannot run, commit dates git cannot give, no declared time zone
-  for the effort where this host's cannot be named, and for the trail, the
+  for the effort where this host's cannot be named, for the components two
+  repositories in directories of the same name, and for the trail, the
   review gaps, the newest
   session and the effort's time and tokens an entry named as a session that
   is not a directory, which the integrity counts as tampered as `basou

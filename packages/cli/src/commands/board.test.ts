@@ -676,6 +676,30 @@ describe("basou board measure", () => {
     expect(out.join("\n")).toContain("\nEffort:\n  from 2026-10-04 (UTC), 1 day\n");
   });
 
+  it("prints the components found, each flagged when it is not registered, and those gone", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await writeFile(join(repo, "package.json"), "{}\n");
+    await mkdir(join(repo, "svc"));
+    await writeFile(join(repo, "svc", "Dockerfile"), "FROM x\n");
+    const name = basename(repo);
+    const declared = JSON.parse(boardYaml([])) as Record<string, unknown>;
+    await placeBoard(
+      repo,
+      JSON.stringify({
+        ...declared,
+        components: {
+          [name]: { lane: ["core"] },
+          [`${name}/gone`]: { lane: "-", note: "removed" },
+        },
+      }),
+    );
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      `\nComponents:\n  2 found, 1 unacknowledged, 1 gone\n    ${name}  manifest\n    ${name}/svc  container  (unacknowledged)\n    ${name}/gone  (gone)\n`,
+    );
+  });
+
   it("refuses a workspace that is not initialized", async () => {
     const repo = await realpath(tmpRepo as string);
     const { out, err } = capture();
