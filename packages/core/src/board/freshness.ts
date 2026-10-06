@@ -12,8 +12,10 @@ export const BOARD_FRESHNESS_METHOD = 1;
 /**
  * What a dry run of `basou refresh` would do on this host: the sessions it
  * would newly import, the imported ones it would import again (grown or
- * replaced), and those that changed but it could not import safely. The
- * caller runs it, as `basou orient` does; the board does not import.
+ * replaced), and those whose native log grew but it could not import again
+ * safely. A session whose log shrank, which a refresh passes over, is in
+ * none of them, as in `basou orient`. The caller runs it, as `basou orient`
+ * does; the board does not import.
  */
 export type BoardImportProbe = {
   newSessions: number;
@@ -28,7 +30,9 @@ export type BoardImportProbe = {
  */
 export type BoardFreshness = {
   /**
-   * When the newest session that is not archived started, as recorded. Null
+   * When the newest session that is not archived started, as basou reads it
+   * from session.yaml (a time with no seconds gains `:00`, as `basou orient`
+   * shows it). Null
    * with no not_found entry when there is no such session, a null that means
    * so. Null with an entry at `freshness.newest_session_at` when the sessions
    * cannot be listed (or `.basou/sessions` is refused), a session.yaml cannot
@@ -37,9 +41,10 @@ export type BoardFreshness = {
    */
   newest_session_at: string | null;
   /**
-   * Sessions a `basou refresh` would newly import, import again, or could not
-   * import safely. Null with an entry at `freshness.unimported` when no dry
-   * run was given or it could not run.
+   * Sessions a `basou refresh` would newly import, import again, or, their
+   * native log having grown, could not import again safely. Null with an
+   * entry at `freshness.unimported` when no dry run was given or it could
+   * not run.
    */
   unimported: { new: number; updated: number; unverifiable: number } | null;
 };

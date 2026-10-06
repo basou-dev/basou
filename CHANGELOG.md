@@ -33,8 +33,10 @@ All notable changes to **basou** are recorded here. The project follows
   `~/.basou/portfolio.yaml` is a null that means so); and, as `basou orient`
   judges freshness, when the newest session that is not archived started (no
   such session is a null that means so) and how many sessions a `basou
-  refresh` would newly import, import again, or could not import safely,
-  counted by a dry run that reads this host's Claude Code and Codex logs. It
+  refresh` would newly import, import again, or, their native log having
+  grown, could not import again safely (a session whose log shrank is in
+  none of them), counted by a dry run that reads this host's Claude Code and
+  Codex logs. It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git
