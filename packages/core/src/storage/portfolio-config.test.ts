@@ -1,8 +1,13 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadPortfolioConfig } from "./portfolio-config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  loadPortfolioConfig,
+  PortfolioConfigMissingError,
+  portfolioPathExists,
+  portfolioPathInitialized,
+} from "./portfolio-config.js";
 
 let dir: string | undefined;
 
@@ -81,5 +86,58 @@ describe("loadPortfolioConfig", () => {
   it("rejects a non-string path", async () => {
     const path = await writeConfig("workspaces:\n  - path: 123\n");
     await expect(loadPortfolioConfig(path)).rejects.toThrow(/non-empty string 'path'/);
+  });
+});
+
+describe("the portfolio's own checks", () => {
+  it("says there is no config with its own error, and the message basou portfolio prints", async () => {
+    const error = await loadPortfolioConfig(join(getDir(), "absent.yaml")).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PortfolioConfigMissingError);
+    expect((error as Error).message).toMatch(
+      /^No portfolio config at ~\/\.basou\/portfolio\.yaml\./,
+    );
+    const broken = await loadPortfolioConfig(await writeConfig("workspaces: [\n")).catch(
+      (e: unknown) => e,
+    );
+    expect(broken).not.toBeInstanceOf(PortfolioConfigMissingError);
+  });
+
+  it("counts a path as initialized only when it owns a .basou directory", async () => {
+    const master = join(getDir(), "master");
+    const stray = join(getDir(), "stray");
+    await mkdir(join(master, ".basou"), { recursive: true });
+    await mkdir(stray);
+    await writeFile(join(stray, ".basou"), "not a store\n");
+    expect([master, stray, join(getDir(), "gone")].map(portfolioPathExists)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect([master, stray, join(getDir(), "gone")].map(portfolioPathInitialized)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+  });
+});
+
+describe("the default portfolio config path", () => {
+  it("is worked out when it is asked for, not when the module is imported", async () => {
+    vi.resetModules();
+    const homedir = vi.fn((): string => {
+      throw new Error("no home");
+    });
+    vi.doMock("node:os", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:os")>()),
+      homedir,
+    }));
+    try {
+      const loaded = await import("./portfolio-config.js");
+      expect(homedir).not.toHaveBeenCalled();
+      expect(() => loaded.defaultPortfolioConfigPath()).toThrow("no home");
+    } finally {
+      vi.doUnmock("node:os");
+      vi.resetModules();
+    }
   });
 });

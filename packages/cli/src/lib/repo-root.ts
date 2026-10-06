@@ -1,14 +1,19 @@
 import { realpath, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
-import { basouPaths, readManifest, resolveBasouRepositoryRoot } from "@basou/core";
-import { DEFAULT_PORTFOLIO_CONFIG_PATH, loadPortfolioConfig } from "./portfolio-config.js";
+import {
+  basouPaths,
+  defaultPortfolioConfigPath,
+  loadPortfolioConfig,
+  readManifest,
+  resolveBasouRepositoryRoot,
+} from "@basou/core";
 
 /** A planning master that aggregates the queried repo via its `source_roots`. */
 export type MemberMaster = { root: string; label: string };
 
 /** Override the portfolio registry path (tests). */
 export type ResolveRootOptions = {
-  /** Defaults to {@link DEFAULT_PORTFOLIO_CONFIG_PATH}. */
+  /** Defaults to {@link defaultPortfolioConfigPath}. */
   portfolioConfigPath?: string;
 };
 
@@ -61,7 +66,7 @@ export async function resolveBasouRootForCommand(
   if (!(await hasBasouStore(root))) {
     const master = await resolveMemberToMaster(
       root,
-      opts.portfolioConfigPath ?? DEFAULT_PORTFOLIO_CONFIG_PATH,
+      opts.portfolioConfigPath ?? defaultPortfolioConfigPath(),
     );
     if (master !== undefined) {
       console.error(

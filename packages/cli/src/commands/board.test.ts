@@ -13,6 +13,7 @@ import {
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doRunBoardMeasure, runBoardMeasure } from "./board.js";
+import { doRunPortfolioList } from "./portfolio.js";
 import { doRunReviewGaps } from "./review-gaps.js";
 import { runVerify } from "./verify.js";
 
@@ -89,7 +90,13 @@ function capture(): { out: string[]; err: string[] } {
   return { out, err };
 }
 
-const ctx = (cwd: string) => ({ cwd, nowProvider: () => NOW });
+// The portfolio config is read from beside the workspace, where no test
+// writes one unless it means to, so no test reads the host's own.
+const ctx = (cwd: string) => ({
+  cwd,
+  nowProvider: () => NOW,
+  portfolioConfigPath: join(cwd, ".portfolio.yaml"),
+});
 const ESC = String.fromCharCode(27);
 
 describe("basou board measure", () => {
@@ -216,6 +223,7 @@ describe("basou board measure", () => {
     expect(text).toContain(
       "\nReview gaps:\n  units 0: 0 omission, 0 near_unbound, 0 candidate, 0 unknown\n  gaps 0\n",
     );
+    expect(text).toContain("\nPortfolio:\n  no ~/.basou/portfolio.yaml\n");
     expect(text).toContain("Complete: no");
     expect(text).toMatch(/Digest: sha256:[0-9a-f]{64}/);
   });
@@ -505,12 +513,58 @@ describe("basou board measure", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("counts what basou portfolio lists, and prints it, that there is none, or that it was not measured", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const config = join(repo, ".portfolio.yaml");
+    const absent = join(repo, "gone");
+    // There, but with no `.basou` directory of its own.
+    const bare = join(repo, "bare");
+    await mkdir(bare);
+    await writeFile(
+      config,
+      `workspaces:\n  - { path: ${repo} }\n  - { path: ${bare} }\n  - { path: ${absent} }\n`,
+    );
+    const { out } = capture();
+    const listed = await doRunPortfolioList({ json: true }, { configPath: config });
+    out.length = 0;
+    const result = await doRunBoardMeasure({ json: true }, ctx(repo));
+    expect(result.portfolio).toEqual({
+      workspaces: listed.workspaces.length,
+      initialized: listed.workspaces.filter((w) => w.initialized).length,
+    });
+    expect(result.portfolio).toEqual({ workspaces: 3, initialized: 1 });
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain("\nPortfolio:\n  workspaces 3 (initialized 1)\n");
+
+    await writeFile(config, "workspaces: []\n");
+    out.length = 0;
+    process.exitCode = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain("\nPortfolio:\n  not measured\n");
+    expect(out.join("\n")).toContain("portfolio: ~/.basou/portfolio.yaml has no workspaces.");
+    expect(process.exitCode).toBe(1);
+  });
+
   it("refuses a workspace that is not initialized", async () => {
     const repo = await realpath(tmpRepo as string);
     const { out, err } = capture();
     await runBoardMeasure({ board: "board.yaml" }, ctx(repo));
     expect(out).toEqual([]);
     expect(err.join("\n")).toContain("Workspace not initialized. Run 'basou init' first.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("looks for a member repo's master in the portfolio config it is given", async () => {
+    const repo = await realpath(tmpRepo as string);
+    // A config the host's own could not be: the line below can only come from it.
+    await writeFile(join(repo, ".portfolio.yaml"), "workspaces: [\n");
+    const { err } = capture();
+    await runBoardMeasure({ board: "board.yaml" }, ctx(repo));
+    expect(err.join("\n")).toContain(
+      "Ignoring ~/.basou/portfolio.yaml: ~/.basou/portfolio.yaml is not valid YAML.",
+    );
     expect(process.exitCode).toBe(1);
   });
 });

@@ -33,6 +33,14 @@ export {
   seedMarkers,
   writeMarkdownFile,
 } from "./markdown-store.js";
+export type { PortfolioWorkspace } from "./portfolio-config.js";
+export {
+  defaultPortfolioConfigPath,
+  loadPortfolioConfig,
+  PortfolioConfigMissingError,
+  portfolioPathExists,
+  portfolioPathInitialized,
+} from "./portfolio-config.js";
 export type { SessionEntryKind } from "./session-dir.js";
 export {
   assertSessionDirSafe,

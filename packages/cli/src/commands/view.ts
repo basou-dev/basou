@@ -5,12 +5,13 @@ import {
   assertBasouRootSafe,
   basouPaths,
   findErrorCode,
+  loadPortfolioConfig,
+  type PortfolioWorkspace,
   readManifest,
   resolveRepositoryRoot,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
-import { loadPortfolioConfig, type PortfolioWorkspace } from "../lib/portfolio-config.js";
 import { checkPortfolioCoverage, formatCoverageReport } from "../lib/portfolio-coverage.js";
 import { checkPortfolioSafety, formatSafetyReport } from "../lib/portfolio-safety.js";
 import {

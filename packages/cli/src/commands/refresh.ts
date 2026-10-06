@@ -3,13 +3,13 @@ import {
   type BasouPaths,
   basouPaths,
   findErrorCode,
+  loadPortfolioConfig,
   readManifest,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { warnIfPositionNamesOtherWorkspaces } from "../lib/foreign-workspace-warn.js";
 import { warnIfObservationsRefused } from "../lib/observation-warn.js";
-import { loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import type { ImportContext } from "./import.js";

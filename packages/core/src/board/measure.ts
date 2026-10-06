@@ -18,6 +18,7 @@ import {
   toBytes,
 } from "./glob.js";
 import { BOARD_INTEGRITY_METHOD, type BoardIntegrity, measureIntegrity } from "./integrity.js";
+import { BOARD_PORTFOLIO_METHOD, type BoardPortfolio, measurePortfolio } from "./portfolio.js";
 import { BOARD_REPOS_METHOD, type BoardRepo, measureRepos } from "./repos.js";
 import {
   BOARD_REVIEW_GAPS_METHOD,
@@ -61,10 +62,11 @@ export type BoardRatioValue = {
 /**
  * What `basou board measure` reports. A value is `null` when it could not be
  * measured, and then `not_found` says why and `complete` is false: a missing
- * repository, revision or file is never counted as zero. The one exception is
- * the three nulls of the repos section that mean something of their own (a
- * detached HEAD, no commit yet, no origin/main; see {@link BoardRepo}), which
- * have no entry and leave `complete` as it is.
+ * repository, revision or file is never counted as zero. The exceptions are
+ * the nulls that mean something of their own, which have no entry and leave
+ * `complete` as it is: three in the repos section (a detached HEAD, no commit
+ * yet, no origin/main; see {@link BoardRepo}) and the portfolio's when there
+ * is no portfolio config (see {@link BoardPortfolio}).
  */
 export type BoardMeasurement = {
   board_version: number;
@@ -81,10 +83,16 @@ export type BoardMeasurement = {
   digest: string;
   /**
    * The version of how each built-in section measures (see
-   * `BOARD_REPOS_METHOD`, `BOARD_TRAIL_METHOD`, `BOARD_INTEGRITY_METHOD` and
-   * `BOARD_REVIEW_GAPS_METHOD`).
+   * `BOARD_REPOS_METHOD`, `BOARD_TRAIL_METHOD`, `BOARD_INTEGRITY_METHOD`,
+   * `BOARD_REVIEW_GAPS_METHOD` and `BOARD_PORTFOLIO_METHOD`).
    */
-  methods: { repos: number; trail: number; integrity: number; review_gaps: number };
+  methods: {
+    repos: number;
+    trail: number;
+    integrity: number;
+    review_gaps: number;
+    portfolio: number;
+  };
   /** Each repository the manifest declares, in its order. */
   repos: BoardRepo[];
   measures: Record<string, BoardMeasureValue>;
@@ -95,6 +103,8 @@ export type BoardMeasurement = {
   integrity: BoardIntegrity;
   /** What `basou review-gaps` finds in the workspace's own trail. */
   review_gaps: BoardReviewGaps;
+  /** How many workspaces `basou portfolio` lists, and how many are initialized. */
+  portfolio: BoardPortfolio;
 };
 
 export type MeasureBoardInput = {
@@ -108,6 +118,8 @@ export type MeasureBoardInput = {
   measuredWith: { basou: string; build: string | null };
   onReplayWarning?: (warning: ReplayWarning, sessionId: string) => void;
   onTaskSkip?: (taskId: string, reason: TaskSkipReason) => void;
+  /** The portfolio config to read (default: `~/.basou/portfolio.yaml`). */
+  portfolioConfigPath?: string;
 };
 
 type Outcome = { value: number | string | null; reason?: string };
@@ -178,6 +190,8 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
   notFound.push(...verified.notFound);
   const reviewed = await measureReviewGaps(input);
   notFound.push(...reviewed.notFound);
+  const registered = await measurePortfolio(input.portfolioConfigPath);
+  notFound.push(...registered.notFound);
 
   const body = {
     board_version: declaration.board_version,
@@ -191,6 +205,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
       trail: BOARD_TRAIL_METHOD,
       integrity: BOARD_INTEGRITY_METHOD,
       review_gaps: BOARD_REVIEW_GAPS_METHOD,
+      portfolio: BOARD_PORTFOLIO_METHOD,
     },
     repos: repos.repos,
     measures,
@@ -198,6 +213,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     trail: trailed.trail,
     integrity: verified.integrity,
     review_gaps: reviewed.reviewGaps,
+    portfolio: registered.portfolio,
   };
   const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
   return {
@@ -215,6 +231,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     trail: body.trail,
     integrity: body.integrity,
     review_gaps: body.review_gaps,
+    portfolio: body.portfolio,
   };
 }
 

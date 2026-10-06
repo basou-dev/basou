@@ -1,8 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { dirname } from "node:path";
-import { type BasouPaths, readMarkdownFile } from "@basou/core";
+import { type BasouPaths, loadPortfolioConfig, readMarkdownFile } from "@basou/core";
 import { scanForeignWorkspaceNames } from "./foreign-workspace-scan.js";
-import { loadPortfolioConfig } from "./portfolio-config.js";
 
 /**
  * The CLI half of foreign-workspace detection: read the portfolio registry and

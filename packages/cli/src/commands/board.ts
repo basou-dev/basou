@@ -33,6 +33,12 @@ export type BoardContext = {
   cwd?: string;
   /** Defaults to `() => new Date()`. Injectable for tests. */
   nowProvider?: () => Date;
+  /**
+   * The portfolio config, read both to find a member repo's master and for
+   * the portfolio section. Defaults to `~/.basou/portfolio.yaml`. Injectable
+   * for tests.
+   */
+  portfolioConfigPath?: string;
 };
 
 /** Where a board's declaration is read from when `--board` is not given. */
@@ -95,7 +101,11 @@ export async function doRunBoardMeasure(
   ctx: BoardContext,
 ): Promise<BoardMeasurement> {
   const cwd = ctx.cwd ?? process.cwd();
-  const root = await resolveBasouRootForCommand(cwd, "board measure");
+  const root = await resolveBasouRootForCommand(
+    cwd,
+    "board measure",
+    ctx.portfolioConfigPath === undefined ? {} : { portfolioConfigPath: ctx.portfolioConfigPath },
+  );
   const paths = basouPaths(root);
   await assertWorkspaceInitialized(paths.root);
   const manifest = await readManifest(paths);
@@ -121,6 +131,9 @@ export async function doRunBoardMeasure(
     measuredWith: { basou: BASOU_CLI_VERSION, build: BASOU_BUILD?.commit ?? null },
     onReplayWarning: (warning, sessionId) => printReplayWarning(warning, sessionId),
     onTaskSkip: (taskId, reason) => printTaskSkip(taskId, reason),
+    ...(ctx.portfolioConfigPath === undefined
+      ? {}
+      : { portfolioConfigPath: ctx.portfolioConfigPath }),
   });
 
   if (options.json === true) console.log(JSON.stringify(measurement, null, 2));
@@ -247,6 +260,18 @@ function reviewGapsLines(m: BoardMeasurement): string[] {
   ];
 }
 
+// A null the not_found entries do not explain means there is no portfolio
+// config.
+function portfolioLines(m: BoardMeasurement): string[] {
+  const { workspaces, initialized } = m.portfolio;
+  if (workspaces === null || initialized === null) {
+    return m.not_found.some((n) => n.at === "portfolio")
+      ? ["  not measured"]
+      : ["  no ~/.basou/portfolio.yaml"];
+  }
+  return [`  workspaces ${workspaces} (initialized ${initialized})`];
+}
+
 function printMeasurementText(m: BoardMeasurement): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
@@ -275,6 +300,7 @@ function printMeasurementText(m: BoardMeasurement): void {
   lines.push("", "Trail:", ...trailLines(m));
   lines.push("", "Integrity:", ...integrityLines(m));
   lines.push("", "Review gaps:", ...reviewGapsLines(m));
+  lines.push("", "Portfolio:", ...portfolioLines(m));
   if (m.not_found.length > 0) {
     lines.push("", `Not measured (${m.not_found.length}):`);
     for (const missing of m.not_found)

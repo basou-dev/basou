@@ -10,6 +10,7 @@ import {
   buildStopHookCommand,
   type ClaudeTranscriptRecord,
   DEFAULT_STOP_HOOK_MIN_EDITS,
+  defaultPortfolioConfigPath,
   evaluateStopHook,
   findBasouSessionStartHook,
   findBasouStopHookCommand,
@@ -17,6 +18,7 @@ import {
   findUnrecognizedSessionStart,
   isClaudeSessionStartMalformed,
   isProtocolUpdateDue,
+  loadPortfolioConfig,
   ORIENTATION_END,
   ORIENTATION_START,
   observedRepoRoots,
@@ -51,7 +53,6 @@ import {
 import { assertNotSymlink, writeFileDurable } from "../lib/durable-write.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { findForeignWorkspaceNames } from "../lib/foreign-workspace-warn.js";
-import { DEFAULT_PORTFOLIO_CONFIG_PATH, loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { DEFAULT_TARGET_PATH as PROTOCOL_TARGET_PATH } from "../lib/protocols-config.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import { renderOrientationForRoot } from "./orient.js";
@@ -665,7 +666,7 @@ export type HookSessionStartContext = {
  */
 export async function renderRegisteredWorkspacePosition(
   cwd: string,
-  portfolioConfigPath: string = DEFAULT_PORTFOLIO_CONFIG_PATH,
+  portfolioConfigPath: string = defaultPortfolioConfigPath(),
 ): Promise<{ body: string }> {
   const root = await resolveBasouRootForCommand(cwd, "hook session-start", {
     portfolioConfigPath,
@@ -811,7 +812,7 @@ async function observeSessionFromPayload(
   const cwd = typeof fields.cwd === "string" ? fields.cwd : "";
   if (externalId.length === 0 || cwd.length === 0) return;
 
-  const configPath = portfolioConfigPath ?? DEFAULT_PORTFOLIO_CONFIG_PATH;
+  const configPath = portfolioConfigPath ?? defaultPortfolioConfigPath();
   let root: string;
   try {
     root = await resolveBasouRootForCommand(cwd, "hook observe", {
