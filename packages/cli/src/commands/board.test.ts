@@ -4,6 +4,7 @@ import { devNull, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
+  basouPaths,
   chainEvents,
   createManifest,
   type Event,
@@ -12,6 +13,7 @@ import {
   writeManifest,
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { probeStaleness } from "../lib/provenance-actions.js";
 import { doRunBoardMeasure, runBoardMeasure } from "./board.js";
 import { doRunPortfolioList } from "./portfolio.js";
 import { doRunReviewGaps } from "./review-gaps.js";
@@ -90,12 +92,15 @@ function capture(): { out: string[]; err: string[] } {
   return { out, err };
 }
 
-// The portfolio config is read from beside the workspace, where no test
-// writes one unless it means to, so no test reads the host's own.
+// The portfolio config and the native logs are read from beside the
+// workspace, where no test writes them unless it means to, so no test reads
+// the host's own.
 const ctx = (cwd: string) => ({
   cwd,
   nowProvider: () => NOW,
   portfolioConfigPath: join(cwd, ".portfolio.yaml"),
+  claudeProjectsDir: join(cwd, ".claude-projects"),
+  codexSessionsDir: join(cwd, ".codex-sessions"),
 });
 const ESC = String.fromCharCode(27);
 
@@ -224,6 +229,9 @@ describe("basou board measure", () => {
       "\nReview gaps:\n  units 0: 0 omission, 0 near_unbound, 0 candidate, 0 unknown\n  gaps 0\n",
     );
     expect(text).toContain("\nPortfolio:\n  no ~/.basou/portfolio.yaml\n");
+    expect(text).toContain(
+      "\nFreshness:\n  newest session none\n  not imported 0 new, 0 updated, 0 unverifiable\n",
+    );
     expect(text).toContain("Complete: no");
     expect(text).toMatch(/Digest: sha256:[0-9a-f]{64}/);
   });
@@ -545,6 +553,56 @@ describe("basou board measure", () => {
     expect(out.join("\n")).toContain("\nPortfolio:\n  not measured\n");
     expect(out.join("\n")).toContain("portfolio: ~/.basou/portfolio.yaml has no workspaces.");
     expect(process.exitCode).toBe(1);
+  });
+
+  it("counts the sessions not yet imported as basou orient does, and prints them", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const context = ctx(repo);
+    // A Claude Code transcript of this workspace that was never imported.
+    const projectDir = join(context.claudeProjectsDir, repo.replace(/[^a-zA-Z0-9]/g, "-"));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "sess-1.jsonl"),
+      [
+        {
+          type: "user",
+          timestamp: "2026-10-01T00:00:00.000Z",
+          cwd: repo,
+          sessionId: "sess-1",
+          message: { role: "user", content: [{ type: "text", text: "go" }] },
+        },
+        {
+          type: "assistant",
+          timestamp: "2026-10-01T00:00:01.000Z",
+          cwd: repo,
+          message: { content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }] },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    );
+    const { out } = capture();
+    const probe = await probeStaleness({
+      ctx: {
+        cwd: repo,
+        claudeProjectsDir: context.claudeProjectsDir,
+        codexSessionsDir: context.codexSessionsDir,
+      },
+      paths: basouPaths(repo),
+      nowIso: NOW.toISOString(),
+    });
+    out.length = 0;
+    const result = await doRunBoardMeasure({ json: true }, context);
+    expect(probe).toEqual({ newSessions: 1, updatedSessions: 0, unverifiableSessions: 0 });
+    expect(result.freshness.unimported).toEqual({ new: 1, updated: 0, unverifiable: 0 });
+    // A dry run: nothing was imported.
+    expect(result.freshness.newest_session_at).toBeNull();
+    out.length = 0;
+    await runBoardMeasure({}, context);
+    expect(out.join("\n")).toContain(
+      "\nFreshness:\n  newest session none\n  not imported 1 new, 0 updated, 0 unverifiable\n",
+    );
   });
 
   it("refuses a workspace that is not initialized", async () => {

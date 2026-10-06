@@ -10,6 +10,12 @@ import {
   type BoardMeasure,
 } from "./declaration.js";
 import {
+  BOARD_FRESHNESS_METHOD,
+  type BoardFreshness,
+  type BoardImportProbe,
+  measureFreshness,
+} from "./freshness.js";
+import {
   compileGlob,
   compileGlobs,
   literalLength,
@@ -76,15 +82,18 @@ export type BoardMeasurement = {
   complete: boolean;
   not_found: BoardNotFound[];
   /**
-   * `sha256:` and the hex digest of the measurement without `measured_at` and
-   * `digest`, serialized with its keys sorted. Two measurements with the same
-   * values have the same digest whenever they were taken.
+   * `sha256:` and the hex digest of the measurement without `measured_at`,
+   * `digest` and `freshness`, serialized with its keys sorted. Two
+   * measurements with the same values have the same digest whenever they
+   * were taken. The freshness moves as work goes on, the measuring session's
+   * own included, so it is left out.
    */
   digest: string;
   /**
    * The version of how each built-in section measures (see
    * `BOARD_REPOS_METHOD`, `BOARD_TRAIL_METHOD`, `BOARD_INTEGRITY_METHOD`,
-   * `BOARD_REVIEW_GAPS_METHOD` and `BOARD_PORTFOLIO_METHOD`).
+   * `BOARD_REVIEW_GAPS_METHOD`, `BOARD_PORTFOLIO_METHOD` and
+   * `BOARD_FRESHNESS_METHOD`).
    */
   methods: {
     repos: number;
@@ -92,6 +101,7 @@ export type BoardMeasurement = {
     integrity: number;
     review_gaps: number;
     portfolio: number;
+    freshness: number;
   };
   /** Each repository the manifest declares, in its order. */
   repos: BoardRepo[];
@@ -105,6 +115,8 @@ export type BoardMeasurement = {
   review_gaps: BoardReviewGaps;
   /** How many workspaces `basou portfolio` lists, and how many are initialized. */
   portfolio: BoardPortfolio;
+  /** How current the workspace's own trail is, as `basou orient` judges it. */
+  freshness: BoardFreshness;
 };
 
 export type MeasureBoardInput = {
@@ -120,6 +132,11 @@ export type MeasureBoardInput = {
   onTaskSkip?: (taskId: string, reason: TaskSkipReason) => void;
   /** The portfolio config to read (default: `~/.basou/portfolio.yaml`). */
   portfolioConfigPath?: string;
+  /**
+   * A dry run of `basou refresh`, to count the sessions not yet imported (the
+   * CLI passes the one `basou orient` runs). Without it they are not measured.
+   */
+  probeImports?: () => Promise<BoardImportProbe | null>;
 };
 
 type Outcome = { value: number | string | null; reason?: string };
@@ -192,6 +209,8 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
   notFound.push(...reviewed.notFound);
   const registered = await measurePortfolio(input.portfolioConfigPath);
   notFound.push(...registered.notFound);
+  const current = await measureFreshness(input);
+  notFound.push(...current.notFound);
 
   const body = {
     board_version: declaration.board_version,
@@ -206,6 +225,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
       integrity: BOARD_INTEGRITY_METHOD,
       review_gaps: BOARD_REVIEW_GAPS_METHOD,
       portfolio: BOARD_PORTFOLIO_METHOD,
+      freshness: BOARD_FRESHNESS_METHOD,
     },
     repos: repos.repos,
     measures,
@@ -214,6 +234,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     integrity: verified.integrity,
     review_gaps: reviewed.reviewGaps,
     portfolio: registered.portfolio,
+    freshness: current.freshness,
   };
   const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
   return {
@@ -232,16 +253,21 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     integrity: body.integrity,
     review_gaps: body.review_gaps,
     portfolio: body.portfolio,
+    freshness: body.freshness,
   };
 }
 
+// What the digest leaves out: when it was measured, the digest itself, and
+// the freshness, which moves as work goes on.
+const UNDIGESTED = new Set(["measured_at", "digest", "freshness"]);
+
 /**
  * The digest of a measurement: sha256 over the measurement without
- * `measured_at` and `digest`, with every object's keys sorted.
+ * `measured_at`, `digest` and `freshness`, with every object's keys sorted.
  */
 export function boardDigest(measurement: object): string {
   const hashed = Object.fromEntries(
-    Object.entries(measurement).filter(([key]) => key !== "measured_at" && key !== "digest"),
+    Object.entries(measurement).filter(([key]) => !UNDIGESTED.has(key)),
   );
   return `sha256:${createHash("sha256").update(canonicalJson(hashed)).digest("hex")}`;
 }
