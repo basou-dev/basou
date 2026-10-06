@@ -851,6 +851,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "ratios",
       "trail",
       "integrity",
+      "review_gaps",
     ]);
     expect(m).toMatchObject({
       board_version: 1,
@@ -1200,6 +1201,10 @@ describe("measureBoard: what the review found", () => {
       { at: "measures.all", reason: lost },
       { at: "measures.tracks", reason: lost },
       { at: "trail", reason: lost },
+      {
+        at: "review_gaps",
+        reason: "1 event line could not be read, so the counts are not known",
+      },
     ]);
     expect(m.trail).toEqual({ decisions_all: null, decisions_live: null, tracks_open: null });
   });
@@ -1654,7 +1659,7 @@ describe("measureBoard: the repos section", () => {
     const dir = await repo("app", { "a.txt": "1\n" });
     const declaration = declare([], {}, ["app"]);
     const first = await measure(declaration, NOW, ["app"]);
-    expect(first.methods).toEqual({ repos: 1, trail: 1, integrity: 1 });
+    expect(first.methods).toEqual({ repos: 1, trail: 1, integrity: 1, review_gaps: 1 });
     const later = await measure(declaration, new Date("2026-10-06T00:00:00.000Z"), ["app"]);
     expect(later.digest).toBe(first.digest);
     await writeFile(join(dir, "b.txt"), "1\n");
@@ -2228,6 +2233,10 @@ describe("measureBoard: the trail section", () => {
     expect(m.trail).toEqual({ decisions_all: null, decisions_live: null, tracks_open: null });
     expect(m.not_found).toEqual([
       { at: "trail", reason: "1 event line could not be read, so decisions may be missing" },
+      {
+        at: "review_gaps",
+        reason: "1 event line could not be read, so the counts are not known",
+      },
     ]);
     expect(m.complete).toBe(false);
   });
@@ -2238,7 +2247,9 @@ describe("measureBoard: the trail section", () => {
       decided(sessionId, evt, id, "t", "2026-09-01T00:00:00Z");
     // Torn: the last line, with no newline after it.
     await placeSession(s1, `${ok(s1, "E01", DEC("D01"))}{"torn`);
-    expect((await measure(declare([]))).trail.decisions_all).toBe(1);
+    const torn = await measure(declare([]));
+    expect(torn.trail.decisions_all).toBe(1);
+    expect(torn.review_gaps.gaps).toBe(0);
     // Not torn: a last line that is not JSON but ends with a newline.
     await placeSession(s2, `${ok(s2, "E02", DEC("D02"))}{"ended\n`);
     // Not torn: not the last line, in a file that does not end with a newline.
@@ -2246,6 +2257,10 @@ describe("measureBoard: the trail section", () => {
     const m = await measure(declare([]));
     expect(m.not_found).toEqual([
       { at: "trail", reason: "2 event lines could not be read, so decisions may be missing" },
+      {
+        at: "review_gaps",
+        reason: "2 event lines could not be read, so the counts are not known",
+      },
     ]);
   });
 
@@ -2255,6 +2270,10 @@ describe("measureBoard: the trail section", () => {
     const m = await measure(declare([]));
     expect(m.not_found).toEqual([
       { at: "trail", reason: "3000 event lines could not be read, so decisions may be missing" },
+      {
+        at: "review_gaps",
+        reason: "3000 event lines could not be read, so the counts are not known",
+      },
     ]);
   });
 
@@ -2273,6 +2292,11 @@ describe("measureBoard: the trail section", () => {
           reason:
             "2 session entries are not a directory (a symlink or a file), so decisions may be missing",
         },
+        {
+          at: "review_gaps",
+          reason:
+            "2 session entries are not a directory (a symlink or a file), so the counts are not known",
+        },
       ]);
     },
   );
@@ -2288,6 +2312,7 @@ describe("measureBoard: the trail section", () => {
       expect(m.not_found).toEqual([
         { at: "trail", reason: "the sessions of the workspace could not be read" },
         { at: "integrity", reason: "the sessions of the workspace could not be read" },
+        { at: "review_gaps", reason: "the sessions of the workspace could not be read" },
       ]);
     } finally {
       await chmod(paths.sessions, 0o755);
@@ -2442,7 +2467,12 @@ describe("measureBoard: the integrity section", () => {
       },
       not_verified: 7,
     });
-    expect(m.complete).toBe(true);
+    // basou verify judges a session with no session.yaml (incomplete) and one
+    // of a version it does not know (unsupported); basou review-gaps passes
+    // over both, so it is the review gaps that are not known.
+    expect(m.not_found).toEqual([
+      { at: "review_gaps", reason: "2 sessions could not be read, so the counts are not known" },
+    ]);
   });
 
   it("counts nothing, all at 0, in a workspace with no session", async () => {
@@ -2487,16 +2517,17 @@ describe("measureBoard: the integrity section", () => {
     try {
       const m = await measure(declare([]));
       expect(m.integrity).toEqual({ by_status: null, not_verified: null });
+      const two = "2 sessions could not be read, so the counts are not known";
       expect(m.not_found).toEqual([
-        {
-          at: "integrity",
-          reason: "2 sessions could not be read, so the counts are not known",
-        },
+        { at: "integrity", reason: two },
+        { at: "review_gaps", reason: two },
       ]);
       expect(m.complete).toBe(false);
       await chmod(shut[0] as string, 0o644);
+      const one = "1 session could not be read, so the counts are not known";
       expect((await measure(declare([]))).not_found).toEqual([
-        { at: "integrity", reason: "1 session could not be read, so the counts are not known" },
+        { at: "integrity", reason: one },
+        { at: "review_gaps", reason: one },
       ]);
     } finally {
       for (const file of shut) await chmod(file, 0o644);
@@ -2538,6 +2569,7 @@ describe("measureBoard: the integrity section", () => {
       expect(linked.not_found).toEqual([
         { at: "trail", reason: refused },
         { at: "integrity", reason: refused },
+        { at: "review_gaps", reason: refused },
       ]);
       await unlink(paths.sessions);
       await writeFile(paths.sessions, "not a directory\n");
@@ -2546,6 +2578,7 @@ describe("measureBoard: the integrity section", () => {
       expect(file.not_found).toEqual([
         { at: "trail", reason: ".basou/sessions is not a directory" },
         { at: "integrity", reason: ".basou/sessions is not a directory" },
+        { at: "review_gaps", reason: ".basou/sessions is not a directory" },
       ]);
     },
   );
@@ -2561,7 +2594,7 @@ describe("measureBoard: the integrity section", () => {
   it("names its method's version, and is in the digest", async () => {
     const declaration = declare([]);
     const first = await measure(declaration);
-    expect(first.methods).toEqual({ repos: 1, trail: 1, integrity: 1 });
+    expect(first.methods).toEqual({ repos: 1, trail: 1, integrity: 1, review_gaps: 1 });
     await placeChained(SES("S01"));
     const verified = await measure(declaration);
     await rm(join(paths.sessions, SES("S01")), { recursive: true });
@@ -2570,5 +2603,230 @@ describe("measureBoard: the integrity section", () => {
     // The trail is the same in all three; only the integrity differs.
     expect(tampered.trail).toEqual(verified.trail);
     expect(new Set([first.digest, verified.digest, tampered.digest]).size).toBe(3);
+  });
+});
+
+describe("measureBoard: the review_gaps section", () => {
+  // Absent on disk, so basou review-gaps keys them by the path as recorded.
+  const ALPHA = "/nonexistent/projects/alpha";
+  const BETA = "/nonexistent/projects/beta";
+  const GAMMA = "/nonexistent/projects/gamma";
+  const DELTA = "/nonexistent/projects/delta";
+
+  // A session whose source is `source` (basou review-gaps reads a
+  // codex-import session as a review, any other as the work), with `events`.
+  async function placeWork(
+    id: string,
+    source: string,
+    events: string,
+    status = "imported",
+  ): Promise<void> {
+    const dir = join(paths.sessions, id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "session.yaml"),
+      stringify({
+        schema_version: "0.1.0",
+        session: {
+          id,
+          label: "fixture",
+          task_id: null,
+          workspace_id: WS,
+          source: { kind: source, version: "0.1.0" },
+          started_at: "2026-10-01T00:00:00Z",
+          status,
+          working_directory: "/tmp/fixture",
+          invocation: { command: source, args: [], exit_code: null },
+          related_files: [],
+          events_log: "events.jsonl",
+        },
+      }),
+    );
+    await writeFile(join(dir, "events.jsonl"), events);
+  }
+
+  const ran = (
+    sessionId: string,
+    evt: string,
+    occurredAt: string,
+    script: string,
+    cwd: string | null,
+  ): string =>
+    line(sessionId, evt, {
+      type: "command_executed",
+      occurred_at: occurredAt,
+      command: null,
+      args: ["-c", script],
+      cwd,
+      exit_code: 0,
+      duration_ms: 0,
+    });
+
+  it("counts the units of each verdict basou review-gaps gives, every verdict included, and the gaps", async () => {
+    const [r1, r2, c1, c2, c3, c4] = ["R01", "R02", "C01", "C02", "C03", "C04"].map(SES);
+    const before = "2026-10-01T09:30:00Z";
+    const after = "2026-10-01T10:05:00Z";
+    // A review that examined the diff of alpha, and one that only read a file of beta.
+    await placeWork(
+      r1 as string,
+      "codex-import",
+      ran(r1 as string, "E01", before, "git diff", ALPHA),
+    );
+    await placeWork(
+      r2 as string,
+      "codex-import",
+      ran(r2 as string, "E02", before, "sed -n '1,5p' NOTES.md", BETA),
+    );
+    await placeWork(
+      c1 as string,
+      "claude-code-import",
+      ran(c1 as string, "E03", after, "git commit -m a", ALPHA),
+    );
+    await placeWork(
+      c2 as string,
+      "claude-code-import",
+      ran(c2 as string, "E04", after, "git add src/app.ts && git commit -m b", BETA),
+    );
+    // No review at all, in two repositories: two units of one session.
+    await placeWork(
+      c3 as string,
+      "claude-code-import",
+      ran(c3 as string, "E05", after, "git commit -m c", GAMMA) +
+        ran(c3 as string, "E06", after, "git commit -m d", DELTA),
+    );
+    // Where it ran was not recorded, so no repository can be named.
+    await placeWork(
+      c4 as string,
+      "claude-code-import",
+      ran(c4 as string, "E07", after, "git commit -m e", null),
+    );
+    const m = await measure(declare([]));
+    expect(m.review_gaps).toEqual({
+      by_verdict: { omission: 2, near_unbound: 1, candidate: 1, unknown: 1 },
+      gaps: 3,
+    });
+    expect(Object.keys(m.review_gaps.by_verdict ?? {})).toEqual([
+      "omission",
+      "near_unbound",
+      "candidate",
+      "unknown",
+    ]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("counts nothing, all at 0, in a workspace with no session or no sessions directory", async () => {
+    const zero = {
+      by_verdict: { omission: 0, near_unbound: 0, candidate: 0, unknown: 0 },
+      gaps: 0,
+    };
+    expect((await measure(declare([]))).review_gaps).toEqual(zero);
+    await rm(paths.sessions, { recursive: true });
+    const m = await measure(declare([]));
+    expect(m.review_gaps).toEqual(zero);
+    expect(m.complete).toBe(true);
+  });
+
+  it("does not count a commit on a torn last line, and is measured", async () => {
+    const s1 = SES("C01");
+    const landed = ran(s1, "E01", "2026-10-01T10:05:00Z", "git commit -m a", ALPHA);
+    const torn = ran(s1, "E02", "2026-10-01T10:06:00Z", "git commit -m b", BETA).slice(0, 40);
+    await placeWork(s1, "claude-code-import", landed + torn);
+    const m = await measure(declare([]));
+    expect(m.review_gaps).toEqual({
+      by_verdict: { omission: 1, near_unbound: 0, candidate: 0, unknown: 0 },
+      gaps: 1,
+    });
+    expect(m.complete).toBe(true);
+  });
+
+  it("counts a line once, though the events of a running session are read twice", async () => {
+    const s1 = SES("C01");
+    await placeWork(
+      s1,
+      "claude-code-import",
+      `{"bad\n${ran(s1, "E01", "2026-10-01T10:05:00Z", "git commit -m a", ALPHA)}`,
+      "running",
+    );
+    const m = await measure(declare([]));
+    expect(m.review_gaps).toEqual({ by_verdict: null, gaps: null });
+    expect(m.not_found.filter((n) => n.at === "review_gaps")).toEqual([
+      { at: "review_gaps", reason: "1 event line could not be read, so the counts are not known" },
+    ]);
+  });
+
+  it("is not measured when a session.yaml is missing or is not a session", async () => {
+    const [s1, s2] = [SES("C01"), SES("C02")];
+    await placeWork(
+      s1,
+      "claude-code-import",
+      ran(s1, "E01", "2026-10-01T10:05:00Z", "git commit -m a", ALPHA),
+    );
+    await placeWork(
+      s2,
+      "claude-code-import",
+      ran(s2, "E02", "2026-10-01T10:05:00Z", "git commit -m b", BETA),
+    );
+    await writeFile(join(paths.sessions, s1, "session.yaml"), "session: [not, a, session]\n");
+    const m = await measure(declare([]));
+    expect(m.review_gaps).toEqual({ by_verdict: null, gaps: null });
+    expect(m.not_found).toEqual([
+      { at: "review_gaps", reason: "1 session could not be read, so the counts are not known" },
+    ]);
+    expect(m.complete).toBe(false);
+    await unlink(join(paths.sessions, s2, "session.yaml"));
+    expect((await measure(declare([]))).not_found).toContainEqual({
+      at: "review_gaps",
+      reason: "2 sessions could not be read, so the counts are not known",
+    });
+  });
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("is not measured when an events.jsonl cannot be read", async () => {
+    const s1 = SES("C01");
+    await placeWork(
+      s1,
+      "claude-code-import",
+      ran(s1, "E01", "2026-10-01T10:05:00Z", "git commit -m a", ALPHA),
+    );
+    const events = join(paths.sessions, s1, "events.jsonl");
+    await chmod(events, 0o000);
+    try {
+      const m = await measure(declare([]));
+      expect(m.review_gaps).toEqual({ by_verdict: null, gaps: null });
+      expect(m.not_found).toContainEqual({
+        at: "review_gaps",
+        reason: "1 session could not be read, so the counts are not known",
+      });
+    } finally {
+      await chmod(events, 0o644);
+    }
+  });
+
+  it("names its method's version, and is in the digest", async () => {
+    const declaration = declare([]);
+    const s1 = SES("C01");
+    await placeWork(
+      s1,
+      "claude-code-import",
+      ran(s1, "E01", "2026-10-01T10:05:00Z", "echo a", ALPHA),
+    );
+    const none = await measure(declaration);
+    expect(none.methods).toEqual({ repos: 1, trail: 1, integrity: 1, review_gaps: 1 });
+    await placeWork(
+      s1,
+      "claude-code-import",
+      ran(s1, "E01", "2026-10-01T10:05:00Z", "git commit -m a", ALPHA),
+    );
+    const gap = await measure(declaration);
+    expect(gap.review_gaps.gaps).toBe(1);
+    // The trail and the integrity are the same in both; only the review gaps differ.
+    expect(gap.trail).toEqual(none.trail);
+    expect(gap.integrity).toEqual(none.integrity);
+    expect(gap.digest).not.toBe(none.digest);
+    expect((await measure(declaration, new Date("2026-12-01T00:00:00.000Z"))).digest).toBe(
+      gap.digest,
+    );
   });
 });

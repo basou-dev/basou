@@ -13,6 +13,7 @@ import {
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doRunBoardMeasure, runBoardMeasure } from "./board.js";
+import { doRunReviewGaps } from "./review-gaps.js";
 import { runVerify } from "./verify.js";
 
 const execFileAsync = promisify(execFile);
@@ -212,6 +213,9 @@ describe("basou board measure", () => {
     expect(text).toContain(
       "\nIntegrity:\n  sessions 0: 0 verified, 0 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 unsupported, 0 tampered\n  not verified 0\n",
     );
+    expect(text).toContain(
+      "\nReview gaps:\n  units 0: 0 omission, 0 near_unbound, 0 candidate, 0 unknown\n  gaps 0\n",
+    );
     expect(text).toContain("Complete: no");
     expect(text).toMatch(/Digest: sha256:[0-9a-f]{64}/);
   });
@@ -410,6 +414,95 @@ describe("basou board measure", () => {
     } finally {
       await chmod(events, 0o644);
     }
+  });
+
+  it("counts what basou review-gaps reports, and prints it or that it was not measured", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const sessions = join(repo, ".basou", "sessions");
+    const place = async (id: string, source: string, args: string[], cwd: string | null) => {
+      await mkdir(join(sessions, id), { recursive: true });
+      await writeFile(
+        join(sessions, id, "session.yaml"),
+        [
+          'schema_version: "0.1.0"',
+          "session:",
+          `  id: ${id}`,
+          "  task_id: null",
+          `  workspace_id: ${FIXED_WS_ID}`,
+          `  source: { kind: ${source}, version: 0.1.0 }`,
+          "  started_at: 2026-10-01T00:00:00Z",
+          "  status: imported",
+          "  working_directory: /tmp/fixture",
+          `  invocation: { command: ${source}, args: [], exit_code: null }`,
+          "  related_files: []",
+          "  events_log: events.jsonl",
+          "",
+        ].join("\n"),
+      );
+      await writeFile(
+        join(sessions, id, "events.jsonl"),
+        `${JSON.stringify({
+          schema_version: "0.1.0",
+          id: `evt_${id.slice(4)}`,
+          session_id: id,
+          occurred_at: args.includes("git diff") ? "2026-10-01T09:30:00Z" : "2026-10-01T10:05:00Z",
+          source: "local-cli",
+          type: "command_executed",
+          command: null,
+          args,
+          cwd,
+          exit_code: 0,
+          duration_ms: 0,
+        })}\n`,
+      );
+    };
+    await place("ses_01HXABCDEF1234567890ABCR01", "codex-import", ["-c", "git diff"], repo);
+    await place(
+      "ses_01HXABCDEF1234567890ABCC01",
+      "claude-code-import",
+      ["-c", "git commit -m a"],
+      repo,
+    );
+    await place(
+      "ses_01HXABCDEF1234567890ABCC02",
+      "claude-code-import",
+      ["-c", "git commit -m b"],
+      "/nonexistent/projects/beta",
+    );
+    await place(
+      "ses_01HXABCDEF1234567890ABCC03",
+      "claude-code-import",
+      ["-c", "git commit -m c"],
+      null,
+    );
+    const { out } = capture();
+    const summary = await doRunReviewGaps({ json: true }, { cwd: repo });
+    const tally: Record<string, number> = {};
+    for (const u of [...summary.gaps, ...summary.candidates, ...summary.unknowns]) {
+      tally[u.verdict] = (tally[u.verdict] ?? 0) + 1;
+    }
+    out.length = 0;
+    const result = await doRunBoardMeasure({ json: true }, ctx(repo));
+    expect(tally).toEqual({ candidate: 1, omission: 1, unknown: 1 });
+    expect(
+      Object.fromEntries(
+        Object.entries(result.review_gaps.by_verdict ?? {}).filter(([, n]) => n > 0),
+      ),
+    ).toEqual(tally);
+    expect(result.review_gaps.gaps).toBe(summary.gaps.length);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      "\nReview gaps:\n  units 3: 1 omission, 0 near_unbound, 1 candidate, 1 unknown\n  gaps 1\n",
+    );
+
+    await writeFile(join(sessions, "ses_01HXABCDEF1234567890ABCC02", "session.yaml"), "[]\n");
+    out.length = 0;
+    process.exitCode = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain("\nReview gaps:\n  not measured\n");
+    expect(process.exitCode).toBe(1);
   });
 
   it("refuses a workspace that is not initialized", async () => {

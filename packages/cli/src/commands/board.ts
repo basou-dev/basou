@@ -236,6 +236,17 @@ function integrityLines(m: BoardMeasurement): string[] {
   ];
 }
 
+function reviewGapsLines(m: BoardMeasurement): string[] {
+  const { by_verdict, gaps } = m.review_gaps;
+  if (by_verdict === null || gaps === null) return ["  not measured"];
+  const counts = Object.entries(by_verdict);
+  const total = counts.reduce((sum, [, count]) => sum + count, 0);
+  return [
+    `  units ${total}: ${counts.map(([verdict, count]) => `${count} ${verdict}`).join(", ")}`,
+    `  gaps ${gaps}`,
+  ];
+}
+
 function printMeasurementText(m: BoardMeasurement): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
@@ -263,6 +274,7 @@ function printMeasurementText(m: BoardMeasurement): void {
   }
   lines.push("", "Trail:", ...trailLines(m));
   lines.push("", "Integrity:", ...integrityLines(m));
+  lines.push("", "Review gaps:", ...reviewGapsLines(m));
   if (m.not_found.length > 0) {
     lines.push("", `Not measured (${m.not_found.length}):`);
     for (const missing of m.not_found)
