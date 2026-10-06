@@ -24,6 +24,7 @@ function fixtureSimpleGit(baseDir: string, extraConfig: readonly string[] = []):
     baseDir,
     config: [...extraConfig],
     unsafe: { allowUnsafeConfigPaths: true },
+    allowEnvironment: ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"],
   }).env(ENV);
 }
 

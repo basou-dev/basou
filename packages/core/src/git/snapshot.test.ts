@@ -14,9 +14,10 @@ import {
 const ENV_GLOBAL = process.platform === "win32" ? "\\\\.\\nul" : "/dev/null";
 // Minimal env for fixtures: only PATH / HOME / USERPROFILE are needed for
 // git itself to run; GIT_CONFIG_GLOBAL / SYSTEM neutralize the developer's
-// global git config. We deliberately do NOT spread `process.env` because
-// simple-git v3.31+ refuses inherited unsafe env vars (GIT_EDITOR, GIT_SSH,
-// ...) without explicit `unsafe` opt-in.
+// global git config. We deliberately do NOT spread `process.env`: simple-git
+// throws on a variable passed to `.env()` that starts with GIT_ (or is EDITOR,
+// PAGER, ...) unless `allowEnvironment` names it, and some also need an
+// `unsafe` opt-in.
 const ENV: NodeJS.ProcessEnv = {
   ...(process.env.PATH !== undefined ? { PATH: process.env.PATH } : {}),
   ...(process.env.HOME !== undefined ? { HOME: process.env.HOME } : {}),
@@ -27,7 +28,8 @@ const ENV: NodeJS.ProcessEnv = {
 
 /**
  * Build a SimpleGit instance for fixtures with simple-git's safety guards
- * relaxed enough to accept GIT_CONFIG_GLOBAL/SYSTEM in the test env. The
+ * relaxed enough to accept GIT_CONFIG_GLOBAL/SYSTEM in the test env (both
+ * the `unsafe` opt-in and `allowEnvironment`). The
  * production capability (snapshot.ts) deliberately does NOT use this opt —
  * only fixture setup does, where we need git init / commit / push to
  * honour our isolated config paths.
@@ -37,6 +39,7 @@ function safeSimpleGit(baseDir: string, extraConfig: readonly string[] = []): Si
     baseDir,
     config: [...extraConfig],
     unsafe: { allowUnsafeConfigPaths: true },
+    allowEnvironment: ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"],
   }).env(ENV);
 }
 
@@ -87,6 +90,29 @@ describe("resolveRepositoryRoot", () => {
     const root = await resolveRepositoryRoot(subdir);
     const { realpath } = await import("node:fs/promises");
     expect(await realpath(root)).toBe(await realpath(tmpRepo));
+  });
+
+  it("does not let the caller's GIT_ variables steer it", async () => {
+    // simple-git leaves them out of the git it runs: a ceiling above the
+    // subdirectory, or a GIT_DIR at another repository, changes nothing.
+    await initRepoWithCommit(tmpRepo);
+    const subdir = join(tmpRepo, "subdir");
+    await mkdir(subdir);
+    const { realpath } = await import("node:fs/promises");
+    const saved = {
+      GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES,
+      GIT_DIR: process.env.GIT_DIR,
+    };
+    process.env.GIT_CEILING_DIRECTORIES = tmpRepo;
+    process.env.GIT_DIR = join(subdir, "no-such-repo");
+    try {
+      expect(await realpath(await resolveRepositoryRoot(subdir))).toBe(await realpath(tmpRepo));
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("throws Error('Not a git repository') for a non-git directory (contract: exact message + cause preserved)", async () => {

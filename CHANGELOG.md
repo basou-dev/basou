@@ -46,6 +46,20 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Changed
 
+- **`@basou/core` now depends on simple-git 4, for four advisories against
+  3.36.0 and earlier, and the git it runs through simple-git no longer sees
+  part of the caller's environment.** simple-git 4 leaves every variable that
+  starts with `GIT_`, and `EDITOR`, `VISUAL`, `PAGER`, `PREFIX` and
+  `SSH_ASKPASS`, out of the environment of the git it runs. basou runs git
+  through it to find the repository (nearly every command does), for the
+  snapshots and diffs of `basou run` and `basou exec`, and to observe the
+  files a session changed (the hooks and the imports). So
+  `GIT_CEILING_DIRECTORIES` no longer stops basou from finding a repository
+  above the working directory, for instance, and `GIT_CONFIG_GLOBAL` no
+  longer points those commands at another global config. `basou board
+  measure` starts git itself, as before. The advisories are
+  GHSA-v5rq-49vh-5v5c, GHSA-x6jw-m9v5-85vh, GHSA-g4wm-2vf7-vfgr and
+  GHSA-858h-whjf-mvg5.
 - **A refused `.basou/tmp` is said instead of costing sessions their
   observed files without a sign.** With `.basou/tmp` or
   `.basou/tmp/observations` a symlink or a file, the hooks write no

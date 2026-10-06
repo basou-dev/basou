@@ -7,9 +7,12 @@ import { findErrorCode } from "../storage/status.js";
 /**
  * Build a {@link SimpleGit} instance bound to `repoRoot`. Production callers
  * use this single helper so any future tightening (additional safety opts,
- * environment scrubbing, ...) lands in one place. Test fixtures that need
- * `unsafe.allowUnsafeConfigPaths` for isolated `GIT_CONFIG_*` paths build
- * their own SimpleGit locally and intentionally bypass this helper.
+ * environment scrubbing, ...) lands in one place. simple-git leaves every
+ * caller's variable that starts with `GIT_` (and `EDITOR`, `VISUAL`, `PAGER`,
+ * `PREFIX`, `SSH_ASKPASS`) out of the git it runs, so the git these callers
+ * run sees none of them. Test fixtures that need isolated `GIT_CONFIG_*`
+ * paths build their own SimpleGit locally, with `allowEnvironment` and
+ * `unsafe.allowUnsafeConfigPaths`, and intentionally bypass this helper.
  */
 export function safeSimpleGit(repoRoot: string): SimpleGit {
   return simpleGit({ baseDir: repoRoot });

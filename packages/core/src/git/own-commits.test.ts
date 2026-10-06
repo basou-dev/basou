@@ -29,6 +29,7 @@ beforeEach(async () => {
     baseDir: repo,
     config: ["init.defaultBranch=main"],
     unsafe: { allowUnsafeConfigPaths: true },
+    allowEnvironment: ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"],
   }).env(ENV);
   await git.init();
   await git.addConfig("user.email", "test@example.com");
