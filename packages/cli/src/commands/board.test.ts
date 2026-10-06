@@ -664,6 +664,18 @@ describe("basou board measure", () => {
     );
   });
 
+  it("says one day as one day", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const declared = JSON.parse(boardYaml([])) as Record<string, unknown>;
+    await placeBoard(
+      repo,
+      JSON.stringify({ ...declared, effort: { start: "2026-10-04", time_zone: "UTC" } }),
+    );
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain("\nEffort:\n  from 2026-10-04 (UTC), 1 day\n");
+  });
+
   it("refuses a workspace that is not initialized", async () => {
     const repo = await realpath(tmpRepo as string);
     const { out, err } = capture();

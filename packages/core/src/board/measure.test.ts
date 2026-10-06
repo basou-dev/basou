@@ -98,7 +98,8 @@ function declare(
     lanes: [{ id: "core", name: "Core" }],
     measures,
     axis: { version: 1, review_due_days: 60 },
-    effort: { start: "2026-04-28" },
+    // A declared zone, so that no test's days depend on the host's.
+    effort: { start: "2026-04-28", time_zone: "UTC" },
     ...extra,
   });
   const result = parseBoardDeclaration(text, { manifestRepoPaths: repos });
@@ -3309,6 +3310,10 @@ describe("measureBoard: the freshness section", () => {
 
 describe("measureBoard: the effort section", () => {
   const TOKYO = { effort: { start: "2026-10-01", time_zone: "Asia/Tokyo" } };
+  const rows = (m: BoardMeasurement) => {
+    if (m.effort.daily === null) throw new Error("no rows");
+    return m.effort.daily;
+  };
   const MIN = 60_000;
 
   // A session of `kind` that started at `startedAt`, worked over `intervals`,
@@ -3319,6 +3324,7 @@ describe("measureBoard: the effort section", () => {
     startedAt: string,
     intervals: [string, string][],
     tokens?: number,
+    reasoning?: number,
   ): Promise<void> {
     const dir = join(paths.sessions, id);
     await mkdir(dir, { recursive: true });
@@ -3341,6 +3347,7 @@ describe("measureBoard: the effort section", () => {
           metrics: {
             active_intervals: intervals.map(([start, end]) => ({ start, end })),
             ...(tokens === undefined ? {} : { output_tokens: tokens }),
+            ...(reasoning === undefined ? {} : { reasoning_output_tokens: reasoning }),
           },
         },
       }),
@@ -3395,7 +3402,7 @@ describe("measureBoard: the effort section", () => {
       elapsed_days: 4,
       active_ms: active(30 + 60 + 90 + 10, 30 + 60 + 60, 60),
     });
-    expect(m.effort.daily.map((row) => [row.date, row.active_ms])).toEqual([
+    expect(rows(m).map((row) => [row.date, row.active_ms])).toEqual([
       ["2026-10-01", active(30, 30, 0)],
       ["2026-10-02", active(60, 60, 0)],
       ["2026-10-03", active(90, 60, 60)],
@@ -3405,12 +3412,23 @@ describe("measureBoard: the effort section", () => {
     expect(m.complete).toBe(true);
   });
 
+  it("merges the sessions of one vendor that overlap, rather than adding them", async () => {
+    await placeWorked(SES("C01"), "claude-code-import", "2026-10-02T01:00:00Z", [
+      ["2026-10-02T01:00:00Z", "2026-10-02T02:00:00Z"],
+    ]);
+    await placeWorked(SES("C02"), "claude-code-adapter", "2026-10-02T01:30:00Z", [
+      ["2026-10-02T01:30:00Z", "2026-10-02T02:30:00Z"],
+    ]);
+    const m = await measure(declare([], TOKYO));
+    expect(m.effort.active_ms).toEqual(active(90, 90, null));
+  });
+
   it("puts a day's boundary where its time zone does", async () => {
     await placeWork();
     const m = await measure(declare([], { effort: { start: "2026-10-01", time_zone: "UTC" } }));
     // In UTC the first session ends before the start, and the second and third
     // are both on 10-02, merged: 14:00 to 16:30.
-    expect(m.effort.daily.map((row) => [row.date, row.active_ms.union])).toEqual([
+    expect(rows(m).map((row) => [row.date, row.active_ms.union])).toEqual([
       ["2026-10-01", 0],
       ["2026-10-02", 150 * MIN],
       ["2026-10-03", 0],
@@ -3434,7 +3452,7 @@ describe("measureBoard: the effort section", () => {
     ]);
     const none = await measure(declare([], TOKYO));
     expect(none.effort.active_ms.codex).toBeNull();
-    expect(none.effort.daily.every((row) => row.active_ms.codex === null)).toBe(true);
+    expect(rows(none).every((row) => row.active_ms.codex === null)).toBe(true);
     expect(none.not_found).toEqual([]);
     // A launcher's session is Codex's too; this one worked before the start.
     await placeWorked(SES("C02"), "codex-adapter", "2026-09-01T00:00:00Z", [
@@ -3446,7 +3464,7 @@ describe("measureBoard: the effort section", () => {
     ]);
     const idle = await measure(declare([], TOKYO));
     expect(idle.effort.active_ms).toEqual(active(45, 45, 0));
-    expect(idle.effort.daily.every((row) => row.active_ms.codex === 0)).toBe(true);
+    expect(rows(idle).every((row) => row.active_ms.codex === 0)).toBe(true);
   });
 
   it("adds the output tokens of the sessions that started from the start, and counts the imports that recorded none", async () => {
@@ -3457,8 +3475,18 @@ describe("measureBoard: the effort section", () => {
     const m = await measure(declare([], TOKYO));
     // 100 started before the start; the adapter leaves tokens to the import.
     expect(m.effort.output_tokens).toBe(250);
+    // Reasoning is not output.
+    await placeWorked(
+      SES("C02"),
+      "claude-code-import",
+      "2026-10-02T14:00:00Z",
+      [["2026-10-02T14:00:00Z", "2026-10-02T16:00:00Z"]],
+      200,
+      40,
+    );
+    expect((await measure(declare([], TOKYO))).effort.output_tokens).toBe(250);
     expect(m.effort.sessions_without_tokens).toBe(1);
-    expect(m.effort.daily.map((row) => row.output_tokens)).toEqual([0, 200, 50, 0, 0]);
+    expect(rows(m).map((row) => row.output_tokens)).toEqual([0, 200, 50, 0, 0]);
   });
 
   it("counts the commits authored from the start to today, by day, each repository apart", async () => {
@@ -3475,7 +3503,7 @@ describe("measureBoard: the effort section", () => {
     const m = await measure(declare([], TOKYO, ["app"]), NOW, ["app"]);
     // The first commit was authored when the test ran, after NOW's today.
     expect(m.effort.commits).toEqual({ app: 3 });
-    expect(m.effort.daily.map((row) => row.commits)).toEqual([
+    expect(rows(m).map((row) => row.commits)).toEqual([
       { app: 0 },
       { app: 1 },
       { app: 2 },
@@ -3490,7 +3518,7 @@ describe("measureBoard: the effort section", () => {
     git(empty, "init", "-q", "-b", "main");
     const m = await measure(declare([], TOKYO, ["empty", "gone"]), NOW, ["empty", "gone"]);
     expect(m.effort.commits).toEqual({ empty: 0, gone: null });
-    expect(m.effort.daily[0]?.commits).toEqual({ empty: 0, gone: null });
+    expect(rows(m)[0]?.commits).toEqual({ empty: 0, gone: null });
     expect(m.not_found).toContainEqual({
       at: "effort.commits[gone]",
       reason: "the repo 'gone' is not on disk",
@@ -3500,13 +3528,21 @@ describe("measureBoard: the effort section", () => {
   it("does not count time or tokens when a session cannot be read, but counts commits", async () => {
     await placeWork();
     await writeFile(join(paths.sessions, SES("C02"), "session.yaml"), "session: [broken]\n");
+    const dir = await repo("app", { "a.txt": "1\n" });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "10-02"], {
+      cwd: dir,
+      env: { ...GIT_ENV, GIT_AUTHOR_DATE: "2026-10-02T12:00:00+09:00" },
+    });
+    const counted = await measure(declare([], TOKYO, ["app"]), NOW, ["app"]);
+    expect(counted.effort.commits).toEqual({ app: 1 });
+    expect(rows(counted)[1]?.commits).toEqual({ app: 1 });
     const m = await measure(declare([], TOKYO));
     expect(m.effort).toMatchObject({
       active_ms: { union: null, claude: null, codex: null },
       output_tokens: null,
       sessions_without_tokens: null,
     });
-    expect(m.effort.daily[0]).toEqual({
+    expect(rows(m)[0]).toEqual({
       date: "2026-10-01",
       active_ms: { union: null, claude: null, codex: null },
       output_tokens: null,
@@ -3517,6 +3553,34 @@ describe("measureBoard: the effort section", () => {
       { at: "effort.active_ms", reason },
       { at: "effort.output_tokens", reason },
     ]);
+  });
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("does not count time or tokens when a session's events cannot be read", async () => {
+    await placeWork();
+    const events = join(paths.sessions, SES("C02"), "events.jsonl");
+    await chmod(events, 0o000);
+    try {
+      const m = await measure(declare([], TOKYO));
+      expect(m.effort.active_ms).toEqual({ union: null, claude: null, codex: null });
+      expect(m.not_found).toContainEqual({
+        at: "effort.active_ms",
+        reason: "1 session could not be read, so the time and tokens are not known",
+      });
+    } finally {
+      await chmod(events, 0o644);
+    }
+  });
+
+  it("counts the days of a start in the first century as they are", async () => {
+    const m = await measure(
+      declare([], { effort: { start: "0099-12-30", time_zone: "UTC" } }),
+      new Date("0100-01-01T12:00:00.000Z"),
+    );
+    expect(m.effort.elapsed_days).toBe(2);
+    expect(rows(m).map((row) => row.date)).toEqual(["0099-12-30", "0099-12-31", "0100-01-01"]);
   });
 
   it("has no day before the start, when the start is later than today", async () => {
@@ -3540,17 +3604,15 @@ describe("measureBoard: the effort section", () => {
     expect((await measure(declare([], TOKYO), new Date("2026-10-05T09:00:00.000Z"))).digest).toBe(
       m.digest,
     );
-    const today = m.effort.daily.at(-1);
-    const yesterday = m.effort.daily.at(-2);
+    const today = rows(m).at(-1);
+    const yesterday = rows(m).at(-2);
     if (today === undefined || yesterday === undefined) throw new Error("no rows");
-    const changed = (daily: typeof m.effort.daily, days = m.effort.elapsed_days) =>
+    const changed = (daily: ReturnType<typeof rows>, days = m.effort.elapsed_days) =>
       boardDigest({ ...m, effort: { ...m.effort, elapsed_days: days, daily } });
-    expect(changed([...m.effort.daily.slice(0, -1), { ...today, output_tokens: 9 }], 99)).toBe(
+    expect(changed([...rows(m).slice(0, -1), { ...today, output_tokens: 9 }], 99)).toBe(m.digest);
+    expect(changed([...rows(m).slice(0, -2), { ...yesterday, output_tokens: 9 }, today])).not.toBe(
       m.digest,
     );
-    expect(
-      changed([...m.effort.daily.slice(0, -2), { ...yesterday, output_tokens: 9 }, today]),
-    ).not.toBe(m.digest);
     expect(boardDigest({ ...m, effort: { ...m.effort, output_tokens: 9 } })).not.toBe(m.digest);
   });
 });

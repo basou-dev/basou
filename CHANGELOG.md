@@ -60,7 +60,9 @@ All notable changes to **basou** are recorded here. The project follows
   cannot be read, for the review gaps and the effort's time and tokens an
   `events.jsonl` that cannot be read, a
   `~/.basou/portfolio.yaml` that `basou portfolio` refuses, a dry run of an
-  import that cannot run, and for the trail, the review gaps, the newest
+  import that cannot run, commit dates git cannot give, no declared time zone
+  for the effort where this host's cannot be named, and for the trail, the
+  review gaps, the newest
   session and the effort's time and tokens an entry named as a session that
   is not a directory, which the integrity counts as tampered as `basou
   verify` does)

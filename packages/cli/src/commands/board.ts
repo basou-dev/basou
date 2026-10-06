@@ -307,6 +307,9 @@ function hours(ms: number): string {
 
 function effortLines(m: BoardMeasurement): string[] {
   const e = m.effort;
+  if (e.time_zone === null || e.elapsed_days === null || e.commits === null) {
+    return [`  from ${e.start}, not measured`];
+  }
   const { union, claude, codex } = e.active_ms;
   const shownCodex =
     codex !== null ? hours(codex) : union === null ? "not measured" : "no Codex session";
@@ -322,7 +325,7 @@ function effortLines(m: BoardMeasurement): string[] {
     ([path, n]) => `${displayPath(path)} ${n ?? "not measured"}`,
   );
   return [
-    `  from ${e.start} (${displayPath(e.time_zone)}), ${e.elapsed_days} days`,
+    `  from ${e.start} (${displayPath(e.time_zone)}), ${e.elapsed_days} day${e.elapsed_days === 1 ? "" : "s"}`,
     `  ${time}`,
     `  ${tokens}`,
     `  commits${commits.length === 0 ? " none" : `: ${commits.join(", ")}`}`,

@@ -54,39 +54,49 @@ export type BoardEffortDay = {
  * The work since the board's start, in its time zone. Time and tokens are
  * every session's, as `basou stats` counts them; an interval that crosses a
  * midnight is split between the days, and nothing before the start counts.
+ *
+ * When no time zone is declared and `Intl` cannot name this host's, there are
+ * no days to count by: everything but `start` is null, with one entry at
+ * `effort`.
  */
 export type BoardEffort = {
   /** The declared start. */
   start: string;
   /** The time zone the days are in: the declared one, or this host's, as named by `Intl`. */
-  time_zone: string;
+  time_zone: string | null;
   /** Days from the start to today. Left out of the digest. */
-  elapsed_days: number;
+  elapsed_days: number | null;
   /**
-   * Null with an entry at `effort.active_ms` when a session could not be read.
-   * `codex` is also null, with no entry, when there is no Codex session at
-   * all: a null that means so, where 0 is a Codex that did nothing.
+   * Null, with entries at `effort.active_ms` and `effort.output_tokens` (the
+   * tokens are null with it), when the sessions cannot be listed, a session
+   * cannot be read, an event line is lost (a torn last line is not), or an
+   * entry named as a session is not a directory. `codex` is also null, with
+   * no entry, when there is no Codex session at all: a null that means so,
+   * where 0 is a Codex that did nothing.
    */
   active_ms: BoardActiveMs;
   /**
    * The output tokens of the sessions that recorded them (reasoning not
-   * included). Null with an entry at `effort.output_tokens` when a session
-   * could not be read.
+   * included). Null when the time is, with an entry at `effort.output_tokens`.
    */
   output_tokens: number | null;
   /**
    * The Claude Code and Codex imports that recorded no tokens, so that
-   * `output_tokens` is a floor while it is above 0.
+   * `output_tokens` is a floor while it is above 0. Null when the tokens are.
    */
   sessions_without_tokens: number | null;
   /**
    * The commits reachable from HEAD authored on a day from the start to
    * today, by the manifest's path. Null with an entry at
-   * `effort.commits[<path>]` for a repository whose history is not known.
+   * `effort.commits[<path>]` for a repository whose history or commit dates
+   * are not known.
    */
-  commits: Record<string, number | null>;
-  /** One row for each day from the start to today, today's left out of the digest. */
-  daily: BoardEffortDay[];
+  commits: Record<string, number | null> | null;
+  /**
+   * One row for each day from the start to today, today's left out of the
+   * digest. A row's values are null where the section's are.
+   */
+  daily: BoardEffortDay[] | null;
 };
 
 export type EffortInput = {
@@ -106,9 +116,29 @@ export async function measureEffort(input: EffortInput): Promise<{
   notFound: { at: string; reason: string }[];
 }> {
   const notFound: { at: string; reason: string }[] = [];
-  const zone = new Intl.DateTimeFormat("en-US", {
-    ...(input.timeZone === undefined ? {} : { timeZone: input.timeZone }),
-  }).resolvedOptions().timeZone;
+  const zone = namedZone(input.timeZone);
+  if (zone === undefined) {
+    const unknown = { union: null, claude: null, codex: null };
+    return {
+      effort: {
+        start: input.start,
+        time_zone: null,
+        elapsed_days: null,
+        active_ms: unknown,
+        output_tokens: null,
+        sessions_without_tokens: null,
+        commits: null,
+        daily: null,
+      },
+      notFound: [
+        {
+          at: "effort",
+          reason:
+            "this host's time zone could not be named, so the days are not known (declare effort.time_zone)",
+        },
+      ],
+    };
+  }
   const calendar = new Calendar(zone);
   const today = calendar.dateOf(input.now.getTime());
   const days = datesFrom(input.start, today);
@@ -211,6 +241,22 @@ export async function measureEffort(input: EffortInput): Promise<{
   return { effort, notFound };
 }
 
+// The zone the days are in, named as `Intl` names it: the declared one, or
+// this host's. Undefined when the host's cannot be named, as with an empty or
+// unknown TZ.
+function namedZone(declared: string | undefined): string | undefined {
+  try {
+    const options = declared === undefined ? {} : { timeZone: declared };
+    const name = new Intl.DateTimeFormat("en-US", options).resolvedOptions().timeZone;
+    if (typeof name !== "string" || name === "") return undefined;
+    // A name `Intl` gives back but does not take, such as Etc/Unknown, throws.
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return name;
+  } catch {
+    return undefined;
+  }
+}
+
 // Every session as `basou stats` measures it, or why one could not be read.
 async function readSessions(
   paths: BasouPaths,
@@ -306,9 +352,13 @@ function datesFrom(first: string, last: string): string[] {
   return out;
 }
 
+// The UTC midnight of a date. Not Date.UTC, which reads a year from 0 to 99
+// as 1900 to 1999.
 function utcOf(date: string): number {
   const [y, m, d] = date.split("-").map(Number) as [number, number, number];
-  return Date.UTC(y, m - 1, d);
+  const at = new Date(0);
+  at.setUTCFullYear(y, m - 1, d);
+  return at.getTime();
 }
 
 function nextDate(date: string): string {
@@ -344,8 +394,7 @@ class Calendar {
   midnightOf(date: string): number {
     const known = this.midnights.get(date);
     if (known !== undefined) return known;
-    const [y, m, d] = date.split("-").map(Number) as [number, number, number];
-    const target = Date.UTC(y, m - 1, d);
+    const target = utcOf(date);
     // No zone is two days from UTC, so the answer lies between these.
     let low = target - 2 * 86_400_000;
     let high = target + 2 * 86_400_000;
