@@ -9,6 +9,7 @@ import {
   type BoardDeclaration,
   type BoardMeasure,
 } from "./declaration.js";
+import { BOARD_EFFORT_METHOD, type BoardEffort, measureEffort } from "./effort.js";
 import {
   BOARD_FRESHNESS_METHOD,
   type BoardFreshness,
@@ -83,17 +84,18 @@ export type BoardMeasurement = {
   not_found: BoardNotFound[];
   /**
    * `sha256:` and the hex digest of the measurement without `measured_at`,
-   * `digest` and `freshness`, serialized with its keys sorted. Two
-   * measurements with the same values have the same digest whenever they
-   * were taken. The freshness moves as work goes on, the measuring session's
-   * own included, so it is left out.
+   * `digest`, `freshness`, `effort.elapsed_days` and today's row of
+   * `effort.daily`, serialized with its keys sorted. Two measurements with the
+   * same values have the same digest whenever they were taken. The freshness
+   * moves as work goes on, the measuring session's own included, and the
+   * others move with the clock, so they are left out.
    */
   digest: string;
   /**
    * The version of how each built-in section measures (see
    * `BOARD_REPOS_METHOD`, `BOARD_TRAIL_METHOD`, `BOARD_INTEGRITY_METHOD`,
-   * `BOARD_REVIEW_GAPS_METHOD`, `BOARD_PORTFOLIO_METHOD` and
-   * `BOARD_FRESHNESS_METHOD`).
+   * `BOARD_REVIEW_GAPS_METHOD`, `BOARD_PORTFOLIO_METHOD`,
+   * `BOARD_FRESHNESS_METHOD` and `BOARD_EFFORT_METHOD`).
    */
   methods: {
     repos: number;
@@ -102,6 +104,7 @@ export type BoardMeasurement = {
     review_gaps: number;
     portfolio: number;
     freshness: number;
+    effort: number;
   };
   /** Each repository the manifest declares, in its order. */
   repos: BoardRepo[];
@@ -117,6 +120,8 @@ export type BoardMeasurement = {
   portfolio: BoardPortfolio;
   /** How current the workspace's own trail is, as `basou orient` judges it. */
   freshness: BoardFreshness;
+  /** The work since the board's start: active time, tokens and commits, by day. */
+  effort: BoardEffort;
 };
 
 export type MeasureBoardInput = {
@@ -211,6 +216,15 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
   notFound.push(...registered.notFound);
   const current = await measureFreshness(input);
   notFound.push(...current.notFound);
+  const worked = await measureEffort({
+    paths: input.paths,
+    now: input.now,
+    start: declaration.effort.start,
+    timeZone: declaration.effort.time_zone,
+    repos: input.repos,
+    authorDates: repos.authorDates,
+  });
+  notFound.push(...worked.notFound);
 
   const body = {
     board_version: declaration.board_version,
@@ -226,6 +240,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
       review_gaps: BOARD_REVIEW_GAPS_METHOD,
       portfolio: BOARD_PORTFOLIO_METHOD,
       freshness: BOARD_FRESHNESS_METHOD,
+      effort: BOARD_EFFORT_METHOD,
     },
     repos: repos.repos,
     measures,
@@ -235,6 +250,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     review_gaps: reviewed.reviewGaps,
     portfolio: registered.portfolio,
     freshness: current.freshness,
+    effort: worked.effort,
   };
   const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
   return {
@@ -254,6 +270,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     review_gaps: body.review_gaps,
     portfolio: body.portfolio,
     freshness: body.freshness,
+    effort: body.effort,
   };
 }
 
@@ -263,13 +280,24 @@ const UNDIGESTED = new Set(["measured_at", "digest", "freshness"]);
 
 /**
  * The digest of a measurement: sha256 over the measurement without
- * `measured_at`, `digest` and `freshness`, with every object's keys sorted.
+ * `measured_at`, `digest`, `freshness`, `effort.elapsed_days` and the last
+ * row of `effort.daily` (today's), with every object's keys sorted.
  */
 export function boardDigest(measurement: object): string {
   const hashed = Object.fromEntries(
-    Object.entries(measurement).filter(([key]) => !UNDIGESTED.has(key)),
+    Object.entries(measurement)
+      .filter(([key]) => !UNDIGESTED.has(key))
+      .map(([key, value]) => [key, key === "effort" ? withoutClock(value) : value]),
   );
   return `sha256:${createHash("sha256").update(canonicalJson(hashed)).digest("hex")}`;
+}
+
+// The effort section without what moves with the clock: the days elapsed, and
+// today's row, which a new day replaces.
+function withoutClock(effort: unknown): unknown {
+  if (effort === null || typeof effort !== "object") return effort;
+  const { elapsed_days: _elapsed, daily, ...rest } = effort as Record<string, unknown>;
+  return { ...rest, daily: Array.isArray(daily) ? daily.slice(0, -1) : daily };
 }
 
 function canonicalJson(value: unknown): string {

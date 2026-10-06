@@ -301,6 +301,37 @@ function freshnessLines(m: BoardMeasurement): string[] {
   return [`  newest session ${shownNewest}`, `  not imported ${shownUnimported}`];
 }
 
+function hours(ms: number): string {
+  return `${(ms / 3_600_000).toFixed(1)} h`;
+}
+
+function effortLines(m: BoardMeasurement): string[] {
+  const e = m.effort;
+  if (e.time_zone === null || e.elapsed_days === null || e.commits === null) {
+    return [`  from ${e.start}, not measured`];
+  }
+  const { union, claude, codex } = e.active_ms;
+  const shownCodex =
+    codex !== null ? hours(codex) : union === null ? "not measured" : "no Codex session";
+  const time =
+    union === null || claude === null
+      ? "active not measured"
+      : `active ${hours(union)}: Claude ${hours(claude)}, Codex ${shownCodex}`;
+  const tokens =
+    e.output_tokens === null
+      ? "output tokens not measured"
+      : `output tokens ${e.output_tokens}, ${e.sessions_without_tokens ?? 0} session${e.sessions_without_tokens === 1 ? "" : "s"} recorded none`;
+  const commits = Object.entries(e.commits).map(
+    ([path, n]) => `${displayPath(path)} ${n ?? "not measured"}`,
+  );
+  return [
+    `  from ${e.start} (${displayPath(e.time_zone)}), ${e.elapsed_days} day${e.elapsed_days === 1 ? "" : "s"}`,
+    `  ${time}`,
+    `  ${tokens}`,
+    `  commits${commits.length === 0 ? " none" : `: ${commits.join(", ")}`}`,
+  ];
+}
+
 function printMeasurementText(m: BoardMeasurement): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
@@ -331,6 +362,7 @@ function printMeasurementText(m: BoardMeasurement): void {
   lines.push("", "Review gaps:", ...reviewGapsLines(m));
   lines.push("", "Portfolio:", ...portfolioLines(m));
   lines.push("", "Freshness:", ...freshnessLines(m));
+  lines.push("", "Effort:", ...effortLines(m));
   if (m.not_found.length > 0) {
     lines.push("", `Not measured (${m.not_found.length}):`);
     for (const missing of m.not_found)

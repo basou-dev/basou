@@ -98,7 +98,8 @@ function declare(
     lanes: [{ id: "core", name: "Core" }],
     measures,
     axis: { version: 1, review_due_days: 60 },
-    effort: { start: "2026-04-28" },
+    // A declared zone, so that no test's days depend on the host's.
+    effort: { start: "2026-04-28", time_zone: "UTC" },
     ...extra,
   });
   const result = parseBoardDeclaration(text, { manifestRepoPaths: repos });
@@ -875,6 +876,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "review_gaps",
       "portfolio",
       "freshness",
+      "effort",
     ]);
     expect(m).toMatchObject({
       board_version: 1,
@@ -889,10 +891,10 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
     expect(m.measures.test).not.toHaveProperty("lane");
   });
 
-  it("gives the same digest at another time and a different one for another value", async () => {
+  it("gives the same digest later the same day and a different one for another value", async () => {
     const declaration = declare(MEASURES.slice(0, 2));
     const first = await measure(declaration);
-    const later = await measure(declaration, new Date("2026-10-06T00:00:00.000Z"));
+    const later = await measure(declaration, new Date("2026-10-05T09:00:00.000Z"));
     expect(later.measured_at).not.toBe(first.measured_at);
     expect(later.digest).toBe(first.digest);
     expect(first.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1227,6 +1229,14 @@ describe("measureBoard: what the review found", () => {
       {
         at: "review_gaps",
         reason: "1 event line could not be read, so the counts are not known",
+      },
+      {
+        at: "effort.active_ms",
+        reason: "1 event line could not be read, so the time and tokens are not known",
+      },
+      {
+        at: "effort.output_tokens",
+        reason: "1 event line could not be read, so the time and tokens are not known",
       },
     ]);
     expect(m.trail).toEqual({ decisions_all: null, decisions_live: null, tracks_open: null });
@@ -1620,6 +1630,12 @@ describe("measureBoard: the repos section", () => {
         reason: "the repo 'app/sub' is inside a git repository but is not its root",
       },
       { at: "measures.gone", reason: "the repo 'gone' is not on disk" },
+      { at: "effort.commits[gone]", reason: "the repo 'gone' is not on disk" },
+      { at: "effort.commits[plain]", reason: "the repo 'plain' is not a git repository" },
+      {
+        at: "effort.commits[app/sub]",
+        reason: "the repo 'app/sub' is inside a git repository but is not its root",
+      },
     ]);
     expect(m.complete).toBe(false);
   });
@@ -1646,6 +1662,7 @@ describe("measureBoard: the repos section", () => {
     expect(m.not_found).toEqual([
       { at: "repos[app].commits", reason: cut },
       { at: "repos[app].behind_main", reason: cut },
+      { at: "effort.commits[app]", reason: cut },
     ]);
   });
 
@@ -1668,6 +1685,7 @@ describe("measureBoard: the repos section", () => {
         reason: "the working tree could not be compared by git",
       },
       { at: "repos[broken].behind_main", reason: noCommit },
+      { at: "effort.commits[broken]", reason: noCommit },
     ]);
   });
 
@@ -1689,8 +1707,9 @@ describe("measureBoard: the repos section", () => {
       review_gaps: 1,
       portfolio: 1,
       freshness: 1,
+      effort: 1,
     });
-    const later = await measure(declaration, new Date("2026-10-06T00:00:00.000Z"), ["app"]);
+    const later = await measure(declaration, new Date("2026-10-05T09:00:00.000Z"), ["app"]);
     expect(later.digest).toBe(first.digest);
     await writeFile(join(dir, "b.txt"), "1\n");
     expect((await measure(declaration, NOW, ["app"])).digest).not.toBe(first.digest);
@@ -2064,6 +2083,7 @@ describe("measureBoard: the repos section", () => {
         expect(m.not_found).toEqual([
           { at: "repos[app].commits", reason: unknown },
           { at: "repos[app].behind_main", reason: unknown },
+          { at: "effort.commits[app]", reason: unknown },
         ]);
       });
     },
@@ -2267,6 +2287,14 @@ describe("measureBoard: the trail section", () => {
         at: "review_gaps",
         reason: "1 event line could not be read, so the counts are not known",
       },
+      {
+        at: "effort.active_ms",
+        reason: "1 event line could not be read, so the time and tokens are not known",
+      },
+      {
+        at: "effort.output_tokens",
+        reason: "1 event line could not be read, so the time and tokens are not known",
+      },
     ]);
     expect(m.complete).toBe(false);
   });
@@ -2291,6 +2319,14 @@ describe("measureBoard: the trail section", () => {
         at: "review_gaps",
         reason: "2 event lines could not be read, so the counts are not known",
       },
+      {
+        at: "effort.active_ms",
+        reason: "2 event lines could not be read, so the time and tokens are not known",
+      },
+      {
+        at: "effort.output_tokens",
+        reason: "2 event lines could not be read, so the time and tokens are not known",
+      },
     ]);
   });
 
@@ -2303,6 +2339,14 @@ describe("measureBoard: the trail section", () => {
       {
         at: "review_gaps",
         reason: "3000 event lines could not be read, so the counts are not known",
+      },
+      {
+        at: "effort.active_ms",
+        reason: "3000 event lines could not be read, so the time and tokens are not known",
+      },
+      {
+        at: "effort.output_tokens",
+        reason: "3000 event lines could not be read, so the time and tokens are not known",
       },
     ]);
   });
@@ -2332,6 +2376,16 @@ describe("measureBoard: the trail section", () => {
           reason:
             "2 session entries are not a directory (a symlink or a file), so the newest may be missing",
         },
+        {
+          at: "effort.active_ms",
+          reason:
+            "2 session entries are not a directory (a symlink or a file), so the time and tokens are not known",
+        },
+        {
+          at: "effort.output_tokens",
+          reason:
+            "2 session entries are not a directory (a symlink or a file), so the time and tokens are not known",
+        },
       ]);
     },
   );
@@ -2352,6 +2406,8 @@ describe("measureBoard: the trail section", () => {
           at: "freshness.newest_session_at",
           reason: "the sessions of the workspace could not be read",
         },
+        { at: "effort.active_ms", reason: "the sessions of the workspace could not be read" },
+        { at: "effort.output_tokens", reason: "the sessions of the workspace could not be read" },
       ]);
     } finally {
       await chmod(paths.sessions, 0o755);
@@ -2519,6 +2575,14 @@ describe("measureBoard: the integrity section", () => {
         at: "freshness.newest_session_at",
         reason: "2 sessions could not be read, so the newest may be missing",
       },
+      {
+        at: "effort.active_ms",
+        reason: "2 sessions could not be read, so the time and tokens are not known",
+      },
+      {
+        at: "effort.output_tokens",
+        reason: "2 sessions could not be read, so the time and tokens are not known",
+      },
     ]);
   });
 
@@ -2572,6 +2636,14 @@ describe("measureBoard: the integrity section", () => {
           at: "freshness.newest_session_at",
           reason: "2 sessions could not be read, so the newest may be missing",
         },
+        {
+          at: "effort.active_ms",
+          reason: "2 sessions could not be read, so the time and tokens are not known",
+        },
+        {
+          at: "effort.output_tokens",
+          reason: "2 sessions could not be read, so the time and tokens are not known",
+        },
       ]);
       expect(m.complete).toBe(false);
       await chmod(shut[0] as string, 0o644);
@@ -2582,6 +2654,14 @@ describe("measureBoard: the integrity section", () => {
         {
           at: "freshness.newest_session_at",
           reason: "1 session could not be read, so the newest may be missing",
+        },
+        {
+          at: "effort.active_ms",
+          reason: "1 session could not be read, so the time and tokens are not known",
+        },
+        {
+          at: "effort.output_tokens",
+          reason: "1 session could not be read, so the time and tokens are not known",
         },
       ]);
     } finally {
@@ -2626,6 +2706,8 @@ describe("measureBoard: the integrity section", () => {
         { at: "integrity", reason: refused },
         { at: "review_gaps", reason: refused },
         { at: "freshness.newest_session_at", reason: refused },
+        { at: "effort.active_ms", reason: refused },
+        { at: "effort.output_tokens", reason: refused },
       ]);
       await unlink(paths.sessions);
       await writeFile(paths.sessions, "not a directory\n");
@@ -2636,6 +2718,8 @@ describe("measureBoard: the integrity section", () => {
         { at: "integrity", reason: ".basou/sessions is not a directory" },
         { at: "review_gaps", reason: ".basou/sessions is not a directory" },
         { at: "freshness.newest_session_at", reason: ".basou/sessions is not a directory" },
+        { at: "effort.active_ms", reason: ".basou/sessions is not a directory" },
+        { at: "effort.output_tokens", reason: ".basou/sessions is not a directory" },
       ]);
     },
   );
@@ -2658,6 +2742,7 @@ describe("measureBoard: the integrity section", () => {
       review_gaps: 1,
       portfolio: 1,
       freshness: 1,
+      effort: 1,
     });
     await placeChained(SES("S01"));
     const verified = await measure(declaration);
@@ -2858,6 +2943,14 @@ describe("measureBoard: the review_gaps section", () => {
         at: "freshness.newest_session_at",
         reason: "1 session could not be read, so the newest may be missing",
       },
+      {
+        at: "effort.active_ms",
+        reason: "1 session could not be read, so the time and tokens are not known",
+      },
+      {
+        at: "effort.output_tokens",
+        reason: "1 session could not be read, so the time and tokens are not known",
+      },
     ]);
     expect(m.complete).toBe(false);
     await unlink(join(paths.sessions, s2, "session.yaml"));
@@ -2907,6 +3000,7 @@ describe("measureBoard: the review_gaps section", () => {
       review_gaps: 1,
       portfolio: 1,
       freshness: 1,
+      effort: 1,
     });
     await placeWork(
       s1,
@@ -2919,7 +3013,7 @@ describe("measureBoard: the review_gaps section", () => {
     expect(gap.trail).toEqual(none.trail);
     expect(gap.integrity).toEqual(none.integrity);
     expect(gap.digest).not.toBe(none.digest);
-    expect((await measure(declaration, new Date("2026-12-01T00:00:00.000Z"))).digest).toBe(
+    expect((await measure(declaration, new Date("2026-10-05T09:00:00.000Z"))).digest).toBe(
       gap.digest,
     );
   });
@@ -3024,6 +3118,7 @@ describe("measureBoard: the portfolio section", () => {
       review_gaps: 1,
       portfolio: 1,
       freshness: 1,
+      effort: 1,
     });
     expect(bare.portfolio).toEqual({ workspaces: 1, initialized: 0 });
     await mkdir(join(master, ".basou"));
@@ -3210,5 +3305,314 @@ describe("measureBoard: the freshness section", () => {
     ).toBe(m.digest);
     // Everything else stays in it.
     expect(boardDigest({ ...m, title: "Another board" })).not.toBe(m.digest);
+  });
+});
+
+describe("measureBoard: the effort section", () => {
+  const TOKYO = { effort: { start: "2026-10-01", time_zone: "Asia/Tokyo" } };
+  const rows = (m: BoardMeasurement) => {
+    if (m.effort.daily === null) throw new Error("no rows");
+    return m.effort.daily;
+  };
+  const MIN = 60_000;
+
+  // A session of `kind` that started at `startedAt`, worked over `intervals`,
+  // and recorded `tokens` output tokens (none when undefined).
+  async function placeWorked(
+    id: string,
+    kind: string,
+    startedAt: string,
+    intervals: [string, string][],
+    tokens?: number,
+    reasoning?: number,
+  ): Promise<void> {
+    const dir = join(paths.sessions, id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "session.yaml"),
+      stringify({
+        schema_version: "0.1.0",
+        session: {
+          id,
+          label: "fixture",
+          task_id: null,
+          workspace_id: WS,
+          source: { kind, version: "0.1.0" },
+          started_at: startedAt,
+          status: "imported",
+          working_directory: "/tmp/fixture",
+          invocation: { command: kind, args: [], exit_code: null },
+          related_files: [],
+          events_log: "events.jsonl",
+          metrics: {
+            active_intervals: intervals.map(([start, end]) => ({ start, end })),
+            ...(tokens === undefined ? {} : { output_tokens: tokens }),
+            ...(reasoning === undefined ? {} : { reasoning_output_tokens: reasoning }),
+          },
+        },
+      }),
+    );
+    await writeFile(join(dir, "events.jsonl"), "");
+  }
+
+  // Work around midnight in Tokyo (UTC+9): 2026-10-02T15:00Z is 10-03 00:00.
+  async function placeWork(): Promise<void> {
+    // Before the start until 10-01 00:30; only the half hour after counts.
+    await placeWorked(
+      SES("C01"),
+      "claude-code-import",
+      "2026-09-30T14:30:00Z",
+      [["2026-09-30T14:30:00Z", "2026-09-30T15:30:00Z"]],
+      100,
+    );
+    // 10-02 23:00 to 10-03 01:00: an hour on each day.
+    await placeWorked(
+      SES("C02"),
+      "claude-code-import",
+      "2026-10-02T14:00:00Z",
+      [["2026-10-02T14:00:00Z", "2026-10-02T16:00:00Z"]],
+      200,
+    );
+    // 10-03 00:30 to 01:30, half of it alongside the one above.
+    await placeWorked(
+      SES("C03"),
+      "codex-import",
+      "2026-10-02T15:30:00Z",
+      [["2026-10-02T15:30:00Z", "2026-10-02T16:30:00Z"]],
+      50,
+    );
+    // Ten minutes on 10-04 in a terminal: in the union only.
+    await placeWorked(SES("C04"), "terminal", "2026-10-04T01:00:00Z", [
+      ["2026-10-04T01:00:00Z", "2026-10-04T01:10:00Z"],
+    ]);
+  }
+
+  const active = (union: number, claude: number, codex: number | null) => ({
+    union: union * MIN,
+    claude: claude * MIN,
+    codex: codex === null ? null : codex * MIN,
+  });
+
+  it("counts the active time from the start, by day in its time zone, each vendor merged apart", async () => {
+    await placeWork();
+    const m = await measure(declare([], TOKYO));
+    expect(m.effort).toMatchObject({
+      start: "2026-10-01",
+      time_zone: "Asia/Tokyo",
+      elapsed_days: 4,
+      active_ms: active(30 + 60 + 90 + 10, 30 + 60 + 60, 60),
+    });
+    expect(rows(m).map((row) => [row.date, row.active_ms])).toEqual([
+      ["2026-10-01", active(30, 30, 0)],
+      ["2026-10-02", active(60, 60, 0)],
+      ["2026-10-03", active(90, 60, 60)],
+      ["2026-10-04", active(10, 0, 0)],
+      ["2026-10-05", active(0, 0, 0)],
+    ]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("merges the sessions of one vendor that overlap, rather than adding them", async () => {
+    await placeWorked(SES("C01"), "claude-code-import", "2026-10-02T01:00:00Z", [
+      ["2026-10-02T01:00:00Z", "2026-10-02T02:00:00Z"],
+    ]);
+    await placeWorked(SES("C02"), "claude-code-adapter", "2026-10-02T01:30:00Z", [
+      ["2026-10-02T01:30:00Z", "2026-10-02T02:30:00Z"],
+    ]);
+    const m = await measure(declare([], TOKYO));
+    expect(m.effort.active_ms).toEqual(active(90, 90, null));
+  });
+
+  it("puts a day's boundary where its time zone does", async () => {
+    await placeWork();
+    const m = await measure(declare([], { effort: { start: "2026-10-01", time_zone: "UTC" } }));
+    // In UTC the first session ends before the start, and the second and third
+    // are both on 10-02, merged: 14:00 to 16:30.
+    expect(rows(m).map((row) => [row.date, row.active_ms.union])).toEqual([
+      ["2026-10-01", 0],
+      ["2026-10-02", 150 * MIN],
+      ["2026-10-03", 0],
+      ["2026-10-04", 10 * MIN],
+      ["2026-10-05", 0],
+    ]);
+  });
+
+  it("names the time zone as Intl does, and takes this host's when none is declared", async () => {
+    const lower = await measure(
+      declare([], { effort: { start: "2026-10-01", time_zone: "asia/tokyo" } }),
+    );
+    expect(lower.effort.time_zone).toBe("Asia/Tokyo");
+    const host = await measure(declare([], { effort: { start: "2026-10-01" } }));
+    expect(host.effort.time_zone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+
+  it("gives no Codex time when there is no Codex session, and 0 when it did nothing", async () => {
+    await placeWorked(SES("C01"), "claude-code-import", "2026-10-02T00:00:00Z", [
+      ["2026-10-02T00:00:00Z", "2026-10-02T00:30:00Z"],
+    ]);
+    const none = await measure(declare([], TOKYO));
+    expect(none.effort.active_ms.codex).toBeNull();
+    expect(rows(none).every((row) => row.active_ms.codex === null)).toBe(true);
+    expect(none.not_found).toEqual([]);
+    // A launcher's session is Codex's too; this one worked before the start.
+    await placeWorked(SES("C02"), "codex-adapter", "2026-09-01T00:00:00Z", [
+      ["2026-09-01T00:00:00Z", "2026-09-01T00:30:00Z"],
+    ]);
+    // And Claude Code's launcher is Claude's, on 10-03.
+    await placeWorked(SES("C03"), "claude-code-adapter", "2026-10-03T00:00:00Z", [
+      ["2026-10-03T00:00:00Z", "2026-10-03T00:15:00Z"],
+    ]);
+    const idle = await measure(declare([], TOKYO));
+    expect(idle.effort.active_ms).toEqual(active(45, 45, 0));
+    expect(rows(idle).every((row) => row.active_ms.codex === 0)).toBe(true);
+  });
+
+  it("adds the output tokens of the sessions that started from the start, and counts the imports that recorded none", async () => {
+    await placeWork();
+    await placeWorked(SES("C05"), "claude-code-import", "2026-10-04T02:00:00Z", []);
+    await placeWorked(SES("C06"), "codex-adapter", "2026-10-04T03:00:00Z", []);
+    await placeWorked(SES("C07"), "claude-code-import", "2026-09-29T00:00:00Z", []);
+    const m = await measure(declare([], TOKYO));
+    // 100 started before the start; the adapter leaves tokens to the import.
+    expect(m.effort.output_tokens).toBe(250);
+    // Reasoning is not output.
+    await placeWorked(
+      SES("C02"),
+      "claude-code-import",
+      "2026-10-02T14:00:00Z",
+      [["2026-10-02T14:00:00Z", "2026-10-02T16:00:00Z"]],
+      200,
+      40,
+    );
+    expect((await measure(declare([], TOKYO))).effort.output_tokens).toBe(250);
+    expect(m.effort.sessions_without_tokens).toBe(1);
+    expect(rows(m).map((row) => row.output_tokens)).toEqual([0, 200, 50, 0, 0]);
+  });
+
+  it("counts the commits authored from the start to today, by day, each repository apart", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    const authored = (date: string, name: string) =>
+      execFileSync("git", ["commit", "-q", "--allow-empty", "-m", name], {
+        cwd: dir,
+        env: { ...GIT_ENV, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: "2026-10-05T00:00:00Z" },
+      });
+    authored("2026-09-30T12:00:00+09:00", "before the start");
+    authored("2026-10-02T23:30:00+09:00", "late on 10-02");
+    authored("2026-10-02T15:30:00Z", "10-03 in Tokyo");
+    authored("2026-10-03T12:00:00+09:00", "10-03");
+    const m = await measure(declare([], TOKYO, ["app"]), NOW, ["app"]);
+    // The first commit was authored when the test ran, after NOW's today.
+    expect(m.effort.commits).toEqual({ app: 3 });
+    expect(rows(m).map((row) => row.commits)).toEqual([
+      { app: 0 },
+      { app: 1 },
+      { app: 2 },
+      { app: 0 },
+      { app: 0 },
+    ]);
+  });
+
+  it("counts no commit of a repository with no commit yet, and none of one whose history is unknown", async () => {
+    const empty = join(root, "empty");
+    await mkdir(empty);
+    git(empty, "init", "-q", "-b", "main");
+    const m = await measure(declare([], TOKYO, ["empty", "gone"]), NOW, ["empty", "gone"]);
+    expect(m.effort.commits).toEqual({ empty: 0, gone: null });
+    expect(rows(m)[0]?.commits).toEqual({ empty: 0, gone: null });
+    expect(m.not_found).toContainEqual({
+      at: "effort.commits[gone]",
+      reason: "the repo 'gone' is not on disk",
+    });
+  });
+
+  it("does not count time or tokens when a session cannot be read, but counts commits", async () => {
+    await placeWork();
+    await writeFile(join(paths.sessions, SES("C02"), "session.yaml"), "session: [broken]\n");
+    const dir = await repo("app", { "a.txt": "1\n" });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "10-02"], {
+      cwd: dir,
+      env: { ...GIT_ENV, GIT_AUTHOR_DATE: "2026-10-02T12:00:00+09:00" },
+    });
+    const counted = await measure(declare([], TOKYO, ["app"]), NOW, ["app"]);
+    expect(counted.effort.commits).toEqual({ app: 1 });
+    expect(rows(counted)[1]?.commits).toEqual({ app: 1 });
+    const m = await measure(declare([], TOKYO));
+    expect(m.effort).toMatchObject({
+      active_ms: { union: null, claude: null, codex: null },
+      output_tokens: null,
+      sessions_without_tokens: null,
+    });
+    expect(rows(m)[0]).toEqual({
+      date: "2026-10-01",
+      active_ms: { union: null, claude: null, codex: null },
+      output_tokens: null,
+      commits: {},
+    });
+    const reason = "1 session could not be read, so the time and tokens are not known";
+    expect(m.not_found.filter((n) => n.at.startsWith("effort"))).toEqual([
+      { at: "effort.active_ms", reason },
+      { at: "effort.output_tokens", reason },
+    ]);
+  });
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("does not count time or tokens when a session's events cannot be read", async () => {
+    await placeWork();
+    const events = join(paths.sessions, SES("C02"), "events.jsonl");
+    await chmod(events, 0o000);
+    try {
+      const m = await measure(declare([], TOKYO));
+      expect(m.effort.active_ms).toEqual({ union: null, claude: null, codex: null });
+      expect(m.not_found).toContainEqual({
+        at: "effort.active_ms",
+        reason: "1 session could not be read, so the time and tokens are not known",
+      });
+    } finally {
+      await chmod(events, 0o644);
+    }
+  });
+
+  it("counts the days of a start in the first century as they are", async () => {
+    const m = await measure(
+      declare([], { effort: { start: "0099-12-30", time_zone: "UTC" } }),
+      new Date("0100-01-01T12:00:00.000Z"),
+    );
+    expect(m.effort.elapsed_days).toBe(2);
+    expect(rows(m).map((row) => row.date)).toEqual(["0099-12-30", "0099-12-31", "0100-01-01"]);
+  });
+
+  it("has no day before the start, when the start is later than today", async () => {
+    await placeWork();
+    const m = await measure(
+      declare([], { effort: { start: "2026-10-09", time_zone: "Asia/Tokyo" } }),
+    );
+    expect(m.effort).toMatchObject({
+      elapsed_days: -4,
+      active_ms: active(0, 0, 0),
+      output_tokens: 0,
+      daily: [],
+    });
+  });
+
+  it("names its method's version, and leaves the days elapsed and today's row out of the digest", async () => {
+    await placeWork();
+    const m = await measure(declare([], TOKYO));
+    expect(m.methods.effort).toBe(1);
+    // Later the same day, nothing else changed.
+    expect((await measure(declare([], TOKYO), new Date("2026-10-05T09:00:00.000Z"))).digest).toBe(
+      m.digest,
+    );
+    const today = rows(m).at(-1);
+    const yesterday = rows(m).at(-2);
+    if (today === undefined || yesterday === undefined) throw new Error("no rows");
+    const changed = (daily: ReturnType<typeof rows>, days = m.effort.elapsed_days) =>
+      boardDigest({ ...m, effort: { ...m.effort, elapsed_days: days, daily } });
+    expect(changed([...rows(m).slice(0, -1), { ...today, output_tokens: 9 }], 99)).toBe(m.digest);
+    expect(changed([...rows(m).slice(0, -2), { ...yesterday, output_tokens: 9 }, today])).not.toBe(
+      m.digest,
+    );
+    expect(boardDigest({ ...m, effort: { ...m.effort, output_tokens: 9 } })).not.toBe(m.digest);
   });
 });

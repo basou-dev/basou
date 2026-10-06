@@ -17,6 +17,7 @@ import { probeStaleness } from "../lib/provenance-actions.js";
 import { doRunBoardMeasure, runBoardMeasure } from "./board.js";
 import { doRunPortfolioList } from "./portfolio.js";
 import { doRunReviewGaps } from "./review-gaps.js";
+import { doRunStats } from "./stats.js";
 import { runVerify } from "./verify.js";
 
 const execFileAsync = promisify(execFile);
@@ -613,6 +614,66 @@ describe("basou board measure", () => {
     await runBoardMeasure({}, context);
     expect(out.join("\n")).toContain("\nFreshness:\n  newest session not measured\n");
     expect(process.exitCode).toBe(1);
+  });
+
+  it("counts the active time and tokens basou stats counts, and prints them", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const id = "ses_01HXABCDEF1234567890ABCS01";
+    const dir = join(repo, ".basou", "sessions", id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "session.yaml"),
+      [
+        'schema_version: "0.1.0"',
+        "session:",
+        `  id: ${id}`,
+        "  task_id: null",
+        `  workspace_id: ${FIXED_WS_ID}`,
+        "  source: { kind: claude-code-import, version: 0.1.0 }",
+        "  started_at: 2026-10-01T00:00:00Z",
+        "  status: imported",
+        "  working_directory: /tmp/fixture",
+        "  invocation: { command: claude, args: [], exit_code: null }",
+        "  related_files: []",
+        "  events_log: events.jsonl",
+        "  metrics:",
+        "    output_tokens: 1234",
+        "    active_intervals:",
+        "      - { start: 2026-10-01T00:00:00Z, end: 2026-10-01T01:30:00Z }",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(join(dir, "events.jsonl"), "");
+    const { out } = capture();
+    await doRunStats({ json: true }, { cwd: repo, nowProvider: () => NOW });
+    const stats = JSON.parse(out.join("\n")) as {
+      totals: { billableActiveTimeMs: number; tokens: { output: number } };
+    };
+    out.length = 0;
+    const result = await doRunBoardMeasure({ json: true }, ctx(repo));
+    expect(result.effort.active_ms.union).toBe(stats.totals.billableActiveTimeMs);
+    expect(result.effort.active_ms).toEqual({ union: 5_400_000, claude: 5_400_000, codex: null });
+    expect(result.effort.output_tokens).toBe(stats.totals.tokens.output);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("\nEffort:\n  from 2026-04-28 (");
+    expect(text).toContain(
+      "\n  active 1.5 h: Claude 1.5 h, Codex no Codex session\n  output tokens 1234, 0 sessions recorded none\n  commits: . ",
+    );
+  });
+
+  it("says one day as one day", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const declared = JSON.parse(boardYaml([])) as Record<string, unknown>;
+    await placeBoard(
+      repo,
+      JSON.stringify({ ...declared, effort: { start: "2026-10-04", time_zone: "UTC" } }),
+    );
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain("\nEffort:\n  from 2026-10-04 (UTC), 1 day\n");
   });
 
   it("refuses a workspace that is not initialized", async () => {
