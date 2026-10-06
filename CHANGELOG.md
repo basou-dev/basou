@@ -23,7 +23,11 @@ All notable changes to **basou** are recorded here. The project follows
   and titles, newest first as `basou orient` lists them, read from the
   events (a decision recorded twice under one id counts once); and how many
   of the workspace's own sessions have each status `basou verify` gives,
-  every status listed, and how many are not verified. It
+  every status listed, and how many are not verified; and how many units of
+  work (one session's commits in one repository, or those of one session
+  that could not be placed in any repository) `basou review-gaps` finds of
+  each verdict, every verdict listed, and how many are gaps, over every
+  repository and with its default window. It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git
@@ -35,9 +39,10 @@ All notable changes to **basou** are recorded here. The project follows
   read, a directory git could not open or whose ignore file it could not
   read, a symlink out of the repository, sessions that cannot be listed or a
   `.basou/sessions` that is a symlink or not a directory, an event line that
-  cannot be read, a session `basou verify` cannot read, and for the trail an
-  entry named as a session that is not a directory, which the integrity
-  counts as tampered as `basou verify` does)
+  cannot be read, a session `basou verify` cannot read, a session whose
+  `session.yaml` or `events.jsonl` `basou review-gaps` cannot read, and for
+  the trail and the review gaps an entry named as a session that is not a
+  directory, which the integrity counts as tampered as `basou verify` does)
   is `null`, with a reason under `not_found`, and is never counted as zero. The result carries a digest of its values. The
   declaration is read from `board/board.yaml` in the workspace only when the
   manifest declares the workspace's own repo private; otherwise `--board` is

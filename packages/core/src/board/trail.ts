@@ -1,9 +1,8 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type ReplayWarning, readAllEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadTaskEntries, type TaskSkipReason } from "../storage/tasks.js";
-import { listSessions } from "./sessions.js";
+import { listSessions, lostAmong } from "./sessions.js";
 
 /**
  * The version of how the `trail` section measures. Raised whenever a value of
@@ -47,22 +46,6 @@ export type TrailInput = {
   onReplayWarning?: (warning: ReplayWarning, sessionId: string) => void;
   onTaskSkip?: (taskId: string, reason: TaskSkipReason) => void;
 };
-
-// How many of the lines of an events log that were not JSON were lost
-// events: all but a torn last line, one with no newline after it, which is a
-// write that has not finished. The log is read once, however many there are.
-async function lostAmong(eventsLog: string, malformed: readonly number[]): Promise<number> {
-  let body: Buffer;
-  try {
-    body = await readFile(eventsLog);
-  } catch {
-    return malformed.length;
-  }
-  if (body.length === 0 || body[body.length - 1] === 0x0a) return malformed.length;
-  let newlines = 0;
-  for (const byte of body) if (byte === 0x0a) newlines++;
-  return malformed.filter((lineNo) => lineNo !== newlines + 1).length;
-}
 
 type Recorded = { track: boolean; title: string; occurredAt: number };
 
