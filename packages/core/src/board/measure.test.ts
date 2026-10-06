@@ -2521,20 +2521,42 @@ describe("measureBoard: the integrity section", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "is not measured when the sessions directory is a symlink",
+    "says the sessions directory was refused, in the trail too, when it is a symlink or a file",
     async () => {
       const elsewhere = join(root, "elsewhere");
       await mkdir(elsewhere);
       await rm(paths.sessions, { recursive: true });
       await symlink(elsewhere, paths.sessions);
-      const m = await measure(declare([]));
-      expect(m.integrity).toEqual({ by_status: null, not_verified: null });
-      expect(m.not_found).toContainEqual({
-        at: "integrity",
-        reason: "the sessions of the workspace could not be read",
+      const linked = await measure(declare([]));
+      expect(linked.integrity).toEqual({ by_status: null, not_verified: null });
+      expect(linked.trail).toEqual({
+        decisions_all: null,
+        decisions_live: null,
+        tracks_open: null,
       });
+      const refused = ".basou/sessions is a symlink, which basou refuses to read";
+      expect(linked.not_found).toEqual([
+        { at: "trail", reason: refused },
+        { at: "integrity", reason: refused },
+      ]);
+      await unlink(paths.sessions);
+      await writeFile(paths.sessions, "not a directory\n");
+      const file = await measure(declare([]));
+      expect(file.integrity).toEqual({ by_status: null, not_verified: null });
+      expect(file.not_found).toEqual([
+        { at: "trail", reason: ".basou/sessions is not a directory" },
+        { at: "integrity", reason: ".basou/sessions is not a directory" },
+      ]);
     },
   );
+
+  it("counts nothing when there is no sessions directory", async () => {
+    await rm(paths.sessions, { recursive: true });
+    const m = await measure(declare([]));
+    expect(m.integrity.not_verified).toBe(0);
+    expect(m.trail.decisions_all).toBe(0);
+    expect(m.complete).toBe(true);
+  });
 
   it("names its method's version, and is in the digest", async () => {
     const declaration = declare([]);

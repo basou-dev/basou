@@ -1,6 +1,6 @@
 import { type ChainVerdictStatus, verifyEventsChain } from "../events/verify.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
-import { enumerateSessionEntries } from "../storage/sessions.js";
+import { listSessions } from "./sessions.js";
 
 /**
  * The version of how the `integrity` section measures. Raised whenever a value
@@ -25,7 +25,8 @@ const STATUSES: Record<ChainVerdictStatus, true> = {
 /**
  * What `basou verify` finds in the workspace's own sessions, on this host
  * only. Both values are null, with one not_found entry at `integrity`, when
- * the sessions cannot be listed or a session cannot be read (where `basou
+ * the sessions cannot be listed (or `.basou/sessions` is refused, being a
+ * symlink or not a directory) or a session cannot be read (where `basou
  * verify` stops with an error): a count that leaves a session out would be
  * wrong, not partial.
  */
@@ -50,13 +51,9 @@ export async function measureIntegrity(paths: BasouPaths): Promise<{
     integrity: { by_status: null, not_verified: null },
     notFound: [{ at: "integrity", reason }],
   });
-  let names: string[];
-  try {
-    const { dirs, notDirectories } = await enumerateSessionEntries(paths);
-    names = [...dirs, ...notDirectories];
-  } catch {
-    return unmeasured("the sessions of the workspace could not be read");
-  }
+  const listed = await listSessions(paths);
+  if (!listed.ok) return unmeasured(listed.reason);
+  const names = [...listed.dirs, ...listed.notDirectories];
   const byStatus: Record<string, number> = {};
   for (const status of Object.keys(STATUSES)) byStatus[status] = 0;
   let unreadable = 0;

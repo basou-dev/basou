@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type ReplayWarning, readAllEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
-import { enumerateSessionEntries } from "../storage/sessions.js";
 import { loadTaskEntries, type TaskSkipReason } from "../storage/tasks.js";
+import { listSessions } from "./sessions.js";
 
 /**
  * The version of how the `trail` section measures. Raised whenever a value of
@@ -19,7 +19,9 @@ export type BoardTrack = { id: string; title: string };
  * decisions.md), on this host only. A decision recorded twice under one id
  * counts once. All three are null, with one not_found entry at `trail`, when
  * an event line could not be read (a torn last line, a write in progress, is
- * not counted as one) or an entry named as a session is not a directory.
+ * not counted as one), an entry named as a session is not a directory, or
+ * the sessions cannot be listed (or `.basou/sessions` is refused, being a
+ * symlink or not a directory).
  */
 export type BoardTrail = {
   decisions_all: number | null;
@@ -70,7 +72,9 @@ export async function readDecisions(input: TrailInput): Promise<TrailDecisions> 
     const recorded = new Map<string, Recorded>();
     const voided = new Set<string>();
     let lost = 0;
-    const { dirs, notDirectories } = await enumerateSessionEntries(input.paths);
+    const listed = await listSessions(input.paths);
+    if (!listed.ok) return { ok: false, reason: listed.reason };
+    const { dirs, notDirectories } = listed;
     for (const sessionId of dirs) {
       const sessionDir = join(input.paths.sessions, sessionId);
       // A line that is not JSON may be a write in progress; one that is JSON
