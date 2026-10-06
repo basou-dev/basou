@@ -1,5 +1,5 @@
 import {
-  DEFAULT_PORTFOLIO_CONFIG_PATH,
+  defaultPortfolioConfigPath,
   loadPortfolioConfig,
   portfolioPathExists,
   portfolioPathInitialized,
@@ -26,9 +26,9 @@ export type PortfolioCommandOptions = PortfolioListOptions & {
 export type PortfolioListContext = {
   /** Config file to read (default: ~/.basou/portfolio.yaml). */
   configPath?: string;
-  /** Whether the workspace path resolves to something on disk (default: fs.existsSync). */
+  /** Whether the workspace path resolves to something on disk (default: `portfolioPathExists`). */
   pathExists?: (path: string) => boolean;
-  /** Whether the workspace path owns a `.basou/` store (default: fs.existsSync of `<path>/.basou`). */
+  /** Whether the workspace path owns a `.basou/` directory (default: `portfolioPathInitialized`). */
   isInitialized?: (path: string) => boolean;
 };
 
@@ -146,7 +146,7 @@ export async function doRunPortfolioList(
   options: PortfolioListOptions,
   ctx: PortfolioListContext,
 ): Promise<PortfolioListResult> {
-  const configPath = ctx.configPath ?? DEFAULT_PORTFOLIO_CONFIG_PATH;
+  const configPath = ctx.configPath ?? defaultPortfolioConfigPath();
   const pathExists = ctx.pathExists ?? portfolioPathExists;
   // Shared with `basou board measure`, which counts what this lists.
   const isInitialized = ctx.isInitialized ?? portfolioPathInitialized;

@@ -30,8 +30,14 @@ import { readYamlFile } from "./yaml-store.js";
  */
 export type PortfolioWorkspace = { path: string; label?: string };
 
-/** Canonical location of the portfolio config. */
-export const DEFAULT_PORTFOLIO_CONFIG_PATH = join(homedir(), ".basou", "portfolio.yaml");
+/**
+ * Canonical location of the portfolio config. Worked out when it is asked
+ * for, not when the package is imported: `os.homedir()` can throw where there
+ * is neither a HOME nor a passwd entry, and importing must not.
+ */
+export function defaultPortfolioConfigPath(): string {
+  return join(homedir(), ".basou", "portfolio.yaml");
+}
 
 /** Thrown by {@link loadPortfolioConfig} when there is no config file at all. */
 export class PortfolioConfigMissingError extends Error {}
@@ -55,7 +61,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * file, invalid YAML, a malformed shape, a non-absolute path, or an empty list.
  */
 export async function loadPortfolioConfig(
-  configPath: string = DEFAULT_PORTFOLIO_CONFIG_PATH,
+  configPath: string = defaultPortfolioConfigPath(),
 ): Promise<PortfolioWorkspace[]> {
   let raw: unknown;
   try {

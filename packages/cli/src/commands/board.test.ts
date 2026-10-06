@@ -555,6 +555,18 @@ describe("basou board measure", () => {
     expect(err.join("\n")).toContain("Workspace not initialized. Run 'basou init' first.");
     expect(process.exitCode).toBe(1);
   });
+
+  it("looks for a member repo's master in the portfolio config it is given", async () => {
+    const repo = await realpath(tmpRepo as string);
+    // A config the host's own could not be: the line below can only come from it.
+    await writeFile(join(repo, ".portfolio.yaml"), "workspaces: [\n");
+    const { err } = capture();
+    await runBoardMeasure({ board: "board.yaml" }, ctx(repo));
+    expect(err.join("\n")).toContain(
+      "Ignoring ~/.basou/portfolio.yaml: ~/.basou/portfolio.yaml is not valid YAML.",
+    );
+    expect(process.exitCode).toBe(1);
+  });
 });
 
 describe("basou board measure: what the review found", () => {

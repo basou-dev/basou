@@ -9,8 +9,8 @@ import {
   buildSessionStartHookCommand,
   buildStopHookCommand,
   type ClaudeTranscriptRecord,
-  DEFAULT_PORTFOLIO_CONFIG_PATH,
   DEFAULT_STOP_HOOK_MIN_EDITS,
+  defaultPortfolioConfigPath,
   evaluateStopHook,
   findBasouSessionStartHook,
   findBasouStopHookCommand,
@@ -666,7 +666,7 @@ export type HookSessionStartContext = {
  */
 export async function renderRegisteredWorkspacePosition(
   cwd: string,
-  portfolioConfigPath: string = DEFAULT_PORTFOLIO_CONFIG_PATH,
+  portfolioConfigPath: string = defaultPortfolioConfigPath(),
 ): Promise<{ body: string }> {
   const root = await resolveBasouRootForCommand(cwd, "hook session-start", {
     portfolioConfigPath,
@@ -812,7 +812,7 @@ async function observeSessionFromPayload(
   const cwd = typeof fields.cwd === "string" ? fields.cwd : "";
   if (externalId.length === 0 || cwd.length === 0) return;
 
-  const configPath = portfolioConfigPath ?? DEFAULT_PORTFOLIO_CONFIG_PATH;
+  const configPath = portfolioConfigPath ?? defaultPortfolioConfigPath();
   let root: string;
   try {
     root = await resolveBasouRootForCommand(cwd, "hook observe", {

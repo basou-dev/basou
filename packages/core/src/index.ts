@@ -541,7 +541,7 @@ export {
   createAdHocSessionWithEvent,
   createManifest,
   createTaskWithEvent,
-  DEFAULT_PORTFOLIO_CONFIG_PATH,
+  defaultPortfolioConfigPath,
   deleteTask,
   editTask,
   ensureBasouDirectory,

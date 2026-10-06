@@ -1,5 +1,5 @@
 import {
-  DEFAULT_PORTFOLIO_CONFIG_PATH,
+  defaultPortfolioConfigPath,
   loadPortfolioConfig,
   PortfolioConfigMissingError,
   portfolioPathExists,
@@ -21,8 +21,9 @@ export const BOARD_PORTFOLIO_METHOD = 1;
  * all, a null that means so: a board of someone who does not use a portfolio
  * is complete. Both are null with one not_found entry at `portfolio` when the
  * config is there but `basou portfolio` refuses it (it cannot be read, is not
- * YAML, has no `workspaces:` list, names a relative path, or lists nothing),
- * with the reason `basou portfolio` gives.
+ * YAML, has no `workspaces:` list, has an entry whose path is missing, empty,
+ * not a string or relative, or whose label is not a string, or lists
+ * nothing), with the reason `basou portfolio` gives.
  */
 export type BoardPortfolio = {
   /** The registered workspaces, each path counted once. */
@@ -33,7 +34,7 @@ export type BoardPortfolio = {
 
 /** The `portfolio` section of a measurement, and why it is missing when it is. */
 export async function measurePortfolio(
-  configPath: string = DEFAULT_PORTFOLIO_CONFIG_PATH,
+  configPath: string = defaultPortfolioConfigPath(),
 ): Promise<{ portfolio: BoardPortfolio; notFound: { at: string; reason: string }[] }> {
   const none = { workspaces: null, initialized: null };
   let paths: string[];

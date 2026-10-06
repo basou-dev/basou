@@ -35,7 +35,7 @@ export {
 } from "./markdown-store.js";
 export type { PortfolioWorkspace } from "./portfolio-config.js";
 export {
-  DEFAULT_PORTFOLIO_CONFIG_PATH,
+  defaultPortfolioConfigPath,
   loadPortfolioConfig,
   PortfolioConfigMissingError,
   portfolioPathExists,

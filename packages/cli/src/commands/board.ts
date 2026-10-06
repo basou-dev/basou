@@ -33,7 +33,11 @@ export type BoardContext = {
   cwd?: string;
   /** Defaults to `() => new Date()`. Injectable for tests. */
   nowProvider?: () => Date;
-  /** Defaults to `~/.basou/portfolio.yaml`. Injectable for tests. */
+  /**
+   * The portfolio config, read both to find a member repo's master and for
+   * the portfolio section. Defaults to `~/.basou/portfolio.yaml`. Injectable
+   * for tests.
+   */
   portfolioConfigPath?: string;
 };
 
@@ -97,7 +101,11 @@ export async function doRunBoardMeasure(
   ctx: BoardContext,
 ): Promise<BoardMeasurement> {
   const cwd = ctx.cwd ?? process.cwd();
-  const root = await resolveBasouRootForCommand(cwd, "board measure");
+  const root = await resolveBasouRootForCommand(
+    cwd,
+    "board measure",
+    ctx.portfolioConfigPath === undefined ? {} : { portfolioConfigPath: ctx.portfolioConfigPath },
+  );
   const paths = basouPaths(root);
   await assertWorkspaceInitialized(paths.root);
   const manifest = await readManifest(paths);

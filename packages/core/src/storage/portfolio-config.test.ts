@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadPortfolioConfig,
   PortfolioConfigMissingError,
@@ -118,5 +118,26 @@ describe("the portfolio's own checks", () => {
       false,
       false,
     ]);
+  });
+});
+
+describe("the default portfolio config path", () => {
+  it("is worked out when it is asked for, not when the module is imported", async () => {
+    vi.resetModules();
+    const homedir = vi.fn((): string => {
+      throw new Error("no home");
+    });
+    vi.doMock("node:os", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:os")>()),
+      homedir,
+    }));
+    try {
+      const loaded = await import("./portfolio-config.js");
+      expect(homedir).not.toHaveBeenCalled();
+      expect(() => loaded.defaultPortfolioConfigPath()).toThrow("no home");
+    } finally {
+      vi.doUnmock("node:os");
+      vi.resetModules();
+    }
   });
 });

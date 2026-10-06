@@ -2,7 +2,7 @@ import { realpath, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import {
   basouPaths,
-  DEFAULT_PORTFOLIO_CONFIG_PATH,
+  defaultPortfolioConfigPath,
   loadPortfolioConfig,
   readManifest,
   resolveBasouRepositoryRoot,
@@ -13,7 +13,7 @@ export type MemberMaster = { root: string; label: string };
 
 /** Override the portfolio registry path (tests). */
 export type ResolveRootOptions = {
-  /** Defaults to {@link DEFAULT_PORTFOLIO_CONFIG_PATH}. */
+  /** Defaults to {@link defaultPortfolioConfigPath}. */
   portfolioConfigPath?: string;
 };
 
@@ -66,7 +66,7 @@ export async function resolveBasouRootForCommand(
   if (!(await hasBasouStore(root))) {
     const master = await resolveMemberToMaster(
       root,
-      opts.portfolioConfigPath ?? DEFAULT_PORTFOLIO_CONFIG_PATH,
+      opts.portfolioConfigPath ?? defaultPortfolioConfigPath(),
     );
     if (master !== undefined) {
       console.error(
