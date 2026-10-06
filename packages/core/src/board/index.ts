@@ -14,6 +14,8 @@ export {
   BOARD_VERSION,
   parseBoardDeclaration,
 } from "./declaration.js";
+export type { BoardFreshness, BoardImportProbe } from "./freshness.js";
+export { BOARD_FRESHNESS_METHOD } from "./freshness.js";
 export type { GlobMatcher } from "./glob.js";
 export { compileGlob, compileGlobs } from "./glob.js";
 export type { BoardIntegrity } from "./integrity.js";

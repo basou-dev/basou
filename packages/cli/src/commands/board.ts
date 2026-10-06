@@ -19,8 +19,10 @@ import {
   printTaskSkip,
   renderCliError,
 } from "../lib/error-render.js";
+import { probeStaleness } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import { BASOU_BUILD, BASOU_CLI_VERSION } from "../program.js";
+import type { ImportContext } from "./import.js";
 
 export type BoardMeasureOptions = {
   board?: string;
@@ -39,6 +41,10 @@ export type BoardContext = {
    * for tests.
    */
   portfolioConfigPath?: string;
+  /** Defaults to `~/.claude/projects`. Injectable for tests. */
+  claudeProjectsDir?: string;
+  /** Defaults to `~/.codex/sessions`. Injectable for tests. */
+  codexSessionsDir?: string;
 };
 
 /** Where a board's declaration is read from when `--board` is not given. */
@@ -122,18 +128,25 @@ export async function doRunBoardMeasure(
     );
   }
 
+  const now = ctx.nowProvider?.() ?? new Date();
+  // The dry run `basou orient` runs to judge freshness: it reads the native
+  // logs of this host and writes nothing.
+  const probeCtx: ImportContext = { cwd: root };
+  if (ctx.claudeProjectsDir !== undefined) probeCtx.claudeProjectsDir = ctx.claudeProjectsDir;
+  if (ctx.codexSessionsDir !== undefined) probeCtx.codexSessionsDir = ctx.codexSessionsDir;
   const measurement = await measureBoard({
     declaration: parsed.declaration,
     root,
     repos: repoPaths,
     paths,
-    now: ctx.nowProvider?.() ?? new Date(),
+    now,
     measuredWith: { basou: BASOU_CLI_VERSION, build: BASOU_BUILD?.commit ?? null },
     onReplayWarning: (warning, sessionId) => printReplayWarning(warning, sessionId),
     onTaskSkip: (taskId, reason) => printTaskSkip(taskId, reason),
     ...(ctx.portfolioConfigPath === undefined
       ? {}
       : { portfolioConfigPath: ctx.portfolioConfigPath }),
+    probeImports: () => probeStaleness({ ctx: probeCtx, paths, nowIso: now.toISOString() }),
   });
 
   if (options.json === true) console.log(JSON.stringify(measurement, null, 2));
@@ -272,6 +285,22 @@ function portfolioLines(m: BoardMeasurement): string[] {
   return [`  workspaces ${workspaces} (initialized ${initialized})`];
 }
 
+function freshnessLines(m: BoardMeasurement): string[] {
+  const missing = new Set(m.not_found.map((n) => n.at));
+  const { newest_session_at: newest, unimported } = m.freshness;
+  const shownNewest =
+    newest !== null
+      ? displayPath(newest)
+      : missing.has("freshness.newest_session_at")
+        ? "not measured"
+        : "none";
+  const shownUnimported =
+    unimported === null
+      ? "not measured"
+      : `${unimported.new} new, ${unimported.updated} updated, ${unimported.unverifiable} unverifiable`;
+  return [`  newest session ${shownNewest}`, `  not imported ${shownUnimported}`];
+}
+
 function printMeasurementText(m: BoardMeasurement): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
@@ -301,6 +330,7 @@ function printMeasurementText(m: BoardMeasurement): void {
   lines.push("", "Integrity:", ...integrityLines(m));
   lines.push("", "Review gaps:", ...reviewGapsLines(m));
   lines.push("", "Portfolio:", ...portfolioLines(m));
+  lines.push("", "Freshness:", ...freshnessLines(m));
   if (m.not_found.length > 0) {
     lines.push("", `Not measured (${m.not_found.length}):`);
     for (const missing of m.not_found)

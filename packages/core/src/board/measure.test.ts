@@ -33,6 +33,13 @@ const TASK = (s: string): string => `task_01HXABCDEF1234567890ABC${s}`;
 // Where the portfolio config is read from: absent unless a test writes it, so
 // that no test reads the portfolio of the host it runs on.
 const PORTFOLIO = (): string => join(root, "portfolio.yaml");
+// A dry run of an import that finds nothing to import, in place of the one
+// the CLI passes, which reads the host's native logs.
+const NOTHING_TO_IMPORT = async () => ({
+  newSessions: 0,
+  updatedSessions: 0,
+  unverifiableSessions: 0,
+});
 
 let root: string;
 let paths: BasouPaths;
@@ -112,6 +119,7 @@ function measure(
     now,
     measuredWith: WITH,
     portfolioConfigPath: PORTFOLIO(),
+    probeImports: NOTHING_TO_IMPORT,
   });
 }
 
@@ -799,6 +807,7 @@ describe("measureBoard: the workspace's own trail", () => {
       now: NOW,
       measuredWith: WITH,
       portfolioConfigPath: PORTFOLIO(),
+      probeImports: NOTHING_TO_IMPORT,
       onTaskSkip: (taskId) => skipped.push(taskId),
     });
     expect(skipped).toEqual([TASK("T02")]);
@@ -865,6 +874,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "integrity",
       "review_gaps",
       "portfolio",
+      "freshness",
     ]);
     expect(m).toMatchObject({
       board_version: 1,
@@ -1678,6 +1688,7 @@ describe("measureBoard: the repos section", () => {
       integrity: 1,
       review_gaps: 1,
       portfolio: 1,
+      freshness: 1,
     });
     const later = await measure(declaration, new Date("2026-10-06T00:00:00.000Z"), ["app"]);
     expect(later.digest).toBe(first.digest);
@@ -2316,6 +2327,11 @@ describe("measureBoard: the trail section", () => {
           reason:
             "2 session entries are not a directory (a symlink or a file), so the counts are not known",
         },
+        {
+          at: "freshness.newest_session_at",
+          reason:
+            "2 session entries are not a directory (a symlink or a file), so the newest may be missing",
+        },
       ]);
     },
   );
@@ -2332,6 +2348,10 @@ describe("measureBoard: the trail section", () => {
         { at: "trail", reason: "the sessions of the workspace could not be read" },
         { at: "integrity", reason: "the sessions of the workspace could not be read" },
         { at: "review_gaps", reason: "the sessions of the workspace could not be read" },
+        {
+          at: "freshness.newest_session_at",
+          reason: "the sessions of the workspace could not be read",
+        },
       ]);
     } finally {
       await chmod(paths.sessions, 0o755);
@@ -2353,6 +2373,7 @@ describe("measureBoard: the trail section", () => {
       now: NOW,
       measuredWith: WITH,
       portfolioConfigPath: PORTFOLIO(),
+      probeImports: NOTHING_TO_IMPORT,
       onReplayWarning: (warning) => warned.push(warning.line),
     });
     expect(warned).toEqual([1]);
@@ -2378,6 +2399,7 @@ describe("measureBoard: the trail section", () => {
         now: NOW,
         measuredWith: WITH,
         portfolioConfigPath: PORTFOLIO(),
+        probeImports: NOTHING_TO_IMPORT,
         onTaskSkip: (taskId) => skipped.push(taskId),
       });
     const quiet = await run([]);
@@ -2493,6 +2515,10 @@ describe("measureBoard: the integrity section", () => {
     // over both, so it is the review gaps that are not known.
     expect(m.not_found).toEqual([
       { at: "review_gaps", reason: "2 sessions could not be read, so the counts are not known" },
+      {
+        at: "freshness.newest_session_at",
+        reason: "2 sessions could not be read, so the newest may be missing",
+      },
     ]);
   });
 
@@ -2542,6 +2568,10 @@ describe("measureBoard: the integrity section", () => {
       expect(m.not_found).toEqual([
         { at: "integrity", reason: two },
         { at: "review_gaps", reason: two },
+        {
+          at: "freshness.newest_session_at",
+          reason: "2 sessions could not be read, so the newest may be missing",
+        },
       ]);
       expect(m.complete).toBe(false);
       await chmod(shut[0] as string, 0o644);
@@ -2549,6 +2579,10 @@ describe("measureBoard: the integrity section", () => {
       expect((await measure(declare([]))).not_found).toEqual([
         { at: "integrity", reason: one },
         { at: "review_gaps", reason: one },
+        {
+          at: "freshness.newest_session_at",
+          reason: "1 session could not be read, so the newest may be missing",
+        },
       ]);
     } finally {
       for (const file of shut) await chmod(file, 0o644);
@@ -2591,6 +2625,7 @@ describe("measureBoard: the integrity section", () => {
         { at: "trail", reason: refused },
         { at: "integrity", reason: refused },
         { at: "review_gaps", reason: refused },
+        { at: "freshness.newest_session_at", reason: refused },
       ]);
       await unlink(paths.sessions);
       await writeFile(paths.sessions, "not a directory\n");
@@ -2600,6 +2635,7 @@ describe("measureBoard: the integrity section", () => {
         { at: "trail", reason: ".basou/sessions is not a directory" },
         { at: "integrity", reason: ".basou/sessions is not a directory" },
         { at: "review_gaps", reason: ".basou/sessions is not a directory" },
+        { at: "freshness.newest_session_at", reason: ".basou/sessions is not a directory" },
       ]);
     },
   );
@@ -2621,6 +2657,7 @@ describe("measureBoard: the integrity section", () => {
       integrity: 1,
       review_gaps: 1,
       portfolio: 1,
+      freshness: 1,
     });
     await placeChained(SES("S01"));
     const verified = await measure(declaration);
@@ -2817,6 +2854,10 @@ describe("measureBoard: the review_gaps section", () => {
     expect(m.review_gaps).toEqual({ by_verdict: null, gaps: null });
     expect(m.not_found).toEqual([
       { at: "review_gaps", reason: "1 session could not be read, so the counts are not known" },
+      {
+        at: "freshness.newest_session_at",
+        reason: "1 session could not be read, so the newest may be missing",
+      },
     ]);
     expect(m.complete).toBe(false);
     await unlink(join(paths.sessions, s2, "session.yaml"));
@@ -2865,6 +2906,7 @@ describe("measureBoard: the review_gaps section", () => {
       integrity: 1,
       review_gaps: 1,
       portfolio: 1,
+      freshness: 1,
     });
     await placeWork(
       s1,
@@ -2981,6 +3023,7 @@ describe("measureBoard: the portfolio section", () => {
       integrity: 1,
       review_gaps: 1,
       portfolio: 1,
+      freshness: 1,
     });
     expect(bare.portfolio).toEqual({ workspaces: 1, initialized: 0 });
     await mkdir(join(master, ".basou"));
@@ -2990,5 +3033,182 @@ describe("measureBoard: the portfolio section", () => {
     await rm(PORTFOLIO());
     const none = await measure(declaration);
     expect(new Set([bare.digest, initialized.digest, none.digest]).size).toBe(3);
+  });
+});
+
+describe("measureBoard: the freshness section", () => {
+  // A session that started at `startedAt`, with `status` and `events`.
+  async function placeStarted(
+    id: string,
+    startedAt: string,
+    status = "completed",
+    events = "",
+  ): Promise<void> {
+    const dir = join(paths.sessions, id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "session.yaml"),
+      stringify({
+        schema_version: "0.1.0",
+        session: {
+          id,
+          label: "fixture",
+          task_id: null,
+          workspace_id: WS,
+          source: { kind: "terminal", version: "0.1.0" },
+          started_at: startedAt,
+          status,
+          working_directory: "/tmp/fixture",
+          invocation: { command: "echo", args: [], exit_code: 0 },
+          related_files: [],
+          events_log: "events.jsonl",
+        },
+      }),
+    );
+    await writeFile(join(dir, "events.jsonl"), events);
+  }
+
+  const run = (probeImports?: () => Promise<unknown>) =>
+    measureBoard({
+      declaration: declare([]),
+      root,
+      repos: [],
+      paths,
+      now: NOW,
+      measuredWith: WITH,
+      portfolioConfigPath: PORTFOLIO(),
+      ...(probeImports === undefined ? {} : { probeImports: probeImports as () => Promise<null> }),
+    });
+
+  it("gives when the newest session that is not archived started, as recorded", async () => {
+    await placeStarted(SES("S01"), "2026-10-01T00:00:00Z");
+    await placeStarted(SES("S02"), "2026-10-03T09:00:00+09:00");
+    await placeStarted(SES("S03"), "2026-10-02T00:00:00Z");
+    await placeStarted(SES("S04"), "2026-10-04T00:00:00Z", "archived");
+    const m = await measure(declare([]));
+    // 2026-10-03T00:00Z, after S03 and before the archived S04.
+    expect(m.freshness.newest_session_at).toBe("2026-10-03T09:00:00+09:00");
+    // By time, not by how it is written: 2026-10-02T23:00Z is before 23:30Z.
+    await placeStarted(SES("S02"), "2026-10-03T08:00:00+09:00");
+    await placeStarted(SES("S03"), "2026-10-02T23:30:00Z");
+    expect((await measure(declare([]))).freshness.newest_session_at).toBe("2026-10-02T23:30:00Z");
+    expect(m.complete).toBe(true);
+  });
+
+  it("is null, and complete, when there is no session that is not archived", async () => {
+    expect((await measure(declare([]))).freshness.newest_session_at).toBeNull();
+    await placeStarted(SES("S01"), "2026-10-04T00:00:00Z", "archived");
+    const m = await measure(declare([]));
+    expect(m.freshness).toEqual({
+      newest_session_at: null,
+      unimported: { new: 0, updated: 0, unverifiable: 0 },
+    });
+    expect(m.not_found).toEqual([]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("counts what a dry run of an import finds, each kind apart", async () => {
+    const m = await run(async () => ({
+      newSessions: 2,
+      updatedSessions: 3,
+      unverifiableSessions: 1,
+    }));
+    expect(m.freshness.unimported).toEqual({ new: 2, updated: 3, unverifiable: 1 });
+    expect(m.complete).toBe(true);
+  });
+
+  it("does not count what is not imported without a dry run, or when it fails", async () => {
+    const without = await run();
+    expect(without.freshness.unimported).toBeNull();
+    expect(without.not_found).toEqual([
+      {
+        at: "freshness.unimported",
+        reason: "no dry run of an import was given to count the sessions not yet imported",
+      },
+    ]);
+    expect(without.complete).toBe(false);
+    const failed = "a dry run of an import could not run";
+    expect((await run(async () => null)).not_found).toEqual([
+      { at: "freshness.unimported", reason: failed },
+    ]);
+    expect(
+      (
+        await run(async () => {
+          throw new Error("no logs");
+        })
+      ).not_found,
+    ).toEqual([{ at: "freshness.unimported", reason: failed }]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not give the newest when a session might be left out",
+    async () => {
+      await placeStarted(SES("S01"), "2026-10-01T00:00:00Z");
+      await placeStarted(SES("S02"), "2026-10-02T00:00:00Z");
+      await writeFile(join(paths.sessions, SES("S02"), "session.yaml"), "session: [broken]\n");
+      const m = await measure(declare([]));
+      expect(m.freshness.newest_session_at).toBeNull();
+      expect(m.not_found).toContainEqual({
+        at: "freshness.newest_session_at",
+        reason: "1 session could not be read, so the newest may be missing",
+      });
+      expect(m.complete).toBe(false);
+      await rm(join(paths.sessions, SES("S02")), { recursive: true });
+      await symlink(join(paths.sessions, SES("S01")), join(paths.sessions, SES("S03")));
+      expect((await measure(declare([]))).not_found).toContainEqual({
+        at: "freshness.newest_session_at",
+        reason:
+          "1 session entry is not a directory (a symlink or a file), so the newest may be missing",
+      });
+      await unlink(join(paths.sessions, SES("S03")));
+      const elsewhere = join(root, "elsewhere");
+      await rm(paths.sessions, { recursive: true });
+      await mkdir(elsewhere);
+      await symlink(elsewhere, paths.sessions);
+      expect((await measure(declare([]))).not_found).toContainEqual({
+        at: "freshness.newest_session_at",
+        reason: ".basou/sessions is a symlink, which basou refuses to read",
+      });
+    },
+  );
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("gives the newest of a running session whose events cannot be read", async () => {
+    await placeStarted(SES("S01"), "2026-10-02T00:00:00Z", "running", "{}\n");
+    const events = join(paths.sessions, SES("S01"), "events.jsonl");
+    await chmod(events, 0o000);
+    try {
+      const m = await measure(declare([]));
+      expect(m.freshness.newest_session_at).toBe("2026-10-02T00:00:00Z");
+      expect(m.not_found.filter((n) => n.at.startsWith("freshness"))).toEqual([]);
+    } finally {
+      await chmod(events, 0o644);
+    }
+  });
+
+  it("names its method's version, and is left out of the digest", async () => {
+    await placeStarted(SES("S01"), "2026-10-01T00:00:00Z");
+    const m = await run(async () => ({
+      newSessions: 0,
+      updatedSessions: 1,
+      unverifiableSessions: 0,
+    }));
+    expect(m.methods.freshness).toBe(1);
+    const other = await run(async () => ({
+      newSessions: 4,
+      updatedSessions: 0,
+      unverifiableSessions: 2,
+    }));
+    expect(other.digest).toBe(m.digest);
+    expect(
+      boardDigest({
+        ...m,
+        freshness: { newest_session_at: "2026-12-01T00:00:00Z", unimported: null },
+      }),
+    ).toBe(m.digest);
+    // Everything else stays in it.
+    expect(boardDigest({ ...m, title: "Another board" })).not.toBe(m.digest);
   });
 });

@@ -87,6 +87,8 @@ export type {
   BoardDeclaration,
   BoardDeclarationContext,
   BoardDeclarationResult,
+  BoardFreshness,
+  BoardImportProbe,
   BoardIntegrity,
   BoardMeasure,
   BoardMeasureKind,
@@ -104,6 +106,7 @@ export type {
 export {
   BOARD_DEFAULT_AT,
   BOARD_DEFAULT_CAPTURE_GROUP,
+  BOARD_FRESHNESS_METHOD,
   BOARD_INTEGRITY_METHOD,
   BOARD_PORTFOLIO_METHOD,
   BOARD_REGEX_FLAGS,

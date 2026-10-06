@@ -30,7 +30,13 @@ All notable changes to **basou** are recorded here. The project follows
   repository and with its default window; and how many workspaces
   `~/.basou/portfolio.yaml` registers and how many of them are initialized,
   as `basou portfolio` lists them, as counts only (no name or path; no
-  `~/.basou/portfolio.yaml` is a null that means so). It
+  `~/.basou/portfolio.yaml` is a null that means so); and, as `basou orient`
+  judges freshness, when the newest session that is not archived started (no
+  such session is a null that means so) and how many sessions a `basou
+  refresh` would newly import, import again, or, their native log having
+  grown, could not import again safely (a session whose log shrank is in
+  none of them), counted by a dry run that reads this host's Claude Code and
+  Codex logs. It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git
@@ -42,12 +48,15 @@ All notable changes to **basou** are recorded here. The project follows
   read, a directory git could not open or whose ignore file it could not
   read, a symlink out of the repository, sessions that cannot be listed or a
   `.basou/sessions` that is a symlink or not a directory, an event line that
-  cannot be read, a session `basou verify` cannot read, a session whose
-  `session.yaml` or `events.jsonl` `basou review-gaps` cannot read, a
-  `~/.basou/portfolio.yaml` that `basou portfolio` refuses, and for the
-  trail and the review gaps an entry named as a session that is not a
-  directory, which the integrity counts as tampered as `basou verify` does)
-  is `null`, with a reason under `not_found`, and is never counted as zero. The result carries a digest of its values. The
+  cannot be read, a session `basou verify` cannot read, for the review gaps
+  and the newest session a `session.yaml` that cannot be read, for the
+  review gaps an `events.jsonl` that cannot be read, a
+  `~/.basou/portfolio.yaml` that `basou portfolio` refuses, a dry run of an
+  import that cannot run, and for the trail, the review gaps and the newest
+  session an entry named as a session that is not a directory, which the
+  integrity counts as tampered as `basou verify` does)
+  is `null`, with a reason under `not_found`, and is never counted as zero. The result carries a digest of its values but the
+  freshness, which moves as work goes on, the measuring session's own included. The
   declaration is read from `board/board.yaml` in the workspace only when the
   manifest declares the workspace's own repo private; otherwise `--board` is
   required. Exit codes: `0` when everything was measured, `1` when something
