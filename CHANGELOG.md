@@ -24,8 +24,9 @@ All notable changes to **basou** are recorded here. The project follows
   events (a decision recorded twice under one id counts once); and how many
   of the workspace's own sessions have each status `basou verify` gives,
   every status listed, and how many are not verified; and how many units of
-  work (one session's commits in one repository) `basou review-gaps` finds
-  of each verdict, every verdict listed, and how many are gaps, over every
+  work (one session's commits in one repository, or those of one session
+  that could not be placed in any repository) `basou review-gaps` finds of
+  each verdict, every verdict listed, and how many are gaps, over every
   repository and with its default window. It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system

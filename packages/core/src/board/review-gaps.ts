@@ -38,9 +38,10 @@ const VERDICTS: Record<ReviewGapVerdict, true> = {
  */
 export type BoardReviewGaps = {
   /**
-   * How many units of work (one session's commits in one repository) have
-   * each verdict, every verdict `basou review-gaps` gives included at 0, in
-   * the order its type lists them.
+   * How many units of work (one session's commits in one repository, or,
+   * for `unknown`, those of one session that could not be placed in any
+   * repository) have each verdict, every verdict `basou review-gaps` gives
+   * included at 0, in the order its type lists them.
    */
   by_verdict: Record<string, number> | null;
   /** The units `basou review-gaps` lists as gaps: those with no bound review trail. */

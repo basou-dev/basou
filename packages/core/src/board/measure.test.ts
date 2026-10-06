@@ -2757,14 +2757,14 @@ describe("measureBoard: the review_gaps section", () => {
   });
 
   it("looks for a review in the 24 hours before a commit, as basou review-gaps does by default", async () => {
-    const [r1, r2, c1, c2] = ["R01", "R02", "C01", "C02"].map(SES) as string[];
+    const [r1, r2, c1, c2] = [SES("R01"), SES("R02"), SES("C01"), SES("C02")];
     const commit = "2026-10-02T10:00:00Z";
-    await placeWork(r1, "codex-import", ran(r1, "E01", "2026-10-01T11:00:00Z", "git diff", ALPHA));
-    await placeWork(r2, "codex-import", ran(r2, "E02", "2026-10-01T09:00:00Z", "git diff", BETA));
+    await placeWork(r1, "codex-import", ran(r1, "E01", "2026-10-01T10:00:00Z", "git diff", ALPHA));
+    await placeWork(r2, "codex-import", ran(r2, "E02", "2026-10-01T09:59:00Z", "git diff", BETA));
     await placeWork(c1, "claude-code-import", ran(c1, "E03", commit, "git commit -m a", ALPHA));
     await placeWork(c2, "claude-code-import", ran(c2, "E04", commit, "git commit -m b", BETA));
     const m = await measure(declare([]));
-    // 23 hours before binds; 25 hours before is out of the window.
+    // 24 hours before binds; 24 hours and a minute before is out of the window.
     expect(m.review_gaps.by_verdict).toEqual({
       omission: 1,
       near_unbound: 0,
