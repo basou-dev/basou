@@ -247,10 +247,11 @@ export async function measureEffort(input: EffortInput): Promise<{
 function namedZone(declared: string | undefined): string | undefined {
   try {
     const options = declared === undefined ? {} : { timeZone: declared };
-    const name = new Intl.DateTimeFormat("en-US", options).resolvedOptions().timeZone;
-    if (typeof name !== "string" || name === "") return undefined;
+    // Undefined where `Intl` has no name for it.
+    const name: string | undefined = new Intl.DateTimeFormat("en-US", options).resolvedOptions()
+      .timeZone;
     // A name `Intl` gives back but does not take, such as Etc/Unknown, throws.
-    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    if (name !== undefined) new Intl.DateTimeFormat("en-US", { timeZone: name });
     return name;
   } catch {
     return undefined;
