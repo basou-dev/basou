@@ -30,6 +30,13 @@ function fixtureSimpleGit(baseDir: string): SimpleGit {
     baseDir,
     config: ["init.defaultBranch=main"],
     unsafe: { allowUnsafeConfigPaths: true },
+    // The variables its callers pass: the config paths, and the dates of datedAt.
+    allowEnvironment: [
+      "GIT_CONFIG_GLOBAL",
+      "GIT_CONFIG_SYSTEM",
+      "GIT_COMMITTER_DATE",
+      "GIT_AUTHOR_DATE",
+    ],
   }).env(ENV);
 }
 
@@ -87,6 +94,12 @@ function withEditor(env: NodeJS.ProcessEnv = {}): SimpleGit {
   return simpleGit({
     baseDir: repo,
     unsafe: { allowUnsafeConfigPaths: true, allowUnsafeEditor: true },
+    allowEnvironment: [
+      "GIT_CONFIG_GLOBAL",
+      "GIT_CONFIG_SYSTEM",
+      "GIT_EDITOR",
+      "GIT_SEQUENCE_EDITOR",
+    ],
   }).env({ ...ENV, GIT_EDITOR: "true", ...env });
 }
 
