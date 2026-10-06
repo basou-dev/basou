@@ -79,4 +79,16 @@ describe("measureReviewGaps", () => {
     expect(reviewGaps.gaps).toBe(2);
     expect(notFound).toEqual([]);
   });
+
+  it("is not measured when basou review-gaps fails after the sessions were listed", async () => {
+    vi.mocked(findReviewGaps).mockRejectedValueOnce(new Error("Failed to read"));
+    const { reviewGaps, notFound } = await measureReviewGaps({
+      paths,
+      now: new Date("2026-10-06T00:00:00.000Z"),
+    });
+    expect(reviewGaps).toEqual({ by_verdict: null, gaps: null });
+    expect(notFound).toEqual([
+      { at: "review_gaps", reason: "the sessions of the workspace could not be read" },
+    ]);
+  });
 });
