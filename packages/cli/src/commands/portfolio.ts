@@ -1,8 +1,11 @@
-import { existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import {
+  DEFAULT_PORTFOLIO_CONFIG_PATH,
+  loadPortfolioConfig,
+  portfolioPathExists,
+  portfolioPathInitialized,
+} from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
-import { DEFAULT_PORTFOLIO_CONFIG_PATH, loadPortfolioConfig } from "../lib/portfolio-config.js";
 
 export type PortfolioListOptions = {
   json?: boolean;
@@ -89,15 +92,6 @@ export function registerPortfolioCommand(program: Command): void {
     });
 }
 
-/** Whether `path` resolves to a directory on disk (a missing/other-type path → false). */
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Dispatch the `basou portfolio [action]` surface. Bare and the explicit `list`
  * spelling both list; `--check` is redirected to `basou view --portfolio
@@ -153,12 +147,9 @@ export async function doRunPortfolioList(
   ctx: PortfolioListContext,
 ): Promise<PortfolioListResult> {
   const configPath = ctx.configPath ?? DEFAULT_PORTFOLIO_CONFIG_PATH;
-  const pathExists = ctx.pathExists ?? ((p: string) => existsSync(p));
-  // A `.basou` store is a DIRECTORY. Match basou's canonical `hasBasouStore`
-  // (repo-root.ts) `isDirectory()` check rather than a bare `existsSync`, so a
-  // stray regular file named `.basou` is not mis-reported as an initialized
-  // master (which the real resolver would reject).
-  const isInitialized = ctx.isInitialized ?? ((p: string) => isDirectory(join(p, ".basou")));
+  const pathExists = ctx.pathExists ?? portfolioPathExists;
+  // Shared with `basou board measure`, which counts what this lists.
+  const isInitialized = ctx.isInitialized ?? portfolioPathInitialized;
 
   const workspaces = await loadPortfolioConfig(configPath);
   const result: PortfolioListResult = {

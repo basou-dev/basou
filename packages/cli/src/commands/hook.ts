@@ -9,6 +9,7 @@ import {
   buildSessionStartHookCommand,
   buildStopHookCommand,
   type ClaudeTranscriptRecord,
+  DEFAULT_PORTFOLIO_CONFIG_PATH,
   DEFAULT_STOP_HOOK_MIN_EDITS,
   evaluateStopHook,
   findBasouSessionStartHook,
@@ -17,6 +18,7 @@ import {
   findUnrecognizedSessionStart,
   isClaudeSessionStartMalformed,
   isProtocolUpdateDue,
+  loadPortfolioConfig,
   ORIENTATION_END,
   ORIENTATION_START,
   observedRepoRoots,
@@ -51,7 +53,6 @@ import {
 import { assertNotSymlink, writeFileDurable } from "../lib/durable-write.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { findForeignWorkspaceNames } from "../lib/foreign-workspace-warn.js";
-import { DEFAULT_PORTFOLIO_CONFIG_PATH, loadPortfolioConfig } from "../lib/portfolio-config.js";
 import { DEFAULT_TARGET_PATH as PROTOCOL_TARGET_PATH } from "../lib/protocols-config.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import { renderOrientationForRoot } from "./orient.js";

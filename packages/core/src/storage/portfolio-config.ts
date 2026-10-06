@@ -1,6 +1,7 @@
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { readYamlFile } from "@basou/core";
+import { readYamlFile } from "./yaml-store.js";
 
 /**
  * GUI configuration for `basou view --portfolio`: the set of workspaces a single
@@ -32,6 +33,9 @@ export type PortfolioWorkspace = { path: string; label?: string };
 /** Canonical location of the portfolio config. */
 export const DEFAULT_PORTFOLIO_CONFIG_PATH = join(homedir(), ".basou", "portfolio.yaml");
 
+/** Thrown by {@link loadPortfolioConfig} when there is no config file at all. */
+export class PortfolioConfigMissingError extends Error {}
+
 /** Expand a leading `~` / `~/` to the user's home directory. */
 function expandTilde(p: string): string {
   if (p === "~") return homedir();
@@ -58,7 +62,7 @@ export async function loadPortfolioConfig(
     raw = await readYamlFile(configPath);
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "YAML file not found") {
-      throw new Error(
+      throw new PortfolioConfigMissingError(
         "No portfolio config at ~/.basou/portfolio.yaml. Create one (a 'workspaces:' list of repo paths) or pass --workspace <path>.",
       );
     }
@@ -97,4 +101,22 @@ export async function loadPortfolioConfig(
     throw new Error("~/.basou/portfolio.yaml has no workspaces.");
   }
   return result;
+}
+
+/** Whether a portfolio workspace's path resolves to something on disk. */
+export function portfolioPathExists(path: string): boolean {
+  return existsSync(path);
+}
+
+/**
+ * Whether a portfolio workspace's path owns a `.basou/` store, i.e. is an
+ * initialized planning master. A store is a DIRECTORY, as basou's own resolver
+ * requires, so a stray regular file named `.basou` does not count.
+ */
+export function portfolioPathInitialized(path: string): boolean {
+  try {
+    return statSync(join(path, ".basou")).isDirectory();
+  } catch {
+    return false;
+  }
 }

@@ -1,7 +1,12 @@
 import { realpath, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
-import { basouPaths, readManifest, resolveBasouRepositoryRoot } from "@basou/core";
-import { DEFAULT_PORTFOLIO_CONFIG_PATH, loadPortfolioConfig } from "./portfolio-config.js";
+import {
+  basouPaths,
+  DEFAULT_PORTFOLIO_CONFIG_PATH,
+  loadPortfolioConfig,
+  readManifest,
+  resolveBasouRepositoryRoot,
+} from "@basou/core";
 
 /** A planning master that aggregates the queried repo via its `source_roots`. */
 export type MemberMaster = { root: string; label: string };

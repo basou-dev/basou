@@ -30,6 +30,9 @@ const SES = (s: string): string => `ses_01HXABCDEF1234567890ABC${s}`;
 const EVT = (s: string): string => `evt_01HXABCDEF1234567890ABC${s}`;
 const DEC = (s: string): string => `decision_01HXABCDEF1234567890ABC${s}`;
 const TASK = (s: string): string => `task_01HXABCDEF1234567890ABC${s}`;
+// Where the portfolio config is read from: absent unless a test writes it, so
+// that no test reads the portfolio of the host it runs on.
+const PORTFOLIO = (): string => join(root, "portfolio.yaml");
 
 let root: string;
 let paths: BasouPaths;
@@ -101,7 +104,15 @@ function measure(
   now: Date = NOW,
   repos: readonly string[] = [],
 ): Promise<BoardMeasurement> {
-  return measureBoard({ declaration, root, repos, paths, now, measuredWith: WITH });
+  return measureBoard({
+    declaration,
+    root,
+    repos,
+    paths,
+    now,
+    measuredWith: WITH,
+    portfolioConfigPath: PORTFOLIO(),
+  });
 }
 
 function measured(m: BoardMeasurement, id: string): unknown {
@@ -787,6 +798,7 @@ describe("measureBoard: the workspace's own trail", () => {
       paths,
       now: NOW,
       measuredWith: WITH,
+      portfolioConfigPath: PORTFOLIO(),
       onTaskSkip: (taskId) => skipped.push(taskId),
     });
     expect(skipped).toEqual([TASK("T02")]);
@@ -852,6 +864,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "trail",
       "integrity",
       "review_gaps",
+      "portfolio",
     ]);
     expect(m).toMatchObject({
       board_version: 1,
@@ -1659,7 +1672,13 @@ describe("measureBoard: the repos section", () => {
     const dir = await repo("app", { "a.txt": "1\n" });
     const declaration = declare([], {}, ["app"]);
     const first = await measure(declaration, NOW, ["app"]);
-    expect(first.methods).toEqual({ repos: 1, trail: 1, integrity: 1, review_gaps: 1 });
+    expect(first.methods).toEqual({
+      repos: 1,
+      trail: 1,
+      integrity: 1,
+      review_gaps: 1,
+      portfolio: 1,
+    });
     const later = await measure(declaration, new Date("2026-10-06T00:00:00.000Z"), ["app"]);
     expect(later.digest).toBe(first.digest);
     await writeFile(join(dir, "b.txt"), "1\n");
@@ -2333,6 +2352,7 @@ describe("measureBoard: the trail section", () => {
       paths,
       now: NOW,
       measuredWith: WITH,
+      portfolioConfigPath: PORTFOLIO(),
       onReplayWarning: (warning) => warned.push(warning.line),
     });
     expect(warned).toEqual([1]);
@@ -2357,6 +2377,7 @@ describe("measureBoard: the trail section", () => {
         paths,
         now: NOW,
         measuredWith: WITH,
+        portfolioConfigPath: PORTFOLIO(),
         onTaskSkip: (taskId) => skipped.push(taskId),
       });
     const quiet = await run([]);
@@ -2594,7 +2615,13 @@ describe("measureBoard: the integrity section", () => {
   it("names its method's version, and is in the digest", async () => {
     const declaration = declare([]);
     const first = await measure(declaration);
-    expect(first.methods).toEqual({ repos: 1, trail: 1, integrity: 1, review_gaps: 1 });
+    expect(first.methods).toEqual({
+      repos: 1,
+      trail: 1,
+      integrity: 1,
+      review_gaps: 1,
+      portfolio: 1,
+    });
     await placeChained(SES("S01"));
     const verified = await measure(declaration);
     await rm(join(paths.sessions, SES("S01")), { recursive: true });
@@ -2832,7 +2859,13 @@ describe("measureBoard: the review_gaps section", () => {
       ran(s1, "E01", "2026-10-01T10:05:00Z", "echo a", ALPHA),
     );
     const none = await measure(declaration);
-    expect(none.methods).toEqual({ repos: 1, trail: 1, integrity: 1, review_gaps: 1 });
+    expect(none.methods).toEqual({
+      repos: 1,
+      trail: 1,
+      integrity: 1,
+      review_gaps: 1,
+      portfolio: 1,
+    });
     await placeWork(
       s1,
       "claude-code-import",
@@ -2847,5 +2880,115 @@ describe("measureBoard: the review_gaps section", () => {
     expect((await measure(declaration, new Date("2026-12-01T00:00:00.000Z"))).digest).toBe(
       gap.digest,
     );
+  });
+});
+
+describe("measureBoard: the portfolio section", () => {
+  // A directory under the root, holding a `.basou` directory when `store` is
+  // "dir", a file named `.basou` when it is "file", and nothing when it is
+  // "none".
+  async function place(name: string, store: "dir" | "file" | "none"): Promise<string> {
+    const dir = join(root, name);
+    await mkdir(dir, { recursive: true });
+    if (store === "dir") await mkdir(join(dir, ".basou"));
+    if (store === "file") await writeFile(join(dir, ".basou"), "not a store\n");
+    return dir;
+  }
+
+  async function register(text: string): Promise<void> {
+    await writeFile(PORTFOLIO(), text);
+  }
+
+  it("counts the workspaces basou portfolio lists, and those initialized, and nothing else", async () => {
+    const master = await place("master", "dir");
+    const bare = await place("bare", "none");
+    const stray = await place("stray", "file");
+    await register(
+      [
+        "workspaces:",
+        `  - { path: ${master}, label: secret-label }`,
+        `  - { path: ${master}/ }`,
+        `  - { path: ${bare} }`,
+        `  - { path: ${stray} }`,
+        `  - { path: ${join(root, "gone")} }`,
+        "",
+      ].join("\n"),
+    );
+    const m = await measure(declare([]));
+    // The same path twice counts once; a missing path and one without a
+    // `.basou` directory are registered but not initialized.
+    expect(m.portfolio).toEqual({ workspaces: 4, initialized: 1 });
+    expect(Object.keys(m.portfolio)).toEqual(["workspaces", "initialized"]);
+    expect(JSON.stringify(m)).not.toContain("secret-label");
+    expect(JSON.stringify(m)).not.toContain(master);
+    expect(m.complete).toBe(true);
+  });
+
+  it("is null, and complete, when there is no portfolio config", async () => {
+    const m = await measure(declare([]));
+    expect(m.portfolio).toEqual({ workspaces: null, initialized: null });
+    expect(m.not_found).toEqual([]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("is not measured, with the reason basou portfolio gives, when it refuses the config", async () => {
+    const master = await place("master", "dir");
+    const cases: [string, string][] = [
+      ["workspaces: [\n", "~/.basou/portfolio.yaml is not valid YAML."],
+      ["workspaces: none\n", "~/.basou/portfolio.yaml must contain a 'workspaces:' list."],
+      ["workspaces: []\n", "~/.basou/portfolio.yaml has no workspaces."],
+      [
+        "workspaces:\n  - { path: relative/dir }\n",
+        "Portfolio workspace paths must be absolute (or start with '~'); use --workspace for relative ad-hoc paths.",
+      ],
+      [
+        `workspaces:\n  - { path: ${master}, label: 3 }\n`,
+        "A portfolio workspace 'label' must be a string when present.",
+      ],
+    ];
+    for (const [text, reason] of cases) {
+      await register(text);
+      const m = await measure(declare([]));
+      expect(m.portfolio).toEqual({ workspaces: null, initialized: null });
+      expect(m.not_found).toEqual([{ at: "portfolio", reason }]);
+      expect(m.complete).toBe(false);
+    }
+  });
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("is not measured when the config cannot be read", async () => {
+    await register("workspaces: []\n");
+    await chmod(PORTFOLIO(), 0o000);
+    try {
+      const m = await measure(declare([]));
+      expect(m.portfolio).toEqual({ workspaces: null, initialized: null });
+      expect(m.not_found).toEqual([{ at: "portfolio", reason: "Failed to read YAML file" }]);
+    } finally {
+      await chmod(PORTFOLIO(), 0o644);
+    }
+  });
+
+  it("names its method's version, and is in the digest", async () => {
+    const declaration = declare([]);
+    const master = await place("master", "none");
+    await register(`workspaces:\n  - { path: ${master} }\n`);
+    const bare = await measure(declaration);
+    expect(bare.methods).toEqual({
+      repos: 1,
+      trail: 1,
+      integrity: 1,
+      review_gaps: 1,
+      portfolio: 1,
+    });
+    expect(bare.portfolio).toEqual({ workspaces: 1, initialized: 0 });
+    await mkdir(join(master, ".basou"));
+    const initialized = await measure(declaration);
+    expect(initialized.portfolio).toEqual({ workspaces: 1, initialized: 1 });
+    expect(initialized.digest).not.toBe(bare.digest);
+    await rm(PORTFOLIO());
+    const none = await measure(declaration);
+    expect(new Set([bare.digest, initialized.digest, none.digest]).size).toBe(3);
   });
 });
