@@ -87,6 +87,7 @@ export type {
   BoardDeclaration,
   BoardDeclarationContext,
   BoardDeclarationResult,
+  BoardIntegrity,
   BoardMeasure,
   BoardMeasureKind,
   BoardMeasurement,
@@ -101,6 +102,7 @@ export type {
 export {
   BOARD_DEFAULT_AT,
   BOARD_DEFAULT_CAPTURE_GROUP,
+  BOARD_INTEGRITY_METHOD,
   BOARD_REGEX_FLAGS,
   BOARD_REPOS_METHOD,
   BOARD_STAGE_IDS,

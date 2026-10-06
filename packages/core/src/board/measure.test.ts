@@ -15,6 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
+import { chainEvents } from "../events/chain.js";
+import type { Event } from "../schemas/event.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { type BoardDeclaration, parseBoardDeclaration } from "./declaration.js";
 import { type BoardMeasurement, boardDigest, measureBoard } from "./measure.js";
@@ -848,6 +850,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "measures",
       "ratios",
       "trail",
+      "integrity",
     ]);
     expect(m).toMatchObject({
       board_version: 1,
@@ -1651,7 +1654,7 @@ describe("measureBoard: the repos section", () => {
     const dir = await repo("app", { "a.txt": "1\n" });
     const declaration = declare([], {}, ["app"]);
     const first = await measure(declaration, NOW, ["app"]);
-    expect(first.methods).toEqual({ repos: 1, trail: 1 });
+    expect(first.methods).toEqual({ repos: 1, trail: 1, integrity: 1 });
     const later = await measure(declaration, new Date("2026-10-06T00:00:00.000Z"), ["app"]);
     expect(later.digest).toBe(first.digest);
     await writeFile(join(dir, "b.txt"), "1\n");
@@ -2284,6 +2287,7 @@ describe("measureBoard: the trail section", () => {
       expect(m.trail).toEqual({ decisions_all: null, decisions_live: null, tracks_open: null });
       expect(m.not_found).toEqual([
         { at: "trail", reason: "the sessions of the workspace could not be read" },
+        { at: "integrity", reason: "the sessions of the workspace could not be read" },
       ]);
     } finally {
       await chmod(paths.sessions, 0o755);
@@ -2338,5 +2342,233 @@ describe("measureBoard: the trail section", () => {
     expect(counted.not_found).toEqual([
       { at: "measures.tasks", reason: "1 task could not be read" },
     ]);
+  });
+});
+
+describe("measureBoard: the integrity section", () => {
+  // A session whose events are chained, with session.yaml at `status` and the
+  // head anchor (`anchor: false` leaves it out, a number writes a wrong
+  // count), or no session.yaml at all.
+  async function placeChained(
+    id: string,
+    options: { status?: string; anchor?: boolean | number; yaml?: boolean; version?: string } = {},
+  ): Promise<void> {
+    const dir = join(paths.sessions, id);
+    await mkdir(dir, { recursive: true });
+    const events = ["E01", "E02"].map(
+      (evt) => JSON.parse(line(id, evt, { type: "note_added", body: evt })) as Event,
+    );
+    const { lines, headHash, count } = chainEvents(events, id);
+    await writeFile(join(dir, "events.jsonl"), `${lines.join("\n")}\n`);
+    if (options.yaml === false) return;
+    const anchor = options.anchor ?? true;
+    await writeFile(
+      join(dir, "session.yaml"),
+      stringify({
+        schema_version: options.version ?? "0.1.0",
+        session: {
+          id,
+          label: "fixture",
+          task_id: null,
+          workspace_id: WS,
+          source: { kind: "terminal", version: "0.1.0" },
+          started_at: "2026-10-01T00:00:00Z",
+          status: options.status ?? "completed",
+          working_directory: "/tmp/fixture",
+          invocation: { command: "echo", args: [], exit_code: 0 },
+          related_files: [],
+          events_log: "events.jsonl",
+          ...(anchor === false
+            ? {}
+            : {
+                integrity: {
+                  head_hash: headHash,
+                  event_count: typeof anchor === "number" ? anchor : count,
+                },
+              }),
+        },
+      }),
+    );
+  }
+
+  it("counts the sessions of each status basou verify gives, every status included", async () => {
+    await placeChained(SES("S01"));
+    await placeChained(SES("S02"));
+    await placeSession(SES("S03"), line(SES("S03"), "E01", { type: "note_added", body: "x" }));
+    const m = await measure(declare([]));
+    expect(m.integrity).toEqual({
+      by_status: {
+        verified: 2,
+        unchained: 1,
+        empty: 0,
+        incomplete: 0,
+        in_progress: 0,
+        unsupported: 0,
+        tampered: 0,
+      },
+      not_verified: 1,
+    });
+    expect(Object.keys(m.integrity.by_status ?? {})).toEqual([
+      "verified",
+      "unchained",
+      "empty",
+      "incomplete",
+      "in_progress",
+      "unsupported",
+      "tampered",
+    ]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("counts every status but verified as not verified", async () => {
+    await placeChained(SES("S01"));
+    await placeSession(SES("S02"), line(SES("S02"), "E01", { type: "note_added", body: "x" }));
+    await placeSession(SES("S03"), "");
+    await placeChained(SES("S04"), { yaml: false });
+    await placeChained(SES("S05"), { status: "running", anchor: false });
+    await placeChained(SES("S06"), { version: "1.0.0" });
+    await placeChained(SES("S07"), { anchor: 5 });
+    await placeChained(SES("S08"), { anchor: 7 });
+    const m = await measure(declare([]));
+    expect(m.integrity).toEqual({
+      by_status: {
+        verified: 1,
+        unchained: 1,
+        empty: 1,
+        incomplete: 1,
+        in_progress: 1,
+        unsupported: 1,
+        tampered: 2,
+      },
+      not_verified: 7,
+    });
+    expect(m.complete).toBe(true);
+  });
+
+  it("counts nothing, all at 0, in a workspace with no session", async () => {
+    const m = await measure(declare([]));
+    expect(m.integrity.by_status).toEqual({
+      verified: 0,
+      unchained: 0,
+      empty: 0,
+      incomplete: 0,
+      in_progress: 0,
+      unsupported: 0,
+      tampered: 0,
+    });
+    expect(m.integrity.not_verified).toBe(0);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "counts an entry named as a session that is not a directory as tampered, as basou verify does",
+    async () => {
+      await placeChained(SES("S01"));
+      await symlink(join(paths.sessions, SES("S01")), join(paths.sessions, SES("S02")));
+      await writeFile(join(paths.sessions, SES("S03")), "not a session\n");
+      const m = await measure(declare([]));
+      expect(m.integrity).toMatchObject({
+        by_status: { verified: 1, tampered: 2 },
+        not_verified: 2,
+      });
+      expect(m.not_found.filter((n) => n.at === "integrity")).toEqual([]);
+    },
+  );
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("is not measured when a session cannot be read, however many could", async () => {
+    await placeChained(SES("S01"));
+    await placeChained(SES("S02"));
+    await placeChained(SES("S03"));
+    // session.yaml, which basou verify reads and the trail does not.
+    const shut = [SES("S01"), SES("S03")].map((id) => join(paths.sessions, id, "session.yaml"));
+    for (const file of shut) await chmod(file, 0o000);
+    try {
+      const m = await measure(declare([]));
+      expect(m.integrity).toEqual({ by_status: null, not_verified: null });
+      expect(m.not_found).toEqual([
+        {
+          at: "integrity",
+          reason: "2 sessions could not be read, so the counts are not known",
+        },
+      ]);
+      expect(m.complete).toBe(false);
+      await chmod(shut[0] as string, 0o644);
+      expect((await measure(declare([]))).not_found).toEqual([
+        { at: "integrity", reason: "1 session could not be read, so the counts are not known" },
+      ]);
+    } finally {
+      for (const file of shut) await chmod(file, 0o644);
+    }
+  });
+
+  it.skipIf(
+    process.platform === "win32" ||
+      (typeof process.getuid === "function" && process.getuid() === 0),
+  )("is not measured when the sessions cannot be listed", async () => {
+    await chmod(paths.sessions, 0o000);
+    try {
+      const m = await measure(declare([]));
+      expect(m.integrity).toEqual({ by_status: null, not_verified: null });
+      expect(m.not_found).toContainEqual({
+        at: "integrity",
+        reason: "the sessions of the workspace could not be read",
+      });
+    } finally {
+      await chmod(paths.sessions, 0o755);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "says the sessions directory was refused, in the trail too, when it is a symlink or a file",
+    async () => {
+      const elsewhere = join(root, "elsewhere");
+      await mkdir(elsewhere);
+      await rm(paths.sessions, { recursive: true });
+      await symlink(elsewhere, paths.sessions);
+      const linked = await measure(declare([]));
+      expect(linked.integrity).toEqual({ by_status: null, not_verified: null });
+      expect(linked.trail).toEqual({
+        decisions_all: null,
+        decisions_live: null,
+        tracks_open: null,
+      });
+      const refused = ".basou/sessions is a symlink, which basou refuses to read";
+      expect(linked.not_found).toEqual([
+        { at: "trail", reason: refused },
+        { at: "integrity", reason: refused },
+      ]);
+      await unlink(paths.sessions);
+      await writeFile(paths.sessions, "not a directory\n");
+      const file = await measure(declare([]));
+      expect(file.integrity).toEqual({ by_status: null, not_verified: null });
+      expect(file.not_found).toEqual([
+        { at: "trail", reason: ".basou/sessions is not a directory" },
+        { at: "integrity", reason: ".basou/sessions is not a directory" },
+      ]);
+    },
+  );
+
+  it("counts nothing when there is no sessions directory", async () => {
+    await rm(paths.sessions, { recursive: true });
+    const m = await measure(declare([]));
+    expect(m.integrity.not_verified).toBe(0);
+    expect(m.trail.decisions_all).toBe(0);
+    expect(m.complete).toBe(true);
+  });
+
+  it("names its method's version, and is in the digest", async () => {
+    const declaration = declare([]);
+    const first = await measure(declaration);
+    expect(first.methods).toEqual({ repos: 1, trail: 1, integrity: 1 });
+    await placeChained(SES("S01"));
+    const verified = await measure(declaration);
+    await rm(join(paths.sessions, SES("S01")), { recursive: true });
+    await placeChained(SES("S01"), { anchor: 9 });
+    const tampered = await measure(declaration);
+    // The trail is the same in all three; only the integrity differs.
+    expect(tampered.trail).toEqual(verified.trail);
+    expect(new Set([first.digest, verified.digest, tampered.digest]).size).toBe(3);
   });
 });

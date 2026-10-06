@@ -21,7 +21,9 @@ All notable changes to **basou** are recorded here. The project follows
   commit yet and a missing `origin/main` are nulls that mean so); and the
   workspace's own decisions, live decisions and open tracks with their ids
   and titles, newest first as `basou orient` lists them, read from the
-  events (a decision recorded twice under one id counts once). It
+  events (a decision recorded twice under one id counts once); and how many
+  of the workspace's own sessions have each status `basou verify` gives,
+  every status listed, and how many are not verified. It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git
@@ -31,8 +33,11 @@ All notable changes to **basou** are recorded here. The project follows
   matched as git matches a `:(glob)` pathspec. A value that cannot be
   measured (a missing repo, revision or file, a file or blob that cannot be
   read, a directory git could not open or whose ignore file it could not
-  read, a symlink out of the repository, an event line that cannot be read,
-  an entry named as a session that is not a directory)
+  read, a symlink out of the repository, sessions that cannot be listed or a
+  `.basou/sessions` that is a symlink or not a directory, an event line that
+  cannot be read, a session `basou verify` cannot read, and for the trail an
+  entry named as a session that is not a directory, which the integrity
+  counts as tampered as `basou verify` does)
   is `null`, with a reason under `not_found`, and is never counted as zero. The result carries a digest of its values. The
   declaration is read from `board/board.yaml` in the workspace only when the
   manifest declares the workspace's own repo private; otherwise `--board` is
