@@ -84,9 +84,12 @@ export {
   loadApproval,
 } from "./approval/index.js";
 export type {
+  BoardActiveMs,
   BoardDeclaration,
   BoardDeclarationContext,
   BoardDeclarationResult,
+  BoardEffort,
+  BoardEffortDay,
   BoardFreshness,
   BoardImportProbe,
   BoardIntegrity,
@@ -106,6 +109,7 @@ export type {
 export {
   BOARD_DEFAULT_AT,
   BOARD_DEFAULT_CAPTURE_GROUP,
+  BOARD_EFFORT_METHOD,
   BOARD_FRESHNESS_METHOD,
   BOARD_INTEGRITY_METHOD,
   BOARD_PORTFOLIO_METHOD,

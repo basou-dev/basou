@@ -57,9 +57,18 @@ export type BoardRepo = {
   behind_main: number | null;
 };
 
+/**
+ * When each commit reachable from HEAD was authored, as git recorded it (ISO
+ * 8601 with its offset), or why that is not known. For the effort section,
+ * which counts commits by day.
+ */
+export type AuthorDates = { ok: true; dates: string[] } | { ok: false; reason: string };
+
 export type BoardReposResult = {
   repos: BoardRepo[];
   notFound: { at: string; reason: string }[];
+  /** By the manifest's path, for each repository it declares. */
+  authorDates: Map<string, AuthorDates>;
 };
 
 type Head =
@@ -161,7 +170,7 @@ export async function measureRepos(
   root: string,
   worktreeOf: (repo: string) => Promise<RepoScopeResult>,
 ): Promise<BoardReposResult> {
-  const result: BoardReposResult = { repos: [], notFound: [] };
+  const result: BoardReposResult = { repos: [], notFound: [], authorDates: new Map() };
   for (const path of repoPaths) {
     const at = `repos[${path}]`;
     const repo: BoardRepo = {
@@ -178,7 +187,9 @@ export async function measureRepos(
     result.repos.push(repo);
     const located = await locateRepoRoot(resolve(root, path));
     if (!located.ok) {
-      result.notFound.push({ at, reason: `the repo '${path}' ${located.reason}` });
+      const reason = `the repo '${path}' ${located.reason}`;
+      result.notFound.push({ at, reason });
+      result.authorDates.set(path, { ok: false, reason });
       continue;
     }
     const fail = (field: keyof BoardRepo, reason: string) => {
@@ -231,14 +242,40 @@ export async function measureRepos(
           ? SHALLOW
           : failure(shallow, "could not tell whether the history of the repo is complete");
 
-    if (head.kind === "unborn") repo.commits = 0;
-    else if (head.kind === "error") fail("commits", head.reason);
-    else if (history !== undefined) fail("commits", history);
-    else {
+    if (head.kind === "unborn") {
+      repo.commits = 0;
+      result.authorDates.set(path, { ok: true, dates: [] });
+    } else if (head.kind === "error") {
+      fail("commits", head.reason);
+      result.authorDates.set(path, { ok: false, reason: head.reason });
+    } else if (history !== undefined) {
+      fail("commits", history);
+      result.authorDates.set(path, { ok: false, reason: history });
+    } else {
       const commits = await runGit(cwd, ["rev-list", "--count", head.oid, "--"]);
       const n = count(commits);
       if (n === undefined) fail("commits", failure(commits, "the commits could not be counted"));
       else repo.commits = n;
+      const authored = await runGit(cwd, [
+        "log",
+        "--no-show-signature",
+        "--format=%aI",
+        head.oid,
+        "--",
+      ]);
+      const dates = authored.stdout
+        .toString("utf8")
+        .split("\n")
+        .filter((d) => d !== "");
+      result.authorDates.set(
+        path,
+        authored.code === 0 && dates.every((d) => !Number.isNaN(Date.parse(d)))
+          ? { ok: true, dates }
+          : {
+              ok: false,
+              reason: failure(authored, "the dates of the commits could not be read"),
+            },
+      );
     }
 
     const worktree = await worktreeOf(path);

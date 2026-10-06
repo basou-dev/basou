@@ -36,7 +36,14 @@ All notable changes to **basou** are recorded here. The project follows
   refresh` would newly import, import again, or, their native log having
   grown, could not import again safely (a session whose log shrank is in
   none of them), counted by a dry run that reads this host's Claude Code and
-  Codex logs. It
+  Codex logs; and the work since the board's declared start, by day in its
+  time zone: the active time as `basou stats` measures it (every session's
+  intervals merged, and Claude Code's and Codex's each merged apart, an
+  interval that crosses a midnight split between the days; no Codex session
+  at all is a null that means so), the output tokens of the sessions that
+  recorded them, with how many Claude Code and Codex imports recorded none,
+  and in each repository the manifest declares, the commits reachable from
+  HEAD authored each day. It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git
@@ -48,15 +55,19 @@ All notable changes to **basou** are recorded here. The project follows
   read, a directory git could not open or whose ignore file it could not
   read, a symlink out of the repository, sessions that cannot be listed or a
   `.basou/sessions` that is a symlink or not a directory, an event line that
-  cannot be read, a session `basou verify` cannot read, for the review gaps
-  and the newest session a `session.yaml` that cannot be read, for the
-  review gaps an `events.jsonl` that cannot be read, a
+  cannot be read, a session `basou verify` cannot read, for the review gaps,
+  the newest session and the effort's time and tokens a `session.yaml` that
+  cannot be read, for the review gaps and the effort's time and tokens an
+  `events.jsonl` that cannot be read, a
   `~/.basou/portfolio.yaml` that `basou portfolio` refuses, a dry run of an
-  import that cannot run, and for the trail, the review gaps and the newest
-  session an entry named as a session that is not a directory, which the
-  integrity counts as tampered as `basou verify` does)
+  import that cannot run, and for the trail, the review gaps, the newest
+  session and the effort's time and tokens an entry named as a session that
+  is not a directory, which the integrity counts as tampered as `basou
+  verify` does)
   is `null`, with a reason under `not_found`, and is never counted as zero. The result carries a digest of its values but the
-  freshness, which moves as work goes on, the measuring session's own included. The
+  freshness, which moves as work goes on, the measuring session's own included,
+  and the days elapsed and today's row of the effort, which move with the
+  clock. The
   declaration is read from `board/board.yaml` in the workspace only when the
   manifest declares the workspace's own repo private; otherwise `--board` is
   required. Exit codes: `0` when everything was measured, `1` when something
