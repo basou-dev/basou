@@ -3088,6 +3088,10 @@ describe("measureBoard: the freshness section", () => {
     const m = await measure(declare([]));
     // 2026-10-03T00:00Z, after S03 and before the archived S04.
     expect(m.freshness.newest_session_at).toBe("2026-10-03T09:00:00+09:00");
+    // By time, not by how it is written: 2026-10-02T23:00Z is before 23:30Z.
+    await placeStarted(SES("S02"), "2026-10-03T08:00:00+09:00");
+    await placeStarted(SES("S03"), "2026-10-02T23:30:00Z");
+    expect((await measure(declare([]))).freshness.newest_session_at).toBe("2026-10-02T23:30:00Z");
     expect(m.complete).toBe(true);
   });
 

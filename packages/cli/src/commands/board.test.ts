@@ -603,6 +603,16 @@ describe("basou board measure", () => {
     expect(out.join("\n")).toContain(
       "\nFreshness:\n  newest session none\n  not imported 1 new, 0 updated, 0 unverifiable\n",
     );
+
+    // A session that cannot be read could be the newest.
+    const broken = join(repo, ".basou", "sessions", "ses_01HXABCDEF1234567890ABCS01");
+    await mkdir(broken, { recursive: true });
+    await writeFile(join(broken, "session.yaml"), "session: [broken]\n");
+    out.length = 0;
+    process.exitCode = 0;
+    await runBoardMeasure({}, context);
+    expect(out.join("\n")).toContain("\nFreshness:\n  newest session not measured\n");
+    expect(process.exitCode).toBe(1);
   });
 
   it("refuses a workspace that is not initialized", async () => {
