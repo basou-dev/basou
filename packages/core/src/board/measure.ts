@@ -73,8 +73,12 @@ export type BoardRatioValue = {
  * repository, revision or file is never counted as zero. The exceptions are
  * the nulls that mean something of their own, which have no entry and leave
  * `complete` as it is: three in the repos section (a detached HEAD, no commit
- * yet, no origin/main; see {@link BoardRepo}) and the portfolio's when there
- * is no portfolio config (see {@link BoardPortfolio}).
+ * yet, no origin/main; see {@link BoardRepo}), the portfolio's when there is
+ * no portfolio config (see {@link BoardPortfolio}), the newest session's when
+ * there is no session that is not archived (see {@link BoardFreshness}), the
+ * Codex time when there is no Codex session (see {@link BoardEffort}), and
+ * the components' kind changes when there is no previous record (see
+ * {@link BoardComponents}).
  */
 export type BoardMeasurement = {
   board_version: number;

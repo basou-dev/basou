@@ -125,6 +125,7 @@ export {
   BOARD_TRAIL_METHOD,
   BOARD_VERSION,
   boardDigest,
+  byCodePoint,
   measureBoard,
   parseBoardDeclaration,
 } from "./board/index.js";

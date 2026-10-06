@@ -49,7 +49,9 @@ All notable changes to **basou** are recorded here. The project follows
   migrations, SQL) find in the working tree of each repository, each keyed
   by the name of the repository's directory and the component's directory,
   and held against the declaration's `components`: those it does not
-  register, and those it registers that were not found. It
+  register, and those it registers that were not found (a change in a
+  component's kinds needs a previous record, so until there is one,
+  `kind_changed` is a null that means so). It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git
@@ -68,7 +70,8 @@ All notable changes to **basou** are recorded here. The project follows
   `~/.basou/portfolio.yaml` that `basou portfolio` refuses, a dry run of an
   import that cannot run, commit dates git cannot give, no declared time zone
   for the effort where this host's cannot be named, for the components two
-  repositories in directories of the same name, and for the trail, the
+  repositories in directories of the same name or a directory whose name is
+  not valid UTF-8, and for the trail, the
   review gaps, the newest
   session and the effort's time and tokens an entry named as a session that
   is not a directory, which the integrity counts as tampered as `basou

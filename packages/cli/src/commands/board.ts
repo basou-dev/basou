@@ -5,6 +5,7 @@ import {
   type BoardMeasurement,
   type BoardRepo,
   basouPaths,
+  byCodePoint,
   displayPath,
   findErrorCode,
   type Manifest,
@@ -338,7 +339,8 @@ function componentLines(m: BoardMeasurement): string[] {
   const lines = [
     `  ${Object.keys(found).length} found, ${unacknowledged.length} unacknowledged, ${gone.length} gone`,
   ];
-  for (const [key, component] of Object.entries(found)) {
+  const sorted = Object.entries(found).sort(([a], [b]) => byCodePoint(a, b));
+  for (const [key, component] of sorted) {
     const flag = component.status === "unacknowledged" ? "  (unacknowledged)" : "";
     lines.push(`    ${displayPath(key)}  ${component.kinds.join(", ")}${flag}`);
   }

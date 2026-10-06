@@ -3696,6 +3696,36 @@ describe("measureBoard: the components section", () => {
     expect(m.complete).toBe(true);
   });
 
+  it("applies each rule as components.sh does, and no wider", async () => {
+    await repo("app", {
+      "README.md": "\n",
+      // A workflow outside the repository's own .github is not CI.
+      "sub/.github/workflows/ci.yml": "\n",
+      "c1/docker-compose.yml": "\n",
+      "c2/my-compose.yml": "\n",
+      "build/package.json": "{}\n",
+      "g/go.mod": "\n",
+      // Only a config.toml whose parent is supabase.
+      "supabase/sub/config.toml": "\n",
+      "d/drizzle.config.js": "\n",
+      "e/.env.sample": "\n",
+      "m/migration/1.txt": "\n",
+      "cloudflared/config.yml": "\n",
+    });
+    const m = await measure(declare([], {}, ["app"]), NOW, ["app"]);
+    const kinds = Object.fromEntries(
+      Object.entries(m.components.found ?? {}).map(([key, found]) => [key, found.kinds]),
+    );
+    expect(kinds).toEqual({
+      "app/c1": ["container"],
+      "app/cloudflared": ["iac"],
+      "app/d": ["db"],
+      "app/e": ["env"],
+      "app/g": ["manifest"],
+      "app/m/migration": ["db"],
+    });
+  });
+
   it("holds what it finds against the declaration's components", async () => {
     await repo("app", { "package.json": "{}\n", "svc/Dockerfile": "FROM x\n" });
     const m = await measure(

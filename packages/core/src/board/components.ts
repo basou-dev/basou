@@ -62,17 +62,21 @@ export type BoardComponentChange = { key: string; before: string[]; after: strin
  * then the directory of the component inside it.
  *
  * Every value is null, with one entry at `components`, when a repository
- * cannot be opened, git could not list all of its working tree, or two
- * repositories are in directories of the same name (their keys could not be
- * told apart). `kind_changed` is also null, with no entry, when there is no
+ * cannot be opened, git could not list all of its working tree, two
+ * repositories are in directories of the same name, or a component's
+ * directory is not a valid UTF-8 name (in either case keys could not be told
+ * apart). `kind_changed` is also null, with no entry, when there is no
  * previous record to hold the kinds against: a null that means so.
  */
 export type BoardComponents = {
-  /** Sorted by key. */
+  /**
+   * By key. The order of the keys is not part of it: an object puts keys
+   * that read as array indexes first, whatever order they were added in.
+   */
   found: Record<string, BoardComponent> | null;
-  /** The keys found that the declaration does not register, sorted. */
+  /** The keys found that the declaration does not register, by code point. */
   unacknowledged: string[] | null;
-  /** The keys the declaration registers that were not found, sorted. */
+  /** The keys the declaration registers that were not found, by code point. */
   gone: string[] | null;
   kind_changed: BoardComponentChange[] | null;
 };
@@ -114,29 +118,39 @@ export async function measureComponents(input: ComponentsInput): Promise<{
   }
 
   const kinds = new Map<string, Set<string>>();
-  const add = (repo: string, dir: string, kind: string) => {
-    const key = dir === "" ? repo : `${repo}/${fromBytes(dir)}`;
-    const found = kinds.get(key) ?? new Set<string>();
-    found.add(kind);
-    kinds.set(key, found);
-  };
+  let undecodable: string | undefined;
   for (const [name, path] of byName) {
     const opened = await input.worktreeOf(path);
     if (!opened.ok) return unmeasured(`the repo '${path}' ${opened.reason}`);
     const [unread] = opened.scope.unread.values();
     if (unread !== undefined) return unmeasured(`in the repo '${path}', ${unread}`);
-    for (const file of opened.scope.entries.keys()) classify(name, file, add);
+    const add = (dir: string, kind: string) => {
+      const text = utf8(dir);
+      if (text === undefined) {
+        undecodable ??= `in the repo '${path}', the directory '${fromBytes(dir)}' is not a valid UTF-8 name, so its component cannot be told apart from others`;
+        return;
+      }
+      const key = text === "" ? name : `${name}/${text}`;
+      const found = kinds.get(key) ?? new Set<string>();
+      found.add(kind);
+      kinds.set(key, found);
+    };
+    for (const file of opened.scope.entries.keys()) classify(file, add);
   }
+  if (undecodable !== undefined) return unmeasured(undecodable);
 
   const registered = new Set(Object.keys(input.registered));
   const keys = [...kinds.keys()].sort(byCodePoint);
-  const found: Record<string, BoardComponent> = {};
-  for (const key of keys) {
-    found[key] = {
-      kinds: [...(kinds.get(key) ?? [])].sort(byCodePoint),
-      status: registered.has(key) ? "known" : "unacknowledged",
-    };
-  }
+  // From entries, so that a key such as __proto__ is a key of its own.
+  const found: Record<string, BoardComponent> = Object.fromEntries(
+    keys.map((key) => [
+      key,
+      {
+        kinds: [...(kinds.get(key) ?? [])].sort(byCodePoint),
+        status: registered.has(key) ? "known" : "unacknowledged",
+      },
+    ]),
+  );
   return {
     components: {
       found,
@@ -148,47 +162,64 @@ export async function measureComponents(input: ComponentsInput): Promise<{
   };
 }
 
-function byCodePoint(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
+const UTF8 = new TextDecoder("utf-8", { fatal: true });
+
+// The text of a byte string, or undefined when it is not valid UTF-8 (a name
+// that would otherwise read the same as another one).
+function utf8(bytes: string): string | undefined {
+  try {
+    return UTF8.decode(Buffer.from(bytes, "latin1"));
+  } catch {
+    return undefined;
+  }
 }
 
-// The markers a file of the working tree is, each added to its component.
-// `path` is a byte string; the names it is held against are ASCII.
-function classify(
-  repo: string,
-  path: string,
-  add: (repo: string, dir: string, kind: string) => void,
-): void {
+/** Orders strings by code point, as components.sh sorts them (not by UTF-16 unit). */
+export function byCodePoint(a: string, b: string): number {
+  const x = [...a];
+  const y = [...b];
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const p = (x[i] as string).codePointAt(0) ?? 0;
+    const q = (y[i] as string).codePointAt(0) ?? 0;
+    if (p !== q) return p - q;
+  }
+  return x.length - y.length;
+}
+
+// The markers a file of the working tree is, each added to the component in
+// its directory. `path` is a byte string; the names it is held against are
+// ASCII.
+function classify(path: string, add: (dir: string, kind: string) => void): void {
   const parts = path.split("/");
   const dirs = parts.slice(0, -1);
   if (dirs.some((part) => SKIP.has(part))) return;
   const name = parts[parts.length - 1] ?? "";
   const dir = dirs.join("/");
-  if (MANIFEST.has(name)) add(repo, dir, "manifest");
-  if (BUILD.has(name)) add(repo, dir, "build");
-  if (name.startsWith("Dockerfile") || COMPOSE.test(name)) add(repo, dir, "container");
-  if (EDGE.has(name)) add(repo, dir, "edge");
-  if (ENV.has(name)) add(repo, dir, "env");
-  if (name.endsWith(".tf")) add(repo, dir, "iac");
+  if (MANIFEST.has(name)) add(dir, "manifest");
+  if (BUILD.has(name)) add(dir, "build");
+  if (name.startsWith("Dockerfile") || COMPOSE.test(name)) add(dir, "container");
+  if (EDGE.has(name)) add(dir, "edge");
+  if (ENV.has(name)) add(dir, "env");
+  if (name.endsWith(".tf")) add(dir, "iac");
   if (parts.length >= 3 && parts[0] === ".github" && parts[1] === "workflows") {
-    if (/\.ya?ml$/.test(name)) add(repo, ".github/workflows", "ci");
+    if (/\.ya?ml$/.test(name)) add(".github/workflows", "ci");
   }
-  if (name === "config.toml" && dirs[dirs.length - 1] === "supabase") add(repo, dir, "db");
-  if (name === "schema.prisma") add(repo, dir, "db");
-  if (name.startsWith("drizzle.config.")) add(repo, dir, "db");
+  if (name === "config.toml" && dirs[dirs.length - 1] === "supabase") add(dir, "db");
+  if (name === "schema.prisma") add(dir, "db");
+  if (name.startsWith("drizzle.config.")) add(dir, "db");
   // The first directory of either sort on the way down is the component.
   for (let i = 0; i < dirs.length; i++) {
     const part = dirs[i] as string;
     if (MIGRATIONS.has(part)) {
-      add(repo, dirs.slice(0, i + 1).join("/"), "db");
+      add(dirs.slice(0, i + 1).join("/"), "db");
       break;
     }
     if (INFRASTRUCTURE.has(part)) {
-      add(repo, dirs.slice(0, i + 1).join("/"), "iac");
+      add(dirs.slice(0, i + 1).join("/"), "iac");
       break;
     }
   }
   if (name.endsWith(".sql") && !dirs.some((part) => MIGRATIONS.has(part))) {
-    add(repo, dir, "sql");
+    add(dir, "sql");
   }
 }

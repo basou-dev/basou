@@ -3,7 +3,7 @@ export type {
   BoardComponentChange,
   BoardComponents,
 } from "./components.js";
-export { BOARD_COMPONENTS_METHOD } from "./components.js";
+export { BOARD_COMPONENTS_METHOD, byCodePoint } from "./components.js";
 export type {
   BoardDeclaration,
   BoardDeclarationContext,
