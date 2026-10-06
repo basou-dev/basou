@@ -3,7 +3,14 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs
 import { devNull, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import { createManifest, ensureBasouDirectory, type RepoEntry, writeManifest } from "@basou/core";
+import {
+  chainEvents,
+  createManifest,
+  type Event,
+  ensureBasouDirectory,
+  type RepoEntry,
+  writeManifest,
+} from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doRunBoardMeasure, runBoardMeasure } from "./board.js";
 import { runVerify } from "./verify.js";
@@ -337,6 +344,43 @@ describe("basou board measure", () => {
     );
     await symlink(join(sessions, sessionId), join(sessions, "ses_01HXABCDEF1234567890ABCS02"));
     await writeFile(join(sessions, "ses_01HXABCDEF1234567890ABCS03"), "not a session\n");
+    // A verified one: chained events and the head anchor in session.yaml.
+    const chainedId = "ses_01HXABCDEF1234567890ABCS04";
+    await mkdir(join(sessions, chainedId));
+    const { lines, headHash, count } = chainEvents(
+      [
+        {
+          schema_version: "0.1.0",
+          id: "evt_01HXABCDEF1234567890ABCE02",
+          session_id: chainedId,
+          occurred_at: "2026-10-01T00:00:00Z",
+          source: "local-cli",
+          type: "note_added",
+          body: "y",
+        } as Event,
+      ],
+      chainedId,
+    );
+    await writeFile(join(sessions, chainedId, "events.jsonl"), `${lines.join("\n")}\n`);
+    await writeFile(
+      join(sessions, chainedId, "session.yaml"),
+      [
+        'schema_version: "0.1.0"',
+        "session:",
+        `  id: ${chainedId}`,
+        "  task_id: null",
+        `  workspace_id: ${FIXED_WS_ID}`,
+        "  source: { kind: terminal, version: 0.1.0 }",
+        "  started_at: 2026-10-01T00:00:00Z",
+        "  status: completed",
+        "  working_directory: /tmp/fixture",
+        "  invocation: { command: echo, args: [], exit_code: 0 }",
+        "  related_files: []",
+        "  events_log: events.jsonl",
+        `  integrity: { head_hash: ${headHash}, event_count: ${count} }`,
+        "",
+      ].join("\n"),
+    );
     const { out } = capture();
     await runVerify({ json: true }, { cwd: repo });
     const rows = JSON.parse(out.join("\n")) as { status: string }[];
@@ -345,14 +389,14 @@ describe("basou board measure", () => {
     out.length = 0;
     process.exitCode = 0;
     const result = await doRunBoardMeasure({ json: true }, ctx(repo));
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     expect(
       Object.fromEntries(Object.entries(result.integrity.by_status ?? {}).filter(([, n]) => n > 0)),
     ).toEqual(tally);
     out.length = 0;
     await runBoardMeasure({}, ctx(repo));
     expect(out.join("\n")).toContain(
-      "\nIntegrity:\n  sessions 3: 0 verified, 1 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 unsupported, 2 tampered\n  not verified 3\n",
+      "\nIntegrity:\n  sessions 4: 1 verified, 1 unchained, 0 empty, 0 incomplete, 0 in_progress, 0 unsupported, 2 tampered\n  not verified 3\n",
     );
 
     const events = join(sessions, sessionId, "events.jsonl");

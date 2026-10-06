@@ -2494,6 +2494,10 @@ describe("measureBoard: the integrity section", () => {
         },
       ]);
       expect(m.complete).toBe(false);
+      await chmod(shut[0] as string, 0o644);
+      expect((await measure(declare([]))).not_found).toEqual([
+        { at: "integrity", reason: "1 session could not be read, so the counts are not known" },
+      ]);
     } finally {
       for (const file of shut) await chmod(file, 0o644);
     }
