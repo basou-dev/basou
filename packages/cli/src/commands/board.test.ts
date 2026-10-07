@@ -912,7 +912,7 @@ describe("basou board record", () => {
     const { out } = capture();
     const result = await doRunBoardRecord({}, fed(repo, input));
     expect(result.record).toMatch(/^board\/records\/[0-7][0-9A-HJKMNP-TV-Z]{25}\.json$/);
-    expect(out.join("\n")).toBe(`Recorded ${result.record}`);
+    expect(out.join("\n")).toBe(`Recorded ${result.record}\nNot compared with a previous record.`);
     const name = (result.record ?? "").split("/").at(-1) ?? "";
     expect(await readdir(join(repo, "board", "records"))).toEqual([name]);
     const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
@@ -934,11 +934,20 @@ describe("basou board record", () => {
     const { repo, input } = await judged();
     const { out } = capture();
     const result = await doRunBoardRecord({ dryRun: true, json: true }, fed(repo, input));
-    expect(result).toEqual({ record: null, dry_run: true, complete: true, order_anomalies: [] });
+    expect(result).toEqual({
+      record: null,
+      dry_run: true,
+      complete: true,
+      not_found: [],
+      order_anomalies: [],
+      diff: null,
+    });
     expect(JSON.parse(out.join("\n"))).toEqual(result);
     out.length = 0;
     await doRunBoardRecord({ dryRun: true }, fed(repo, input));
-    expect(out.join("\n")).toBe("Dry run: the record checked out (nothing was written).");
+    expect(out.join("\n")).toBe(
+      "Dry run: the record checked out (nothing was written).\nNot compared with a previous record.",
+    );
     await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
   });
 
@@ -964,7 +973,7 @@ describe("basou board record", () => {
     expect(result.record).toMatch(
       /^\.\.\/\.\.\/board\/records\/[0-7][0-9A-HJKMNP-TV-Z]{25}\.json$/,
     );
-    expect(out.join("\n")).toBe(`Recorded ${result.record}`);
+    expect(out.join("\n")).toBe(`Recorded ${result.record}\nNot compared with a previous record.`);
     await expect(readFile(join(deeper, result.record ?? ""), "utf8")).resolves.toContain(
       '"record_version": 1',
     );
@@ -1128,5 +1137,187 @@ describe("basou board record", () => {
     await expect(doRunBoardRecord({ file: join(repo, "missing.json") }, ctx(repo))).rejects.toThrow(
       /Input file not found/,
     );
+  });
+});
+
+describe("basou board measure and record against the previous record", () => {
+  async function recorded(): Promise<{ repo: string; first: string }> {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([MD]));
+    capture();
+    const measured = await doRunBoardMeasure({ json: true }, ctx(repo));
+    const result = await doRunBoardRecord(
+      {},
+      {
+        ...ctx(repo),
+        readInput: async () =>
+          JSON.stringify(
+            judgement(measured.digest, ["done", "part"], {
+              npm: { value: "0.64.0", observed_at: "2026-10-05", source: "registry" },
+              site: { value: "0.64.0", observed_at: "2026-10-05", source: "site" },
+            }),
+          ),
+      },
+    );
+    vi.restoreAllMocks();
+    const first =
+      (result.record ?? "")
+        .split("/")
+        .at(-1)
+        ?.replace(/\.json$/, "") ?? "";
+    return { repo, first };
+  }
+
+  function judgement(digest: string, states: string[], observed: Record<string, unknown>) {
+    return {
+      measure_digest: digest,
+      observed,
+      cells: ["01", "02", "03", "04", "05", "06"].map((stage, i) => ({
+        lane: "core",
+        stage,
+        state: states[i] ?? "none",
+      })),
+      prose: { summary: "fine" },
+      judged_by: { model: "Claude Opus 5.5", self_reported: true },
+    };
+  }
+
+  it("measures against the last record, and says first what moved", async () => {
+    const { repo, first } = await recorded();
+    await writeFile(join(repo, "LATER.md"), "# later\n");
+    const { out } = capture();
+    const m = await doRunBoardMeasure({ json: true }, ctx(repo));
+    expect(m.diff?.against).toBe(first);
+    expect(m.diff?.values).toContainEqual({
+      at: "measures.md.value",
+      before: 2,
+      after: 3,
+      delta: 1,
+    });
+    out.length = 0;
+    await doRunBoardMeasure({}, ctx(repo));
+    const lines = out.join("\n").split("\n");
+    expect(lines.slice(2, 5)).toEqual(["", `Since the previous record ${first}:`, lines[4]]);
+    expect(out.join("\n")).toContain("  measures.md.value: 2 -> 3 (+1)\n");
+  });
+
+  it("reads no records for a declaration not named board.yaml", async () => {
+    const { repo } = await recorded();
+    await placeBoard(repo, boardYaml([MD]), "board/other.yaml");
+    const { out } = capture();
+    const m = await doRunBoardMeasure({ board: "board/other.yaml", json: true }, ctx(repo));
+    expect(m.diff).toBeNull();
+    expect(m.components.kind_changed).toBeNull();
+    out.length = 0;
+    await doRunBoardMeasure({ board: "board/other.yaml" }, ctx(repo));
+    expect(out.join("\n")).toContain(
+      "\n\nNo records are read for a declaration not named board.yaml.\n",
+    );
+  });
+
+  it("records again, saying what moved in the cells, the observations and the measurement", async () => {
+    const { repo, first } = await recorded();
+    capture();
+    const measured = await doRunBoardMeasure({ json: true }, ctx(repo));
+    vi.restoreAllMocks();
+    const { out } = capture();
+    const result = await doRunBoardRecord(
+      {},
+      {
+        ...ctx(repo),
+        readInput: async () =>
+          JSON.stringify(
+            judgement(measured.digest, ["done", "done", "part"], {
+              npm: { value: "0.65.0", observed_at: "2026-10-06", source: "registry" },
+              site: { value: null, observed_at: "2026-10-06", source: "site", error: "timeout" },
+            }),
+          ),
+      },
+    );
+    expect(result.diff).toMatchObject({
+      against: first,
+      cells: [
+        { lane: "core", stage: "02", before: "part", after: "done" },
+        { lane: "core", stage: "03", before: "none", after: "part" },
+      ],
+      observed: [
+        { name: "npm", before: { value: "0.64.0" }, after: { value: "0.65.0" } },
+        { name: "site", before: { value: "0.64.0" }, after: { value: null, error: "timeout" } },
+      ],
+    });
+    expect(result.diff?.measure.values).toEqual(measured.diff?.values);
+    const text = out.join("\n");
+    expect(text).toContain(
+      `Since the previous record ${first}:\n  core 02: part -> done\n  core 03: none -> part\n  observed npm: "0.64.0" -> "0.65.0"\n  observed site: "0.64.0" -> null (timeout)\n`,
+    );
+  });
+
+  it("shows what a previous record holds with its control characters escaped", async () => {
+    const { repo, first } = await recorded();
+    const file = join(repo, "board", "records", `${first}.json`);
+    const written = JSON.parse(await readFile(file, "utf8"));
+    written.cells[1].state = `part${ESC}[31m`;
+    written.measure.methods[`evil${ESC}[2J`] = 1;
+    await writeFile(file, JSON.stringify(written));
+    const { out } = capture();
+    const m = await doRunBoardMeasure({ json: true }, ctx(repo));
+    out.length = 0;
+    await doRunBoardMeasure({}, ctx(repo));
+    await doRunBoardRecord(
+      { dryRun: true },
+      {
+        ...ctx(repo),
+        readInput: async () => JSON.stringify(judgement(m.digest, ["done", "done"], {})),
+      },
+    );
+    const text = out.join("\n");
+    expect(text).not.toContain(ESC);
+    expect(text).toContain("  core 02: part\\x1b[31m -> done\n");
+    expect(text).toContain("methods changed: evil\\x1b[2J 1 -> none");
+  });
+
+  it("takes a record it cannot read as a gap, not as no record", async () => {
+    const { repo, first } = await recorded();
+    await writeFile(join(repo, "board", "records", `${first}.json`), "{ not json");
+    // The record says why, in its text and as JSON, before anything else.
+    capture();
+    const measuredNow = await doRunBoardMeasure({ json: true }, ctx(repo));
+    vi.restoreAllMocks();
+    const said = capture();
+    const result = await doRunBoardRecord(
+      { dryRun: true },
+      {
+        ...ctx(repo),
+        readInput: async () => JSON.stringify(judgement(measuredNow.digest, ["done"], {})),
+      },
+    );
+    expect(result.diff).toBeNull();
+    expect(result.not_found).toContainEqual({
+      at: "diff",
+      reason: `the record ${first} could not be read as JSON`,
+    });
+    const recordText = said.out.join("\n").split("\n");
+    expect(recordText[1]).toBe(
+      "The previous record could not be read, so nothing is compared with it.",
+    );
+    expect(recordText[2]).toMatch(/^The measurement recorded is not complete \(\d+\):$/);
+    expect(recordText).toContain(`  diff: the record ${first} could not be read as JSON`);
+    expect(said.out.join("\n")).not.toContain("not measured");
+    vi.restoreAllMocks();
+    const { out } = capture();
+    const m = await doRunBoardMeasure({ json: true }, ctx(repo));
+    expect(m.diff).toBeNull();
+    expect(m.complete).toBe(false);
+    expect(m.not_found).toContainEqual({
+      at: "diff",
+      reason: `the record ${first} could not be read as JSON`,
+    });
+    expect(process.exitCode).toBe(1);
+    out.length = 0;
+    await doRunBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      "\n\nThe previous record could not be read (see Not measured).\n",
+    );
+    expect(out.join("\n")).toContain("Components:\n  0 found, 0 unacknowledged, gone not known\n");
   });
 });

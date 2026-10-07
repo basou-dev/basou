@@ -70,6 +70,11 @@ export function prefixedUlid<P extends IdPrefix>(prefix: P): PrefixedId<P> {
   return `${prefix}_${ulid()}` as PrefixedId<P>;
 }
 
+/** Whether a string is a ULID of the shape basou generates, with no prefix. */
+export function isUlidBody(value: string): boolean {
+  return ULID_BODY_REGEX.test(value) && isValidUlid(value);
+}
+
 /**
  * Check whether the given string is a valid prefixed Basou ID.
  *

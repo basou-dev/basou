@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { measureComponents } from "./components.js";
+import { measureComponents, type PreviousComponents } from "./components.js";
 import type { RepoScopeResult } from "./scope.js";
 
 // A working tree holding `paths` (byte strings, as git lists them).
@@ -75,5 +75,66 @@ describe("measureComponents", () => {
       '{"__proto__":{"kinds":["manifest"],"status":"unacknowledged"},"__proto__/svc":{"kinds":["container"],"status":"unacknowledged"}}',
     );
     expect(Object.getPrototypeOf(components.found)).toBe(Object.prototype);
+  });
+});
+
+describe("measureComponents against the previous record", () => {
+  const against = (previous: PreviousComponents, paths: string[], registered: string[] = []) =>
+    measureComponents({
+      repos: ["."],
+      names: new Map([[".", "app"]]),
+      worktreeOf: tree(paths),
+      registered: Object.fromEntries(registered.map((key) => [key, {}])),
+      previous,
+    });
+
+  it("finds the kinds that changed, and counts gone what only the previous record found", async () => {
+    const { components, notFound } = await against(
+      {
+        status: "found",
+        found: {
+          app: { kinds: ["manifest"] },
+          "app/web": { kinds: ["manifest", "edge"] },
+          "app/tmp": { kinds: ["container"] },
+          "app/__proto__": { kinds: ["env"] },
+        },
+      },
+      ["package.json", "Dockerfile", "web/package.json", "web/wrangler.toml", "svc/go.mod"],
+      ["app/registered"],
+    );
+    expect(components.kind_changed).toEqual([
+      { key: "app", before: ["manifest"], after: ["container", "manifest"] },
+    ]);
+    expect(components.gone).toEqual(["app/__proto__", "app/registered", "app/tmp"]);
+    expect(components.unacknowledged).toEqual(["app", "app/svc", "app/web"]);
+    expect(notFound).toEqual([]);
+  });
+
+  it("has no kind changes to give, a null that means so, when there is no previous record", async () => {
+    const { components, notFound } = await against({ status: "none" }, ["package.json"], ["app/x"]);
+    expect(components.kind_changed).toBeNull();
+    expect(components.gone).toEqual(["app/x"]);
+    expect(notFound).toEqual([]);
+  });
+
+  it("does not know what is gone or changed when the previous record cannot be read", async () => {
+    const { components, notFound } = await against(
+      { status: "unreadable", reason: "the record X could not be read as JSON" },
+      ["package.json"],
+      ["app/x"],
+    );
+    expect(components).toEqual({
+      found: { app: { kinds: ["manifest"], status: "unacknowledged" } },
+      unacknowledged: ["app"],
+      gone: null,
+      kind_changed: null,
+    });
+    expect(notFound).toEqual([
+      {
+        at: "components.gone",
+        reason: "the record X could not be read as JSON, so a component only it found is not known",
+      },
+      { at: "components.kind_changed", reason: "the record X could not be read as JSON" },
+    ]);
   });
 });

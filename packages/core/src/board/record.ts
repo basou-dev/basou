@@ -313,11 +313,12 @@ export type BoardRecord = {
     effort: BoardDeclaration["effort"];
   };
   /**
-   * What basou measured as it recorded, the digest the judge saw included.
-   * What the digest leaves out (freshness, the axis, the clock) is as it was
-   * measured again, not necessarily as the judge saw it.
+   * What basou measured as it recorded, the digest the judge saw included,
+   * but not its diff, which the previous record derives. What the digest
+   * leaves out (freshness, the axis, the clock) is as it was measured again,
+   * not necessarily as the judge saw it.
    */
-  measure: BoardMeasurement;
+  measure: Omit<BoardMeasurement, "diff">;
   observed: BoardRecordInput["observed"];
   cells: BoardRecordInput["cells"];
   prose: BoardRecordInput["prose"];
@@ -334,6 +335,7 @@ export function buildRecord(input: {
   recordedWith: { basou: string; build: string | null };
 }): BoardRecord {
   const { declaration: d, recordInput: r } = input;
+  const { diff: _diff, ...measure } = input.measurement;
   return {
     record_version: BOARD_RECORD_VERSION,
     recorded_at: input.recordedAt.toISOString(),
@@ -348,7 +350,7 @@ export function buildRecord(input: {
       axis: d.axis,
       effort: d.effort,
     },
-    measure: input.measurement,
+    measure,
     observed: r.observed,
     cells: r.cells,
     prose: r.prose,

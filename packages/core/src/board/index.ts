@@ -28,6 +28,16 @@ export {
   BOARD_VERSION,
   parseBoardDeclaration,
 } from "./declaration.js";
+export type {
+  BoardCellChange,
+  BoardDiff,
+  BoardMethodChange,
+  BoardObservation,
+  BoardObservedChange,
+  BoardValueChange,
+  BoardValueOnly,
+} from "./diff.js";
+export { diffCells, diffMeasurements, diffObserved } from "./diff.js";
 export type { BoardActiveMs, BoardEffort, BoardEffortDay } from "./effort.js";
 export { BOARD_EFFORT_METHOD } from "./effort.js";
 export type { BoardFreshness, BoardImportProbe } from "./freshness.js";
@@ -46,6 +56,12 @@ export type {
 export { boardDigest, measureBoard } from "./measure.js";
 export type { BoardPortfolio } from "./portfolio.js";
 export { BOARD_PORTFOLIO_METHOD } from "./portfolio.js";
+export type {
+  BoardPreviousRecords,
+  PreviousOutcome,
+  ReadBoardRecord,
+} from "./previous.js";
+export { NO_PREVIOUS_RECORDS, readPreviousRecords } from "./previous.js";
 export type {
   BoardOrderAnomaly,
   BoardRecord,

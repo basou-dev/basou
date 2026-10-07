@@ -1,12 +1,13 @@
 import { fromBytes } from "./glob.js";
+import type { PreviousOutcome } from "./previous.js";
 import type { RepoScopeResult } from "./scope.js";
 
 /**
  * The version of how the `components` section measures. Raised whenever a
- * value of the section would change for the same repositories and
- * declaration, as when a rule for a marker changes.
+ * value of the section would change for the same repositories, declaration
+ * and previous record, as when a rule for a marker changes.
  */
-export const BOARD_COMPONENTS_METHOD = 1;
+export const BOARD_COMPONENTS_METHOD = 2;
 
 // A file under one of these directories is not a marker.
 const SKIP = new Set([
@@ -66,7 +67,10 @@ export type BoardComponentChange = { key: string; before: string[]; after: strin
  * repositories are in directories of the same name, or a component's
  * directory is not a valid UTF-8 name (in either case keys could not be told
  * apart). `kind_changed` is also null, with no entry, when there is no
- * previous record to hold the kinds against: a null that means so.
+ * previous record to hold the kinds against, or it did not measure the
+ * components: a null that means so. When the previous record cannot be read,
+ * `gone` and `kind_changed` are null, each with an entry: what that record
+ * alone found is not known.
  */
 export type BoardComponents = {
   /**
@@ -76,10 +80,19 @@ export type BoardComponents = {
   found: Record<string, BoardComponent> | null;
   /** The keys found that the declaration does not register, by code point. */
   unacknowledged: string[] | null;
-  /** The keys the declaration registers that were not found, by code point. */
+  /**
+   * The keys the declaration registers, or the previous record found, that
+   * were not found now, by code point.
+   */
   gone: string[] | null;
+  /** The keys found now and in the previous record with other kinds, by code point. */
   kind_changed: BoardComponentChange[] | null;
 };
+
+/** The components the previous record found (none when it has none, or did not measure them). */
+export type PreviousComponents = PreviousOutcome<{
+  found: Readonly<Record<string, { kinds: readonly string[] }>>;
+}>;
 
 export type ComponentsInput = {
   /** The manifest's paths, in its order. */
@@ -90,6 +103,8 @@ export type ComponentsInput = {
   worktreeOf: (repo: string) => Promise<RepoScopeResult>;
   /** The declaration's components, by key. */
   registered: Readonly<Record<string, unknown>>;
+  /** The components of the previous record (default: there is none). */
+  previous?: PreviousComponents;
 };
 
 /** The `components` section of a measurement, and why it is missing when it is. */
@@ -140,6 +155,8 @@ export async function measureComponents(input: ComponentsInput): Promise<{
   if (undecodable !== undefined) return unmeasured(undecodable);
 
   const registered = new Set(Object.keys(input.registered));
+  const previous = input.previous ?? { status: "none" };
+  const before = previous.status === "found" ? previous.found : {};
   const keys = [...kinds.keys()].sort(byCodePoint);
   // From entries, so that a key such as __proto__ is a key of its own.
   const found: Record<string, BoardComponent> = Object.fromEntries(
@@ -151,12 +168,38 @@ export async function measureComponents(input: ComponentsInput): Promise<{
       },
     ]),
   );
+  if (previous.status === "unreadable") {
+    return {
+      components: {
+        found,
+        unacknowledged: keys.filter((key) => !registered.has(key)),
+        gone: null,
+        kind_changed: null,
+      },
+      notFound: [
+        {
+          at: "components.gone",
+          reason: `${previous.reason}, so a component only it found is not known`,
+        },
+        { at: "components.kind_changed", reason: previous.reason },
+      ],
+    };
+  }
+  const was = new Set([...registered, ...Object.keys(before)]);
   return {
     components: {
       found,
       unacknowledged: keys.filter((key) => !registered.has(key)),
-      gone: [...registered].filter((key) => !kinds.has(key)).sort(byCodePoint),
-      kind_changed: null,
+      gone: [...was].filter((key) => !kinds.has(key)).sort(byCodePoint),
+      kind_changed:
+        previous.status === "found"
+          ? keys.flatMap((key) => {
+              if (!Object.hasOwn(before, key)) return [];
+              const then = [...(before[key]?.kinds ?? [])].sort(byCodePoint);
+              const now = found[key]?.kinds ?? [];
+              return then.join("\0") === now.join("\0") ? [] : [{ key, before: then, after: now }];
+            })
+          : null,
     },
     notFound: [],
   };

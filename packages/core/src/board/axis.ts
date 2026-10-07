@@ -1,12 +1,13 @@
 import type { BoardComponents } from "./components.js";
 import { daysBetween } from "./effort.js";
+import type { PreviousOutcome } from "./previous.js";
 
 /**
  * The version of how the `axis` section judges. Raised whenever a value of
  * the section would change for the same inputs, as when a trigger is judged
  * differently.
  */
-export const BOARD_AXIS_METHOD = 1;
+export const BOARD_AXIS_METHOD = 2;
 
 /** A trigger of an axis review that measure judges: (d), the operator's word, is not one. */
 export type BoardAxisTrigger = "a" | "b" | "c" | "e";
@@ -17,8 +18,14 @@ export type BoardAxisReason = { trigger: BoardAxisTrigger; detail: string };
 /** A trigger that was not judged, and why. */
 export type BoardAxisUnjudged = { trigger: BoardAxisTrigger; why: string };
 
-/** The last review of the axis: for now, the declaration's `axis.seed_review`. */
-export type BoardLastReview = { date: string; model: string; from: "seed" };
+/**
+ * The last review of the axis: the last record with an axis review (its
+ * date in the effort section's time zone, and the model that judged it), or,
+ * with no such record, the declaration's `axis.seed_review`.
+ */
+export type BoardLastReview =
+  | { date: string; model: string; from: "seed" }
+  | { date: string; model: string; from: "record"; record: string };
 
 /**
  * Whether the board's axis is due a review, by the triggers measure can
@@ -33,18 +40,22 @@ export type BoardAxis = {
   version: number;
   /**
    * True when a trigger fired. Null, with an entry at `axis.review_needed`,
-   * when none fired but (a) or (b) could not be judged because what it rests
-   * on was not measured (the components, or a time zone to count days in).
-   * False otherwise: a trigger with nothing to judge it by, (c) with no
-   * `--model` or (e) with no previous record, is listed under `unjudged`
-   * and does not keep it from being false.
+   * when none fired but one could not be judged because what it rests on was
+   * not measured (the components, or a time zone to count days in) or a
+   * record could not be read. False otherwise: a trigger with nothing to
+   * judge it by, (c) with no `--model` or (e) with no previous record, is
+   * listed under `unjudged` and does not keep it from being false.
    */
   review_needed: boolean | null;
   /** The triggers that fired, in the order a, b, c, e. */
   reasons: BoardAxisReason[];
   /** The triggers that were not judged, in the same order. */
   unjudged: BoardAxisUnjudged[];
-  /** Null when there is none, which fires (b), and (c) when a model is given. */
+  /**
+   * Null when there is none, which fires (b), and (c) when a model is given.
+   * Null with an entry at `axis.last_review` when a record that may hold it
+   * cannot be read: (b) and (c) are then not judged.
+   */
   last_review: BoardLastReview | null;
 };
 
@@ -59,6 +70,17 @@ export type AxisInput = {
   today: string | undefined;
   /** The model that will judge the board, when one is given. */
   model?: string | undefined;
+  /**
+   * The components the declaration registers that were not found, for (a)
+   * when `gone` is not known because the previous record cannot be read.
+   */
+  declaredGone?: readonly string[];
+  /** The last review the records hold (default: there is none). */
+  recordedReview?: PreviousOutcome<{ date: string; model: string; record: string }>;
+  /** The methods of this measurement. */
+  methods?: Readonly<Record<string, number>>;
+  /** The methods of the previous record (default: there is no previous record). */
+  previousMethods?: PreviousOutcome<{ methods: Readonly<Record<string, number>> }>;
 };
 
 /**
@@ -90,34 +112,50 @@ export function judgeAxis(input: AxisInput): {
 } {
   const reasons: BoardAxisReason[] = [];
   const unjudged: BoardAxisUnjudged[] = [];
-  let unknown = false;
+  // The triggers not judged for want of what they rest on.
+  const unknown = new Set<BoardAxisTrigger>();
+  const notJudged = (trigger: BoardAxisTrigger, why: string) => {
+    unjudged.push({ trigger, why });
+    unknown.add(trigger);
+  };
   const seed = input.declared.seed_review;
+  const recorded = input.recordedReview ?? { status: "none" };
   const last: BoardLastReview | null =
-    seed === undefined ? null : { date: seed.date, model: seed.model, from: "seed" };
+    recorded.status === "found"
+      ? { date: recorded.date, model: recorded.model, from: "record", record: recorded.record }
+      : recorded.status === "unreadable" || seed === undefined
+        ? null
+        : { date: seed.date, model: seed.model, from: "seed" };
+  const lastUnknown =
+    recorded.status === "unreadable" ? `the last review is not known: ${recorded.reason}` : null;
 
   // (a)
   const { found, unacknowledged, gone, kind_changed } = input.components;
-  if (found === null || unacknowledged === null || gone === null) {
-    unjudged.push({ trigger: "a", why: "the components were not measured" });
-    unknown = true;
+  if (found === null || unacknowledged === null) {
+    notJudged("a", "the components were not measured");
   } else {
     const changed = kind_changed?.length ?? 0;
-    if (unacknowledged.length > 0 || gone.length > 0 || changed > 0) {
-      const parts = [`${unacknowledged.length} unacknowledged`, `${gone.length} gone`];
+    const goneKnown = gone ?? input.declaredGone ?? [];
+    if (unacknowledged.length > 0 || goneKnown.length > 0 || changed > 0) {
+      const parts = [`${unacknowledged.length} unacknowledged`];
+      parts.push(gone !== null ? `${gone.length} gone` : `${goneKnown.length} registered gone`);
       if (kind_changed !== null) parts.push(`${changed} with changed kinds`);
       reasons.push({ trigger: "a", detail: `components: ${parts.join(", ")}` });
+    } else if (gone === null) {
+      notJudged("a", "what the previous record alone found is not known");
     }
   }
 
   // (b)
-  if (last === null) {
+  if (lastUnknown !== null) {
+    notJudged("b", lastUnknown);
+  } else if (last === null) {
     reasons.push({ trigger: "b", detail: "the axis has no review on record" });
   } else if (input.today === undefined) {
-    unjudged.push({
-      trigger: "b",
-      why: "this host's time zone could not be named, so the days are not known (declare effort.time_zone)",
-    });
-    unknown = true;
+    notJudged(
+      "b",
+      "this host's time zone could not be named, so the days are not known (declare effort.time_zone)",
+    );
   } else {
     const days = daysBetween(last.date, input.today);
     if (days >= input.declared.review_due_days) {
@@ -131,6 +169,8 @@ export function judgeAxis(input: AxisInput): {
   // (c)
   if (input.model === undefined) {
     unjudged.push({ trigger: "c", why: "no --model was given" });
+  } else if (lastUnknown !== null) {
+    notJudged("c", lastUnknown);
   } else if (last === null) {
     reasons.push({ trigger: "c", detail: "the axis has no review on record" });
   } else if (!sameModel(input.model, last.model)) {
@@ -141,12 +181,29 @@ export function judgeAxis(input: AxisInput): {
   }
 
   // (e)
-  unjudged.push({
-    trigger: "e",
-    why: "there is no previous record to compare the methods with",
-  });
+  const previous = input.previousMethods ?? { status: "none" };
+  if (previous.status === "none") {
+    unjudged.push({ trigger: "e", why: "there is no previous record to compare the methods with" });
+  } else if (previous.status === "unreadable") {
+    notJudged("e", `the previous record could not be read: ${previous.reason}`);
+  } else {
+    const now = input.methods ?? {};
+    const sections = [...new Set([...Object.keys(now), ...Object.keys(previous.methods)])];
+    const moved = sections.filter((section) => now[section] !== previous.methods[section]);
+    if (moved.length > 0) {
+      const shown = (n: number | undefined) => (n === undefined ? "none" : String(n));
+      reasons.push({
+        trigger: "e",
+        detail: `methods changed since the previous record: ${moved
+          .map(
+            (section) => `${section} ${shown(previous.methods[section])} -> ${shown(now[section])}`,
+          )
+          .join(", ")}`,
+      });
+    }
+  }
 
-  const reviewNeeded = reasons.length > 0 ? true : unknown ? null : false;
+  const reviewNeeded = reasons.length > 0 ? true : unknown.size > 0 ? null : false;
   return {
     axis: {
       version: input.declared.version,
@@ -155,17 +212,19 @@ export function judgeAxis(input: AxisInput): {
       unjudged,
       last_review: last,
     },
-    notFound:
-      reviewNeeded === null
+    notFound: [
+      ...(lastUnknown === null ? [] : [{ at: "axis.last_review", reason: lastUnknown }]),
+      ...(reviewNeeded === null
         ? [
             {
               at: "axis.review_needed",
               reason: `no trigger fired, but ${unjudged
-                .filter((u) => u.trigger === "a" || u.trigger === "b")
+                .filter((u) => unknown.has(u.trigger))
                 .map((u) => `(${u.trigger}) could not be judged: ${u.why}`)
                 .join("; ")}`,
             },
           ]
-        : [],
+        : []),
+    ],
   };
 }
