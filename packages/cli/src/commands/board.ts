@@ -5,6 +5,7 @@ import {
   type BoardMeasurement,
   type BoardRepo,
   basouPaths,
+  byCodePoint,
   displayPath,
   findErrorCode,
   type Manifest,
@@ -332,6 +333,21 @@ function effortLines(m: BoardMeasurement): string[] {
   ];
 }
 
+function componentLines(m: BoardMeasurement): string[] {
+  const { found, unacknowledged, gone } = m.components;
+  if (found === null || unacknowledged === null || gone === null) return ["  not measured"];
+  const lines = [
+    `  ${Object.keys(found).length} found, ${unacknowledged.length} unacknowledged, ${gone.length} gone`,
+  ];
+  const sorted = Object.entries(found).sort(([a], [b]) => byCodePoint(a, b));
+  for (const [key, component] of sorted) {
+    const flag = component.status === "unacknowledged" ? "  (unacknowledged)" : "";
+    lines.push(`    ${displayPath(key)}  ${component.kinds.join(", ")}${flag}`);
+  }
+  for (const key of gone) lines.push(`    ${displayPath(key)}  (gone)`);
+  return lines;
+}
+
 function printMeasurementText(m: BoardMeasurement): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
@@ -363,6 +379,7 @@ function printMeasurementText(m: BoardMeasurement): void {
   lines.push("", "Portfolio:", ...portfolioLines(m));
   lines.push("", "Freshness:", ...freshnessLines(m));
   lines.push("", "Effort:", ...effortLines(m));
+  lines.push("", "Components:", ...componentLines(m));
   if (m.not_found.length > 0) {
     lines.push("", `Not measured (${m.not_found.length}):`);
     for (const missing of m.not_found)

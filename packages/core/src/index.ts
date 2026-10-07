@@ -85,6 +85,9 @@ export {
 } from "./approval/index.js";
 export type {
   BoardActiveMs,
+  BoardComponent,
+  BoardComponentChange,
+  BoardComponents,
   BoardDeclaration,
   BoardDeclarationContext,
   BoardDeclarationResult,
@@ -107,6 +110,7 @@ export type {
   MeasureBoardInput,
 } from "./board/index.js";
 export {
+  BOARD_COMPONENTS_METHOD,
   BOARD_DEFAULT_AT,
   BOARD_DEFAULT_CAPTURE_GROUP,
   BOARD_EFFORT_METHOD,
@@ -121,6 +125,7 @@ export {
   BOARD_TRAIL_METHOD,
   BOARD_VERSION,
   boardDigest,
+  byCodePoint,
   measureBoard,
   parseBoardDeclaration,
 } from "./board/index.js";
