@@ -135,10 +135,14 @@ describe("parseRecordInput", () => {
     const list = cells({ core: ["blocked"] }).filter(
       (c) => !(c.lane === "docs" && c.stage === "06"),
     );
+    const observed = { " ": { value: 1, observed_at: "2026-10-07", source: "s" } };
     expect(
-      refused(input({ extra: true, cells: list, prose: { summary: "x", lanes: { web: "y" } } })),
+      refused(
+        input({ extra: true, observed, cells: list, prose: { summary: "x", lanes: { web: "y" } } }),
+      ),
     ).toEqual([
       "(top level): unknown key 'extra'",
+      'observed[" "]: is not a name it can have',
       "cells[0].reason: a cell that is blocked needs a reason",
       "cells: lane 'docs' has no cell at stage '06'",
       "prose.lanes.web: is not a lane of the board",
