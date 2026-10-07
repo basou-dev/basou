@@ -57,7 +57,10 @@ All notable changes to **basou** are recorded here. The project follows
   (for now the declaration's `seed_review`) by the effort's time zone, and,
   with `--model`, a model other than the one that reviewed last (names
   compared lower case, each run of anything but an ASCII letter or digit as
-  one `-`), each with what it rests on, and the triggers it did not judge.
+  one `-`, or as written when one has no such letter or digit; an empty
+  `--model` is refused), each with what it rests on, and the triggers it did
+  not judge. With no review on record, the time trigger fires, and the
+  model trigger too when `--model` is given.
   `review_needed` is null when nothing fired and the components or a time
   zone to count days in were not measured. It
   writes nothing (not even the task index or a stale git index), sends

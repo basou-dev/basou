@@ -113,6 +113,9 @@ export async function doRunBoardMeasure(
   options: BoardMeasureOptions,
   ctx: BoardContext,
 ): Promise<BoardMeasurement> {
+  if (options.model !== undefined && options.model.trim() === "") {
+    throw new Error("--model must name a model.");
+  }
   const cwd = ctx.cwd ?? process.cwd();
   const root = await resolveBasouRootForCommand(
     cwd,

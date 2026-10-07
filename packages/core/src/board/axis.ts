@@ -72,6 +72,17 @@ export function modelKey(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/**
+ * Whether two names name the same model: by {@link modelKey}, or, when either
+ * has no ASCII letter or digit to key on, by the names themselves, lower case
+ * and trimmed (so that two names in another script are not all one model).
+ */
+export function sameModel(a: string, b: string): boolean {
+  const [x, y] = [modelKey(a), modelKey(b)];
+  if (x !== "" && y !== "") return x === y;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
 /** The `axis` section of a measurement, and why it is missing when it is. */
 export function judgeAxis(input: AxisInput): {
   axis: BoardAxis;
@@ -112,7 +123,7 @@ export function judgeAxis(input: AxisInput): {
     if (days >= input.declared.review_due_days) {
       reasons.push({
         trigger: "b",
-        detail: `${days} days since the review of ${last.date} (due after ${input.declared.review_due_days})`,
+        detail: `${days} day${days === 1 ? "" : "s"} since the review of ${last.date} (due after ${input.declared.review_due_days})`,
       });
     }
   }
@@ -122,7 +133,7 @@ export function judgeAxis(input: AxisInput): {
     unjudged.push({ trigger: "c", why: "no --model was given" });
   } else if (last === null) {
     reasons.push({ trigger: "c", detail: "the axis has no review on record" });
-  } else if (modelKey(input.model) !== modelKey(last.model)) {
+  } else if (!sameModel(input.model, last.model)) {
     reasons.push({
       trigger: "c",
       detail: `${input.model} judges; ${last.model} reviewed last`,

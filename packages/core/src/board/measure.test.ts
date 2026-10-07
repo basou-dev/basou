@@ -3867,6 +3867,21 @@ describe("measureBoard: the axis section", () => {
       at: "axis.review_needed",
       reason: "no trigger fired, but (a) could not be judged: the components were not measured",
     });
+    // With a model that fires (c), the entry goes, and the digest stays.
+    const fired = await measureBoard({
+      declaration: declare([], SEEDED, repos),
+      root,
+      repos,
+      paths,
+      now: NOW,
+      measuredWith: WITH,
+      portfolioConfigPath: PORTFOLIO(),
+      probeImports: NOTHING_TO_IMPORT,
+      model: "Claude Fable 5.1",
+    });
+    expect(fired.not_found.filter((n) => n.at.startsWith("axis"))).toEqual([]);
+    expect(fired.complete).toBe(m.complete);
+    expect(fired.digest).toBe(m.digest);
   });
 
   it("is left out of the digest", async () => {

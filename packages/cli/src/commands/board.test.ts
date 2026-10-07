@@ -752,6 +752,16 @@ describe("basou board measure", () => {
     );
   });
 
+  it("refuses an empty --model before measuring", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const { out, err } = capture();
+    await runBoardMeasure({ model: "  " }, ctx(repo));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain("--model must name a model.");
+    expect(process.exitCode).toBe(1);
+  });
+
   it("says when it does not know whether the axis is due a review", async () => {
     // A repository that is not there leaves the components, and so (a), unknown.
     const repo = await workspace([{ path: ".", visibility: "private" }, { path: "gone" }]);

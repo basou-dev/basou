@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type AxisInput, judgeAxis, modelKey } from "./axis.js";
+import { type AxisInput, judgeAxis, modelKey, sameModel } from "./axis.js";
 import type { BoardComponents } from "./components.js";
 
 const QUIET: BoardComponents = { found: {}, unacknowledged: [], gone: [], kind_changed: null };
@@ -50,12 +50,18 @@ describe("judgeAxis", () => {
     expect(due("2026-11-27")).toEqual([
       { trigger: "b", detail: "60 days since the review of 2026-09-28 (due after 60)" },
     ]);
-    expect(due("2026-09-01")).toEqual([]);
+    // A review dated later than today, by more than the days due, is not due.
+    expect(
+      judged({
+        declared: { version: 2, review_due_days: 60, seed_review: { ...SEED, date: "2027-03-01" } },
+      }).axis.reasons,
+    ).toEqual([]);
   });
 
   it("fires (c) for another model, comparing the names as keys", () => {
     const by = (model: string) => judged({ model }).axis;
     expect(by("claude-opus-5-5").reasons).toEqual([]);
+    expect(by("  CLAUDE   opus 5.5 ").reasons).toEqual([]);
     expect(by("  CLAUDE   opus 5.5 ").unjudged).toEqual([E]);
     expect(by("Claude Fable 5.1").reasons).toEqual([
       { trigger: "c", detail: "Claude Fable 5.1 judges; Claude Opus 5.5 reviewed last" },
@@ -105,5 +111,25 @@ describe("modelKey", () => {
     expect(modelKey("Claude Opus 5.5")).toBe("claude-opus-5-5");
     expect(modelKey("  claude__opus--5.5  ")).toBe("claude-opus-5-5");
     expect(modelKey("Claude Opus 5.5（日本語）")).toBe("claude-opus-5-5");
+  });
+});
+
+describe("sameModel", () => {
+  it("compares by key, or by the names when either has nothing to key on", () => {
+    expect(sameModel("Claude Opus 5.5", "claude-opus-5-5")).toBe(true);
+    expect(sameModel("日本語モデル", "別のモデル")).toBe(false);
+    expect(sameModel(" 日本語モデル", "日本語モデル ")).toBe(true);
+    expect(sameModel("!!!", "Claude")).toBe(false);
+  });
+
+  it("says one day, and more days", () => {
+    const one = judgeAxis({
+      declared: { version: 1, review_due_days: 1, seed_review: { date: "2026-12-31", model: "x" } },
+      components: QUIET,
+      today: "2027-01-01",
+    });
+    expect(one.axis.reasons).toEqual([
+      { trigger: "b", detail: "1 day since the review of 2026-12-31 (due after 1)" },
+    ]);
   });
 });

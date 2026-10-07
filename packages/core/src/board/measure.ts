@@ -77,9 +77,10 @@ export type BoardRatioValue = {
  * yet, no origin/main; see {@link BoardRepo}), the portfolio's when there is
  * no portfolio config (see {@link BoardPortfolio}), the newest session's when
  * there is no session that is not archived (see {@link BoardFreshness}), the
- * Codex time when there is no Codex session (see {@link BoardEffort}), and
- * the components' kind changes when there is no previous record (see
- * {@link BoardComponents}).
+ * Codex time when there is no Codex session (see {@link BoardEffort}), the
+ * components' kind changes when there is no previous record (see
+ * {@link BoardComponents}), and the axis's last review when there is none on
+ * record (see {@link BoardAxis}).
  */
 export type BoardMeasurement = {
   board_version: number;
@@ -90,8 +91,9 @@ export type BoardMeasurement = {
   not_found: BoardNotFound[];
   /**
    * `sha256:` and the hex digest of the measurement without `measured_at`,
-   * `digest`, `freshness`, `axis`, `effort.elapsed_days` and today's row of
-   * `effort.daily`, serialized with its keys sorted. Two measurements with the
+   * `digest`, `freshness`, `axis` and its not_found entries,
+   * `effort.elapsed_days` and today's row of `effort.daily`, serialized with
+   * its keys sorted. Two measurements with the
    * same values have the same digest whenever they were taken. The freshness
    * moves as work goes on, the measuring session's own included, the axis
    * rests on the day, the model and the records, and the others move with the
@@ -317,16 +319,31 @@ const UNDIGESTED = new Set(["measured_at", "digest", "freshness", "axis"]);
 
 /**
  * The digest of a measurement: sha256 over the measurement without
- * `measured_at`, `digest`, `freshness`, `axis`, `effort.elapsed_days` and the
- * last row of `effort.daily` (today's), with every object's keys sorted.
+ * `measured_at`, `digest`, `freshness`, `axis` and its not_found entries,
+ * `effort.elapsed_days` and the last row of `effort.daily` (today's), with
+ * every object's keys sorted.
  */
 export function boardDigest(measurement: object): string {
   const hashed = Object.fromEntries(
     Object.entries(measurement)
       .filter(([key]) => !UNDIGESTED.has(key))
-      .map(([key, value]) => [key, key === "effort" ? withoutClock(value) : value]),
+      .map(([key, value]) => [
+        key,
+        key === "effort" ? withoutClock(value) : key === "not_found" ? notOfAxis(value) : value,
+      ]),
   );
   return `sha256:${createHash("sha256").update(canonicalJson(hashed)).digest("hex")}`;
+}
+
+// The not_found entries but the axis's, which come and go with the day and
+// the model as the axis does. Each of them follows a gap another section
+// already reports, so `complete` stays as it is.
+function notOfAxis(notFound: unknown): unknown {
+  if (!Array.isArray(notFound)) return notFound;
+  return notFound.filter((entry) => {
+    const at = (entry as { at?: unknown } | null)?.at;
+    return !(typeof at === "string" && (at === "axis" || at.startsWith("axis.")));
+  });
 }
 
 // The effort section without what moves with the clock: the days elapsed, and
