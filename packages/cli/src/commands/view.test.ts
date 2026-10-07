@@ -1163,6 +1163,12 @@ describe("basou view: the board page", () => {
     throw new Error(`no end of ${name}`);
   }
   const lift = (name: string) => liftFrom(BOARD_HTML, name);
+  /** Lift a top-level `var` of the board page, as the page declares it. */
+  function liftVar(name: string): string {
+    const start = BOARD_HTML.indexOf(`var ${name} = `);
+    expect(start).toBeGreaterThan(-1);
+    return BOARD_HTML.slice(start, BOARD_HTML.indexOf(";\n", start) + 1);
+  }
 
   // Just enough of a DOM for the page's drawing functions.
   class Node {
@@ -1229,15 +1235,16 @@ describe("basou view: the board page", () => {
       "yAxis",
       "xAxis",
       "dayIndex",
-      "sideLabel",
+      "labelWidth",
+      "placeLabels",
       "timelineChart",
       "dailyChart",
       "cumulativeChart",
       "weeksTable",
     ];
     const source = [
-      "var SVGNS = 'http://www.w3.org/2000/svg';",
-      "var CHART = { w: 760, left: 44, right: 10 };",
+      liftVar("SVGNS"),
+      liftVar("CHART"),
       ...[...helpers, ...names.filter((n) => !helpers.includes(n))].map(lift),
     ].join("\n");
     const fns = new Function("document", "S", "lang", `${source}; return { ${names.join(", ")} };`)(
@@ -1340,7 +1347,7 @@ describe("basou view: the board page", () => {
     expect(foot.text()).not.toContain(boardPageStrings("en").footnotes.noReview);
   });
 
-  it("draws the days of the effort: Claude's time, Codex's alone above it, the running total and the weeks", () => {
+  it("draws the days of the effort: Claude's time, the rest above it, the running total and the weeks", () => {
     const { call } = drawing(["effort"]);
     const day = (
       date: string,
@@ -1351,7 +1358,7 @@ describe("basou view: the board page", () => {
       date,
       union,
       claude,
-      codex_only: union === null || claude === null ? null : union - claude,
+      not_claude: union === null || claude === null ? null : union - claude,
       cumulative,
       commits: 1,
     });
@@ -1365,8 +1372,13 @@ describe("basou view: the board page", () => {
         output_tokens: 1000,
         sessions_without_tokens: 0,
         commits: [{ repo: ".", count: 3 }],
-        milestones: [{ date: "2026-05-01", label: "Started", ref: "abc" }],
+        milestones: [
+          { date: "2026-05-01", label: "Started", ref: "abc" },
+          // Outside the days drawn: listed, not charted.
+          { date: "2026-04-01", label: "Before", ref: "x" },
+        ],
         active_days: 2,
+        period_days: 4,
         daily: [
           day("2026-04-30", 2 * H, 2 * H, 2 * H),
           day("2026-05-01", 4 * H, 2 * H, 6 * H),
@@ -1400,20 +1412,22 @@ describe("basou view: the board page", () => {
     const charts = effort.find((n) => n.tag === "svg");
     expect(charts).toHaveLength(3);
     const [timeline, daily, total] = charts as [Node, Node, Node];
-    // One dot on the line for the milestone, and its label.
+    // One dot on the line for the milestone within the days, and its label.
     expect(timeline.find((n) => n.attrs.class === "dot")).toHaveLength(1);
     expect(timeline.text()).toContain("Started");
-    // Bars only where there was time: Claude on both days, Codex alone on the second, above Claude.
+    expect(timeline.text()).not.toContain("Before");
+    expect(effort.text()).toContain("Before");
+    // Bars only where there was time: Claude on both days, the rest on the second, above Claude.
     const bars = (cls: string) => daily.find((n) => n.tag === "rect" && n.attrs.class === cls);
     expect(bars("claude")).toHaveLength(2);
-    expect(bars("codex")).toHaveLength(1);
-    const [claude2, codex2] = [bars("claude")[1] as Node, bars("codex")[0] as Node];
-    expect(Number(codex2.attrs.y) + Number(codex2.attrs.height)).toBeLessThan(
-      Number(claude2.attrs.y),
-    );
-    expect(Number(codex2.attrs.height)).toBeCloseTo(Number(claude2.attrs.height), 5);
+    expect(bars("other")).toHaveLength(1);
+    const [claude2, other2] = [bars("claude")[1] as Node, bars("other")[0] as Node];
+    // The top of the stack is the day's total; the gap comes out of the upper bar.
+    const at = (n: Node, key: string) => Number(n.attrs[key]);
+    expect(at(other2, "y") + at(other2, "height")).toBeLessThan(at(claude2, "y"));
+    expect(at(claude2, "y") - at(other2, "y")).toBeCloseTo(at(claude2, "height"), 5);
     expect(daily.find((n) => n.attrs.class === "hit").map((r) => r.text())[1]).toBe(
-      "2026-05-01: active 4h 00m (Claude 2h 00m, Codex alone 2h 00m), commits 1",
+      "2026-05-01: active 4h 00m (Claude 2h 00m, not Claude 2h 00m), commits 1",
     );
     // The running total stops at the first day not measured.
     const line = total.find((n) => n.tag === "path")[0] as Node;
@@ -1421,23 +1435,63 @@ describe("basou view: the board page", () => {
     expect(total.find((n) => n.attrs.class === "ms")).toHaveLength(1);
     const weekRows = effort.find((n) => n.tag === "tr").map((r) => r.children.map((c) => c.text()));
     expect(weekRows[1]).toEqual(["week of 2026-04-27", "6h 00m", "4h 00m", "3h 00m", "2", "4"]);
+    // With no Codex session at all, its column says so rather than not measured.
+    const solo = call("effort", {
+      effort: {
+        start: "2026-04-30",
+        time_zone: "UTC",
+        elapsed_days: 0,
+        active_ms: { union: 2 * H, claude: 2 * H, codex: null },
+        output_tokens: 0,
+        sessions_without_tokens: 0,
+        commits: [],
+        milestones: [],
+        active_days: 1,
+        period_days: 1,
+        daily: [day("2026-04-30", 2 * H, 2 * H, 2 * H)],
+        weeks: [
+          {
+            week: "2026-04-27",
+            union: 2 * H,
+            claude: 2 * H,
+            codex: null,
+            active_days: 1,
+            commits: 1,
+          },
+        ],
+      },
+    });
+    const soloRows = solo.find((n) => n.tag === "tr").map((r) => r.children.map((c) => c.text()));
+    expect(soloRows[1]?.[3]).toBe("-");
+    // On the first day, the day so far is the day.
+    const soloTiles = solo
+      .find((n) => n.className === "tile")
+      .map((t) => t.children.map((c) => c.text()));
+    expect(soloTiles[4]).toEqual(["Per day", "2h 00m", "2h 00m a day worked"]);
   });
 
-  it("labels the months under a chart without crowding, and keeps a label in the right part inside", () => {
+  it("labels the months under a chart without crowding, and the milestones inside it without overlap", () => {
     const document = {
       createElementNS: (_ns: string, tag: string) => new Node(tag),
     };
     const fns = new Function(
       "document",
       [
-        "var SVGNS = 'x';",
-        "var CHART = { w: 760, left: 44, right: 10 };",
-        ...["svg", "monthTicks", "plotWidth", "dayX", "xAxis", "sideLabel"].map(lift),
-        "return { xAxis: xAxis, sideLabel: sideLabel };",
+        liftVar("SVGNS"),
+        liftVar("CHART"),
+        ...["svg", "monthTicks", "plotWidth", "dayX", "xAxis", "labelWidth", "placeLabels"].map(
+          lift,
+        ),
+        "return { xAxis: xAxis, placeLabels: placeLabels, CHART: CHART };",
       ].join("\n"),
     )(document) as {
       xAxis: (days: { date: string }[], base: number) => Node[];
-      sideLabel: (x: number, y: number, text: string, middle: boolean) => Node;
+      placeLabels: (
+        items: { x: number; text: string }[],
+        rows: number,
+        centred: boolean,
+      ) => { x: number; row: number; text: string }[];
+      CHART: { w: number; left: number; right: number };
     };
     const days = Array.from({ length: 160 }, (_, i) => ({
       date: new Date(Date.UTC(2026, 3, 28 + i)).toISOString().slice(0, 10),
@@ -1451,10 +1505,33 @@ describe("basou view: the board page", () => {
       "9/1",
       "10/1",
     ]);
-    expect(fns.sideLabel(100, 10, "a", false).attrs["text-anchor"]).toBe("start");
-    expect(fns.sideLabel(700, 10, "a", false).attrs["text-anchor"]).toBe("end");
-    expect(fns.sideLabel(100, 10, "a", true).attrs["text-anchor"]).toBe("middle");
-    expect(fns.sideLabel(700, 10, "a", true).attrs["text-anchor"]).toBe("end");
+    const { w, left, right } = fns.CHART;
+    const long = "a milestone with a rather long label";
+    // At either edge a label is kept inside the chart, centred or beside its mark.
+    for (const centred of [true, false]) {
+      const [atRight, atLeft] = fns.placeLabels(
+        [
+          { x: w - right - 2, text: long },
+          { x: left + 2, text: long },
+        ],
+        4,
+        centred,
+      );
+      expect(atRight?.x).toBeGreaterThanOrEqual(left);
+      expect((atRight?.x ?? 0) + long.length * 6.2).toBeLessThanOrEqual(w - right + 1e-9);
+      expect(atLeft?.x).toBeGreaterThanOrEqual(left);
+    }
+    // Two marks close together take two rows; one far off goes back to the first.
+    const placed = fns.placeLabels(
+      [
+        { x: 200, text: long },
+        { x: 210, text: long },
+        { x: 650, text: "far" },
+      ],
+      4,
+      false,
+    );
+    expect(placed.map((p) => p.row)).toEqual([0, 1, 0]);
   });
 
   it("builds prose of text nodes, with only a span between backticks as a code element", () => {

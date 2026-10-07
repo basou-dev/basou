@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { decodeTime } from "ulid";
 import { z } from "zod";
 import { findErrorCode } from "../lib/error-codes.js";
+import { isCalendarDate } from "./declaration.js";
 import { diffCells } from "./diff.js";
 import { readBoardRecordFile, recordIds } from "./previous.js";
 
@@ -62,7 +63,7 @@ const pageRecordSchema = z.looseObject({
       daily: z
         .array(
           z.looseObject({
-            date: text,
+            date: z.string().refine(isCalendarDate),
             active_ms: z.looseObject({ union: count, claude: count, codex: count }),
             commits: z.record(text, count),
           }),
@@ -159,18 +160,24 @@ export type BoardPageDay = {
   date: string;
   union: number | null;
   claude: number | null;
-  codex_only: number | null;
+  /**
+   * The active time not Claude's: Codex's, and work by hand or in a terminal,
+   * when it was not at the same time as Claude's. The record's days cannot
+   * tell Codex's alone apart.
+   */
+  not_claude: number | null;
   cumulative: number | null;
+  /** The commits of every repo that day, null when one of them was not measured. */
   commits: number | null;
 };
 
-/** One week of the effort, from its Monday. */
+/** One week of the effort, from its Monday: null where a day of it was not measured. */
 export type BoardPageWeek = {
   week: string;
   union: number | null;
   claude: number | null;
   codex: number | null;
-  active_days: number;
+  active_days: number | null;
   commits: number | null;
 };
 
@@ -193,12 +200,17 @@ export type BoardPageBody = {
     sessions_without_tokens: number | null;
     commits: { repo: string; count: number | null }[] | null;
     milestones: { date: string; label: string; ref: string }[];
-    /** The days the active time was more than none on. */
+    /**
+     * The days the active time was more than none on, null when a day's time
+     * was not measured.
+     */
     active_days: number | null;
+    /** The days from the start to today, the one the effort was measured on. */
+    period_days: number | null;
     /**
      * Each day from the start, in milliseconds: the active time, Claude's, the
-     * part of Codex's not at the same time as Claude's, and the running total
-     * of the active time (null from a day whose time was not measured on).
+     * part not Claude's, and the running total of the active time (null from a
+     * day whose time was not measured on).
      */
     daily: BoardPageDay[] | null;
     /** The days by week, from Monday. */
@@ -566,10 +578,20 @@ type MeasuredDay = {
   commits: Readonly<Record<string, number | null>>;
 };
 
-// The sum of what was measured, null when nothing of it was.
+// The sum, null when any of it was not measured: a part is not the whole.
 function sumOf(values: readonly (number | null)[]): number | null {
-  const measured = values.filter((v): v is number => v !== null);
-  return measured.length === 0 ? null : measured.reduce((a, b) => a + b, 0);
+  let sum = 0;
+  for (const value of values) {
+    if (value === null) return null;
+    sum += value;
+  }
+  return sum;
+}
+
+// The days with active time, null when a day's time was not measured.
+function activeDaysOf(rows: readonly MeasuredDay[]): number | null {
+  if (rows.some((r) => r.active_ms.union === null)) return null;
+  return rows.filter((r) => (r.active_ms.union ?? 0) > 0).length;
 }
 
 // The Monday of the week a calendar date is in, as YYYY-MM-DD.
@@ -583,10 +605,11 @@ function mondayOf(date: string): string {
 
 function daysOf(rows: readonly MeasuredDay[] | null): {
   active_days: number | null;
+  period_days: number | null;
   daily: BoardPageDay[] | null;
   weeks: BoardPageWeek[] | null;
 } {
-  if (rows === null) return { active_days: null, daily: null, weeks: null };
+  if (rows === null) return { active_days: null, period_days: null, daily: null, weeks: null };
   let total: number | null = 0;
   const daily = rows.map((row) => {
     const { union, claude } = row.active_ms;
@@ -595,7 +618,7 @@ function daysOf(rows: readonly MeasuredDay[] | null): {
       date: row.date,
       union,
       claude,
-      codex_only: union === null || claude === null ? null : Math.max(0, union - claude),
+      not_claude: union === null || claude === null ? null : Math.max(0, union - claude),
       cumulative: total,
       commits: sumOf(Object.values(row.commits)),
     };
@@ -610,12 +633,8 @@ function daysOf(rows: readonly MeasuredDay[] | null): {
     union: sumOf(days.map((r) => r.active_ms.union)),
     claude: sumOf(days.map((r) => r.active_ms.claude)),
     codex: sumOf(days.map((r) => r.active_ms.codex)),
-    active_days: days.filter((r) => (r.active_ms.union ?? 0) > 0).length,
+    active_days: activeDaysOf(days),
     commits: sumOf(days.flatMap((r) => Object.values(r.commits))),
   }));
-  return {
-    active_days: rows.filter((r) => (r.active_ms.union ?? 0) > 0).length,
-    daily,
-    weeks,
-  };
+  return { active_days: activeDaysOf(rows), period_days: rows.length, daily, weeks };
 }

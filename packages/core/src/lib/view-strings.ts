@@ -897,7 +897,7 @@ export type BoardPageStrings = {
     noMilestones: string;
     notMeasured: string;
     dailyTitle: string;
-    codexAlone: string;
+    notClaude: string;
     dayDetail: string;
     cumulativeTitle: string;
     cumulativeDetail: string;
@@ -1023,8 +1023,8 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     noMilestones: "No milestones declared.",
     notMeasured: "not measured",
     dailyTitle: "Active time by day",
-    codexAlone: "Codex (not at the same time as Claude)",
-    dayDetail: "{date}: active {active} (Claude {claude}, Codex alone {codex}), commits {commits}",
+    notClaude: "Not Claude (Codex, by hand, in a terminal; not at the same time as Claude)",
+    dayDetail: "{date}: active {active} (Claude {claude}, not Claude {other}), commits {commits}",
     cumulativeTitle: "Active time, cumulative",
     cumulativeDetail: "{date}: {total} in all",
     weeksTitle: "By week, from Monday",
@@ -1154,8 +1154,8 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     noMilestones: "節目の宣言はない。",
     notMeasured: "測れなかった",
     dailyTitle: "日ごとの実働",
-    codexAlone: "Codex（Claude と重ならない分）",
-    dayDetail: "{date}: 実働 {active}（Claude {claude} / Codex のみ {codex}）· commit {commits}",
+    notClaude: "Claude 以外（Codex・人手・端末など。Claude と重ならない分）",
+    dayDetail: "{date}: 実働 {active}（Claude {claude} / Claude 以外 {other}）· commit {commits}",
     cumulativeTitle: "実働の累積",
     cumulativeDetail: "{date}: 累計 {total}",
     weeksTitle: "週ごと（月曜から）",

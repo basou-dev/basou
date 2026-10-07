@@ -94,7 +94,7 @@ export const BOARD_HTML = `<!doctype html>
   svg.chart .grid { stroke: var(--grid); stroke-width: 1; }
   svg.chart .axis { stroke: var(--border); stroke-width: 1; }
   svg.chart .claude { fill: var(--s1); }
-  svg.chart .codex { fill: var(--s2); }
+  svg.chart .other { fill: var(--s2); }
   svg.chart .line { fill: none; stroke: var(--s1); stroke-width: 2; }
   svg.chart .ms { stroke: var(--fg-2); stroke-width: 1; stroke-dasharray: 3 3; }
   svg.chart .dot { fill: var(--s1); stroke: var(--bg); stroke-width: 2; }
@@ -364,12 +364,32 @@ export const BOARD_HTML = `<!doctype html>
     });
     return out;
   }
-  // A label beside a mark: to the left of it in the right part of a chart, so it is not cut off.
-  function sideLabel(x, y, text, middle) {
-    var right = x > CHART.w * 0.7;
-    return svg('text', {
-      class: 'ms-label', x: middle ? x : right ? x - 4 : x + 4, y: y,
-      'text-anchor': middle && !right ? 'middle' : right ? 'end' : 'start', text: text
+  // About how wide a label is drawn: a wide character (CJK) counts as two narrow ones.
+  function labelWidth(text) {
+    var w = 0;
+    for (var i = 0; i < text.length; i++) w += text.charCodeAt(i) > 11903 ? 11 : 6.2;
+    return w;
+  }
+  // Where labels beside marks go: each kept inside the chart, centred on its mark
+  // or just after it, and in the first of the rows where it does not run into
+  // another (the last row when none has room). A test lifts this function.
+  function placeLabels(items, rows, centred) {
+    var min = CHART.left;
+    var max = CHART.w - CHART.right;
+    var taken = [];
+    for (var r = 0; r < rows; r++) taken.push([]);
+    return items.map(function (it) {
+      var w = labelWidth(it.text);
+      var x0 = centred ? it.x - w / 2 : it.x + 4;
+      if (x0 + w > max) x0 = centred ? max - w : it.x - 4 - w;
+      if (x0 < min) x0 = min;
+      var row = rows - 1;
+      for (var k = 0; k < rows; k++) {
+        var free = taken[k].every(function (s) { return x0 + w + 6 <= s[0] || x0 >= s[1] + 6; });
+        if (free) { row = k; break; }
+      }
+      taken[row].push([x0, x0 + w]);
+      return { x: x0, row: row, text: it.text };
     });
   }
   function dayIndex(days, date) {
@@ -379,8 +399,8 @@ export const BOARD_HTML = `<!doctype html>
 
   // Milestones on a line from the first day to the last.
   function timelineChart(days, milestones) {
-    var h = 86;
-    var mid = 46;
+    var h = 100;
+    var mid = 50;
     var nodes = [svg('line', { class: 'axis', x1: CHART.left, x2: CHART.w - CHART.right, y1: mid, y2: mid })];
     monthTicks(days).forEach(function (t) {
       var x = dayX(t.i, days.length);
@@ -389,17 +409,20 @@ export const BOARD_HTML = `<!doctype html>
     nodes.push(svg('circle', { class: 'start', cx: dayX(0, days.length), cy: mid, r: 5 }, [
       svg('title', { text: days[0].date })
     ]));
-    var placed = 0;
+    var marks = [];
     milestones.forEach(function (m) {
       var i = dayIndex(days, m.date);
       if (i === -1) return;
       var x = dayX(i, days.length);
-      var above = placed % 2 === 0;
-      placed++;
+      marks.push({ x: x, text: m.label });
       nodes.push(svg('circle', { class: 'dot', cx: x, cy: mid, r: 5 }, [
         svg('title', { text: m.date + '  ' + m.label + '  ' + m.ref })
       ]));
-      nodes.push(sideLabel(x, above ? mid - 12 : mid + 22, m.label, true));
+    });
+    // Rows above and below the line, nearest first.
+    var rowY = [mid - 12, mid + 22, mid - 26, mid + 36];
+    placeLabels(marks, rowY.length, true).forEach(function (p) {
+      nodes.push(svg('text', { class: 'ms-label', x: p.x, y: rowY[p.row], text: p.text }));
     });
     return el('figure', null, [
       el('figcaption', { text: S.effort.milestones }),
@@ -423,20 +446,21 @@ export const BOARD_HTML = `<!doctype html>
     days.forEach(function (d, i) {
       var x = CHART.left + i * band + (band - width) / 2;
       var ch = hours(d.claude) * scale;
-      var xh = hours(d.codex_only) * scale;
-      var gap = ch > 0 && xh > 0 && band > 4 ? 2 : 0;
+      var oh = hours(d.not_claude) * scale;
+      // The gap between the two comes out of the upper one, so the top is the total.
+      var gap = ch > 0 && oh > 2 && band > 4 ? 2 : 0;
       if (ch > 0) nodes.push(svg('rect', { class: 'claude', x: x, y: base - ch, width: width, height: ch }));
-      if (xh > 0) nodes.push(svg('rect', { class: 'codex', x: x, y: base - ch - gap - xh, width: width, height: xh }));
+      if (oh > 0) nodes.push(svg('rect', { class: 'other', x: x, y: base - ch - oh, width: width, height: oh - gap }));
       nodes.push(svg('rect', { class: 'hit', x: CHART.left + i * band, y: top, width: band, height: base - top }, [
         svg('title', { text: fill(S.effort.dayDetail, {
-          date: d.date, active: hm(d.union), claude: hm(d.claude), codex: hm(d.codex_only), commits: num(d.commits)
+          date: d.date, active: hm(d.union), claude: hm(d.claude), other: hm(d.not_claude), commits: num(d.commits)
         }) })
       ]));
     });
     nodes = nodes.concat(xAxis(days, base));
     var legend = el('div', { class: 'legend' }, [
       el('span', null, [el('span', { class: 'swatch s1' }), S.effort.claude]),
-      el('span', null, [el('span', { class: 'swatch s2' }), S.effort.codexAlone])
+      el('span', null, [el('span', { class: 'swatch s2' }), S.effort.notClaude])
     ]);
     return el('figure', null, [
       el('figcaption', { text: S.effort.dailyTitle }),
@@ -456,14 +480,16 @@ export const BOARD_HTML = `<!doctype html>
     var max = Math.ceil(Math.max(last, 1) / step) * step;
     var y = function (ms) { return base - hours(ms) / max * (base - top); };
     var nodes = yAxis(top, base, max, step, function (v) { return v + 'h'; });
-    var placed = 0;
+    var marks = [];
     milestones.forEach(function (m) {
       var i = dayIndex(days, m.date);
       if (i === -1) return;
       var x = dayX(i, days.length);
+      marks.push({ x: x, text: m.label });
       nodes.push(svg('line', { class: 'ms', x1: x, x2: x, y1: top, y2: base }));
-      nodes.push(sideLabel(x, top + 10 + (placed % 3) * 13, m.label, false));
-      placed++;
+    });
+    placeLabels(marks, 4, false).forEach(function (p) {
+      nodes.push(svg('text', { class: 'ms-label', x: p.x, y: top + 10 + p.row * 13, text: p.text }));
     });
     var path = '';
     for (var i = 0; i < days.length; i++) {
@@ -484,7 +510,7 @@ export const BOARD_HTML = `<!doctype html>
     ]);
   }
 
-  function weeksTable(weeks) {
+  function weeksTable(weeks, noCodex) {
     var head = el('tr', null, [
       el('th', { text: S.effort.week }), el('th', { class: 'n', text: S.effort.active }),
       el('th', { class: 'n', text: S.effort.claude }), el('th', { class: 'n', text: S.effort.codex }),
@@ -493,7 +519,7 @@ export const BOARD_HTML = `<!doctype html>
     var rows = weeks.map(function (w) {
       return el('tr', null, [
         el('td', { text: fill(S.effort.weekOf, { date: w.week }) }), el('td', { class: 'n', text: hm(w.union) }),
-        el('td', { class: 'n', text: hm(w.claude) }), el('td', { class: 'n', text: hm(w.codex) }),
+        el('td', { class: 'n', text: hm(w.claude) }), el('td', { class: 'n', text: noCodex ? '-' : hm(w.codex) }),
         el('td', { class: 'n', text: num(w.active_days) }), el('td', { class: 'n', text: num(w.commits) })
       ]);
     });
@@ -512,7 +538,7 @@ export const BOARD_HTML = `<!doctype html>
       ]);
     };
     var union = e.active_ms.union;
-    var perDay = union === null || !e.elapsed_days ? null : union / e.elapsed_days;
+    var perDay = union === null || !e.period_days ? null : union / e.period_days;
     var perWorked = union === null || !e.active_days ? null : union / e.active_days;
     var tokens = e.sessions_without_tokens ? fill(S.effort.withoutTokens, { n: e.sessions_without_tokens }) : null;
     var tiles = el('div', { class: 'tiles' }, [
@@ -541,7 +567,9 @@ export const BOARD_HTML = `<!doctype html>
       : el('ul', null, e.milestones.map(function (m) {
           return el('li', null, [m.date + '  ', el('b', { text: m.label }), el('span', { class: 'muted', text: '  ' + m.ref })]);
         })));
-    if (e.weeks && e.weeks.length > 0) children.push(weeksTable(e.weeks));
+    // With no Codex session at all, its column is not a measurement that failed.
+    var noCodex = e.active_ms.codex === null && union !== null;
+    if (e.weeks && e.weeks.length > 0) children.push(weeksTable(e.weeks, noCodex));
     return section(S.sections.effort, false, children);
   }
 
