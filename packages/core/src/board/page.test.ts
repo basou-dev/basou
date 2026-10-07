@@ -421,12 +421,20 @@ describe("boardPage", () => {
         output_tokens: 0,
         commits: { ".": 2, "../basou": null },
       },
+      // A day with no time is not a day worked.
+      {
+        date: "2026-10-05",
+        active_ms: { union: 0, claude: 0, codex: 0 },
+        output_tokens: 0,
+        commits: { ".": 0, "../basou": 0 },
+      },
     ] as unknown as typeof partly.measure.effort.daily;
     await place(B, partly);
     const part = await boardPage(records);
     if (part.status !== "ok") throw new Error(part.why);
     expect(part.board.effort.daily?.[0]?.commits).toBeNull();
     expect(part.board.effort.weeks?.[0]).toMatchObject({ commits: null, active_days: 1 });
+    expect(part.board.effort.active_days).toBe(1);
     // A day that is not a date of the calendar is not in the shape of a record.
     const undatedRow = record();
     (undatedRow.measure.effort.daily[0] as { date: string }).date = "x";
