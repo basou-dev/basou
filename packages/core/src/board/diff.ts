@@ -21,9 +21,10 @@ export type BoardMethodChange = { section: string; before: number | null; after:
 
 /**
  * What moved since the previous record, value by value. Compared are the
- * values the digest holds but `measured_with`, the methods (compared on their
- * own), `effort.daily`, whose rows only grow, and `components.kind_changed`,
- * already a change since the previous record. A list whose entries name
+ * values the digest holds (so not the axis's not_found entries either) but
+ * `measured_with`, the methods (compared on their own), `effort.daily`, whose
+ * rows only grow, and `components.kind_changed`, already a change since the
+ * previous record. Values are equal when their JSON is, keys sorted. A list whose entries name
  * themselves is compared entry by entry (`repos` by path, open tracks by id,
  * `not_found` by where), the unacknowledged and gone components as sets, and
  * any other list whole.
@@ -81,6 +82,8 @@ function leaves(measurement: unknown): Map<string, Leaf> {
         for (const entry of value) {
           if (!isRecord(entry)) continue;
           const { [field]: name, ...rest } = entry;
+          // As the digest leaves them out: they come and go with the axis.
+          if (rule === "not_found" && /^axis(\.|$)/.test(String(name))) continue;
           walk(rest, `${rule}[]`, `${shown}[${JSON.stringify(String(name))}]`, section);
         }
       } else if (SETS.has(rule)) {
@@ -114,7 +117,18 @@ function methodsOf(measurement: unknown): Record<string, unknown> {
   return isRecord(measurement) && isRecord(measurement.methods) ? measurement.methods : {};
 }
 
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+// JSON with every object's keys sorted, so that the order they were written
+// in does not make two values differ.
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (isRecord(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+const same = (a: unknown, b: unknown): boolean => canonical(a) === canonical(b);
 
 /** What moved from the previous record's measurement to this one. */
 export function diffMeasurements(before: unknown, after: unknown, against: string): BoardDiff {

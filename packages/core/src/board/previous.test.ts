@@ -123,9 +123,13 @@ describe("readPreviousRecords", () => {
     await writeFile(join(elsewhere, `${A}.json`), JSON.stringify(record()));
     await symlink(elsewhere, records);
     const reason = "the records/ beside the board is not a directory (a symlink or a file)";
-    expect(await readPreviousRecords(records)).toEqual({
+    const unreadable = {
       last: { status: "unreadable", reason },
       lastReview: { status: "unreadable", reason },
-    });
+    };
+    expect(await readPreviousRecords(records)).toEqual(unreadable);
+    await rm(records);
+    await writeFile(records, "not a directory\n");
+    expect(await readPreviousRecords(records)).toEqual(unreadable);
   });
 });

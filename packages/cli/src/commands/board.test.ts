@@ -938,6 +938,7 @@ describe("basou board record", () => {
       record: null,
       dry_run: true,
       complete: true,
+      not_found: [],
       order_anomalies: [],
       diff: null,
     });
@@ -1278,6 +1279,31 @@ describe("basou board measure and record against the previous record", () => {
   it("takes a record it cannot read as a gap, not as no record", async () => {
     const { repo, first } = await recorded();
     await writeFile(join(repo, "board", "records", `${first}.json`), "{ not json");
+    // The record says why, in its text and as JSON, before anything else.
+    capture();
+    const measuredNow = await doRunBoardMeasure({ json: true }, ctx(repo));
+    vi.restoreAllMocks();
+    const said = capture();
+    const result = await doRunBoardRecord(
+      { dryRun: true },
+      {
+        ...ctx(repo),
+        readInput: async () => JSON.stringify(judgement(measuredNow.digest, ["done"], {})),
+      },
+    );
+    expect(result.diff).toBeNull();
+    expect(result.not_found).toContainEqual({
+      at: "diff",
+      reason: `the record ${first} could not be read as JSON`,
+    });
+    const recordText = said.out.join("\n").split("\n");
+    expect(recordText[1]).toBe(
+      "The previous record could not be read, so nothing is compared with it.",
+    );
+    expect(recordText[2]).toMatch(/^The measurement recorded is not complete \(\d+\):$/);
+    expect(recordText).toContain(`  diff: the record ${first} could not be read as JSON`);
+    expect(said.out.join("\n")).not.toContain("not measured");
+    vi.restoreAllMocks();
     const { out } = capture();
     const m = await doRunBoardMeasure({ json: true }, ctx(repo));
     expect(m.diff).toBeNull();
@@ -1292,5 +1318,6 @@ describe("basou board measure and record against the previous record", () => {
     expect(out.join("\n")).toContain(
       "\n\nThe previous record could not be read (see Not measured).\n",
     );
+    expect(out.join("\n")).toContain("Components:\n  0 found, 0 unacknowledged, gone not known\n");
   });
 });

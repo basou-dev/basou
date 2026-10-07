@@ -70,8 +70,8 @@ All notable changes to **basou** are recorded here. The project follows
   `.json`. Against it the result also says what moved (`diff`): each value
   that moved, a number with its change, marked when its section's method
   changed; the methods that changed; and the values there only now or only
-  then (the clock, the freshness, the axis, `measured_with` and the daily
-  rows of the effort are not compared). The text summary puts it first. A
+  then (the clock, the freshness, the axis and its not_found entries,
+  `measured_with` and the daily rows of the effort are not compared). The text summary puts it first. A
   record that cannot be read is not taken as no record: the diff, what the
   components it alone found and the triggers it bears on are then null or
   not judged, with a reason under `not_found`. It
@@ -140,8 +140,9 @@ All notable changes to **basou** are recorded here. The project follows
   `records/` that no repo the manifest declares private holds unless
   `--not-private` is given. It says what moved since the previous record,
   in the measurement, the cells and the observations, in its text and under
-  `diff` with `--json`; the record does not hold the diff, which the
-  previous record derives. `--dry-run` checks where the record would go
+  `diff` with `--json`, and what the measurement recorded could not measure
+  (`not_found`); the record does not hold the diff, which the previous
+  record derives. `--dry-run` checks where the record would go
   and the input, and measures, but writes nothing. Exit codes: `0` when the
   record was written (or, with `--dry-run`, everything checked out), `1`
   when it was refused, saying why and that nothing was written. The README

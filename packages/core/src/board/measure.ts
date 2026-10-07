@@ -280,9 +280,14 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     components: BOARD_COMPONENTS_METHOD,
     axis: BOARD_AXIS_METHOD,
   };
+  const { found } = built.components;
   const judged = judgeAxis({
     declared: declaration.axis,
     components: built.components,
+    declaredGone:
+      found === null
+        ? []
+        : Object.keys(declaration.components).filter((key) => !Object.hasOwn(found, key)),
     today: todayIn(declaration.effort.time_zone, input.now),
     model: input.model,
     // The day of a review on record, counted in the same calendar as (b).
@@ -374,7 +379,8 @@ export function boardDigest(measurement: object): string {
 
 // The not_found entries but the axis's, which come and go with the day and
 // the model as the axis does. Each of them follows a gap another section
-// already reports, so `complete` stays as it is.
+// reports or a record that cannot be read, neither of which moves with the
+// day or the model, so `complete`, which counts them, does not move either.
 function notOfAxis(notFound: unknown): unknown {
   if (!Array.isArray(notFound)) return notFound;
   return notFound.filter((entry) => {

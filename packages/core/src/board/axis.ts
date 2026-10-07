@@ -70,6 +70,11 @@ export type AxisInput = {
   today: string | undefined;
   /** The model that will judge the board, when one is given. */
   model?: string | undefined;
+  /**
+   * The components the declaration registers that were not found, for (a)
+   * when `gone` is not known because the previous record cannot be read.
+   */
+  declaredGone?: readonly string[];
   /** The last review the records hold (default: there is none). */
   recordedReview?: PreviousOutcome<{ date: string; model: string; record: string }>;
   /** The methods of this measurement. */
@@ -130,9 +135,10 @@ export function judgeAxis(input: AxisInput): {
     notJudged("a", "the components were not measured");
   } else {
     const changed = kind_changed?.length ?? 0;
-    if (unacknowledged.length > 0 || (gone?.length ?? 0) > 0 || changed > 0) {
+    const goneKnown = gone ?? input.declaredGone ?? [];
+    if (unacknowledged.length > 0 || goneKnown.length > 0 || changed > 0) {
       const parts = [`${unacknowledged.length} unacknowledged`];
-      if (gone !== null) parts.push(`${gone.length} gone`);
+      parts.push(gone !== null ? `${gone.length} gone` : `${goneKnown.length} registered gone`);
       if (kind_changed !== null) parts.push(`${changed} with changed kinds`);
       reasons.push({ trigger: "a", detail: `components: ${parts.join(", ")}` });
     } else if (gone === null) {

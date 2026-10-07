@@ -155,6 +155,27 @@ describe("diffMeasurements", () => {
   });
 });
 
+describe("diffMeasurements: what the digest leaves out", () => {
+  it("does not compare the axis's not_found entries, nor the order an object's keys were written in", () => {
+    const before = measurement({
+      not_found: [{ at: "axis.review_needed", reason: "(c) could not be judged" }],
+      measures: { md: { value: 2, unit: "files" } },
+    });
+    const after = measurement({
+      not_found: [
+        { at: "axis.last_review", reason: "not known" },
+        { at: "axis", reason: "whole" },
+        { at: "axisx", reason: "not the axis's" },
+      ],
+      measures: { md: { unit: "files", value: 2 } },
+    });
+    const diff = diffMeasurements(before, after, "01M4");
+    expect(diff.values).toEqual([]);
+    expect(diff.removed).toEqual([]);
+    expect(diff.added).toEqual([{ at: 'not_found["axisx"].reason', value: "not the axis's" }]);
+  });
+});
+
 describe("diffCells", () => {
   it("lists the cells whose state moved, and those there only now or only then", () => {
     const cell = (lane: string, stage: string, state: string) => ({ lane, stage, state });
@@ -193,5 +214,9 @@ describe("diffObserved", () => {
       { name: "fresh", before: null, after: { value: true } },
       { name: "gone", before: { value: 1 }, after: null },
     ]);
+    const keyed = { v: { value: { x: 1, y: [{ a: 1, b: 2 }] } } };
+    const reordered = { v: { value: { y: [{ b: 2, a: 1 }], x: 1 } } };
+    expect(diffObserved(keyed, reordered)).toEqual([]);
+    expect(diffObserved(keyed, { v: { value: { x: 1, y: [{ a: 1, b: 3 }] } } })).toHaveLength(1);
   });
 });

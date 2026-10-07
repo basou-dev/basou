@@ -7,6 +7,7 @@ import {
   type BoardDeclaration,
   type BoardDiff,
   type BoardMeasurement,
+  type BoardNotFound,
   type BoardObservation,
   type BoardObservedChange,
   type BoardOrderAnomaly,
@@ -212,11 +213,13 @@ export type BoardRecordResult = {
   dry_run: boolean;
   /** Whether the measurement recorded was complete. */
   complete: boolean;
+  /** What the measurement recorded could not measure, and why. */
+  not_found: BoardNotFound[];
   order_anomalies: BoardOrderAnomaly[];
   /**
    * What moved since the previous record: in the measurement, the cells and
    * the observations. Null when there is no previous record, or when it
-   * cannot be read (the measurement says why under not_found).
+   * cannot be read (`not_found` then says why, at `diff`).
    */
   diff: {
     against: string;
@@ -326,6 +329,7 @@ async function checkAndRecord(
     record: written,
     dry_run: options.dryRun === true,
     complete: measurement.complete,
+    not_found: measurement.not_found,
     order_anomalies: record.order_anomalies,
     diff,
   };
@@ -418,9 +422,13 @@ function printRecordText(result: BoardRecordResult): void {
       ? "Dry run: the record checked out (nothing was written)."
       : `Recorded ${displayPath(result.record)}`,
   ];
-  if (!result.complete) lines.push("The measurement recorded is not complete.");
+  // What moved comes first, after where the record is.
   if (result.diff === null) {
-    lines.push("Not compared with a previous record.");
+    lines.push(
+      result.not_found.some((n) => n.at === "diff")
+        ? "The previous record could not be read, so nothing is compared with it."
+        : "Not compared with a previous record.",
+    );
   } else {
     const { cells, observed } = result.diff;
     lines.push(`Since the previous record ${result.diff.against}:`);
@@ -435,6 +443,12 @@ function printRecordText(result: BoardRecordResult): void {
       );
     }
     lines.push(...diffLines(result.diff.measure, cells.length + observed.length > 0));
+  }
+  if (!result.complete) {
+    lines.push(`The measurement recorded is not complete (${result.not_found.length}):`);
+    for (const missing of result.not_found) {
+      lines.push(`  ${displayPath(missing.at)}: ${displayPath(missing.reason)}`);
+    }
   }
   if (result.order_anomalies.length > 0) {
     lines.push(`Order anomalies (${result.order_anomalies.length}):`);
@@ -765,16 +779,16 @@ function effortLines(m: BoardMeasurement): string[] {
 
 function componentLines(m: BoardMeasurement): string[] {
   const { found, unacknowledged, gone } = m.components;
-  if (found === null || unacknowledged === null || gone === null) return ["  not measured"];
+  if (found === null || unacknowledged === null) return ["  not measured"];
   const lines = [
-    `  ${Object.keys(found).length} found, ${unacknowledged.length} unacknowledged, ${gone.length} gone`,
+    `  ${Object.keys(found).length} found, ${unacknowledged.length} unacknowledged, ${gone === null ? "gone not known" : `${gone.length} gone`}`,
   ];
   const sorted = Object.entries(found).sort(([a], [b]) => byCodePoint(a, b));
   for (const [key, component] of sorted) {
     const flag = component.status === "unacknowledged" ? "  (unacknowledged)" : "";
     lines.push(`    ${displayPath(key)}  ${component.kinds.join(", ")}${flag}`);
   }
-  for (const key of gone) lines.push(`    ${displayPath(key)}  (gone)`);
+  for (const key of gone ?? []) lines.push(`    ${displayPath(key)}  (gone)`);
   return lines;
 }
 

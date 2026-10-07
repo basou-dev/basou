@@ -13,7 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { chainEvents } from "../events/chain.js";
 import type { Event } from "../schemas/event.schema.js";
@@ -4045,5 +4045,54 @@ describe("measureBoard: against the previous record", () => {
       "axis.review_needed",
     ]);
     expect(m.not_found).toContainEqual({ at: "diff", reason });
+  });
+
+  it("fires (a) on a registered component not found, whatever the unreadable record would add", async () => {
+    await repo("app", { "package.json": "{}\n" });
+    const reason = `the record ${ID} could not be read as JSON`;
+    const m = await against(
+      declare(
+        [],
+        { components: { app: { lane: "-", note: "x" }, "app/gone": { lane: "-", note: "y" } } },
+        ["app"],
+      ),
+      { last: { status: "unreadable", reason }, lastReview: { status: "none" } },
+      ["app"],
+    );
+    expect(m.components.gone).toBeNull();
+    expect(m.axis.reasons[0]).toEqual({
+      trigger: "a",
+      detail: "components: 0 unacknowledged, 1 registered gone",
+    });
+    expect(m.axis.review_needed).toBe(true);
+  });
+
+  it("dates a review on record by its day in UTC when no time zone can be named", async () => {
+    const declaration = declare([], { effort: { start: "2026-04-28" } });
+    const first = await measure(declaration);
+    const reviewed = recordOf(first, {
+      recorded_at: "2026-10-04T23:30:00.000Z",
+      axis_review: { triggers: ["d"], summary: "s" },
+    });
+    // This host's zone, as Intl names it under an unknown TZ: none.
+    const resolved = Intl.DateTimeFormat.prototype.resolvedOptions;
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (
+      this: Intl.DateTimeFormat,
+    ) {
+      return { ...resolved.call(this), timeZone: undefined as unknown as string };
+    });
+    try {
+      const m = await against(
+        declaration,
+        {
+          last: { status: "found", id: ID, record: reviewed },
+          lastReview: { status: "found", id: ID, record: reviewed },
+        },
+        [],
+      );
+      expect(m.axis.last_review).toMatchObject({ date: "2026-10-04", from: "record" });
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

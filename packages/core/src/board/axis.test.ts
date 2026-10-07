@@ -224,6 +224,12 @@ describe("judgeAxis against the records", () => {
     });
     expect(
       judged({ components: { ...unknownGone, unacknowledged: ["app/x"] } }).axis.reasons,
-    ).toEqual([{ trigger: "a", detail: "components: 1 unacknowledged" }]);
+    ).toEqual([{ trigger: "a", detail: "components: 1 unacknowledged, 0 registered gone" }]);
+    // What the declaration registers and was not found is known, and fires it.
+    const registered = judged({ components: unknownGone, declaredGone: ["app/y"] });
+    expect(registered.axis.reasons).toEqual([
+      { trigger: "a", detail: "components: 0 unacknowledged, 1 registered gone" },
+    ]);
+    expect(registered.axis.review_needed).toBe(true);
   });
 });
