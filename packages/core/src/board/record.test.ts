@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -243,10 +243,18 @@ describe("buildRecord and writeRecord", () => {
     expect((await readdir(records)).sort()).toEqual([first, second].sort());
   });
 
-  it("refuses a records path that is not a directory, and writes nothing", async () => {
+  it("refuses a records path that is not a directory, a link to one included, and writes nothing", async () => {
     const records = join(dir, "records");
     await writeFile(records, "not a directory\n");
     await expect(writeRecord(records, record())).rejects.toThrow();
     expect(await readdir(dir)).toEqual(["records"]);
+    await rm(records);
+    const elsewhere = join(dir, "elsewhere");
+    await mkdir(elsewhere);
+    await symlink(elsewhere, records);
+    await expect(writeRecord(records, record())).rejects.toThrow(
+      "the records directory is not a directory",
+    );
+    expect(await readdir(elsewhere)).toEqual([]);
   });
 });

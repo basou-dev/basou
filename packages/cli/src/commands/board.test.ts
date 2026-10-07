@@ -921,6 +921,11 @@ describe("basou board record", () => {
       judged_by: { model: "Claude Opus 5.5", self_reported: true },
       order_anomalies: [],
     });
+    // Measured again as the judge's model: with no review on record, (c) fires.
+    expect(written.measure.axis.reasons.map((r: { trigger: string }) => r.trigger)).toEqual([
+      "b",
+      "c",
+    ]);
     expect(process.exitCode ?? 0).toBe(0);
   });
 
