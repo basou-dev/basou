@@ -752,6 +752,28 @@ describe("basou board measure", () => {
     );
   });
 
+  it("says when it does not know whether the axis is due a review", async () => {
+    // A repository that is not there leaves the components, and so (a), unknown.
+    const repo = await workspace([{ path: ".", visibility: "private" }, { path: "gone" }]);
+    const declared = JSON.parse(boardYaml([])) as Record<string, unknown>;
+    await placeBoard(
+      repo,
+      JSON.stringify({
+        ...declared,
+        axis: {
+          version: 1,
+          review_due_days: 60,
+          seed_review: { date: "2026-09-28", model: "Claude Opus 5.5" },
+        },
+      }),
+    );
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      "\n  review needed: not known\n    (a) not judged: the components were not measured\n",
+    );
+  });
+
   it("refuses a workspace that is not initialized", async () => {
     const repo = await realpath(tmpRepo as string);
     const { out, err } = capture();

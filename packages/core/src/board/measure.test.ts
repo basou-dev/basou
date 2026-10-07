@@ -3846,6 +3846,29 @@ describe("measureBoard: the axis section", () => {
     expect(later.axis.reasons.map((r) => r.trigger)).toEqual(["a", "b"]);
   });
 
+  it("counts the days to today in the effort's time zone", async () => {
+    // 2026-11-26T16:00Z is 11-27 in Tokyo, 60 days after the review; 59 in UTC.
+    const at = new Date("2026-11-26T16:00:00.000Z");
+    const tokyo = await measure(
+      declare([], { ...SEEDED, effort: { start: "2026-04-28", time_zone: "Asia/Tokyo" } }),
+      at,
+    );
+    expect(tokyo.axis.reasons.map((r) => r.trigger)).toEqual(["b"]);
+    expect((await measure(declare([], SEEDED), at)).axis.reasons).toEqual([]);
+  });
+
+  it("does not know whether a review is needed when the components were not measured and nothing fired", async () => {
+    await repo("one/app", { "package.json": "{}\n" });
+    await repo("two/app", { "package.json": "{}\n" });
+    const repos = ["one/app", "two/app"];
+    const m = await measure(declare([], SEEDED, repos), NOW, repos);
+    expect(m.axis.review_needed).toBeNull();
+    expect(m.not_found).toContainEqual({
+      at: "axis.review_needed",
+      reason: "no trigger fired, but (a) could not be judged: the components were not measured",
+    });
+  });
+
   it("is left out of the digest", async () => {
     const declaration = declare([], SEEDED);
     const m = await measure(declaration);
