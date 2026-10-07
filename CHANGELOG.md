@@ -151,6 +151,23 @@ All notable changes to **basou** are recorded here. The project follows
   reads, never under `.basou/`, and that what it writes is not part of the
   trail.
 
+- **`basou view` shows the experimental board at `/board`, in single mode.**
+  The page draws one record of `board/board.yaml` (read only when the
+  manifest declares the workspace's own repo private) from the record
+  alone, by the declaration it was judged by: its title and judge, a
+  summary with six counts (lanes in operation, blocked and unverified
+  cells, open tracks, sessions, the operator's turns) and the observations
+  from outside (one not made shows the previous record's value), the period
+  and effort, the reach matrix with the cells that moved since the previous
+  record marked and the stages left behind above it, where each lane is,
+  the ratios, the operator's turns, and footnotes. What the judge reported
+  is marked as such. Its fixed strings are in the language the anchor
+  declares. A link in the header leads to it, and earlier records open from
+  it. It draws from the records, never from the board.yaml as it is now
+  (the manifest says whether there is a board and in which language), takes
+  no new flag, and is not served in portfolio mode. Like every page of `basou view`, it is a local
+  UI and not an API.
+
 ### Changed
 
 - **`@basou/core` now depends on simple-git 4, for four advisories against

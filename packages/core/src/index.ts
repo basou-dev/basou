@@ -112,6 +112,10 @@ export type {
   BoardObservation,
   BoardObservedChange,
   BoardOrderAnomaly,
+  BoardPage,
+  BoardPageBody,
+  BoardPageRecordRef,
+  BoardPageUnavailable,
   BoardPortfolio,
   BoardPreviousRecords,
   BoardRatioValue,
@@ -148,6 +152,8 @@ export {
   BOARD_TRAIL_METHOD,
   BOARD_VERSION,
   boardDigest,
+  boardPage,
+  boardPageUnavailable,
   buildRecord,
   byCodePoint,
   diffCells,
@@ -228,8 +234,14 @@ export {
 } from "./lib/path-sanitizer.js";
 export type { SourceRootScope } from "./lib/source-root-scope.js";
 export { AGENT_INFRA_DIRS, classifyFilesBySourceRoot } from "./lib/source-root-scope.js";
-export type { PresetStrings, ViewLanguage, ViewStrings } from "./lib/view-strings.js";
+export type {
+  BoardPageStrings,
+  PresetStrings,
+  ViewLanguage,
+  ViewStrings,
+} from "./lib/view-strings.js";
 export {
+  boardPageStrings,
   presetStrings,
   resolveAnchorContentLanguage,
   resolveRepoContentLanguage,

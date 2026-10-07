@@ -74,6 +74,7 @@ export const VIEW_HTML = `<!doctype html>
 <header>
   <h1>basou view</h1>
   <button id="btn-back" style="display:none">&larr; portfolio</button>
+  <a id="board-link" href="/board" style="display:none">Board</a>
   <input type="text" id="project" placeholder="source root (optional override)" />
   <button class="primary" id="btn-refresh">Refresh all</button>
   <button id="btn-import-claude">Import claude-code</button>
@@ -235,6 +236,8 @@ export const VIEW_HTML = `<!doctype html>
     state.canAct = true;
     document.body.classList.remove('landing');
     $('btn-back').style.display = 'none';
+    // The board page is served in single mode only.
+    $('board-link').style.display = '';
     updateActionBar();
     buildTabs();
     loadTab('overview');

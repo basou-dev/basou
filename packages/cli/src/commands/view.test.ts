@@ -17,15 +17,26 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
+  boardPageStrings,
   createManifest,
   displayPath,
   ensureBasouDirectory,
+  type RepoEntry,
   writeManifest,
 } from "@basou/core";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BOARD_HTML } from "../lib/board-ui.js";
 import type { ViewServerHandle } from "../lib/view-server.js";
 import { VIEW_HTML } from "../lib/view-ui.js";
-import { doRunView, runView, type ViewContext, type ViewOptions } from "./view.js";
+import { doRunBoardMeasure, doRunBoardRecord } from "./board.js";
+import {
+  doRunView,
+  registerViewCommand,
+  runView,
+  type ViewContext,
+  type ViewOptions,
+} from "./view.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -946,5 +957,416 @@ describe("the view page shows a recorded file name with its control characters e
     expect(summary({ type: "file_changed", path: "a\nb\u001b.txt", change_type: "added" })).toBe(
       "a\\nb\\x1b.txt [added]",
     );
+  });
+});
+
+describe("basou view: the board page", () => {
+  const [A_REC, B_REC, C_REC] = [
+    "00000000010000000000000000",
+    "00000000020000000000000000",
+    "00000000030000000000000000",
+  ];
+  const STAGES = Object.fromEntries(
+    ["01", "02", "03", "04", "05", "06"].map((id) => [id, { meaning: `stage ${id}` }]),
+  );
+
+  async function workspaceWith(repos?: RepoEntry[]): Promise<string> {
+    const repo = await realpath(tmpRepo as string);
+    const paths = await ensureBasouDirectory(repo);
+    const manifest = createManifest({
+      workspaceName: "view-ws",
+      now: FIXED_DATE,
+      workspaceId: FIXED_WS_ID,
+    });
+    await writeManifest(paths, repos === undefined ? manifest : { ...manifest, repos });
+    return repo;
+  }
+
+  // Declare a board in the workspace, measure it and record a judgement of it.
+  async function recorded(repo: string): Promise<string> {
+    await mkdir(join(repo, "board"), { recursive: true });
+    await writeFile(
+      join(repo, "board", "board.yaml"),
+      JSON.stringify({
+        board_version: 1,
+        title: "Board",
+        stages: STAGES,
+        lanes: [{ id: "core", name: "Core" }],
+        axis: { version: 1, review_due_days: 60 },
+        effort: { start: "2026-04-28", time_zone: "UTC" },
+      }),
+    );
+    const ctx = {
+      cwd: repo,
+      nowProvider: () => FIXED_DATE,
+      portfolioConfigPath: join(repo, ".portfolio.yaml"),
+      claudeProjectsDir: getClaudeRoot(),
+      codexSessionsDir: getCodexRoot(),
+    };
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const measured = await doRunBoardMeasure({ json: true }, ctx);
+    const result = await doRunBoardRecord(
+      {},
+      {
+        ...ctx,
+        readInput: async () =>
+          JSON.stringify({
+            measure_digest: measured.digest,
+            observed: { site: { value: null, observed_at: "2026-05-09", source: "s", error: "x" } },
+            cells: ["01", "02", "03", "04", "05", "06"].map((stage) => ({
+              lane: "core",
+              stage,
+              state: stage === "01" ? "done" : "none",
+            })),
+            prose: { summary: "Fine `here`." },
+            judged_by: { model: "Claude Opus 5.5", self_reported: true },
+          }),
+      },
+    );
+    vi.restoreAllMocks();
+    return (
+      (result.record ?? "")
+        .split("/")
+        .at(-1)
+        ?.replace(/\.json$/, "") ?? ""
+    );
+  }
+
+  async function withView(
+    repo: string,
+    options: Partial<ViewOptions>,
+    body: (handle: ViewServerHandle) => Promise<void>,
+  ): Promise<void> {
+    const controller = new AbortController();
+    let handle: ViewServerHandle | undefined;
+    let markReady: () => void = () => {};
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const running = doRunView(
+      { port: 0, ...options },
+      {
+        cwd: repo,
+        signal: controller.signal,
+        openBrowser: () => {},
+        codexSessionsDir: getCodexRoot(),
+        onListening: (h) => {
+          handle = h;
+          markReady();
+        },
+      },
+    );
+    await ready;
+    try {
+      if (handle === undefined) throw new Error("server never listened");
+      await body(handle);
+    } finally {
+      controller.abort();
+      await running;
+    }
+  }
+
+  it("serves the page, and the records with the strings of the anchor's language", async () => {
+    const repo = await workspaceWith([{ path: ".", visibility: "private", language: "ja" }]);
+    const id = await recorded(repo);
+    await withView(repo, {}, async (h) => {
+      const page = await fetch(`${h.url}/board`);
+      expect(page.status).toBe(200);
+      expect(await page.text()).toBe(BOARD_HTML);
+      const latest = await getJson(h, "/api/board");
+      expect(latest.status).toBe(200);
+      // The table of the anchor's language, not the English one.
+      expect((latest.data as { strings: unknown }).strings).not.toEqual(boardPageStrings("en"));
+      expect(latest.data).toMatchObject({
+        language: "ja",
+        strings: boardPageStrings("ja"),
+        page: {
+          status: "ok",
+          id,
+          older: null,
+          newer: null,
+          board: {
+            heading: { title: "Board", model: "Claude Opus 5.5" },
+            summary: {
+              text: "Fine `here`.",
+              observed: [{ name: "site", value: null, previous: { status: "none" } }],
+            },
+          },
+        },
+      });
+      const scoped = await getJson(h, `/api/ws/${FIXED_WS_ID}/board/${id}`);
+      expect(scoped.data).toMatchObject({ page: { status: "ok", id } });
+      expect((await getJson(h, "/api/board/00000000010000000000000000")).data).toMatchObject({
+        page: { status: "unavailable", why: "not_found" },
+      });
+      expect((await getJson(h, "/api/board/..%2F..%2Fx")).status).toBe(404);
+    });
+  });
+
+  it("says why there is no board to show", async () => {
+    const repo = await workspaceWith();
+    await withView(repo, {}, async (h) => {
+      expect((await getJson(h, "/api/board")).data).toMatchObject({
+        language: "en",
+        strings: boardPageStrings("en"),
+        page: { status: "unavailable", why: "no_board" },
+      });
+    });
+  });
+
+  it("has no record to draw before the first one is written", async () => {
+    const repo = await workspaceWith([{ path: ".", visibility: "private" }]);
+    await withView(repo, {}, async (h) => {
+      expect((await getJson(h, "/api/board")).data).toMatchObject({
+        page: { status: "unavailable", why: "no_records", records: [] },
+      });
+    });
+  });
+
+  it("is not served in portfolio mode", async () => {
+    const repo = await initWorkspaceAt(tmpRepo as string, WS_ID_A, "a");
+    await withPortfolioServer([repo], {}, async (h) => {
+      expect((await fetch(`${h.url}/board`)).status).toBe(404);
+      expect((await getJson(h, `/api/ws/${WS_ID_A}/board`)).status).toBe(404);
+    });
+  });
+
+  it("takes no flag to point at a board: the command is guaranteed and the board is not", () => {
+    const program = new Command();
+    registerViewCommand(program);
+    const view = program.commands.find((c) => c.name() === "view");
+    expect(view?.options.map((o) => o.long)).toContain("--port");
+    expect(view?.options.map((o) => o.long)).not.toContain("--board");
+  });
+
+  it("links to the page from the single-mode header, and only there", () => {
+    expect(VIEW_HTML).toContain('<a id="board-link" href="/board" style="display:none">Board</a>');
+    const shows = "$('board-link').style.display = '';";
+    expect(liftFrom(VIEW_HTML, "enterSingle")).toContain(shows);
+    expect(liftFrom(VIEW_HTML, "openWorkspace")).not.toContain("board-link");
+    expect(VIEW_HTML.split(shows)).toHaveLength(2);
+  });
+
+  /** Lift a named function out of a page. */
+  function liftFrom(html: string, name: string): string {
+    const marker = `function ${name}(`;
+    const start = html.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = html.indexOf("{", start); i < html.length; i++) {
+      const ch = html[i];
+      if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) return html.slice(start, i + 1);
+    }
+    throw new Error(`no end of ${name}`);
+  }
+  const lift = (name: string) => liftFrom(BOARD_HTML, name);
+
+  // Just enough of a DOM for the page's drawing functions.
+  class Node {
+    children: Node[] = [];
+    attrs: Record<string, string> = {};
+    className = "";
+    textContent = "";
+    selected = false;
+    disabled = false;
+    style: Record<string, string> = {};
+    constructor(readonly tag: string) {}
+    appendChild(child: Node): Node {
+      this.children.push(child);
+      return child;
+    }
+    get firstChild(): Node | null {
+      return this.children[0] ?? null;
+    }
+    removeChild(child: Node): void {
+      this.children = this.children.filter((c) => c !== child);
+    }
+    setAttribute(key: string, value: unknown): void {
+      this.attrs[key] = String(value);
+    }
+    addEventListener(): void {}
+    text(): string {
+      return this.textContent + this.children.map((c) => c.text()).join("");
+    }
+    find(pick: (node: Node) => boolean): Node[] {
+      return [...(pick(this) ? [this] : []), ...this.children.flatMap((c) => c.find(pick))];
+    }
+  }
+  function drawing(names: string[]) {
+    const byId: Record<string, Node> = {};
+    const document = {
+      createElement: (tag: string) => new Node(tag),
+      createTextNode: (text: string) => Object.assign(new Node("#text"), { textContent: text }),
+      getElementById: (id: string) => {
+        byId[id] ??= new Node("div");
+        return byId[id];
+      },
+    };
+    const helpers = [
+      "$",
+      "clear",
+      "el",
+      "fill",
+      "codeSpans",
+      "prose",
+      "reported",
+      "num",
+      "hm",
+      "when",
+      "shown",
+      "stateName",
+      "section",
+    ];
+    const source = [...helpers, ...names].map(lift).join("\n");
+    const fns = new Function("document", "S", "lang", `${source}; return { ${names.join(", ")} };`)(
+      document,
+      boardPageStrings("en"),
+      "en",
+    ) as Record<string, (arg: unknown) => Node>;
+    const call = (name: string, arg: unknown): Node => {
+      const fn = fns[name];
+      if (fn === undefined) throw new Error(`no ${name}`);
+      return fn(arg);
+    };
+    return { call, byId };
+  }
+
+  it("draws a page it cannot draw around the record asked for", () => {
+    const { call, byId } = drawing(["records"]);
+    const records = [A_REC, B_REC, C_REC].map((id, i) => ({
+      id,
+      at: `2026-10-0${i + 1}T00:00:00.000Z`,
+    }));
+    call("records", {
+      page: {
+        status: "unavailable",
+        why: "not_json",
+        records,
+        id: B_REC,
+        older: A_REC,
+        newer: C_REC,
+      },
+    });
+    const nav = byId.records as Node;
+    expect(nav.find((n) => n.tag === "a").map((a) => a.attrs.href)).toEqual([
+      `/board?record=${A_REC}`,
+      `/board?record=${C_REC}`,
+      "/board",
+    ]);
+    const chosen = nav.find((n) => n.tag === "option" && n.selected);
+    expect(chosen.map((o) => o.attrs.value)).toEqual([B_REC]);
+    call("records", {
+      page: {
+        status: "unavailable",
+        why: "not_found",
+        records,
+        id: "NOPE",
+        older: null,
+        newer: null,
+      },
+    });
+    const none = nav.find((n) => n.tag === "option" && n.selected);
+    expect(none.map((o) => [o.attrs.value, o.disabled])).toEqual([["", true]]);
+  });
+
+  it("marks a lane's marks as reported, and leaves out of the period what was not measured", () => {
+    const { call } = drawing(["lanes", "effort", "footnotes"]);
+    const lane = (flags: Record<string, boolean>) => ({
+      id: "core",
+      name: "Core",
+      now: null,
+      attention: [],
+      prose: null,
+      measures: [],
+      flags: { live: false, blocked: false, unverified: false, ...flags },
+    });
+    const heads = (flags: Record<string, boolean>) =>
+      call("lanes", { lanes: [lane(flags)] }).find((n) => n.tag === "h3");
+    expect(heads({ blocked: true })[0]?.find((n) => n.className === "reported")).toHaveLength(1);
+    expect(heads({})[0]?.find((n) => n.className === "reported")).toHaveLength(0);
+    const effort = call("effort", {
+      effort: {
+        start: "2026-04-28",
+        time_zone: null,
+        elapsed_days: null,
+        active_ms: { union: null, claude: null, codex: null },
+        output_tokens: null,
+        sessions_without_tokens: null,
+        commits: null,
+        milestones: [],
+      },
+    }) as Node;
+    const rows = effort.find((n) => n.tag === "tr").map((r) => r.children.map((c) => c.text()));
+    expect(rows.slice(0, 2)).toEqual([
+      ["Start", "2026-04-28"],
+      ["Elapsed", "not measured"],
+    ]);
+    const foot = call("footnotes", {
+      footnotes: {
+        notes: [],
+        axis: { version: 1, review_needed: null, last_review: null, last_review_known: false },
+        model: "m",
+        not_found: [],
+        measured_with: { basou: "0", build: null },
+      },
+    }) as Node;
+    expect(foot.text()).toContain(boardPageStrings("en").footnotes.reviewUnknown);
+    expect(foot.text()).not.toContain(boardPageStrings("en").footnotes.noReview);
+  });
+
+  it("builds prose of text nodes, with only a span between backticks as a code element", () => {
+    const document = {
+      createElement: (tag: string) => new Node(tag),
+      createTextNode: (text: string) => Object.assign(new Node("#text"), { textContent: text }),
+    };
+    const prose = new Function(
+      "document",
+      `${lift("el")}; ${lift("codeSpans")}; ${lift("prose")}; return prose;`,
+    )(document) as (text: string) => Node;
+    const node = prose("a `<b>x</b>` <i>c</i> ``");
+    expect(node.children.map((c) => [c.tag, c.textContent])).toEqual([
+      ["#text", "a "],
+      ["code", "<b>x</b>"],
+      ["#text", " <i>c</i> ``"],
+    ]);
+  });
+
+  it("puts text in without markup, a span between backticks as code and nothing else", () => {
+    expect(BOARD_HTML).not.toContain("innerHTML");
+    const codeSpans = new Function(`${lift("codeSpans")}; return codeSpans;`)() as (
+      text: string,
+    ) => { code: boolean; text: string }[];
+    expect(codeSpans("run `basou board` now")).toEqual([
+      { code: false, text: "run " },
+      { code: true, text: "basou board" },
+      { code: false, text: " now" },
+    ]);
+    expect(codeSpans("a `b` c `d")).toEqual([
+      { code: false, text: "a " },
+      { code: true, text: "b" },
+      { code: false, text: " c `d" },
+    ]);
+    expect(codeSpans("`<b>x</b>`")).toEqual([{ code: true, text: "<b>x</b>" }]);
+    expect(codeSpans("`")).toEqual([{ code: false, text: "`" }]);
+    const fill = new Function(`${lift("fill")}; return fill;`)() as (
+      template: string,
+      values: Record<string, unknown>,
+    ) => string;
+    expect(fill("{n} of {n} and {m}", { n: 2 })).toBe("2 of 2 and {m}");
+    // What a value holds is never filled in itself.
+    expect(fill("{a} then {b}", { a: "{b}", b: "x" })).toBe("{b} then x");
+    expect(codeSpans("x `` y")).toEqual([{ code: false, text: "x `` y" }]);
+    const num = new Function("S", `${lift("num")}; return num;`)(boardPageStrings("en")) as (
+      n: unknown,
+    ) => string;
+    expect([num(0.333333), num(1234567), num(null), num("12")]).toEqual([
+      "0.3333",
+      "1,234,567",
+      "not measured",
+      "12",
+    ]);
   });
 });

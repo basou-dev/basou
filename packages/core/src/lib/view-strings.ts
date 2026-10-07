@@ -826,3 +826,357 @@ const PRESET_JA: PresetStrings = {
     ],
   },
 };
+
+/**
+ * The fixed strings of the board page of `basou view`, as plain text so that
+ * the server can hand them to the page as JSON. A `{name}` in one is filled in
+ * by the page. What a board declares or a record holds (lane names, the
+ * meanings of stages, prose) is the user's data and is never translated.
+ */
+export type BoardPageStrings = {
+  pageTitle: string;
+  latest: string;
+  older: string;
+  newer: string;
+  loadFailed: string;
+  /** Marks what the judge reported, as against what basou measured. */
+  reported: string;
+  heading: {
+    recordedAt: string;
+    judgedBy: string;
+    complete: string;
+    incomplete: string;
+  };
+  sections: {
+    summary: string;
+    effort: string;
+    matrix: string;
+    lanes: string;
+    composition: string;
+    turns: string;
+    footnotes: string;
+  };
+  tiles: {
+    liveLanes: string;
+    liveLanesOf: string;
+    blocked: string;
+    unverified: string;
+    openTracks: string;
+    sessions: string;
+    sessionsNotVerified: string;
+    turns: string;
+    notMeasured: string;
+  };
+  observed: {
+    heading: string;
+    name: string;
+    value: string;
+    observedAt: string;
+    source: string;
+    none: string;
+    missing: string;
+    missingNoPrevious: string;
+    missingPreviousUnreadable: string;
+  };
+  effort: {
+    start: string;
+    elapsedLabel: string;
+    elapsed: string;
+    active: string;
+    claude: string;
+    codex: string;
+    noCodex: string;
+    outputTokens: string;
+    withoutTokens: string;
+    commits: string;
+    milestones: string;
+    noMilestones: string;
+    notMeasured: string;
+  };
+  states: {
+    done: string;
+    part: string;
+    blocked: string;
+    shelved: string;
+    none: string;
+    unverified: string;
+  };
+  matrix: {
+    lane: string;
+    moved: string;
+    anomalies: string;
+    anomaly: string;
+  };
+  lane: {
+    now: string;
+    notStarted: string;
+    attention: string;
+    measures: string;
+    live: string;
+    blocked: string;
+    unverified: string;
+  };
+  composition: { none: string };
+  turns: { none: string; source: string };
+  footnotes: {
+    axis: string;
+    lastReview: string;
+    lastReviewFromRecord: string;
+    noReview: string;
+    reviewUnknown: string;
+    reviewNeeded: string;
+    reviewNeededYes: string;
+    reviewNeededNo: string;
+    reviewNeededUnknown: string;
+    judgedBy: string;
+    reportedNote: string;
+    notMeasured: string;
+    measuredWith: string;
+  };
+  unavailable: {
+    noBoard: string;
+    noRecords: string;
+    recordsNotDirectory: string;
+    recordsUnreadable: string;
+    notFound: string;
+    notJson: string;
+    unknownVersion: string;
+    notARecord: string;
+  };
+};
+
+const BOARD_PAGE_EN: BoardPageStrings = {
+  pageTitle: "Progress board",
+  latest: "Latest",
+  older: "Older record",
+  newer: "Newer record",
+  loadFailed: "The board could not be loaded: {message}",
+  reported: "reported",
+  heading: {
+    recordedAt: "Recorded {at}",
+    judgedBy: "judged by {model}",
+    complete: "everything was measured",
+    incomplete: "{n} could not be measured",
+  },
+  sections: {
+    summary: "Summary",
+    effort: "Period and effort",
+    matrix: "Reach matrix",
+    lanes: "Where each lane is",
+    composition: "Composition",
+    turns: "The operator's turns",
+    footnotes: "Footnotes",
+  },
+  tiles: {
+    liveLanes: "Lanes in operation",
+    liveLanesOf: "of {n} lanes",
+    blocked: "Blocked cells",
+    unverified: "Unverified cells",
+    openTracks: "Open tracks",
+    sessions: "Sessions in the trail",
+    sessionsNotVerified: "{n} not verified",
+    turns: "The operator's turns",
+    notMeasured: "not measured",
+  },
+  observed: {
+    heading: "Observed outside",
+    name: "Name",
+    value: "Value",
+    observedAt: "Observed",
+    source: "Source",
+    none: "Nothing was observed outside.",
+    missing: "not observed (previous: {value})",
+    missingNoPrevious: "not observed (no previous value)",
+    missingPreviousUnreadable: "not observed (the previous record could not be read)",
+  },
+  effort: {
+    start: "Start",
+    elapsedLabel: "Elapsed",
+    elapsed: "{days} days",
+    active: "Active",
+    claude: "Claude",
+    codex: "Codex",
+    noCodex: "no Codex session",
+    outputTokens: "Output tokens",
+    withoutTokens: "imports that recorded no tokens: {n}",
+    commits: "Commits",
+    milestones: "Milestones",
+    noMilestones: "No milestones declared.",
+    notMeasured: "not measured",
+  },
+  states: {
+    done: "done",
+    part: "partly",
+    blocked: "blocked",
+    shelved: "shelved",
+    none: "not started",
+    unverified: "unverified",
+  },
+  matrix: {
+    lane: "Lane",
+    moved: "was {state} in the previous record",
+    anomalies: "Out of order",
+    anomaly: "{lane} {stage} is {state} before {before}, which is done or begun",
+  },
+  lane: {
+    now: "Now at {stage} {meaning} ({state})",
+    notStarted: "No stage done or begun",
+    attention: "Blocked, shelved or unverified",
+    measures: "Measured",
+    live: "in operation",
+    blocked: "blocked",
+    unverified: "has unverified cells",
+  },
+  composition: { none: "No ratios are declared." },
+  turns: { none: "Nothing is waiting on the operator.", source: "source: {source}" },
+  footnotes: {
+    axis: "Axis v{version}",
+    lastReview: "last reviewed {date} by {model} (declared)",
+    lastReviewFromRecord: "last reviewed {date} by {model} (record {record})",
+    noReview: "no review on record",
+    reviewUnknown: "the last review is not known (a record that may hold it could not be read)",
+    reviewNeeded: "Review needed: {answer}",
+    reviewNeededYes: "yes",
+    reviewNeededNo: "no",
+    reviewNeededUnknown: "not known",
+    judgedBy: "The cells and prose were written by {model}, as it reported itself.",
+    reportedNote:
+      "Marked reported: what the judge wrote (cells, prose and observations outside). Everything else was measured by basou.",
+    notMeasured: "Not measured",
+    measuredWith: "Measured with basou {basou}{build}.",
+  },
+  unavailable: {
+    noBoard:
+      "The board page shows the records beside board/board.yaml in the workspace, which is read only when the manifest declares this workspace's own repo (path: .) private.",
+    noRecords:
+      "The board has no record yet. Declare the board in board/board.yaml and write a record with basou board record; it is drawn here.",
+    recordsNotDirectory:
+      "The records/ beside board/board.yaml is not a directory (a symlink or a file).",
+    recordsUnreadable: "The records/ beside board/board.yaml could not be read.",
+    notFound: "There is no record {record}.",
+    notJson: "The record {record} could not be read as JSON.",
+    unknownVersion:
+      "The record {record} is of record_version {version}, which this basou does not draw.",
+    notARecord: "The record {record} is not in the shape of a record.",
+  },
+};
+
+const BOARD_PAGE_JA: BoardPageStrings = {
+  pageTitle: "進捗盤",
+  latest: "最新",
+  older: "前の記録",
+  newer: "次の記録",
+  loadFailed: "盤を読み込めませんでした: {message}",
+  reported: "申告",
+  heading: {
+    recordedAt: "{at} に記録",
+    judgedBy: "判定 {model}",
+    complete: "すべて測れた",
+    incomplete: "{n} 件が測れなかった",
+  },
+  sections: {
+    summary: "サマリー",
+    effort: "期間と労力",
+    matrix: "到達マトリクス",
+    lanes: "レーンごとの現在地",
+    composition: "構成比",
+    turns: "operator の手番",
+    footnotes: "脚注",
+  },
+  tiles: {
+    liveLanes: "稼働に届いたレーン",
+    liveLanesOf: "{n} レーン中",
+    blocked: "止まっているセル",
+    unverified: "未確認のセル",
+    openTracks: "未完トラック",
+    sessions: "証跡の session",
+    sessionsNotVerified: "verified でないもの {n}",
+    turns: "operator の手番",
+    notMeasured: "測れなかった",
+  },
+  observed: {
+    heading: "外の観測",
+    name: "項目",
+    value: "値",
+    observedAt: "観測",
+    source: "出所",
+    none: "外の観測はない。",
+    missing: "未確認（前回値: {value}）",
+    missingNoPrevious: "未確認（前回値なし）",
+    missingPreviousUnreadable: "未確認（前回の記録が読めない）",
+  },
+  effort: {
+    start: "開始",
+    elapsedLabel: "経過",
+    elapsed: "{days} 日",
+    active: "実働",
+    claude: "Claude",
+    codex: "Codex",
+    noCodex: "Codex の session なし",
+    outputTokens: "出力トークン",
+    withoutTokens: "トークンを記録しなかった取り込み {n}",
+    commits: "commit",
+    milestones: "節目",
+    noMilestones: "節目の宣言はない。",
+    notMeasured: "測れなかった",
+  },
+  states: {
+    done: "到達",
+    part: "部分到達",
+    blocked: "止まっている",
+    shelved: "棚上げ",
+    none: "未着手",
+    unverified: "未確認",
+  },
+  matrix: {
+    lane: "レーン",
+    moved: "前回は {state}",
+    anomalies: "順序の破れ",
+    anomaly: "{lane} の {stage} は {state} なのに、後の {before} は到達か部分到達",
+  },
+  lane: {
+    now: "いまの段 {stage} {meaning}（{state}）",
+    notStarted: "到達・部分到達の段はない",
+    attention: "止まり・棚上げ・未確認",
+    measures: "測った値",
+    live: "稼働",
+    blocked: "止まっている",
+    unverified: "未確認あり",
+  },
+  composition: { none: "構成比の宣言はない。" },
+  turns: { none: "operator の手番はない。", source: "出所: {source}" },
+  footnotes: {
+    axis: "軸 v{version}",
+    lastReview: "最終見直し {date}・{model}（宣言）",
+    lastReviewFromRecord: "最終見直し {date}・{model}（記録 {record}）",
+    noReview: "見直しの記録なし",
+    reviewUnknown: "前回の見直しは分からない（それを含みうる記録が読めない）",
+    reviewNeeded: "見直しの要否: {answer}",
+    reviewNeededYes: "要",
+    reviewNeededNo: "不要",
+    reviewNeededUnknown: "分からない",
+    judgedBy: "セルと文章を書いたのは {model}（自己申告）。",
+    reportedNote:
+      "「申告」の印は、判定したモデルが書いたもの（セル・文章・外の観測）。それ以外は basou が測った値。",
+    notMeasured: "測れなかったもの",
+    measuredWith: "測った basou {basou}{build}。",
+  },
+  unavailable: {
+    noBoard:
+      "盤のページは workspace の board/board.yaml の隣の記録を描く。board/board.yaml を読むのは、manifest がこの workspace の repo（path: .）を private と宣言しているときだけ。",
+    noRecords:
+      "盤の記録はまだない。board/board.yaml に盤を宣言し、basou board record で記録を書くと、ここに描かれる。",
+    recordsNotDirectory:
+      "board/board.yaml の隣の records/ がディレクトリでない（symlink かファイル）。",
+    recordsUnreadable: "board/board.yaml の隣の records/ を読めない。",
+    notFound: "記録 {record} はない。",
+    notJson: "記録 {record} を JSON として読めない。",
+    unknownVersion: "記録 {record} は record_version {version} で、この basou はこの版を描けない。",
+    notARecord: "記録 {record} は記録の形をしていない。",
+  },
+};
+
+/** The fixed strings of the board page for a resolved view language. */
+export function boardPageStrings(language: ViewLanguage): BoardPageStrings {
+  return language === "ja" ? BOARD_PAGE_JA : BOARD_PAGE_EN;
+}
