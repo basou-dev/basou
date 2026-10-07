@@ -972,7 +972,9 @@ describe("basou board record", () => {
 
   it("refuses records outside a repo the manifest declares private, unless --not-private", async () => {
     const { repo, input } = await judged();
-    const outside = await realpath(await mkdtemp(join(tmpdir(), "basou-board-elsewhere-")));
+    // Beside the repo, under a name that starts with the repo's.
+    const outside = `${repo}-elsewhere`;
+    await mkdir(outside);
     try {
       await placeBoard(outside, boardYaml([MD]));
       const board = join(outside, "board", "board.yaml");
