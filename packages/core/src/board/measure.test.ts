@@ -878,6 +878,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "freshness",
       "effort",
       "components",
+      "axis",
     ]);
     expect(m).toMatchObject({
       board_version: 1,
@@ -1711,6 +1712,7 @@ describe("measureBoard: the repos section", () => {
       freshness: 1,
       effort: 1,
       components: 1,
+      axis: 1,
     });
     const later = await measure(declaration, new Date("2026-10-05T09:00:00.000Z"), ["app"]);
     expect(later.digest).toBe(first.digest);
@@ -2749,6 +2751,7 @@ describe("measureBoard: the integrity section", () => {
       freshness: 1,
       effort: 1,
       components: 1,
+      axis: 1,
     });
     await placeChained(SES("S01"));
     const verified = await measure(declaration);
@@ -3008,6 +3011,7 @@ describe("measureBoard: the review_gaps section", () => {
       freshness: 1,
       effort: 1,
       components: 1,
+      axis: 1,
     });
     await placeWork(
       s1,
@@ -3127,6 +3131,7 @@ describe("measureBoard: the portfolio section", () => {
       freshness: 1,
       effort: 1,
       components: 1,
+      axis: 1,
     });
     expect(bare.portfolio).toEqual({ workspaces: 1, initialized: 0 });
     await mkdir(join(master, ".basou"));
@@ -3803,5 +3808,49 @@ describe("measureBoard: the components section", () => {
     expect(second.components.unacknowledged).toEqual(["app", "app/svc"]);
     expect(second.digest).not.toBe(first.digest);
     expect(boardDigest({ ...second, components: first.components })).not.toBe(second.digest);
+  });
+});
+
+describe("measureBoard: the axis section", () => {
+  const SEEDED = {
+    axis: {
+      version: 3,
+      review_due_days: 60,
+      seed_review: { date: "2026-09-28", model: "Claude Opus 5.5" },
+    },
+  };
+
+  it("judges the triggers from the components, the day in the effort's time zone, and the model", async () => {
+    await repo("app", { "package.json": "{}\n" });
+    const quiet = await measureBoard({
+      declaration: declare([], { ...SEEDED, components: { app: { lane: "-", note: "x" } } }, [
+        "app",
+      ]),
+      root,
+      repos: ["app"],
+      paths,
+      now: NOW,
+      measuredWith: WITH,
+      portfolioConfigPath: PORTFOLIO(),
+      probeImports: NOTHING_TO_IMPORT,
+      model: "claude-opus-5-5",
+    });
+    expect(quiet.axis).toMatchObject({ version: 3, review_needed: false, reasons: [] });
+    expect(quiet.axis.unjudged.map((u) => u.trigger)).toEqual(["e"]);
+    // Unregistered now; and 60 days on, in the effort's time zone (UTC by default here).
+    const later = await measure(
+      declare([], SEEDED, ["app"]),
+      new Date("2026-11-27T00:00:00.000Z"),
+      ["app"],
+    );
+    expect(later.axis.reasons.map((r) => r.trigger)).toEqual(["a", "b"]);
+  });
+
+  it("is left out of the digest", async () => {
+    const declaration = declare([], SEEDED);
+    const m = await measure(declaration);
+    expect(m.methods.axis).toBe(1);
+    expect(m.axis.review_needed).toBe(false);
+    expect(boardDigest({ ...m, axis: { ...m.axis, review_needed: true } })).toBe(m.digest);
   });
 });

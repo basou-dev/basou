@@ -727,6 +727,31 @@ describe("basou board measure", () => {
     );
   });
 
+  it("judges trigger (c) of the axis only with --model, and prints the axis", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const declared = JSON.parse(boardYaml([])) as Record<string, unknown>;
+    await placeBoard(
+      repo,
+      JSON.stringify({
+        ...declared,
+        axis: {
+          version: 1,
+          review_due_days: 60,
+          seed_review: { date: "2026-09-28", model: "Claude Opus 5.5" },
+        },
+      }),
+    );
+    const { out } = capture();
+    const quiet = await doRunBoardMeasure({ json: true }, ctx(repo));
+    expect(quiet.axis.review_needed).toBe(false);
+    expect(quiet.axis.unjudged.map((u) => u.trigger)).toEqual(["c", "e"]);
+    out.length = 0;
+    await runBoardMeasure({ model: "Claude Fable 5.1" }, ctx(repo));
+    expect(out.join("\n")).toContain(
+      "\nAxis:\n  version 1, last reviewed 2026-09-28 by Claude Opus 5.5 (seed)\n  review needed: yes\n    (c) Claude Fable 5.1 judges; Claude Opus 5.5 reviewed last\n    (e) not judged: there is no previous record to compare the methods with\n",
+    );
+  });
+
   it("refuses a workspace that is not initialized", async () => {
     const repo = await realpath(tmpRepo as string);
     const { out, err } = capture();

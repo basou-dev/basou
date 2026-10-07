@@ -1,4 +1,12 @@
 export type {
+  BoardAxis,
+  BoardAxisReason,
+  BoardAxisTrigger,
+  BoardAxisUnjudged,
+  BoardLastReview,
+} from "./axis.js";
+export { BOARD_AXIS_METHOD, modelKey } from "./axis.js";
+export type {
   BoardComponent,
   BoardComponentChange,
   BoardComponents,

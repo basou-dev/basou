@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { ReplayWarning } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import type { TaskSkipReason } from "../storage/tasks.js";
+import { BOARD_AXIS_METHOD, type BoardAxis, judgeAxis } from "./axis.js";
 import { BOARD_COMPONENTS_METHOD, type BoardComponents, measureComponents } from "./components.js";
 import {
   BOARD_DEFAULT_AT,
@@ -10,7 +11,7 @@ import {
   type BoardDeclaration,
   type BoardMeasure,
 } from "./declaration.js";
-import { BOARD_EFFORT_METHOD, type BoardEffort, measureEffort } from "./effort.js";
+import { BOARD_EFFORT_METHOD, type BoardEffort, measureEffort, todayIn } from "./effort.js";
 import {
   BOARD_FRESHNESS_METHOD,
   type BoardFreshness,
@@ -89,19 +90,20 @@ export type BoardMeasurement = {
   not_found: BoardNotFound[];
   /**
    * `sha256:` and the hex digest of the measurement without `measured_at`,
-   * `digest`, `freshness`, `effort.elapsed_days` and today's row of
+   * `digest`, `freshness`, `axis`, `effort.elapsed_days` and today's row of
    * `effort.daily`, serialized with its keys sorted. Two measurements with the
    * same values have the same digest whenever they were taken. The freshness
-   * moves as work goes on, the measuring session's own included, and the
-   * others move with the clock, so they are left out.
+   * moves as work goes on, the measuring session's own included, the axis
+   * rests on the day, the model and the records, and the others move with the
+   * clock, so they are left out.
    */
   digest: string;
   /**
    * The version of how each built-in section measures (see
    * `BOARD_REPOS_METHOD`, `BOARD_TRAIL_METHOD`, `BOARD_INTEGRITY_METHOD`,
    * `BOARD_REVIEW_GAPS_METHOD`, `BOARD_PORTFOLIO_METHOD`,
-   * `BOARD_FRESHNESS_METHOD`, `BOARD_EFFORT_METHOD` and
-   * `BOARD_COMPONENTS_METHOD`).
+   * `BOARD_FRESHNESS_METHOD`, `BOARD_EFFORT_METHOD`,
+   * `BOARD_COMPONENTS_METHOD` and `BOARD_AXIS_METHOD`).
    */
   methods: {
     repos: number;
@@ -112,6 +114,7 @@ export type BoardMeasurement = {
     freshness: number;
     effort: number;
     components: number;
+    axis: number;
   };
   /** Each repository the manifest declares, in its order. */
   repos: BoardRepo[];
@@ -131,6 +134,8 @@ export type BoardMeasurement = {
   effort: BoardEffort;
   /** The components the markers find, held against the declaration's. */
   components: BoardComponents;
+  /** Whether the axis is due a review, by the triggers measure can judge. */
+  axis: BoardAxis;
 };
 
 export type MeasureBoardInput = {
@@ -151,6 +156,8 @@ export type MeasureBoardInput = {
    * CLI passes the one `basou orient` runs). Without it they are not measured.
    */
   probeImports?: () => Promise<BoardImportProbe | null>;
+  /** The model that will judge the board, for trigger (c) of the axis. */
+  model?: string;
 };
 
 type Outcome = { value: number | string | null; reason?: string };
@@ -241,6 +248,13 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     registered: declaration.components,
   });
   notFound.push(...built.notFound);
+  const judged = judgeAxis({
+    declared: declaration.axis,
+    components: built.components,
+    today: todayIn(declaration.effort.time_zone, input.now),
+    model: input.model,
+  });
+  notFound.push(...judged.notFound);
 
   const body = {
     board_version: declaration.board_version,
@@ -258,6 +272,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
       freshness: BOARD_FRESHNESS_METHOD,
       effort: BOARD_EFFORT_METHOD,
       components: BOARD_COMPONENTS_METHOD,
+      axis: BOARD_AXIS_METHOD,
     },
     repos: repos.repos,
     measures,
@@ -269,6 +284,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     freshness: current.freshness,
     effort: worked.effort,
     components: built.components,
+    axis: judged.axis,
   };
   const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
   return {
@@ -290,17 +306,19 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     freshness: body.freshness,
     effort: body.effort,
     components: body.components,
+    axis: body.axis,
   };
 }
 
-// What the digest leaves out: when it was measured, the digest itself, and
-// the freshness, which moves as work goes on.
-const UNDIGESTED = new Set(["measured_at", "digest", "freshness"]);
+// What the digest leaves out: when it was measured, the digest itself, the
+// freshness, which moves as work goes on, and the axis, which rests on the
+// day, the model and the records rather than on what was measured.
+const UNDIGESTED = new Set(["measured_at", "digest", "freshness", "axis"]);
 
 /**
  * The digest of a measurement: sha256 over the measurement without
- * `measured_at`, `digest`, `freshness`, `effort.elapsed_days` and the last
- * row of `effort.daily` (today's), with every object's keys sorted.
+ * `measured_at`, `digest`, `freshness`, `axis`, `effort.elapsed_days` and the
+ * last row of `effort.daily` (today's), with every object's keys sorted.
  */
 export function boardDigest(measurement: object): string {
   const hashed = Object.fromEntries(

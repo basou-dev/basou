@@ -241,6 +241,20 @@ export async function measureEffort(input: EffortInput): Promise<{
   return { effort, notFound };
 }
 
+/**
+ * Today's date in the zone the effort section counts days in (the declared
+ * one, or this host's), or undefined when this host's cannot be named.
+ */
+export function todayIn(declared: string | undefined, now: Date): string | undefined {
+  const zone = namedZone(declared);
+  return zone === undefined ? undefined : new Calendar(zone).dateOf(now.getTime());
+}
+
+/** Whole days from one date to another, both `YYYY-MM-DD`. */
+export function daysBetween(from: string, to: string): number {
+  return Math.round((utcOf(to) - utcOf(from)) / 86_400_000);
+}
+
 // The zone the days are in, named as `Intl` names it: the declared one, or
 // this host's. Undefined when the host's cannot be named, as with an empty or
 // unknown TZ.
