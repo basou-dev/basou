@@ -17,15 +17,26 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
+  boardPageStrings,
   createManifest,
   displayPath,
   ensureBasouDirectory,
+  type RepoEntry,
   writeManifest,
 } from "@basou/core";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BOARD_HTML } from "../lib/board-ui.js";
 import type { ViewServerHandle } from "../lib/view-server.js";
 import { VIEW_HTML } from "../lib/view-ui.js";
-import { doRunView, runView, type ViewContext, type ViewOptions } from "./view.js";
+import { doRunBoardMeasure, doRunBoardRecord } from "./board.js";
+import {
+  doRunView,
+  registerViewCommand,
+  runView,
+  type ViewContext,
+  type ViewOptions,
+} from "./view.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -946,5 +957,223 @@ describe("the view page shows a recorded file name with its control characters e
     expect(summary({ type: "file_changed", path: "a\nb\u001b.txt", change_type: "added" })).toBe(
       "a\\nb\\x1b.txt [added]",
     );
+  });
+});
+
+describe("basou view: the board page", () => {
+  const STAGES = Object.fromEntries(
+    ["01", "02", "03", "04", "05", "06"].map((id) => [id, { meaning: `stage ${id}` }]),
+  );
+
+  async function workspaceWith(repos?: RepoEntry[]): Promise<string> {
+    const repo = await realpath(tmpRepo as string);
+    const paths = await ensureBasouDirectory(repo);
+    const manifest = createManifest({
+      workspaceName: "view-ws",
+      now: FIXED_DATE,
+      workspaceId: FIXED_WS_ID,
+    });
+    await writeManifest(paths, repos === undefined ? manifest : { ...manifest, repos });
+    return repo;
+  }
+
+  // Declare a board in the workspace, measure it and record a judgement of it.
+  async function recorded(repo: string): Promise<string> {
+    await mkdir(join(repo, "board"), { recursive: true });
+    await writeFile(
+      join(repo, "board", "board.yaml"),
+      JSON.stringify({
+        board_version: 1,
+        title: "Board",
+        stages: STAGES,
+        lanes: [{ id: "core", name: "Core" }],
+        axis: { version: 1, review_due_days: 60 },
+        effort: { start: "2026-04-28", time_zone: "UTC" },
+      }),
+    );
+    const ctx = {
+      cwd: repo,
+      nowProvider: () => FIXED_DATE,
+      portfolioConfigPath: join(repo, ".portfolio.yaml"),
+      claudeProjectsDir: getClaudeRoot(),
+      codexSessionsDir: getCodexRoot(),
+    };
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const measured = await doRunBoardMeasure({ json: true }, ctx);
+    const result = await doRunBoardRecord(
+      {},
+      {
+        ...ctx,
+        readInput: async () =>
+          JSON.stringify({
+            measure_digest: measured.digest,
+            observed: { site: { value: null, observed_at: "2026-05-09", source: "s", error: "x" } },
+            cells: ["01", "02", "03", "04", "05", "06"].map((stage) => ({
+              lane: "core",
+              stage,
+              state: stage === "01" ? "done" : "none",
+            })),
+            prose: { summary: "Fine `here`." },
+            judged_by: { model: "Claude Opus 5.5", self_reported: true },
+          }),
+      },
+    );
+    vi.restoreAllMocks();
+    return (
+      (result.record ?? "")
+        .split("/")
+        .at(-1)
+        ?.replace(/\.json$/, "") ?? ""
+    );
+  }
+
+  async function withView(
+    repo: string,
+    options: Partial<ViewOptions>,
+    body: (handle: ViewServerHandle) => Promise<void>,
+  ): Promise<void> {
+    const controller = new AbortController();
+    let handle: ViewServerHandle | undefined;
+    let markReady: () => void = () => {};
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const running = doRunView(
+      { port: 0, ...options },
+      {
+        cwd: repo,
+        signal: controller.signal,
+        openBrowser: () => {},
+        codexSessionsDir: getCodexRoot(),
+        onListening: (h) => {
+          handle = h;
+          markReady();
+        },
+      },
+    );
+    await ready;
+    try {
+      if (handle === undefined) throw new Error("server never listened");
+      await body(handle);
+    } finally {
+      controller.abort();
+      await running;
+    }
+  }
+
+  it("serves the page, and the records with the strings of the anchor's language", async () => {
+    const repo = await workspaceWith([{ path: ".", visibility: "private", language: "ja" }]);
+    const id = await recorded(repo);
+    await withView(repo, {}, async (h) => {
+      const page = await fetch(`${h.url}/board`);
+      expect(page.status).toBe(200);
+      expect(await page.text()).toBe(BOARD_HTML);
+      const latest = await getJson(h, "/api/board");
+      expect(latest.status).toBe(200);
+      expect(latest.data).toMatchObject({
+        language: "ja",
+        strings: boardPageStrings("ja"),
+        page: {
+          status: "ok",
+          id,
+          older: null,
+          newer: null,
+          board: {
+            heading: { title: "Board", model: "Claude Opus 5.5" },
+            summary: {
+              text: "Fine `here`.",
+              observed: [{ name: "site", value: null, previous: { status: "none" } }],
+            },
+          },
+        },
+      });
+      const scoped = await getJson(h, `/api/ws/${FIXED_WS_ID}/board/${id}`);
+      expect(scoped.data).toMatchObject({ page: { status: "ok", id } });
+      expect((await getJson(h, "/api/board/00000000010000000000000000")).data).toMatchObject({
+        page: { status: "unavailable", why: "not_found" },
+      });
+      expect((await getJson(h, "/api/board/..%2F..%2Fx")).status).toBe(404);
+    });
+  });
+
+  it("says why there is no board to show", async () => {
+    const repo = await workspaceWith();
+    await withView(repo, {}, async (h) => {
+      expect((await getJson(h, "/api/board")).data).toMatchObject({
+        language: "en",
+        strings: boardPageStrings("en"),
+        page: { status: "unavailable", why: "no_board" },
+      });
+    });
+  });
+
+  it("has no record to draw before the first one is written", async () => {
+    const repo = await workspaceWith([{ path: ".", visibility: "private" }]);
+    await withView(repo, {}, async (h) => {
+      expect((await getJson(h, "/api/board")).data).toMatchObject({
+        page: { status: "unavailable", why: "no_records", records: [] },
+      });
+    });
+  });
+
+  it("is not served in portfolio mode", async () => {
+    const repo = await initWorkspaceAt(tmpRepo as string, WS_ID_A, "a");
+    await withPortfolioServer([repo], {}, async (h) => {
+      expect((await fetch(`${h.url}/board`)).status).toBe(404);
+      expect((await getJson(h, `/api/ws/${WS_ID_A}/board`)).status).toBe(404);
+    });
+  });
+
+  it("takes no flag to point at a board: the command is guaranteed and the board is not", () => {
+    const program = new Command();
+    registerViewCommand(program);
+    const view = program.commands.find((c) => c.name() === "view");
+    expect(view?.options.map((o) => o.long)).toContain("--port");
+    expect(view?.options.map((o) => o.long)).not.toContain("--board");
+  });
+
+  it("links to the page from the single-mode header", () => {
+    expect(VIEW_HTML).toContain('<a id="board-link" href="/board" style="display:none">Board</a>');
+    expect(VIEW_HTML).toContain("$('board-link').style.display = '';");
+  });
+
+  /** Lift a named function out of the board page. */
+  function lift(name: string): string {
+    const marker = `function ${name}(`;
+    const start = BOARD_HTML.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = BOARD_HTML.indexOf("{", start); i < BOARD_HTML.length; i++) {
+      const ch = BOARD_HTML[i];
+      if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) return BOARD_HTML.slice(start, i + 1);
+    }
+    throw new Error(`no end of ${name}`);
+  }
+
+  it("puts text in without markup, a span between backticks as code and nothing else", () => {
+    expect(BOARD_HTML).not.toContain("innerHTML");
+    const codeSpans = new Function(`${lift("codeSpans")}; return codeSpans;`)() as (
+      text: string,
+    ) => { code: boolean; text: string }[];
+    expect(codeSpans("run `basou board` now")).toEqual([
+      { code: false, text: "run " },
+      { code: true, text: "basou board" },
+      { code: false, text: " now" },
+    ]);
+    expect(codeSpans("a `b` c `d")).toEqual([
+      { code: false, text: "a " },
+      { code: true, text: "b" },
+      { code: false, text: " c `d" },
+    ]);
+    expect(codeSpans("`<b>x</b>`")).toEqual([{ code: true, text: "<b>x</b>" }]);
+    expect(codeSpans("`")).toEqual([{ code: false, text: "`" }]);
+    const fill = new Function(`${lift("fill")}; return fill;`)() as (
+      template: string,
+      values: Record<string, unknown>,
+    ) => string;
+    expect(fill("{n} of {n} and {m}", { n: 2 })).toBe("2 of 2 and {m}");
   });
 });

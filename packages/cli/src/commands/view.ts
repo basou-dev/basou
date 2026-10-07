@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { basename, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   assertBasouRootSafe,
   basouPaths,
@@ -17,10 +17,12 @@ import { checkPortfolioSafety, formatSafetyReport } from "../lib/portfolio-safet
 import {
   type RemoteUrlResolver,
   startViewServer,
+  type ViewBoard,
   type ViewServerDeps,
   type ViewServerHandle,
   type WorkspaceEntry,
 } from "../lib/view-server.js";
+import { DEFAULT_BOARD_PATH } from "./board.js";
 import type { ImportContext } from "./import.js";
 
 const DEFAULT_PORT = 4319;
@@ -225,7 +227,23 @@ async function buildSingleDeps(ctx: ViewContext, cwd: string): Promise<ViewServe
     mode: "single",
     nowProvider: nowProviderOf(ctx),
     ...(ctx.remoteUrlOf !== undefined ? { remoteUrlOf: ctx.remoteUrlOf } : {}),
+    board: await viewBoardOf(repositoryRoot, paths),
   };
+}
+
+// Where the board page reads records from: beside the default board.yaml,
+// which `basou board` reads only when the manifest declares the workspace's
+// own repo private. There is no flag to point elsewhere: this command is
+// guaranteed and the board is experimental. Only the records are read.
+async function viewBoardOf(root: string, paths: ReturnType<typeof basouPaths>): Promise<ViewBoard> {
+  let own: { visibility?: string | undefined } | undefined;
+  try {
+    own = (await readManifest(paths)).repos?.find((repo) => repo.path === ".");
+  } catch {
+    own = undefined;
+  }
+  if (own?.visibility !== "private") return { why: "no_board" };
+  return { recordsDir: join(root, dirname(DEFAULT_BOARD_PATH), "records") };
 }
 
 /**

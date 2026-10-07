@@ -3,6 +3,9 @@ import type { AddressInfo } from "node:net";
 import { basename, join, resolve } from "node:path";
 import {
   type BasouPaths,
+  boardPage,
+  boardPageStrings,
+  boardPageUnavailable,
   computeWorkStats,
   enumerateApprovals,
   findErrorCode,
@@ -19,11 +22,13 @@ import {
   readTaskFile,
   renderDecisions,
   renderHandoff,
+  resolveViewLanguageFromPaths,
   SessionIdSchema,
   summarizeOrientation,
   tryRemoteUrl,
 } from "@basou/core";
 import type { ImportContext } from "../commands/import.js";
+import { BOARD_HTML } from "./board-ui.js";
 import { warnIfPositionNamesOtherWorkspaces } from "./foreign-workspace-warn.js";
 import {
   importClaudeCode,
@@ -59,6 +64,12 @@ export type WorkspaceEntry = {
   manifestError?: string;
 };
 
+/**
+ * Where the board page reads a board's records from (the `records/` beside
+ * its board.yaml), or why there is no board to show.
+ */
+export type ViewBoard = { recordsDir: string } | { why: "no_board" };
+
 /** Resolve a repo's remote URL live from its local git config; `undefined` when unset. */
 export type RemoteUrlResolver = (repoRoot: string) => Promise<string | undefined>;
 
@@ -75,6 +86,8 @@ export type ViewServerDeps = {
    * {@link tryRemoteUrl}; injectable so tests need no real git remotes.
    */
   remoteUrlOf?: RemoteUrlResolver;
+  /** The board the board page shows: single mode only (the page is not served otherwise). */
+  board?: ViewBoard;
 };
 
 /** A running view server, with the means to stop it. */
@@ -198,6 +211,12 @@ async function handleGet(
     sendHtml(res, VIEW_HTML);
     return;
   }
+  // Single mode only: a board carries the effort figures the portfolio
+  // cards never show.
+  if (pathname === "/board" && deps.mode === "single") {
+    sendHtml(res, BOARD_HTML);
+    return;
+  }
   if (pathname === "/api/portfolio") {
     sendJson(res, 200, await portfolio(deps));
     return;
@@ -209,7 +228,16 @@ async function handleGet(
       sendError(res, 404, "Unknown workspace");
       return;
     }
-    if (!(await handleWorkspaceGet(res, scoped.sub, ws, deps.nowProvider, remoteUrlOf(deps)))) {
+    if (
+      !(await handleWorkspaceGet(
+        res,
+        scoped.sub,
+        ws,
+        deps.nowProvider,
+        remoteUrlOf(deps),
+        boardOf(deps),
+      ))
+    ) {
       sendError(res, 404, "Not found");
     }
     return;
@@ -223,6 +251,7 @@ async function handleGet(
         primaryWorkspace(deps),
         deps.nowProvider,
         remoteUrlOf(deps),
+        boardOf(deps),
       ))
     ) {
       sendError(res, 404, "Not found");
@@ -230,6 +259,11 @@ async function handleGet(
     return;
   }
   sendError(res, 404, "Not found");
+}
+
+/** The board the board routes serve: none outside single mode. */
+function boardOf(deps: ViewServerDeps): ViewBoard | undefined {
+  return deps.mode === "single" ? deps.board : undefined;
 }
 
 /** The configured live remote-URL resolver, or core's default. */
@@ -273,7 +307,19 @@ async function handleWorkspaceGet(
   ws: WorkspaceEntry,
   nowProvider: () => Date,
   resolveRemoteUrl: RemoteUrlResolver,
+  board: ViewBoard | undefined,
 ): Promise<boolean> {
+  if (board !== undefined) {
+    if (sub === "board") {
+      sendJson(res, 200, await boardView(ws, board, undefined));
+      return true;
+    }
+    const recordId = matchId(sub, "board/");
+    if (recordId !== null) {
+      sendJson(res, 200, await boardView(ws, board, recordId));
+      return true;
+    }
+  }
   if (sub === "overview") {
     sendJson(res, 200, await overview(ws, nowProvider, resolveRemoteUrl));
     return true;
@@ -392,6 +438,23 @@ function matchWsRoute(pathname: string): { key: string; sub: string } | null {
 }
 
 // --- handlers -------------------------------------------------------------
+
+/**
+ * What the board page draws, with its fixed strings in the language the
+ * workspace's anchor declares. Read-only: only the records are read.
+ */
+async function boardView(
+  ws: WorkspaceEntry,
+  board: ViewBoard,
+  recordId: string | undefined,
+): Promise<Record<string, unknown>> {
+  const language = await resolveViewLanguageFromPaths(ws.paths);
+  const page =
+    "why" in board
+      ? boardPageUnavailable(board.why, "")
+      : await boardPage(board.recordsDir, recordId);
+  return { language, strings: boardPageStrings(language), page };
+}
 
 /**
  * Aggregate the per-workspace "current position" for the portfolio landing.

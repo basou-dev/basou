@@ -58,6 +58,14 @@ export type BoardPreviousRecords = {
   lastReview: PreviousOutcome<{ id: string; record: ReadBoardRecord }>;
 };
 
+/** The names that are records, as their ULIDs, oldest first. */
+export function recordIds(names: readonly string[]): string[] {
+  return names
+    .filter((name) => name.endsWith(".json") && isUlidBody(name.slice(0, -".json".length)))
+    .map((name) => name.slice(0, -".json".length))
+    .sort();
+}
+
 /** No record to compare with. */
 export const NO_PREVIOUS_RECORDS: BoardPreviousRecords = {
   last: { status: "none" },
@@ -87,15 +95,12 @@ export async function readPreviousRecords(recordsDir: string): Promise<BoardPrev
     const reason = "the records/ beside the board could not be read";
     return { last: { status: "unreadable", reason }, lastReview: { status: "unreadable", reason } };
   }
-  const ids = names
-    .filter((name) => name.endsWith(".json") && isUlidBody(name.slice(0, -".json".length)))
-    .map((name) => name.slice(0, -".json".length))
-    .sort();
+  const ids = recordIds(names);
 
   let last: BoardPreviousRecords["last"] = { status: "none" };
   for (let i = ids.length - 1; i >= 0; i--) {
     const id = ids[i] as string;
-    const read = await readRecord(recordsDir, id);
+    const read = await readBoardRecordFile(recordsDir, id);
     if (!read.ok) {
       const unreadable = { status: "unreadable" as const, reason: read.reason };
       return { last: last.status === "none" ? unreadable : last, lastReview: unreadable };
@@ -108,7 +113,8 @@ export async function readPreviousRecords(recordsDir: string): Promise<BoardPrev
   return { last, lastReview: { status: "none" } };
 }
 
-async function readRecord(
+/** Read the record named `id` in a records directory, or say why it cannot be read. */
+export async function readBoardRecordFile(
   recordsDir: string,
   id: string,
 ): Promise<{ ok: true; record: ReadBoardRecord } | { ok: false; reason: string }> {

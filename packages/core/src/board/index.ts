@@ -54,6 +54,13 @@ export type {
   MeasureBoardInput,
 } from "./measure.js";
 export { boardDigest, measureBoard } from "./measure.js";
+export type {
+  BoardPage,
+  BoardPageBody,
+  BoardPageRecordRef,
+  BoardPageUnavailable,
+} from "./page.js";
+export { boardPage, boardPageUnavailable } from "./page.js";
 export type { BoardPortfolio } from "./portfolio.js";
 export { BOARD_PORTFOLIO_METHOD } from "./portfolio.js";
 export type {
