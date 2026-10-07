@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   assertBasouRootSafe,
   type BasouPaths,
@@ -44,6 +44,8 @@ export type BoardRecordOptions = {
   /** Read the record's input from this file; `-`, or none, reads stdin. */
   file?: string;
   dryRun?: boolean;
+  /** Record even where no repo the manifest declares private holds the records. */
+  notPrivate?: boolean;
   json?: boolean;
   verbose?: boolean;
 };
@@ -116,10 +118,14 @@ read (nothing is printed on stdout).`,
     )
     .option(
       "--board <path>",
-      `The board.yaml to read (default: ${DEFAULT_BOARD_PATH} in the workspace, only when the manifest declares the workspace's own repo private)`,
+      `The board.yaml to read, a file of that name (default: ${DEFAULT_BOARD_PATH} in the workspace, only when the manifest declares the workspace's own repo private)`,
     )
     .option("--file <path>", "Read the record's input (JSON) from a file; - or none reads stdin")
     .option("--dry-run", "Check the input and measure again, but write nothing")
+    .option(
+      "--not-private",
+      "Record even when no repo the manifest declares private holds records/ (a record holds what the trail holds)",
+    )
     .option("--json", "Output the result as JSON")
     .option("-v, --verbose", "Show error causes")
     .addHelpText(
@@ -128,9 +134,10 @@ read (nothing is printed on stdout).`,
 The input is a JSON object: measure_digest (the digest of the measurement the
 judgement saw), observed, cells (every lane at every stage), prose, judged_by
 and axis_review. The board is measured again, and nothing is written when the
-digest differs. Exit codes: 0 when the record was written (with --dry-run,
-when it could be); 1 when it was refused (nothing is written; the reasons are
-on stderr).`,
+digest differs. Records are never written under a .basou/ directory. Exit
+codes: 0 when the record was written, or with --dry-run when everything
+checked out (nothing is written then); 1 when it was refused (nothing is
+written; the reasons are on stderr).`,
     )
     .action(async (options: BoardRecordOptions) => {
       await runBoardRecord(options);
@@ -185,7 +192,10 @@ export async function runBoardRecord(
 
 /** What `basou board record` reports when it is not refused. */
 export type BoardRecordResult = {
-  /** Where the record was written, as given (null with --dry-run). */
+  /**
+   * Where the record was written: beside the --board given, as given, or
+   * else from the current directory (null with --dry-run).
+   */
   record: string | null;
   dry_run: boolean;
   /** Whether the measurement recorded was complete. */
@@ -193,26 +203,57 @@ export type BoardRecordResult = {
   order_anomalies: BoardOrderAnomaly[];
 };
 
+// A refusal of `basou board record` that says nothing was written.
+class RecordRefusal extends Error {}
+
 /**
- * Check the input against the declaration, measure the board again with the
- * judge's model, and write the record when the digest is the one the
- * judgement saw. Anything refused throws before a file is written.
+ * Check where the record goes and the input against the declaration, measure
+ * the board again with the judge's model, and write the record when the
+ * digest is the one the judgement saw. Anything refused throws, saying that
+ * nothing was written.
  */
 export async function doRunBoardRecord(
   options: BoardRecordOptions,
   ctx: BoardContext,
 ): Promise<BoardRecordResult> {
+  let result: BoardRecordResult;
+  try {
+    result = await checkAndRecord(options, ctx);
+  } catch (error: unknown) {
+    if (error instanceof RecordRefusal || !(error instanceof Error)) throw error;
+    throw new RecordRefusal(`${error.message}\nNothing was written.`, { cause: error.cause });
+  }
+  if (options.json === true) console.log(JSON.stringify(result, null, 2));
+  else printRecordText(result);
+  return result;
+}
+
+async function checkAndRecord(
+  options: BoardRecordOptions,
+  ctx: BoardContext,
+): Promise<BoardRecordResult> {
+  const cwd = ctx.cwd ?? process.cwd();
   const loaded = await loadBoard(options, ctx, "board record");
+  const beside = (...parts: string[]) =>
+    loaded.board.given
+      ? join(dirname(loaded.board.shown), ...parts)
+      : relative(cwd, join(dirname(loaded.board.path), ...parts));
+  const recordsDir = join(dirname(loaded.board.path), "records");
+  await checkRecordsPlace(loaded, recordsDir, beside("records"), options.notPrivate === true);
+
   const text = await readRecordInput(options, ctx);
+  // A key given twice keeps its last, as JSON.parse reads it.
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch (error: unknown) {
-    throw new Error("The record's input is not valid JSON; nothing was written.", { cause: error });
+    throw new RecordRefusal("The record's input is not valid JSON; nothing was written.", {
+      cause: error,
+    });
   }
   const parsed = parseRecordInput(value, loaded.declaration);
   if (!parsed.ok) {
-    throw new Error(
+    throw new RecordRefusal(
       `The record's input was refused; nothing was written:\n${parsed.errors
         .map((e) => `  - ${displayPath(e)}`)
         .join("\n")}`,
@@ -221,8 +262,8 @@ export async function doRunBoardRecord(
   const recordedAt = ctx.nowProvider?.() ?? new Date();
   const measurement = await measureLoaded(loaded, ctx, parsed.input.judged_by.model);
   if (measurement.digest !== parsed.input.measure_digest) {
-    throw new Error(
-      `measure_digest is ${parsed.input.measure_digest}, but the board measures ${measurement.digest} now: something it measures moved since the judgement. Measure again and judge that; nothing was written.`,
+    throw new RecordRefusal(
+      `measure_digest is ${parsed.input.measure_digest}, but the board measures ${measurement.digest} now: something it measures moved since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.`,
     );
   }
   const record = buildRecord({
@@ -234,30 +275,100 @@ export async function doRunBoardRecord(
   });
   let written: string | null = null;
   if (options.dryRun !== true) {
-    const recordsDir = join(dirname(loaded.board.path), "records");
     let name: string;
     try {
       name = await writeRecord(recordsDir, record);
     } catch (error: unknown) {
-      throw new Error("The record could not be written; nothing was written.", { cause: error });
+      const code = errorCode(error);
+      throw new RecordRefusal(
+        `The record could not be written${code === undefined ? "" : ` (${code})`}; nothing was written.`,
+        { cause: error },
+      );
     }
-    written = join(dirname(loaded.board.shown), "records", name);
+    written = beside("records", name);
   }
-  const result: BoardRecordResult = {
+  return {
     record: written,
     dry_run: options.dryRun === true,
     complete: measurement.complete,
     order_anomalies: record.order_anomalies,
   };
-  if (options.json === true) console.log(JSON.stringify(result, null, 2));
-  else printRecordText(result);
-  return result;
+}
+
+function errorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
+// Where records go, checked before the input is read, with --dry-run too: the
+// records/ beside a file named board.yaml (one board a directory), never under
+// a .basou/ directory, and, unless --not-private, inside a repo the manifest
+// declares private, since a record holds what the trail holds.
+async function checkRecordsPlace(
+  loaded: LoadedBoard,
+  recordsDir: string,
+  shown: string,
+  notPrivate: boolean,
+): Promise<void> {
+  const { board } = loaded;
+  if (basename(board.path) !== "board.yaml") {
+    throw new RecordRefusal(
+      `${displayPath(board.shown)} is not named board.yaml: basou board record reads only a file of that name, so that the records/ beside it holds one board's records; nothing was written.`,
+    );
+  }
+  let dir: string;
+  try {
+    dir = await realpath(dirname(board.path));
+  } catch (error: unknown) {
+    throw new RecordRefusal(
+      `The directory of ${displayPath(board.shown)} could not be resolved; nothing was written.`,
+      { cause: error },
+    );
+  }
+  if (dir.split(sep).includes(".basou")) {
+    throw new RecordRefusal(
+      `${displayPath(shown)} would be under a .basou/ directory, where basou board record writes nothing; nothing was written.`,
+    );
+  }
+  if (!notPrivate) {
+    let holder: { real: string; private: boolean } | undefined;
+    for (const repo of loaded.manifest.repos ?? []) {
+      const real = await realpath(resolve(loaded.root, repo.path)).catch(() => undefined);
+      if (real === undefined || (dir !== real && !dir.startsWith(`${real}${sep}`))) continue;
+      // The innermost repo holds it.
+      if (holder === undefined || real.length > holder.real.length) {
+        holder = { real, private: repo.visibility === "private" };
+      }
+    }
+    if (holder?.private !== true) {
+      throw new RecordRefusal(
+        `${displayPath(shown)} is not in a repo the manifest declares private, and a record holds what the trail holds (open tracks, time worked, model names). Pass --not-private to record there anyway; nothing was written.`,
+      );
+    }
+  }
+  try {
+    const entry = await lstat(recordsDir);
+    if (!entry.isDirectory()) {
+      throw new RecordRefusal(
+        `${displayPath(shown)} is not a directory (a symlink or a file); nothing was written.`,
+      );
+    }
+  } catch (error: unknown) {
+    if (error instanceof RecordRefusal) throw error;
+    if (!findErrorCode(error, "ENOENT")) {
+      const code = errorCode(error);
+      throw new RecordRefusal(
+        `${displayPath(shown)} could not be looked at${code === undefined ? "" : ` (${code})`}; nothing was written.`,
+        { cause: error },
+      );
+    }
+  }
 }
 
 function printRecordText(result: BoardRecordResult): void {
   const lines = [
     result.record === null
-      ? "Dry run: the record could be written (nothing was written)."
+      ? "Dry run: the record checked out (nothing was written)."
       : `Recorded ${displayPath(result.record)}`,
   ];
   if (!result.complete) lines.push("The measurement recorded is not complete.");
@@ -301,6 +412,7 @@ async function readRecordInput(options: BoardRecordOptions, ctx: BoardContext): 
 type LoadedBoard = {
   root: string;
   paths: BasouPaths;
+  manifest: Manifest;
   repoPaths: string[];
   board: BoardLocation;
   declaration: BoardDeclaration;
@@ -334,7 +446,7 @@ async function loadBoard(
         .join("\n")}`,
     );
   }
-  return { root, paths, repoPaths, board, declaration: parsed.declaration };
+  return { root, paths, manifest, repoPaths, board, declaration: parsed.declaration };
 }
 
 async function measureLoaded(
@@ -366,7 +478,8 @@ async function measureLoaded(
   });
 }
 
-type BoardLocation = { path: string; shown: string };
+/** Where a board.yaml is, how to show it, and whether --board gave it. */
+type BoardLocation = { path: string; shown: string; given: boolean };
 
 // The default is used only when the manifest declares the workspace's own
 // repo private: a measurement carries what the trail holds (open tracks,
@@ -378,14 +491,14 @@ function boardPath(
   manifest: Manifest,
 ): BoardLocation {
   if (options.board !== undefined)
-    return { path: resolve(cwd, options.board), shown: options.board };
+    return { path: resolve(cwd, options.board), shown: options.board, given: true };
   const own = (manifest.repos ?? []).find((repo) => repo.path === ".");
   if (own?.visibility !== "private") {
     throw new Error(
       `No --board given, and the default ${DEFAULT_BOARD_PATH} is used only when the manifest declares this workspace's own repo (path: .) private. Pass --board <path to board.yaml>.`,
     );
   }
-  return { path: join(root, DEFAULT_BOARD_PATH), shown: DEFAULT_BOARD_PATH };
+  return { path: join(root, DEFAULT_BOARD_PATH), shown: DEFAULT_BOARD_PATH, given: false };
 }
 
 async function readDeclaration(board: BoardLocation): Promise<string> {

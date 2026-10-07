@@ -536,9 +536,10 @@ expected to change across major versions:
 - **Local-first and zero-network** — the workspace trail lives under `.basou/`
   next to your code; optional integrations may also write user-level files
   (`~/.claude/`, `~/.codex/`), and an experimental command may write files
-  where you point it (`basou board record` writes beside the `board.yaml` it
-  reads), which are not part of the trail. Everything stays on-machine —
-  nothing is sent off-machine.
+  beside a file of yours that it reads, never under `.basou/` (`basou board
+  record` writes a `records/` directory beside its `board.yaml`); those files
+  are not part of the trail, though they may hold what the trail holds.
+  Everything stays on-machine — nothing is sent off-machine.
 - **Adopt, not rip** — adoption is non-destructive and reversible, and the
   adoption / wiring generators (`sync`, `adopt`, gitignore, symlinks) are
   dry-run-by-default.

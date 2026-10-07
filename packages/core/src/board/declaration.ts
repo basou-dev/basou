@@ -48,7 +48,8 @@ const idText = z.string().regex(ID_PATTERN, {
   error: "must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
 });
 
-function isCalendarDate(s: string): boolean {
+/** Whether a text is a date of the calendar written as YYYY-MM-DD. */
+export function isCalendarDate(s: string): boolean {
   const m = DATE_PATTERN.exec(s);
   if (m === null) return false;
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];

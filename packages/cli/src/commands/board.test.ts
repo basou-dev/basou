@@ -878,9 +878,10 @@ describe("basou board record", () => {
   // input of a record judged against the board as measured now.
   async function judged(
     states: string[] = ["done", "part", "none", "none", "none", "none"],
+    board: string = boardYaml([MD]),
   ): Promise<{ repo: string; input: Record<string, unknown> }> {
     const repo = await workspace([{ path: ".", visibility: "private" }]);
-    await placeBoard(repo, boardYaml([MD]));
+    await placeBoard(repo, board);
     const { out } = capture();
     const measured = await doRunBoardMeasure({ json: true }, ctx(repo));
     out.length = 0;
@@ -935,7 +936,124 @@ describe("basou board record", () => {
     const result = await doRunBoardRecord({ dryRun: true, json: true }, fed(repo, input));
     expect(result).toEqual({ record: null, dry_run: true, complete: true, order_anomalies: [] });
     expect(JSON.parse(out.join("\n"))).toEqual(result);
+    out.length = 0;
+    await doRunBoardRecord({ dryRun: true }, fed(repo, input));
+    expect(out.join("\n")).toBe("Dry run: the record checked out (nothing was written).");
     await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
+  });
+
+  it("measures again as the judge's model, against the review the axis has on record", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.axis.seed_review = { date: "2026-10-01", model: "Other Model" };
+    const { repo, input } = await judged(undefined, JSON.stringify(board));
+    capture();
+    const result = await doRunBoardRecord({}, fed(repo, input));
+    const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
+    expect(written.measure.axis.reasons).toContainEqual({
+      trigger: "c",
+      detail: "Claude Opus 5.5 judges; Other Model reviewed last",
+    });
+  });
+
+  it("says where the record is from the current directory, or beside a --board as given", async () => {
+    const { repo, input } = await judged();
+    const deeper = join(repo, "sub", "deeper");
+    await mkdir(deeper, { recursive: true });
+    const { out } = capture();
+    const result = await doRunBoardRecord({}, { ...fed(repo, input), cwd: deeper });
+    expect(result.record).toMatch(
+      /^\.\.\/\.\.\/board\/records\/[0-7][0-9A-HJKMNP-TV-Z]{25}\.json$/,
+    );
+    expect(out.join("\n")).toBe(`Recorded ${result.record}`);
+    await expect(readFile(join(deeper, result.record ?? ""), "utf8")).resolves.toContain(
+      '"record_version": 1',
+    );
+  });
+
+  it("refuses records outside a repo the manifest declares private, unless --not-private", async () => {
+    const { repo, input } = await judged();
+    const outside = await realpath(await mkdtemp(join(tmpdir(), "basou-board-elsewhere-")));
+    try {
+      await placeBoard(outside, boardYaml([MD]));
+      const board = join(outside, "board", "board.yaml");
+      const { out, err } = capture();
+      await runBoardRecord({ board }, fed(repo, input));
+      expect(err.join("\n")).toContain(
+        "is not in a repo the manifest declares private, and a record holds what the trail holds (open tracks, time worked, model names). Pass --not-private to record there anyway; nothing was written.",
+      );
+      expect(out).toEqual([]);
+      expect(process.exitCode).toBe(1);
+      await expect(readdir(join(outside, "board"))).resolves.toEqual(["board.yaml"]);
+      process.exitCode = 0;
+      const result = await doRunBoardRecord({ board, notPrivate: true }, fed(repo, input));
+      expect(result.record).toMatch(
+        new RegExp(`^${join(outside, "board", "records")}/[0-7][0-9A-HJKMNP-TV-Z]{25}\\.json$`),
+      );
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses records in a repo inside the private one that the manifest does not declare private", async () => {
+    const repo = await workspace([
+      { path: ".", visibility: "private" },
+      { path: "pub", visibility: "public" },
+    ]);
+    await placeBoard(repo, boardYaml([MD]), "pub/board/board.yaml");
+    const { err } = capture();
+    await runBoardRecord({ board: "pub/board/board.yaml", dryRun: true }, fed(repo, "{}"));
+    expect(err.join("\n")).toContain(
+      "pub/board/records is not in a repo the manifest declares private",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("refuses, with --dry-run too, a board.yaml of another name, records under .basou/, or a records/ that is not a directory", async () => {
+    const { repo, input } = await judged();
+    const { out, err } = capture();
+    await placeBoard(repo, boardYaml([MD]), "board/other.yaml");
+    await runBoardRecord({ board: "board/other.yaml", dryRun: true }, fed(repo, input));
+    expect(err.join("\n")).toContain(
+      "board/other.yaml is not named board.yaml: basou board record reads only a file of that name, so that the records/ beside it holds one board's records; nothing was written.",
+    );
+    err.length = 0;
+    await placeBoard(repo, boardYaml([MD]), ".basou/board/board.yaml");
+    await runBoardRecord({ board: ".basou/board/board.yaml" }, fed(repo, input));
+    expect(err.join("\n")).toContain(
+      ".basou/board/records would be under a .basou/ directory, where basou board record writes nothing; nothing was written.",
+    );
+    err.length = 0;
+    await symlink(join(repo, ".basou", "board"), join(repo, "linked"));
+    await runBoardRecord({ board: "linked/board.yaml", dryRun: true }, fed(repo, input));
+    expect(err.join("\n")).toContain("linked/records would be under a .basou/ directory");
+    await expect(readdir(join(repo, ".basou", "board"))).resolves.toEqual(["board.yaml"]);
+    err.length = 0;
+    await writeFile(join(repo, "board", "records"), "not a directory\n");
+    await runBoardRecord({ dryRun: true }, fed(repo, input));
+    expect(err.join("\n")).toContain(
+      "board/records is not a directory (a symlink or a file); nothing was written.",
+    );
+    expect(out).toEqual([]);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("says why a record could not be written, and leaves nothing behind", async () => {
+    const { repo, input } = await judged();
+    const records = join(repo, "board", "records");
+    await mkdir(records);
+    await chmod(records, 0o555);
+    try {
+      const { out, err } = capture();
+      await runBoardRecord({}, fed(repo, input));
+      expect(err.join("\n")).toContain(
+        "The record could not be written (EACCES); nothing was written.",
+      );
+      expect(out).toEqual([]);
+      expect(process.exitCode).toBe(1);
+      expect(await readdir(records)).toEqual([]);
+    } finally {
+      await chmod(records, 0o755);
+    }
   });
 
   it("lists the stages left behind", async () => {
@@ -956,7 +1074,9 @@ describe("basou board record", () => {
     expect(err.join("\n")).toContain(
       `measure_digest is ${input.measure_digest}, but the board measures sha256:`,
     );
-    expect(err.join("\n")).toContain("Measure again and judge that; nothing was written.");
+    expect(err.join("\n")).toContain(
+      "something it measures moved since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.",
+    );
     expect(process.exitCode).toBe(1);
     await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
   });
@@ -968,14 +1088,20 @@ describe("basou board record", () => {
     expect(err.join("\n")).toContain("The record's input is not valid JSON; nothing was written.");
     err.length = 0;
     await runBoardRecord({}, fed(repo, "  \n"));
-    expect(err.join("\n")).toContain(
-      "No input: pipe the record's JSON to stdin or pass --file <path>.",
+    expect(err.join("\n")).toBe(
+      "No input: pipe the record's JSON to stdin or pass --file <path>.\nNothing was written.",
     );
     err.length = 0;
     const cells = (input.cells as Record<string, unknown>[]).slice(1);
     await runBoardRecord({}, fed(repo, { ...input, cells, extra: true }));
-    expect(err.join("\n")).toContain(
-      "The record's input was refused; nothing was written:\n  - (top level): unknown key 'extra'",
+    expect(err.join("\n")).toBe(
+      "The record's input was refused; nothing was written:\n  - (top level): unknown key 'extra'\n  - cells: lane 'core' has no cell at stage '01'",
+    );
+    err.length = 0;
+    await writeFile(join(repo, "board", "board.yaml"), "board_version: 1\n");
+    await runBoardRecord({}, fed(repo, input));
+    expect(err.join("\n")).toMatch(
+      /^board\/board\.yaml is not a valid board declaration:\n[\s\S]*\nNothing was written\.$/,
     );
     expect(out).toEqual([]);
     expect(process.exitCode).toBe(1);
