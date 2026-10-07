@@ -1482,7 +1482,7 @@ describe("basou view: the board page", () => {
         ...["svg", "monthTicks", "plotWidth", "dayX", "xAxis", "labelWidth", "placeLabels"].map(
           lift,
         ),
-        "return { xAxis: xAxis, placeLabels: placeLabels, CHART: CHART };",
+        "return { xAxis: xAxis, placeLabels: placeLabels, labelWidth: labelWidth, CHART: CHART };",
       ].join("\n"),
     )(document) as {
       xAxis: (days: { date: string }[], base: number) => Node[];
@@ -1491,8 +1491,12 @@ describe("basou view: the board page", () => {
         rows: number,
         centred: boolean,
       ) => { x: number; row: number; text: string }[];
+      labelWidth: (text: string) => number;
       CHART: { w: number; left: number; right: number };
     };
+    // A wide character is reckoned as wide as two narrow ones, near enough.
+    expect(fns.labelWidth("ab")).toBeCloseTo(12.4, 5);
+    expect(fns.labelWidth("\u5b9f\u88c5")).toBeCloseTo(22, 5);
     const days = Array.from({ length: 160 }, (_, i) => ({
       date: new Date(Date.UTC(2026, 3, 28 + i)).toISOString().slice(0, 10),
     }));
