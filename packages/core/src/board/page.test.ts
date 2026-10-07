@@ -409,6 +409,14 @@ describe("boardPage", () => {
       ],
     });
     expect(b.turns).toEqual([{ text: "Decide X", source: "decision_X" }]);
+    // With no days measured there is nothing by day or by week, not none of them.
+    const undated = record();
+    undated.measure.effort.daily = null as unknown as typeof undated.measure.effort.daily;
+    await place(B, undated);
+    const noDays = await boardPage(records);
+    if (noDays.status !== "ok") throw new Error(noDays.why);
+    expect(noDays.board.effort).toMatchObject({ active_days: null, daily: null, weeks: null });
+    await rm(join(records, `${B}.json`));
     expect(b.footnotes).toEqual({
       notes: ["Measured with care."],
       axis: {
