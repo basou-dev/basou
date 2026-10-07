@@ -3,7 +3,7 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
-## Unreleased
+## 0.65.0 — 2026-10-08
 
 ### Added
 
@@ -218,10 +218,10 @@ All notable changes to **basou** are recorded here. The project follows
   promotion in a minor release, which guarantees only the files and shapes
   that release names; a command may instead be removed at any release.
   `--help` marks these commands `[experimental]`, but the table decides. The
-  list is empty for now. `basou view`'s HTTP routes and pages are a local UI;
-  read the trail through `@basou/sdk` or the `--json` output of a command
-  that is not experimental. The README and the portfolio section of
-  `docs/spec/cli-commands.md` say the same.
+  first command on it is `basou board`. `basou view`'s HTTP routes and pages
+  are a local UI; read the trail through `@basou/sdk` or the `--json` output
+  of a command that is not experimental. The README and the portfolio section
+  of `docs/spec/cli-commands.md` say the same.
 
 ### Internal
 
