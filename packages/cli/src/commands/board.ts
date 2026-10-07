@@ -426,7 +426,7 @@ function printRecordText(result: BoardRecordResult): void {
     lines.push(`Since the previous record ${result.diff.against}:`);
     for (const c of cells) {
       lines.push(
-        `  ${displayPath(c.lane)} ${displayPath(c.stage)}: ${c.before ?? "no cell"} -> ${c.after ?? "no cell"}`,
+        `  ${displayPath(c.lane)} ${displayPath(c.stage)}: ${displayPath(c.before ?? "no cell")} -> ${displayPath(c.after ?? "no cell")}`,
       );
     }
     for (const o of observed) {
@@ -614,7 +614,7 @@ function diffLines(diff: Omit<BoardDiff, "against">, more: boolean): string[] {
   const lines: string[] = [];
   if (diff.methods.length > 0) {
     const moved = diff.methods.map(
-      (m) => `${m.section} ${m.before ?? "none"} -> ${m.after ?? "none"}`,
+      (m) => `${displayPath(m.section)} ${m.before ?? "none"} -> ${m.after ?? "none"}`,
     );
     lines.push(`  methods changed: ${moved.join(", ")}`);
   }

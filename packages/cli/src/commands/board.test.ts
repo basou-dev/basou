@@ -1251,6 +1251,30 @@ describe("basou board measure and record against the previous record", () => {
     );
   });
 
+  it("shows what a previous record holds with its control characters escaped", async () => {
+    const { repo, first } = await recorded();
+    const file = join(repo, "board", "records", `${first}.json`);
+    const written = JSON.parse(await readFile(file, "utf8"));
+    written.cells[1].state = `part${ESC}[31m`;
+    written.measure.methods[`evil${ESC}[2J`] = 1;
+    await writeFile(file, JSON.stringify(written));
+    const { out } = capture();
+    const m = await doRunBoardMeasure({ json: true }, ctx(repo));
+    out.length = 0;
+    await doRunBoardMeasure({}, ctx(repo));
+    await doRunBoardRecord(
+      { dryRun: true },
+      {
+        ...ctx(repo),
+        readInput: async () => JSON.stringify(judgement(m.digest, ["done", "done"], {})),
+      },
+    );
+    const text = out.join("\n");
+    expect(text).not.toContain(ESC);
+    expect(text).toContain("  core 02: part\\x1b[31m -> done\n");
+    expect(text).toContain("methods changed: evil\\x1b[2J 1 -> none");
+  });
+
   it("takes a record it cannot read as a gap, not as no record", async () => {
     const { repo, first } = await recorded();
     await writeFile(join(repo, "board", "records", `${first}.json`), "{ not json");
