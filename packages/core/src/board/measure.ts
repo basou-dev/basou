@@ -11,6 +11,7 @@ import {
   type BoardDeclaration,
   type BoardMeasure,
 } from "./declaration.js";
+import { type BoardDiff, diffMeasurements } from "./diff.js";
 import { BOARD_EFFORT_METHOD, type BoardEffort, measureEffort, todayIn } from "./effort.js";
 import {
   BOARD_FRESHNESS_METHOD,
@@ -28,6 +29,7 @@ import {
 } from "./glob.js";
 import { BOARD_INTEGRITY_METHOD, type BoardIntegrity, measureIntegrity } from "./integrity.js";
 import { BOARD_PORTFOLIO_METHOD, type BoardPortfolio, measurePortfolio } from "./portfolio.js";
+import { type BoardPreviousRecords, NO_PREVIOUS_RECORDS } from "./previous.js";
 import { BOARD_REPOS_METHOD, type BoardRepo, measureRepos } from "./repos.js";
 import {
   BOARD_REVIEW_GAPS_METHOD,
@@ -79,8 +81,9 @@ export type BoardRatioValue = {
  * there is no session that is not archived (see {@link BoardFreshness}), the
  * Codex time when there is no Codex session (see {@link BoardEffort}), the
  * components' kind changes when there is no previous record (see
- * {@link BoardComponents}), and the axis's last review when there is none on
- * record (see {@link BoardAxis}).
+ * {@link BoardComponents}), the axis's last review when there is none on
+ * record (see {@link BoardAxis}), and the diff when there is no previous
+ * record.
  */
 export type BoardMeasurement = {
   board_version: number;
@@ -91,13 +94,14 @@ export type BoardMeasurement = {
   not_found: BoardNotFound[];
   /**
    * `sha256:` and the hex digest of the measurement without `measured_at`,
-   * `digest`, `freshness`, `axis` and its not_found entries,
+   * `digest`, `freshness`, `axis` and its not_found entries, `diff`,
    * `effort.elapsed_days` and today's row of `effort.daily`, serialized with
    * its keys sorted. Two measurements with the
    * same values have the same digest whenever they were taken. The freshness
    * moves as work goes on, the measuring session's own included, the axis
-   * rests on the day, the model and the records, and the others move with the
-   * clock, so they are left out.
+   * rests on the day, the model and the records, the diff is derived from the
+   * previous record, and the others move with the clock, so they are left
+   * out.
    */
   digest: string;
   /**
@@ -138,6 +142,11 @@ export type BoardMeasurement = {
   components: BoardComponents;
   /** Whether the axis is due a review, by the triggers measure can judge. */
   axis: BoardAxis;
+  /**
+   * What moved since the previous record. Null, with no entry, when there is
+   * no previous record; null with an entry at `diff` when it cannot be read.
+   */
+  diff: BoardDiff | null;
 };
 
 export type MeasureBoardInput = {
@@ -160,6 +169,8 @@ export type MeasureBoardInput = {
   probeImports?: () => Promise<BoardImportProbe | null>;
   /** The model that will judge the board, for trigger (c) of the axis. */
   model?: string;
+  /** The records the board compares with (default: there are none). */
+  previous?: BoardPreviousRecords;
 };
 
 type Outcome = { value: number | string | null; reason?: string };
@@ -243,18 +254,52 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     authorDates: repos.authorDates,
   });
   notFound.push(...worked.notFound);
+  const { last, lastReview } = input.previous ?? NO_PREVIOUS_RECORDS;
   const built = await measureComponents({
     repos: input.repos,
     names: new Map(repos.repos.map((repo) => [repo.path, repo.name])),
     worktreeOf: (repo) => scopeOf(repo, BOARD_DEFAULT_AT),
     registered: declaration.components,
+    previous:
+      last.status !== "found"
+        ? last
+        : last.record.measure.components.found === null
+          ? { status: "none" }
+          : { status: "found", found: last.record.measure.components.found },
   });
   notFound.push(...built.notFound);
+  if (last.status === "unreadable") notFound.push({ at: "diff", reason: last.reason });
+  const methods = {
+    repos: BOARD_REPOS_METHOD,
+    trail: BOARD_TRAIL_METHOD,
+    integrity: BOARD_INTEGRITY_METHOD,
+    review_gaps: BOARD_REVIEW_GAPS_METHOD,
+    portfolio: BOARD_PORTFOLIO_METHOD,
+    freshness: BOARD_FRESHNESS_METHOD,
+    effort: BOARD_EFFORT_METHOD,
+    components: BOARD_COMPONENTS_METHOD,
+    axis: BOARD_AXIS_METHOD,
+  };
   const judged = judgeAxis({
     declared: declaration.axis,
     components: built.components,
     today: todayIn(declaration.effort.time_zone, input.now),
     model: input.model,
+    // The day of a review on record, counted in the same calendar as (b).
+    recordedReview:
+      lastReview.status !== "found"
+        ? lastReview
+        : {
+            status: "found",
+            date:
+              todayIn(declaration.effort.time_zone, new Date(lastReview.record.recorded_at)) ??
+              new Date(lastReview.record.recorded_at).toISOString().slice(0, 10),
+            model: lastReview.record.judged_by.model,
+            record: lastReview.id,
+          },
+    methods,
+    previousMethods:
+      last.status !== "found" ? last : { status: "found", methods: last.record.measure.methods },
   });
   notFound.push(...judged.notFound);
 
@@ -265,17 +310,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     measured_with: input.measuredWith,
     complete: notFound.length === 0,
     not_found: notFound,
-    methods: {
-      repos: BOARD_REPOS_METHOD,
-      trail: BOARD_TRAIL_METHOD,
-      integrity: BOARD_INTEGRITY_METHOD,
-      review_gaps: BOARD_REVIEW_GAPS_METHOD,
-      portfolio: BOARD_PORTFOLIO_METHOD,
-      freshness: BOARD_FRESHNESS_METHOD,
-      effort: BOARD_EFFORT_METHOD,
-      components: BOARD_COMPONENTS_METHOD,
-      axis: BOARD_AXIS_METHOD,
-    },
+    methods,
     repos: repos.repos,
     measures,
     ratios,
@@ -288,7 +323,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     components: built.components,
     axis: judged.axis,
   };
-  const { board_version, title, measured_at, measured_with, complete, not_found, methods } = body;
+  const { board_version, title, measured_at, measured_with, complete, not_found } = body;
   return {
     board_version,
     title,
@@ -309,19 +344,21 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     effort: body.effort,
     components: body.components,
     axis: body.axis,
+    diff: last.status === "found" ? diffMeasurements(last.record.measure, body, last.id) : null,
   };
 }
 
 // What the digest leaves out: when it was measured, the digest itself, the
-// freshness, which moves as work goes on, and the axis, which rests on the
-// day, the model and the records rather than on what was measured.
-const UNDIGESTED = new Set(["measured_at", "digest", "freshness", "axis"]);
+// freshness, which moves as work goes on, the axis, which rests on the day,
+// the model and the records rather than on what was measured, and the diff,
+// derived from the previous record.
+const UNDIGESTED = new Set(["measured_at", "digest", "freshness", "axis", "diff"]);
 
 /**
  * The digest of a measurement: sha256 over the measurement without
  * `measured_at`, `digest`, `freshness`, `axis` and its not_found entries,
- * `effort.elapsed_days` and the last row of `effort.daily` (today's), with
- * every object's keys sorted.
+ * `diff`, `effort.elapsed_days` and the last row of `effort.daily` (today's),
+ * with every object's keys sorted.
  */
 export function boardDigest(measurement: object): string {
   const hashed = Object.fromEntries(

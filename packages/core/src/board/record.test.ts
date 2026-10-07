@@ -353,6 +353,19 @@ describe("buildRecord and writeRecord", () => {
     expect(JSON.parse(await readFile(join(records, name), "utf8"))).toEqual(r);
   });
 
+  it("does not keep the measurement's diff, which the previous record derives", () => {
+    const parsed = parseRecordInput(input(), declaration());
+    if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+    const r = buildRecord({
+      declaration: declaration(),
+      measurement: { digest: DIGEST, diff: { against: "X" } } as unknown as BoardMeasurement,
+      recordInput: parsed.input,
+      recordedAt: new Date("2026-10-07T00:00:00.000Z"),
+      recordedWith: { basou: "0.0.0-test", build: null },
+    });
+    expect(r.measure).toEqual({ digest: DIGEST });
+  });
+
   it("tries another name rather than replace a record, and leaves no other file", async () => {
     const records = join(dir, "records");
     const first = await writeRecord(records, record());

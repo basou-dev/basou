@@ -20,6 +20,7 @@ import type { Event } from "../schemas/event.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { type BoardDeclaration, parseBoardDeclaration } from "./declaration.js";
 import { type BoardMeasurement, boardDigest, measureBoard } from "./measure.js";
+import type { BoardPreviousRecords, ReadBoardRecord } from "./previous.js";
 
 const NULL_CONFIG = process.platform === "win32" ? "\\\\.\\nul" : "/dev/null";
 const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: NULL_CONFIG, GIT_CONFIG_SYSTEM: NULL_CONFIG };
@@ -879,6 +880,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       "effort",
       "components",
       "axis",
+      "diff",
     ]);
     expect(m).toMatchObject({
       board_version: 1,
@@ -1711,8 +1713,8 @@ describe("measureBoard: the repos section", () => {
       portfolio: 1,
       freshness: 1,
       effort: 1,
-      components: 1,
-      axis: 1,
+      components: 2,
+      axis: 2,
     });
     const later = await measure(declaration, new Date("2026-10-05T09:00:00.000Z"), ["app"]);
     expect(later.digest).toBe(first.digest);
@@ -2750,8 +2752,8 @@ describe("measureBoard: the integrity section", () => {
       portfolio: 1,
       freshness: 1,
       effort: 1,
-      components: 1,
-      axis: 1,
+      components: 2,
+      axis: 2,
     });
     await placeChained(SES("S01"));
     const verified = await measure(declaration);
@@ -3010,8 +3012,8 @@ describe("measureBoard: the review_gaps section", () => {
       portfolio: 1,
       freshness: 1,
       effort: 1,
-      components: 1,
-      axis: 1,
+      components: 2,
+      axis: 2,
     });
     await placeWork(
       s1,
@@ -3130,8 +3132,8 @@ describe("measureBoard: the portfolio section", () => {
       portfolio: 1,
       freshness: 1,
       effort: 1,
-      components: 1,
-      axis: 1,
+      components: 2,
+      axis: 2,
     });
     expect(bare.portfolio).toEqual({ workspaces: 1, initialized: 0 });
     await mkdir(join(master, ".basou"));
@@ -3801,7 +3803,7 @@ describe("measureBoard: the components section", () => {
     const dir = await repo("app", { "package.json": "{}\n" });
     const declaration = declare([], {}, ["app"]);
     const first = await measure(declaration, NOW, ["app"]);
-    expect(first.methods.components).toBe(1);
+    expect(first.methods.components).toBe(2);
     await mkdir(join(dir, "svc"));
     await writeFile(join(dir, "svc", "Dockerfile"), "FROM x\n");
     const second = await measure(declaration, NOW, ["app"]);
@@ -3887,8 +3889,161 @@ describe("measureBoard: the axis section", () => {
   it("is left out of the digest", async () => {
     const declaration = declare([], SEEDED);
     const m = await measure(declaration);
-    expect(m.methods.axis).toBe(1);
+    expect(m.methods.axis).toBe(2);
     expect(m.axis.review_needed).toBe(false);
     expect(boardDigest({ ...m, axis: { ...m.axis, review_needed: true } })).toBe(m.digest);
+  });
+});
+
+describe("measureBoard: against the previous record", () => {
+  const ID = "01M4A00000000000000000000A";
+
+  // What a record of `m` reads back as.
+  function recordOf(m: BoardMeasurement, over: Record<string, unknown> = {}): ReadBoardRecord {
+    const { diff: _diff, ...measure } = m;
+    return {
+      record_version: 1,
+      recorded_at: m.measured_at,
+      measure,
+      observed: {},
+      cells: [],
+      judged_by: { model: "Claude Opus 5.5" },
+      axis_review: null,
+      ...over,
+    } as unknown as ReadBoardRecord;
+  }
+
+  function against(
+    declaration: BoardDeclaration,
+    previous: BoardPreviousRecords,
+    repos: readonly string[],
+    model?: string,
+  ): Promise<BoardMeasurement> {
+    return measureBoard({
+      declaration,
+      root,
+      repos,
+      paths,
+      now: NOW,
+      measuredWith: WITH,
+      portfolioConfigPath: PORTFOLIO(),
+      probeImports: NOTHING_TO_IMPORT,
+      previous,
+      ...(model === undefined ? {} : { model }),
+    });
+  }
+
+  it("says what moved since the previous record, and leaves that out of the digest", async () => {
+    await repo("app", { "package.json": "{}\n" });
+    const declaration = declare([], {}, ["app"]);
+    const first = await measure(declaration, NOW, ["app"]);
+    expect(first.diff).toBeNull();
+    await writeFile(join(root, "app", "README.md"), "# app\n");
+    const second = await against(
+      declaration,
+      {
+        last: { status: "found", id: ID, record: recordOf(first) },
+        lastReview: { status: "none" },
+      },
+      ["app"],
+    );
+    expect(second.diff).toEqual({
+      against: ID,
+      values: [
+        { at: 'repos["app"].files', before: 1, after: 2, delta: 1 },
+        { at: 'repos["app"].uncommitted', before: 0, after: 1, delta: 1 },
+      ],
+      methods: [],
+      added: [],
+      removed: [],
+    });
+    expect(boardDigest({ ...second, diff: null })).toBe(second.digest);
+    expect(second.complete).toBe(true);
+  });
+
+  it("counts gone what only the previous record found, and fires (e) for a method that moved", async () => {
+    await repo("app", { "package.json": "{}\n" });
+    const declaration = declare([], { components: { app: { lane: "-", note: "x" } } }, ["app"]);
+    const first = await measure(declaration, NOW, ["app"]);
+    const then = recordOf({
+      ...first,
+      methods: { ...first.methods, components: 1 },
+      components: {
+        ...first.components,
+        found: {
+          app: { kinds: ["ci", "manifest"], status: "known" },
+          "app/old": { kinds: ["env"], status: "unacknowledged" },
+        },
+      },
+    });
+    const m = await against(
+      declaration,
+      { last: { status: "found", id: ID, record: then }, lastReview: { status: "none" } },
+      ["app"],
+    );
+    expect(m.components.gone).toEqual(["app/old"]);
+    expect(m.components.kind_changed).toEqual([
+      { key: "app", before: ["ci", "manifest"], after: ["manifest"] },
+    ]);
+    expect(m.axis.reasons).toEqual([
+      { trigger: "a", detail: "components: 0 unacknowledged, 1 gone, 1 with changed kinds" },
+      { trigger: "b", detail: "the axis has no review on record" },
+      { trigger: "e", detail: "methods changed since the previous record: components 1 -> 2" },
+    ]);
+    expect(m.diff?.methods).toEqual([{ section: "components", before: 1, after: 2 }]);
+  });
+
+  it("takes the last review a record holds, dated in the effort's time zone", async () => {
+    const declaration = declare([], {
+      axis: { version: 1, review_due_days: 60, seed_review: { date: "2026-01-01", model: "Seed" } },
+      effort: { start: "2026-04-28", time_zone: "Asia/Tokyo" },
+    });
+    const first = await measure(declaration);
+    // 16:00 on the 4th in UTC is the 5th in Tokyo.
+    const reviewed = recordOf(first, {
+      recorded_at: "2026-10-04T16:00:00.000Z",
+      judged_by: { model: "Other Model" },
+      axis_review: { triggers: ["d"], summary: "s" },
+    });
+    const m = await against(
+      declaration,
+      {
+        last: { status: "found", id: ID, record: reviewed },
+        lastReview: { status: "found", id: ID, record: reviewed },
+      },
+      [],
+      "Claude Opus 5.5",
+    );
+    expect(m.axis.last_review).toEqual({
+      date: "2026-10-05",
+      model: "Other Model",
+      from: "record",
+      record: ID,
+    });
+    expect(m.axis.reasons).toEqual([
+      { trigger: "c", detail: "Claude Opus 5.5 judges; Other Model reviewed last" },
+    ]);
+  });
+
+  it("does not take a previous record it cannot read as none", async () => {
+    await repo("app", { "package.json": "{}\n" });
+    const reason = `the record ${ID} could not be read as JSON`;
+    const m = await against(
+      declare([], { components: { app: { lane: "-", note: "x" } } }, ["app"]),
+      { last: { status: "unreadable", reason }, lastReview: { status: "unreadable", reason } },
+      ["app"],
+    );
+    expect(m.diff).toBeNull();
+    expect(m.axis.review_needed).toBeNull();
+    expect(m.complete).toBe(false);
+    expect(m.components.gone).toBeNull();
+    expect(m.not_found.map((n) => n.at)).toEqual([
+      "components.gone",
+      "components.kind_changed",
+      "diff",
+      "axis.last_review",
+      "axis.review_needed",
+    ]);
+    expect(m.not_found).toContainEqual({ at: "diff", reason });
   });
 });

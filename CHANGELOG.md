@@ -49,20 +49,32 @@ All notable changes to **basou** are recorded here. The project follows
   migrations, SQL) find in the working tree of each repository, each keyed
   by the name of the repository's directory and the component's directory,
   and held against the declaration's `components`: those it does not
-  register, and those it registers that were not found (a change in a
-  component's kinds needs a previous record, so until there is one,
-  `kind_changed` is a null that means so); and whether the board's axis is
-  due a review, by the triggers it can judge: the components found
-  unacknowledged or gone, `review_due_days` passed since the last review
-  (for now the declaration's `seed_review`) by the effort's time zone, and,
-  with `--model`, a model other than the one that reviewed last (names
-  compared lower case, each run of anything but an ASCII letter or digit as
-  one `-`, or as written when one has no such letter or digit; an empty
-  `--model` is refused), each with what it rests on, and the triggers it did
-  not judge. With no review on record, the time trigger fires, and the
-  model trigger too when `--model` is given.
+  register, those it registers or the previous record found that were not
+  found now, and those whose kinds are not the previous record's (with no
+  previous record, `kind_changed` is a null that means so); and whether the
+  board's axis is due a review, by the triggers it can judge: the components
+  found unacknowledged, gone or with changed kinds, `review_due_days` passed
+  since the last review (that of the last record with an axis review, its
+  day in the effort's time zone, or else the declaration's `seed_review`) by
+  the effort's time zone, with `--model`, a model other than the one that
+  reviewed last (names compared lower case, each run of anything but an
+  ASCII letter or digit as one `-`, or as written when one has no such
+  letter or digit; an empty `--model` is refused), and a built-in section's
+  method that is not the previous record's, each with what it rests on, and
+  the triggers it did not judge. With no review on record, the time trigger
+  fires, and the model trigger too when `--model` is given.
   `review_needed` is null when nothing fired and the components or a time
-  zone to count days in were not measured. It
+  zone to count days in were not measured, or a record could not be read.
+  The previous record is, for a declaration named `board.yaml`, the last by
+  name in the `records/` beside it of the files named as a ULID with
+  `.json`. Against it the result also says what moved (`diff`): each value
+  that moved, a number with its change, marked when its section's method
+  changed; the methods that changed; and the values there only now or only
+  then (the clock, the freshness, the axis, `measured_with` and the daily
+  rows of the effort are not compared). The text summary puts it first. A
+  record that cannot be read is not taken as no record: the diff, what the
+  components it alone found and the triggers it bears on are then null or
+  not judged, with a reason under `not_found`. It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git
@@ -79,7 +91,8 @@ All notable changes to **basou** are recorded here. The project follows
   cannot be read, for the review gaps and the effort's time and tokens an
   `events.jsonl` that cannot be read, a
   `~/.basou/portfolio.yaml` that `basou portfolio` refuses, a dry run of an
-  import that cannot run, commit dates git cannot give, no declared time zone
+  import that cannot run, a previous record that cannot be read, commit
+  dates git cannot give, no declared time zone
   for the effort where this host's cannot be named, for the components two
   repositories in directories of the same name or a directory whose name is
   not valid UTF-8, and for the trail, the
@@ -90,7 +103,8 @@ All notable changes to **basou** are recorded here. The project follows
   is `null`, with a reason under `not_found`, and is never counted as zero. The result carries a digest of its values but the
   freshness, which moves as work goes on, the measuring session's own included,
   the axis, which rests on the day, the model and the records rather than on
-  what was measured, and the days elapsed and today's row of the effort,
+  what was measured, the diff, derived from the previous record, and the
+  days elapsed and today's row of the effort,
   which move with the clock. The
   declaration is read from `board/board.yaml` in the workspace only when the
   manifest declares the workspace's own repo private; otherwise `--board` is
@@ -124,7 +138,10 @@ All notable changes to **basou** are recorded here. The project follows
   `records/` holds one board's records, never writes under a `.basou/`
   directory, and, since a record holds what the trail holds, refuses a
   `records/` that no repo the manifest declares private holds unless
-  `--not-private` is given. `--dry-run` checks where the record would go
+  `--not-private` is given. It says what moved since the previous record,
+  in the measurement, the cells and the observations, in its text and under
+  `diff` with `--json`; the record does not hold the diff, which the
+  previous record derives. `--dry-run` checks where the record would go
   and the input, and measures, but writes nothing. Exit codes: `0` when the
   record was written (or, with `--dry-run`, everything checked out), `1`
   when it was refused, saying why and that nothing was written. The README

@@ -133,3 +133,97 @@ describe("sameModel", () => {
     ]);
   });
 });
+
+describe("judgeAxis against the records", () => {
+  const METHODS = { repos: 1, components: 2, axis: 2 };
+
+  it("fires (e) for each section whose method is not the previous record's, one it lacked included", () => {
+    const { axis } = judged({
+      methods: METHODS,
+      previousMethods: { status: "found", methods: { repos: 1, components: 1, gone: 3 } },
+    });
+    expect(axis.reasons).toEqual([
+      {
+        trigger: "e",
+        detail:
+          "methods changed since the previous record: components 1 -> 2, axis none -> 2, gone 3 -> none",
+      },
+    ]);
+    expect(axis.unjudged).toEqual([NO_MODEL]);
+    const same = judged({
+      methods: METHODS,
+      previousMethods: { status: "found", methods: METHODS },
+    });
+    expect(same.axis.reasons).toEqual([]);
+    expect(same.axis.review_needed).toBe(false);
+  });
+
+  it("does not know whether a review is needed when the previous record cannot be read", () => {
+    const { axis, notFound } = judged({
+      methods: METHODS,
+      previousMethods: { status: "unreadable", reason: "the record X could not be read as JSON" },
+    });
+    expect(axis.unjudged).toEqual([
+      NO_MODEL,
+      {
+        trigger: "e",
+        why: "the previous record could not be read: the record X could not be read as JSON",
+      },
+    ]);
+    expect(axis.review_needed).toBeNull();
+    expect(notFound).toEqual([
+      {
+        at: "axis.review_needed",
+        reason:
+          "no trigger fired, but (e) could not be judged: the previous record could not be read: the record X could not be read as JSON",
+      },
+    ]);
+  });
+
+  it("takes the last review from a record before the seed, for (b) and (c)", () => {
+    const { axis } = judged({
+      model: "Claude Opus 5.5",
+      recordedReview: { status: "found", date: "2026-08-01", model: "Other Model", record: "01M4" },
+    });
+    expect(axis.last_review).toEqual({
+      date: "2026-08-01",
+      model: "Other Model",
+      from: "record",
+      record: "01M4",
+    });
+    expect(axis.reasons).toEqual([
+      { trigger: "b", detail: "67 days since the review of 2026-08-01 (due after 60)" },
+      { trigger: "c", detail: "Claude Opus 5.5 judges; Other Model reviewed last" },
+    ]);
+  });
+
+  it("judges neither (b) nor (c) when a record that may hold the last review cannot be read", () => {
+    const why = "the last review is not known: the record Y could not be read as JSON";
+    const { axis, notFound } = judged({
+      model: "Claude Opus 5.5",
+      recordedReview: { status: "unreadable", reason: "the record Y could not be read as JSON" },
+    });
+    expect(axis.last_review).toBeNull();
+    expect(axis.reasons).toEqual([]);
+    expect(axis.unjudged).toEqual([{ trigger: "b", why }, { trigger: "c", why }, E]);
+    expect(axis.review_needed).toBeNull();
+    expect(notFound).toEqual([
+      { at: "axis.last_review", reason: why },
+      {
+        at: "axis.review_needed",
+        reason: `no trigger fired, but (b) could not be judged: ${why}; (c) could not be judged: ${why}`,
+      },
+    ]);
+  });
+
+  it("judges (a) on what is known when what only the previous record found is not", () => {
+    const unknownGone = { ...QUIET, gone: null };
+    expect(judged({ components: unknownGone }).axis.unjudged).toContainEqual({
+      trigger: "a",
+      why: "what the previous record alone found is not known",
+    });
+    expect(
+      judged({ components: { ...unknownGone, unacknowledged: ["app/x"] } }).axis.reasons,
+    ).toEqual([{ trigger: "a", detail: "components: 1 unacknowledged" }]);
+  });
+});

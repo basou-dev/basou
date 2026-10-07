@@ -3,20 +3,29 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   assertBasouRootSafe,
   type BasouPaths,
+  type BoardCellChange,
   type BoardDeclaration,
+  type BoardDiff,
   type BoardMeasurement,
+  type BoardObservation,
+  type BoardObservedChange,
   type BoardOrderAnomaly,
+  type BoardPreviousRecords,
   type BoardRepo,
   basouPaths,
   buildRecord,
   byCodePoint,
+  diffCells,
+  diffObserved,
   displayPath,
   findErrorCode,
   type Manifest,
   measureBoard,
+  NO_PREVIOUS_RECORDS,
   parseBoardDeclaration,
   parseRecordInput,
   readManifest,
+  readPreviousRecords,
   writeRecord,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -103,6 +112,9 @@ export function registerBoardCommand(program: Command): void {
     .addHelpText(
       "after",
       `
+For a board.yaml, the last record in the records/ beside it is the previous
+one, and the result says what moved since it.
+
 Exit codes: 0 when everything was measured; 1 when something could not be
 measured (the result is still printed, with null for what is missing and a
 reason under not_found); 1 when the declaration or the manifest cannot be
@@ -170,9 +182,9 @@ export async function doRunBoardMeasure(
     throw new Error("--model must name a model.");
   }
   const loaded = await loadBoard(options, ctx, "board measure");
-  const measurement = await measureLoaded(loaded, ctx, options.model);
+  const measurement = await measureLoaded(loaded, ctx, options.model, await previousOf(loaded));
   if (options.json === true) console.log(JSON.stringify(measurement, null, 2));
-  else printMeasurementText(measurement);
+  else printMeasurementText(measurement, hasRecords(loaded));
   if (!measurement.complete) process.exitCode = 1;
   return measurement;
 }
@@ -201,6 +213,17 @@ export type BoardRecordResult = {
   /** Whether the measurement recorded was complete. */
   complete: boolean;
   order_anomalies: BoardOrderAnomaly[];
+  /**
+   * What moved since the previous record: in the measurement, the cells and
+   * the observations. Null when there is no previous record, or when it
+   * cannot be read (the measurement says why under not_found).
+   */
+  diff: {
+    against: string;
+    measure: Omit<BoardDiff, "against">;
+    cells: BoardCellChange[];
+    observed: BoardObservedChange[];
+  } | null;
 };
 
 // A refusal of `basou board record` that says nothing was written.
@@ -260,7 +283,8 @@ async function checkAndRecord(
     );
   }
   const recordedAt = ctx.nowProvider?.() ?? new Date();
-  const measurement = await measureLoaded(loaded, ctx, parsed.input.judged_by.model);
+  const previous = await previousOf(loaded);
+  const measurement = await measureLoaded(loaded, ctx, parsed.input.judged_by.model, previous);
   if (measurement.digest !== parsed.input.measure_digest) {
     throw new RecordRefusal(
       `measure_digest is ${parsed.input.measure_digest}, but the board measures ${measurement.digest} now: something it measures moved since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.`,
@@ -287,12 +311,35 @@ async function checkAndRecord(
     }
     written = beside("records", name);
   }
+  const { last } = previous;
+  let diff: BoardRecordResult["diff"] = null;
+  if (measurement.diff !== null && last.status === "found") {
+    const { against, ...moved } = measurement.diff;
+    diff = {
+      against,
+      measure: moved,
+      cells: diffCells(last.record.cells, parsed.input.cells),
+      observed: diffObserved(last.record.observed, parsed.input.observed),
+    };
+  }
   return {
     record: written,
     dry_run: options.dryRun === true,
     complete: measurement.complete,
     order_anomalies: record.order_anomalies,
+    diff,
   };
+}
+
+// Only a file named board.yaml has records: one board a records/ directory.
+function hasRecords(loaded: LoadedBoard): boolean {
+  return basename(loaded.board.path) === "board.yaml";
+}
+
+async function previousOf(loaded: LoadedBoard): Promise<BoardPreviousRecords> {
+  return hasRecords(loaded)
+    ? readPreviousRecords(join(dirname(loaded.board.path), "records"))
+    : NO_PREVIOUS_RECORDS;
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -372,6 +419,23 @@ function printRecordText(result: BoardRecordResult): void {
       : `Recorded ${displayPath(result.record)}`,
   ];
   if (!result.complete) lines.push("The measurement recorded is not complete.");
+  if (result.diff === null) {
+    lines.push("Not compared with a previous record.");
+  } else {
+    const { cells, observed } = result.diff;
+    lines.push(`Since the previous record ${result.diff.against}:`);
+    for (const c of cells) {
+      lines.push(
+        `  ${displayPath(c.lane)} ${displayPath(c.stage)}: ${c.before ?? "no cell"} -> ${c.after ?? "no cell"}`,
+      );
+    }
+    for (const o of observed) {
+      lines.push(
+        `  observed ${displayPath(o.name)}: ${observation(o.before)} -> ${observation(o.after)}`,
+      );
+    }
+    lines.push(...diffLines(result.diff.measure, cells.length + observed.length > 0));
+  }
   if (result.order_anomalies.length > 0) {
     lines.push(`Order anomalies (${result.order_anomalies.length}):`);
     for (const a of result.order_anomalies) {
@@ -453,6 +517,7 @@ async function measureLoaded(
   loaded: LoadedBoard,
   ctx: BoardContext,
   model: string | undefined,
+  previous: BoardPreviousRecords,
 ): Promise<BoardMeasurement> {
   const { root, paths } = loaded;
   const now = ctx.nowProvider?.() ?? new Date();
@@ -475,6 +540,7 @@ async function measureLoaded(
       : { portfolioConfigPath: ctx.portfolioConfigPath }),
     probeImports: () => probeStaleness({ ctx: probeCtx, paths, nowIso: now.toISOString() }),
     ...(model === undefined ? {} : { model }),
+    previous,
   });
 }
 
@@ -526,6 +592,47 @@ async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {
     }
     throw error;
   }
+}
+
+// A value of a diff as text: a number rounded as the summary rounds it, anything
+// else as JSON.
+function shownJson(value: unknown): string {
+  if (typeof value === "number") return shownValue(value);
+  return displayPath(JSON.stringify(value) ?? "undefined");
+}
+
+function observation(o: BoardObservation | null): string {
+  if (o === null) return "not observed";
+  return o.error === undefined
+    ? shownJson(o.value)
+    : `${shownJson(o.value)} (${displayPath(o.error)})`;
+}
+
+// The lines of what moved in a measurement; `more` says whether other lines
+// of the same diff came before them.
+function diffLines(diff: Omit<BoardDiff, "against">, more: boolean): string[] {
+  const lines: string[] = [];
+  if (diff.methods.length > 0) {
+    const moved = diff.methods.map(
+      (m) => `${m.section} ${m.before ?? "none"} -> ${m.after ?? "none"}`,
+    );
+    lines.push(`  methods changed: ${moved.join(", ")}`);
+  }
+  const flag = (c: { method_changed?: true }) =>
+    c.method_changed === true ? "  (its method changed)" : "";
+  for (const c of diff.values) {
+    const delta = c.delta === undefined ? "" : ` (${c.delta > 0 ? "+" : ""}${shownValue(c.delta)})`;
+    lines.push(
+      `  ${displayPath(c.at)}: ${shownJson(c.before)} -> ${shownJson(c.after)}${delta}${flag(c)}`,
+    );
+  }
+  for (const c of diff.added)
+    lines.push(`  + ${displayPath(c.at)}: ${shownJson(c.value)}${flag(c)}`);
+  for (const c of diff.removed) {
+    lines.push(`  - ${displayPath(c.at)}: ${shownJson(c.value)}${flag(c)}`);
+  }
+  if (lines.length === 0 && !more) lines.push("  nothing moved");
+  return lines;
 }
 
 function shownValue(value: number | string | null): string {
@@ -684,10 +791,23 @@ function axisLines(m: BoardMeasurement): string[] {
   return lines;
 }
 
-function printMeasurementText(m: BoardMeasurement): void {
+function printMeasurementText(m: BoardMeasurement, hasRecords: boolean): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
   lines.push(`Measured ${m.measured_at} with basou ${m.measured_with.basou}${build}`);
+  // What moved comes first: it is what a reader of the board looks for.
+  if (m.diff !== null) {
+    lines.push("", `Since the previous record ${m.diff.against}:`, ...diffLines(m.diff, false));
+  } else if (m.not_found.some((n) => n.at === "diff")) {
+    lines.push("", "The previous record could not be read (see Not measured).");
+  } else {
+    lines.push(
+      "",
+      hasRecords
+        ? "No previous record to compare with."
+        : "No records are read for a declaration not named board.yaml.",
+    );
+  }
   if (m.repos.length > 0) lines.push("", "Repos:", ...repoLines(m));
   const measures = Object.entries(m.measures);
   if (measures.length > 0) {
