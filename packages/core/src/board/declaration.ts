@@ -48,7 +48,8 @@ const idText = z.string().regex(ID_PATTERN, {
   error: "must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
 });
 
-function isCalendarDate(s: string): boolean {
+/** Whether a text is a date of the calendar written as YYYY-MM-DD. */
+export function isCalendarDate(s: string): boolean {
   const m = DATE_PATTERN.exec(s);
   if (m === null) return false;
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
@@ -447,7 +448,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function formatPath(path: readonly PropertyKey[]): string {
+export function formatPath(path: readonly PropertyKey[]): string {
   if (path.length === 0) return "(top level)";
   let out = "";
   for (const key of path) {
@@ -461,7 +462,7 @@ function formatPath(path: readonly PropertyKey[]): string {
 
 type Issue = z.ZodError["issues"][number];
 
-function formatIssue(issue: Issue): string {
+export function formatIssue(issue: Issue): string {
   if (issue.code === "unrecognized_keys") {
     const keys = issue.keys.map((k) => `'${k}'`).join(", ");
     return `${formatPath(issue.path)}: unknown key${issue.keys.length > 1 ? "s" : ""} ${keys}`;

@@ -13,8 +13,10 @@ in plain files next to your code.
 [![Node](https://img.shields.io/badge/node-%3E%3D20.10-339933.svg)](#installation)
 
 Basou is local-first and zero-network: it reads the agent logs already on
-your machine and writes only into a `.basou/` directory beside your repo.
-Nothing leaves your machine.
+your machine and writes its trail only into a `.basou/` directory beside your
+repo (the experimental `basou board record` also writes records, which are
+not part of the trail, beside the board's `board.yaml`). Nothing leaves your
+machine.
 
 ## Why Basou?
 
@@ -185,10 +187,14 @@ What that means for you today:
 - **The `basou` CLI surface is frozen for the `0.x` line** — commands and
   flags are stable, except the experimental commands that
   [docs/spec/compatibility.md](docs/spec/compatibility.md#what-is-not-guaranteed)
-  lists. Internal `@basou/core` APIs may still change between minor releases.
+  lists, which may also write files beside one of yours that they read, never
+  under `.basou/` (`basou board record` writes records beside its
+  `board.yaml`: they are not part of the trail, though they may hold what the
+  trail holds). Internal `@basou/core` APIs may still change between minor
+  releases.
 - **The on-disk `.basou/` formats are versioned** and ship JSON Schemas;
   `1.0` is where the formats and semver guarantees are committed.
-- **Adopting is low-risk and reversible**: everything lives in a `.basou/`
+- **Adopting is low-risk and reversible**: the trail lives in a `.basou/`
   directory next to your code, nothing is sent off-machine, and the
   generators are dry-run-by-default and non-destructive.
 
