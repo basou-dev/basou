@@ -85,6 +85,10 @@ export {
 } from "./approval/index.js";
 export type {
   BoardActiveMs,
+  BoardAxis,
+  BoardAxisReason,
+  BoardAxisTrigger,
+  BoardAxisUnjudged,
   BoardComponent,
   BoardComponentChange,
   BoardComponents,
@@ -96,6 +100,7 @@ export type {
   BoardFreshness,
   BoardImportProbe,
   BoardIntegrity,
+  BoardLastReview,
   BoardMeasure,
   BoardMeasureKind,
   BoardMeasurement,
@@ -110,6 +115,7 @@ export type {
   MeasureBoardInput,
 } from "./board/index.js";
 export {
+  BOARD_AXIS_METHOD,
   BOARD_COMPONENTS_METHOD,
   BOARD_DEFAULT_AT,
   BOARD_DEFAULT_CAPTURE_GROUP,
@@ -127,6 +133,7 @@ export {
   boardDigest,
   byCodePoint,
   measureBoard,
+  modelKey,
   parseBoardDeclaration,
 } from "./board/index.js";
 export type {

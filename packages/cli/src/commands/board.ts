@@ -28,6 +28,8 @@ import type { ImportContext } from "./import.js";
 export type BoardMeasureOptions = {
   board?: string;
   json?: boolean;
+  /** The model that will judge the board, for trigger (c) of the axis. */
+  model?: string;
   verbose?: boolean;
 };
 
@@ -71,6 +73,10 @@ export function registerBoardCommand(program: Command): void {
       `The board.yaml to read (default: ${DEFAULT_BOARD_PATH} in the workspace, only when the manifest declares the workspace's own repo private)`,
     )
     .option("--json", "Output the measurement as JSON")
+    .option(
+      "--model <name>",
+      "The model that will judge the board, to tell whether it is not the one that reviewed the axis last",
+    )
     .option("-v, --verbose", "Show error causes")
     .addHelpText(
       "after",
@@ -107,6 +113,9 @@ export async function doRunBoardMeasure(
   options: BoardMeasureOptions,
   ctx: BoardContext,
 ): Promise<BoardMeasurement> {
+  if (options.model !== undefined && options.model.trim() === "") {
+    throw new Error("--model must name a model.");
+  }
   const cwd = ctx.cwd ?? process.cwd();
   const root = await resolveBasouRootForCommand(
     cwd,
@@ -148,6 +157,7 @@ export async function doRunBoardMeasure(
       ? {}
       : { portfolioConfigPath: ctx.portfolioConfigPath }),
     probeImports: () => probeStaleness({ ctx: probeCtx, paths, nowIso: now.toISOString() }),
+    ...(options.model === undefined ? {} : { model: options.model }),
   });
 
   if (options.json === true) console.log(JSON.stringify(measurement, null, 2));
@@ -348,6 +358,19 @@ function componentLines(m: BoardMeasurement): string[] {
   return lines;
 }
 
+function axisLines(m: BoardMeasurement): string[] {
+  const a = m.axis;
+  const last =
+    a.last_review === null
+      ? "no review on record"
+      : `last reviewed ${a.last_review.date} by ${displayPath(a.last_review.model)} (${a.last_review.from})`;
+  const needed = a.review_needed === null ? "not known" : a.review_needed ? "yes" : "no";
+  const lines = [`  version ${a.version}, ${last}`, `  review needed: ${needed}`];
+  for (const r of a.reasons) lines.push(`    (${r.trigger}) ${displayPath(r.detail)}`);
+  for (const u of a.unjudged) lines.push(`    (${u.trigger}) not judged: ${u.why}`);
+  return lines;
+}
+
 function printMeasurementText(m: BoardMeasurement): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
@@ -380,6 +403,7 @@ function printMeasurementText(m: BoardMeasurement): void {
   lines.push("", "Freshness:", ...freshnessLines(m));
   lines.push("", "Effort:", ...effortLines(m));
   lines.push("", "Components:", ...componentLines(m));
+  lines.push("", "Axis:", ...axisLines(m));
   if (m.not_found.length > 0) {
     lines.push("", `Not measured (${m.not_found.length}):`);
     for (const missing of m.not_found)

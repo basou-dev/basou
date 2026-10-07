@@ -51,7 +51,18 @@ All notable changes to **basou** are recorded here. The project follows
   and held against the declaration's `components`: those it does not
   register, and those it registers that were not found (a change in a
   component's kinds needs a previous record, so until there is one,
-  `kind_changed` is a null that means so). It
+  `kind_changed` is a null that means so); and whether the board's axis is
+  due a review, by the triggers it can judge: the components found
+  unacknowledged or gone, `review_due_days` passed since the last review
+  (for now the declaration's `seed_review`) by the effort's time zone, and,
+  with `--model`, a model other than the one that reviewed last (names
+  compared lower case, each run of anything but an ASCII letter or digit as
+  one `-`, or as written when one has no such letter or digit; an empty
+  `--model` is refused), each with what it rests on, and the triggers it did
+  not judge. With no review on record, the time trigger fires, and the
+  model trigger too when `--model` is given.
+  `review_needed` is null when nothing fired and the components or a time
+  zone to count days in were not measured. It
   writes nothing (not even the task index or a stale git index), sends
   nothing (a partial clone is not fetched from), starts no file system
   monitor, and runs no import. Counting the uncommitted paths runs `git
@@ -78,8 +89,9 @@ All notable changes to **basou** are recorded here. The project follows
   verify` does)
   is `null`, with a reason under `not_found`, and is never counted as zero. The result carries a digest of its values but the
   freshness, which moves as work goes on, the measuring session's own included,
-  and the days elapsed and today's row of the effort, which move with the
-  clock. The
+  the axis, which rests on the day, the model and the records rather than on
+  what was measured, and the days elapsed and today's row of the effort,
+  which move with the clock. The
   declaration is read from `board/board.yaml` in the workspace only when the
   manifest declares the workspace's own repo private; otherwise `--board` is
   required. Exit codes: `0` when everything was measured, `1` when something
