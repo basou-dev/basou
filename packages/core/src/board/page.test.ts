@@ -81,7 +81,33 @@ function record(over: Record<string, unknown> = {}) {
         output_tokens: 1000,
         sessions_without_tokens: 1,
         commits: { ".": 12, "../basou": 34 },
-        daily: [],
+        // Sunday, then Monday to Wednesday; Tuesday's time not measured.
+        daily: [
+          {
+            date: "2026-10-04",
+            active_ms: { union: 60_000, claude: 60_000, codex: null },
+            output_tokens: 1,
+            commits: { ".": 1, "../basou": 2 },
+          },
+          {
+            date: "2026-10-05",
+            active_ms: { union: 180_000, claude: 120_000, codex: 90_000 },
+            output_tokens: 1,
+            commits: { ".": 0, "../basou": 3 },
+          },
+          {
+            date: "2026-10-06",
+            active_ms: { union: null, claude: null, codex: null },
+            output_tokens: null,
+            commits: { ".": null, "../basou": null },
+          },
+          {
+            date: "2026-10-07",
+            active_ms: { union: 0, claude: 0, codex: 0 },
+            output_tokens: 0,
+            commits: { ".": 0, "../basou": 0 },
+          },
+        ],
       },
       components: { found: {}, unacknowledged: [], gone: [], kind_changed: null },
       axis: {
@@ -335,8 +361,102 @@ describe("boardPage", () => {
         { repo: "../basou", count: 34 },
       ],
       milestones: [{ date: "2026-05-04", label: "Started", ref: "abc1234" }],
+      // Tuesday's time was not measured, so the days worked are not known.
+      active_days: null,
+      period_days: 4,
+      daily: [
+        {
+          date: "2026-10-04",
+          union: 60_000,
+          claude: 60_000,
+          not_claude: 0,
+          cumulative: 60_000,
+          commits: 3,
+        },
+        {
+          date: "2026-10-05",
+          union: 180_000,
+          claude: 120_000,
+          not_claude: 60_000,
+          cumulative: 240_000,
+          commits: 3,
+        },
+        {
+          date: "2026-10-06",
+          union: null,
+          claude: null,
+          not_claude: null,
+          cumulative: null,
+          commits: null,
+        },
+        { date: "2026-10-07", union: 0, claude: 0, not_claude: 0, cumulative: null, commits: 0 },
+      ],
+      weeks: [
+        {
+          week: "2026-09-28",
+          union: 60_000,
+          claude: 60_000,
+          codex: null,
+          active_days: 1,
+          commits: 3,
+        },
+        // A week with a day not measured is not known as a whole.
+        {
+          week: "2026-10-05",
+          union: null,
+          claude: null,
+          codex: null,
+          active_days: null,
+          commits: null,
+        },
+      ],
     });
     expect(b.turns).toEqual([{ text: "Decide X", source: "decision_X" }]);
+    // A day one repo's commits of which were not measured has no total.
+    const partly = record();
+    partly.measure.effort.daily = [
+      {
+        date: "2026-10-04",
+        active_ms: { union: 1, claude: 1, codex: 0 },
+        output_tokens: 0,
+        commits: { ".": 2, "../basou": null },
+      },
+      // A day with no time is not a day worked.
+      {
+        date: "2026-10-05",
+        active_ms: { union: 0, claude: 0, codex: 0 },
+        output_tokens: 0,
+        commits: { ".": 0, "../basou": 0 },
+      },
+    ] as unknown as typeof partly.measure.effort.daily;
+    await place(B, partly);
+    const part = await boardPage(records);
+    if (part.status !== "ok") throw new Error(part.why);
+    expect(part.board.effort.daily?.[0]?.commits).toBeNull();
+    expect(part.board.effort.weeks?.[0]).toMatchObject({ commits: null, active_days: 1 });
+    expect(part.board.effort.active_days).toBe(1);
+    // A day that is not a date of the calendar is not in the shape of a record.
+    const undatedRow = record();
+    (undatedRow.measure.effort.daily[0] as { date: string }).date = "x";
+    await place(B, undatedRow);
+    expect(await boardPage(records)).toMatchObject({
+      status: "unavailable",
+      why: "not_a_record",
+      id: B,
+    });
+    // With no days measured there is nothing by day or by week, not none of them.
+    const undated = record();
+    undated.measure.effort.daily = null as unknown as typeof undated.measure.effort.daily;
+    await place(B, undated);
+    const noDays = await boardPage(records);
+    if (noDays.status !== "ok") throw new Error(noDays.why);
+    expect(noDays.board.effort).toMatchObject({
+      active_days: null,
+      period_days: null,
+      daily: null,
+      weeks: null,
+    });
+    await rm(join(records, `${B}.json`));
     expect(b.footnotes).toEqual({
       notes: ["Measured with care."],
       axis: {

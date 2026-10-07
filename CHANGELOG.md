@@ -158,7 +158,10 @@ All notable changes to **basou** are recorded here. The project follows
   summary with six counts (lanes in operation, blocked and unverified
   cells, open tracks, sessions, the operator's turns) and the observations
   from outside (one not made shows the previous record's value), the period
-  and effort, the reach matrix with the cells that moved since the previous
+  and effort (six counts, the commits, and charts of the milestones, the
+  active time by day with Claude's and the rest not at the same time
+  stacked, and the running total, with a table by week; a day or a week
+  part of which was not measured is not totalled), the reach matrix with the cells that moved since the previous
   record marked and the stages left behind above it, where each lane is,
   the ratios, the operator's turns, and footnotes. What the judge reported
   is marked as such. Its fixed strings are in the language the anchor
