@@ -88,7 +88,15 @@ type PageRecord = z.output<typeof pageRecordSchema>;
 export type BoardPageRecordRef = { id: string; at: string };
 
 /** Why there is no board to draw. */
-export type BoardPageUnavailable = "no_board" | "no_records" | "not_found" | "unreadable";
+export type BoardPageUnavailable =
+  | "no_board"
+  | "no_records"
+  | "records_not_directory"
+  | "records_unreadable"
+  | "not_found"
+  | "not_json"
+  | "unknown_version"
+  | "not_a_record";
 
 /** A value the page shows, and whether the judge reported it rather than basou measured it. */
 export type BoardPageTile = {
@@ -176,7 +184,12 @@ export type BoardPageBody = {
     axis: {
       version: number;
       review_needed: boolean | null;
+      /**
+       * Null when there is none on record, or, with `last_review_known`
+       * false, when a record that may hold it could not be read.
+       */
       last_review: { date: string; model: string; from: string; record?: string } | null;
+      last_review_known: boolean;
     };
     model: string;
     not_found: { at: string; reason: string }[];
@@ -189,8 +202,13 @@ export type BoardPage =
   | {
       status: "unavailable";
       why: BoardPageUnavailable;
-      detail: string;
       records: BoardPageRecordRef[];
+      /** The record asked for, or the last one, when there was one to ask for. */
+      id: string | null;
+      older: string | null;
+      newer: string | null;
+      /** The record_version it does not draw, for unknown_version. */
+      version?: number;
     }
   | {
       status: "ok";
@@ -204,10 +222,23 @@ export type BoardPage =
 /** Say why there is no board to draw. */
 export function boardPageUnavailable(
   why: BoardPageUnavailable,
-  detail: string,
-  records: BoardPageRecordRef[] = [],
+  around: {
+    records?: BoardPageRecordRef[];
+    id?: string | null;
+    older?: string | null;
+    newer?: string | null;
+    version?: number;
+  } = {},
 ): BoardPage {
-  return { status: "unavailable", why, detail, records };
+  return {
+    status: "unavailable",
+    why,
+    records: around.records ?? [],
+    id: around.id ?? null,
+    older: around.older ?? null,
+    newer: around.newer ?? null,
+    ...(around.version === undefined ? {} : { version: around.version }),
+  };
 }
 
 /**
@@ -221,34 +252,38 @@ export async function boardPage(recordsDir: string, id?: string): Promise<BoardP
   let names: string[];
   try {
     const entry = await lstat(recordsDir);
-    if (!entry.isDirectory()) {
-      return boardPageUnavailable(
-        "unreadable",
-        "the records/ beside the board is not a directory (a symlink or a file)",
-      );
-    }
+    if (!entry.isDirectory()) return boardPageUnavailable("records_not_directory");
     names = await readdir(recordsDir);
   } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) return boardPageUnavailable("no_records", "");
-    return boardPageUnavailable("unreadable", "the records/ beside the board could not be read");
+    if (findErrorCode(error, "ENOENT")) return boardPageUnavailable("no_records");
+    return boardPageUnavailable("records_unreadable");
   }
   const ids = recordIds(names);
   const records = ids.map((name) => ({ id: name, at: new Date(decodeTime(name)).toISOString() }));
-  if (ids.length === 0) return boardPageUnavailable("no_records", "", records);
+  if (ids.length === 0) return boardPageUnavailable("no_records", { records });
   const shown = id ?? (ids[ids.length - 1] as string);
   const index = ids.indexOf(shown);
-  if (index === -1) return boardPageUnavailable("not_found", shown, records);
+  if (index === -1) return boardPageUnavailable("not_found", { records, id: shown });
 
-  const read = await readPageRecord(recordsDir, shown);
-  if (!read.ok) return boardPageUnavailable("unreadable", read.reason, records);
   const older = index > 0 ? (ids[index - 1] as string) : null;
+  const newer = ids[index + 1] ?? null;
+  const read = await readPageRecord(recordsDir, shown);
+  if (!read.ok) {
+    return boardPageUnavailable(read.why, {
+      records,
+      id: shown,
+      older,
+      newer,
+      ...(read.version === undefined ? {} : { version: read.version }),
+    });
+  }
   const previous = older === null ? null : await readBoardRecordFile(recordsDir, older);
   return {
     status: "ok",
     records,
     id: shown,
     older,
-    newer: ids[index + 1] ?? null,
+    newer,
     board: bodyOf(
       read.record,
       previous === null
@@ -263,23 +298,23 @@ export async function boardPage(recordsDir: string, id?: string): Promise<BoardP
 async function readPageRecord(
   recordsDir: string,
   id: string,
-): Promise<{ ok: true; record: PageRecord } | { ok: false; reason: string }> {
+): Promise<
+  | { ok: true; record: PageRecord }
+  | { ok: false; why: "not_json" | "unknown_version" | "not_a_record"; version?: number }
+> {
   let value: unknown;
   try {
     value = JSON.parse(await readFile(join(recordsDir, `${id}.json`), "utf8"));
   } catch {
-    return { ok: false, reason: `the record ${id} could not be read as JSON` };
+    return { ok: false, why: "not_json" };
   }
   const version = (value as { record_version?: unknown } | null)?.record_version;
   if (typeof version === "number" && !DRAWN_VERSIONS.has(version)) {
-    return {
-      ok: false,
-      reason: `the record ${id} is of record_version ${version}, which this basou does not draw`,
-    };
+    return { ok: false, why: "unknown_version", version };
   }
   const parsed = pageRecordSchema.safeParse(value);
   if (!parsed.success || !DRAWN_VERSIONS.has(parsed.data.record_version)) {
-    return { ok: false, reason: `the record ${id} is not in the shape of a record` };
+    return { ok: false, why: "not_a_record" };
   }
   return { ok: true, record: parsed.data };
 }
@@ -466,6 +501,7 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
                   ? {}
                   : { record: m.axis.last_review.record }),
               },
+        last_review_known: !m.not_found.some((n) => n.at === "axis.last_review"),
       },
       model: r.judged_by.model,
       not_found: m.not_found.map(({ at, reason }) => ({ at, reason })),

@@ -93,29 +93,42 @@ export const BOARD_HTML = `<!doctype html>
     });
     return node;
   }
-  // Fill each {name} of a fixed string. A test lifts this function.
+  // Fill each {name} of a fixed string, in one pass over the fixed string, so
+  // that what a value holds is never filled in itself. A test lifts this function.
   function fill(template, values) {
-    var out = String(template);
-    Object.keys(values || {}).forEach(function (k) {
-      out = out.split('{' + k + '}').join(String(values[k]));
-    });
+    var t = String(template);
+    var given = values || {};
+    var out = '';
+    var i = 0;
+    while (i < t.length) {
+      var open = t.indexOf('{', i);
+      var close = open === -1 ? -1 : t.indexOf('}', open + 1);
+      if (close === -1) { out += t.slice(i); break; }
+      var key = t.slice(open + 1, close);
+      out += t.slice(i, open);
+      out += Object.prototype.hasOwnProperty.call(given, key) ? String(given[key]) : t.slice(open, close + 1);
+      i = close + 1;
+    }
     return out;
   }
   // Split prose into text and the spans between backticks, which become code.
-  // An unmatched backtick stays as it is. A test lifts this function.
+  // An unmatched backtick, and a pair with nothing between, stay as written.
+  // A test lifts this function.
   function codeSpans(text) {
     var tick = String.fromCharCode(96);
     var parts = String(text).split(tick);
     var out = [];
+    var plain = function (s) {
+      if (s === '') return;
+      var last = out.length > 0 ? out[out.length - 1] : null;
+      if (last !== null && !last.code) last.text += s;
+      else out.push({ code: false, text: s });
+    };
     for (var i = 0; i < parts.length; i++) {
-      if (i % 2 === 1 && i === parts.length - 1) {
-        var last = out.length > 0 ? out[out.length - 1] : null;
-        if (last !== null && !last.code) last.text += tick + parts[i];
-        else out.push({ code: false, text: tick + parts[i] });
-        continue;
-      }
-      if (parts[i] === '') continue;
-      out.push({ code: i % 2 === 1, text: parts[i] });
+      if (i % 2 === 0) plain(parts[i]);
+      else if (i === parts.length - 1) plain(tick + parts[i]);
+      else if (parts[i] === '') plain(tick + tick);
+      else out.push({ code: true, text: parts[i] });
     }
     return out;
   }
@@ -130,7 +143,7 @@ export const BOARD_HTML = `<!doctype html>
   function num(n) {
     if (n === null || n === undefined) return S.tiles.notMeasured;
     if (typeof n !== 'number') return String(n);
-    return (Math.round(n * 10000) / 10000).toLocaleString('en-US');
+    return n.toLocaleString('en-US', { maximumFractionDigits: 4 });
   }
   function hm(ms) {
     if (ms === null || ms === undefined) return S.effort.notMeasured;
@@ -168,15 +181,23 @@ export const BOARD_HTML = `<!doctype html>
     var link = function (id, label) {
       return el('a', { href: '/board?record=' + encodeURIComponent(id), text: label });
     };
-    if (page.status === 'ok' && page.older) nav.appendChild(link(page.older, S.older));
-    if (page.status === 'ok' && page.newer) nav.appendChild(link(page.newer, S.newer));
+    // Around the record asked for, whether or not it could be drawn.
+    if (page.older) nav.appendChild(link(page.older, S.older));
+    if (page.newer) nav.appendChild(link(page.newer, S.newer));
     nav.appendChild(el('a', { href: '/board', text: S.latest }));
     var select = el('select', {
       onchange: function () { location.href = '/board?record=' + encodeURIComponent(select.value); }
     });
+    var listed = list.some(function (r) { return r.id === page.id; });
+    if (!listed) {
+      var none = el('option', { value: '', text: '-' });
+      none.selected = true;
+      none.disabled = true;
+      select.appendChild(none);
+    }
     list.slice().reverse().forEach(function (r) {
       var option = el('option', { value: r.id, text: when(r.at) + '  ' + r.id });
-      if (page.status === 'ok' && r.id === page.id) option.selected = true;
+      if (r.id === page.id) option.selected = true;
       select.appendChild(option);
     });
     nav.appendChild(select);
@@ -251,10 +272,8 @@ export const BOARD_HTML = `<!doctype html>
     var e = b.effort;
     var rows = [];
     var row = function (k, v) { rows.push(el('tr', null, [el('td', { class: 'muted', text: k }), el('td', { text: v })])); };
-    row('', fill(S.effort.start, {
-      date: e.start, zone: e.time_zone === null ? S.effort.notMeasured : e.time_zone,
-      days: e.elapsed_days === null ? S.effort.notMeasured : e.elapsed_days
-    }));
+    row(S.effort.start, e.start + (e.time_zone === null ? '' : '  (' + e.time_zone + ')'));
+    row(S.effort.elapsedLabel, e.elapsed_days === null ? S.effort.notMeasured : fill(S.effort.elapsed, { days: e.elapsed_days }));
     row(S.effort.active, hm(e.active_ms.union));
     row(S.effort.claude, hm(e.active_ms.claude));
     row(S.effort.codex, e.active_ms.codex === null && e.active_ms.union !== null ? S.effort.noCodex : hm(e.active_ms.codex));
@@ -310,6 +329,8 @@ export const BOARD_HTML = `<!doctype html>
       if (lane.flags.live) head.appendChild(el('span', { class: 'chip live', text: S.lane.live }));
       if (lane.flags.blocked) head.appendChild(el('span', { class: 'chip blocked', text: S.lane.blocked }));
       if (lane.flags.unverified) head.appendChild(el('span', { class: 'chip unverified', text: S.lane.unverified }));
+      // The marks are counted from the cells, which the judge reported.
+      if (lane.flags.live || lane.flags.blocked || lane.flags.unverified) head.appendChild(reported());
       var body = [head];
       if (lane.about) body.push(el('div', { class: 'muted', text: lane.about }));
       body.push(el('div', null, [
@@ -362,7 +383,8 @@ export const BOARD_HTML = `<!doctype html>
     var f = b.footnotes;
     var items = f.notes.map(function (n) { return el('li', null, [prose(n, 'span'), reported()]); });
     var last = f.axis.last_review;
-    var review = last === null ? S.footnotes.noReview
+    var review = !f.axis.last_review_known ? S.footnotes.reviewUnknown
+      : last === null ? S.footnotes.noReview
       : last.from === 'record' ? fill(S.footnotes.lastReviewFromRecord, { date: last.date, model: last.model, record: last.record || '' })
       : fill(S.footnotes.lastReview, { date: last.date, model: last.model });
     var answer = f.axis.review_needed === true ? S.footnotes.reviewNeededYes
@@ -391,11 +413,14 @@ export const BOARD_HTML = `<!doctype html>
     var page = d.page;
     if (page.status !== 'ok') {
       var messages = {
-        no_board: S.unavailable.noBoard,
-        no_records: S.unavailable.noRecords, not_found: S.unavailable.notFound,
-        unreadable: S.unavailable.unreadable
+        no_board: S.unavailable.noBoard, no_records: S.unavailable.noRecords,
+        records_not_directory: S.unavailable.recordsNotDirectory,
+        records_unreadable: S.unavailable.recordsUnreadable,
+        not_found: S.unavailable.notFound, not_json: S.unavailable.notJson,
+        unknown_version: S.unavailable.unknownVersion, not_a_record: S.unavailable.notARecord
       };
-      setStatus(fill(messages[page.why] || page.why, { detail: page.detail }), page.why === 'unreadable');
+      var quiet = page.why === 'no_board' || page.why === 'no_records';
+      setStatus(fill(messages[page.why] || page.why, { record: page.id || '', version: page.version }), !quiet);
       return;
     }
     setStatus('', false);

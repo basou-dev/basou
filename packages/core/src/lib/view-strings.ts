@@ -838,7 +838,6 @@ export type BoardPageStrings = {
   latest: string;
   older: string;
   newer: string;
-  loading: string;
   loadFailed: string;
   /** Marks what the judge reported, as against what basou measured. */
   reported: string;
@@ -881,6 +880,7 @@ export type BoardPageStrings = {
   };
   effort: {
     start: string;
+    elapsedLabel: string;
     elapsed: string;
     active: string;
     claude: string;
@@ -923,6 +923,7 @@ export type BoardPageStrings = {
     lastReview: string;
     lastReviewFromRecord: string;
     noReview: string;
+    reviewUnknown: string;
     reviewNeeded: string;
     reviewNeededYes: string;
     reviewNeededNo: string;
@@ -935,8 +936,12 @@ export type BoardPageStrings = {
   unavailable: {
     noBoard: string;
     noRecords: string;
+    recordsNotDirectory: string;
+    recordsUnreadable: string;
     notFound: string;
-    unreadable: string;
+    notJson: string;
+    unknownVersion: string;
+    notARecord: string;
   };
 };
 
@@ -945,7 +950,6 @@ const BOARD_PAGE_EN: BoardPageStrings = {
   latest: "Latest",
   older: "Older record",
   newer: "Newer record",
-  loading: "Loading the board...",
   loadFailed: "The board could not be loaded: {message}",
   reported: "reported",
   heading: {
@@ -986,14 +990,15 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     missingPreviousUnreadable: "not observed (the previous record could not be read)",
   },
   effort: {
-    start: "From {date} ({zone}), {days} days",
+    start: "Start",
+    elapsedLabel: "Elapsed",
     elapsed: "{days} days",
     active: "Active",
     claude: "Claude",
     codex: "Codex",
     noCodex: "no Codex session",
     outputTokens: "Output tokens",
-    withoutTokens: "{n} sessions recorded none",
+    withoutTokens: "imports that recorded no tokens: {n}",
     commits: "Commits",
     milestones: "Milestones",
     noMilestones: "No milestones declared.",
@@ -1029,6 +1034,7 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     lastReview: "last reviewed {date} by {model} (declared)",
     lastReviewFromRecord: "last reviewed {date} by {model} (record {record})",
     noReview: "no review on record",
+    reviewUnknown: "the last review is not known (a record that may hold it could not be read)",
     reviewNeeded: "Review needed: {answer}",
     reviewNeededYes: "yes",
     reviewNeededNo: "no",
@@ -1042,9 +1048,16 @@ const BOARD_PAGE_EN: BoardPageStrings = {
   unavailable: {
     noBoard:
       "The board page shows the records beside board/board.yaml in the workspace, which is read only when the manifest declares this workspace's own repo (path: .) private.",
-    noRecords: "The board has no record yet. Run basou board record to write the first one.",
-    notFound: "There is no record {detail}.",
-    unreadable: "The record could not be shown: {detail}",
+    noRecords:
+      "The board has no record yet. Declare the board in board/board.yaml and write a record with basou board record; it is drawn here.",
+    recordsNotDirectory:
+      "The records/ beside board/board.yaml is not a directory (a symlink or a file).",
+    recordsUnreadable: "The records/ beside board/board.yaml could not be read.",
+    notFound: "There is no record {record}.",
+    notJson: "The record {record} could not be read as JSON.",
+    unknownVersion:
+      "The record {record} is of record_version {version}, which this basou does not draw.",
+    notARecord: "The record {record} is not in the shape of a record.",
   },
 };
 
@@ -1053,7 +1066,6 @@ const BOARD_PAGE_JA: BoardPageStrings = {
   latest: "最新",
   older: "前の記録",
   newer: "次の記録",
-  loading: "盤を読み込んでいます…",
   loadFailed: "盤を読み込めませんでした: {message}",
   reported: "申告",
   heading: {
@@ -1094,14 +1106,15 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     missingPreviousUnreadable: "未確認（前回の記録が読めない）",
   },
   effort: {
-    start: "{date} から（{zone}）{days} 日",
+    start: "開始",
+    elapsedLabel: "経過",
     elapsed: "{days} 日",
     active: "実働",
     claude: "Claude",
     codex: "Codex",
     noCodex: "Codex の session なし",
     outputTokens: "出力トークン",
-    withoutTokens: "記録の無い session {n}",
+    withoutTokens: "トークンを記録しなかった取り込み {n}",
     commits: "commit",
     milestones: "節目",
     noMilestones: "節目の宣言はない。",
@@ -1137,6 +1150,7 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     lastReview: "最終見直し {date}・{model}（宣言）",
     lastReviewFromRecord: "最終見直し {date}・{model}（記録 {record}）",
     noReview: "見直しの記録なし",
+    reviewUnknown: "前回の見直しは分からない（それを含みうる記録が読めない）",
     reviewNeeded: "見直しの要否: {answer}",
     reviewNeededYes: "要",
     reviewNeededNo: "不要",
@@ -1150,9 +1164,15 @@ const BOARD_PAGE_JA: BoardPageStrings = {
   unavailable: {
     noBoard:
       "盤のページは workspace の board/board.yaml の隣の記録を描く。board/board.yaml を読むのは、manifest がこの workspace の repo（path: .）を private と宣言しているときだけ。",
-    noRecords: "盤の記録がまだない。basou board record で最初の記録を書く。",
-    notFound: "記録 {detail} はない。",
-    unreadable: "記録を描けない: {detail}",
+    noRecords:
+      "盤の記録はまだない。board/board.yaml に盤を宣言し、basou board record で記録を書くと、ここに描かれる。",
+    recordsNotDirectory:
+      "board/board.yaml の隣の records/ がディレクトリでない（symlink かファイル）。",
+    recordsUnreadable: "board/board.yaml の隣の records/ を読めない。",
+    notFound: "記録 {record} はない。",
+    notJson: "記録 {record} を JSON として読めない。",
+    unknownVersion: "記録 {record} は record_version {version} で、この basou はこの版を描けない。",
+    notARecord: "記録 {record} は記録の形をしていない。",
   },
 };
 

@@ -234,7 +234,8 @@ async function buildSingleDeps(ctx: ViewContext, cwd: string): Promise<ViewServe
 // Where the board page reads records from: beside the default board.yaml,
 // which `basou board` reads only when the manifest declares the workspace's
 // own repo private. There is no flag to point elsewhere: this command is
-// guaranteed and the board is experimental. Only the records are read.
+// guaranteed and the board is experimental. The page is drawn from the
+// records; the board.yaml as it is now is not read.
 async function viewBoardOf(root: string, paths: ReturnType<typeof basouPaths>): Promise<ViewBoard> {
   let own: { visibility?: string | undefined } | undefined;
   try {

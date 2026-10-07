@@ -961,6 +961,11 @@ describe("the view page shows a recorded file name with its control characters e
 });
 
 describe("basou view: the board page", () => {
+  const [A_REC, B_REC, C_REC] = [
+    "00000000010000000000000000",
+    "00000000020000000000000000",
+    "00000000030000000000000000",
+  ];
   const STAGES = Object.fromEntries(
     ["01", "02", "03", "04", "05", "06"].map((id) => [id, { meaning: `stage ${id}` }]),
   );
@@ -1136,24 +1141,198 @@ describe("basou view: the board page", () => {
     expect(view?.options.map((o) => o.long)).not.toContain("--board");
   });
 
-  it("links to the page from the single-mode header", () => {
+  it("links to the page from the single-mode header, and only there", () => {
     expect(VIEW_HTML).toContain('<a id="board-link" href="/board" style="display:none">Board</a>');
-    expect(VIEW_HTML).toContain("$('board-link').style.display = '';");
+    const shows = "$('board-link').style.display = '';";
+    expect(liftFrom(VIEW_HTML, "enterSingle")).toContain(shows);
+    expect(liftFrom(VIEW_HTML, "openWorkspace")).not.toContain("board-link");
+    expect(VIEW_HTML.split(shows)).toHaveLength(2);
   });
 
-  /** Lift a named function out of the board page. */
-  function lift(name: string): string {
+  /** Lift a named function out of a page. */
+  function liftFrom(html: string, name: string): string {
     const marker = `function ${name}(`;
-    const start = BOARD_HTML.indexOf(marker);
+    const start = html.indexOf(marker);
     expect(start).toBeGreaterThan(-1);
     let depth = 0;
-    for (let i = BOARD_HTML.indexOf("{", start); i < BOARD_HTML.length; i++) {
-      const ch = BOARD_HTML[i];
+    for (let i = html.indexOf("{", start); i < html.length; i++) {
+      const ch = html[i];
       if (ch === "{") depth++;
-      else if (ch === "}" && --depth === 0) return BOARD_HTML.slice(start, i + 1);
+      else if (ch === "}" && --depth === 0) return html.slice(start, i + 1);
     }
     throw new Error(`no end of ${name}`);
   }
+  const lift = (name: string) => liftFrom(BOARD_HTML, name);
+
+  // Just enough of a DOM for the page's drawing functions.
+  class Node {
+    children: Node[] = [];
+    attrs: Record<string, string> = {};
+    className = "";
+    textContent = "";
+    selected = false;
+    disabled = false;
+    style: Record<string, string> = {};
+    constructor(readonly tag: string) {}
+    appendChild(child: Node): Node {
+      this.children.push(child);
+      return child;
+    }
+    get firstChild(): Node | null {
+      return this.children[0] ?? null;
+    }
+    removeChild(child: Node): void {
+      this.children = this.children.filter((c) => c !== child);
+    }
+    setAttribute(key: string, value: unknown): void {
+      this.attrs[key] = String(value);
+    }
+    addEventListener(): void {}
+    text(): string {
+      return this.textContent + this.children.map((c) => c.text()).join("");
+    }
+    find(pick: (node: Node) => boolean): Node[] {
+      return [...(pick(this) ? [this] : []), ...this.children.flatMap((c) => c.find(pick))];
+    }
+  }
+  function drawing(names: string[]) {
+    const byId: Record<string, Node> = {};
+    const document = {
+      createElement: (tag: string) => new Node(tag),
+      createTextNode: (text: string) => Object.assign(new Node("#text"), { textContent: text }),
+      getElementById: (id: string) => {
+        byId[id] ??= new Node("div");
+        return byId[id];
+      },
+    };
+    const helpers = [
+      "$",
+      "clear",
+      "el",
+      "fill",
+      "codeSpans",
+      "prose",
+      "reported",
+      "num",
+      "hm",
+      "when",
+      "shown",
+      "stateName",
+      "section",
+    ];
+    const source = [...helpers, ...names].map(lift).join("\n");
+    const fns = new Function("document", "S", "lang", `${source}; return { ${names.join(", ")} };`)(
+      document,
+      boardPageStrings("en"),
+      "en",
+    ) as Record<string, (arg: unknown) => Node>;
+    const call = (name: string, arg: unknown): Node => {
+      const fn = fns[name];
+      if (fn === undefined) throw new Error(`no ${name}`);
+      return fn(arg);
+    };
+    return { call, byId };
+  }
+
+  it("draws a page it cannot draw around the record asked for", () => {
+    const { call, byId } = drawing(["records"]);
+    const records = [A_REC, B_REC, C_REC].map((id, i) => ({
+      id,
+      at: `2026-10-0${i + 1}T00:00:00.000Z`,
+    }));
+    call("records", {
+      page: {
+        status: "unavailable",
+        why: "not_json",
+        records,
+        id: B_REC,
+        older: A_REC,
+        newer: C_REC,
+      },
+    });
+    const nav = byId.records as Node;
+    expect(nav.find((n) => n.tag === "a").map((a) => a.attrs.href)).toEqual([
+      `/board?record=${A_REC}`,
+      `/board?record=${C_REC}`,
+      "/board",
+    ]);
+    const chosen = nav.find((n) => n.tag === "option" && n.selected);
+    expect(chosen.map((o) => o.attrs.value)).toEqual([B_REC]);
+    call("records", {
+      page: {
+        status: "unavailable",
+        why: "not_found",
+        records,
+        id: "NOPE",
+        older: null,
+        newer: null,
+      },
+    });
+    const none = nav.find((n) => n.tag === "option" && n.selected);
+    expect(none.map((o) => [o.attrs.value, o.disabled])).toEqual([["", true]]);
+  });
+
+  it("marks a lane's marks as reported, and leaves out of the period what was not measured", () => {
+    const { call } = drawing(["lanes", "effort", "footnotes"]);
+    const lane = (flags: Record<string, boolean>) => ({
+      id: "core",
+      name: "Core",
+      now: null,
+      attention: [],
+      prose: null,
+      measures: [],
+      flags: { live: false, blocked: false, unverified: false, ...flags },
+    });
+    const heads = (flags: Record<string, boolean>) =>
+      call("lanes", { lanes: [lane(flags)] }).find((n) => n.tag === "h3");
+    expect(heads({ blocked: true })[0]?.find((n) => n.className === "reported")).toHaveLength(1);
+    expect(heads({})[0]?.find((n) => n.className === "reported")).toHaveLength(0);
+    const effort = call("effort", {
+      effort: {
+        start: "2026-04-28",
+        time_zone: null,
+        elapsed_days: null,
+        active_ms: { union: null, claude: null, codex: null },
+        output_tokens: null,
+        sessions_without_tokens: null,
+        commits: null,
+        milestones: [],
+      },
+    }) as Node;
+    const rows = effort.find((n) => n.tag === "tr").map((r) => r.children.map((c) => c.text()));
+    expect(rows.slice(0, 2)).toEqual([
+      ["Start", "2026-04-28"],
+      ["Elapsed", "not measured"],
+    ]);
+    const foot = call("footnotes", {
+      footnotes: {
+        notes: [],
+        axis: { version: 1, review_needed: null, last_review: null, last_review_known: false },
+        model: "m",
+        not_found: [],
+        measured_with: { basou: "0", build: null },
+      },
+    }) as Node;
+    expect(foot.text()).toContain(boardPageStrings("en").footnotes.reviewUnknown);
+    expect(foot.text()).not.toContain(boardPageStrings("en").footnotes.noReview);
+  });
+
+  it("builds prose of text nodes, with only a span between backticks as a code element", () => {
+    const document = {
+      createElement: (tag: string) => new Node(tag),
+      createTextNode: (text: string) => Object.assign(new Node("#text"), { textContent: text }),
+    };
+    const prose = new Function(
+      "document",
+      `${lift("el")}; ${lift("codeSpans")}; ${lift("prose")}; return prose;`,
+    )(document) as (text: string) => Node;
+    const node = prose("a `<b>x</b>` <i>c</i> ``");
+    expect(node.children.map((c) => [c.tag, c.textContent])).toEqual([
+      ["#text", "a "],
+      ["code", "<b>x</b>"],
+      ["#text", " <i>c</i> ``"],
+    ]);
+  });
 
   it("puts text in without markup, a span between backticks as code and nothing else", () => {
     expect(BOARD_HTML).not.toContain("innerHTML");
@@ -1177,5 +1356,8 @@ describe("basou view: the board page", () => {
       values: Record<string, unknown>,
     ) => string;
     expect(fill("{n} of {n} and {m}", { n: 2 })).toBe("2 of 2 and {m}");
+    // What a value holds is never filled in itself.
+    expect(fill("{a} then {b}", { a: "{b}", b: "x" })).toBe("{b} then x");
+    expect(codeSpans("x `` y")).toEqual([{ code: false, text: "x `` y" }]);
   });
 });

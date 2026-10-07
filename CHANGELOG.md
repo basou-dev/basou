@@ -163,8 +163,9 @@ All notable changes to **basou** are recorded here. The project follows
   the ratios, the operator's turns, and footnotes. What the judge reported
   is marked as such. Its fixed strings are in the language the anchor
   declares. A link in the header leads to it, and earlier records open from
-  it. It reads the records and nothing else, takes no new flag, and is not
-  served in portfolio mode. Like every page of `basou view`, it is a local
+  it. It draws from the records, never from the board.yaml as it is now
+  (the manifest says whether there is a board and in which language), takes
+  no new flag, and is not served in portfolio mode. Like every page of `basou view`, it is a local
   UI and not an API.
 
 ### Changed

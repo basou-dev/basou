@@ -441,7 +441,8 @@ function matchWsRoute(pathname: string): { key: string; sub: string } | null {
 
 /**
  * What the board page draws, with its fixed strings in the language the
- * workspace's anchor declares. Read-only: only the records are read.
+ * workspace's anchor declares. Read-only: the page is drawn from the records,
+ * never from the board.yaml as it is now (the manifest gives the language).
  */
 async function boardView(
   ws: WorkspaceEntry,
@@ -450,9 +451,7 @@ async function boardView(
 ): Promise<Record<string, unknown>> {
   const language = await resolveViewLanguageFromPaths(ws.paths);
   const page =
-    "why" in board
-      ? boardPageUnavailable(board.why, "")
-      : await boardPage(board.recordsDir, recordId);
+    "why" in board ? boardPageUnavailable(board.why) : await boardPage(board.recordsDir, recordId);
   return { language, strings: boardPageStrings(language), page };
 }
 

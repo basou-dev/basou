@@ -133,8 +133,10 @@ describe("boardPage", () => {
     expect(await boardPage(records)).toEqual({
       status: "unavailable",
       why: "no_records",
-      detail: "",
       records: [],
+      id: null,
+      older: null,
+      newer: null,
     });
     await mkdir(records);
     await writeFile(join(records, ".record-1.tmp"), "{");
@@ -156,7 +158,9 @@ describe("boardPage", () => {
     expect(await boardPage(records, C)).toMatchObject({
       status: "unavailable",
       why: "not_found",
-      detail: C,
+      id: C,
+      older: null,
+      newer: null,
     });
   });
 
@@ -164,7 +168,7 @@ describe("boardPage", () => {
     await mkdir(records);
     await place(A, record());
     const page = await boardPage(records);
-    if (page.status !== "ok") throw new Error(page.detail);
+    if (page.status !== "ok") throw new Error(page.why);
     const b = page.board;
     expect(b.heading).toEqual({
       title: "Test board",
@@ -193,7 +197,7 @@ describe("boardPage", () => {
       }),
     );
     const latest = await boardPage(records);
-    if (latest.status !== "ok") throw new Error(latest.detail);
+    if (latest.status !== "ok") throw new Error(latest.why);
     expect(latest.board.summary.tiles[0]).toEqual({
       key: "live_lanes",
       value: 0,
@@ -228,7 +232,7 @@ describe("boardPage", () => {
     );
     await place(B, record());
     const page = await boardPage(records);
-    if (page.status !== "ok") throw new Error(page.detail);
+    if (page.status !== "ok") throw new Error(page.why);
     expect(page.board.summary.observed[1]?.previous).toEqual({ status: "value", value: "0.64.0" });
     const core = page.board.matrix.lanes[0];
     expect(core?.cells.map((c) => c.moved_from ?? "")).toEqual([
@@ -255,14 +259,14 @@ describe("boardPage", () => {
       }),
     );
     const fresh = await boardPage(records);
-    if (fresh.status !== "ok") throw new Error(fresh.detail);
+    if (fresh.status !== "ok") throw new Error(fresh.why);
     expect(fresh.board.summary.observed[1]?.previous).toEqual({ status: "none" });
     expect(fresh.board.matrix.lanes[1]?.cells.some((c) => "moved_from" in c)).toBe(false);
     expect(fresh.board.matrix.lanes[0]?.cells[1]?.moved_from).toBe("part");
     // With the previous record unreadable, nothing is marked and the value is not known.
     await place(A, "{ not json");
     const unread = await boardPage(records);
-    if (unread.status !== "ok") throw new Error(unread.detail);
+    if (unread.status !== "ok") throw new Error(unread.why);
     expect(unread.board.summary.observed[1]?.previous).toEqual({ status: "unreadable" });
     expect(unread.board.matrix.lanes[0]?.cells.some((c) => c.moved_from !== undefined)).toBe(false);
   });
@@ -274,7 +278,7 @@ describe("boardPage", () => {
       record({ order_anomalies: [{ lane: "core", stage: "05", state: "none", before: "06" }] }),
     );
     const page = await boardPage(records);
-    if (page.status !== "ok") throw new Error(page.detail);
+    if (page.status !== "ok") throw new Error(page.why);
     const b = page.board;
     expect(b.matrix.stages.map((s) => s.id)).toEqual(["01", "02", "03", "04", "05", "06"]);
     expect(b.matrix.anomalies).toEqual([
@@ -308,7 +312,7 @@ describe("boardPage", () => {
     await mkdir(records);
     await place(A, record());
     const page = await boardPage(records);
-    if (page.status !== "ok") throw new Error(page.detail);
+    if (page.status !== "ok") throw new Error(page.why);
     const b = page.board;
     expect(b.composition).toEqual([
       {
@@ -339,31 +343,53 @@ describe("boardPage", () => {
         version: 2,
         review_needed: false,
         last_review: { date: "2026-09-28", model: "Claude Opus 5.5", from: "seed" },
+        last_review_known: true,
       },
       model: "Claude Opus 5.5",
       not_found: [{ at: "measures.test", reason: "no such file" }],
       measured_with: { basou: "0.65.0", build: "abcdef0" },
+    });
+    expect(b.footnotes.axis.last_review_known).toBe(true);
+    // A last review a record that could not be read may hold is not known, not none.
+    const unknown = record();
+    unknown.measure.axis.last_review = null as unknown as typeof unknown.measure.axis.last_review;
+    unknown.measure.not_found = [
+      { at: "axis.last_review", reason: "the last review is not known" },
+    ];
+    await place(A, unknown);
+    const notKnown = await boardPage(records);
+    if (notKnown.status !== "ok") throw new Error(notKnown.why);
+    expect(notKnown.board.footnotes.axis).toMatchObject({
+      last_review: null,
+      last_review_known: false,
     });
   });
 
   it("does not draw a record it cannot read, of a version it does not know, or not in the shape of one", async () => {
     await mkdir(records);
     await place(A, "{ not json");
-    expect(await boardPage(records)).toMatchObject({
+    await place(B, record());
+    // The records around the one asked for are still there to go to.
+    expect(await boardPage(records, A)).toEqual({
       status: "unavailable",
-      why: "unreadable",
-      detail: `the record ${A} could not be read as JSON`,
+      why: "not_json",
+      records: [
+        { id: A, at: "1970-01-01T00:00:00.001Z" },
+        { id: B, at: "1970-01-01T00:00:00.002Z" },
+      ],
+      id: A,
+      older: null,
+      newer: B,
     });
     await place(A, record({ record_version: 2 }));
-    expect(await boardPage(records)).toMatchObject({
-      why: "unreadable",
-      detail: `the record ${A} is of record_version 2, which this basou does not draw`,
+    expect(await boardPage(records, A)).toMatchObject({
+      why: "unknown_version",
+      id: A,
+      version: 2,
     });
     await place(A, record({ prose: { summary: 1 } }));
-    expect(await boardPage(records)).toMatchObject({
-      why: "unreadable",
-      detail: `the record ${A} is not in the shape of a record`,
-    });
+    expect(await boardPage(records, A)).toMatchObject({ why: "not_a_record", id: A });
+    await rm(join(records, `${B}.json`));
     // A key the page does not draw is let through.
     await place(A, record({ later: { added: true } }));
     expect((await boardPage(records)).status).toBe("ok");
@@ -373,6 +399,9 @@ describe("boardPage", () => {
     const elsewhere = join(dir, "elsewhere");
     await mkdir(elsewhere);
     await symlink(elsewhere, records);
-    expect(await boardPage(records)).toMatchObject({ status: "unavailable", why: "unreadable" });
+    expect(await boardPage(records)).toMatchObject({
+      status: "unavailable",
+      why: "records_not_directory",
+    });
   });
 });
