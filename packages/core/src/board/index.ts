@@ -57,8 +57,10 @@ export { boardDigest, measureBoard } from "./measure.js";
 export type {
   BoardPage,
   BoardPageBody,
+  BoardPageDay,
   BoardPageRecordRef,
   BoardPageUnavailable,
+  BoardPageWeek,
 } from "./page.js";
 export { boardPage, boardPageUnavailable } from "./page.js";
 export type { BoardPortfolio } from "./portfolio.js";

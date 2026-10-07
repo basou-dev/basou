@@ -879,19 +879,34 @@ export type BoardPageStrings = {
     missingPreviousUnreadable: string;
   };
   effort: {
-    start: string;
-    elapsedLabel: string;
     elapsed: string;
+    days: string;
+    from: string;
+    fromZone: string;
     active: string;
+    daysWorked: string;
     claude: string;
     codex: string;
     noCodex: string;
+    perDay: string;
+    perDayWorked: string;
     outputTokens: string;
     withoutTokens: string;
     commits: string;
     milestones: string;
     noMilestones: string;
     notMeasured: string;
+    dailyTitle: string;
+    codexAlone: string;
+    dayDetail: string;
+    cumulativeTitle: string;
+    cumulativeDetail: string;
+    weeksTitle: string;
+    week: string;
+    weekOf: string;
+    activeDays: string;
+    commitColumn: string;
+    noDays: string;
   };
   states: {
     done: string;
@@ -990,19 +1005,34 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     missingPreviousUnreadable: "not observed (the previous record could not be read)",
   },
   effort: {
-    start: "Start",
-    elapsedLabel: "Elapsed",
-    elapsed: "{days} days",
+    elapsed: "Elapsed",
+    days: "{days} days",
+    from: "from {date}",
+    fromZone: "from {date} ({zone})",
     active: "Active",
+    daysWorked: "{n} days worked",
     claude: "Claude",
     codex: "Codex",
     noCodex: "no Codex session",
+    perDay: "Per day",
+    perDayWorked: "{time} a day worked",
     outputTokens: "Output tokens",
     withoutTokens: "imports that recorded no tokens: {n}",
-    commits: "Commits",
+    commits: "Commits since the start: {list}",
     milestones: "Milestones",
     noMilestones: "No milestones declared.",
     notMeasured: "not measured",
+    dailyTitle: "Active time by day",
+    codexAlone: "Codex (not at the same time as Claude)",
+    dayDetail: "{date}: active {active} (Claude {claude}, Codex alone {codex}), commits {commits}",
+    cumulativeTitle: "Active time, cumulative",
+    cumulativeDetail: "{date}: {total} in all",
+    weeksTitle: "By week, from Monday",
+    week: "Week",
+    weekOf: "week of {date}",
+    activeDays: "Days worked",
+    commitColumn: "Commits",
+    noDays: "There are no days to draw.",
   },
   states: {
     done: "done",
@@ -1106,19 +1136,34 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     missingPreviousUnreadable: "未確認（前回の記録が読めない）",
   },
   effort: {
-    start: "開始",
-    elapsedLabel: "経過",
-    elapsed: "{days} 日",
+    elapsed: "経過",
+    days: "{days} 日",
+    from: "{date} から",
+    fromZone: "{date} から（{zone}）",
     active: "実働",
+    daysWorked: "{n} 日に分布",
     claude: "Claude",
     codex: "Codex",
     noCodex: "Codex の session なし",
+    perDay: "1 日あたり",
+    perDayWorked: "動いた日だけなら {time}",
     outputTokens: "出力トークン",
     withoutTokens: "トークンを記録しなかった取り込み {n}",
-    commits: "commit",
+    commits: "開始日以降の commit: {list}",
     milestones: "節目",
     noMilestones: "節目の宣言はない。",
     notMeasured: "測れなかった",
+    dailyTitle: "日ごとの実働",
+    codexAlone: "Codex（Claude と重ならない分）",
+    dayDetail: "{date}: 実働 {active}（Claude {claude} / Codex のみ {codex}）· commit {commits}",
+    cumulativeTitle: "実働の累積",
+    cumulativeDetail: "{date}: 累計 {total}",
+    weeksTitle: "週ごと（月曜から）",
+    week: "週",
+    weekOf: "{date} 週",
+    activeDays: "動いた日",
+    commitColumn: "commit",
+    noDays: "描く日がない。",
   },
   states: {
     done: "到達",

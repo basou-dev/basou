@@ -81,7 +81,33 @@ function record(over: Record<string, unknown> = {}) {
         output_tokens: 1000,
         sessions_without_tokens: 1,
         commits: { ".": 12, "../basou": 34 },
-        daily: [],
+        // Sunday, then Monday to Wednesday; Tuesday's time not measured.
+        daily: [
+          {
+            date: "2026-10-04",
+            active_ms: { union: 60_000, claude: 60_000, codex: null },
+            output_tokens: 1,
+            commits: { ".": 1, "../basou": 2 },
+          },
+          {
+            date: "2026-10-05",
+            active_ms: { union: 180_000, claude: 120_000, codex: 90_000 },
+            output_tokens: 1,
+            commits: { ".": 0, "../basou": 3 },
+          },
+          {
+            date: "2026-10-06",
+            active_ms: { union: null, claude: null, codex: null },
+            output_tokens: null,
+            commits: { ".": null, "../basou": null },
+          },
+          {
+            date: "2026-10-07",
+            active_ms: { union: 0, claude: 0, codex: 0 },
+            output_tokens: 0,
+            commits: { ".": 0, "../basou": 0 },
+          },
+        ],
       },
       components: { found: {}, unacknowledged: [], gone: [], kind_changed: null },
       axis: {
@@ -335,6 +361,52 @@ describe("boardPage", () => {
         { repo: "../basou", count: 34 },
       ],
       milestones: [{ date: "2026-05-04", label: "Started", ref: "abc1234" }],
+      active_days: 2,
+      daily: [
+        {
+          date: "2026-10-04",
+          union: 60_000,
+          claude: 60_000,
+          codex_only: 0,
+          cumulative: 60_000,
+          commits: 3,
+        },
+        {
+          date: "2026-10-05",
+          union: 180_000,
+          claude: 120_000,
+          codex_only: 60_000,
+          cumulative: 240_000,
+          commits: 3,
+        },
+        {
+          date: "2026-10-06",
+          union: null,
+          claude: null,
+          codex_only: null,
+          cumulative: null,
+          commits: null,
+        },
+        { date: "2026-10-07", union: 0, claude: 0, codex_only: 0, cumulative: null, commits: 0 },
+      ],
+      weeks: [
+        {
+          week: "2026-09-28",
+          union: 60_000,
+          claude: 60_000,
+          codex: null,
+          active_days: 1,
+          commits: 3,
+        },
+        {
+          week: "2026-10-05",
+          union: 180_000,
+          claude: 120_000,
+          codex: 90_000,
+          active_days: 1,
+          commits: 3,
+        },
+      ],
     });
     expect(b.turns).toEqual([{ text: "Decide X", source: "decision_X" }]);
     expect(b.footnotes).toEqual({
