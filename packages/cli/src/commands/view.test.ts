@@ -1359,5 +1359,14 @@ describe("basou view: the board page", () => {
     // What a value holds is never filled in itself.
     expect(fill("{a} then {b}", { a: "{b}", b: "x" })).toBe("{b} then x");
     expect(codeSpans("x `` y")).toEqual([{ code: false, text: "x `` y" }]);
+    const num = new Function("S", `${lift("num")}; return num;`)(boardPageStrings("en")) as (
+      n: unknown,
+    ) => string;
+    expect([num(0.333333), num(1234567), num(null), num("12")]).toEqual([
+      "0.3333",
+      "1,234,567",
+      "not measured",
+      "12",
+    ]);
   });
 });
