@@ -46,6 +46,21 @@ export type {
 export { boardDigest, measureBoard } from "./measure.js";
 export type { BoardPortfolio } from "./portfolio.js";
 export { BOARD_PORTFOLIO_METHOD } from "./portfolio.js";
+export type {
+  BoardOrderAnomaly,
+  BoardRecord,
+  BoardRecordInput,
+  BoardRecordInputResult,
+} from "./record.js";
+export {
+  BOARD_AXIS_REVIEW_TRIGGERS,
+  BOARD_CELL_STATES,
+  BOARD_RECORD_VERSION,
+  buildRecord,
+  orderAnomalies,
+  parseRecordInput,
+  writeRecord,
+} from "./record.js";
 export type { BoardRepo } from "./repos.js";
 export { BOARD_REPOS_METHOD } from "./repos.js";
 export type { BoardReviewGaps } from "./review-gaps.js";

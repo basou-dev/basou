@@ -447,7 +447,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function formatPath(path: readonly PropertyKey[]): string {
+export function formatPath(path: readonly PropertyKey[]): string {
   if (path.length === 0) return "(top level)";
   let out = "";
   for (const key of path) {
@@ -461,7 +461,7 @@ function formatPath(path: readonly PropertyKey[]): string {
 
 type Issue = z.ZodError["issues"][number];
 
-function formatIssue(issue: Issue): string {
+export function formatIssue(issue: Issue): string {
   if (issue.code === "unrecognized_keys") {
     const keys = issue.keys.map((k) => `'${k}'`).join(", ");
     return `${formatPath(issue.path)}: unknown key${issue.keys.length > 1 ? "s" : ""} ${keys}`;

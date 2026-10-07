@@ -102,6 +102,28 @@ All notable changes to **basou** are recorded here. The project follows
   each time one of its subcommands starts it says so on stderr (a command
   line that does not parse stops before that).
 
+- **`basou board record` (experimental) records a board with a judgement of
+  it.** It reads a JSON object from stdin or `--file` (`-` is stdin): the
+  digest of the measurement the judgement saw, observations from outside,
+  a cell for every lane at every stage (`done`, `part`, `blocked`,
+  `shelved`, `none` or `unverified`, with a reason for the last three),
+  prose, who judged (`judged_by.self_reported` is always true), and the
+  triggers of an axis review, if there was one. It measures the board
+  again, as the judge's model, and writes nothing unless the digest is the
+  one the judgement saw. The input is checked whole first: an unknown key
+  anywhere but the names of observations, a lane or stage the board does
+  not have, a missing or doubled cell, and a missing reason are each
+  reported, and nothing is written. Stages left behind (not started,
+  blocked or shelved before one done or begun) are recorded, not refused.
+  The record (the declaration as read, the measurement, the input and the
+  stages left behind) is written whole to `records/<ULID>.json` beside the
+  `board.yaml`, through a file whose name is not a ULID's; nothing is
+  written under `.basou/`. `--dry-run` checks and measures but writes
+  nothing. Exit codes: `0` when the record was written (or, with
+  `--dry-run`, could be), `1` when it was refused. The README and the
+  local-first invariant of `docs/spec/compatibility.md` now say that an
+  experimental command may write where it is pointed, outside the trail.
+
 ### Changed
 
 - **`@basou/core` now depends on simple-git 4, for four advisories against

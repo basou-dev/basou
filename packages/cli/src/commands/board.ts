@@ -1,17 +1,23 @@
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   assertBasouRootSafe,
+  type BasouPaths,
+  type BoardDeclaration,
   type BoardMeasurement,
+  type BoardOrderAnomaly,
   type BoardRepo,
   basouPaths,
+  buildRecord,
   byCodePoint,
   displayPath,
   findErrorCode,
   type Manifest,
   measureBoard,
   parseBoardDeclaration,
+  parseRecordInput,
   readManifest,
+  writeRecord,
 } from "@basou/core";
 import type { Command } from "commander";
 import {
@@ -33,6 +39,15 @@ export type BoardMeasureOptions = {
   verbose?: boolean;
 };
 
+export type BoardRecordOptions = {
+  board?: string;
+  /** Read the record's input from this file; `-`, or none, reads stdin. */
+  file?: string;
+  dryRun?: boolean;
+  json?: boolean;
+  verbose?: boolean;
+};
+
 export type BoardContext = {
   /** Defaults to `process.cwd()`. Injectable for tests. */
   cwd?: string;
@@ -48,6 +63,11 @@ export type BoardContext = {
   claudeProjectsDir?: string;
   /** Defaults to `~/.codex/sessions`. Injectable for tests. */
   codexSessionsDir?: string;
+  /**
+   * Defaults to reading process.stdin to EOF. Injectable for tests so they do
+   * not depend on a real stdin stream. Ignored when `--file` names a file.
+   */
+  readInput?: () => Promise<string>;
 };
 
 /** Where a board's declaration is read from when `--board` is not given. */
@@ -56,13 +76,13 @@ export const DEFAULT_BOARD_PATH = "board/board.yaml";
 /**
  * Register `basou board`, the progress board of a workspace: a declaration
  * file (`board.yaml`) saying what to measure, and the commands that measure
- * it. Experimental (docs/spec/compatibility.md lists it): its flags, output
+ * it and record it with a judgement. Experimental (docs/spec/compatibility.md lists it): its flags, output
  * and files may change at any release.
  */
 export function registerBoardCommand(program: Command): void {
   const board = program
     .command("board")
-    .description("Measure the progress board a workspace declares in board.yaml");
+    .description("Measure and record the progress board a workspace declares in board.yaml");
   board
     .command("measure")
     .description(
@@ -88,6 +108,32 @@ read (nothing is printed on stdout).`,
     )
     .action(async (options: BoardMeasureOptions) => {
       await runBoardMeasure(options);
+    });
+  board
+    .command("record")
+    .description(
+      "Measure the board again and record it with a judgement of it, in records/ beside board.yaml",
+    )
+    .option(
+      "--board <path>",
+      `The board.yaml to read (default: ${DEFAULT_BOARD_PATH} in the workspace, only when the manifest declares the workspace's own repo private)`,
+    )
+    .option("--file <path>", "Read the record's input (JSON) from a file; - or none reads stdin")
+    .option("--dry-run", "Check the input and measure again, but write nothing")
+    .option("--json", "Output the result as JSON")
+    .option("-v, --verbose", "Show error causes")
+    .addHelpText(
+      "after",
+      `
+The input is a JSON object: measure_digest (the digest of the measurement the
+judgement saw), observed, cells (every lane at every stage), prose, judged_by
+and axis_review. The board is measured again, and nothing is written when the
+digest differs. Exit codes: 0 when the record was written (with --dry-run,
+when it could be); 1 when it was refused (nothing is written; the reasons are
+on stderr).`,
+    )
+    .action(async (options: BoardRecordOptions) => {
+      await runBoardRecord(options);
     });
 }
 
@@ -116,10 +162,161 @@ export async function doRunBoardMeasure(
   if (options.model !== undefined && options.model.trim() === "") {
     throw new Error("--model must name a model.");
   }
+  const loaded = await loadBoard(options, ctx, "board measure");
+  const measurement = await measureLoaded(loaded, ctx, options.model);
+  if (options.json === true) console.log(JSON.stringify(measurement, null, 2));
+  else printMeasurementText(measurement);
+  if (!measurement.complete) process.exitCode = 1;
+  return measurement;
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunBoardRecord}. */
+export async function runBoardRecord(
+  options: BoardRecordOptions,
+  ctx: BoardContext = {},
+): Promise<void> {
+  try {
+    await doRunBoardRecord(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/** What `basou board record` reports when it is not refused. */
+export type BoardRecordResult = {
+  /** Where the record was written, as given (null with --dry-run). */
+  record: string | null;
+  dry_run: boolean;
+  /** Whether the measurement recorded was complete. */
+  complete: boolean;
+  order_anomalies: BoardOrderAnomaly[];
+};
+
+/**
+ * Check the input against the declaration, measure the board again with the
+ * judge's model, and write the record when the digest is the one the
+ * judgement saw. Anything refused throws before a file is written.
+ */
+export async function doRunBoardRecord(
+  options: BoardRecordOptions,
+  ctx: BoardContext,
+): Promise<BoardRecordResult> {
+  const loaded = await loadBoard(options, ctx, "board record");
+  const text = await readRecordInput(options, ctx);
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error: unknown) {
+    throw new Error("The record's input is not valid JSON; nothing was written.", { cause: error });
+  }
+  const parsed = parseRecordInput(value, loaded.declaration);
+  if (!parsed.ok) {
+    throw new Error(
+      `The record's input was refused; nothing was written:\n${parsed.errors
+        .map((e) => `  - ${displayPath(e)}`)
+        .join("\n")}`,
+    );
+  }
+  const recordedAt = ctx.nowProvider?.() ?? new Date();
+  const measurement = await measureLoaded(loaded, ctx, parsed.input.judged_by.model);
+  if (measurement.digest !== parsed.input.measure_digest) {
+    throw new Error(
+      `measure_digest is ${parsed.input.measure_digest}, but the board measures ${measurement.digest} now: something it measures moved since the judgement. Measure again and judge that; nothing was written.`,
+    );
+  }
+  const record = buildRecord({
+    declaration: loaded.declaration,
+    measurement,
+    recordInput: parsed.input,
+    recordedAt,
+    recordedWith: { basou: BASOU_CLI_VERSION, build: BASOU_BUILD?.commit ?? null },
+  });
+  let written: string | null = null;
+  if (options.dryRun !== true) {
+    const recordsDir = join(dirname(loaded.board.path), "records");
+    let name: string;
+    try {
+      name = await writeRecord(recordsDir, record);
+    } catch (error: unknown) {
+      throw new Error("The record could not be written; nothing was written.", { cause: error });
+    }
+    written = join(dirname(loaded.board.shown), "records", name);
+  }
+  const result: BoardRecordResult = {
+    record: written,
+    dry_run: options.dryRun === true,
+    complete: measurement.complete,
+    order_anomalies: record.order_anomalies,
+  };
+  if (options.json === true) console.log(JSON.stringify(result, null, 2));
+  else printRecordText(result);
+  return result;
+}
+
+function printRecordText(result: BoardRecordResult): void {
+  const lines = [
+    result.record === null
+      ? "Dry run: the record could be written (nothing was written)."
+      : `Recorded ${displayPath(result.record)}`,
+  ];
+  if (!result.complete) lines.push("The measurement recorded is not complete.");
+  if (result.order_anomalies.length > 0) {
+    lines.push(`Order anomalies (${result.order_anomalies.length}):`);
+    for (const a of result.order_anomalies) {
+      lines.push(
+        `  ${displayPath(a.lane)} ${a.stage} is ${a.state} before ${a.before}, which is done or begun`,
+      );
+    }
+  }
+  console.log(lines.join("\n"));
+}
+
+const NO_RECORD_INPUT = "No input: pipe the record's JSON to stdin or pass --file <path>.";
+
+async function readRecordInput(options: BoardRecordOptions, ctx: BoardContext): Promise<string> {
+  let text: string;
+  if (options.file !== undefined && options.file !== "-") {
+    try {
+      text = await readFile(options.file, "utf8");
+    } catch (error: unknown) {
+      if (findErrorCode(error, "ENOENT")) {
+        throw new Error(`Input file not found: ${displayPath(options.file)}`, { cause: error });
+      }
+      throw new Error(`Failed to read ${displayPath(options.file)}.`, { cause: error });
+    }
+  } else if (ctx.readInput !== undefined) {
+    text = await ctx.readInput();
+  } else {
+    // A bare invocation with no piped stdin would otherwise block forever.
+    if (process.stdin.isTTY === true) throw new Error(NO_RECORD_INPUT);
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+    text = Buffer.concat(chunks).toString("utf8");
+  }
+  if (text.trim() === "") throw new Error(NO_RECORD_INPUT);
+  return text;
+}
+
+type LoadedBoard = {
+  root: string;
+  paths: BasouPaths;
+  repoPaths: string[];
+  board: BoardLocation;
+  declaration: BoardDeclaration;
+};
+
+// Find the workspace and read the board's declaration, or throw before
+// anything is printed.
+async function loadBoard(
+  options: { board?: string },
+  ctx: BoardContext,
+  command: string,
+): Promise<LoadedBoard> {
   const cwd = ctx.cwd ?? process.cwd();
   const root = await resolveBasouRootForCommand(
     cwd,
-    "board measure",
+    command,
     ctx.portfolioConfigPath === undefined ? {} : { portfolioConfigPath: ctx.portfolioConfigPath },
   );
   const paths = basouPaths(root);
@@ -137,17 +334,25 @@ export async function doRunBoardMeasure(
         .join("\n")}`,
     );
   }
+  return { root, paths, repoPaths, board, declaration: parsed.declaration };
+}
 
+async function measureLoaded(
+  loaded: LoadedBoard,
+  ctx: BoardContext,
+  model: string | undefined,
+): Promise<BoardMeasurement> {
+  const { root, paths } = loaded;
   const now = ctx.nowProvider?.() ?? new Date();
   // The dry run `basou orient` runs to judge freshness: it reads the native
   // logs of this host and writes nothing.
   const probeCtx: ImportContext = { cwd: root };
   if (ctx.claudeProjectsDir !== undefined) probeCtx.claudeProjectsDir = ctx.claudeProjectsDir;
   if (ctx.codexSessionsDir !== undefined) probeCtx.codexSessionsDir = ctx.codexSessionsDir;
-  const measurement = await measureBoard({
-    declaration: parsed.declaration,
+  return measureBoard({
+    declaration: loaded.declaration,
     root,
-    repos: repoPaths,
+    repos: loaded.repoPaths,
     paths,
     now,
     measuredWith: { basou: BASOU_CLI_VERSION, build: BASOU_BUILD?.commit ?? null },
@@ -157,13 +362,8 @@ export async function doRunBoardMeasure(
       ? {}
       : { portfolioConfigPath: ctx.portfolioConfigPath }),
     probeImports: () => probeStaleness({ ctx: probeCtx, paths, nowIso: now.toISOString() }),
-    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(model === undefined ? {} : { model }),
   });
-
-  if (options.json === true) console.log(JSON.stringify(measurement, null, 2));
-  else printMeasurementText(measurement);
-  if (!measurement.complete) process.exitCode = 1;
-  return measurement;
 }
 
 type BoardLocation = { path: string; shown: string };
@@ -172,7 +372,7 @@ type BoardLocation = { path: string; shown: string };
 // repo private: a measurement carries what the trail holds (open tracks,
 // task counts), and a default must not lead it into a public history.
 function boardPath(
-  options: BoardMeasureOptions,
+  options: { board?: string },
   cwd: string,
   root: string,
   manifest: Manifest,

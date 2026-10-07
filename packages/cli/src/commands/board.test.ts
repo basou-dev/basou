@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -14,7 +24,7 @@ import {
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeStaleness } from "../lib/provenance-actions.js";
-import { doRunBoardMeasure, runBoardMeasure } from "./board.js";
+import { doRunBoardMeasure, doRunBoardRecord, runBoardMeasure, runBoardRecord } from "./board.js";
 import { doRunPortfolioList } from "./portfolio.js";
 import { doRunReviewGaps } from "./review-gaps.js";
 import { doRunStats } from "./stats.js";
@@ -860,5 +870,130 @@ describe("basou board measure: what the review found", () => {
     const { out } = capture();
     await runBoardMeasure({}, ctx(repo));
     expect(out.join("\n")).toContain("third  0.3333  (one / three)");
+  });
+});
+
+describe("basou board record", () => {
+  // A workspace whose own repo is private, with a board of one lane, and the
+  // input of a record judged against the board as measured now.
+  async function judged(
+    states: string[] = ["done", "part", "none", "none", "none", "none"],
+  ): Promise<{ repo: string; input: Record<string, unknown> }> {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([MD]));
+    const { out } = capture();
+    const measured = await doRunBoardMeasure({ json: true }, ctx(repo));
+    out.length = 0;
+    vi.restoreAllMocks();
+    return {
+      repo,
+      input: {
+        measure_digest: measured.digest,
+        cells: states.map((state, i) => ({
+          lane: "core",
+          stage: `0${i + 1}`,
+          state,
+          ...(state === "blocked" ? { reason: "waiting" } : {}),
+        })),
+        prose: { summary: "fine" },
+        judged_by: { model: "Claude Opus 5.5", self_reported: true },
+      },
+    };
+  }
+
+  const fed = (repo: string, input: unknown) => ({
+    ...ctx(repo),
+    readInput: async () => (typeof input === "string" ? input : JSON.stringify(input)),
+  });
+
+  it("writes the record beside board.yaml, all of it, and says where", async () => {
+    const { repo, input } = await judged();
+    const { out } = capture();
+    const result = await doRunBoardRecord({}, fed(repo, input));
+    expect(result.record).toMatch(/^board\/records\/[0-7][0-9A-HJKMNP-TV-Z]{25}\.json$/);
+    expect(out.join("\n")).toBe(`Recorded ${result.record}`);
+    const name = (result.record ?? "").split("/").at(-1) ?? "";
+    expect(await readdir(join(repo, "board", "records"))).toEqual([name]);
+    const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
+    expect(written).toMatchObject({
+      record_version: 1,
+      measure: { digest: input.measure_digest },
+      judged_by: { model: "Claude Opus 5.5", self_reported: true },
+      order_anomalies: [],
+    });
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("checks and measures but writes nothing with --dry-run, and reports as JSON", async () => {
+    const { repo, input } = await judged();
+    const { out } = capture();
+    const result = await doRunBoardRecord({ dryRun: true, json: true }, fed(repo, input));
+    expect(result).toEqual({ record: null, dry_run: true, complete: true, order_anomalies: [] });
+    expect(JSON.parse(out.join("\n"))).toEqual(result);
+    await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
+  });
+
+  it("lists the stages left behind", async () => {
+    const { repo, input } = await judged(["done", "none", "part", "blocked", "done", "none"]);
+    const { out } = capture();
+    await doRunBoardRecord({}, fed(repo, input));
+    expect(out.join("\n")).toContain(
+      "Order anomalies (2):\n  core 02 is none before 03, which is done or begun\n  core 04 is blocked before 05, which is done or begun",
+    );
+  });
+
+  it("refuses, and writes nothing, when the board moved since the judgement", async () => {
+    const { repo, input } = await judged();
+    await writeFile(join(repo, "LATER.md"), "# later\n");
+    const { out, err } = capture();
+    await runBoardRecord({}, fed(repo, input));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain(
+      `measure_digest is ${input.measure_digest}, but the board measures sha256:`,
+    );
+    expect(err.join("\n")).toContain("Measure again and judge that; nothing was written.");
+    expect(process.exitCode).toBe(1);
+    await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
+  });
+
+  it("refuses an input it cannot read, saying everything wrong with it at once", async () => {
+    const { repo, input } = await judged();
+    const { out, err } = capture();
+    await runBoardRecord({}, fed(repo, "{not json"));
+    expect(err.join("\n")).toContain("The record's input is not valid JSON; nothing was written.");
+    err.length = 0;
+    await runBoardRecord({}, fed(repo, "  \n"));
+    expect(err.join("\n")).toContain(
+      "No input: pipe the record's JSON to stdin or pass --file <path>.",
+    );
+    err.length = 0;
+    const cells = (input.cells as Record<string, unknown>[]).slice(1);
+    await runBoardRecord({}, fed(repo, { ...input, cells, extra: true }));
+    expect(err.join("\n")).toContain(
+      "The record's input was refused; nothing was written:\n  - (top level): unknown key 'extra'",
+    );
+    expect(out).toEqual([]);
+    expect(process.exitCode).toBe(1);
+    await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
+  });
+
+  it("reads the input from --file, or from stdin given -", async () => {
+    const { repo, input } = await judged();
+    // Outside the repository, whose files the board counts.
+    const outside = await mkdtemp(join(tmpdir(), "basou-board-input-"));
+    const file = join(outside, "input.json");
+    await writeFile(file, JSON.stringify(input));
+    capture();
+    try {
+      const fromFile = await doRunBoardRecord({ file, dryRun: true }, ctx(repo));
+      expect(fromFile.dry_run).toBe(true);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+    const fromStdin = await doRunBoardRecord({ file: "-", dryRun: true }, fed(repo, input));
+    expect(fromStdin.dry_run).toBe(true);
+    await expect(doRunBoardRecord({ file: join(repo, "missing.json") }, ctx(repo))).rejects.toThrow(
+      /Input file not found/,
+    );
   });
 });

@@ -13,8 +13,9 @@ in plain files next to your code.
 [![Node](https://img.shields.io/badge/node-%3E%3D20.10-339933.svg)](#installation)
 
 Basou is local-first and zero-network: it reads the agent logs already on
-your machine and writes only into a `.basou/` directory beside your repo.
-Nothing leaves your machine.
+your machine and writes its trail only into a `.basou/` directory beside your
+repo (the experimental `basou board record` keeps its records beside the
+board's `board.yaml` instead). Nothing leaves your machine.
 
 ## Why Basou?
 
@@ -188,9 +189,11 @@ What that means for you today:
   lists. Internal `@basou/core` APIs may still change between minor releases.
 - **The on-disk `.basou/` formats are versioned** and ship JSON Schemas;
   `1.0` is where the formats and semver guarantees are committed.
-- **Adopting is low-risk and reversible**: everything lives in a `.basou/`
-  directory next to your code, nothing is sent off-machine, and the
-  generators are dry-run-by-default and non-destructive.
+- **Adopting is low-risk and reversible**: the trail lives in a `.basou/`
+  directory next to your code (an experimental command writes only where
+  you point it, such as `basou board record` beside a `board.yaml`), nothing
+  is sent off-machine, and the generators are dry-run-by-default and
+  non-destructive.
 
 For the precise semver contract — which surfaces `1.0` guarantees, how the
 on-disk format is versioned, and the deprecation policy — see
