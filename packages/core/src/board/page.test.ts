@@ -182,6 +182,24 @@ describe("boardPage", () => {
       { key: "sessions", value: 12, detail: 2, reported: false },
       { key: "turns", value: 1, reported: true },
     ]);
+    // A lane in operation is one whose last stage is done, not begun or blocked.
+    await place(
+      B,
+      record({
+        cells: cells({
+          core: ["done", "done", "done", "done", "done", "part"],
+          docs: ["done", "done", "done", "done", "done", "blocked"],
+        }),
+      }),
+    );
+    const latest = await boardPage(records);
+    if (latest.status !== "ok") throw new Error(latest.detail);
+    expect(latest.board.summary.tiles[0]).toEqual({
+      key: "live_lanes",
+      value: 0,
+      detail: 2,
+      reported: true,
+    });
     // The first record has no previous one to take a value from.
     expect(b.summary.observed).toEqual([
       { name: "npm", value: "0.65.0", observed_at: "2026-10-07", source: "registry" },
@@ -227,6 +245,20 @@ describe("boardPage", () => {
       reason: "why core 04",
       moved_from: "none",
     });
+    // A cell the previous record did not have has not moved, and a value it
+    // did not observe either is no previous value.
+    await place(
+      A,
+      record({
+        observed: { site: { value: null, observed_at: "2026-10-01", source: "site", error: "x" } },
+        cells: cells({ core: ["done", "part", "none", "none", "none", "none"] }),
+      }),
+    );
+    const fresh = await boardPage(records);
+    if (fresh.status !== "ok") throw new Error(fresh.detail);
+    expect(fresh.board.summary.observed[1]?.previous).toEqual({ status: "none" });
+    expect(fresh.board.matrix.lanes[1]?.cells.some((c) => "moved_from" in c)).toBe(false);
+    expect(fresh.board.matrix.lanes[0]?.cells[1]?.moved_from).toBe("part");
     // With the previous record unreadable, nothing is marked and the value is not known.
     await place(A, "{ not json");
     const unread = await boardPage(records);

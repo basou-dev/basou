@@ -1072,6 +1072,8 @@ describe("basou view: the board page", () => {
       expect(await page.text()).toBe(BOARD_HTML);
       const latest = await getJson(h, "/api/board");
       expect(latest.status).toBe(200);
+      // The table of the anchor's language, not the English one.
+      expect((latest.data as { strings: unknown }).strings).not.toEqual(boardPageStrings("en"));
       expect(latest.data).toMatchObject({
         language: "ja",
         strings: boardPageStrings("ja"),
