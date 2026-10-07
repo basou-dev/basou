@@ -700,6 +700,33 @@ describe("basou board measure", () => {
     );
   });
 
+  it("lists the components by code point, whatever order JSON gives their keys", async () => {
+    const repo = await workspace([
+      { path: ".", visibility: "private" },
+      { path: "10" },
+      { path: "9" },
+    ]);
+    for (const name of ["10", "9"]) {
+      const dir = join(repo, name);
+      await mkdir(dir);
+      await execFileAsync("git", ["-c", "init.defaultBranch=main", "init", "-q"], {
+        cwd: dir,
+        env: ENV,
+      });
+      await writeFile(join(dir, "package.json"), "{}\n");
+    }
+    await placeBoard(repo, boardYaml([]));
+    const { out } = capture();
+    const result = await doRunBoardMeasure({ json: true }, ctx(repo));
+    // An object puts the keys that read as array indexes first.
+    expect(Object.keys(result.components.found ?? {})).toEqual(["9", "10"]);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      "\n    10  manifest  (unacknowledged)\n    9  manifest  (unacknowledged)\n",
+    );
+  });
+
   it("refuses a workspace that is not initialized", async () => {
     const repo = await realpath(tmpRepo as string);
     const { out, err } = capture();
