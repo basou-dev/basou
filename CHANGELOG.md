@@ -15,8 +15,10 @@ All notable changes to **basou** are recorded here. The project follows
   version and last review, the language the prose is written in, the port
   its page opens on (chosen from the workspace's path, never `basou view`'s
   default) and a working directory of its own; the commands that take the
-  other repos' state before and after, measure, record and open the board,
-  each runnable as printed; how to make each observation the board declares
+  other repos' state before and after (each one's HEAD and a hash of what
+  its working tree holds beyond it), measure, record and open the board,
+  runnable as printed once the judging model's name is put in (they stop
+  without it); how to make each observation the board declares
   (the read-only command, the value to take from it, its source, and how to
   write one that could not be made), the manual ones listed as the
   operator's; the principles of judging, with each stage's meaning, `look`

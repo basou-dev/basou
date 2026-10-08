@@ -87,7 +87,7 @@ export function boardGuide(input: BoardGuideInput): string {
   // The working directory may sit in a /tmp other users share: it is used
   // only when it is no link and this user's own, and only this user can
   // read it (it holds what the trail holds).
-  const go = `cd ${anchor} && W="${work}" && mkdir -p "$W" && [ ! -L "$W" ] && [ -O "$W" ] && chmod 700 "$W"`;
+  const go = `cd ${anchor} && W="${work}" && mkdir -p "$W" && { { [ ! -L "$W" ] && [ -O "$W" ]; } || { echo "not a directory of your own, so not used: $W" >&2; false; }; } && chmod 700 "$W"`;
   const out: string[] = [];
   const line = (...lines: string[]) => out.push(...lines);
   const fenced = (lang: string, ...lines: string[]) =>
@@ -119,7 +119,7 @@ export function boardGuide(input: BoardGuideInput): string {
   line(`- Records: board/records/, ${recordsLine(input, recordCount)}`);
   line(`- Axis: ${axisLine(input)}`);
   line(
-    `- Language: write every prose string and reason in ${LANGUAGE_NAMES[input.language]}, the language the manifest declares for this repo`,
+    `- Language: write every prose string and reason in ${LANGUAGE_NAMES[input.language]}, the language this board's page is drawn in (Japanese when the manifest declares ja for this repo, English otherwise)`,
   );
   line(`- Board page port: ${port}`);
   line(`- Working files: ${work} (W in the commands below)`);
@@ -131,10 +131,10 @@ export function boardGuide(input: BoardGuideInput): string {
   line(
     "## Rules for every step",
     "",
-    "- Run each block on its own: a shell variable does not carry over to the next call. Each block goes to the workspace and names W first.",
-    "- Keep working files in W, never in a repo. Each block stops before using W unless it is a directory of your own, not a link, and makes it readable by you alone: it holds what the trail holds.",
-    "- From the measure of step 2 to the record of step 7, write nothing to basou (`decision capture`, `note`, `task`, `review record`, `refresh`), put no file in and change no file of any repo the manifest declares, do not rebuild or upgrade basou, and do not change `~/.basou/portfolio.yaml`. The digest covers all of them, and record refuses when it moved.",
-    '- The model name is your own report of yourself. Use the same name every time, as measure\'s `--model` and as `judged_by.model` (`"<model>"` below).',
+    "- Run each block on its own: a shell variable does not carry over to the next call. Each block that uses W goes to the workspace and names W first.",
+    "- Keep working files in W, never in a repo. A block stops before using W unless it is a directory of your own and not a link (it says so on stderr), and makes it readable by you alone: it holds what the trail holds.",
+    "- From the measure of step 2 to the record of step 7, write nothing to basou (`decision capture`, `note`, `task`, `review record`, `refresh`), put no file in and change no file of any repo the manifest declares, do not rebuild or upgrade basou, and do not change `~/.basou/portfolio.yaml`. Each of these can move what the measurement's digest covers (the trail, the repos' files and uncommitted paths, the basou that measured, the portfolio's counts), and record refuses a digest that moved; not every change moves it, so do not count on record to catch one.",
+    '- The model name is your own report of yourself. Use the same name every time, as measure\'s `--model` and as `judged_by.model`. In the commands, `$MODEL` stands for it: put the name in its place, or set `MODEL="<name>"` at the start of each block. A block run with it unset stops: measure refuses an empty `--model`.',
     "- Isolation, both ways: read and write only this workspace. Do not open another project's repos, planning, `.basou/` or transcripts (other directories under `~/.claude/projects`, `~/.codex/sessions`), not even to read. Write the board only under board/ of this repo; never write it, its numbers or this work into a public repo or one whose contents are published (no file, `.gitignore` comment, commit message, issue or pull request). Do not bring other projects' names, paths, numbers or ids into the board, nor take this one's out. Asked about another project, decline and suggest a session of its own.",
     "",
   );
@@ -152,6 +152,10 @@ export function boardGuide(input: BoardGuideInput): string {
       "Gate (d) of step 9 compares the other repos with this. If a repo cannot be read, stop: a repo left out of the comparison would change unseen.",
     );
     block(`${go} && ( ${snapshotLoop(input.otherRepos)} ) > "$W/before.txt"; echo "exit=$?"`);
+    line(
+      "It keeps each repo's HEAD (or that it has no commit yet) and a hash of what its working tree holds beyond HEAD: the changes to tracked files and the content of untracked ones that are not ignored.",
+      "",
+    );
   }
 
   line(
@@ -159,7 +163,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "",
     "Sessions not yet imported leave the active time and the decisions as of the last import.",
   );
-  block(`${go} && basou board measure --model "<model>" > "$W/measure.txt"; echo "exit=$?"`);
+  block(`${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`);
   line(
     "Under `Freshness:` in `$W/measure.txt`, `not imported N new, N updated, N unverifiable`: when any is above 0, show the operator this line to run, and do not run it yourself (it writes the trail):",
   );
@@ -171,11 +175,11 @@ export function boardGuide(input: BoardGuideInput): string {
 
   line("### 2. Measure");
   block(
-    `${go} && basou board measure --json --model "<model>" > "$W/measure.json"; echo "exit=$?"`,
-    `${go} && basou board measure --model "<model>" > "$W/measure.txt"; echo "exit=$?"`,
+    `${go} && basou board measure --json --model "$MODEL" > "$W/measure.json"; echo "exit=$?"`,
+    `${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`,
   );
   line(
-    "- Exit 0: everything was measured. Exit 1 with JSON on stdout: measured with gaps (`complete: false`, a null for each, its reason under `not_found`). Exit 1 with nothing on stdout: the declaration or the manifest cannot be read; stop, and fix board.yaml through step 2b.",
+    "- Exit 0: everything was measured. Exit 1 with JSON on stdout: measured with gaps (`complete: false`, a null for each, its reason under `not_found`). Exit 1 with nothing on stdout: read stderr and stop. The declaration or the manifest cannot be read (fix board.yaml through step 2b), `--model` was empty, or W was not used.",
     "- An empty file means it did not run, not that it passed: check that measure.json reads as JSON.",
     '- Never read a null as 0. Write "not confirmed" for it and do not judge by it.',
     "- What moved is the point: the top of measure.txt (`Since the previous record <ULID>:`) and `diff` in the JSON. A value marked `method_changed` may have moved because basou measures it another way now.",
@@ -194,7 +198,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- (d) the operator asked: by hand",
     "- (e) a built-in section measures another way than at the previous record: advised",
     "",
-    "Read board.yaml, the commits that changed it (`git log --format='%ad %h %s' --date=short -- board/board.yaml`), the last review, the components in measure.json and the decisions recorded since (`.basou/decisions.md`). Then write one proposal to `$W/axis-proposal.md`: (A) what stays, with why; (B) what changes, as a diff of board.yaml; (C) what to ask the operator. Answer:",
+    "Read board.yaml, the commits that changed it (`git log --format='%ad %h %s' --date=short -- board/board.yaml`), the last review, the components in measure.json and the decisions recorded since (`.basou/decisions.md`, which is as of the last `basou refresh` or `basou decisions generate`: when step 1 found sessions not imported and the operator did not refresh, the latest decisions may be missing from it, and the proposal says so). Then write one proposal to `$W/axis-proposal.md`: (A) what stays, with why; (B) what changes, as a diff of board.yaml; (C) what to ask the operator. Answer:",
     "",
     "1. Each lane: does it still stand as who uses what? Do its stages' conditions fit what is built now? Merge, split, retire or keep, with one sentence why even for keep.",
     "2. Each unacknowledged component: does it change a lane's conditions, make a new lane, or count in no lane (and why)? For the first two, what to measure or observe for it.",
@@ -202,7 +206,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "4. Do the decisions recorded hold anything that should move the axis (a new surface, a new base, something decided not to build)?",
     "5. If the last review was by another model: does anything in how the lanes are cut or worded need fixing now? Change nothing only to make it look new; change only what is worth losing the comparison with past records.",
     "",
-    "Apply nothing until the operator approves. Then edit board.yaml, measure again from step 2 (the digest moves with the declaration), and give the record an `axis_review` whose `triggers` are every letter that led to it. Raise `axis.version` when a lane is added or removed or a stage's condition changes, and name the commit `axis review v<version>`. Give `axis_review` even when nothing changed: the next (b) counts from it. Registering a component only to silence (a) is not a review.",
+    'Apply nothing until the operator approves. Then edit board.yaml, measure again from step 2 (the digest moves with the declaration), and give the record an `axis_review`: `{ "triggers": [every letter that led to it], "summary": "what was reviewed and decided" }`. Raise `axis.version` when a lane is added or removed or a stage\'s condition changes, and name the commit `axis review v<version>`. Give `axis_review` even when nothing changed: the next (b) counts from it. Registering a component only to silence (a) is not a review.',
     "",
   );
 
@@ -233,10 +237,10 @@ export function boardGuide(input: BoardGuideInput): string {
     "Write it to `$W/input.json` from a file you edit, not a heredoc (a shell expands backquotes in one and drops words), starting from the template below:",
     "",
     "- `measure_digest`: the `digest` of `$W/measure.json`.",
-    "- `observed`: one entry per declared observation, under its key, each as step 3 says. Nothing else and nothing left out: record refuses both.",
+    '- `observed`: when the board declares observations, one entry per declared observation, under its key, each as step 3 says; nothing else and nothing left out, or record refuses it. An observation made has no `error`; one not made has `"value": null` and an `error`. With none declared, `observed` may stay empty.',
     "- `cells`: every lane at every stage. Set each `state` and delete each `previous`: record refuses a cell with an empty state or a `previous`. `blocked`, `shelved` and `unverified` need a `reason`.",
-    '- `prose`: `summary`, `lanes`, `operator_turns` as `{ "text", "source" }` and `footnotes`, all plain strings (HTML is shown as text; only `` `code` `` is drawn as code). Do not repeat what basou draws (the heading, the tiles, the period and effort, the matrix, the ratios, the axis version and the model). Do not start a lane\'s prose with its `about`: the page draws the about right before it. Leave out a lane you have nothing to say about.',
-    "- `axis_review`: null, or as step 2b says.",
+    `- \`prose\`: \`summary\`, \`lanes\`, \`operator_turns\` as \`{ "text", "source" }\` and \`footnotes\`, all plain strings (HTML is shown as text; only \`\` \`code\` \`\` is drawn as code). Do not repeat what basou draws (the heading, the tiles, the period and effort, the matrix, the ratios, the axis version and the model). Do not start a lane's prose with its \`about\`: the page draws the about right before it. Give \`lanes\` an entry only for a lane you have something to say about (an empty string is drawn as an empty paragraph); the lane ids are ${d.lanes.map((l) => `\`${l.id}\``).join(", ")}.`,
+    '- `axis_review`: null, or `{ "triggers": [...], "summary": "..." }` as step 2b says.',
     "",
   );
   fenced("json", templateOf(d, previous));
@@ -266,8 +270,9 @@ export function boardGuide(input: BoardGuideInput): string {
     `If it stops with \`Port ${port} is already in use.\`, do not query that port (another board may be there): start it on ${port + 1}, and so on. Once it runs, check that it is this board (it prints the title, or why there is none to draw):`,
   );
   block(
-    `curl -s http://127.0.0.1:<the port it started on>/api/board | node -e 'let t="";process.stdin.on("data",(d)=>{t+=d}).on("end",()=>{const p=JSON.parse(t).page;console.log(p.status==="ok"?p.board.heading.title:"unavailable: "+p.why)})'`,
+    `curl -s http://127.0.0.1:${port}/api/board | node -e 'let t="";process.stdin.on("data",(d)=>{t+=d}).on("end",()=>{const p=JSON.parse(t).page;console.log(JSON.stringify(p.status==="ok"?p.board.heading.title:"unavailable: "+p.why))})'`,
   );
+  line(`(On the port it did start on, if not ${port}.)`);
   line(
     "Look at the page before committing: a record cannot be taken back. Stop the view when done.",
     "",
@@ -285,8 +290,12 @@ export function boardGuide(input: BoardGuideInput): string {
       `${go} && ( ${snapshotLoop(input.otherRepos)} ) > "$W/after.txt" && diff "$W/before.txt" "$W/after.txt" && echo "(d) same"`,
     );
   }
-  line("(e) Only board/ is staged: add it alone, then the next line must print nothing.");
-  block(`cd ${anchor} && git add -- board && git diff --cached --name-only | grep -v '^board/'`);
+  line(
+    "(e) Only board/ is staged: add it alone; it prints `(e) only board/`, or what else is staged.",
+  );
+  block(
+    `cd ${anchor} && git add -- board && if git diff --cached --name-only | grep -v '^board/'; then echo "(e) more than board/ is staged"; false; else echo "(e) only board/"; fi`,
+  );
   line(
     "(f) No one outside can read this repo. On GitHub: visibility PRIVATE, no collaborator but the owner, no invitation. Look at the numbers only, never the names:",
   );
@@ -352,10 +361,14 @@ function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-// Each other repo's HEAD and the hash of its status, one line each; a repo
-// that cannot be read stops it.
+// Each other repo's HEAD (or no-commit) and a hash of what its working tree
+// holds beyond it: the diff of tracked files against HEAD (or, with no commit
+// yet, against the index and the index against nothing), the names of the
+// untracked files that are not ignored and their contents. Hashed, never
+// written: git hash-object without -w stores nothing. A repo that is not a
+// git repo, or cannot be read, stops it.
 function snapshotLoop(repos: readonly string[]): string {
-  return `for d in ${repos.map(shellWord).join(" ")}; do h=$(git -C "$d" rev-parse HEAD) && s=$(git -C "$d" status --porcelain=v1 -uall | git hash-object --stdin) || { echo "cannot read $d" >&2; exit 1; }; echo "$d $h $s"; done`;
+  return `for d in ${repos.map(shellWord).join(" ")}; do git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || { echo "cannot read $d" >&2; exit 1; }; h=$(git -C "$d" rev-parse -q --verify HEAD || echo no-commit); s=$(cd "$d" && { if [ "$h" = no-commit ]; then git diff --binary --cached && git diff --binary; else git diff --binary HEAD; fi && git ls-files -o --exclude-standard && git ls-files -o --exclude-standard | git hash-object --stdin-paths; } | git hash-object --stdin) || { echo "cannot read $d" >&2; exit 1; }; echo "$d $h $s"; done`;
 }
 
 function ago(from: string, to: string): string {
@@ -467,11 +480,11 @@ function observeSteps(
         break;
       case "page_version":
         line(
-          `The version ${o.url} shows: the first \`v<major>.<minor>.<patch>\` (with what follows a \`-\`) not right after a letter, digit or dot, once the page's generator meta tags are taken out (they name the site builder's version, not the product's).`,
+          `The version ${o.url} shows: the first \`v<major>.<minor>.<patch>\` (with what follows a \`-\`) not right after a letter, digit, underscore or dot, once the page's generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's).`,
         );
         block(
           `${go} && curl -fsS --max-time 20 ${shellWord(o.url)} > "$W/page-${o.key}.html"; echo "curl exit=$?"`,
-          `${go} && node -e 'let t="";process.stdin.on("data",(d)=>{t+=d}).on("end",()=>{const m=t.replace(/<meta[^>]*name="generator"[^>]*>/g,"").match(/(?<![\\w.])v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?/);if(m===null){process.exitCode=1}else{console.log(m[0])}})' < "$W/page-${o.key}.html"; echo "exit=$?"`,
+          `${go} && node -e 'let t="";process.stdin.on("data",(d)=>{t+=d}).on("end",()=>{const m=t.replace(/<meta\\b[^>]*\\bname\\s*=\\s*["\\x27]?generator\\b[^>]*>/gi,"").match(/(?<![\\w.])v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?/);if(m===null){process.exitCode=1}else{console.log(m[0])}})' < "$W/page-${o.key}.html"; echo "exit=$?"`,
         );
         line(
           `Value: the version it prints, as a string (such as "v1.2.3"). A failed fetch, or no version on the page (exit 1), is a null with that as the error. Source: \`${sourceOf(o)}\`.`,
@@ -573,7 +586,7 @@ function templateOf(d: BoardDeclaration, previous: BoardPreviousRecords): string
   }
   const observed = d.observe.map(
     (o) =>
-      `    ${jsonText(o.key)}: ${jsonText({ value: null, observed_at: "", source: sourceOf(o), error: "" })}`,
+      `    ${jsonText(o.key)}: ${jsonText({ value: null, observed_at: "", source: sourceOf(o) })}`,
   );
   const cells = d.lanes.flatMap((lane) =>
     BOARD_STAGE_IDS.map((stage) => {
@@ -589,7 +602,6 @@ function templateOf(d: BoardDeclaration, previous: BoardPreviousRecords): string
       return `    ${jsonText(cell)}`;
     }),
   );
-  const lanes = d.lanes.map((lane) => `      ${jsonText(lane.id)}: ""`);
   return [
     "{",
     '  "measure_digest": "",',
@@ -597,11 +609,11 @@ function templateOf(d: BoardDeclaration, previous: BoardPreviousRecords): string
     `  "cells": [\n${cells.join(",\n")}\n  ],`,
     '  "prose": {',
     '    "summary": "",',
-    `    "lanes": {\n${lanes.join(",\n")}\n    },`,
+    '    "lanes": {},',
     '    "operator_turns": [],',
     '    "footnotes": []',
     "  },",
-    '  "judged_by": { "model": "<model>", "self_reported": true },',
+    '  "judged_by": { "model": "", "self_reported": true },',
     '  "axis_review": null',
     "}",
   ].join("\n");
@@ -624,7 +636,7 @@ function undeclared(
     '3. Write board/board.yaml (board_version 2): `title`, the six `stages` (`"01"` to `"06"`, quoted, each with a `meaning`, and `look` and `notes` if you like), at least one lane (`id`, `name`, `about`, `notes`), `observe` for what is reached outside the repos, `axis` (`version: 1`, `review_due_days`) and `effort` (`start`, `time_zone`). Measures, ratios and components may stay empty at first.',
     "4. Check it until it reads (every problem with it is listed at once):",
   );
-  block(`${go} && basou board measure --model "<model>" > "$W/measure.txt"; echo "exit=$?"`);
+  block(`${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`);
   line(
     '5. Register the components: at first every component the markers find is unacknowledged, and the axis review (a) fires. Give each the lanes it counts in, or `"-"` with a note saying why it counts in none.',
     "6. Run `basou board guide` again: with a board declared, it prints the steps that judge and record it. The first record is the first review of the axis: give it an `axis_review`.",

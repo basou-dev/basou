@@ -241,9 +241,18 @@ export async function doRunBoardGuide(
     if (!findErrorCode(error, "ENOENT")) throw error;
     text = null;
   }
+  const otherRepos = (manifest.repos ?? []).map((repo) => repo.path).filter((p) => p !== ".");
+  // The commands carry these paths as they are, and a control character in
+  // one would reach the terminal of whoever reads the guide.
+  if ([root, ...otherRepos].some((path) => displayPath(path) !== path)) {
+    throw new Error(
+      "The workspace's path, or a repo path the manifest declares, holds a control character, which the guide's commands cannot carry safely. Rename it, or follow the steps by hand.",
+    );
+  }
   const common = {
-    anchor: await realpath(root),
-    otherRepos: (manifest.repos ?? []).map((repo) => repo.path).filter((p) => p !== "."),
+    // As basou resolves it, the root measure resolves the repos' paths against.
+    anchor: root,
+    otherRepos,
     language: resolveViewLanguage(manifest),
     basouCommand:
       ctx.basouCommand ??

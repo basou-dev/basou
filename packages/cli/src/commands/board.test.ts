@@ -1443,6 +1443,21 @@ describe("basou board guide", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("refuses a repo path holding a control character, which its commands would carry", async () => {
+    const repo = await workspace([
+      { path: ".", visibility: "private" },
+      { path: `../o${String.fromCharCode(27)}[31mther` },
+    ]);
+    await placeBoard(repo, boardYaml([]));
+    const { out, err } = capture();
+    await runBoardGuide({}, guideCtx(repo));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain(
+      "The workspace's path, or a repo path the manifest declares, holds a control character",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("refuses a declaration that does not read, listing why", async () => {
     const repo = await workspace([{ path: ".", visibility: "private" }]);
     await placeBoard(repo, JSON.stringify({ ...JSON.parse(boardYaml([])), title: "" }));

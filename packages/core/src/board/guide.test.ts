@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -274,6 +274,25 @@ describe("boardGuide: a board declared", () => {
     );
   });
 
+  it("leaves the model to be named, in the commands and the template, so neither runs as printed", () => {
+    const guide = boardGuide(guideInput());
+    const blocks = blocksIn(guide).join("\n");
+    expect(blocks).not.toContain("<model>");
+    expect(blocks).not.toContain("<the port");
+    expect(blocks).toContain('basou board measure --json --model "$MODEL"');
+    expect(blocks).toContain(`curl -s http://127.0.0.1:${boardGuidePort(ANCHOR)}/api/board`);
+    const template = templateIn(guide);
+    expect(template.judged_by).toEqual({ model: "", self_reported: true });
+    expect(template.prose).toEqual({ summary: "", lanes: {}, operator_turns: [], footnotes: [] });
+    expect(Object.values(template.observed as Record<string, object>).map(Object.keys)).toEqual(
+      Array.from({ length: 7 }, () => ["value", "observed_at", "source"]),
+    );
+    expect(guide).toContain("the lane ids are `core`, `docs`.");
+    expect(guide).toContain(
+      "write every prose string and reason in Japanese (ja), the language this board's page is drawn in",
+    );
+  });
+
   it("says to declare what to observe when nothing is declared", () => {
     const guide = boardGuide(
       guideInput({
@@ -454,6 +473,15 @@ describe("boardGuide: the commands run", () => {
     expect(sh(gate)).toEqual({ out: "(d) same\n", code: 0 });
     await writeFile(join(other, "b.txt"), "b\n");
     expect(sh(gate).code).toBe(1);
+    // Edits to a file already changed, and to one not tracked, are changes too.
+    await writeFile(join(other, "a.txt"), "a changed\n");
+    expect(sh(before).out).toContain("exit=0");
+    expect(sh(gate).code).toBe(0);
+    await writeFile(join(other, "a.txt"), "a changed again\n");
+    expect(sh(gate).code).toBe(1);
+    expect(sh(before).out).toContain("exit=0");
+    await writeFile(join(other, "b.txt"), "b changed\n");
+    expect(sh(gate).code).toBe(1);
     // A repo that cannot be read stops the before instead of leaving it out.
     const missing = boardGuide(guideInput({ anchor, otherRepos: ["../nowhere"], language: "en" }));
     const stop = blocksIn(missing).find((b) => b.includes('> "$W/before.txt"')) as string;
@@ -486,6 +514,74 @@ describe("boardGuide: the commands run", () => {
     expect(sh(prefix)).toBe(1);
   });
 
+  it("takes the before of a repo with no commit yet, and still tells a change apart", async () => {
+    const anchor = join(dir, "ws");
+    const fresh = join(dir, "fresh");
+    await mkdir(anchor);
+    await mkdir(fresh);
+    git(fresh, "init", "-q", "-b", "main");
+    await writeFile(join(fresh, "a.txt"), "a\n");
+    const guide = boardGuide(guideInput({ anchor, otherRepos: ["../fresh"], language: "en" }));
+    const blocks = blocksIn(guide);
+    const before = blocks.find((b) => b.includes('> "$W/before.txt"')) as string;
+    const gate = blocks.find((b) => b.includes('echo "(d) same"')) as string;
+    const env = { ...process.env, TMPDIR: dir };
+    const sh = (script: string) => {
+      try {
+        return execFileSync("sh", ["-c", script], { env, encoding: "utf8" });
+      } catch {
+        return "failed";
+      }
+    };
+    expect(sh(before)).toContain("exit=0");
+    const work = boardGuideWorkDir(anchor).replace(TMPDIR_WORD, dir);
+    expect(await readFile(join(work, "before.txt"), "utf8")).toMatch(
+      /^\.\.\/fresh no-commit [0-9a-f]{40}\n$/,
+    );
+    expect(sh(gate)).toBe("(d) same\n");
+    await writeFile(join(fresh, "a.txt"), "b\n");
+    expect(sh(gate)).toBe("failed");
+  });
+
+  it("says why it does not use a working directory that is a link", async () => {
+    const guide = boardGuide(guideInput({ anchor: dir, otherRepos: [] }));
+    const measure = blocksIn(guide).find((b) => b.includes('> "$W/measure.json"')) as string;
+    const prefix = measure.slice(0, measure.indexOf(" && basou "));
+    const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
+    await mkdir(join(dir, "elsewhere"));
+    await symlink(join(dir, "elsewhere"), work);
+    const run = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+      const child = spawn("sh", ["-c", prefix], { env: { ...process.env, TMPDIR: dir } });
+      let stderr = "";
+      child.stderr.on("data", (d) => {
+        stderr += String(d);
+      });
+      child.on("close", (code) => resolve({ code, stderr }));
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toBe(`not a directory of your own, so not used: ${work}\n`);
+  });
+
+  it("passes gate (e) with exit 0 when only board/ is staged, and fails it otherwise", async () => {
+    const anchor = join(dir, "ws");
+    await mkdir(join(anchor, "board"), { recursive: true });
+    git(anchor, "init", "-q", "-b", "main");
+    await writeFile(join(anchor, "board", "board.yaml"), "x\n");
+    const guide = boardGuide(guideInput({ anchor, otherRepos: [] }));
+    const gate = blocksIn(guide).find((b) => b.includes("git add -- board")) as string;
+    const sh = () => {
+      try {
+        return { out: execFileSync("sh", ["-c", gate], { encoding: "utf8" }), code: 0 };
+      } catch (error: unknown) {
+        return { out: String((error as { stdout?: unknown }).stdout ?? ""), code: 1 };
+      }
+    };
+    expect(sh()).toEqual({ out: "(e) only board/\n", code: 0 });
+    await writeFile(join(anchor, "other.txt"), "x\n");
+    git(anchor, "add", "other.txt");
+    expect(sh()).toEqual({ out: "other.txt\n(e) more than board/ is staged\n", code: 1 });
+  });
+
   it("reads the version off a page, past the generator meta tag and a bare number", async () => {
     const guide = boardGuide(guideInput({ anchor: dir }));
     const read = (blocksIn(guide).find((b) => b.includes('> "$W/page-site.html"')) ?? "")
@@ -506,5 +602,13 @@ describe("boardGuide: the commands run", () => {
       ),
     ).toBe("v1.2.3-rc.1\nexit=0\n");
     expect(await run("<p>no version, 1.2.3 alone</p>")).toBe("exit=1\n");
+    for (const meta of [
+      '<meta name=generator content="Astro v4.16.18">',
+      "<meta name='generator' content='Docusaurus v3.5.2'>",
+      '<META NAME="Generator" CONTENT="Jekyll v4.3.2">',
+      '<meta content="Hugo v0.120.0" name="generator" />',
+    ]) {
+      expect(await run(`${meta}<p>release_v9.9.9 then v1.2.3</p>`)).toBe("v1.2.3\nexit=0\n");
+    }
   });
 });
