@@ -1210,6 +1210,12 @@ describe("basou board record", () => {
           // Named like a word of the input's shape, and twice in one place.
           lane: { value: name, observed_at: "2026-10-08", source: "s" },
           d: { value: name, observed_at: "2026-10-08", source: "s" },
+          // Keys of the input's shape inside a value are the judge's words.
+          e: {
+            value: { state: name, triggers: [name], observed_at: name, measure_digest: name },
+            observed_at: "2026-10-08",
+            source: "s",
+          },
         },
         prose: { summary: "fine", operator_turns: [{ text: `ask ${name}`, source: "x" }] },
       };
@@ -1225,7 +1231,24 @@ describe("basou board record", () => {
         "  - observed (a named entry).value (a named entry)[0]",
         "  - observed (a named entry).error",
         "  - observed (a named entry).value",
+        "  - observed (a named entry).value.state",
+        "  - observed (a named entry).value.triggers[0]",
+        "  - observed (a named entry).value.observed_at",
+        "  - observed (a named entry).value.measure_digest",
       ]);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("reads a number in a value as the text it is written as", async () => {
+      const { repo, input } = await judged();
+      const name = await registered(repo, "424242");
+      const named = {
+        ...input,
+        observed: { a: { value: Number(name), observed_at: "2026-10-08", source: "s" } },
+      };
+      const { err } = capture();
+      await runBoardRecord({ dryRun: true }, fed(repo, named));
+      expect(err.join("\n")).toContain("  - observed (a named entry).value");
       expect(process.exitCode).toBe(1);
     });
 

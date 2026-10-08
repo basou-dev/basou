@@ -631,11 +631,17 @@ const INPUT_KEYS = new Set([
   "triggers",
 ]);
 
-// The keys whose values are held to a shape a refusal does not quote (a
+// The places whose values are held to a shape a refusal does not quote (a
 // digest, a time, a state, a trigger), which carry no words of the judge's.
-// A lane and a stage are quoted when they are not the board's, so they are
-// looked at.
-const SHAPED_VALUES = new Set(["measure_digest", "observed_at", "state", "triggers"]);
+// Only at those places: the same key inside an observation's value is the
+// judge's, and is looked at. A lane and a stage are quoted when they are not
+// the board's, so they are looked at too.
+const SHAPED_PLACES = [
+  /^measure_digest$/,
+  /^observed \(a named entry\)\.observed_at$/,
+  /^cells\[\d+\]\.state$/,
+  /^axis_review\.triggers$/,
+];
 
 // The maps whose keys are names: an observation's, a lane's.
 const NAMED_MAPS = new Set(["observed", "prose.lanes"]);
@@ -648,22 +654,22 @@ const NAMED_MAPS = new Set(["observed", "prose.lanes"]);
  */
 function inputTexts(value: unknown): { at: string; text: string }[] {
   const out: { at: string; text: string }[] = [];
-  const stack: { value: unknown; at: string; key?: string }[] = [{ value, at: "" }];
+  const stack: { value: unknown; at: string }[] = [{ value, at: "" }];
   for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
-    const { value: v, at, key } = next;
-    if (key !== undefined && SHAPED_VALUES.has(key)) continue;
-    if (typeof v === "string") {
-      out.push({ at: at === "" ? "(top level)" : at, text: v });
+    const { value: v, at } = next;
+    if (SHAPED_PLACES.some((place) => place.test(at))) continue;
+    if (typeof v === "string" || typeof v === "number") {
+      out.push({ at: at === "" ? "(top level)" : at, text: String(v) });
     } else if (Array.isArray(v)) {
       // Reversed onto the stack, so that it is read in the order written.
       for (let i = v.length - 1; i >= 0; i--) stack.push({ value: v[i], at: `${at}[${i}]` });
     } else if (typeof v === "object" && v !== null) {
       const named = NAMED_MAPS.has(at);
       const where = at === "" ? "(top level)" : at;
-      const children: { value: unknown; at: string; key?: string }[] = [];
+      const children: { value: unknown; at: string }[] = [];
       for (const [k, child] of Object.entries(v)) {
         if (!named && INPUT_KEYS.has(k)) {
-          children.push({ value: child, at: at === "" ? k : `${at}.${k}`, key: k });
+          children.push({ value: child, at: at === "" ? k : `${at}.${k}` });
         } else {
           out.push({ at: `${where}: a name`, text: k });
           children.push({ value: child, at: `${where} (a named entry)` });
