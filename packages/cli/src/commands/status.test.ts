@@ -281,3 +281,23 @@ describe("runStatus (process-state wrapper)", () => {
     },
   );
 });
+
+describe("basou status from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links", async () => {
+    const { repo, paths } = await setupInitedRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-status-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunStatus({}, { cwd: view });
+      expect(joinCalls(out)).toContain(`Workspace: client-foo-lp (${FIXED_WS_ID})`);
+      expect(joinCalls(err)).toContain("Resolved workspace view to");
+      // status.json lands in the linked repo's store, never in the view.
+      expect((await readdir(paths.root)).includes("status.json")).toBe(true);
+      expect(await readdir(view)).toEqual(["fixture-planning"]);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});

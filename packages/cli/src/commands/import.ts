@@ -28,7 +28,6 @@ import {
   readSessionObservation,
   readSessionYaml,
   reimportPreservingId,
-  resolveRepositoryRoot,
   SESSION_IMPORT_SCHEMA_VERSION,
   type Session,
   type SessionImportPayload,
@@ -38,6 +37,7 @@ import {
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { warnIfObservationsRefused } from "../lib/observation-warn.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 const SES_PREFIX = "ses_";
 const SHORT_ID_LEN = 6;
@@ -196,9 +196,11 @@ export async function runImportCodex(
  * the SAME function the import guard uses: coverage claims "import would not
  * take this session log", and that claim only holds while both sides resolve
  * roots identically. Note that identical resolution needs the same INPUT too —
- * `resolveImportTarget` passes the git toplevel, so a caller that passes some
- * other spelling of the repo (a symlink, a subdirectory) gets a different root
- * set than the import it is trying to mirror.
+ * `resolveImportTarget` passes the root `resolveBasouRootForCommand` resolves
+ * (the git toplevel, or the repo a workspace view or a portfolio member resolves
+ * to), so a caller that passes some other spelling of the repo (a symlink, a
+ * subdirectory) gets a different root set than the import it is trying to
+ * mirror.
  */
 export function resolveSourceRoots(args: {
   projectFlags: string[];
@@ -348,7 +350,7 @@ async function resolveImportTarget(
   ctx: ImportContext,
 ): Promise<{ repositoryRoot: string; paths: BasouPaths; manifest: Manifest }> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForImport(cwd);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "import");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
   const manifest = await readManifest(paths);
@@ -1061,19 +1063,6 @@ function shortId(id: string): string {
     return id.slice(SES_PREFIX.length, SES_PREFIX.length + SHORT_ID_LEN);
   }
   return id.slice(0, SHORT_ID_LEN);
-}
-
-async function resolveRepositoryRootForImport(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou import'.", {
-        cause: error,
-      });
-    }
-    throw error;
-  }
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

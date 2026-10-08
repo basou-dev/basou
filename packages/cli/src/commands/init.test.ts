@@ -352,3 +352,20 @@ describe("doRunInit --source-root", () => {
     expect("import" in manifest).toBe(false);
   });
 });
+
+describe("basou init from a workspace view", () => {
+  it("refuses, saying the directory is a view, and creates nothing in it", async () => {
+    const repo = getTmpRepo();
+    await doRunInit({}, { cwd: repo });
+    const view = await mkdtemp(join(tmpdir(), "basou-init-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      await expect(doRunInit({}, { cwd: view })).rejects.toThrow(
+        "Not a git repository: this is a workspace view (it links fixture-planning). Run 'basou init' inside a repository instead.",
+      );
+      expect(await readdir(view)).toEqual(["fixture-planning"]);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});

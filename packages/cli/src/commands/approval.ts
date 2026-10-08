@@ -28,11 +28,11 @@ import {
   readSessionYaml,
   readYamlFile,
   replayEvents,
-  resolveRepositoryRoot,
   type UnfollowedApprovalEntry,
 } from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, printReplayWarning, renderCliError } from "../lib/error-render.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 const APPR_PREFIX = "appr_";
 const SHORT_ID_BASE_LEN = 6;
@@ -156,7 +156,7 @@ export async function doRunApprovalList(
   ctx: ApprovalContext,
 ): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForApproval(cwd, "list");
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "approval list");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
@@ -267,7 +267,7 @@ export async function doRunApprovalShow(
   ctx: ApprovalContext,
 ): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForApproval(cwd, "show");
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "approval show");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
@@ -364,7 +364,7 @@ async function doRunApprovalResolve(
   }
 
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForApproval(cwd, decision);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, `approval ${decision}`);
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
@@ -824,23 +824,6 @@ function maxLen(values: readonly string[], floor: number): number {
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 3)}...`;
-}
-
-async function resolveRepositoryRootForApproval(
-  cwd: string,
-  subcmd: "list" | "show" | "approve" | "reject",
-): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error(
-        `Not a git repository. Run 'git init' first, then re-run 'basou approval ${subcmd}'.`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

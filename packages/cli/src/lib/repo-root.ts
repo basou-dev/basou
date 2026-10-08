@@ -6,6 +6,7 @@ import {
   loadPortfolioConfig,
   readManifest,
   resolveBasouRepositoryRoot,
+  resolveRepositoryRoot,
 } from "@basou/core";
 
 /** A planning master that aggregates the queried repo via its `source_roots`. */
@@ -15,13 +16,19 @@ export type MemberMaster = { root: string; label: string };
 export type ResolveRootOptions = {
   /** Defaults to {@link defaultPortfolioConfigPath}. */
   portfolioConfigPath?: string;
+  /**
+   * Leave out the notes on stderr that say where a view or a member resolved to,
+   * for a caller that resolves on a command's behalf without running it (the
+   * capture-coverage check). Diagnostics about a broken registry still print.
+   */
+  quiet?: boolean;
 };
 
 /**
  * Resolve the repository root for a CLI command with two fallbacks, shared by
- * `orient` / `refresh` / `note` / `decision capture` / `project *` /
- * `review-gaps` / `decision gaps` / `session` / `handoff generate` so they
- * behave identically:
+ * every command that reads or writes a workspace's store (`orient`, `refresh`,
+ * `verify`, `status`, `view`, `decision *`, `approval *`, `import`, `task *`,
+ * `project *` but `new`, and the rest) so they behave identically:
  *
  *  1. A git-untracked workspace *view* dir that symlinks its planning repo
  *     redirects to that repo (handled inside {@link resolveBasouRepositoryRoot},
@@ -45,8 +52,9 @@ export async function resolveBasouRootForCommand(
   let root: string;
   try {
     root = await resolveBasouRepositoryRoot(cwd, {
-      onRedirect: ({ via, root }) =>
-        console.error(`Resolved workspace view to ${root} (via ${via}).`),
+      onRedirect: ({ via, root }) => {
+        if (opts.quiet !== true) console.error(`Resolved workspace view to ${root} (via ${via}).`);
+      },
     });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "Not a git repository") {
@@ -69,13 +77,70 @@ export async function resolveBasouRootForCommand(
       opts.portfolioConfigPath ?? defaultPortfolioConfigPath(),
     );
     if (master !== undefined) {
-      console.error(
-        `Resolved portfolio member to ${master.root} (via portfolio: ${master.label}).`,
-      );
+      if (opts.quiet !== true) {
+        console.error(
+          `Resolved portfolio member to ${master.root} (via portfolio: ${master.label}).`,
+        );
+      }
       return master.root;
     }
   }
   return root;
+}
+
+/**
+ * Resolve the git repository a command works on in place: `init` and `project
+ * new` set up the repository they run in, and `exec` and `run` run a child there
+ * and record its git changes, so none of them may be redirected to another repo.
+ * Outside git, a workspace view is told apart from a plain directory: advising
+ * `git init` in a view would turn the view into a repository, which it is
+ * designed not to be, so the message says what the directory is instead.
+ *
+ * Pathless contract: the messages name only the view's link (a directory entry),
+ * never `cwd` or any absolute path.
+ */
+export async function resolveRepositoryRootInPlace(
+  cwd: string,
+  commandName: string,
+): Promise<string> {
+  try {
+    return await resolveRepositoryRoot(cwd);
+  } catch (error: unknown) {
+    if (!(error instanceof Error) || error.message !== "Not a git repository") throw error;
+    const links = await describeWorkspaceView(cwd);
+    if (links !== undefined) {
+      throw new Error(
+        `Not a git repository: this is a workspace view (it links ${links}). Run 'basou ${commandName}' inside a repository instead.`,
+        { cause: error },
+      );
+    }
+    throw new Error(
+      `Not a git repository. Run 'git init' first, then re-run 'basou ${commandName}'.`,
+      { cause: error },
+    );
+  }
+}
+
+/**
+ * What a non-git `dir` links if it is a workspace view (a link name, or a phrase
+ * for more than one), or `undefined` if it is not one. Reuses the view detection
+ * of {@link resolveBasouRepositoryRoot}; any failure there means "not a view".
+ */
+async function describeWorkspaceView(dir: string): Promise<string | undefined> {
+  let via: string | undefined;
+  try {
+    await resolveBasouRepositoryRoot(dir, {
+      onRedirect: (info) => {
+        via = info.via;
+      },
+    });
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message.startsWith("Ambiguous workspace view:")) {
+      return "more than one repository with a .basou store";
+    }
+    return undefined;
+  }
+  return via;
 }
 
 /** Whether `root` owns a `.basou/` store directory. */

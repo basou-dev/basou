@@ -21,7 +21,6 @@ import {
   prefixedUlid,
   readManifest,
   replayEvents,
-  resolveRepositoryRoot,
   resolveSessionId,
   type SessionStatus,
   sanitizePath,
@@ -277,7 +276,7 @@ export async function doRunDecisionRecord(
   ctx: DecisionContext,
 ): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForDecision(cwd);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "decision record");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
@@ -432,11 +431,9 @@ export async function doRunDecisionCapture(
   ctx: DecisionCaptureContext,
 ): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  // View-aware resolution (like orient / refresh / note) so capture works from
-  // a workspace-view dir, redirecting to the planning repo where decisions.md
-  // and orient live. `basou decision record` predates this and uses a plain
-  // git-root resolver; aligning record is a separate, behavior-changing
-  // follow-up, not in scope for the capture slice.
+  // View-aware resolution (like orient / refresh / note / decision record) so
+  // capture works from a workspace-view dir, redirecting to the planning repo
+  // where decisions.md and orient live.
   const repositoryRoot = await resolveBasouRootForCommand(cwd, "decision capture");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
@@ -1266,20 +1263,6 @@ function printDecisionResult(options: DecisionRecordOptions, result: DecisionPri
     console.log(
       `Recorded ${trackPrefix}${result.decisionId} in session ${sid} (${result.sessionStatus})${rationaleSuffix}${vesselSuffix}`,
     );
-  }
-}
-
-async function resolveRepositoryRootForDecision(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error(
-        "Not a git repository. Run 'git init' first, then re-run 'basou decision record'.",
-        { cause: error },
-      );
-    }
-    throw error;
   }
 }
 

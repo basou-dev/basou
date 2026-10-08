@@ -1,7 +1,16 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
@@ -1514,5 +1523,73 @@ describe("basou decision void", () => {
     await expect(
       doRunDecisionVoid(did, { supersededBy: did }, { cwd: repo, ...FIXED_CTX }),
     ).rejects.toThrow(/cannot supersede itself/);
+  });
+});
+
+describe("doRunDecisionRecord from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links and records there", async () => {
+    const repo = await setupInitedRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-decision-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunDecisionRecord({ title: "recorded from a view" }, { cwd: view, ...FIXED_CTX });
+      expect(joinCalls(out)).toContain("Recorded decision_");
+      expect(joinCalls(err)).toContain("Resolved workspace view to");
+      // The session is in the linked repo's store and records that repo as its
+      // working directory, never the view.
+      const sid = await findAdHocSessionId(repo);
+      const session = (await readYamlFile(
+        join(basouPaths(repo).sessions, sid, "session.yaml"),
+      )) as { session: { working_directory: string } };
+      expect(session.session.working_directory).toBe(repo);
+      expect(await readdir(view)).toEqual(["fixture-planning"]);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("doRunDecisionRecord from a portfolio member", () => {
+  it("resolves a storeless member to the workspace that aggregates it and records there", async () => {
+    const repo = await setupInitedRepo();
+    const root = await realpath(await mkdtemp(join(tmpdir(), "basou-decision-member-")));
+    try {
+      const member = join(root, "fixture-member");
+      await mkdir(member);
+      await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+        cwd: member,
+        env: ENV,
+      });
+      await writeManifest(
+        basouPaths(repo),
+        createManifest({
+          workspaceName: "decision-ws",
+          now: FIXED_DATE,
+          workspaceId: FIXED_WS_ID,
+          sourceRoots: [".", relative(repo, member)],
+        }),
+        { force: true },
+      );
+      const home = join(root, "home");
+      await mkdir(join(home, ".basou"), { recursive: true });
+      await writeFile(
+        join(home, ".basou", "portfolio.yaml"),
+        `version: 1\nworkspaces:\n  - path: ${repo}\n`,
+        "utf8",
+      );
+      vi.stubEnv("HOME", home);
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunDecisionRecord({ title: "recorded from a member" }, { cwd: member, ...FIXED_CTX });
+      expect(joinCalls(out)).toContain("Recorded decision_");
+      expect(joinCalls(err)).toContain("Resolved portfolio member to");
+      await findAdHocSessionId(repo);
+      expect(await readdir(member)).toEqual([".git"]);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -5,12 +5,12 @@ import {
   type ChainVerdict,
   enumerateSessionEntries,
   findErrorCode,
-  resolveRepositoryRoot,
   resolveSessionId,
   verifyEventsChain,
 } from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 export type VerifyOptions = {
   session?: string;
@@ -82,7 +82,7 @@ async function doRunVerify(options: VerifyOptions, ctx: VerifyContext): Promise<
   }
 
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForVerify(cwd);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "verify");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
@@ -160,19 +160,6 @@ function renderVerdict(row: VerifyRow): string {
 async function enumerateAllSessionNames(paths: BasouPaths): Promise<string[]> {
   const { dirs, notDirectories } = await enumerateSessionEntries(paths);
   return [...dirs, ...notDirectories].sort();
-}
-
-async function resolveRepositoryRootForVerify(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou verify'.", {
-        cause: error,
-      });
-    }
-    throw error;
-  }
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

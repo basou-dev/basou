@@ -695,3 +695,27 @@ describe("runExec", () => {
     }
   });
 });
+
+describe("basou exec from a workspace view", () => {
+  it("refuses, saying the directory is a view, and records nothing", async () => {
+    const repo = await setupInitedRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-exec-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const runner = makeFakeRunner({ exit_code: 0 });
+      await expect(
+        runExec(
+          "node",
+          ["-e", "process.exit(0)"],
+          { cwd: view, snapshot: false },
+          { runner, now: () => FIXED_DATE },
+        ),
+      ).rejects.toThrow(
+        "Not a git repository: this is a workspace view (it links fixture-planning). Run 'basou exec' inside a repository instead.",
+      );
+      expect(await readdir(basouPaths(repo).sessions)).toEqual([]);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});

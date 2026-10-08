@@ -3,6 +3,38 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **The commands that read or write a workspace's trail now work from its
+  workspace view.** From a workspace view (a directory outside git that links
+  its planning repo), `basou verify`, `view`, `status`, `stats`, `report
+  generate`, `decisions generate`, `approval list`, `show`, `approve` and
+  `reject`, `decision record`, and `import claude-code` and `import codex`
+  stopped with `Not a git repository. Run 'git init' first, then re-run
+  'basou <command>'.`, advice that would have made the view a repository. They
+  now resolve to the repository the view links, as `orient`, `refresh`,
+  `note`, `decision capture`, `task` and the other commands already did, and
+  say so on stderr (`Resolved workspace view to ...`). Run from a portfolio
+  member (a repository whose trail another workspace aggregates through its
+  `import.source_roots`), they now resolve to that workspace too, as those
+  commands do. A directory that is neither keeps the `git init` advice.
+- **`init`, `project new`, `exec` and `run` say so when they are run from a
+  workspace view.** They work on the repository they run in, so they still
+  stop outside git, but from a workspace view they now print `Not a git
+  repository: this is a workspace view (it links <name>). Run 'basou
+  <command>' inside a repository instead.` rather than advising `git init`.
+  A directory that is not a view keeps the `git init` advice.
+- **`basou view --portfolio --check` counts a registered workspace view or
+  portfolio member as the workspace it resolves to.** Its capture-coverage
+  report listed such an entry among those `import cannot run in` (`not a git
+  repository`, or `no .basou store`) and counted the logs under the roots of
+  the workspace it resolves to as imported by no registered workspace, although
+  `basou refresh --portfolio` already imported them and `basou import` now
+  does too. It now resolves each entry as those commands do, against the
+  registry it checks.
+
 ## 0.65.0 — 2026-10-08
 
 ### Added

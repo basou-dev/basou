@@ -68,7 +68,6 @@ import {
   renderAnchorStarter,
   renderViewPresetBlock,
   renderWithMarkers,
-  resolveRepositoryRoot,
   type SourceRootsReconcile,
   type SymlinkPlanSummary,
   safeSimpleGit,
@@ -90,7 +89,7 @@ import {
 } from "@basou/core";
 import type { Command } from "commander";
 import { extractCauseLabel, isVerbose, renderCliError } from "../lib/error-render.js";
-import { resolveBasouRootForCommand } from "../lib/repo-root.js";
+import { resolveBasouRootForCommand, resolveRepositoryRootInPlace } from "../lib/repo-root.js";
 import type { ImportContext } from "./import.js";
 
 export type ProjectCheckOptions = {
@@ -4432,28 +4431,6 @@ export async function runProjectNew(
 }
 
 /**
- * Wrap the core git capability so the CLI surfaces the command-specific
- * "Run 'git init' first, then re-run 'basou project new'." suffix while the
- * capability layer remains command-agnostic. The anchor must already be a git
- * repository: greenfield scaffolds the project declaration, never the repos.
- * `resolveBasouRootForCommand` is deliberately NOT used — there is no `.basou`
- * yet, so the workspace-resolution fallback would have nothing to resolve.
- */
-async function resolveRepositoryRootForNew(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error(
-        "Not a git repository. Run 'git init' first, then re-run 'basou project new'.",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-}
-
-/**
  * Validate a `--project-name` value. It is stored as `manifest.project.name` AND
  * drives a filesystem path (the `<name>-workspace` view stem), so it must be a
  * simple name: a non-empty ASCII token of letters, digits, `.`, `-`, `_` that
@@ -4492,7 +4469,10 @@ export async function doRunProjectNew(
   ctx: ProjectNewContext,
 ): Promise<ProjectNewResult> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForNew(cwd);
+  // The anchor must already be a git repository: greenfield scaffolds the project
+  // declaration, never the repos. `resolveBasouRootForCommand` is deliberately not
+  // used — there is no `.basou` yet, so its fallbacks would have nothing to resolve.
+  const repositoryRoot = await resolveRepositoryRootInPlace(cwd, "project new");
   const workspaceName = basename(repositoryRoot);
   // `--project-name` is the explicit, first-class product name: it drives
   // `project.name` and the default view stem. Because it also becomes part of a

@@ -4,7 +4,6 @@ import {
   basouPaths,
   findErrorCode,
   renderReport,
-  resolveRepositoryRoot,
   writeMarkdownFile,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -15,6 +14,7 @@ import {
   printTaskSkip,
   renderCliError,
 } from "../lib/error-render.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 export type ReportGenerateOptions = {
   out?: string;
@@ -87,7 +87,7 @@ export async function doRunReportGenerate(
   ctx: ReportContext,
 ): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForReport(cwd);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "report generate");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
@@ -115,20 +115,6 @@ export async function doRunReportGenerate(
     console.log(JSON.stringify(result.data, null, 2));
   } else if (options.out === undefined) {
     console.log(result.body);
-  }
-}
-
-async function resolveRepositoryRootForReport(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error(
-        "Not a git repository. Run 'git init' first, then re-run 'basou report generate'.",
-        { cause: error },
-      );
-    }
-    throw error;
   }
 }
 

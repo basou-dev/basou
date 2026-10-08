@@ -29,7 +29,6 @@ import {
   readYamlFile,
   resolveClaudeCodeCommand,
   resolveCodexCommand,
-  resolveRepositoryRoot,
   SESSION_SCHEMA_VERSION,
   type Session,
   SessionSchema,
@@ -42,6 +41,7 @@ import {
 import type { Command } from "commander";
 import { describeCodexHookTrust } from "../lib/codex-hook-trust.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { resolveRepositoryRootInPlace } from "../lib/repo-root.js";
 import { codexHookTrustFor, DEFAULT_CODEX_HOOKS_PATH } from "./hook.js";
 
 // Appends one event to the session's events.jsonl. The `sessionDir` argument
@@ -247,7 +247,7 @@ async function runTrackedTool(
   const cwd = options.cwd ?? process.cwd();
 
   // 2. Resolve repository root (entry-fail when not in a git repo).
-  const repoRoot = await resolveRepositoryRootForRun(cwd);
+  const repoRoot = await resolveRepositoryRootInPlace(cwd, "run");
   const paths = basouPaths(repoRoot);
 
   // 3. Workspace safety check.
@@ -755,19 +755,6 @@ async function finalizeSessionAsFailed(
     s.session.ended_at = ctx.occurredAt;
     s.session.invocation.exit_code = null;
   });
-}
-
-async function resolveRepositoryRootForRun(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou run'.", {
-        cause: error,
-      });
-    }
-    throw error;
-  }
 }
 
 /**

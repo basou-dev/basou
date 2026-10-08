@@ -4393,3 +4393,26 @@ describe("basou project derive: anchor seed (doRunProjectSeedAnchor)", () => {
     expect(await readFile(anchorDoc(), "utf8")).toContain("<!-- operator edit -->");
   });
 });
+
+describe("basou project new from a workspace view", () => {
+  it("refuses, saying the directory is a view, and creates nothing in it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "basou-new-view-"));
+    try {
+      const anchor = join(root, "anchor");
+      await mkdir(join(anchor, ".basou"), { recursive: true });
+      await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+        cwd: anchor,
+        env: ENV,
+      });
+      const view = join(root, "anchor-workspace");
+      await mkdir(view);
+      await symlink(anchor, join(view, "anchor"));
+      await expect(doRunProjectNew([], {}, { cwd: view })).rejects.toThrow(
+        "Not a git repository: this is a workspace view (it links anchor). Run 'basou project new' inside a repository instead.",
+      );
+      expect(await readdir(view)).toEqual(["anchor"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

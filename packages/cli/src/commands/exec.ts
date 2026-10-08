@@ -22,7 +22,6 @@ import {
   type RunResult,
   readManifest,
   readYamlFile,
-  resolveRepositoryRoot,
   SESSION_SCHEMA_VERSION,
   type Session,
   SessionSchema,
@@ -32,6 +31,7 @@ import {
 } from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { resolveRepositoryRootInPlace } from "../lib/repo-root.js";
 
 // Appends one event to the session's events.jsonl. The `sessionDir` argument
 // is retained for the test-injection seam (ctx.appendEvent); the production
@@ -108,7 +108,7 @@ export async function runExec(
 
   // 1. Resolve repository root before touching anything; matches existing
   //    init/status semantics so subdir invocations still find `.basou/`.
-  const repoRoot = await resolveRepositoryRootForExec(cwd);
+  const repoRoot = await resolveRepositoryRootInPlace(cwd, "exec");
   const paths = basouPaths(repoRoot);
 
   // 2. Workspace safety check (caller responsibility).
@@ -516,17 +516,4 @@ async function finalizeSessionAsFailed(
     s.session.ended_at = ctx.occurredAt;
     s.session.invocation.exit_code = null;
   });
-}
-
-async function resolveRepositoryRootForExec(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou exec'.", {
-        cause: error,
-      });
-    }
-    throw error;
-  }
 }

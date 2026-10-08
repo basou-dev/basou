@@ -1150,3 +1150,26 @@ describe("runCodex pre-spawn: trust of the registered SessionStart hook", () => 
     expect(logs.join("\n")).not.toContain("SessionStart hook");
   });
 });
+
+describe("basou run from a workspace view", () => {
+  it("refuses, saying the directory is a view, and records nothing", async () => {
+    const repo = await setupInitedRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-run-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const runner = makeFakeRunner({ exit_code: 0 });
+      await expect(
+        runClaudeCode(
+          [],
+          { cwd: view, snapshot: false },
+          { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+        ),
+      ).rejects.toThrow(
+        "Not a git repository: this is a workspace view (it links fixture-planning). Run 'basou run' inside a repository instead.",
+      );
+      expect(await readdir(basouPaths(repo).sessions)).toEqual([]);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});

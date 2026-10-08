@@ -108,8 +108,15 @@ async function run(
   workspaces: WorkspaceEntry[],
   claudeProjectsDir: string,
   codexSessionsDir: string,
+  // An absent registry by default, so resolving a storeless entry never reads
+  // the developer's own ~/.basou/portfolio.yaml.
+  portfolioConfigPath = join(getParent(), "absent-portfolio.yaml"),
 ): Promise<CoverageResult> {
-  return checkPortfolioCoverage(workspaces, { claudeProjectsDir, codexSessionsDir });
+  return checkPortfolioCoverage(workspaces, {
+    claudeProjectsDir,
+    codexSessionsDir,
+    portfolioConfigPath,
+  });
 }
 
 describe("checkPortfolioCoverage", () => {
@@ -340,6 +347,49 @@ describe("checkPortfolioCoverage", () => {
     expect(result.groups).toHaveLength(1);
     expect(result.inertWorkspaces).toEqual([{ path: bare, reason: "not_a_git_repo" }]);
     expect(formatCoverageReport(result).join("\n")).toContain("not a git repository");
+  });
+
+  it("declares the roots of the repo a registered workspace view links", async () => {
+    const root = getParent();
+    const planning = join(root, "planning");
+    const repo = join(root, "repo");
+    await mkdir(repo, { recursive: true });
+    await initWorkspace(planning, [".", "../repo"]);
+    const view = join(root, "planning-view"); // registered: outside git, links the planning repo
+    await mkdir(view);
+    await symlink(planning, join(view, "planning"));
+    const claude = join(root, "claude");
+    const codex = join(root, "codex");
+    await codexRollout(codex, "r1", repo);
+
+    const result = await run([wsEntry(view, "view")], claude, codex);
+
+    // `basou import` run in the view imports into the planning repo, so the view
+    // declares that repo's roots rather than being inert.
+    expect(result.inertWorkspaces).toEqual([]);
+    expect(result.attributed).toBe(1);
+  });
+
+  it("declares the roots of the workspace that aggregates a registered member", async () => {
+    const root = getParent();
+    const planning = join(root, "planning");
+    const member = join(root, "member");
+    await mkdir(member, { recursive: true });
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+      cwd: member,
+      env: GIT_ENV,
+    });
+    await initWorkspace(planning, [".", "../member"]);
+    const registry = join(root, "portfolio.yaml");
+    await writeFile(registry, `version: 1\nworkspaces:\n  - path: ${planning}\n`, "utf8");
+    const claude = join(root, "claude");
+    const codex = join(root, "codex");
+    await codexRollout(codex, "r1", member);
+
+    const result = await run([wsEntry(member, "member")], claude, codex, registry);
+
+    expect(result.inertWorkspaces).toEqual([]);
+    expect(result.attributed).toBe(1);
   });
 
   it("reports a git repo with no .basou store as inert, not as a declared root", async () => {

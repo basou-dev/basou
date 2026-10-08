@@ -3,11 +3,11 @@ import {
   appendBasouGitignore,
   createManifest,
   ensureBasouDirectory,
-  resolveRepositoryRoot,
   writeManifest,
 } from "@basou/core";
 import type { Command } from "commander";
 import { extractCauseLabel, isVerbose, renderCliError } from "../lib/error-render.js";
+import { resolveRepositoryRootInPlace } from "../lib/repo-root.js";
 
 export type InitOptions = {
   name?: string;
@@ -93,7 +93,7 @@ export async function runInit(options: InitOptions, ctx: InitContext = {}): Prom
  */
 export async function doRunInit(options: InitOptions, ctx: InitContext): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForInit(cwd);
+  const repositoryRoot = await resolveRepositoryRootInPlace(cwd, "init");
   const workspaceName = options.name ?? basename(repositoryRoot);
 
   // --repo-url is a deprecated no-op: project.repository_url was removed, so the
@@ -154,23 +154,5 @@ function renderGitignoreWarning(error: unknown, verbose: boolean): void {
   if (verbose && error instanceof Error) {
     const label = extractCauseLabel(error);
     if (label !== undefined) console.error(`Caused by: ${label}`);
-  }
-}
-
-/**
- * Wrap the core git capability so the CLI surfaces the command-specific
- * "Run 'git init' first, then re-run 'basou init'." suffix while the
- * capability layer remains command-agnostic.
- */
-async function resolveRepositoryRootForInit(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou init'.", {
-        cause: error,
-      });
-    }
-    throw error;
   }
 }
