@@ -17,6 +17,7 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
+  boardInitStrings,
   chainEvents,
   createManifest,
   type Event,
@@ -1497,6 +1498,17 @@ describe("basou board init", () => {
     expect(parsed.declaration.effort.start).toBe(NOW.toISOString().slice(0, 10));
     expect(await readdir(repo)).toEqual(before);
     expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("writes its words in the language the manifest declares for the workspace's own repo", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private", language: "ja" }]);
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const text = await doRunBoardInit({}, ctx(repo));
+    const parsed = parseBoardDeclaration(text, { manifestRepoPaths: ["."] });
+    if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+    expect(parsed.declaration.title).toBe(
+      boardInitStrings("ja").title.replace("{name}", "board-ws"),
+    );
   });
 
   it("refuses, printing nothing, where a board is already declared", async () => {

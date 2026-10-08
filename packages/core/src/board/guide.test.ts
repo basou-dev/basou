@@ -512,6 +512,7 @@ describe("boardGuide: the commands run", () => {
     await mkdir(elsewhere);
     await symlink(elsewhere, work);
     expect(sh(prefix)).toBe(1);
+  });
 
   it("saves the board init prints only where no board is", async () => {
     const anchor = join(dir, "ws");
