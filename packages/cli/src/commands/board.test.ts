@@ -33,6 +33,7 @@ import {
   doRunBoardInit,
   doRunBoardMeasure,
   doRunBoardRecord,
+  INIT_SAVE,
   measureLiveBoard,
   runBoardGuide,
   runBoardInit,
@@ -1509,6 +1510,27 @@ describe("basou board init", () => {
     expect(parsed.declaration.title).toBe(
       boardInitStrings("ja").title.replace("{name}", "board-ws"),
     );
+  });
+
+  it("says to save it through a file mktemp makes, and only where no board is", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-board-init-save-")));
+    try {
+      const bin = join(dir, "bin");
+      await mkdir(bin);
+      await writeFile(join(bin, "basou"), "#!/bin/sh\necho 'title: printed'\n", { mode: 0o755 });
+      const run = () =>
+        promisify(execFile)("sh", ["-c", `${INIT_SAVE}; echo "exit=$?"`], {
+          cwd: dir,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+      expect((await run()).stdout).toBe("exit=0\n");
+      expect(await readFile(join(dir, "board", "board.yaml"), "utf8")).toBe("title: printed\n");
+      await writeFile(join(dir, "board", "board.yaml"), "title: mine\n");
+      expect((await run()).stdout).toBe("exit=1\n");
+      expect(await readFile(join(dir, "board", "board.yaml"), "utf8")).toBe("title: mine\n");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("refuses, printing nothing, where a board is already declared", async () => {

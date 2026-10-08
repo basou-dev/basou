@@ -226,11 +226,12 @@ read (the reason is on stderr, and nothing is printed on stdout).`,
 }
 
 /**
- * How a printed board is saved: to a file of its own first, moved into place
- * only where no board is. Printing straight into board.yaml would empty an
- * existing one before init could refuse.
+ * How a printed board is saved: to a file of its own first (mktemp makes one
+ * no other user can have placed or read), moved into place only where no
+ * board is. Printing straight into board.yaml would empty an existing one
+ * before init could refuse.
  */
-export const INIT_SAVE = `basou board init > "\${TMPDIR:-/tmp}/board.yaml" && [ ! -e ${DEFAULT_BOARD_PATH} ] && mkdir -p board && mv "\${TMPDIR:-/tmp}/board.yaml" ${DEFAULT_BOARD_PATH}`;
+export const INIT_SAVE = `f=$(mktemp) && basou board init > "$f" && [ ! -e ${DEFAULT_BOARD_PATH} ] && mkdir -p board && mv "$f" ${DEFAULT_BOARD_PATH}`;
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunBoardInit}. */
 export async function runBoardInit(
