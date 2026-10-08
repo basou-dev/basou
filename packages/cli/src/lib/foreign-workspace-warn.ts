@@ -4,6 +4,7 @@ import {
   type BasouPaths,
   isPositionBoardLine,
   loadPortfolioConfig,
+  PortfolioConfigMissingError,
   readMarkdownFile,
 } from "@basou/core";
 import { scanForeignWorkspaceNames } from "./foreign-workspace-scan.js";
@@ -89,6 +90,43 @@ export async function findForeignWorkspaceNames(args: {
 
   const lines = [...new Set(hits.flatMap((h) => h.lines))].sort((a, b) => a - b);
   return { workspaceCount: hits.length, lines };
+}
+
+/** Which of several texts name another registered workspace, or why none was checked. */
+export type ForeignWorkspaceFields =
+  | { status: "checked"; at: string[] }
+  | { status: "no_registry" }
+  | { status: "unreadable" };
+
+/**
+ * Scan each of several texts, each named by where it is, for the names of
+ * registered workspaces other than `selfPath`, reading the registry once.
+ * Says which texts name one (never which workspace), or that there is no
+ * registry to check against, or that it could not be read. Never throws.
+ */
+export async function findForeignWorkspaceFields(args: {
+  fields: readonly { at: string; text: string }[];
+  selfPath: string;
+  configPath?: string | undefined;
+}): Promise<ForeignWorkspaceFields> {
+  let workspacePaths: string[];
+  let selfPath: string;
+  try {
+    const workspaces = await loadPortfolioConfig(args.configPath);
+    workspacePaths = await Promise.all(workspaces.map((w) => canonicalize(w.path)));
+    selfPath = await canonicalize(args.selfPath);
+  } catch (error: unknown) {
+    return error instanceof PortfolioConfigMissingError
+      ? { status: "no_registry" }
+      : { status: "unreadable" };
+  }
+  const at = args.fields
+    .filter(
+      (field) =>
+        scanForeignWorkspaceNames({ text: field.text, workspacePaths, selfPath }).length > 0,
+    )
+    .map((field) => field.at);
+  return { status: "checked", at };
 }
 
 /**

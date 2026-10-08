@@ -1121,6 +1121,106 @@ describe("basou board record", () => {
     );
   });
 
+  describe("the names of other registered workspaces", () => {
+    // A portfolio beside the workspace registering it and one other, whose
+    // directory name is `name`.
+    async function registered(repo: string, name = "other-shop-planning"): Promise<string> {
+      const other = join(`${repo}-x`, name);
+      await mkdir(other, { recursive: true });
+      await writeFile(
+        ctx(repo).portfolioConfigPath,
+        `workspaces:\n  - path: ${repo}\n  - path: ${other}\n`,
+      );
+      return name;
+    }
+
+    it("refuses, writing nothing and naming no workspace, every text of the judge's that names one", async () => {
+      const { repo, input } = await judged(["done", "blocked", "none", "none", "none", "none"]);
+      const name = await registered(repo);
+      const cells = input.cells as { reason?: string }[];
+      (cells[1] as { reason?: string }).reason = `waits on ${name}`;
+      const named = {
+        ...input,
+        observed: {
+          [`${name}_npm`]: { value: null, observed_at: "2026-10-08", source: "npm", error: "x" },
+          npm: {
+            value: `${name} 1.0`,
+            observed_at: "2026-10-08",
+            source: `see ${name}`,
+            error: undefined,
+          },
+        },
+        prose: {
+          summary: `like ${name}`,
+          lanes: { core: `as in ~/projects/${name}` },
+          operator_turns: [{ text: "fine", source: name }],
+          footnotes: ["fine", name],
+        },
+        axis_review: { triggers: ["d"], summary: `cut as ${name} was` },
+      };
+      const { out, err } = capture();
+      for (const dryRun of [true, false]) {
+        await runBoardRecord({ dryRun }, fed(repo, named));
+        const said = err.join("\n");
+        expect(said).toContain(
+          "The record's input names another workspace the portfolio registers, and a board holds this workspace's own work only; nothing was written:",
+        );
+        expect(said).not.toContain(name);
+        expect(said.split("\n").filter((l) => l.startsWith("  - "))).toEqual([
+          "  - prose.summary",
+          "  - prose.lanes.core",
+          "  - prose.operator_turns[0].source",
+          "  - prose.footnotes[1]",
+          "  - observed (entry 1) name",
+          "  - observed (entry 2).value",
+          "  - observed (entry 2).source",
+          "  - cells[1].reason",
+          "  - axis_review.summary",
+        ]);
+        expect(process.exitCode).toBe(1);
+        process.exitCode = undefined;
+        err.length = 0;
+      }
+      expect(out).toEqual([]);
+      await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
+    });
+
+    // The digest after the portfolio changed beside the workspace.
+    async function measuredAgain(repo: string): Promise<string> {
+      const { out } = capture();
+      const digest = (await doRunBoardMeasure({ json: true }, ctx(repo))).digest;
+      out.length = 0;
+      vi.restoreAllMocks();
+      return digest;
+    }
+
+    it("takes the workspace's own name, and records with no portfolio to check against", async () => {
+      const { repo, input } = await judged();
+      const own: Record<string, unknown> = {
+        ...input,
+        prose: { summary: `the ${basename(repo)} board` },
+      };
+      capture();
+      expect((await doRunBoardRecord({ dryRun: true }, fed(repo, own))).dry_run).toBe(true);
+      await registered(repo);
+      own.measure_digest = await measuredAgain(repo);
+      capture();
+      expect((await doRunBoardRecord({ dryRun: true }, fed(repo, own))).dry_run).toBe(true);
+    });
+
+    it("records unchecked, and says so, when the portfolio cannot be read", async () => {
+      const { repo, input } = await judged();
+      await writeFile(ctx(repo).portfolioConfigPath, "workspaces: [\n");
+      input.measure_digest = await measuredAgain(repo);
+      const { err } = capture();
+      const result = await doRunBoardRecord({}, fed(repo, input));
+      expect(result.record).not.toBeNull();
+      expect(err.join("\n")).toContain(
+        "basou: ~/.basou/portfolio.yaml could not be read, so the record's input was not checked for the names of other registered workspaces.",
+      );
+    });
+  });
+
   it("refuses, and writes nothing, when the board moved since the judgement", async () => {
     const { repo, input } = await judged();
     await writeFile(join(repo, "LATER.md"), "# later\n");
