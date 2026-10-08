@@ -190,17 +190,16 @@ describe("parseBoardDeclaration: accepted declarations", () => {
 
 describe("parseBoardDeclaration: board_version", () => {
   it("stops at an unknown board_version, naming it, whatever else is wrong", () => {
-    expect(errorsOf(parse({ ...board(), board_version: 2, title: "", extra: 1 }))).toEqual([
-      "board_version: this basou reads board_version 1, not 2",
+    expect(errorsOf(parse({ ...board(), board_version: 3, title: "", extra: 1 }))).toEqual([
+      "board_version: this basou reads board_version 1 or 2, not 3",
     ]);
   });
 
   it("refuses a board_version that is missing or not a number", () => {
     const { board_version: _v, ...missing } = board();
-    expect(errorsOf(parse(missing))).toEqual(["board_version: Invalid input: expected 1"]);
-    expect(errorsOf(parse({ ...board(), board_version: "1" }))).toEqual([
-      "board_version: Invalid input: expected 1",
-    ]);
+    const reads = "board_version: must be a board version this basou reads (1 or 2)";
+    expect(errorsOf(parse(missing))).toEqual([reads]);
+    expect(errorsOf(parse({ ...board(), board_version: "1" }))).toEqual([reads]);
   });
 });
 
@@ -1134,11 +1133,11 @@ describe("parseBoardDeclaration: what the review found", () => {
   });
 
   it("names an unknown board_version before a YAML warning", () => {
-    const plain = stringify({ ...board(), board_version: 2 });
+    const plain = stringify({ ...board(), board_version: 3 });
     expect(plain).toContain("title: A board\n");
-    const text = plain.replace("title: A board\n", "title: !v2tag A board\n");
+    const text = plain.replace("title: A board\n", "title: !v3tag A board\n");
     expect(errorsOf(parseBoardDeclaration(text, { manifestRepoPaths: REPOS }))).toEqual([
-      "board_version: this basou reads board_version 1, not 2",
+      "board_version: this basou reads board_version 1 or 2, not 3",
     ]);
   });
 
@@ -1209,5 +1208,205 @@ describe("parseBoardDeclaration: what the review found", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// A board of version 2, observing one thing of each kind.
+function boardV2(): Record<string, unknown> {
+  const doc = board();
+  entry(doc.stages, "05").look = ["the published version on npm"];
+  entry(doc.stages, "05").notes = ["on main but not published is part"];
+  return {
+    ...doc,
+    board_version: 2,
+    observe: [
+      { key: "npm_cli", kind: "npm_version", package: "@scope/cli" },
+      { key: "github_release", kind: "github_release", repo: "owner/name" },
+      { key: "github_open_issues", kind: "github_open_issues", repo: "owner/name" },
+      { key: "github_open_prs", kind: "github_open_prs", repo: "owner/name.js" },
+      { key: "github_main_ci", kind: "github_ci", repo: "owner/name", workflow: "quality.yml" },
+      { key: "site_en", kind: "page_version", url: "https://example.com/" },
+      { key: "db_users", kind: "manual", how: "count the users in production, read only" },
+    ],
+  };
+}
+
+// A version 2 board whose only observation is `observe`.
+function withObserve(observe: Record<string, unknown>): Record<string, unknown> {
+  return { ...boardV2(), observe: [observe] };
+}
+
+describe("parseBoardDeclaration: board_version 2", () => {
+  it("accepts what to observe and what to look at for each stage, filling the default branch", () => {
+    const result = parse(boardV2());
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    const { declaration } = result;
+    expect(declaration.board_version).toBe(2);
+    expect(declaration.observe.map((o) => [o.key, o.kind])).toEqual([
+      ["npm_cli", "npm_version"],
+      ["github_release", "github_release"],
+      ["github_open_issues", "github_open_issues"],
+      ["github_open_prs", "github_open_prs"],
+      ["github_main_ci", "github_ci"],
+      ["site_en", "page_version"],
+      ["db_users", "manual"],
+    ]);
+    expect(declaration.observe[4]).toEqual({
+      key: "github_main_ci",
+      kind: "github_ci",
+      repo: "owner/name",
+      workflow: "quality.yml",
+      branch: "main",
+    });
+    expect(declaration.stages["05"]).toEqual({
+      meaning: "stage 05",
+      look: ["the published version on npm"],
+      notes: ["on main but not published is part"],
+    });
+    expect(declaration.stages["01"]).toEqual({ meaning: "stage 01" });
+  });
+
+  it("reads a version 2 board without observe as observing nothing", () => {
+    const { observe: _o, ...doc } = boardV2();
+    const result = parse(doc);
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.observe).toEqual([]);
+  });
+
+  it("still reads version 1, as observing nothing", () => {
+    const result = parse(board());
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.board_version).toBe(1);
+    expect(result.declaration.observe).toEqual([]);
+  });
+
+  it("says that version 2 reads observe and a stage's look and notes when version 1 has them", () => {
+    const doc = boardV2();
+    doc.board_version = 1;
+    entry(doc.stages, "03").colour = "red";
+    expect(errorsOf(parse(doc))).toEqual([
+      "stages.03: unknown key 'colour'",
+      "stages.05: unknown keys 'look', 'notes' (board_version 2 reads it)",
+      "(top level): unknown key 'observe' (board_version 2 reads it)",
+    ]);
+  });
+
+  it("refuses an unknown kind, a kind's missing keys, keys of another kind and a duplicate key", () => {
+    const doc = boardV2();
+    doc.observe = [
+      { key: "a", kind: "rss_feed", url: "https://example.com/" },
+      { key: "b", kind: "github_ci", repo: "owner/name" },
+      { key: "c", kind: "npm_version", package: "x", repo: "owner/name" },
+      { key: "d", kind: "manual" },
+      { key: "d", kind: "manual", how: "ask" },
+      { kind: "manual", how: "ask" },
+      { key: "Bad", kind: "manual", how: "ask" },
+    ];
+    expect(errorsOf(parse(doc))).toEqual([
+      "observe[0].kind: Invalid discriminator value. Expected 'npm_version' | 'github_release' | 'github_open_issues' | 'github_open_prs' | 'github_ci' | 'page_version' | 'manual'",
+      "observe[1].workflow: Invalid input: expected string, received undefined",
+      "observe[2]: unknown key 'repo'",
+      "observe[3].how: Invalid input: expected string, received undefined",
+      "observe[5].key: Invalid input: expected string, received undefined",
+      "observe[6].key: must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
+      "observe[4].key: duplicate observation key 'd' (first at observe[3])",
+    ]);
+  });
+
+  it.each<[string, string]>([
+    ["Scope/Cli", "uppercase"],
+    ["-x", "a leading '-'"],
+    ["@scope/-x", "a leading '-' after the scope"],
+    ["a b", "a space"],
+    ["a;rm", "a ';'"],
+    ["@scope", "a scope alone"],
+    ["", "nothing"],
+    ["a".repeat(215), "too long"],
+  ])("refuses the npm package %j (%s)", (pkg) => {
+    expect(errorsOf(parse(withObserve({ key: "n", kind: "npm_version", package: pkg })))).toEqual([
+      "observe[0].package: must be an npm package name such as name or @scope/name, in lowercase",
+    ]);
+  });
+
+  it.each<[string]>([
+    ["name"],
+    ["-owner/name"],
+    ["owner/name/more"],
+    ["owner/.."],
+    ["owner/."],
+    ["own er/name"],
+    ["owner/na'me"],
+  ])("refuses the GitHub repository %j", (repo) => {
+    for (const kind of ["github_release", "github_open_issues", "github_open_prs"]) {
+      expect(errorsOf(parse(withObserve({ key: "g", kind, repo })))).toEqual([
+        "observe[0].repo: must be a GitHub repository written as owner/name",
+      ]);
+    }
+  });
+
+  it("refuses a workflow that is not a file name and a branch a command could misread", () => {
+    const doc = boardV2();
+    doc.observe = [
+      { key: "a", kind: "github_ci", repo: "o/n", workflow: ".github/workflows/q.yml" },
+      { key: "b", kind: "github_ci", repo: "o/n", workflow: "quality" },
+      { key: "c", kind: "github_ci", repo: "o/n", workflow: "-q.yml" },
+      { key: "d", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "-x" },
+      { key: "e", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "a..b" },
+      { key: "f", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "a b" },
+      { key: "g", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "release/" },
+      { key: "h", kind: "github_ci", repo: "o/n", workflow: "q.yaml", branch: "release/1.x" },
+    ];
+    const workflow = "must be the file name of a workflow, such as quality.yml";
+    const branch =
+      "must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'";
+    expect(errorsOf(parse(doc))).toEqual([
+      `observe[0].workflow: ${workflow}`,
+      `observe[1].workflow: ${workflow}`,
+      `observe[2].workflow: ${workflow}`,
+      `observe[3].branch: ${branch}`,
+      `observe[4].branch: ${branch}`,
+      `observe[5].branch: ${branch}`,
+      `observe[6].branch: ${branch}`,
+    ]);
+  });
+
+  it.each<[string, string]>([
+    ["http://example.com/", "must be an https:// URL"],
+    ["HTTPS://example.com/", "must be an https:// URL"],
+    ["ftp://example.com/", "must be an https:// URL"],
+    ["example.com", "must be an https:// URL"],
+    ["https://", "must be an https:// URL"],
+    ["https://example.com/a b", "must be printable ASCII with no spaces"],
+    ["https://example.com/é", "must be printable ASCII with no spaces"],
+    ["https://example.com/'; rm -rf ~", "must be printable ASCII with no spaces"],
+    ["https://example.com/a'b", "must not contain quotes, backslashes, '<' or '>'"],
+    ["https://example.com/a\\b", "must not contain quotes, backslashes, '<' or '>'"],
+    ["https://user:secret@example.com/", "must not carry a user name or a password"],
+    ["https://user@example.com/", "must not carry a user name or a password"],
+  ])("refuses the page %j", (url, problem) => {
+    expect(errorsOf(parse(withObserve({ key: "p", kind: "page_version", url })))).toEqual([
+      `observe[0].url: ${problem}`,
+    ]);
+  });
+
+  it("takes a page's query and fragment, and a manual observation's how as written", () => {
+    const doc = boardV2();
+    doc.observe = [
+      { key: "p", kind: "page_version", url: "https://example.com:8443/ja/?a=1&b=2#v" },
+      { key: "m", kind: "manual", how: "count with `psql`; it's read only, $(not run)" },
+    ];
+    const result = parse(doc);
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.observe).toEqual(doc.observe);
+  });
+
+  it("refuses an empty look or note of a stage", () => {
+    const doc = boardV2();
+    entry(doc.stages, "02").look = [""];
+    entry(doc.stages, "02").notes = "not a list";
+    expect(errorsOf(parse(doc))).toEqual([
+      "stages.02.look[0]: must be a non-empty string",
+      "stages.02.notes: Invalid input: expected array, received string",
+    ]);
   });
 });

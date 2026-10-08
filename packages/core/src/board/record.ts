@@ -19,9 +19,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * The version of a record's shape, the shape of the measurement it holds
- * included. Raised whenever that shape changes.
+ * included. Raised whenever that shape changes: 2 added the observations the
+ * declaration names (`declaration.observe`) and what each stage is judged by
+ * (`look` and `notes` of `declaration.stages`). Every version is read.
  */
-export const BOARD_RECORD_VERSION = 1;
+export const BOARD_RECORD_VERSION = 2;
+
+/** The record versions this basou reads. A version is added here, never removed. */
+export const BOARD_RECORD_VERSIONS = [1, 2] as const;
 
 /** The states a cell of the board can be in. */
 export const BOARD_CELL_STATES = [
@@ -210,6 +215,27 @@ export function parseRecordInput(
       }
     }
   }
+  // A board that declares what to observe is recorded with exactly those
+  // observations: one that was not made is given as null with its error, so
+  // a closed exit is never dropped from the board unsaid, and a name the
+  // declaration does not hold (a typo) would never meet the value the
+  // previous record has under the right one.
+  const observed = given.observed === undefined ? {} : given.observed;
+  if (declaration.observe.length > 0 && isRecord(observed)) {
+    const declared = new Set(declaration.observe.map((o) => o.key));
+    for (const key of declared) {
+      if (!Object.hasOwn(observed, key)) {
+        errors.push(
+          `${formatPath(["observed", key])}: the board declares it, so it must be given (null, with an error, when it was not observed)`,
+        );
+      }
+    }
+    for (const key of Object.keys(observed)) {
+      if (!declared.has(key) && key.trim() !== "" && key !== "__proto__") {
+        errors.push(`${formatPath(["observed", key])}: is not an observation the board declares`);
+      }
+    }
+  }
   const cells = cellsSchema.safeParse(given.cells);
   if (cells.success) {
     const seen = new Set<string>();
@@ -311,6 +337,7 @@ export type BoardRecord = {
     components: BoardDeclaration["components"];
     axis: BoardDeclaration["axis"];
     effort: BoardDeclaration["effort"];
+    observe: BoardDeclaration["observe"];
   };
   /**
    * What basou measured as it recorded, the digest the judge saw included,
@@ -349,6 +376,7 @@ export function buildRecord(input: {
       components: d.components,
       axis: d.axis,
       effort: d.effort,
+      observe: d.observe,
     },
     measure,
     observed: r.observed,

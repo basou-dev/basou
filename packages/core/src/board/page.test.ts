@@ -190,6 +190,23 @@ describe("boardPage", () => {
     });
   });
 
+  it("draws a record of version 2, which holds the observations declared, after one of version 1", async () => {
+    await mkdir(records);
+    await place(A, record());
+    const v2 = record({ record_version: 2 });
+    v2.declaration = {
+      ...v2.declaration,
+      observe: [{ key: "npm_cli", kind: "npm_version", package: "@scope/cli" }],
+    } as typeof v2.declaration;
+    await place(B, v2);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.id).toBe(B);
+    expect(page.board.heading.title).toBe("Test board");
+    const older = await boardPage(records, A);
+    expect(older.status).toBe("ok");
+  });
+
   it("draws the heading, the tiles and the observations from the record", async () => {
     await mkdir(records);
     await place(A, record());
@@ -501,11 +518,11 @@ describe("boardPage", () => {
       older: null,
       newer: B,
     });
-    await place(A, record({ record_version: 2 }));
+    await place(A, record({ record_version: 3 }));
     expect(await boardPage(records, A)).toMatchObject({
       why: "unknown_version",
       id: A,
-      version: 2,
+      version: 3,
     });
     await place(A, record({ prose: { summary: 1 } }));
     expect(await boardPage(records, A)).toMatchObject({ why: "not_a_record", id: A });

@@ -43,6 +43,32 @@ function declaration(): BoardDeclaration {
   return result.declaration;
 }
 
+// A board of version 2 that declares two observations.
+function observingDeclaration(): BoardDeclaration {
+  const result = parseBoardDeclaration(
+    stringify({
+      board_version: 2,
+      title: "Test board",
+      stages: Object.fromEntries(
+        STAGES.map((id) => [id, { meaning: `stage ${id}`, look: [`what ${id} needs`] }]),
+      ),
+      lanes: [
+        { id: "core", name: "Core" },
+        { id: "docs", name: "Docs" },
+      ],
+      observe: [
+        { key: "npm_cli", kind: "npm_version", package: "@scope/cli" },
+        { key: "users", kind: "manual", how: "ask the operator" },
+      ],
+      axis: { version: 1, review_due_days: 60 },
+      effort: { start: "2026-04-28", time_zone: "UTC" },
+    }),
+    { manifestRepoPaths: [] },
+  );
+  if (!result.ok) throw new Error(result.errors.join("\n"));
+  return result.declaration;
+}
+
 const DIGEST = `sha256:${"a".repeat(64)}`;
 
 function cells(states: Record<string, string[]> = {}) {
@@ -273,6 +299,77 @@ describe("parseRecordInput", () => {
   });
 });
 
+describe("parseRecordInput: a board that declares what to observe", () => {
+  const at = "2026-10-08T10:00:00+09:00";
+  const made = { value: "1.0.0", observed_at: at, source: "npm view @scope/cli version" };
+  const notMade = { value: null, observed_at: at, source: "the operator", error: "not asked" };
+
+  it("takes exactly the observations the board declares, one not made as null with its error", () => {
+    const result = parseRecordInput(
+      input({ observed: { npm_cli: made, users: notMade } }),
+      observingDeclaration(),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("refuses an observation the board declares but the input leaves out, and one it does not declare", () => {
+    const result = parseRecordInput(
+      input({ observed: { npm_cli: made, npm_cil: made } }),
+      observingDeclaration(),
+    );
+    expect(result.ok ? [] : result.errors).toEqual([
+      "observed.users: the board declares it, so it must be given (null, with an error, when it was not observed)",
+      "observed.npm_cil: is not an observation the board declares",
+    ]);
+  });
+
+  it("refuses every declared observation when observed is left out", () => {
+    const result = parseRecordInput(input(), observingDeclaration());
+    expect(result.ok ? [] : result.errors).toEqual([
+      "observed.npm_cli: the board declares it, so it must be given (null, with an error, when it was not observed)",
+      "observed.users: the board declares it, so it must be given (null, with an error, when it was not observed)",
+    ]);
+  });
+
+  it("does not name an observation twice when its name is empty or __proto__", () => {
+    const value = JSON.parse(
+      `{"measure_digest":"${DIGEST}","cells":${JSON.stringify(cells())},"prose":{"summary":"x"},"judged_by":{"model":"m","self_reported":true},"observed":{"npm_cli":${JSON.stringify(made)},"users":${JSON.stringify(notMade)},"__proto__":${JSON.stringify(made)},"":${JSON.stringify(made)}}}`,
+    );
+    const result = parseRecordInput(value, observingDeclaration());
+    expect(result.ok ? [] : result.errors).toEqual([
+      "observed.__proto__: is not a name it can have",
+      'observed[""]: is not a name it can have',
+    ]);
+  });
+
+  it("leaves the names free on a board that declares nothing to observe", () => {
+    const result = parseRecordInput(input({ observed: { anything: made } }), declaration());
+    expect(result.ok).toBe(true);
+  });
+
+  it("keeps the observations and the stages' look in the record of a version 2 board", () => {
+    const parsed = parseRecordInput(
+      input({ observed: { npm_cli: made, users: notMade } }),
+      observingDeclaration(),
+    );
+    if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+    const r = buildRecord({
+      declaration: observingDeclaration(),
+      measurement: { digest: DIGEST } as BoardMeasurement,
+      recordInput: parsed.input,
+      recordedAt: new Date("2026-10-08T00:00:00.000Z"),
+      recordedWith: { basou: "0.0.0-test", build: null },
+    });
+    expect(r.record_version).toBe(2);
+    expect(r.declaration.observe).toEqual([
+      { key: "npm_cli", kind: "npm_version", package: "@scope/cli" },
+      { key: "users", kind: "manual", how: "ask the operator" },
+    ]);
+    expect(r.declaration.stages["04"]).toEqual({ meaning: "stage 04", look: ["what 04 needs"] });
+    expect(r.observed).toEqual({ npm_cli: made, users: notMade });
+  });
+});
+
 describe("orderAnomalies", () => {
   it("finds a stage not started, blocked or shelved before one done or begun, not counting unverified", () => {
     const parsed = parseRecordInput(
@@ -344,7 +441,9 @@ describe("buildRecord and writeRecord", () => {
       components: { "ws/app": { lane: ["core"], note: "the app" } },
       axis: d.axis,
       effort: { start: "2026-04-28", time_zone: "UTC" },
+      observe: [],
     });
+    expect(r.record_version).toBe(2);
     expect(r.recorded_at).toBe("2026-10-07T00:00:00.000Z");
     const records = join(dir, "records");
     const name = await writeRecord(records, r);
