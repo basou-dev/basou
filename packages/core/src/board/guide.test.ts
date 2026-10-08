@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -458,6 +458,32 @@ describe("boardGuide: the commands run", () => {
     const missing = boardGuide(guideInput({ anchor, otherRepos: ["../nowhere"], language: "en" }));
     const stop = blocksIn(missing).find((b) => b.includes('> "$W/before.txt"')) as string;
     expect(sh(stop).out).toContain("exit=1");
+  });
+
+  it("uses a working directory only when it is the user's own and no link, and closes it to others", async () => {
+    const guide = boardGuide(guideInput({ anchor: dir, otherRepos: [] }));
+    const measure = blocksIn(guide).find((b) => b.includes('> "$W/measure.json"')) as string;
+    const prefix = measure.slice(0, measure.indexOf(" && basou "));
+    const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
+    const env = { ...process.env, TMPDIR: dir };
+    const sh = (script: string) => {
+      try {
+        execFileSync("sh", ["-c", script], { env, encoding: "utf8" });
+        return 0;
+      } catch {
+        return 1;
+      }
+    };
+    expect(sh(prefix)).toBe(0);
+    expect((await stat(work)).mode & 0o777).toBe(0o700);
+    await chmod(work, 0o755);
+    expect(sh(prefix)).toBe(0);
+    expect((await stat(work)).mode & 0o777).toBe(0o700);
+    await rm(work, { recursive: true });
+    const elsewhere = join(dir, "elsewhere");
+    await mkdir(elsewhere);
+    await symlink(elsewhere, work);
+    expect(sh(prefix)).toBe(1);
   });
 
   it("reads the version off a page, past the generator meta tag and a bare number", async () => {

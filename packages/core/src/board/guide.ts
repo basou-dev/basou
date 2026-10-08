@@ -84,7 +84,10 @@ const LANGUAGE_NAMES = { en: "English (en)", ja: "Japanese (ja)" } as const;
 export function boardGuide(input: BoardGuideInput): string {
   const anchor = shellWord(input.anchor);
   const work = boardGuideWorkDir(input.anchor);
-  const go = `cd ${anchor} && W="${work}" && mkdir -p "$W"`;
+  // The working directory may sit in a /tmp other users share: it is used
+  // only when it is no link and this user's own, and only this user can
+  // read it (it holds what the trail holds).
+  const go = `cd ${anchor} && W="${work}" && mkdir -p "$W" && [ ! -L "$W" ] && [ -O "$W" ] && chmod 700 "$W"`;
   const out: string[] = [];
   const line = (...lines: string[]) => out.push(...lines);
   const fenced = (lang: string, ...lines: string[]) =>
@@ -129,7 +132,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "## Rules for every step",
     "",
     "- Run each block on its own: a shell variable does not carry over to the next call. Each block goes to the workspace and names W first.",
-    "- Keep working files in W, never in a repo.",
+    "- Keep working files in W, never in a repo. Each block stops before using W unless it is a directory of your own, not a link, and makes it readable by you alone: it holds what the trail holds.",
     "- From the measure of step 2 to the record of step 7, write nothing to basou (`decision capture`, `note`, `task`, `review record`, `refresh`), put no file in and change no file of any repo the manifest declares, do not rebuild or upgrade basou, and do not change `~/.basou/portfolio.yaml`. The digest covers all of them, and record refuses when it moved.",
     '- The model name is your own report of yourself. Use the same name every time, as measure\'s `--model` and as `judged_by.model` (`"<model>"` below).',
     "- Isolation, both ways: read and write only this workspace. Do not open another project's repos, planning, `.basou/` or transcripts (other directories under `~/.claude/projects`, `~/.codex/sessions`), not even to read. Write the board only under board/ of this repo; never write it, its numbers or this work into a public repo or one whose contents are published (no file, `.gitignore` comment, commit message, issue or pull request). Do not bring other projects' names, paths, numbers or ids into the board, nor take this one's out. Asked about another project, decline and suggest a session of its own.",
