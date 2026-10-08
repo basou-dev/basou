@@ -28,13 +28,14 @@ import {
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BOARD_HTML } from "../lib/board-ui.js";
-import type { ViewServerHandle } from "../lib/view-server.js";
+import { startViewServer, type ViewServerHandle } from "../lib/view-server.js";
 import { VIEW_HTML } from "../lib/view-ui.js";
-import { doRunBoardMeasure, doRunBoardRecord } from "./board.js";
+import { doRunBoardMeasure, doRunBoardRecord, measureLiveBoard } from "./board.js";
 import {
   doRunView,
   registerViewCommand,
   runView,
+  sharedWhileRunning,
   type ViewContext,
   type ViewOptions,
 } from "./view.js";
@@ -1052,6 +1053,8 @@ describe("basou view: the board page", () => {
         cwd: repo,
         signal: controller.signal,
         openBrowser: () => {},
+        // The live board runs the dry run of an import: never over this host's logs.
+        claudeProjectsDir: getClaudeRoot(),
         codexSessionsDir: getCodexRoot(),
         onListening: (h) => {
           handle = h;
@@ -1131,6 +1134,107 @@ describe("basou view: the board page", () => {
     await withPortfolioServer([repo], {}, async (h) => {
       expect((await fetch(`${h.url}/board`)).status).toBe(404);
       expect((await getJson(h, `/api/ws/${WS_ID_A}/board`)).status).toBe(404);
+      expect((await getJson(h, `/api/ws/${WS_ID_A}/board/live`)).status).toBe(404);
+    });
+  });
+
+  it("serves the measurement on the spot in single mode only, whatever it is given", async () => {
+    const root = await initWorkspaceAt(tmpRepo as string, WS_ID_A, "a");
+    let measured = 0;
+    const entry = {
+      key: WS_ID_A,
+      label: "a",
+      paths: basouPaths(root),
+      repoRoot: root,
+      importCtx: { cwd: root },
+      initialized: true,
+    };
+    const boardLive = () => {
+      measured++;
+      return measureLiveBoard(root, {
+        claudeProjectsDir: getClaudeRoot(),
+        codexSessionsDir: getCodexRoot(),
+      });
+    };
+    for (const mode of ["portfolio", "single"] as const) {
+      const h = await startViewServer({
+        port: 0,
+        deps: { workspaces: [entry], mode, nowProvider: () => FIXED_DATE, boardLive },
+      });
+      try {
+        const status = (await getJson(h, `/api/ws/${WS_ID_A}/board/live`)).status;
+        expect([mode, status]).toEqual([mode, mode === "single" ? 200 : 404]);
+      } finally {
+        await h.close();
+      }
+    }
+    expect(measured).toBe(1);
+  });
+
+  it("shares one measurement among the requests made while it runs", async () => {
+    let runs = 0;
+    let finish: (value: number) => void = () => {};
+    const shared = sharedWhileRunning(() => {
+      runs++;
+      return new Promise<number>((resolve) => {
+        finish = resolve;
+      });
+    });
+    const first = shared();
+    const second = shared();
+    expect(second).toBe(first);
+    finish(1);
+    expect(await first).toBe(1);
+    // A call after it settled runs again.
+    const third = shared();
+    expect(third).not.toBe(first);
+    finish(2);
+    expect(await third).toBe(2);
+    expect(runs).toBe(2);
+  });
+
+  it("measures the workspace on the spot when there is no board, whatever its visibility", async () => {
+    const repo = await workspaceWith();
+    await withView(repo, {}, async (h) => {
+      const live = await getJson(h, "/api/board/live");
+      expect(live.status).toBe(200);
+      expect(live.data).toMatchObject({
+        language: "en",
+        strings: boardPageStrings("en"),
+        live: {
+          heading: { title: "view-ws", measured_at: expect.any(String) },
+          effort: { milestones: [] },
+          // The manifest declares no repos: the workspace's own repo.
+          repos: [{ path: "." }],
+          trail: { decisions_all: 0, tracks_open: [] },
+          footnotes: { measured_with: { basou: expect.any(String) } },
+        },
+      });
+      const data = live.data as Record<string, unknown>;
+      expect(data).not.toHaveProperty("page");
+      for (const key of ["matrix", "lanes", "turns", "composition", "summary"]) {
+        expect(data.live).not.toHaveProperty(key);
+      }
+      const scoped = await getJson(h, `/api/ws/${FIXED_WS_ID}/board/live`);
+      expect(scoped.status).toBe(200);
+      expect(scoped.data).toMatchObject({ live: { heading: { title: "view-ws" } } });
+    });
+  });
+
+  it("measures beside the records, in the anchor's language, and takes live for no record", async () => {
+    const repo = await workspaceWith([{ path: ".", visibility: "private", language: "ja" }]);
+    const id = await recorded(repo);
+    await withView(repo, {}, async (h) => {
+      expect((await getJson(h, "/api/board/live")).data).toMatchObject({
+        language: "ja",
+        strings: boardPageStrings("ja"),
+        live: { heading: { title: "view-ws" }, repos: [{ path: "." }] },
+      });
+      expect((await getJson(h, "/api/board")).data).toMatchObject({ page: { status: "ok", id } });
+      expect((await getJson(h, `/api/board/${id}`)).data).toMatchObject({ page: { id } });
+      // Nothing was written beside the records.
+      const records = await readdir(join(repo, "board", "records"));
+      expect(records).toEqual([`${id}.json`]);
     });
   });
 
@@ -1252,17 +1356,17 @@ describe("basou view: the board page", () => {
       document,
       boardPageStrings("en"),
       "en",
-    ) as Record<string, (arg: unknown) => Node>;
-    const call = (name: string, arg: unknown): Node => {
+    ) as Record<string, (...args: unknown[]) => Node>;
+    const call = (name: string, ...args: unknown[]): Node => {
       const fn = fns[name];
       if (fn === undefined) throw new Error(`no ${name}`);
-      return fn(arg);
+      return fn(...args);
     };
     return { call, byId };
   }
 
   it("draws a page it cannot draw around the record asked for", () => {
-    const { call, byId } = drawing(["records"]);
+    const { call, byId } = drawing(["records", "recordLinks"]);
     const records = [A_REC, B_REC, C_REC].map((id, i) => ({
       id,
       at: `2026-10-0${i + 1}T00:00:00.000Z`,
@@ -1282,6 +1386,7 @@ describe("basou view: the board page", () => {
       `/board?record=${A_REC}`,
       `/board?record=${C_REC}`,
       "/board",
+      "/board?live=1",
     ]);
     const chosen = nav.find((n) => n.tag === "option" && n.selected);
     expect(chosen.map((o) => o.attrs.value)).toEqual([B_REC]);
@@ -1537,6 +1642,287 @@ describe("basou view: the board page", () => {
       false,
     );
     expect(placed.map((p) => p.row)).toEqual([0, 1, 0]);
+  });
+
+  // A board measured on the spot, as the live route lays it out.
+  const LIVE = {
+    heading: {
+      title: "Board",
+      measured_at: "2026-10-05T03:00:00.000Z",
+      complete: false,
+      not_found: 1,
+    },
+    effort: {
+      start: "2026-10-04",
+      time_zone: "UTC",
+      elapsed_days: 1,
+      active_ms: { union: 3_600_000, claude: 3_600_000, codex: null },
+      output_tokens: 10,
+      sessions_without_tokens: 0,
+      commits: [{ repo: ".", count: 2 }],
+      milestones: [],
+      active_days: 1,
+      period_days: 2,
+      daily: [
+        {
+          date: "2026-10-04",
+          union: 3_600_000,
+          claude: 3_600_000,
+          not_claude: 0,
+          cumulative: 3_600_000,
+          commits: 2,
+        },
+        {
+          date: "2026-10-05",
+          union: 0,
+          claude: 0,
+          not_claude: 0,
+          cumulative: 3_600_000,
+          commits: 0,
+        },
+      ],
+      weeks: [
+        {
+          week: "2026-09-28",
+          union: 3_600_000,
+          claude: 3_600_000,
+          codex: null,
+          active_days: 1,
+          commits: 2,
+        },
+      ],
+    },
+    repos: [
+      {
+        path: ".",
+        name: "app",
+        head: "0123456789abcdef0123456789abcdef01234567",
+        branch: null,
+        last_commit: null,
+        commits: 2,
+        uncommitted: 1,
+        behind_main: null,
+      },
+    ],
+    trail: {
+      decisions_all: 3,
+      decisions_live: 2,
+      tracks_open: [{ id: "decision_01HXABCDEF1234567890ABCDEF", title: "<b>open</b>" }],
+    },
+    integrity: { by_status: { verified: 1 }, not_verified: 0, sessions: 1 },
+    review_gaps: { by_verdict: { omission: 4 }, gaps: 4 },
+    freshness: { newest_session_at: null, unimported: { new: 1, updated: 0, unverifiable: 0 } },
+    components: [{ key: "app", kinds: ["ci", "manifest"] }],
+    footnotes: {
+      not_found: [
+        { at: "freshness.newest_session_at", reason: "a session.yaml could not be read" },
+      ],
+      measured_with: { basou: "0.0.0-test", build: null },
+    },
+  };
+
+  it("draws a board measured on the spot: what basou measured, nothing judged", () => {
+    const names = [
+      "missingIn",
+      "liveTile",
+      "liveHeading",
+      "liveRepos",
+      "liveTrail",
+      "liveComponents",
+      "liveFootnotes",
+      "effort",
+    ];
+    const { call } = drawing(names);
+    const S = boardPageStrings("en");
+    const heading = call("liveHeading", LIVE, null);
+    expect(heading.text()).toContain("Board");
+    expect(heading.text()).toContain("Measured ");
+    expect(heading.text()).toContain("1 could not be measured");
+    expect(heading.find((n) => n.tag === "button").map((b) => b.textContent)).toEqual([
+      S.live.remeasure,
+    ]);
+
+    const repos = call("liveRepos", LIVE);
+    const cells = repos.find((n) => n.tag === "td").map((c) => c.textContent);
+    // Nulls that mean so: a detached HEAD, no origin/main, a last commit unread.
+    expect(cells).toEqual(["app", "-", "0123456", "-", "2", "1", "-"]);
+    // Nulls the measurement could not measure are said to be.
+    const unmeasured = {
+      ...LIVE,
+      repos: [
+        LIVE.repos[0],
+        {
+          ...LIVE.repos[0],
+          path: "../gone",
+          name: null,
+          head: null,
+          commits: null,
+          uncommitted: null,
+        },
+      ],
+      footnotes: {
+        ...LIVE.footnotes,
+        not_found: [
+          ...LIVE.footnotes.not_found,
+          { at: "repos[.].branch", reason: "x" },
+          { at: "repos[../gone]", reason: "not a git repository" },
+        ],
+      },
+    };
+    const rows = call("liveRepos", unmeasured)
+      .find((n) => n.tag === "tr")
+      .slice(1)
+      .map((row) => row.find((n) => n.tag === "td").map((c) => c.textContent));
+    expect(rows).toEqual([
+      ["app", "not measured", "0123456", "-", "2", "1", "-"],
+      [
+        "../gone",
+        "not measured",
+        "not measured",
+        "not measured",
+        "not measured",
+        "not measured",
+        "not measured",
+      ],
+    ]);
+
+    const trail = call("liveTrail", LIVE);
+    // The newest session was not measured: not "no session".
+    expect(trail.text()).toContain(S.tiles.notMeasured);
+    expect(trail.text()).not.toContain(S.live.noSession);
+    expect(trail.text()).toContain("not imported: 1 new, 0 updated, 0 unverifiable");
+    expect(trail.text()).toContain("Sessions by basou verify status: verified 1");
+    expect(trail.text()).toContain("Units of work by basou review-gaps verdict: omission 4");
+    const unknown = call("liveTrail", {
+      ...LIVE,
+      integrity: { by_status: null, not_verified: null, sessions: null },
+      review_gaps: { by_verdict: null, gaps: null },
+      freshness: { newest_session_at: null, unimported: null },
+    });
+    expect(unknown.text()).toContain(S.live.unimportedNotMeasured);
+    expect(unknown.text()).toContain("Sessions by basou verify status: not measured");
+    expect(unknown.text()).toContain("Units of work by basou review-gaps verdict: not measured");
+    // A track's title is text, never markup.
+    expect(trail.find((n) => n.tag === "b")).toEqual([]);
+    expect(trail.text()).toContain("<b>open</b>");
+
+    const components = call("liveComponents", LIVE);
+    expect(components.find((n) => n.tag === "code").map((c) => c.textContent)).toEqual(["app"]);
+    expect(components.text()).toContain("ci, manifest");
+
+    const noBoard = call("liveFootnotes", LIVE, "no_board");
+    for (const s of [S.live.note, S.live.judged, S.unavailable.noBoard, S.footnotes.notMeasured]) {
+      expect(noBoard.text()).toContain(s);
+    }
+    expect(noBoard.text()).toContain(
+      "freshness.newest_session_at: a session.yaml could not be read",
+    );
+    expect(call("liveFootnotes", LIVE, null).text()).not.toContain(S.unavailable.noBoard);
+
+    // The period and effort are drawn as a record's are.
+    expect(call("effort", LIVE).find((n) => n.tag === "figure").length).toBeGreaterThan(0);
+  });
+
+  // Run the page's script as a browser would, with a fake DOM and a fake fetch
+  // that answers each URL from `responses`.
+  async function runPage(search: string, responses: Record<string, unknown>) {
+    const script = BOARD_HTML.slice(
+      BOARD_HTML.indexOf("<script>") + "<script>".length,
+      BOARD_HTML.indexOf("</script>"),
+    );
+    const byId: Record<string, Node> = {};
+    const fetched: string[] = [];
+    const document = {
+      createElement: (tag: string) => new Node(tag),
+      createElementNS: (_ns: string, tag: string) => new Node(tag),
+      createTextNode: (text: string) => Object.assign(new Node("#text"), { textContent: text }),
+      getElementById: (id: string) => {
+        byId[id] ??= new Node("div");
+        return byId[id];
+      },
+      documentElement: { lang: "" },
+      title: "",
+    };
+    const fetch = async (url: string) => {
+      fetched.push(url);
+      const body = responses[url];
+      return {
+        ok: body !== undefined,
+        status: body === undefined ? 404 : 200,
+        json: async () => body ?? { error: "Not found" },
+      };
+    };
+    new Function("document", "location", "fetch", script)(document, { search }, fetch);
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    // A page that never drew has no navigation at all.
+    const links = (byId.records?.find((n) => n.tag === "a") ?? []).map((a) => a.attrs.href);
+    return { fetched, byId, links, document };
+  }
+
+  const STRINGS = { language: "en", strings: boardPageStrings("en") };
+  const NO_RECORDS = {
+    ...STRINGS,
+    page: { status: "unavailable", why: "no_records", records: [] },
+  };
+  const LIVE_BODY = { ...STRINGS, live: LIVE };
+
+  it("measures on the spot when there is no board or no record to draw", async () => {
+    for (const why of ["no_board", "no_records"]) {
+      const page = await runPage("", {
+        "/api/board": { ...STRINGS, page: { status: "unavailable", why, records: [] } },
+        "/api/board/live": LIVE_BODY,
+      });
+      expect(page.fetched).toEqual(["/api/board", "/api/board/live"]);
+      const board = page.byId.board as Node;
+      expect(board.find((n) => n.tag === "h1").map((h) => h.textContent)).toEqual(["Board"]);
+      expect(board.text().includes(boardPageStrings("en").unavailable.noBoard)).toBe(
+        why === "no_board",
+      );
+      // Not asked for: there is no record to lead back to.
+      expect(page.links).toEqual([]);
+      expect((page.byId.status as Node).textContent).toBe("");
+    }
+  });
+
+  it("says why a record cannot be drawn, and links to the measurement on the spot", async () => {
+    const page = await runPage("", {
+      "/api/board": {
+        ...STRINGS,
+        page: { status: "unavailable", why: "records_unreadable", records: [] },
+      },
+      "/api/board/live": LIVE_BODY,
+    });
+    expect(page.fetched).toEqual(["/api/board"]);
+    expect((page.byId.status as Node).textContent).toBe(
+      boardPageStrings("en").unavailable.recordsUnreadable,
+    );
+    expect(page.links).toEqual(["/board?live=1"]);
+  });
+
+  it("measures when asked with ?live=1, leading back to the records only when there are some", async () => {
+    const alone = await runPage("?live=1", {
+      "/api/board/live": LIVE_BODY,
+      "/api/board": NO_RECORDS,
+    });
+    expect(alone.fetched).toEqual(["/api/board/live", "/api/board"]);
+    expect((alone.byId.board as Node).find((n) => n.tag === "h1").length).toBe(1);
+    expect(alone.links).toEqual([]);
+    const withRecords = await runPage("?live=1", {
+      "/api/board/live": LIVE_BODY,
+      "/api/board": {
+        ...STRINGS,
+        page: {
+          status: "unavailable",
+          why: "not_json",
+          records: [{ id: A_REC, at: "2026-10-01T00:00:00.000Z" }],
+        },
+      },
+    });
+    expect(withRecords.links).toEqual(["/board"]);
+    // A measurement that fails says so.
+    const failed = await runPage("?live=1", {});
+    expect(failed.fetched).toEqual(["/api/board/live"]);
+    expect((failed.byId.status as Node).textContent).toBe("Not found");
   });
 
   it("builds prose of text nodes, with only a span between backticks as a code element", () => {

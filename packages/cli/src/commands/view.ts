@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   assertBasouRootSafe,
+  type BoardLiveMeasurement,
   basouPaths,
   findErrorCode,
   loadPortfolioConfig,
@@ -22,7 +23,7 @@ import {
   type ViewServerHandle,
   type WorkspaceEntry,
 } from "../lib/view-server.js";
-import { DEFAULT_BOARD_PATH } from "./board.js";
+import { DEFAULT_BOARD_PATH, measureLiveBoard } from "./board.js";
 import type { ImportContext } from "./import.js";
 
 const DEFAULT_PORT = 4319;
@@ -234,6 +235,35 @@ async function buildSingleDeps(ctx: ViewContext, cwd: string): Promise<ViewServe
     nowProvider: nowProviderOf(ctx),
     ...(ctx.remoteUrlOf !== undefined ? { remoteUrlOf: ctx.remoteUrlOf } : {}),
     board: await viewBoardOf(repositoryRoot, paths),
+    boardLive: liveBoardOf(repositoryRoot, ctx),
+  };
+}
+
+// The board page's measurement of the workspace as it is now, for a workspace
+// with no record to draw (and on request for one with records). It writes
+// nothing, so unlike the records it needs no private anchor. Requests that
+// arrive while one is measuring share its result rather than measuring again.
+function liveBoardOf(root: string, ctx: ViewContext): () => Promise<BoardLiveMeasurement> {
+  return sharedWhileRunning(() =>
+    measureLiveBoard(root, {
+      ...(ctx.nowProvider !== undefined ? { nowProvider: ctx.nowProvider } : {}),
+      ...(ctx.claudeProjectsDir !== undefined ? { claudeProjectsDir: ctx.claudeProjectsDir } : {}),
+      ...(ctx.codexSessionsDir !== undefined ? { codexSessionsDir: ctx.codexSessionsDir } : {}),
+    }),
+  );
+}
+
+/**
+ * Share one run of `run` among the calls made while it runs: such a call gets
+ * that run's result, and a call after it settles starts another.
+ */
+export function sharedWhileRunning<T>(run: () => Promise<T>): () => Promise<T> {
+  let running: Promise<T> | null = null;
+  return () => {
+    running ??= run().finally(() => {
+      running = null;
+    });
+    return running;
   };
 }
 

@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stringify } from "yaml";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { measureEffort } from "./effort.js";
 
@@ -72,5 +73,99 @@ describe("measureEffort", () => {
     expect(effort.time_zone).toBe("Asia/Tokyo");
     expect(effort.commits).toEqual({ app: 1 });
     expect(notFound).toEqual([]);
+  });
+});
+
+describe("measureEffort with no declared start", () => {
+  const SES = (s: string): string => `ses_01HXABCDEF1234567890ABC${s}`;
+
+  // A session that started at `startedAt`, with no events.
+  async function placeStarted(id: string, startedAt: string): Promise<void> {
+    const dir = join(paths.sessions, id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "session.yaml"),
+      stringify({
+        schema_version: "0.1.0",
+        session: {
+          id,
+          label: "fixture",
+          task_id: null,
+          workspace_id: "ws_01HXABCDEF1234567890ABCDEF",
+          source: { kind: "terminal", version: "0.1.0" },
+          started_at: startedAt,
+          status: "completed",
+          working_directory: "/tmp/fixture",
+          invocation: { command: "echo", args: [], exit_code: 0 },
+          related_files: [],
+          events_log: "events.jsonl",
+        },
+      }),
+    );
+    await writeFile(join(dir, "events.jsonl"), "");
+  }
+
+  const undeclared = () => {
+    const { start: _declared, ...rest } = input("Asia/Tokyo");
+    return rest;
+  };
+
+  it("starts on the day the first session started, in the section's time zone", async () => {
+    await placeStarted(SES("S02"), "2026-09-25T00:00:00Z");
+    // 08:30 on 2026-09-21 in Tokyo, though 2026-09-20 in UTC.
+    await placeStarted(SES("S01"), "2026-09-20T23:30:00Z");
+    const { effort, notFound } = await measureEffort(undeclared());
+    expect(effort.start).toBe("2026-09-21");
+    expect(effort.elapsed_days).toBe(14);
+    expect(effort.daily?.map((d) => d.date)).toHaveLength(15);
+    expect(effort.daily?.[0]?.date).toBe("2026-09-21");
+    expect(notFound).toEqual([]);
+  });
+
+  it("starts today when there is no session", async () => {
+    const { effort, notFound } = await measureEffort(undeclared());
+    expect(effort.start).toBe("2026-10-05");
+    expect(effort.elapsed_days).toBe(0);
+    expect(effort.daily?.map((d) => d.date)).toEqual(["2026-10-05"]);
+    expect(notFound).toEqual([]);
+  });
+
+  it("starts today, and says so, when the sessions cannot be read", async () => {
+    await placeStarted(SES("S01"), "2026-09-20T00:00:00Z");
+    await writeFile(join(paths.sessions, SES("S01"), "session.yaml"), "session: [broken]\n");
+    const { effort, notFound } = await measureEffort(undeclared());
+    expect(effort.start).toBe("2026-10-05");
+    expect(effort.active_ms).toEqual({ union: null, claude: null, codex: null });
+    expect(notFound.map((n) => n.at)).toEqual([
+      "effort.start",
+      "effort.active_ms",
+      "effort.output_tokens",
+    ]);
+    expect(notFound[0]?.reason).toBe(
+      "the first session is not known, so the days are counted from today",
+    );
+  });
+
+  it("names today in UTC as its start when this host's zone has no name, measuring nothing", async () => {
+    await placeStarted(SES("S01"), "2026-09-20T00:00:00Z");
+    hostZoneIs(undefined);
+    const { start: _declared, timeZone: _zone, ...rest } = input("Asia/Tokyo");
+    const { effort, notFound } = await measureEffort(rest);
+    expect(effort.start).toBe("2026-10-05");
+    expect(effort.daily).toBeNull();
+    expect(notFound.map((n) => n.at)).toEqual(["effort"]);
+  });
+
+  it("never starts after today, whatever a session's clock said", async () => {
+    await placeStarted(SES("S01"), "2026-12-01T00:00:00Z");
+    const { effort, notFound } = await measureEffort(undeclared());
+    expect(effort.start).toBe("2026-10-05");
+    expect(effort.daily?.map((d) => d.date)).toEqual(["2026-10-05"]);
+    expect(notFound).toEqual([]);
+  });
+
+  it("keeps a declared start, before or after the first session", async () => {
+    await placeStarted(SES("S01"), "2026-09-20T00:00:00Z");
+    expect((await measureEffort(input("Asia/Tokyo"))).effort.start).toBe("2026-10-01");
   });
 });

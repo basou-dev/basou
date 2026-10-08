@@ -3,6 +3,8 @@ import type { AddressInfo } from "node:net";
 import { basename, join, resolve } from "node:path";
 import {
   type BasouPaths,
+  type BoardLiveMeasurement,
+  boardLivePage,
   boardPage,
   boardPageStrings,
   boardPageUnavailable,
@@ -88,6 +90,11 @@ export type ViewServerDeps = {
   remoteUrlOf?: RemoteUrlResolver;
   /** The board the board page shows: single mode only (the page is not served otherwise). */
   board?: ViewBoard;
+  /**
+   * Measure the workspace as it is now for the board page, with no record:
+   * single mode only, like the board. It writes nothing.
+   */
+  boardLive?: () => Promise<BoardLiveMeasurement>;
 };
 
 /** A running view server, with the means to stop it. */
@@ -236,6 +243,7 @@ async function handleGet(
         deps.nowProvider,
         remoteUrlOf(deps),
         boardOf(deps),
+        boardLiveOf(deps),
       ))
     ) {
       sendError(res, 404, "Not found");
@@ -252,6 +260,7 @@ async function handleGet(
         deps.nowProvider,
         remoteUrlOf(deps),
         boardOf(deps),
+        boardLiveOf(deps),
       ))
     ) {
       sendError(res, 404, "Not found");
@@ -264,6 +273,11 @@ async function handleGet(
 /** The board the board routes serve: none outside single mode. */
 function boardOf(deps: ViewServerDeps): ViewBoard | undefined {
   return deps.mode === "single" ? deps.board : undefined;
+}
+
+/** The measurement the live board route serves: none outside single mode. */
+function boardLiveOf(deps: ViewServerDeps): (() => Promise<BoardLiveMeasurement>) | undefined {
+  return deps.mode === "single" ? deps.boardLive : undefined;
 }
 
 /** The configured live remote-URL resolver, or core's default. */
@@ -308,7 +322,13 @@ async function handleWorkspaceGet(
   nowProvider: () => Date,
   resolveRemoteUrl: RemoteUrlResolver,
   board: ViewBoard | undefined,
+  live: (() => Promise<BoardLiveMeasurement>) | undefined,
 ): Promise<boolean> {
+  // Before the records' route, which would take "live" for a record's id.
+  if (live !== undefined && sub === "board/live") {
+    sendJson(res, 200, await boardLiveView(ws, live));
+    return true;
+  }
   if (board !== undefined) {
     if (sub === "board") {
       sendJson(res, 200, await boardView(ws, board, undefined));
@@ -468,6 +488,22 @@ async function boardView(
 }
 
 /**
+ * What the board page draws of the workspace measured now, with no record and
+ * nothing judged, with its fixed strings in the workspace's language.
+ */
+async function boardLiveView(
+  ws: WorkspaceEntry,
+  live: () => Promise<BoardLiveMeasurement>,
+): Promise<Record<string, unknown>> {
+  const language = await resolveViewLanguageFromPaths(ws.paths);
+  return {
+    language,
+    strings: boardPageStrings(language),
+    live: boardLivePage(ws.label, await live()),
+  };
+}
+
+/**
  * Aggregate the per-workspace "current position" for the portfolio landing.
  * Read-only: it runs NO import, so a stale capture is shown as stale (run a
  * refresh to re-import). Each card carries STRUCTURED FACTS only (latest
@@ -481,9 +517,9 @@ async function portfolio(deps: ViewServerDeps): Promise<Record<string, unknown>>
   const workspaces = await Promise.all(deps.workspaces.map((ws) => portfolioCard(ws, nowIso)));
   // Each staleness probe runs a dry-run import, which swaps the process-global
   // console to capture output (see captureImportJson). That swap is NOT
-  // reentrant, so the probes must run ONE AT A TIME — running them inside the
-  // parallel map above let them clobber each other's capture and most failed.
-  // The summaries above are pure reads and stay parallel; only this loop serializes.
+  // reentrant: captures run one at a time whoever starts them (the board page
+  // and the imports included), and this loop also runs the cards' probes in
+  // turn. The summaries above are pure reads and stay parallel.
   for (let i = 0; i < deps.workspaces.length; i++) {
     const card = workspaces[i];
     const ws = deps.workspaces[i];
