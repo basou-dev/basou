@@ -1,5 +1,7 @@
 import { dirname, join } from "node:path";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "../approval/approval-store.js";
+import { todayIn } from "../board/effort.js";
+import type { BoardGlance } from "../board/glance.js";
 import { countOpenDecisionGaps, type DecisionForGapCount } from "../decision-gaps/index.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { displayPath } from "../lib/display-path.js";
@@ -71,6 +73,12 @@ export type OrientationRendererInput = {
    * store and other hosts still render. An absent root path is silently empty.
    */
   onHostUnavailable?: (host: string, error: unknown) => void;
+  /**
+   * The workspace's progress board, as the CLI glanced at it: a line in "where
+   * am I now" says when it was last recorded and how to update it. Omitted or
+   * null = no board, and no line.
+   */
+  board?: BoardGlance | null;
 };
 
 export type OrientationRendererResult = {
@@ -772,6 +780,7 @@ export async function renderOrientation(
       staleness: input.staleness ?? null,
       verbose: input.verbose === true,
       language,
+      board: input.board ?? null,
     }),
     sessionCount: summary.sessionCount,
     pendingApprovalsCount: summary.pendingApprovals.length,
@@ -792,6 +801,7 @@ function formatOrientationBody(
     } | null;
     verbose: boolean;
     language: ViewLanguage;
+    board: BoardGlance | null;
   },
 ): string {
   const t = viewStrings(opts.language);
@@ -900,6 +910,17 @@ function formatOrientationBody(
     }
   } else {
     lines.push(`- ${t.common.recentFilesLabel}: (none recorded)`);
+  }
+  if (opts.board !== null) {
+    const at = opts.board.lastRecordAt;
+    const last =
+      at === null || at === undefined
+        ? at
+        : {
+            date: todayIn(undefined, new Date(at)) ?? at.slice(0, 10),
+            age: t.relativeAge(at, now),
+          };
+    lines.push(`- ${t.orientation.boardLine(last, opts.board.axisVersion)}`);
   }
   lines.push("");
 

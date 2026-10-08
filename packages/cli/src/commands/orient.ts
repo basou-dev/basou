@@ -1,8 +1,12 @@
+import { join } from "node:path";
 import {
   assertBasouRootSafe,
+  type BoardGlance,
   basouPaths,
   type FederatedRoot,
   findErrorCode,
+  glanceBoard,
+  readManifest,
   renderOrientation,
   writeMarkdownFile,
 } from "@basou/core";
@@ -21,6 +25,7 @@ import {
 import { loadHostsConfig } from "../lib/hosts-config.js";
 import { probeStaleness, refreshAll } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
+import { DEFAULT_BOARD_PATH } from "./board.js";
 import type { ImportContext } from "./import.js";
 
 export type OrientOptions = { verbose?: boolean; quiet?: boolean; refresh?: boolean };
@@ -199,6 +204,7 @@ export async function renderOrientationForRoot(
     paths,
     nowIso,
     staleness,
+    board: await glanceDefaultBoard(repositoryRoot, paths),
     verbose: options.verbose === true,
     federatedRoots,
     onWarning: (w, sid) => printReplayWarning(w, sid),
@@ -222,6 +228,24 @@ export async function renderOrientationForRoot(
     pendingApprovalsCount: result.pendingApprovalsCount,
     suspectCount: result.suspectCount,
   };
+}
+
+// The workspace's default board, glanced at for one line of the position: the
+// board.yaml `basou board` reads by default, which it reads only when the
+// manifest declares the workspace's own repo private. Null when there is
+// none, or the manifest cannot be read: the position never fails on a board,
+// which an experimental command wrote.
+async function glanceDefaultBoard(
+  root: string,
+  paths: ReturnType<typeof basouPaths>,
+): Promise<BoardGlance | null> {
+  try {
+    const own = (await readManifest(paths)).repos?.find((repo) => repo.path === ".");
+    if (own?.visibility !== "private") return null;
+  } catch {
+    return null;
+  }
+  return glanceBoard(join(root, DEFAULT_BOARD_PATH));
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

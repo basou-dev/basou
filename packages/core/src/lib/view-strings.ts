@@ -165,6 +165,16 @@ export type ViewStrings = {
     toolHuman: string;
     toolImport: string;
     toolUnknown: string;
+    /**
+     * The line saying the workspace keeps a progress board: when its last
+     * record was written (null when there is none, undefined when the
+     * records cannot be read), the axis's version (null when it cannot be
+     * read), and how to update it.
+     */
+    boardLine: (
+      last: { date: string; age: string } | null | undefined,
+      axisVersion: number | null,
+    ) => string;
   };
   handoff: {
     headingCurrentState: string;
@@ -326,6 +336,16 @@ const EN: ViewStrings = {
     toolHuman: "manual note",
     toolImport: "another workspace",
     toolUnknown: "unknown",
+    boardLine: (last, axisVersion) => {
+      const record =
+        last === undefined
+          ? "its records cannot be read"
+          : last === null
+            ? "no record yet"
+            : `last record ${last.date} (${last.age})`;
+      const axis = axisVersion === null ? "axis version unknown" : `axis v${axisVersion}`;
+      return `Progress board: ${record}, ${axis}. To update it, follow \`basou board guide\`.`;
+    },
   },
   handoff: {
     headingCurrentState: "## Current state",
@@ -449,6 +469,16 @@ const JA: ViewStrings = {
     toolHuman: "手動メモ",
     toolImport: "他ワークスペース",
     toolUnknown: "不明",
+    boardLine: (last, axisVersion) => {
+      const record =
+        last === undefined
+          ? "記録が読めない"
+          : last === null
+            ? "記録なし"
+            : `最後の記録 ${last.date}（${last.age}）`;
+      const axis = axisVersion === null ? "軸の版は不明" : `軸 v${axisVersion}`;
+      return `進捗盤: ${record}・${axis}。更新は \`basou board guide\` の手順で。`;
+    },
   },
   handoff: {
     headingCurrentState: "## 現在の状態",

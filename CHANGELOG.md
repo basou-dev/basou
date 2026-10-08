@@ -7,6 +7,19 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- **`basou orient` says when the workspace keeps a progress board, and how
+  to update it.** When the manifest declares the workspace's own repo
+  private and `board/board.yaml` is there, the position's "where you are
+  now" ends with one line: when the last record was written (from its
+  name) and how long ago, or that there is none yet; the axis's version
+  the declaration gives; and to follow `basou board guide`. The
+  SessionStart hooks hand the same position to a Claude Code or Codex
+  session, so an agent learns of the board, and where its steps are, with
+  no skill of its own. Only the records' names and the declaration's
+  `axis.version` are read: a board that cannot be read is said to be so
+  (the records cannot be read, the axis version is unknown), and never
+  fails the position, changes an exit code or the hooks' output beyond
+  that line. A workspace with no board gets no line.
 - **`basou board init` (experimental) prints a board.yaml to start a board
   from.** It is of the newest `board_version`, in the language the manifest
   declares for the workspace's own repo: a title from the workspace's name,

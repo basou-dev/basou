@@ -2556,3 +2556,67 @@ describe("orientation: an out-of-root file name that carries line breaks", () =>
     expect(body).not.toContain("\u001b");
   });
 });
+
+describe("orientation: the workspace's progress board", () => {
+  const LINE = /^- Progress board: /m;
+
+  it("says nothing of a board when there is none", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, { id: SES("S01"), status: "completed" });
+    const omitted = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(omitted.body).not.toMatch(LINE);
+    const none = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO, board: null });
+    expect(none.body).toBe(omitted.body);
+  });
+
+  it("says when the board was last recorded, its axis, and to follow the guide, in where you are now", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, { id: SES("S01"), status: "completed" });
+    const at = new Date(Date.parse(FIXED_NOW_ISO) - 3 * 86_400_000).toISOString();
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      board: { lastRecordAt: at, axisVersion: 2 },
+    });
+    const where = result.body.slice(
+      result.body.indexOf("## Where you are now"),
+      result.body.indexOf("## Recent direction"),
+    );
+    const day = new Intl.DateTimeFormat("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(at));
+    expect(where).toContain(
+      `- Progress board: last record ${day} (3d ago), axis v2. To update it, follow \`basou board guide\`.\n`,
+    );
+  });
+
+  it("says when there is no record yet, when the records cannot be read, and when the axis is not known", async () => {
+    const paths = await setupPaths();
+    const body = async (board: {
+      lastRecordAt: string | null | undefined;
+      axisVersion: number | null;
+    }) => (await renderOrientation({ paths, nowIso: FIXED_NOW_ISO, board })).body;
+    expect(await body({ lastRecordAt: null, axisVersion: 1 })).toContain(
+      "- Progress board: no record yet, axis v1. To update it, follow `basou board guide`.",
+    );
+    expect(await body({ lastRecordAt: undefined, axisVersion: null })).toContain(
+      "- Progress board: its records cannot be read, axis version unknown. To update it, follow `basou board guide`.",
+    );
+  });
+
+  it("writes the line in the anchor's language", async () => {
+    const paths = await setupPaths();
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      language: "ja",
+      board: { lastRecordAt: null, axisVersion: 3 },
+    });
+    const line = result.body.split("\n").find((l) => l.includes("basou board guide")) ?? "";
+    expect(line.startsWith("- ")).toBe(true);
+    expect(line).not.toContain("Progress board");
+    expect(line).toContain("v3");
+  });
+});
