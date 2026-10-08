@@ -980,6 +980,9 @@ export type BoardPageStrings = {
     newestSession: string;
     noSession: string;
     unimported: string;
+    unimportedNotMeasured: string;
+    byStatus: string;
+    byVerdict: string;
     tracks: string;
     noTracks: string;
     components: string;
@@ -1139,6 +1142,9 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     newestSession: "Newest session",
     noSession: "no session",
     unimported: "not imported: {new} new, {updated} updated, {unverifiable} unverifiable",
+    unimportedNotMeasured: "sessions not imported: not measured",
+    byStatus: "Sessions by basou verify status: {list}",
+    byVerdict: "Units of work by basou review-gaps verdict: {list}",
     tracks: "Open tracks",
     noTracks: "No open track.",
     components: "Components",
@@ -1298,6 +1304,9 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     newestSession: "最新の session",
     noSession: "session なし",
     unimported: "未取り込み: 新規 {new}・更新 {updated}・確かめられない {unverifiable}",
+    unimportedNotMeasured: "未取り込み: 測れなかった",
+    byStatus: "basou verify の状態ごとの session: {list}",
+    byVerdict: "basou review-gaps の判定ごとの作業の単位: {list}",
     tracks: "未完トラック",
     noTracks: "未完トラックはない。",
     components: "構成要素",

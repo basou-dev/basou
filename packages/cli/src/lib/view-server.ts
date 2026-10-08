@@ -517,9 +517,9 @@ async function portfolio(deps: ViewServerDeps): Promise<Record<string, unknown>>
   const workspaces = await Promise.all(deps.workspaces.map((ws) => portfolioCard(ws, nowIso)));
   // Each staleness probe runs a dry-run import, which swaps the process-global
   // console to capture output (see captureImportJson). That swap is NOT
-  // reentrant, so the probes must run ONE AT A TIME — running them inside the
-  // parallel map above let them clobber each other's capture and most failed.
-  // The summaries above are pure reads and stay parallel; only this loop serializes.
+  // reentrant: captures run one at a time whoever starts them (the board page
+  // and the imports included), and this loop also runs the cards' probes in
+  // turn. The summaries above are pure reads and stay parallel.
   for (let i = 0; i < deps.workspaces.length; i++) {
     const card = workspaces[i];
     const ws = deps.workspaces[i];

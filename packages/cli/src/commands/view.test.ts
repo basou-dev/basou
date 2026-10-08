@@ -1723,6 +1723,7 @@ describe("basou view: the board page", () => {
 
   it("draws a board measured on the spot: what basou measured, nothing judged", () => {
     const names = [
+      "missingIn",
       "liveTile",
       "liveHeading",
       "liveRepos",
@@ -1743,13 +1744,64 @@ describe("basou view: the board page", () => {
 
     const repos = call("liveRepos", LIVE);
     const cells = repos.find((n) => n.tag === "td").map((c) => c.textContent);
+    // Nulls that mean so: a detached HEAD, no origin/main, a last commit unread.
     expect(cells).toEqual(["app", "-", "0123456", "-", "2", "1", "-"]);
+    // Nulls the measurement could not measure are said to be.
+    const unmeasured = {
+      ...LIVE,
+      repos: [
+        LIVE.repos[0],
+        {
+          ...LIVE.repos[0],
+          path: "../gone",
+          name: null,
+          head: null,
+          commits: null,
+          uncommitted: null,
+        },
+      ],
+      footnotes: {
+        ...LIVE.footnotes,
+        not_found: [
+          ...LIVE.footnotes.not_found,
+          { at: "repos[.].branch", reason: "x" },
+          { at: "repos[../gone]", reason: "not a git repository" },
+        ],
+      },
+    };
+    const rows = call("liveRepos", unmeasured)
+      .find((n) => n.tag === "tr")
+      .slice(1)
+      .map((row) => row.find((n) => n.tag === "td").map((c) => c.textContent));
+    expect(rows).toEqual([
+      ["app", "not measured", "0123456", "-", "2", "1", "-"],
+      [
+        "../gone",
+        "not measured",
+        "not measured",
+        "not measured",
+        "not measured",
+        "not measured",
+        "not measured",
+      ],
+    ]);
 
     const trail = call("liveTrail", LIVE);
     // The newest session was not measured: not "no session".
     expect(trail.text()).toContain(S.tiles.notMeasured);
     expect(trail.text()).not.toContain(S.live.noSession);
     expect(trail.text()).toContain("not imported: 1 new, 0 updated, 0 unverifiable");
+    expect(trail.text()).toContain("Sessions by basou verify status: verified 1");
+    expect(trail.text()).toContain("Units of work by basou review-gaps verdict: omission 4");
+    const unknown = call("liveTrail", {
+      ...LIVE,
+      integrity: { by_status: null, not_verified: null, sessions: null },
+      review_gaps: { by_verdict: null, gaps: null },
+      freshness: { newest_session_at: null, unimported: null },
+    });
+    expect(unknown.text()).toContain(S.live.unimportedNotMeasured);
+    expect(unknown.text()).toContain("Sessions by basou verify status: not measured");
+    expect(unknown.text()).toContain("Units of work by basou review-gaps verdict: not measured");
     // A track's title is text, never markup.
     expect(trail.find((n) => n.tag === "b")).toEqual([]);
     expect(trail.text()).toContain("<b>open</b>");
@@ -1771,14 +1823,106 @@ describe("basou view: the board page", () => {
     expect(call("effort", LIVE).find((n) => n.tag === "figure").length).toBeGreaterThan(0);
   });
 
-  it("measures the workspace when there is no board or no record, and links to it otherwise", () => {
-    const draw = lift("draw");
-    expect(draw).toContain("page.why === 'no_board' || page.why === 'no_records'");
-    expect(draw).toContain("loadLive(page.why);");
-    expect(lift("drawLive")).toContain(
-      "if (why === null) nav.appendChild(el('a', { href: '/board', text: S.live.toRecords }));",
+  // Run the page's script as a browser would, with a fake DOM and a fake fetch
+  // that answers each URL from `responses`.
+  async function runPage(search: string, responses: Record<string, unknown>) {
+    const script = BOARD_HTML.slice(
+      BOARD_HTML.indexOf("<script>") + "<script>".length,
+      BOARD_HTML.indexOf("</script>"),
     );
-    expect(lift("records")).toContain("href: '/board?live=1'");
+    const byId: Record<string, Node> = {};
+    const fetched: string[] = [];
+    const document = {
+      createElement: (tag: string) => new Node(tag),
+      createElementNS: (_ns: string, tag: string) => new Node(tag),
+      createTextNode: (text: string) => Object.assign(new Node("#text"), { textContent: text }),
+      getElementById: (id: string) => {
+        byId[id] ??= new Node("div");
+        return byId[id];
+      },
+      documentElement: { lang: "" },
+      title: "",
+    };
+    const fetch = async (url: string) => {
+      fetched.push(url);
+      const body = responses[url];
+      return {
+        ok: body !== undefined,
+        status: body === undefined ? 404 : 200,
+        json: async () => body ?? { error: "Not found" },
+      };
+    };
+    new Function("document", "location", "fetch", script)(document, { search }, fetch);
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    // A page that never drew has no navigation at all.
+    const links = (byId.records?.find((n) => n.tag === "a") ?? []).map((a) => a.attrs.href);
+    return { fetched, byId, links, document };
+  }
+
+  const STRINGS = { language: "en", strings: boardPageStrings("en") };
+  const NO_RECORDS = {
+    ...STRINGS,
+    page: { status: "unavailable", why: "no_records", records: [] },
+  };
+  const LIVE_BODY = { ...STRINGS, live: LIVE };
+
+  it("measures on the spot when there is no board or no record to draw", async () => {
+    for (const why of ["no_board", "no_records"]) {
+      const page = await runPage("", {
+        "/api/board": { ...STRINGS, page: { status: "unavailable", why, records: [] } },
+        "/api/board/live": LIVE_BODY,
+      });
+      expect(page.fetched).toEqual(["/api/board", "/api/board/live"]);
+      const board = page.byId.board as Node;
+      expect(board.find((n) => n.tag === "h1").map((h) => h.textContent)).toEqual(["Board"]);
+      expect(board.text().includes(boardPageStrings("en").unavailable.noBoard)).toBe(
+        why === "no_board",
+      );
+      // Not asked for: there is no record to lead back to.
+      expect(page.links).toEqual([]);
+      expect((page.byId.status as Node).textContent).toBe("");
+    }
+  });
+
+  it("says why a record cannot be drawn, and links to the measurement on the spot", async () => {
+    const page = await runPage("", {
+      "/api/board": {
+        ...STRINGS,
+        page: { status: "unavailable", why: "records_unreadable", records: [] },
+      },
+      "/api/board/live": LIVE_BODY,
+    });
+    expect(page.fetched).toEqual(["/api/board"]);
+    expect((page.byId.status as Node).textContent).toBe(
+      boardPageStrings("en").unavailable.recordsUnreadable,
+    );
+    expect(page.links).toEqual(["/board?live=1"]);
+  });
+
+  it("measures when asked with ?live=1, leading back to the records only when there are some", async () => {
+    const alone = await runPage("?live=1", {
+      "/api/board/live": LIVE_BODY,
+      "/api/board": NO_RECORDS,
+    });
+    expect(alone.fetched).toEqual(["/api/board/live", "/api/board"]);
+    expect((alone.byId.board as Node).find((n) => n.tag === "h1").length).toBe(1);
+    expect(alone.links).toEqual([]);
+    const withRecords = await runPage("?live=1", {
+      "/api/board/live": LIVE_BODY,
+      "/api/board": {
+        ...STRINGS,
+        page: {
+          status: "unavailable",
+          why: "not_json",
+          records: [{ id: A_REC, at: "2026-10-01T00:00:00.000Z" }],
+        },
+      },
+    });
+    expect(withRecords.links).toEqual(["/board"]);
+    // A measurement that fails says so.
+    const failed = await runPage("?live=1", {});
+    expect(failed.fetched).toEqual(["/api/board/live"]);
+    expect((failed.byId.status as Node).textContent).toBe("Not found");
   });
 
   it("builds prose of text nodes, with only a span between backticks as a code element", () => {

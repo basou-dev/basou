@@ -740,18 +740,30 @@ export const BOARD_HTML = `<!doctype html>
       el('div', { class: 'stamp' }, [fill(S.live.measuredAt, { at: when(h.measured_at) }) + '  /  ' + measured + '  ', again])
     ]);
   }
+  // Whether the measurement says why the value at a place was not measured.
+  function missingIn(l) {
+    return function (at) { return l.footnotes.not_found.some(function (n) { return n.at === at; }); };
+  }
   function liveRepos(l) {
+    var missing = missingIn(l);
     var labels = [S.live.repo, S.live.branch, S.live.head, S.live.lastCommit, S.live.commits, S.live.uncommitted, S.live.behindMain];
     var head = el('tr', null, labels.map(function (label, i) { return el('th', { class: i >= 4 ? 'n' : '', text: label }); }));
     var rows = l.repos.map(function (r) {
+      var at = 'repos[' + r.path + ']';
+      // A null the measurement says it could not measure, or one that means
+      // so (a detached HEAD, no commit yet, no origin/main), drawn as '-'.
+      var value = function (field, v, show) {
+        if (v !== null) return show(v);
+        return missing(at) || missing(at + '.' + field) ? S.tiles.notMeasured : '-';
+      };
       return el('tr', null, [
         el('td', { text: r.name === null ? r.path : r.name }),
-        el('td', { text: r.branch === null ? '-' : r.branch }),
-        el('td', { text: r.head === null ? '-' : r.head.slice(0, 7) }),
-        el('td', { text: r.last_commit === null ? '-' : when(r.last_commit) }),
+        el('td', { text: value('branch', r.branch, String) }),
+        el('td', { text: value('head', r.head, function (h) { return h.slice(0, 7); }) }),
+        el('td', { text: value('last_commit', r.last_commit, when) }),
         el('td', { class: 'n', text: num(r.commits) }),
         el('td', { class: 'n', text: num(r.uncommitted) }),
-        el('td', { class: 'n', text: r.behind_main === null ? '-' : num(r.behind_main) })
+        el('td', { class: 'n', text: value('behind_main', r.behind_main, num) })
       ]);
     });
     return section(S.live.repos, false, [el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [head].concat(rows))])]);
@@ -760,12 +772,16 @@ export const BOARD_HTML = `<!doctype html>
     var t = l.trail;
     var i = l.integrity;
     var f = l.freshness;
-    var missing = function (at) { return l.footnotes.not_found.some(function (n) { return n.at === at; }); };
+    var missing = missingIn(l);
     var newest = f.newest_session_at !== null ? when(f.newest_session_at)
       : missing('freshness.newest_session_at') ? S.tiles.notMeasured : S.live.noSession;
-    var unimported = f.unimported === null ? null : fill(S.live.unimported, {
+    var unimported = f.unimported === null ? S.live.unimportedNotMeasured : fill(S.live.unimported, {
       new: f.unimported.new, updated: f.unimported.updated, unverifiable: f.unimported.unverifiable
     });
+    var counts = function (byKey) {
+      if (byKey === null) return S.tiles.notMeasured;
+      return Object.keys(byKey).map(function (k) { return k + ' ' + num(byKey[k]); }).join('  /  ');
+    };
     var tiles = el('div', { class: 'tiles' }, [
       liveTile(S.live.decisions, num(t.decisions_live), t.decisions_all === null ? null : fill(S.live.decisionsAll, { n: num(t.decisions_all) })),
       liveTile(S.tiles.openTracks, t.tracks_open === null ? S.tiles.notMeasured : num(t.tracks_open.length), null),
@@ -778,7 +794,11 @@ export const BOARD_HTML = `<!doctype html>
       : el('ul', null, t.tracks_open.map(function (tr) {
           return el('li', null, [el('span', { class: 'muted', text: tr.id + '  ' }), tr.title]);
         }));
-    return section(S.live.trail, false, [tiles, el('h3', { text: S.live.tracks }), tracks]);
+    var breakdown = el('div', { class: 'muted' }, [
+      el('div', { text: fill(S.live.byStatus, { list: counts(i.by_status) }) }),
+      el('div', { text: fill(S.live.byVerdict, { list: counts(l.review_gaps.by_verdict) }) })
+    ]);
+    return section(S.live.trail, false, [tiles, breakdown, el('h3', { text: S.live.tracks }), tracks]);
   }
   function liveComponents(l) {
     var c = l.components;
@@ -802,14 +822,22 @@ export const BOARD_HTML = `<!doctype html>
     items.push(el('li', { text: fill(S.footnotes.measuredWith, { basou: f.measured_with.basou, build: build }) }));
     return section(S.sections.footnotes, false, [el('ul', { class: 'foot' }, items)]);
   }
+  var liveDrawn = 0;
   function drawLive(d, why) {
     S = d.strings;
     lang = d.language;
     document.documentElement.lang = lang;
     document.title = S.pageTitle;
+    var drawn = ++liveDrawn;
     var nav = $('records');
     clear(nav);
-    if (why === null) nav.appendChild(el('a', { href: '/board', text: S.live.toRecords }));
+    // Asked for with ?live=1: lead back to the records, when there are any.
+    if (why === null) {
+      getJson('/api/board').then(function (b) {
+        var list = b && b.page && b.page.records ? b.page.records : [];
+        if (drawn === liveDrawn && list.length > 0) nav.appendChild(el('a', { href: '/board', text: S.live.toRecords }));
+      }).catch(function () {});
+    }
     var root = $('board');
     clear(root);
     setStatus('', false);

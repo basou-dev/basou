@@ -156,6 +156,14 @@ describe("measureEffort with no declared start", () => {
     expect(notFound.map((n) => n.at)).toEqual(["effort"]);
   });
 
+  it("never starts after today, whatever a session's clock said", async () => {
+    await placeStarted(SES("S01"), "2026-12-01T00:00:00Z");
+    const { effort, notFound } = await measureEffort(undeclared());
+    expect(effort.start).toBe("2026-10-05");
+    expect(effort.daily?.map((d) => d.date)).toEqual(["2026-10-05"]);
+    expect(notFound).toEqual([]);
+  });
+
   it("keeps a declared start, before or after the first session", async () => {
     await placeStarted(SES("S01"), "2026-09-20T00:00:00Z");
     expect((await measureEffort(input("Asia/Tokyo"))).effort.start).toBe("2026-10-01");

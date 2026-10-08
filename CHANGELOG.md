@@ -26,6 +26,18 @@ All notable changes to **basou** are recorded here. The project follows
   portfolio mode. Like every page of `basou view`, it is a local UI and not
   an API.
 
+### Fixed
+
+- **`basou view` no longer lets two imports, or dry runs of one, spoil each
+  other.** An import the view runs, and the dry run that counts the sessions
+  a refresh would import for a portfolio card, capture the console the
+  import writes to, which only one can do at a time. Two at once (the
+  portfolio opened in two tabs, or while a refresh or import runs) could
+  leave a card saying its freshness could not be checked, a refresh failing
+  with `Import produced no parseable result`, or the import's JSON result
+  printed by the view. Every capture now waits its turn, the board page's
+  measurement included.
+
 ### Internal
 
 - **`@basou/core` measures a workspace with no board declared.**
@@ -33,8 +45,10 @@ All notable changes to **basou** are recorded here. The project follows
   need nothing from a declaration, and `boardLivePage` lays the result out for
   the board page. The effort section's start may be left out: the days then
   start on the day of the first session, or today when there is none or the
-  sessions cannot be read (which is said under `not_found`). A declared start
-  is measured as before.
+  sessions cannot be read (which is said under `not_found`). With no time zone
+  declared and none named for this host, the effort is not measured, as
+  before, and such a start is only a label: today in UTC. A declared start is
+  measured as before.
 
 ## 0.66.0 — 2026-10-08
 

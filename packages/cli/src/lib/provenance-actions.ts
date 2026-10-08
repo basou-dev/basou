@@ -100,13 +100,27 @@ export type RefreshActionOptions = {
   dryRun?: boolean;
 };
 
+// The capture swaps the process-global console, so two at once take each
+// other's output and the one that finishes last puts back the other's
+// stand-in. Captures therefore run one at a time, in the order they are asked
+// for, whoever asks: a dry run for a portfolio card or the board page, or an
+// import or refresh the view runs.
+let capturing: Promise<unknown> = Promise.resolve();
+
 /**
  * Run `fn` (an import command invoked with `json: true`) while capturing its
  * console output, then return the single machine-readable JSON result line.
  * The import commands print their result as one JSON object on stdout; that
  * line is the result contract. `console` is always restored, even on throw.
+ * Captures in this process run one at a time.
  */
-async function captureImportJson(fn: () => Promise<void>): Promise<Record<string, unknown>> {
+function captureImportJson(fn: () => Promise<void>): Promise<Record<string, unknown>> {
+  const turn = capturing.then(() => captureNow(fn));
+  capturing = turn.catch(() => undefined);
+  return turn;
+}
+
+async function captureNow(fn: () => Promise<void>): Promise<Record<string, unknown>> {
   const stdout: string[] = [];
   const originalLog = console.log;
   const originalError = console.error;
@@ -377,9 +391,9 @@ export type StalenessProbe = {
  * Returns `null` if the probe could not run (the caller renders "can't confirm"
  * rather than a false "current").
  *
- * NOTE: the import capture swaps the process-global console and is NOT
- * reentrant, so callers must never run two probes concurrently (e.g. the
- * portfolio runs them serially).
+ * The import capture swaps the process-global console, so probes, like every
+ * capture, run one at a time (see captureImportJson): callers may start them
+ * at once.
  */
 export async function probeStaleness(args: {
   ctx: ImportContext;

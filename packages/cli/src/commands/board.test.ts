@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -7,6 +8,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -1329,6 +1331,91 @@ describe("basou board measure and record against the previous record", () => {
 });
 
 describe("measureLiveBoard: the board page's measurement with no board", () => {
+  // A Claude Code transcript of the workspace that was never imported, beside
+  // it where ctx() points the dry run of an import.
+  async function neverImported(repo: string): Promise<void> {
+    const projectDir = join(ctx(repo).claudeProjectsDir, repo.replace(/[^a-zA-Z0-9]/g, "-"));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "sess-1.jsonl"),
+      [
+        {
+          type: "user",
+          timestamp: "2026-10-01T00:00:00.000Z",
+          cwd: repo,
+          sessionId: "sess-1",
+          message: { role: "user", content: [{ type: "text", text: "go" }] },
+        },
+        {
+          type: "assistant",
+          timestamp: "2026-10-01T00:00:01.000Z",
+          cwd: repo,
+          message: { content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }] },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n"),
+    );
+  }
+
+  // Every path under a directory with, for a file, its size, modification
+  // time and content.
+  async function snapshot(dir: string): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        out[path] = "dir";
+        Object.assign(out, await snapshot(path));
+      } else {
+        const s = await stat(path, { bigint: true });
+        const sha = createHash("sha256")
+          .update(await readFile(path))
+          .digest("hex");
+        out[path] = `${s.size}:${s.mtimeNs}:${sha}`;
+      }
+    }
+    return out;
+  }
+
+  it("writes nothing, the dry run of an import included", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await neverImported(repo);
+    const before = await snapshot(repo);
+    const m = await measureLiveBoard(repo, ctx(repo));
+    expect(m.freshness.unimported).toEqual({ new: 1, updated: 0, unverifiable: 0 });
+    expect(m.freshness.newest_session_at).toBeNull();
+    expect(await snapshot(repo)).toEqual(before);
+  });
+
+  it("counts the same when dry runs of an import are started at once", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await neverImported(repo);
+    const context = ctx(repo);
+    const args = {
+      ctx: {
+        cwd: repo,
+        claudeProjectsDir: context.claudeProjectsDir,
+        codexSessionsDir: context.codexSessionsDir,
+      },
+      paths: basouPaths(repo),
+      nowIso: NOW.toISOString(),
+    };
+    const log = console.log;
+    const error = console.error;
+    const [live, ...probes] = await Promise.all([
+      measureLiveBoard(repo, context),
+      ...[1, 2, 3].map(() => probeStaleness(args)),
+    ]);
+    expect(live?.freshness.unimported).toEqual({ new: 1, updated: 0, unverifiable: 0 });
+    for (const probe of probes) {
+      expect(probe).toEqual({ newSessions: 1, updatedSessions: 0, unverifiableSessions: 0 });
+    }
+    // Each capture put the console back as it found it.
+    expect(console.log).toBe(log);
+    expect(console.error).toBe(error);
+  });
+
   it("measures the repos the manifest declares, with no declaration and no board.yaml", async () => {
     const repo = await workspace([
       { path: ".", visibility: "public" },

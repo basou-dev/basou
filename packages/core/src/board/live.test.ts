@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -69,15 +70,24 @@ async function placeStarted(id: string, startedAt: string): Promise<void> {
   await writeFile(join(dir, "events.jsonl"), "");
 }
 
-// Every path under a directory, for telling that nothing was written.
-async function tree(dir: string): Promise<string[]> {
-  const out: string[] = [];
+// Every path under a directory with, for a file, its size, modification time
+// and content, for telling that nothing was written, created or touched.
+async function snapshot(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
-    out.push(path);
-    if (entry.isDirectory()) out.push(...(await tree(path)));
+    if (entry.isDirectory()) {
+      out[path] = "dir";
+      Object.assign(out, await snapshot(path));
+    } else {
+      const s = await stat(path, { bigint: true });
+      const sha = createHash("sha256")
+        .update(await readFile(path))
+        .digest("hex");
+      out[path] = `${s.size}:${s.mtimeNs}:${sha}`;
+    }
   }
-  return out.sort();
+  return out;
 }
 
 const measure = () =>
@@ -137,10 +147,13 @@ describe("measureBoardLive", () => {
 
   it("writes nothing", async () => {
     await placeStarted(SES("S01"), "2026-10-01T00:00:00Z");
-    const before = await tree(root);
+    // Before the snapshot: git status itself may refresh the index.
     const status = git("status", "--porcelain");
+    const before = await snapshot(root);
     await measure();
-    expect(await tree(root)).toEqual(before);
+    // Every file of the repository, its .git and its .basou/ included.
+    expect(await snapshot(root)).toEqual(before);
+    expect(Object.keys(before).some((p) => p.endsWith(join(".git", "index")))).toBe(true);
     expect(git("status", "--porcelain")).toBe(status);
   });
 

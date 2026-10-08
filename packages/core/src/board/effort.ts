@@ -63,7 +63,9 @@ export type BoardEffort = {
   /**
    * The declared start, or, with none declared, the day of the first session
    * in the section's time zone (today when there is no session, or the
-   * sessions cannot be read).
+   * sessions cannot be read). With neither a declared zone nor a name for
+   * this host's, there are no days to count, and an undeclared start is only
+   * a label: today in UTC.
    */
   start: string;
   /** The time zone the days are in: the declared one, or this host's, as named by `Intl`. */
@@ -110,6 +112,7 @@ export type EffortInput = {
    * The declared start. Without one, the days start on the day of the first
    * session, or today when there is none: the work the board counts is the
    * work done with an agent, which an adopted repository's history predates.
+   * When the days cannot be counted (no zone can be named), it is today in UTC.
    */
   start?: string | undefined;
   /** The declared time zone, if any. */
