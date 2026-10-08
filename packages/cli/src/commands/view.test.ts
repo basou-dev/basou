@@ -4,6 +4,7 @@ import {
   cp,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -1609,6 +1610,35 @@ describe("basou view from a workspace view", () => {
         expect((data as { repoRoot: string }).repoRoot).toBe(repo);
       });
       expect(err.mock.calls.flat().join(" ")).toContain("Resolved workspace view to");
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("basou view --workspace: an uninitialized card", () => {
+  it("refuses a refresh or an import, writing nothing where its import resolves", async () => {
+    // A workspace view registered beside the repo it links: its card has no
+    // store, while an import run in it resolves to the linked repo.
+    const planning = await setupInitedRepo();
+    const view = await realpath(await mkdtemp(join(tmpdir(), "basou-pf-view-card-")));
+    try {
+      await symlink(planning, join(view, "fixture-planning"));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await withPortfolioServer([view, planning], hermeticLogRoots(), async (handle) => {
+        const { data } = await getJson(handle, "/api/portfolio");
+        const cards = (data as { workspaces: Array<{ key: string; initialized: boolean }> })
+          .workspaces;
+        const card = cards.find((w) => !w.initialized);
+        if (card === undefined) throw new Error("expected an uninitialized card");
+        for (const sub of ["refresh", "import/claude-code", "import/codex"]) {
+          const r = await postJson(handle, `/api/ws/${encodeURIComponent(card.key)}/${sub}`, {});
+          expect(r.status).toBe(500);
+          expect(r.data).toEqual({ error: "Workspace not initialized. Run 'basou init' first." });
+        }
+      });
+      expect(await readdir(basouPaths(planning).sessions)).toEqual([]);
+      expect(await readdir(view)).toEqual(["fixture-planning"]);
     } finally {
       await rm(view, { recursive: true, force: true });
     }

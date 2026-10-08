@@ -288,6 +288,14 @@ describe("resolveRepositoryRootInPlace", () => {
     );
   });
 
+  it("surfaces a git that fails in an existing repository, never advising git init", async () => {
+    const broken = await gitRepo("broken");
+    await writeFile(join(broken, ".git", "config"), "[core\n", "utf8");
+    await expect(resolveRepositoryRootInPlace(broken, "init")).rejects.toThrow(
+      /^Git command failed$/,
+    );
+  });
+
   it("keeps the git init advice for a plain directory", async () => {
     const dir = join(parent, "plain-dir");
     await mkdir(dir);

@@ -160,6 +160,9 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
           ? { claudeProjectsDir: ctx.claudeProjectsDir }
           : {}),
         ...(ctx.codexSessionsDir !== undefined ? { codexSessionsDir: ctx.codexSessionsDir } : {}),
+        ...(ctx.portfolioConfigPath !== undefined
+          ? { portfolioConfigPath: ctx.portfolioConfigPath }
+          : {}),
       });
       console.log("");
       for (const line of formatCoverageReport(coverage)) console.log(line);
@@ -216,7 +219,10 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
   }
 }
 
-/** Single-workspace mode: resolve the cwd's repo (git required) and serve it alone. */
+/**
+ * Single-workspace mode: resolve the cwd's workspace (a git repo, or the repo a
+ * workspace view or a portfolio member resolves to) and serve it alone.
+ */
 async function buildSingleDeps(ctx: ViewContext, cwd: string): Promise<ViewServerDeps> {
   const repositoryRoot = await resolveBasouRootForCommand(cwd, "view");
   const paths = basouPaths(repositoryRoot);

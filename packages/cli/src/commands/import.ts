@@ -196,9 +196,11 @@ export async function runImportCodex(
  * the SAME function the import guard uses: coverage claims "import would not
  * take this session log", and that claim only holds while both sides resolve
  * roots identically. Note that identical resolution needs the same INPUT too —
- * `resolveImportTarget` passes the git toplevel, so a caller that passes some
- * other spelling of the repo (a symlink, a subdirectory) gets a different root
- * set than the import it is trying to mirror.
+ * `resolveImportTarget` passes the root `resolveBasouRootForCommand` resolves
+ * (the git toplevel, or the repo a workspace view or a portfolio member resolves
+ * to), so a caller that passes some other spelling of the repo (a symlink, a
+ * subdirectory) gets a different root set than the import it is trying to
+ * mirror.
  */
 export function resolveSourceRoots(args: {
   projectFlags: string[];

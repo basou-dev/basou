@@ -431,11 +431,9 @@ export async function doRunDecisionCapture(
   ctx: DecisionCaptureContext,
 ): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  // View-aware resolution (like orient / refresh / note) so capture works from
-  // a workspace-view dir, redirecting to the planning repo where decisions.md
-  // and orient live. `basou decision record` predates this and uses a plain
-  // git-root resolver; aligning record is a separate, behavior-changing
-  // follow-up, not in scope for the capture slice.
+  // View-aware resolution (like orient / refresh / note / decision record) so
+  // capture works from a workspace-view dir, redirecting to the planning repo
+  // where decisions.md and orient live.
   const repositoryRoot = await resolveBasouRootForCommand(cwd, "decision capture");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);

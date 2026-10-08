@@ -3,8 +3,9 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { basouPaths, readManifest, resolveRepositoryRoot } from "@basou/core";
+import { basouPaths, readManifest } from "@basou/core";
 import { encodeProjectDir, readRolloutMeta, resolveSourceRoots } from "../commands/import.js";
+import { resolveBasouRootForCommand } from "./repo-root.js";
 import type { WorkspaceEntry } from "./view-server.js";
 
 /**
@@ -49,8 +50,9 @@ export type InertReason = "not_a_git_repo" | "no_store" | "unreadable_store";
 
 /**
  * A registered workspace that cannot import anything, so it claims no roots.
- * Registration alone never causes capture: `basou import` resolves the git
- * toplevel and asserts an initialized `.basou/` before it reads a single log.
+ * Registration alone never causes capture: `basou import` resolves its root (the
+ * git toplevel, or the repo a workspace view or a portfolio member resolves to)
+ * and asserts an initialized `.basou/` there before it reads a single log.
  * Counting such an entry's own path as a declared root would let registering a
  * directory move the coverage number without capturing one extra log.
  */
@@ -86,6 +88,11 @@ export type CoverageContext = {
   claudeProjectsDir?: string;
   /** Override the `~/.codex/sessions` root (must match the importer's). */
   codexSessionsDir?: string;
+  /**
+   * The registry a storeless entry (a portfolio member) is resolved against, as
+   * `basou import` resolves it (defaults to `~/.basou/portfolio.yaml`).
+   */
+  portfolioConfigPath?: string;
 };
 
 /**
@@ -124,7 +131,10 @@ export async function checkPortfolioCoverage(
   workspaces: ReadonlyArray<WorkspaceEntry>,
   ctx: CoverageContext = {},
 ): Promise<CoverageResult> {
-  const { roots, inertWorkspaces } = await collectDeclaredRoots(workspaces);
+  const { roots, inertWorkspaces } = await collectDeclaredRoots(
+    workspaces,
+    ctx.portfolioConfigPath,
+  );
   // The per-project directories the Claude importer would list, for any
   // declared root. A transcript outside all of them is never read.
   const listedDirs = new Set([...roots].map((root) => encodeProjectDir(root)));
@@ -160,13 +170,16 @@ export async function checkPortfolioCoverage(
 
 /**
  * Every path some registered workspace would import from, derived the way
- * `basou import` derives it: resolve the git toplevel of the entry, require a
- * readable `.basou/` there, then apply {@link resolveSourceRoots} to that
- * manifest against that toplevel.
+ * `basou import` derives it: resolve the entry as the CLI resolves a command's
+ * root ({@link resolveBasouRootForCommand}: the git toplevel, or the repo a
+ * workspace view or a portfolio member resolves to), require a readable
+ * `.basou/` there, then apply {@link resolveSourceRoots} to that manifest
+ * against that root.
  *
- * The toplevel matters. `basou import` starts from `resolveRepositoryRoot(cwd)`,
- * so a portfolio entry registered by a symlinked (or otherwise non-toplevel)
- * spelling imports under the toplevel spelling. Deriving roots from the
+ * The resolved root matters. `basou import` starts from it, so a portfolio entry
+ * registered by a symlinked (or otherwise non-toplevel) spelling imports under
+ * the toplevel spelling, and a registered view or member imports into the
+ * workspace it resolves to. Deriving roots from the
  * registered spelling instead would invert coverage for that whole workspace:
  * the symlinked spelling silently matched, the real one reported as missed.
  *
@@ -175,13 +188,17 @@ export async function checkPortfolioCoverage(
  */
 async function collectDeclaredRoots(
   workspaces: ReadonlyArray<WorkspaceEntry>,
+  portfolioConfigPath: string | undefined,
 ): Promise<{ roots: Set<string>; inertWorkspaces: InertWorkspace[] }> {
   const roots = new Set<string>();
   const inertWorkspaces: InertWorkspace[] = [];
   for (const ws of workspaces) {
     let importRoot: string;
     try {
-      importRoot = await resolveRepositoryRoot(ws.repoRoot);
+      importRoot = await resolveBasouRootForCommand(ws.repoRoot, "import", {
+        quiet: true,
+        ...(portfolioConfigPath !== undefined ? { portfolioConfigPath } : {}),
+      });
     } catch {
       inertWorkspaces.push({ path: ws.repoRoot, reason: "not_a_git_repo" });
       continue;

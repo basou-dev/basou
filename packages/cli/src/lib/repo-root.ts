@@ -16,6 +16,12 @@ export type MemberMaster = { root: string; label: string };
 export type ResolveRootOptions = {
   /** Defaults to {@link defaultPortfolioConfigPath}. */
   portfolioConfigPath?: string;
+  /**
+   * Leave out the notes on stderr that say where a view or a member resolved to,
+   * for a caller that resolves on a command's behalf without running it (the
+   * capture-coverage check). Diagnostics about a broken registry still print.
+   */
+  quiet?: boolean;
 };
 
 /**
@@ -46,8 +52,9 @@ export async function resolveBasouRootForCommand(
   let root: string;
   try {
     root = await resolveBasouRepositoryRoot(cwd, {
-      onRedirect: ({ via, root }) =>
-        console.error(`Resolved workspace view to ${root} (via ${via}).`),
+      onRedirect: ({ via, root }) => {
+        if (opts.quiet !== true) console.error(`Resolved workspace view to ${root} (via ${via}).`);
+      },
     });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "Not a git repository") {
@@ -70,9 +77,11 @@ export async function resolveBasouRootForCommand(
       opts.portfolioConfigPath ?? defaultPortfolioConfigPath(),
     );
     if (master !== undefined) {
-      console.error(
-        `Resolved portfolio member to ${master.root} (via portfolio: ${master.label}).`,
-      );
+      if (opts.quiet !== true) {
+        console.error(
+          `Resolved portfolio member to ${master.root} (via portfolio: ${master.label}).`,
+        );
+      }
       return master.root;
     }
   }

@@ -11,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
@@ -510,6 +510,50 @@ describe("basou verify from a workspace view", () => {
       expect(process.exitCode ?? 0).toBe(0);
     } finally {
       await rm(view, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("basou verify from a portfolio member", () => {
+  it("resolves a storeless member to the workspace that aggregates it", async () => {
+    const repo = await setupInitedRepo();
+    const importedId = await importChainedSession(repo);
+    const root = await realpath(await mkdtemp(join(tmpdir(), "basou-verify-member-")));
+    try {
+      const member = join(root, "fixture-member");
+      await mkdir(member);
+      await execFileAsync("git", ["-c", "init.defaultBranch=main", "init"], {
+        cwd: member,
+        env: ENV,
+      });
+      await writeManifest(
+        basouPaths(repo),
+        createManifest({
+          workspaceName: "verify-ws",
+          now: FIXED_DATE,
+          workspaceId: FIXED_WS_ID,
+          sourceRoots: [".", relative(repo, member)],
+        }),
+        { force: true },
+      );
+      // The member is found through the registry under HOME, as on a real machine.
+      const home = join(root, "home");
+      await mkdir(join(home, ".basou"), { recursive: true });
+      await writeFile(
+        join(home, ".basou", "portfolio.yaml"),
+        `version: 1\nworkspaces:\n  - path: ${repo}\n`,
+        "utf8",
+      );
+      vi.stubEnv("HOME", home);
+      const out = captureStdout();
+      const err = captureStderr();
+      await runVerify({}, { cwd: member });
+      expect(joinCalls(out).split("\n")).toContain(`${importedId}  verified (3 events)`);
+      expect(joinCalls(err)).toContain("Resolved portfolio member to");
+      expect(process.exitCode ?? 0).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

@@ -26,6 +26,14 @@ All notable changes to **basou** are recorded here. The project follows
   repository: this is a workspace view (it links <name>). Run 'basou
   <command>' inside a repository instead.` rather than advising `git init`.
   A directory that is not a view keeps the `git init` advice.
+- **`basou view --portfolio --check` counts a registered workspace view or
+  portfolio member as the workspace it resolves to.** Its capture-coverage
+  report listed such an entry among those `import cannot run in` (`not a git
+  repository`, or `no .basou store`) and counted the logs under the roots of
+  the workspace it resolves to as imported by no registered workspace, although
+  `basou refresh --portfolio` already imported them and `basou import` now
+  does too. It now resolves each entry as those commands do, against the
+  registry it checks.
 
 ## 0.65.0 — 2026-10-08
 

@@ -1550,4 +1550,34 @@ describe("basou approval from a workspace view", () => {
       await rm(view, { recursive: true, force: true });
     }
   });
+
+  it("shows, approves and rejects from a view, writing into the linked repo", async () => {
+    const repo = await setupInitedRepo();
+    const toApprove = APPR("P01");
+    const toReject = APPR("P02");
+    await createApproval(repo, { id: toApprove, sessionId: SES("S01") });
+    await appendRequestedEvent(repo, SES("S01"), toApprove, "2026-05-04T10:00:00+09:00", "E01");
+    await createApproval(repo, { id: toReject, sessionId: SES("S02") });
+    await appendRequestedEvent(repo, SES("S02"), toReject, "2026-05-04T10:00:00+09:00", "E02");
+    const view = await mkdtemp(join(tmpdir(), "basou-approval-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunApprovalShow(toApprove, {}, { cwd: view });
+      expect(joinCalls(out)).toContain(`Approval: ${toApprove}`);
+      await runApprovalApprove(toApprove, {}, { cwd: view });
+      await runApprovalReject(toReject, { reason: "Not allowed" }, { cwd: view });
+      expect(
+        err.mock.calls.flat().filter((c) => String(c).includes("Resolved workspace view to")),
+      ).toHaveLength(3);
+      const resolved = await readdir(basouPaths(repo).approvals.resolved);
+      expect(resolved).toEqual(expect.arrayContaining([`${toApprove}.yaml`, `${toReject}.yaml`]));
+      expect(await readdir(basouPaths(repo).approvals.pending)).toEqual([]);
+      expect(await readdir(view)).toEqual(["fixture-planning"]);
+      expect(process.exitCode ?? 0).toBe(0);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
 });

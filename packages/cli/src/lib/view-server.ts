@@ -362,6 +362,9 @@ async function handleWorkspaceGet(
 }
 
 /** POST routes scoped to one workspace. Returns false if `sub` matched nothing. */
+/** The POST routes that import into a card's store. */
+const IMPORT_SUBS: ReadonlySet<string> = new Set(["import/claude-code", "import/codex"]);
+
 async function handleWorkspacePost(
   res: ServerResponse,
   sub: string,
@@ -372,6 +375,15 @@ async function handleWorkspacePost(
 ): Promise<boolean> {
   const nowIso = deps.nowProvider().toISOString();
   const actionOptions = readActionOptions(body);
+
+  // A card's import resolves its root the way the CLI does, which sends a card
+  // with no store of its own (a portfolio member, a workspace view) to the
+  // workspace that aggregates it while the card's own paths stay put. Such a card
+  // has nothing to refresh or import into: stop before either writes anything,
+  // with the error the import itself gave before it resolved.
+  if (!ws.initialized && (sub === "refresh" || IMPORT_SUBS.has(sub))) {
+    throw new Error("Workspace not initialized. Run 'basou init' first.");
+  }
 
   if (sub === "refresh") {
     const result = await runExclusive(() =>
