@@ -147,8 +147,9 @@ read (nothing is printed on stdout).`,
       "after",
       `
 The input is a JSON object: measure_digest (the digest of the measurement the
-judgement saw), observed, cells (every lane at every stage), prose, judged_by
-and axis_review. The board is measured again, and nothing is written when the
+judgement saw), observed (exactly the observations the board declares, when it
+declares any), cells (every lane at every stage), prose, judged_by and
+axis_review. The board is measured again, and nothing is written when the
 digest differs. Records are never written under a .basou/ directory. Exit
 codes: 0 when the record was written, or with --dry-run when everything
 checked out (nothing is written then); 1 when it was refused (nothing is

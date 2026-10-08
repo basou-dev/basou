@@ -342,6 +342,13 @@ describe("parseRecordInput: a board that declares what to observe", () => {
     ]);
   });
 
+  it("reports only that the input is not an object when it is not one", () => {
+    for (const value of ["x", null, []]) {
+      const result = parseRecordInput(value, observingDeclaration());
+      expect(result.ok ? [] : result.errors).toHaveLength(1);
+    }
+  });
+
   it("leaves the names free on a board that declares nothing to observe", () => {
     const result = parseRecordInput(input({ observed: { anything: made } }), declaration());
     expect(result.ok).toBe(true);

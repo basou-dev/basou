@@ -1286,8 +1286,25 @@ describe("parseBoardDeclaration: board_version 2", () => {
     entry(doc.stages, "03").colour = "red";
     expect(errorsOf(parse(doc))).toEqual([
       "stages.03: unknown key 'colour'",
-      "stages.05: unknown keys 'look', 'notes' (board_version 2 reads it)",
-      "(top level): unknown key 'observe' (board_version 2 reads it)",
+      "stages.05: 'look', 'notes' are read from board_version 2 on; this file is board_version 1",
+      "(top level): 'observe' is read from board_version 2 on; this file is board_version 1",
+    ]);
+  });
+
+  it("tells a key version 2 reads apart from one no version reads, where it stands", () => {
+    const doc = board();
+    entry(doc.stages, "02").colour = "red";
+    entry(doc.stages, "02").look = ["x"];
+    entry(doc.stages, "03").observe = [];
+    doc.extra = 1;
+    doc.look = ["x"];
+    doc.observe = [];
+    expect(errorsOf(parse(doc))).toEqual([
+      "stages.02: unknown key 'colour'",
+      "stages.02: 'look' is read from board_version 2 on; this file is board_version 1",
+      "stages.03: unknown key 'observe'",
+      "(top level): unknown keys 'extra', 'look'",
+      "(top level): 'observe' is read from board_version 2 on; this file is board_version 1",
     ]);
   });
 
@@ -1333,17 +1350,30 @@ describe("parseBoardDeclaration: board_version 2", () => {
   it.each<[string]>([
     ["name"],
     ["-owner/name"],
+    ["_owner/name"],
     ["owner/name/more"],
     ["owner/.."],
     ["owner/."],
     ["own er/name"],
     ["owner/na'me"],
+    [`${"o".repeat(65)}/name`],
+    [`owner/${"n".repeat(101)}`],
   ])("refuses the GitHub repository %j", (repo) => {
     for (const kind of ["github_release", "github_open_issues", "github_open_prs"]) {
       expect(errorsOf(parse(withObserve({ key: "g", kind, repo })))).toEqual([
         "observe[0].repo: must be a GitHub repository written as owner/name",
       ]);
     }
+  });
+
+  it("takes a managed user's owner, with '_', and names at their longest", () => {
+    const doc = boardV2();
+    doc.observe = [
+      { key: "a", kind: "github_release", repo: "mona_corp/name" },
+      { key: "b", kind: "github_release", repo: `${"o".repeat(64)}/${"n".repeat(100)}` },
+      { key: "c", kind: "github_ci", repo: "o/n", workflow: `${"w".repeat(251)}.yml` },
+    ];
+    expect(parse(doc).ok).toBe(true);
   });
 
   it("refuses a workflow that is not a file name and a branch a command could misread", () => {
@@ -1357,6 +1387,10 @@ describe("parseBoardDeclaration: board_version 2", () => {
       { key: "f", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "a b" },
       { key: "g", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "release/" },
       { key: "h", kind: "github_ci", repo: "o/n", workflow: "q.yaml", branch: "release/1.x" },
+      { key: "i", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "a//b" },
+      { key: "j", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "v1." },
+      { key: "k", kind: "github_ci", repo: "o/n", workflow: "Q.YML" },
+      { key: "l", kind: "github_ci", repo: "o/n", workflow: `${"w".repeat(252)}.yml` },
     ];
     const workflow = "must be the file name of a workflow, such as quality.yml";
     const branch =
@@ -1369,6 +1403,10 @@ describe("parseBoardDeclaration: board_version 2", () => {
       `observe[4].branch: ${branch}`,
       `observe[5].branch: ${branch}`,
       `observe[6].branch: ${branch}`,
+      `observe[8].branch: ${branch}`,
+      `observe[9].branch: ${branch}`,
+      `observe[10].workflow: ${workflow}`,
+      `observe[11].workflow: ${workflow}`,
     ]);
   });
 
@@ -1377,7 +1415,9 @@ describe("parseBoardDeclaration: board_version 2", () => {
     ["HTTPS://example.com/", "must be an https:// URL"],
     ["ftp://example.com/", "must be an https:// URL"],
     ["example.com", "must be an https:// URL"],
-    ["https://", "must be an https:// URL"],
+    ["https://", "must name a host"],
+    ["https:///example.com", "must name a host"],
+    ["https://?a=1", "must name a host"],
     ["https://example.com/a b", "must be printable ASCII with no spaces"],
     ["https://example.com/é", "must be printable ASCII with no spaces"],
     ["https://example.com/'; rm -rf ~", "must be printable ASCII with no spaces"],
@@ -1385,6 +1425,12 @@ describe("parseBoardDeclaration: board_version 2", () => {
     ["https://example.com/a\\b", "must not contain quotes, backslashes, '<' or '>'"],
     ["https://user:secret@example.com/", "must not carry a user name or a password"],
     ["https://user@example.com/", "must not carry a user name or a password"],
+    ["https://:secret@example.com/", "must not carry a user name or a password"],
+    ["https://@example.com/", "must not carry a user name or a password"],
+    ['https://example.com/a"b', "must not contain quotes, backslashes, '<' or '>'"],
+    ["https://example.com/a`b`", "must not contain quotes, backslashes, '<' or '>'"],
+    ["https://example.com/<a>", "must not contain quotes, backslashes, '<' or '>'"],
+    ["https://exa%zzmple.com/", "must be an https:// URL"],
   ])("refuses the page %j", (url, problem) => {
     expect(errorsOf(parse(withObserve({ key: "p", kind: "page_version", url })))).toEqual([
       `observe[0].url: ${problem}`,

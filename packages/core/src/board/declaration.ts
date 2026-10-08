@@ -254,8 +254,8 @@ const measureSchema = z.discriminatedUnion("kind", [
 
 /**
  * What a board can declare to observe outside basou. basou never makes these
- * observations (it sends nothing): `basou board guide` says how to make each,
- * and the judge records what it found under the same key.
+ * observations (it sends nothing): the judge makes each and records what it
+ * found under the same key.
  */
 export const BOARD_OBSERVE_KINDS = [
   "npm_version",
@@ -270,9 +270,11 @@ export const BOARD_OBSERVE_KINDS = [
 /** The branch a `github_ci` observation looks at when it names none. */
 export const BOARD_DEFAULT_CI_BRANCH = "main";
 
-// The values of an observation become words of a command the guide prints,
-// so each is held to a shape that cannot start an option, end a quotation or
-// carry a second command.
+// The values of an observation are put into the commands a judge runs, each
+// as one single-quoted shell word. Each is held to a shape that, quoted so,
+// cannot end its quotation (no "'") or, where a command takes it as an
+// argument, start an option (no leading '-'). A manual observation's `how` is
+// words for a person, never a word of a command.
 
 // An npm package name, scoped or not, in lowercase.
 const NPM_PACKAGE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
@@ -281,7 +283,8 @@ const npmPackage = z.string().refine((s) => s.length <= 214 && NPM_PACKAGE.test(
 });
 
 // A GitHub repository as owner/name.
-const GITHUB_REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+// An owner may hold '_' (a managed user's handle does).
+const GITHUB_REPO = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\/[A-Za-z0-9._-]{1,100}$/;
 const githubRepo = z.string().refine((s) => GITHUB_REPO.test(s) && !/\/\.{1,2}$/.test(s), {
   error: "must be a GitHub repository written as owner/name",
 });
@@ -312,15 +315,15 @@ function httpsUrlProblem(s: string): string | undefined {
   if (!/^[\x21-\x7e]+$/.test(s)) return "must be printable ASCII with no spaces";
   if (/['"`\\<>]/.test(s)) return "must not contain quotes, backslashes, '<' or '>'";
   if (!s.startsWith("https://")) return "must be an https:// URL";
-  let url: URL;
+  // As written, not as the URL parser reads it: the parser drops a slash too
+  // many and an empty user name, but the text is what a command is given.
+  const authority = s.slice("https://".length).split(/[/?#]/)[0] ?? "";
+  if (authority === "") return "must name a host";
+  if (authority.includes("@")) return "must not carry a user name or a password";
   try {
-    url = new URL(s);
+    new URL(s);
   } catch {
     return "must be an https:// URL";
-  }
-  if (url.hostname === "") return "must name a host";
-  if (url.username !== "" || url.password !== "") {
-    return "must not carry a user name or a password";
   }
   return undefined;
 }
@@ -532,7 +535,7 @@ export function parseBoardDeclaration(
   if (version === 1) {
     const parsed = boardSchemaV1.safeParse(raw);
     if (!parsed.success) {
-      for (const issue of parsed.error.issues) errors.push(formatVersion1Issue(issue));
+      for (const issue of parsed.error.issues) errors.push(...formatVersion1Issue(issue));
     }
     errors.push(...crossCheck(raw, context));
     if (errors.length > 0 || !parsed.success) return { ok: false, errors };
@@ -547,18 +550,25 @@ export function parseBoardDeclaration(
   return { ok: true, declaration: parsed.data };
 }
 
-// The keys version 2 added, which a file of version 1 has to move up to use.
-const VERSION_2_KEYS = new Set(["observe", "look", "notes"]);
-
-function formatVersion1Issue(issue: Issue): string {
-  const formatted = formatIssue(issue);
-  if (issue.code !== "unrecognized_keys") return formatted;
-  const atTop = issue.path.length === 0;
-  const atStage = issue.path.length === 2 && issue.path[0] === "stages";
-  const added = issue.keys.some(
-    (k) => (atTop && k === "observe") || (atStage && VERSION_2_KEYS.has(k) && k !== "observe"),
+// The keys version 2 added, where it added them: a file of version 1 that
+// has one is told so apart from the keys no version reads.
+function formatVersion1Issue(issue: Issue): string[] {
+  if (issue.code !== "unrecognized_keys") return [formatIssue(issue)];
+  const added =
+    issue.path.length === 0
+      ? ["observe"]
+      : issue.path.length === 2 && issue.path[0] === "stages"
+        ? ["look", "notes"]
+        : [];
+  const later = issue.keys.filter((k) => added.includes(k));
+  if (later.length === 0) return [formatIssue(issue)];
+  const others = issue.keys.filter((k) => !added.includes(k));
+  const out = others.length === 0 ? [] : [formatIssue({ ...issue, keys: others })];
+  const named = later.map((k) => `'${k}'`).join(", ");
+  out.push(
+    `${formatPath(issue.path)}: ${named} ${later.length === 1 ? "is" : "are"} read from board_version 2 on; this file is board_version 1`,
   );
-  return added ? `${formatted} (board_version 2 reads it)` : formatted;
+  return out;
 }
 
 // The first line of a parser message, without the ':' that introduces the

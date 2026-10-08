@@ -181,9 +181,11 @@ export type BoardRecordInputResult =
  * report every problem at once, each starting with where it is: each part
  * whose shape is right is held against the declaration even when another
  * part's shape is wrong. An unknown key is refused at every level but the
- * keys of `observed` and of `prose.lanes`, which the latter limits to the
- * declaration's lane ids. Every lane has a cell at every stage, once. The
- * value is what JSON.parse read, so a key given twice has kept its last.
+ * keys of `observed` and of `prose.lanes`: the latter are limited to the
+ * declaration's lane ids, and the former, when the declaration names what to
+ * observe, are exactly those names. Every lane has a cell at every stage,
+ * once. The value is what JSON.parse read, so a key given twice has kept
+ * its last.
  */
 export function parseRecordInput(
   value: unknown,
@@ -221,7 +223,7 @@ export function parseRecordInput(
   // declaration does not hold (a typo) would never meet the value the
   // previous record has under the right one.
   const observed = given.observed === undefined ? {} : given.observed;
-  if (declaration.observe.length > 0 && isRecord(observed)) {
+  if (declaration.observe.length > 0 && isRecord(value) && isRecord(observed)) {
     const declared = new Set(declaration.observe.map((o) => o.key));
     for (const key of declared) {
       if (!Object.hasOwn(observed, key)) {

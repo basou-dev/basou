@@ -5,8 +5,8 @@ import { isUlidBody } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import { BOARD_RECORD_VERSIONS } from "./record.js";
 
-// The record versions this reader reads. A version is added here, never
-// removed, when the shape of a record changes.
+// The record versions this reader reads: every version a record has had
+// (a version is added to BOARD_RECORD_VERSIONS, never removed).
 const READABLE_VERSIONS = new Set<number>(BOARD_RECORD_VERSIONS);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
