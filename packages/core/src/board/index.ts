@@ -31,6 +31,7 @@ export {
   BOARD_TRAIL_COUNTS,
   BOARD_VERSION,
   BOARD_VERSIONS,
+  isBoardTimeZone,
   parseBoardDeclaration,
 } from "./declaration.js";
 export type {
@@ -58,7 +59,12 @@ export {
   shellWord,
 } from "./guide.js";
 export type { BoardInitInput } from "./init.js";
-export { BOARD_INIT_LANE_ID, BOARD_INIT_REVIEW_DUE_DAYS, boardInitText } from "./init.js";
+export {
+  BOARD_INIT_LANE_ID,
+  BOARD_INIT_REVIEW_DUE_DAYS,
+  BOARD_INIT_SAVE,
+  boardInitText,
+} from "./init.js";
 export type { BoardIntegrity } from "./integrity.js";
 export { BOARD_INTEGRITY_METHOD } from "./integrity.js";
 export type { BoardLiveMeasurement, BoardLivePage, MeasureBoardLiveInput } from "./live.js";

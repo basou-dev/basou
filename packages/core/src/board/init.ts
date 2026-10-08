@@ -14,15 +14,31 @@ export type BoardInitInput = {
   language: ViewLanguage;
   /** The day the effort starts, `YYYY-MM-DD`. */
   start: string;
-  /** This host's time zone, or undefined when it has no name. */
+  /**
+   * Whether `start` is the day of the first session (or today, with none),
+   * rather than today in UTC because this host's time zone has no name.
+   */
+  startIsFirstSession: boolean;
+  /**
+   * This host's time zone, when a board can declare it (a name, not an
+   * offset); otherwise undefined, and a comment says to write one.
+   */
   timeZone: string | undefined;
 };
+
+/**
+ * How to save the board init prints, from the top of the workspace's own
+ * repo: to a file of its own inside board/, linked into place only where no
+ * board.yaml is (a link never replaces one), then removed, with board/ too
+ * when nothing else is in it.
+ */
+export const BOARD_INIT_SAVE = `mkdir -p board && f=$(mktemp board/.board.yaml.XXXXXX) && { basou board init > "$f" && ln "$f" board/board.yaml; s=$?; rm -f "$f"; rmdir board 2>/dev/null; [ "$s" -eq 0 ]; }`;
 
 // A YAML 1.2 scalar that reads back as the string given: JSON's quoting is
 // YAML's double-quoted style, with what a terminal would act on escaped.
 function quoted(text: string): string {
   return JSON.stringify(text).replace(
-    /[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
+    /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g,
     (c) => `\\u${(c.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`,
   );
 }
@@ -72,7 +88,7 @@ export function boardInitText(input: BoardInitInput): string {
     "  version: 1",
     `  review_due_days: ${BOARD_INIT_REVIEW_DUE_DAYS}`,
     "",
-    comment(t.comments.effort),
+    comment(input.startIsFirstSession ? t.comments.effort : t.comments.effortToday),
     "effort:",
     `  start: ${quoted(input.start)}`,
     input.timeZone === undefined

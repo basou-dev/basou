@@ -1329,7 +1329,7 @@ export function boardPageStrings(language: ViewLanguage): BoardPageStrings {
  * change. They are the user's data once printed: a board may change them all.
  */
 export type BoardInitStrings = {
-  /** `{name}` is the name of the workspace's directory. */
+  /** `{name}` is the workspace's name in the manifest. */
   title: string;
   stages: Record<"01" | "02" | "03" | "04" | "05" | "06", string>;
   lane: { name: string; about: string; note: string };
@@ -1341,6 +1341,8 @@ export type BoardInitStrings = {
     components: string;
     axis: string;
     effort: string;
+    /** The start is today in UTC: this host's zone has no name. */
+    effortToday: string;
     timeZone: string;
   };
 };
@@ -1371,8 +1373,10 @@ const BOARD_INIT_EN: BoardInitStrings = {
       "Left empty: the first measure names every component it finds, and the axis review registers each with its lanes or '-' and a note.",
     axis: "Raise version when a lane is added or removed or a stage's meaning changes.",
     effort: "start is the day of the first session (today when there is none).",
+    effortToday:
+      "start is today in UTC: this host's time zone has no name, so the day of the first session is not known. Set start to the day the work began.",
     timeZone:
-      "This host's time zone has no name: write effort.time_zone (such as Asia/Tokyo), or the effort is not measured.",
+      "This host's time zone has no name a board can declare: write effort.time_zone (such as Asia/Tokyo), or the days are counted in an unnamed zone or not at all.",
   },
 };
 
@@ -1402,8 +1406,10 @@ const BOARD_INIT_JA: BoardInitStrings = {
       "空のままでよい。最初の measure が見つけた構成要素を全部名指しし、軸の見直しで各要素をレーンに（数えないなら '-' と note で）登録する。",
     axis: "レーンの増減や段の意味を変えたら version を上げる。",
     effort: "start は最初の session の日（session が無ければ今日）。",
+    effortToday:
+      "start は UTC の今日。このホストの time zone に名前が無く、最初の session の日が分からないため。仕事を始めた日に直す。",
     timeZone:
-      "このホストの time zone に名前が無い。effort.time_zone（例 Asia/Tokyo）を書かないと、期間と労力は測られない。",
+      "このホストの time zone に、盤に書ける名前が無い。effort.time_zone（例 Asia/Tokyo）を書かないと、期間と労力は名前の無い zone で数えられるか、測られない。",
   },
 };
 

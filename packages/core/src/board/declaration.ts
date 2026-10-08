@@ -70,10 +70,12 @@ const dateText = z
   .string()
   .refine(isCalendarDate, { error: "must be a calendar date written as YYYY-MM-DD" });
 
-// A name from the time zone database. An offset such as +09:00 is refused
-// although some Node versions accept one, so a declaration reads the same on
-// every version.
-function isTimeZone(s: string): boolean {
+/**
+ * Whether a board can declare a time zone: a name from the time zone
+ * database. An offset such as +09:00 is refused although some Node versions
+ * accept one, so a declaration reads the same on every version.
+ */
+export function isBoardTimeZone(s: string): boolean {
   if (/^[+-]\d/.test(s)) return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: s });
@@ -83,7 +85,7 @@ function isTimeZone(s: string): boolean {
   }
 }
 
-const timeZoneText = z.string().refine(isTimeZone, {
+const timeZoneText = z.string().refine(isBoardTimeZone, {
   error: "must be a time zone name such as Asia/Tokyo, not an offset such as +09:00",
 });
 

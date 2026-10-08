@@ -13,6 +13,7 @@ describe("boardInitText", () => {
       name: "shop",
       language: "en",
       start: "2026-09-21",
+      startIsFirstSession: true,
       timeZone: "Asia/Tokyo",
     });
     const result = read(text);
@@ -34,7 +35,13 @@ describe("boardInitText", () => {
 
   it("writes the words in Japanese for a Japanese anchor", () => {
     const result = read(
-      boardInitText({ name: "shop", language: "ja", start: "2026-09-21", timeZone: "UTC" }),
+      boardInitText({
+        name: "shop",
+        language: "ja",
+        start: "2026-09-21",
+        startIsFirstSession: true,
+        timeZone: "UTC",
+      }),
     );
     if (!result.ok) throw new Error(result.errors.join("\n"));
     expect(result.declaration.title).toBe(ja.title.replace("{name}", "shop"));
@@ -47,9 +54,12 @@ describe("boardInitText", () => {
       name: "shop",
       language: "en",
       start: "2026-10-05",
+      startIsFirstSession: false,
       timeZone: undefined,
     });
-    expect(text).toContain("  # This host's time zone has no name: write effort.time_zone");
+    expect(text).toContain(`  # ${en.comments.timeZone}`);
+    expect(text).toContain(`# ${en.comments.effortToday}\neffort:`);
+    expect(text).not.toContain(en.comments.effort);
     const result = read(text);
     if (!result.ok) throw new Error(result.errors.join("\n"));
     expect(result.declaration.effort).toEqual({ start: "2026-10-05" });
@@ -58,7 +68,13 @@ describe("boardInitText", () => {
   it("keeps a name as written, whatever it holds", () => {
     const bidi = String.fromCodePoint(0x202e);
     const lines = (name: string) =>
-      boardInitText({ name, language: "en", start: "2026-10-05", timeZone: "UTC" }).split("\n");
+      boardInitText({
+        name,
+        language: "en",
+        start: "2026-10-05",
+        startIsFirstSession: true,
+        timeZone: "UTC",
+      }).split("\n");
     for (const name of ['a "quoted" $& name', "it's #1: yes", "x\ny", `${bidi}x`]) {
       const text = lines(name).join("\n");
       const result = read(text);

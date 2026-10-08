@@ -3,6 +3,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   assertBasouRootSafe,
   type BasouPaths,
+  BOARD_INIT_SAVE,
   type BoardCellChange,
   type BoardDeclaration,
   type BoardDiff,
@@ -24,6 +25,7 @@ import {
   displayPath,
   effortStartOf,
   findErrorCode,
+  isBoardTimeZone,
   type Manifest,
   measureBoard,
   measureBoardLive,
@@ -225,13 +227,8 @@ read (the reason is on stderr, and nothing is printed on stdout).`,
     });
 }
 
-/**
- * How a printed board is saved: to a file of its own first (mktemp makes one
- * no other user can have placed or read), moved into place only where no
- * board is. Printing straight into board.yaml would empty an existing one
- * before init could refuse.
- */
-export const INIT_SAVE = `f=$(mktemp) && basou board init > "$f" && [ ! -e ${DEFAULT_BOARD_PATH} ] && mkdir -p board && mv "$f" ${DEFAULT_BOARD_PATH}`;
+/** How a printed board is saved (see BOARD_INIT_SAVE in @basou/core). */
+export const INIT_SAVE = BOARD_INIT_SAVE;
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunBoardInit}. */
 export async function runBoardInit(
@@ -255,6 +252,15 @@ export async function doRunBoardInit(
   ctx: BoardContext,
 ): Promise<string> {
   const { root, paths, manifest } = await privateWorkspace(ctx, "board init");
+  // The way to save it writes board/board.yaml in the current directory, so
+  // init runs only where that is the workspace's own: from a member repo, a
+  // workspace view or a subdirectory the board would land elsewhere.
+  const cwd = ctx.cwd ?? process.cwd();
+  if ((await realpath(cwd).catch(() => cwd)) !== (await realpath(root).catch(() => root))) {
+    throw new Error(
+      `Run basou board init from the top of the workspace's own repo, where its .basou/ is: the way to save what it prints writes ${DEFAULT_BOARD_PATH} in the current directory.`,
+    );
+  }
   const board = join(root, DEFAULT_BOARD_PATH);
   try {
     await lstat(board);
@@ -268,16 +274,27 @@ export async function doRunBoardInit(
     paths,
     ctx.nowProvider?.() ?? new Date(),
   );
-  if (!sessionsRead && timeZone !== undefined) {
+  if (timeZone === undefined) {
+    console.error(
+      "basou: this host's time zone has no name, so effort.start is today in UTC and effort.time_zone is left out; write both.",
+    );
+  } else if (!sessionsRead) {
     console.error(
       "basou: the sessions could not be read, so effort.start is today; set it to the day the work began.",
+    );
+  } else if (!isBoardTimeZone(timeZone)) {
+    console.error(
+      "basou: this host's time zone has no name a board can declare, so effort.time_zone is left out; write one.",
     );
   }
   const text = boardInitText({
     name: manifest.workspace.name,
     language: resolveViewLanguage(manifest),
     start,
-    timeZone,
+    startIsFirstSession: timeZone !== undefined,
+    // An offset such as +00:00, which some hosts name their zone, is not
+    // one a board can declare.
+    timeZone: timeZone !== undefined && isBoardTimeZone(timeZone) ? timeZone : undefined,
   });
   process.stdout.write(text);
   return text;
@@ -339,6 +356,18 @@ export async function doRunBoardGuide(
     text = await readDeclaration(board);
   } catch (error: unknown) {
     if (!findErrorCode(error, "ENOENT")) throw error;
+    // A link to nothing is there, though it cannot be read: init would not
+    // replace it, so it is not a board to declare.
+    if (
+      await lstat(board.path).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      throw new Error(
+        `${DEFAULT_BOARD_PATH} is there but cannot be read (a link to nothing?). Fix it before the board is updated.`,
+      );
+    }
     text = null;
   }
   const otherRepos = (manifest.repos ?? []).map((repo) => repo.path).filter((p) => p !== ".");

@@ -1463,6 +1463,19 @@ describe("basou board guide", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("refuses a board.yaml that is a link to nothing, as init would not replace it", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await mkdir(join(repo, "board"));
+    await symlink(join(repo, "nowhere.yaml"), join(repo, "board", "board.yaml"));
+    const { out, err } = capture();
+    await runBoardGuide({}, guideCtx(repo));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain(
+      "board/board.yaml is there but cannot be read (a link to nothing?)",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("refuses a declaration that does not read, listing why", async () => {
     const repo = await workspace([{ path: ".", visibility: "private" }]);
     await placeBoard(repo, JSON.stringify({ ...JSON.parse(boardYaml([])), title: "" }));
@@ -1496,7 +1509,13 @@ describe("basou board init", () => {
     expect(parsed.declaration.title).toBe("board-ws progress board");
     expect(parsed.declaration.board_version).toBe(2);
     // No session yet: the effort starts today.
-    expect(parsed.declaration.effort.start).toBe(NOW.toISOString().slice(0, 10));
+    expect(parsed.declaration.effort.start).toBe(
+      new Intl.DateTimeFormat("en-CA", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(NOW),
+    );
     expect(await readdir(repo)).toEqual(before);
     expect(process.exitCode ?? 0).toBe(0);
   });
@@ -1512,7 +1531,7 @@ describe("basou board init", () => {
     );
   });
 
-  it("says to save it through a file mktemp makes, and only where no board is", async () => {
+  it("says to save it through a file of its own in board/, and only where no board is", async () => {
     const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-board-init-save-")));
     try {
       const bin = join(dir, "bin");
@@ -1528,9 +1547,70 @@ describe("basou board init", () => {
       await writeFile(join(dir, "board", "board.yaml"), "title: mine\n");
       expect((await run()).stdout).toBe("exit=1\n");
       expect(await readFile(join(dir, "board", "board.yaml"), "utf8")).toBe("title: mine\n");
+      expect(await readdir(join(dir, "board"))).toEqual(["board.yaml"]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("runs only from the top of the workspace's own repo, where the save writes", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await mkdir(join(repo, "docs"));
+    const write = vi.spyOn(process.stdout, "write");
+    const { err } = capture();
+    await runBoardInit({}, { ...ctx(repo), cwd: join(repo, "docs") });
+    expect(write).not.toHaveBeenCalled();
+    expect(err.join("\n")).toContain(
+      "Run basou board init from the top of the workspace's own repo, where its .basou/ is",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("leaves out a time zone a board cannot declare, and says when the start is not the first session's", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const resolved = Intl.DateTimeFormat.prototype.resolvedOptions;
+    const zoneIs = (name: string | undefined) =>
+      vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (
+        this: Intl.DateTimeFormat,
+      ) {
+        return { ...resolved.call(this), timeZone: name as string };
+      });
+    for (const [zone, said] of [
+      ["+00:00", "no name a board can declare, so effort.time_zone is left out"],
+      [undefined, "no name, so effort.start is today in UTC and effort.time_zone is left out"],
+    ] as const) {
+      const spy = zoneIs(zone);
+      const out: string[] = [];
+      vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+        out.push(String(chunk));
+        return true;
+      });
+      const { err } = capture();
+      try {
+        const text = await doRunBoardInit({}, ctx(repo));
+        expect(err.join("\n")).toContain(said);
+        const parsed = parseBoardDeclaration(text, { manifestRepoPaths: ["."] });
+        if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+        expect(parsed.declaration.effort.time_zone).toBeUndefined();
+        expect(text.includes(boardInitStrings("en").comments.effortToday)).toBe(zone === undefined);
+      } finally {
+        spy.mockRestore();
+        vi.restoreAllMocks();
+      }
+    }
+  });
+
+  it("says when the sessions could not be read, so the start is today", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const sessions = join(repo, ".basou", "sessions", "ses_01HXABCDEF1234567890ABCS01");
+    await mkdir(sessions, { recursive: true });
+    await writeFile(join(sessions, "session.yaml"), "session: [broken]\n");
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const { err } = capture();
+    await doRunBoardInit({}, ctx(repo));
+    expect(err.join("\n")).toContain(
+      "basou: the sessions could not be read, so effort.start is today; set it to the day the work began.",
+    );
   });
 
   it("refuses, printing nothing, where a board is already declared", async () => {

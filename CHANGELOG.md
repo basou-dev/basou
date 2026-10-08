@@ -12,16 +12,21 @@ All notable changes to **basou** are recorded here. The project follows
   declares for the workspace's own repo: a title from the workspace's name,
   the six stages with a meaning each (concept, spec, built, merged, open,
   live), one sample lane to cut again (a board needs one), nothing to
-  observe, no component registered (the first measurement names every one
-  it finds, which fires the axis review that registers them), an axis of
+  observe, no component registered (the first measurement names every one it
+  finds, which fires the axis review that registers them), an axis of
   version 1 reviewed every 60 days, and the effort from the day of the first
-  session in this host's time zone (today when there is none; with no name
-  for the zone, a comment says to write one). It writes nothing: its help
-  and `basou board guide` say to save it through a file of its own, moved
-  into place only where no board is, never by printing straight into
-  `board/board.yaml`, which the shell empties before init runs. It exits 1,
-  printing nothing, where a board is already declared or the workspace's
-  own repo is not declared private.
+  session in this host's time zone, as the board page counts it with no
+  board (today when there is none). Where the host's zone has no name a
+  board can declare (none, or an offset such as `+00:00`), the time zone is
+  left out and a comment and stderr say to write it, and with no name at all
+  the start is today in UTC, said so. It writes nothing, and runs only from
+  the top of the workspace's own repo: its help and `basou board guide` say
+  to save it through a file of its own inside `board/`, linked into place
+  only where no `board.yaml` is (a link never replaces one) and removed
+  either way, never by printing straight into `board/board.yaml`, which the
+  shell empties before init runs. It exits 1, printing nothing, where a
+  board is already declared (a link to nothing included), the workspace's
+  own repo is not declared private, or it is run from elsewhere.
 - **`basou board guide` (experimental) prints the steps an agent follows to
   judge the board and record it, so a workspace needs no skill of its own
   for that.** The steps are filled in with the workspace's default board

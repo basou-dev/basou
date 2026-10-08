@@ -1,5 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,6 +23,7 @@ import {
   boardGuideWorkDir,
   shellWord,
 } from "./guide.js";
+import { BOARD_INIT_SAVE } from "./init.js";
 import {
   type BoardPreviousRecords,
   NO_PREVIOUS_RECORDS,
@@ -421,7 +432,8 @@ describe("boardGuide: no board declared", () => {
   it("says how to declare one instead of the steps", () => {
     const guide = boardGuide(guideInput({ board: { status: "undeclared" } }));
     expect(guide).toContain("## No board is declared yet");
-    expect(guide).toContain('basou board init > "$W/board.yaml" && [ ! -e board/board.yaml ]');
+    expect(guide).toContain(BOARD_INIT_SAVE);
+    expect(guide).toContain("basou: `'/usr/bin/node' '/opt/basou/index.js'` printed this.");
     expect(guide).toContain("Run `basou board guide` again");
     expect(guide).not.toContain("## Steps");
     expect(guide).not.toContain("```json");
@@ -514,21 +526,29 @@ describe("boardGuide: the commands run", () => {
     expect(sh(prefix)).toBe(1);
   });
 
-  it("saves the board init prints only where no board is", async () => {
+  it("saves the board init prints only where no board is, leaving nothing else behind", async () => {
     const anchor = join(dir, "ws");
     const bin = join(dir, "bin");
     await mkdir(anchor);
     await mkdir(bin);
-    // A basou that prints a board, as init does.
-    await writeFile(join(bin, "basou"), "#!/bin/sh\necho 'title: printed'\n", { mode: 0o755 });
+    // A basou that prints a board, as init does, or fails as init does.
+    const basou = join(bin, "basou");
+    const prints = "#!/bin/sh\necho 'title: printed'\n";
+    await writeFile(basou, prints, { mode: 0o755 });
     const guide = boardGuide(guideInput({ anchor, board: { status: "undeclared" } }));
     const save = blocksIn(guide).find((b) => b.includes("basou board init")) as string;
     const env = { ...process.env, TMPDIR: dir, PATH: `${bin}:${process.env.PATH ?? ""}` };
     const run = () => execFileSync("sh", ["-c", save], { env, encoding: "utf8" });
+    await writeFile(basou, "#!/bin/sh\necho 'refused' >&2; exit 1\n", { mode: 0o755 });
+    expect(run()).toBe("exit=1\n");
+    await expect(readdir(anchor)).resolves.toEqual([]);
+    await writeFile(basou, prints, { mode: 0o755 });
     expect(run()).toBe("exit=0\n");
+    expect(await readdir(join(anchor, "board"))).toEqual(["board.yaml"]);
     expect(await readFile(join(anchor, "board", "board.yaml"), "utf8")).toBe("title: printed\n");
     await writeFile(join(anchor, "board", "board.yaml"), "title: mine\n");
     expect(run()).toBe("exit=1\n");
+    expect(await readdir(join(anchor, "board"))).toEqual(["board.yaml"]);
     expect(await readFile(join(anchor, "board", "board.yaml"), "utf8")).toBe("title: mine\n");
   });
 
