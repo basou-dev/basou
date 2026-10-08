@@ -6,6 +6,7 @@ import {
   type BoardCellChange,
   type BoardDeclaration,
   type BoardDiff,
+  type BoardLiveMeasurement,
   type BoardMeasurement,
   type BoardNotFound,
   type BoardObservation,
@@ -22,6 +23,7 @@ import {
   findErrorCode,
   type Manifest,
   measureBoard,
+  measureBoardLive,
   NO_PREVIOUS_RECORDS,
   parseBoardDeclaration,
   parseRecordInput,
@@ -556,6 +558,53 @@ async function measureLoaded(
     ...(model === undefined ? {} : { model }),
     previous,
   });
+}
+
+/**
+ * Measure what the workspace at `root` shows with no board declared, for the
+ * board page of `basou view`: the built-in sections that need nothing from a
+ * declaration, over the repos the manifest declares (the workspace's own repo
+ * alone when it declares none, or cannot be read). Writes nothing, sends
+ * nothing, and runs no import: the sessions not yet imported are counted by
+ * the dry run `basou orient` runs.
+ */
+export async function measureLiveBoard(
+  root: string,
+  ctx: BoardContext,
+): Promise<BoardLiveMeasurement> {
+  const paths = basouPaths(root);
+  let repos: string[] = ["."];
+  let manifestUnread = false;
+  try {
+    const declared = ((await readManifest(paths)).repos ?? []).map((repo) => repo.path);
+    if (declared.length > 0) repos = declared;
+  } catch {
+    manifestUnread = true;
+  }
+  const now = ctx.nowProvider?.() ?? new Date();
+  const probeCtx: ImportContext = { cwd: root };
+  if (ctx.claudeProjectsDir !== undefined) probeCtx.claudeProjectsDir = ctx.claudeProjectsDir;
+  if (ctx.codexSessionsDir !== undefined) probeCtx.codexSessionsDir = ctx.codexSessionsDir;
+  const measured = await measureBoardLive({
+    root,
+    repos,
+    paths,
+    now,
+    measuredWith: { basou: BASOU_CLI_VERSION, build: BASOU_BUILD?.commit ?? null },
+    probeImports: () => probeStaleness({ ctx: probeCtx, paths, nowIso: now.toISOString() }),
+  });
+  if (!manifestUnread) return measured;
+  return {
+    ...measured,
+    complete: false,
+    not_found: [
+      {
+        at: "repos",
+        reason: "the manifest could not be read, so only the workspace's own repo was measured",
+      },
+      ...measured.not_found,
+    ],
+  };
 }
 
 /** Where a board.yaml is, how to show it, and whether --board gave it. */

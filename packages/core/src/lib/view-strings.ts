@@ -958,6 +958,35 @@ export type BoardPageStrings = {
     unknownVersion: string;
     notARecord: string;
   };
+  /** The board measured on the spot, with no record: what basou measures, nothing judged. */
+  live: {
+    measureNow: string;
+    toRecords: string;
+    measuring: string;
+    remeasure: string;
+    measuredAt: string;
+    repos: string;
+    repo: string;
+    branch: string;
+    head: string;
+    lastCommit: string;
+    commits: string;
+    uncommitted: string;
+    behindMain: string;
+    trail: string;
+    decisions: string;
+    decisionsAll: string;
+    reviewGaps: string;
+    newestSession: string;
+    noSession: string;
+    unimported: string;
+    tracks: string;
+    noTracks: string;
+    components: string;
+    noComponents: string;
+    note: string;
+    judged: string;
+  };
 };
 
 const BOARD_PAGE_EN: BoardPageStrings = {
@@ -1089,6 +1118,35 @@ const BOARD_PAGE_EN: BoardPageStrings = {
       "The record {record} is of record_version {version}, which this basou does not draw.",
     notARecord: "The record {record} is not in the shape of a record.",
   },
+  live: {
+    measureNow: "Measure now",
+    toRecords: "Recorded board",
+    measuring: "Measuring the workspace...",
+    remeasure: "Measure again",
+    measuredAt: "Measured {at}, on the spot (not a record)",
+    repos: "Repositories",
+    repo: "Repository",
+    branch: "Branch",
+    head: "HEAD",
+    lastCommit: "Last commit",
+    commits: "Commits",
+    uncommitted: "Uncommitted",
+    behindMain: "Behind origin/main",
+    trail: "Trail",
+    decisions: "Decisions",
+    decisionsAll: "{n} in all, voided ones included",
+    reviewGaps: "Review gaps",
+    newestSession: "Newest session",
+    noSession: "no session",
+    unimported: "not imported: {new} new, {updated} updated, {unverifiable} unverifiable",
+    tracks: "Open tracks",
+    noTracks: "No open track.",
+    components: "Components",
+    noComponents: "No component was found.",
+    note: "basou measured these values from this workspace's repos and trail when the page was opened. They are not recorded, and nothing here is judged.",
+    judged:
+      "The reach matrix, the lanes and the operator's turns are drawn from a record: declare the board in board/board.yaml, have an agent judge it, and record it with basou board record.",
+  },
 };
 
 const BOARD_PAGE_JA: BoardPageStrings = {
@@ -1218,6 +1276,35 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     notJson: "記録 {record} を JSON として読めない。",
     unknownVersion: "記録 {record} は record_version {version} で、この basou はこの版を描けない。",
     notARecord: "記録 {record} は記録の形をしていない。",
+  },
+  live: {
+    measureNow: "いま測る",
+    toRecords: "記録の盤へ",
+    measuring: "workspace を測っています...",
+    remeasure: "測り直す",
+    measuredAt: "{at} にその場で測った（記録ではない）",
+    repos: "repo",
+    repo: "repo",
+    branch: "branch",
+    head: "HEAD",
+    lastCommit: "最終 commit",
+    commits: "commit 数",
+    uncommitted: "未 commit",
+    behindMain: "origin/main からの遅れ",
+    trail: "証跡",
+    decisions: "判断",
+    decisionsAll: "取り消したものを含めて {n}",
+    reviewGaps: "レビューの抜け",
+    newestSession: "最新の session",
+    noSession: "session なし",
+    unimported: "未取り込み: 新規 {new}・更新 {updated}・確かめられない {unverifiable}",
+    tracks: "未完トラック",
+    noTracks: "未完トラックはない。",
+    components: "構成要素",
+    noComponents: "見つかった構成要素はない。",
+    note: "ページを開いたときに、basou がこの workspace の repo と証跡を測った値。記録には残らず、判定も含まない。",
+    judged:
+      "到達マトリクス・レーン・operator の手番は、判定の記録から描かれる。board/board.yaml に盤を宣言し、AI に判定させて basou board record で記録すると、ここに出る。",
   },
 };
 

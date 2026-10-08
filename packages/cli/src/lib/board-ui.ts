@@ -3,6 +3,9 @@
  * mode. It draws one record of the board (`GET /api/board`, or
  * `/api/board/<ULID>` with `?record=<ULID>`) in eight sections, from the record
  * alone, with the fixed strings the server sends in the workspace's language.
+ * With no record to draw, or with `?live=1`, it draws what basou measures of
+ * the workspace now (`GET /api/board/live`): the period and effort, the
+ * repositories, the trail and the components, with nothing judged.
  * Everything is put in with createElement / textContent (never innerHTML): a
  * record's prose is the judge's text, and a script running on this origin
  * could call the view's POST routes. Only a span between backticks in prose
@@ -126,6 +129,7 @@ export const BOARD_HTML = `<!doctype html>
         if (k === 'text') node.textContent = attrs[k];
         else if (k === 'class') node.className = attrs[k];
         else if (k === 'onchange') node.addEventListener('change', attrs[k]);
+        else if (k === 'onclick') node.addEventListener('click', attrs[k]);
         else node.setAttribute(k, attrs[k]);
       });
     }
@@ -219,7 +223,11 @@ export const BOARD_HTML = `<!doctype html>
     clear(nav);
     var page = d.page;
     var list = page.records || [];
-    if (list.length === 0) return;
+    if (list.length > 0) recordLinks(nav, page, list);
+    nav.appendChild(el('a', { href: '/board?live=1', text: S.live.measureNow }));
+  }
+
+  function recordLinks(nav, page, list) {
     var link = function (id, label) {
       return el('a', { href: '/board?record=' + encodeURIComponent(id), text: label });
     };
@@ -700,8 +708,12 @@ export const BOARD_HTML = `<!doctype html>
         not_found: S.unavailable.notFound, not_json: S.unavailable.notJson,
         unknown_version: S.unavailable.unknownVersion, not_a_record: S.unavailable.notARecord
       };
-      var quiet = page.why === 'no_board' || page.why === 'no_records';
-      setStatus(fill(messages[page.why] || page.why, { record: page.id || '', version: page.version }), !quiet);
+      // With no board or no record yet, draw what basou measures now instead.
+      if (page.why === 'no_board' || page.why === 'no_records') {
+        loadLive(page.why);
+        return;
+      }
+      setStatus(fill(messages[page.why] || page.why, { record: page.id || '', version: page.version }), true);
       return;
     }
     setStatus('', false);
@@ -710,17 +722,125 @@ export const BOARD_HTML = `<!doctype html>
       .forEach(function (node) { root.appendChild(node); });
   }
 
-  var record = new URLSearchParams(location.search).get('record');
-  setStatus('...', false);
-  fetch('/api/board' + (record ? '/' + encodeURIComponent(record) : ''))
-    .then(function (res) {
+  // The board measured now: the sections basou measures with nothing declared
+  // or judged. why is the reason there was no record to draw, or null when
+  // asked for with ?live=1.
+  function liveTile(k, v, sub) {
+    return el('div', { class: 'tile' }, [
+      el('div', { class: 'k', text: k }), el('div', { class: 'v', text: v }),
+      sub ? el('div', { class: 's', text: sub }) : null
+    ]);
+  }
+  function liveHeading(l, why) {
+    var h = l.heading;
+    var measured = h.complete ? S.heading.complete : fill(S.heading.incomplete, { n: h.not_found });
+    var again = el('button', { type: 'button', text: S.live.remeasure, onclick: function () { loadLive(why); } });
+    return el('header', null, [
+      el('h1', { text: h.title }),
+      el('div', { class: 'stamp' }, [fill(S.live.measuredAt, { at: when(h.measured_at) }) + '  /  ' + measured + '  ', again])
+    ]);
+  }
+  function liveRepos(l) {
+    var labels = [S.live.repo, S.live.branch, S.live.head, S.live.lastCommit, S.live.commits, S.live.uncommitted, S.live.behindMain];
+    var head = el('tr', null, labels.map(function (label, i) { return el('th', { class: i >= 4 ? 'n' : '', text: label }); }));
+    var rows = l.repos.map(function (r) {
+      return el('tr', null, [
+        el('td', { text: r.name === null ? r.path : r.name }),
+        el('td', { text: r.branch === null ? '-' : r.branch }),
+        el('td', { text: r.head === null ? '-' : r.head.slice(0, 7) }),
+        el('td', { text: r.last_commit === null ? '-' : when(r.last_commit) }),
+        el('td', { class: 'n', text: num(r.commits) }),
+        el('td', { class: 'n', text: num(r.uncommitted) }),
+        el('td', { class: 'n', text: r.behind_main === null ? '-' : num(r.behind_main) })
+      ]);
+    });
+    return section(S.live.repos, false, [el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [head].concat(rows))])]);
+  }
+  function liveTrail(l) {
+    var t = l.trail;
+    var i = l.integrity;
+    var f = l.freshness;
+    var missing = function (at) { return l.footnotes.not_found.some(function (n) { return n.at === at; }); };
+    var newest = f.newest_session_at !== null ? when(f.newest_session_at)
+      : missing('freshness.newest_session_at') ? S.tiles.notMeasured : S.live.noSession;
+    var unimported = f.unimported === null ? null : fill(S.live.unimported, {
+      new: f.unimported.new, updated: f.unimported.updated, unverifiable: f.unimported.unverifiable
+    });
+    var tiles = el('div', { class: 'tiles' }, [
+      liveTile(S.live.decisions, num(t.decisions_live), t.decisions_all === null ? null : fill(S.live.decisionsAll, { n: num(t.decisions_all) })),
+      liveTile(S.tiles.openTracks, t.tracks_open === null ? S.tiles.notMeasured : num(t.tracks_open.length), null),
+      liveTile(S.tiles.sessions, num(i.sessions), i.not_verified === null ? null : fill(S.tiles.sessionsNotVerified, { n: num(i.not_verified) })),
+      liveTile(S.live.reviewGaps, num(l.review_gaps.gaps), null),
+      liveTile(S.live.newestSession, newest, unimported)
+    ]);
+    var tracks = t.tracks_open === null ? el('p', { class: 'muted', text: S.tiles.notMeasured })
+      : t.tracks_open.length === 0 ? el('p', { class: 'muted', text: S.live.noTracks })
+      : el('ul', null, t.tracks_open.map(function (tr) {
+          return el('li', null, [el('span', { class: 'muted', text: tr.id + '  ' }), tr.title]);
+        }));
+    return section(S.live.trail, false, [tiles, el('h3', { text: S.live.tracks }), tracks]);
+  }
+  function liveComponents(l) {
+    var c = l.components;
+    var body = c === null ? el('p', { class: 'muted', text: S.tiles.notMeasured })
+      : c.length === 0 ? el('p', { class: 'muted', text: S.live.noComponents })
+      : el('ul', null, c.map(function (x) {
+          return el('li', null, [el('code', { text: x.key }), el('span', { class: 'muted', text: '  ' + x.kinds.join(', ') })]);
+        }));
+    return section(S.live.components, false, [body]);
+  }
+  function liveFootnotes(l, why) {
+    var f = l.footnotes;
+    var items = [el('li', { text: S.live.note }), el('li', { text: S.live.judged })];
+    if (why === 'no_board') items.push(el('li', { text: S.unavailable.noBoard }));
+    if (f.not_found.length > 0) {
+      items.push(el('li', null, [el('b', { text: S.footnotes.notMeasured }), el('ul', null, f.not_found.map(function (n) {
+        return el('li', { text: n.at + ': ' + n.reason });
+      }))]));
+    }
+    var build = f.measured_with.build === null ? '' : ' (' + f.measured_with.build + ')';
+    items.push(el('li', { text: fill(S.footnotes.measuredWith, { basou: f.measured_with.basou, build: build }) }));
+    return section(S.sections.footnotes, false, [el('ul', { class: 'foot' }, items)]);
+  }
+  function drawLive(d, why) {
+    S = d.strings;
+    lang = d.language;
+    document.documentElement.lang = lang;
+    document.title = S.pageTitle;
+    var nav = $('records');
+    clear(nav);
+    if (why === null) nav.appendChild(el('a', { href: '/board', text: S.live.toRecords }));
+    var root = $('board');
+    clear(root);
+    setStatus('', false);
+    var l = d.live;
+    [liveHeading(l, why), effort(l), liveRepos(l), liveTrail(l), liveComponents(l), liveFootnotes(l, why)]
+      .forEach(function (node) { root.appendChild(node); });
+  }
+
+  function getJson(url) {
+    return fetch(url).then(function (res) {
       return res.json().then(function (body) {
         if (!res.ok) throw new Error(body && body.error ? body.error : String(res.status));
         return body;
       });
-    })
-    .then(draw)
-    .catch(function (err) { setStatus(S ? fill(S.loadFailed, { message: err.message }) : String(err.message), true); });
+    });
+  }
+  function failed(err) { setStatus(S ? fill(S.loadFailed, { message: err.message }) : String(err.message), true); }
+  // Measuring takes seconds, so the page says so until it is done.
+  function loadLive(why) {
+    setStatus(S ? S.live.measuring : '...', false);
+    getJson('/api/board/live').then(function (d) { drawLive(d, why); }).catch(failed);
+  }
+
+  var params = new URLSearchParams(location.search);
+  var record = params.get('record');
+  if (params.get('live') !== null) {
+    loadLive(null);
+  } else {
+    setStatus('...', false);
+    getJson('/api/board' + (record ? '/' + encodeURIComponent(record) : '')).then(draw).catch(failed);
+  }
 })();
 </script>
 </body>

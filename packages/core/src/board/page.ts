@@ -447,24 +447,7 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
         ...(o.value === null ? { previous: previousValue(previous, name) } : {}),
       })),
     },
-    effort: {
-      start: m.effort.start,
-      time_zone: m.effort.time_zone,
-      elapsed_days: m.effort.elapsed_days,
-      active_ms: {
-        union: m.effort.active_ms.union,
-        claude: m.effort.active_ms.claude,
-        codex: m.effort.active_ms.codex,
-      },
-      output_tokens: m.effort.output_tokens,
-      sessions_without_tokens: m.effort.sessions_without_tokens,
-      commits:
-        m.effort.commits === null
-          ? null
-          : Object.entries(m.effort.commits).map(([repo, n]) => ({ repo, count: n })),
-      milestones: (d.effort.milestones ?? []).map(({ date, label, ref }) => ({ date, label, ref })),
-      ...daysOf(m.effort.daily),
-    },
+    effort: effortOf(m.effort, d.effort.milestones ?? []),
     matrix: {
       stages,
       lanes: d.lanes.map((lane) => ({
@@ -577,6 +560,46 @@ type MeasuredDay = {
   active_ms: { union: number | null; claude: number | null; codex: number | null };
   commits: Readonly<Record<string, number | null>>;
 };
+
+/** The effort section of a measurement, as a record holds it or as basou measured it now. */
+export type MeasuredEffort = {
+  start: string;
+  time_zone: string | null;
+  elapsed_days: number | null;
+  active_ms: { union: number | null; claude: number | null; codex: number | null };
+  output_tokens: number | null;
+  sessions_without_tokens: number | null;
+  commits: Readonly<Record<string, number | null>> | null;
+  daily: readonly MeasuredDay[] | null;
+};
+
+/**
+ * What the page draws of the period and effort: the measured effort, the
+ * milestones declared, and the days and weeks derived from its daily rows.
+ */
+export function effortOf(
+  effort: MeasuredEffort,
+  milestones: readonly { date: string; label: string; ref: string }[],
+): BoardPageBody["effort"] {
+  return {
+    start: effort.start,
+    time_zone: effort.time_zone,
+    elapsed_days: effort.elapsed_days,
+    active_ms: {
+      union: effort.active_ms.union,
+      claude: effort.active_ms.claude,
+      codex: effort.active_ms.codex,
+    },
+    output_tokens: effort.output_tokens,
+    sessions_without_tokens: effort.sessions_without_tokens,
+    commits:
+      effort.commits === null
+        ? null
+        : Object.entries(effort.commits).map(([repo, n]) => ({ repo, count: n })),
+    milestones: milestones.map(({ date, label, ref }) => ({ date, label, ref })),
+    ...daysOf(effort.daily),
+  };
+}
 
 // The sum, null when any of it was not measured: a part is not the whole.
 function sumOf(values: readonly (number | null)[]): number | null {

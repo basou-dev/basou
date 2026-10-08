@@ -3,6 +3,39 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **`basou view`'s board page measures the workspace on the spot when there
+  is no record to draw.** With no record yet, or no `board/board.yaml` read
+  (the manifest does not declare the workspace's own repo private), `/board`
+  now measures what `basou board measure` measures without a declaration and
+  draws it, saying it was measured now and is not a record: the period and
+  effort, from the day of the first session in this host's time zone; each
+  repository the manifest declares (the workspace's own repo when it declares
+  none), with HEAD, its branch, the last commit, the commits, the uncommitted
+  paths and the commits behind `origin/main` as of the last fetch; the
+  decisions and open tracks; how many sessions there are and how many
+  `basou verify` does not find verified; the review gaps; the newest session
+  and the sessions not yet imported, counted by the dry run `basou orient`
+  runs; and the components the markers find. A page drawing a record links
+  to the same measurement (`/board?live=1`), and a button measures again.
+  Nothing on it is judged (no reach matrix, lanes or operator's turns), it
+  writes nothing, so it needs no private repo, and it is not served in
+  portfolio mode. Like every page of `basou view`, it is a local UI and not
+  an API.
+
+### Internal
+
+- **`@basou/core` measures a workspace with no board declared.**
+  `measureBoardLive` runs the built-in sections of a board's measurement that
+  need nothing from a declaration, and `boardLivePage` lays the result out for
+  the board page. The effort section's start may be left out: the days then
+  start on the day of the first session, or today when there is none or the
+  sessions cannot be read (which is said under `not_found`). A declared start
+  is measured as before.
+
 ## 0.66.0 — 2026-10-08
 
 ### Fixed

@@ -60,7 +60,11 @@ export type BoardEffortDay = {
  * `effort`.
  */
 export type BoardEffort = {
-  /** The declared start. */
+  /**
+   * The declared start, or, with none declared, the day of the first session
+   * in the section's time zone (today when there is no session, or the
+   * sessions cannot be read).
+   */
   start: string;
   /** The time zone the days are in: the declared one, or this host's, as named by `Intl`. */
   time_zone: string | null;
@@ -102,7 +106,12 @@ export type BoardEffort = {
 export type EffortInput = {
   paths: BasouPaths;
   now: Date;
-  start: string;
+  /**
+   * The declared start. Without one, the days start on the day of the first
+   * session, or today when there is none: the work the board counts is the
+   * work done with an agent, which an adopted repository's history predates.
+   */
+  start?: string | undefined;
   /** The declared time zone, if any. */
   timeZone?: string | undefined;
   /** The manifest's paths, in its order. */
@@ -121,7 +130,9 @@ export async function measureEffort(input: EffortInput): Promise<{
     const unknown = { union: null, claude: null, codex: null };
     return {
       effort: {
-        start: input.start,
+        // With no zone there are no days, the first session's included: the
+        // date is only a label then, and every value is null.
+        start: input.start ?? input.now.toISOString().slice(0, 10),
         time_zone: null,
         elapsed_days: null,
         active_ms: unknown,
@@ -141,8 +152,19 @@ export async function measureEffort(input: EffortInput): Promise<{
   }
   const calendar = new Calendar(zone);
   const today = calendar.dateOf(input.now.getTime());
-  const days = datesFrom(input.start, today);
-  const elapsedDays = Math.round((utcOf(today) - utcOf(input.start)) / 86_400_000);
+  const sessions = await readSessions(input.paths, input.now, zone);
+  let start = input.start;
+  if (start === undefined) {
+    start = sessions.ok ? firstDay(sessions.sessions, calendar, today) : today;
+    if (!sessions.ok) {
+      notFound.push({
+        at: "effort.start",
+        reason: "the first session is not known, so the days are counted from today",
+      });
+    }
+  }
+  const days = datesFrom(start, today);
+  const elapsedDays = Math.round((utcOf(today) - utcOf(start)) / 86_400_000);
 
   // Commits, each repository apart.
   const commits: Record<string, number | null> = {};
@@ -170,7 +192,6 @@ export async function measureEffort(input: EffortInput): Promise<{
     commits[path] = total;
   }
 
-  const sessions = await readSessions(input.paths, input.now, zone);
   let effort: BoardEffort;
   if (!sessions.ok) {
     for (const at of ["effort.active_ms", "effort.output_tokens"]) {
@@ -178,7 +199,7 @@ export async function measureEffort(input: EffortInput): Promise<{
     }
     const unknown = { union: null, claude: null, codex: null };
     effort = {
-      start: input.start,
+      start,
       time_zone: zone,
       elapsed_days: elapsedDays,
       active_ms: unknown,
@@ -215,7 +236,7 @@ export async function measureEffort(input: EffortInput): Promise<{
     }
     const sum = (values: Iterable<number>) => [...values].reduce((a, b) => a + b, 0);
     effort = {
-      start: input.start,
+      start,
       time_zone: zone,
       elapsed_days: elapsedDays,
       active_ms: {
@@ -248,6 +269,23 @@ export async function measureEffort(input: EffortInput): Promise<{
 export function todayIn(declared: string | undefined, now: Date): string | undefined {
   const zone = namedZone(declared);
   return zone === undefined ? undefined : new Calendar(zone).dateOf(now.getTime());
+}
+
+// The day the first session started on, never later than today (a clock set
+// back is not a day to come); today when there is no session.
+function firstDay(
+  sessions: readonly SessionWorkStats[],
+  calendar: Calendar,
+  today: string,
+): string {
+  let first = today;
+  for (const session of sessions) {
+    const at = Date.parse(session.startedAt);
+    if (Number.isNaN(at)) continue;
+    const day = calendar.dateOf(at);
+    if (day < first) first = day;
+  }
+  return first;
 }
 
 /** Whole days from one date to another, both `YYYY-MM-DD`. */

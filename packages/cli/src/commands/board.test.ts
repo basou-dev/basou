@@ -24,7 +24,13 @@ import {
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeStaleness } from "../lib/provenance-actions.js";
-import { doRunBoardMeasure, doRunBoardRecord, runBoardMeasure, runBoardRecord } from "./board.js";
+import {
+  doRunBoardMeasure,
+  doRunBoardRecord,
+  measureLiveBoard,
+  runBoardMeasure,
+  runBoardRecord,
+} from "./board.js";
 import { doRunPortfolioList } from "./portfolio.js";
 import { doRunReviewGaps } from "./review-gaps.js";
 import { doRunStats } from "./stats.js";
@@ -1319,5 +1325,39 @@ describe("basou board measure and record against the previous record", () => {
       "\n\nThe previous record could not be read (see Not measured).\n",
     );
     expect(out.join("\n")).toContain("Components:\n  0 found, 0 unacknowledged, gone not known\n");
+  });
+});
+
+describe("measureLiveBoard: the board page's measurement with no board", () => {
+  it("measures the repos the manifest declares, with no declaration and no board.yaml", async () => {
+    const repo = await workspace([
+      { path: ".", visibility: "public" },
+      { path: "../elsewhere", visibility: "private" },
+    ]);
+    const m = await measureLiveBoard(repo, ctx(repo));
+    expect(m.repos.map((r) => r.path)).toEqual([".", "../elsewhere"]);
+    expect(m.not_found.map((n) => n.at)).toContain("repos[../elsewhere]");
+    expect(m.measured_at).toBe(NOW.toISOString());
+    // The dry run of an import ran, over the logs beside the workspace.
+    expect(m.freshness.unimported).toEqual({ new: 0, updated: 0, unverifiable: 0 });
+  });
+
+  it("measures the workspace's own repo when the manifest declares none", async () => {
+    const repo = await workspace();
+    const m = await measureLiveBoard(repo, ctx(repo));
+    expect(m.repos.map((r) => r.path)).toEqual(["."]);
+    expect(m.not_found.map((n) => n.at)).not.toContain("repos");
+  });
+
+  it("measures the workspace's own repo, and says why, when the manifest cannot be read", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await writeFile(join(repo, ".basou", "manifest.yaml"), "repos: [: broken\n");
+    const m = await measureLiveBoard(repo, ctx(repo));
+    expect(m.repos.map((r) => r.path)).toEqual(["."]);
+    expect(m.complete).toBe(false);
+    expect(m.not_found[0]).toEqual({
+      at: "repos",
+      reason: "the manifest could not be read, so only the workspace's own repo was measured",
+    });
   });
 });
