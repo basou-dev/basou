@@ -14,18 +14,20 @@ import { scanForeignWorkspaceNames } from "./foreign-workspace-scan.js";
  * scan a text basou is about to hand to an agent for the names of OTHER
  * registered workspaces.
  *
- * On the commands a person runs, the scan is advisory and never blocks.
- * Refusing to render a position or a protocol block would stop `basou refresh`
- * — the command the operator runs many times a day — on prose they may have
- * written deliberately; a warning they can act on is the honest trade. The
- * warning also names no workspace and quotes no matched text: it reports WHERE
- * to look, so the warning itself cannot become the leak it is reporting. The
- * one automatic path, `basou hook session-start`, has no reader for a warning
- * and withholds the position instead.
+ * On the position and the protocol block, the scan is advisory and never
+ * blocks. Refusing to render one would stop `basou refresh` — the command the
+ * operator runs many times a day — on prose they may have written
+ * deliberately; a warning they can act on is the honest trade. The warning
+ * also names no workspace and quotes no matched text: it reports WHERE to
+ * look, so the warning itself cannot become the leak it is reporting. The one
+ * automatic path, `basou hook session-start`, has no reader for a warning and
+ * withholds the position instead. A progress board's record is the one thing
+ * refused outright ({@link findForeignWorkspaceFields}): it is written for
+ * good and kept in git, where a warning read once would not undo it.
  *
- * A missing, unreadable or empty registry yields `null` (silence): the scan is
- * a courtesy to an operator who registered several workspaces, not a
- * prerequisite for using basou with one.
+ * For the position and the protocol block, a missing, unreadable or empty
+ * registry yields `null` (silence): the scan is a courtesy to an operator who
+ * registered several workspaces, not a prerequisite for using basou with one.
  */
 
 /** How many line numbers a warning spells out before summarizing the rest. */

@@ -14,7 +14,6 @@ import {
   type BoardObservedChange,
   type BoardOrderAnomaly,
   type BoardPreviousRecords,
-  type BoardRecordInput,
   type BoardRepo,
   basouPaths,
   boardGuide,
@@ -543,6 +542,9 @@ async function checkAndRecord(
       cause: error,
     });
   }
+  // Before the shape is checked: a refusal of the shape quotes what it
+  // refuses, and that may be another workspace's name.
+  await refuseOtherWorkspaces(value, loaded.root, ctx);
   const parsed = parseRecordInput(value, loaded.declaration);
   if (!parsed.ok) {
     throw new RecordRefusal(
@@ -551,7 +553,6 @@ async function checkAndRecord(
         .join("\n")}`,
     );
   }
-  await refuseOtherWorkspaces(parsed.input, loaded.root, ctx);
   const recordedAt = ctx.nowProvider?.() ?? new Date();
   const previous = await previousOf(loaded);
   const measurement = await measureLoaded(loaded, ctx, parsed.input.judged_by.model, previous);
@@ -602,71 +603,104 @@ async function checkAndRecord(
   };
 }
 
-// Where in a record's input a text is: a key as it is when it is a plain
-// name, quoted when it is not.
-function at(base: string, key: string | number): string {
-  if (typeof key === "number") return `${base}[${key}]`;
-  return /^[A-Za-z0-9_-]+$/.test(key) ? `${base}.${key}` : `${base}[${JSON.stringify(key)}]`;
-}
+// The keys of a record's input, which a location may name: the words of its
+// shape. Any other key is a name someone chose (an observation's, a lane's,
+// or one the input should not have), which may be the very name found.
+const INPUT_KEYS = new Set([
+  "measure_digest",
+  "observed",
+  "cells",
+  "prose",
+  "judged_by",
+  "axis_review",
+  "value",
+  "observed_at",
+  "source",
+  "error",
+  "lane",
+  "stage",
+  "state",
+  "reason",
+  "summary",
+  "lanes",
+  "operator_turns",
+  "footnotes",
+  "text",
+  "model",
+  "self_reported",
+  "triggers",
+]);
 
-// Every text of a record's input the judge wrote, with where it is: what a
-// record keeps in words, and what the board page shows.
-function judgedTexts(input: BoardRecordInput): { at: string; text: string }[] {
-  const out: { at: string; text: string }[] = [{ at: "prose.summary", text: input.prose.summary }];
-  for (const [lane, text] of Object.entries(input.prose.lanes)) {
-    out.push({ at: at("prose.lanes", lane), text });
+// The keys whose values are held to a shape a refusal does not quote (a
+// digest, a time, a state, a trigger), which carry no words of the judge's.
+// A lane and a stage are quoted when they are not the board's, so they are
+// looked at.
+const SHAPED_VALUES = new Set(["measure_digest", "observed_at", "state", "triggers"]);
+
+// The maps whose keys are names: an observation's, a lane's.
+const NAMED_MAPS = new Set(["observed", "prose.lanes"]);
+
+/**
+ * Every text of a record's input as JSON.parse read it, keys included, with
+ * where it is: what the judge wrote, and what any key or value the input
+ * should not have says. A location names only the words of the input's
+ * shape; a name someone chose is said to be one, never spelled.
+ */
+function inputTexts(value: unknown): { at: string; text: string }[] {
+  const out: { at: string; text: string }[] = [];
+  const stack: { value: unknown; at: string; key?: string }[] = [{ value, at: "" }];
+  for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
+    const { value: v, at, key } = next;
+    if (key !== undefined && SHAPED_VALUES.has(key)) continue;
+    if (typeof v === "string") {
+      out.push({ at: at === "" ? "(top level)" : at, text: v });
+    } else if (Array.isArray(v)) {
+      // Reversed onto the stack, so that it is read in the order written.
+      for (let i = v.length - 1; i >= 0; i--) stack.push({ value: v[i], at: `${at}[${i}]` });
+    } else if (typeof v === "object" && v !== null) {
+      const named = NAMED_MAPS.has(at);
+      const where = at === "" ? "(top level)" : at;
+      const children: { value: unknown; at: string; key?: string }[] = [];
+      for (const [k, child] of Object.entries(v)) {
+        if (!named && INPUT_KEYS.has(k)) {
+          children.push({ value: child, at: at === "" ? k : `${at}.${k}`, key: k });
+        } else {
+          out.push({ at: `${where}: a name`, text: k });
+          children.push({ value: child, at: `${where} (a named entry)` });
+        }
+      }
+      stack.push(...children.reverse());
+    }
   }
-  input.prose.operator_turns.forEach((turn, i) => {
-    out.push({ at: `${at("prose.operator_turns", i)}.text`, text: turn.text });
-    out.push({ at: `${at("prose.operator_turns", i)}.source`, text: turn.source });
-  });
-  input.prose.footnotes.forEach((text, i) => {
-    out.push({ at: at("prose.footnotes", i), text });
-  });
-  // An observation is named by its place, not its name: the name is the
-  // judge's words, and may be what names another workspace.
-  Object.entries(input.observed).forEach(([name, o], i) => {
-    const where = `observed (entry ${i + 1})`;
-    out.push({ at: `${where} name`, text: name });
-    const value = typeof o.value === "string" ? o.value : (JSON.stringify(o.value) ?? "");
-    out.push({ at: `${where}.value`, text: value });
-    out.push({ at: `${where}.source`, text: o.source });
-    if (o.error !== undefined) out.push({ at: `${where}.error`, text: o.error });
-  });
-  input.cells.forEach((cell, i) => {
-    if (cell.reason !== undefined) out.push({ at: `${at("cells", i)}.reason`, text: cell.reason });
-  });
-  if (input.axis_review !== null) {
-    out.push({ at: "axis_review.summary", text: input.axis_review.summary });
-  }
-  out.push({ at: "judged_by.model", text: input.judged_by.model });
   return out;
 }
 
-// A board holds one workspace's own work: its record is refused when what
-// the judge wrote names another workspace the portfolio registers. The
-// refusal says where, never which workspace, so it does not carry the name
-// on itself. With no portfolio there is nothing to check against; one that
+// A board holds one workspace's own work: its record is refused when its
+// input names another workspace the portfolio registers. The refusal says
+// where, never which workspace, so it does not carry the name on itself, and
+// it comes before any other refusal of the input, which would quote it. With no portfolio there is nothing to check against; one that
 // cannot be read is said to be so, and the record goes on unchecked.
 async function refuseOtherWorkspaces(
-  input: BoardRecordInput,
+  input: unknown,
   root: string,
   ctx: BoardContext,
 ): Promise<void> {
   const found = await findForeignWorkspaceFields({
-    fields: judgedTexts(input),
+    fields: inputTexts(input),
     selfPath: root,
     configPath: ctx.portfolioConfigPath,
   });
   if (found.status === "unreadable") {
     console.error(
-      "basou: ~/.basou/portfolio.yaml could not be read, so the record's input was not checked for the names of other registered workspaces.",
+      "basou: ~/.basou/portfolio.yaml could not be read, or does not list workspaces as basou reads them, so the record's input was not checked for the names of other registered workspaces.",
     );
     return;
   }
   if (found.status === "checked" && found.at.length > 0) {
     throw new RecordRefusal(
-      `The record's input names another workspace the portfolio registers, and a board holds this workspace's own work only; nothing was written:\n${found.at
+      `The record's input names another workspace the portfolio registers, and a board holds this workspace's own work only; nothing was written:\n${[
+        ...new Set(found.at),
+      ]
         .map((where) => `  - ${displayPath(where)}`)
         .join("\n")}`,
     );

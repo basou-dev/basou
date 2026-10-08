@@ -1168,16 +1168,16 @@ describe("basou board record", () => {
         );
         expect(said).not.toContain(name);
         expect(said.split("\n").filter((l) => l.startsWith("  - "))).toEqual([
+          "  - cells[1].reason",
           "  - prose.summary",
-          "  - prose.lanes.core",
+          "  - prose.lanes (a named entry)",
           "  - prose.operator_turns[0].source",
           "  - prose.footnotes[1]",
-          "  - observed (entry 1) name",
-          "  - observed (entry 2).value",
-          "  - observed (entry 2).source",
-          "  - cells[1].reason",
-          "  - axis_review.summary",
           "  - judged_by.model",
+          "  - observed: a name",
+          "  - observed (a named entry).value",
+          "  - observed (a named entry).source",
+          "  - axis_review.summary",
         ]);
         expect(process.exitCode).toBe(1);
         process.exitCode = undefined;
@@ -1195,6 +1195,39 @@ describe("basou board record", () => {
       vi.restoreAllMocks();
       return digest;
     }
+
+    it("refuses before the shape is checked, so no other refusal quotes the name", async () => {
+      const { repo, input } = await judged();
+      const name = await registered(repo);
+      const cells = input.cells as { lane: string }[];
+      (cells[0] as { lane: string }).lane = name;
+      const named = {
+        ...input,
+        [name]: 1,
+        observed: {
+          a: { value: { k: [`~/x/${name}`] }, observed_at: "2026-10-08", source: "s" },
+          b: { value: null, observed_at: "2026-10-08", source: "s", error: `on ${name}` },
+          // Named like a word of the input's shape, and twice in one place.
+          lane: { value: name, observed_at: "2026-10-08", source: "s" },
+          d: { value: name, observed_at: "2026-10-08", source: "s" },
+        },
+        prose: { summary: "fine", operator_turns: [{ text: `ask ${name}`, source: "x" }] },
+      };
+      const { err } = capture();
+      await runBoardRecord({ dryRun: true }, fed(repo, named));
+      const said = err.join("\n");
+      expect(said).not.toContain(name);
+      expect(said).not.toContain("is not a lane of the board");
+      expect(said.split("\n").filter((l) => l.startsWith("  - "))).toEqual([
+        "  - (top level): a name",
+        "  - cells[0].lane",
+        "  - prose.operator_turns[0].text",
+        "  - observed (a named entry).value (a named entry)[0]",
+        "  - observed (a named entry).error",
+        "  - observed (a named entry).value",
+      ]);
+      expect(process.exitCode).toBe(1);
+    });
 
     it("takes the workspace's own name, and records with no portfolio to check against", async () => {
       const { repo, input } = await judged();
@@ -1218,7 +1251,7 @@ describe("basou board record", () => {
       const result = await doRunBoardRecord({}, fed(repo, input));
       expect(result.record).not.toBeNull();
       expect(err.join("\n")).toContain(
-        "basou: ~/.basou/portfolio.yaml could not be read, so the record's input was not checked for the names of other registered workspaces.",
+        "basou: ~/.basou/portfolio.yaml could not be read, or does not list workspaces as basou reads them, so the record's input was not checked for the names of other registered workspaces.",
       );
     });
   });

@@ -9,17 +9,20 @@ All notable changes to **basou** are recorded here. The project follows
 
 - **`basou board record` (experimental) refuses an input whose words name
   another workspace the portfolio registers.** A board holds one workspace's
-  own work. Every text the judge writes is checked against the directory
-  names `~/.basou/portfolio.yaml` registers, the workspace's own excepted,
-  as `basou orient` checks a position: the prose (summary, each lane's, the
-  operator's turns and their sources, the footnotes), each observation's
-  name, value, source and error, each cell's reason, the axis review's
-  summary and the model the judge names. One that names another is refused,
-  nothing written, `--dry-run` too; the refusal lists where (an observation
-  by its place, since its name may be what names one), never which
-  workspace. With no `~/.basou/portfolio.yaml` there is nothing to check
-  against; one that cannot be read is said to be so on stderr, and the
-  record goes on.
+  own work. Every text of the input, keys included, is checked against the
+  directory names `~/.basou/portfolio.yaml` registers, the workspace's own
+  excepted, as `basou orient` checks a position: the prose (summary, each
+  lane's, the operator's turns and their sources, the footnotes), each
+  observation's name, value (however nested), source and error, each cell's
+  lane, stage and reason, the axis review's summary, the model the judge
+  names, and any key the input should not have. One that names another is
+  refused, nothing written, `--dry-run` too, before anything else about the
+  input is checked (a refusal of its shape would quote it): the refusal
+  lists where, naming only the words of the input's shape and saying of a
+  name someone chose that it is one, never which workspace. With no
+  `~/.basou/portfolio.yaml` there is nothing to check against; one that
+  cannot be read, or does not list workspaces as basou reads them, is said
+  to be so on stderr, and the record goes on.
 - **`basou orient` says when the workspace keeps a progress board, and how
   to update it.** When the manifest declares the workspace's own repo
   private and `board/board.yaml` is there, the position's "where you are
