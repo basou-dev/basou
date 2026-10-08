@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { LOCAL_CLI_EVENT_SOURCE } from "../schemas/shared.schema.js";
 import type { TaskStatus } from "../schemas/task.schema.js";
@@ -2590,6 +2590,27 @@ describe("orientation: the workspace's progress board", () => {
     expect(where).toContain(
       `- Progress board: last record ${day} (3d ago), axis v2. To update it, follow \`basou board guide\`.\n`,
     );
+  });
+
+  it("gives the record's day in this host's time zone", async () => {
+    const resolved = Intl.DateTimeFormat.prototype.resolvedOptions;
+    const spy = vi
+      .spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions")
+      .mockImplementation(function (this: Intl.DateTimeFormat) {
+        return { ...resolved.call(this), timeZone: "Asia/Tokyo" };
+      });
+    try {
+      const paths = await setupPaths();
+      const result = await renderOrientation({
+        paths,
+        nowIso: FIXED_NOW_ISO,
+        // 05:00 on 2026-05-06 in Tokyo, though still 2026-05-05 in UTC.
+        board: { lastRecordAt: "2026-05-05T20:00:00.000Z", axisVersion: 1 },
+      });
+      expect(result.body).toContain("- Progress board: last record 2026-05-06 (");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("says when there is no record yet, when the records cannot be read, and when the axis is not known", async () => {
