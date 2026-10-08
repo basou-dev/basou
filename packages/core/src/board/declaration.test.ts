@@ -1314,7 +1314,9 @@ describe("parseBoardDeclaration: board_version 2", () => {
   });
 
   it.each<[string, string]>([
-    ["Scope/Cli", "uppercase"],
+    ["Cli", "uppercase"],
+    ["@Scope/cli", "an uppercase scope"],
+    ["scope/cli", "a slash without a scope"],
     ["-x", "a leading '-'"],
     ["@scope/-x", "a leading '-' after the scope"],
     ["a b", "a space"],
