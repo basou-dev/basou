@@ -44,7 +44,7 @@ export type {
 } from "./diff.js";
 export { diffCells, diffMeasurements, diffObserved } from "./diff.js";
 export type { BoardActiveMs, BoardEffort, BoardEffortDay } from "./effort.js";
-export { BOARD_EFFORT_METHOD } from "./effort.js";
+export { BOARD_EFFORT_METHOD, effortStartOf } from "./effort.js";
 export type { BoardFreshness, BoardImportProbe } from "./freshness.js";
 export { BOARD_FRESHNESS_METHOD } from "./freshness.js";
 export type { GlobMatcher } from "./glob.js";
@@ -57,6 +57,8 @@ export {
   boardGuideWorkDir,
   shellWord,
 } from "./guide.js";
+export type { BoardInitInput } from "./init.js";
+export { BOARD_INIT_LANE_ID, BOARD_INIT_REVIEW_DUE_DAYS, boardInitText } from "./init.js";
 export type { BoardIntegrity } from "./integrity.js";
 export { BOARD_INTEGRITY_METHOD } from "./integrity.js";
 export type { BoardLiveMeasurement, BoardLivePage, MeasureBoardLiveInput } from "./live.js";

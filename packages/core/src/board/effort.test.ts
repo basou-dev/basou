@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
-import { measureEffort } from "./effort.js";
+import { effortStartOf, measureEffort } from "./effort.js";
 
 let root: string;
 let paths: BasouPaths;
@@ -167,5 +167,33 @@ describe("measureEffort with no declared start", () => {
   it("keeps a declared start, before or after the first session", async () => {
     await placeStarted(SES("S01"), "2026-09-20T00:00:00Z");
     expect((await measureEffort(input("Asia/Tokyo"))).effort.start).toBe("2026-10-01");
+  });
+  it("gives a board's start the same day, in this host's zone, and the zone", async () => {
+    hostZoneIs("Asia/Tokyo");
+    const now = new Date("2026-10-05T03:00:00.000Z");
+    expect(await effortStartOf(paths, now)).toEqual({
+      start: "2026-10-05",
+      timeZone: "Asia/Tokyo",
+      sessionsRead: true,
+    });
+    await placeStarted(SES("S02"), "2026-09-25T00:00:00Z");
+    await placeStarted(SES("S01"), "2026-09-20T23:30:00Z");
+    expect(await effortStartOf(paths, now)).toEqual({
+      start: "2026-09-21",
+      timeZone: "Asia/Tokyo",
+      sessionsRead: true,
+    });
+    await writeFile(join(paths.sessions, SES("S01"), "session.yaml"), "session: [broken]\n");
+    expect(await effortStartOf(paths, now)).toEqual({
+      start: "2026-10-05",
+      timeZone: "Asia/Tokyo",
+      sessionsRead: false,
+    });
+    hostZoneIs(undefined);
+    expect(await effortStartOf(paths, new Date("2026-10-05T23:00:00.000Z"))).toEqual({
+      start: "2026-10-05",
+      timeZone: undefined,
+      sessionsRead: false,
+    });
   });
 });

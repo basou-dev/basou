@@ -21,6 +21,7 @@ import {
   createManifest,
   type Event,
   ensureBasouDirectory,
+  parseBoardDeclaration,
   type RepoEntry,
   writeManifest,
 } from "@basou/core";
@@ -28,10 +29,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeStaleness } from "../lib/provenance-actions.js";
 import {
   doRunBoardGuide,
+  doRunBoardInit,
   doRunBoardMeasure,
   doRunBoardRecord,
   measureLiveBoard,
   runBoardGuide,
+  runBoardInit,
   runBoardMeasure,
   runBoardRecord,
 } from "./board.js";
@@ -1468,6 +1471,57 @@ describe("basou board guide", () => {
       "board/board.yaml is not a valid board declaration, so there are no steps to print until it reads",
     );
     expect(err.join("\n")).toContain("  - title: must be a non-empty string");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("basou board init", () => {
+  it("prints a board that reads under the workspace's manifest, and writes nothing", async () => {
+    const repo = await workspace([
+      { path: ".", visibility: "private", language: "en" },
+      { path: "../elsewhere" },
+    ]);
+    const before = await readdir(repo);
+    const out: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      out.push(String(chunk));
+      return true;
+    });
+    const text = await doRunBoardInit({}, ctx(repo));
+    expect(out.join("")).toBe(text);
+    const parsed = parseBoardDeclaration(text, { manifestRepoPaths: [".", "../elsewhere"] });
+    if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+    expect(parsed.declaration.title).toBe("board-ws progress board");
+    expect(parsed.declaration.board_version).toBe(2);
+    // No session yet: the effort starts today.
+    expect(parsed.declaration.effort.start).toBe(NOW.toISOString().slice(0, 10));
+    expect(await readdir(repo)).toEqual(before);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("refuses, printing nothing, where a board is already declared", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const write = vi.spyOn(process.stdout, "write");
+    const { err } = capture();
+    await runBoardInit({}, ctx(repo));
+    expect(write).not.toHaveBeenCalled();
+    expect(err.join("\n")).toContain(
+      "board/board.yaml is already there, so there is no board to start",
+    );
+    expect(process.exitCode).toBe(1);
+    expect(await readFile(join(repo, "board", "board.yaml"), "utf8")).toBe(boardYaml([]));
+  });
+
+  it("refuses a workspace whose own repo is not declared private", async () => {
+    const repo = await workspace([{ path: "." }]);
+    const write = vi.spyOn(process.stdout, "write");
+    const { err } = capture();
+    await runBoardInit({}, ctx(repo));
+    expect(write).not.toHaveBeenCalled();
+    expect(err.join("\n")).toContain(
+      "The board is kept at board/board.yaml only in a workspace whose manifest declares its own repo (path: .) private",
+    );
     expect(process.exitCode).toBe(1);
   });
 });

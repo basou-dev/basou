@@ -421,7 +421,7 @@ describe("boardGuide: no board declared", () => {
   it("says how to declare one instead of the steps", () => {
     const guide = boardGuide(guideInput({ board: { status: "undeclared" } }));
     expect(guide).toContain("## No board is declared yet");
-    expect(guide).toContain("Write board/board.yaml (board_version 2)");
+    expect(guide).toContain('basou board init > "$W/board.yaml" && [ ! -e board/board.yaml ]');
     expect(guide).toContain("Run `basou board guide` again");
     expect(guide).not.toContain("## Steps");
     expect(guide).not.toContain("```json");
@@ -512,6 +512,23 @@ describe("boardGuide: the commands run", () => {
     await mkdir(elsewhere);
     await symlink(elsewhere, work);
     expect(sh(prefix)).toBe(1);
+
+  it("saves the board init prints only where no board is", async () => {
+    const anchor = join(dir, "ws");
+    const bin = join(dir, "bin");
+    await mkdir(anchor);
+    await mkdir(bin);
+    // A basou that prints a board, as init does.
+    await writeFile(join(bin, "basou"), "#!/bin/sh\necho 'title: printed'\n", { mode: 0o755 });
+    const guide = boardGuide(guideInput({ anchor, board: { status: "undeclared" } }));
+    const save = blocksIn(guide).find((b) => b.includes("basou board init")) as string;
+    const env = { ...process.env, TMPDIR: dir, PATH: `${bin}:${process.env.PATH ?? ""}` };
+    const run = () => execFileSync("sh", ["-c", save], { env, encoding: "utf8" });
+    expect(run()).toBe("exit=0\n");
+    expect(await readFile(join(anchor, "board", "board.yaml"), "utf8")).toBe("title: printed\n");
+    await writeFile(join(anchor, "board", "board.yaml"), "title: mine\n");
+    expect(run()).toBe("exit=1\n");
+    expect(await readFile(join(anchor, "board", "board.yaml"), "utf8")).toBe("title: mine\n");
   });
 
   it("takes the before of a repo with no commit yet, and still tells a change apart", async () => {

@@ -1321,3 +1321,93 @@ const BOARD_PAGE_JA: BoardPageStrings = {
 export function boardPageStrings(language: ViewLanguage): BoardPageStrings {
   return language === "ja" ? BOARD_PAGE_JA : BOARD_PAGE_EN;
 }
+
+/**
+ * The words `basou board init` writes into a board.yaml it prints, in the
+ * anchor's language: the board's title, what each stage means by default,
+ * the sample lane a board starts with and the comments that say what to
+ * change. They are the user's data once printed: a board may change them all.
+ */
+export type BoardInitStrings = {
+  /** `{name}` is the name of the workspace's directory. */
+  title: string;
+  stages: Record<"01" | "02" | "03" | "04" | "05" | "06", string>;
+  lane: { name: string; about: string; note: string };
+  comments: {
+    head: string;
+    stages: string;
+    lanes: string;
+    observe: string;
+    components: string;
+    axis: string;
+    effort: string;
+    timeZone: string;
+  };
+};
+
+const BOARD_INIT_EN: BoardInitStrings = {
+  title: "{name} progress board",
+  stages: {
+    "01": "Concept — a document says what the lane is for",
+    "02": "Spec — what to build and how is decided",
+    "03": "Built — working code is in a repo and its tests pass",
+    "04": "Merged — it is on main",
+    "05": "Open — its users can get it",
+    "06": "Live — it is in use",
+  },
+  lane: {
+    name: "A lane: who uses what",
+    about: "Replace this lane with the board's own, cut by who uses what, not by repo",
+    note: "What to mind when judging this lane",
+  },
+  comments: {
+    head: "A progress board, printed by `basou board init`. Change it to fit this workspace, then check it with `basou board measure`; `basou board guide` prints the steps that judge and record it.",
+    stages:
+      "The six stages are fixed; only what each means is the board's. Keep 04 (merged) apart from 05 (in users' hands). `look` and `notes` say what to look at and mind when judging a stage.",
+    lanes: "At least one lane. Its id is lowercase ASCII and stays: records join on it.",
+    observe:
+      "What to observe outside basou (npm_version, github_release, github_open_issues, github_open_prs, github_ci, page_version, manual). basou never makes these; the guide says how.",
+    components:
+      "Left empty: the first measure names every component it finds, and the axis review registers each with its lanes or '-' and a note.",
+    axis: "Raise version when a lane is added or removed or a stage's meaning changes.",
+    effort: "start is the day of the first session (today when there is none).",
+    timeZone:
+      "This host's time zone has no name: write effort.time_zone (such as Asia/Tokyo), or the effort is not measured.",
+  },
+};
+
+const BOARD_INIT_JA: BoardInitStrings = {
+  title: "{name} 進捗盤",
+  stages: {
+    "01": "構想 — そのレーンが何をするものかを書いた文書がある",
+    "02": "仕様 — 何をどう作るかが決まっている",
+    "03": "実装 — 動くコードが repo にあり、テストが通る",
+    "04": "本番 — main に入っている",
+    "05": "開通 — 利用者が手に取れる",
+    "06": "稼働 — 実際に使われている",
+  },
+  lane: {
+    name: "レーンの名前（誰が使う何か）",
+    about: "このレーンを、この盤のレーンに切り直す。repo ではなく「誰が使う何か」で切る",
+    note: "このレーンを判定するときの注意",
+  },
+  comments: {
+    head: "進捗盤の宣言（basou board init が出した雛形）。この workspace に合わせて直し、basou board measure で確かめる。判定と記録の手順は basou board guide が出す。",
+    stages:
+      "6 段の id は固定で、盤が決めるのは意味だけ。04 本番（main に入った）と 05 開通（利用者が手に取れる）を分ける。look と notes は、その段を判定するときに見るものと注意。",
+    lanes: "レーンは 1 本以上。id は小文字の ASCII で、記録の照合に使うので変えない。",
+    observe:
+      "basou の外で観測するもの（npm_version・github_release・github_open_issues・github_open_prs・github_ci・page_version・manual）。basou は取りに行かない。取り方は guide が出す。",
+    components:
+      "空のままでよい。最初の measure が見つけた構成要素を全部名指しし、軸の見直しで各要素をレーンに（数えないなら '-' と note で）登録する。",
+    axis: "レーンの増減や段の意味を変えたら version を上げる。",
+    effort: "start は最初の session の日（session が無ければ今日）。",
+    timeZone:
+      "このホストの time zone に名前が無い。effort.time_zone（例 Asia/Tokyo）を書かないと、期間と労力は測られない。",
+  },
+};
+
+/** The words `basou board init` writes, for a resolved view language. */
+export function boardInitStrings(language: ViewLanguage): BoardInitStrings {
+  return language === "ja" ? BOARD_INIT_JA : BOARD_INIT_EN;
+}

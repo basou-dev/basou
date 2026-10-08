@@ -632,8 +632,13 @@ function undeclared(
     `This workspace (${displayPath(input.anchor)}) declares no board at board/board.yaml. \`basou view\`'s /board page already draws what can be measured without one (the period and effort, the repos, the trail, the components). A judged board (the reach matrix, the lanes, the operator's turns) needs a declaration first.`,
     "",
     "1. Check that no one outside can read this repo: records hold what the trail holds (open tracks, time worked, model names). Step 9 (f) of this guide, once a board is declared, says how; on GitHub it is visibility PRIVATE, no collaborator but the owner and no invitation. Never keep a board in a repo shared with a client.",
-    "2. Cut the axis. The board asks what can be used now and what is stuck, not what was built. Cut lanes by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one.",
-    '3. Write board/board.yaml (board_version 2): `title`, the six `stages` (`"01"` to `"06"`, quoted, each with a `meaning`, and `look` and `notes` if you like), at least one lane (`id`, `name`, `about`, `notes`), `observe` for what is reached outside the repos, `axis` (`version: 1`, `review_due_days`) and `effort` (`start`, `time_zone`). Measures, ratios and components may stay empty at first.',
+    "2. Print a board to start from, and save it only where no board is. Never print it straight into board/board.yaml: the shell empties that file before init runs.",
+  );
+  block(
+    `${go} && basou board init > "$W/board.yaml" && [ ! -e board/board.yaml ] && mkdir -p board && mv "$W/board.yaml" board/board.yaml; echo "exit=$?"`,
+  );
+  line(
+    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Measures, ratios and components may stay empty at first.",
     "4. Check it until it reads (every problem with it is listed at once):",
   );
   block(`${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`);

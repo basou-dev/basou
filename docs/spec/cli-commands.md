@@ -56,6 +56,7 @@ basou hook stop | session-start      # the handlers themselves — the tool invo
 basou board measure        # measure what a board.yaml declares (writes nothing, sends nothing)
 basou board record         # measure again and record a judgement of the board, beside its board.yaml
 basou board guide          # print the steps an agent follows to judge and record the board (writes nothing)
+basou board init           # print a board.yaml to start a board from (writes nothing)
 
 # User-global context faces (files every project's AI tool auto-loads)
 basou channel clear codex  # remove an orientation block an older basou left in ~/.codex/AGENTS.md

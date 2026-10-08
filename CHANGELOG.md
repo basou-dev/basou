@@ -7,6 +7,21 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- **`basou board init` (experimental) prints a board.yaml to start a board
+  from.** It is of the newest `board_version`, in the language the manifest
+  declares for the workspace's own repo: a title from the workspace's name,
+  the six stages with a meaning each (concept, spec, built, merged, open,
+  live), one sample lane to cut again (a board needs one), nothing to
+  observe, no component registered (the first measurement names every one
+  it finds, which fires the axis review that registers them), an axis of
+  version 1 reviewed every 60 days, and the effort from the day of the first
+  session in this host's time zone (today when there is none; with no name
+  for the zone, a comment says to write one). It writes nothing: its help
+  and `basou board guide` say to save it through a file of its own, moved
+  into place only where no board is, never by printing straight into
+  `board/board.yaml`, which the shell empties before init runs. It exits 1,
+  printing nothing, where a board is already declared or the workspace's
+  own repo is not declared private.
 - **`basou board guide` (experimental) prints the steps an agent follows to
   judge the board and record it, so a workspace needs no skill of its own
   for that.** The steps are filled in with the workspace's default board
