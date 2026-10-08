@@ -8,12 +8,12 @@ import {
   loadPortfolioConfig,
   type PortfolioWorkspace,
   readManifest,
-  resolveRepositoryRoot,
 } from "@basou/core";
 import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { checkPortfolioCoverage, formatCoverageReport } from "../lib/portfolio-coverage.js";
 import { checkPortfolioSafety, formatSafetyReport } from "../lib/portfolio-safety.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import {
   type RemoteUrlResolver,
   startViewServer,
@@ -218,7 +218,7 @@ export async function doRunView(options: ViewOptions, ctx: ViewContext): Promise
 
 /** Single-workspace mode: resolve the cwd's repo (git required) and serve it alone. */
 async function buildSingleDeps(ctx: ViewContext, cwd: string): Promise<ViewServerDeps> {
-  const repositoryRoot = await resolveRepositoryRootForView(cwd);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "view");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
   const entry = await buildWorkspaceEntry(repositoryRoot, ctx);
@@ -386,19 +386,6 @@ function waitForShutdown(signal: AbortSignal | undefined): Promise<void> {
       signal.addEventListener("abort", onAbort);
     }
   });
-}
-
-async function resolveRepositoryRootForView(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou view'.", {
-        cause: error,
-      });
-    }
-    throw error;
-  }
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

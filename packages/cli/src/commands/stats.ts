@@ -3,7 +3,6 @@ import {
   basouPaths,
   computeWorkStats,
   findErrorCode,
-  resolveRepositoryRoot,
   type SourceWorkStats,
   type WorkStatsResult,
 } from "@basou/core";
@@ -15,6 +14,7 @@ import {
   renderCliError,
 } from "../lib/error-render.js";
 import { formatDurationMs } from "../lib/format-duration.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 export type StatsOptions = {
   json?: boolean;
@@ -61,7 +61,7 @@ export async function runStats(options: StatsOptions, ctx: StatsContext = {}): P
 /** Pure runner: resolve the workspace, aggregate, and print (text or JSON). */
 export async function doRunStats(options: StatsOptions, ctx: StatsContext): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForStats(cwd);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "stats");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
@@ -199,19 +199,6 @@ function formatFloorMs(ms: number): string {
 /** "1,234,567" — thousands-separated, fixed en-US so output is deterministic. */
 function formatInt(n: number): string {
   return n.toLocaleString("en-US");
-}
-
-async function resolveRepositoryRootForStats(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou stats'.", {
-        cause: error,
-      });
-    }
-    throw error;
-  }
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

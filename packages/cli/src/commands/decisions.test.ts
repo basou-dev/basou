@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -440,5 +450,24 @@ describe("basou decisions generate", () => {
     expect(decisions).toBeDefined();
     const generate = decisions?.commands.find((c) => c.name() === "generate");
     expect(generate).toBeDefined();
+  });
+});
+
+describe("basou decisions generate from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links and writes there", async () => {
+    const repo = await setupInitedRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-decisions-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunDecisionsGenerate({}, { cwd: view, nowProvider: () => FIXED_DATE });
+      expect(joinCalls(out)).toContain("decisions: 0");
+      expect(joinCalls(err)).toContain("Resolved workspace view to");
+      expect(await readFile(basouPaths(repo).files.decisions, "utf8")).toContain(GENERATED_START);
+      expect(await readdir(view)).toEqual(["fixture-planning"]);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
   });
 });

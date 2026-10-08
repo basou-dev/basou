@@ -1534,3 +1534,20 @@ describe.skipIf(process.platform === "win32")("an approval file that is not foll
     expect(events).toContain('"type":"approval_approved"');
   });
 });
+
+describe("basou approval from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links", async () => {
+    const repo = await setupInitedRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-approval-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunApprovalList({}, { cwd: view });
+      expect(joinCalls(out)).toBe("No approvals found.");
+      expect(joinCalls(err)).toContain("Resolved workspace view to");
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});

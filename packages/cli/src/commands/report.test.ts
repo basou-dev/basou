@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -240,5 +240,24 @@ describe("basou report generate", () => {
     await runReportGenerate({}, { cwd: repo });
     expect(process.exitCode).toBe(1);
     expect(joinCalls(err)).toContain("Workspace not initialized");
+  });
+});
+
+describe("basou report generate from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links", async () => {
+    const repo = await setupInitedRepo();
+    await importChainedSession(repo);
+    const view = await mkdtemp(join(tmpdir(), "basou-report-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const out = captureStdout();
+      const err = captureStderr();
+      await runReportGenerate({}, { cwd: view, nowProvider: () => FIXED_DATE });
+      expect(joinCalls(out)).toContain("1 verified");
+      expect(joinCalls(err)).toContain("Resolved workspace view to");
+      expect(process.exitCode ?? 0).toBe(0);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
   });
 });

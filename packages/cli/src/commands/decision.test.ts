@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -1514,5 +1523,24 @@ describe("basou decision void", () => {
     await expect(
       doRunDecisionVoid(did, { supersededBy: did }, { cwd: repo, ...FIXED_CTX }),
     ).rejects.toThrow(/cannot supersede itself/);
+  });
+});
+
+describe("doRunDecisionRecord from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links and records there", async () => {
+    const repo = await setupInitedRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-decision-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunDecisionRecord({ title: "recorded from a view" }, { cwd: view, ...FIXED_CTX });
+      expect(joinCalls(out)).toContain("Recorded decision_");
+      expect(joinCalls(err)).toContain("Resolved workspace view to");
+      await findAdHocSessionId(repo); // the session is in the linked repo's store
+      expect(await readdir(view)).toEqual(["fixture-planning"]);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
   });
 });

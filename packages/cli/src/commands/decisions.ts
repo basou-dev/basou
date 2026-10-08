@@ -5,7 +5,6 @@ import {
   readMarkdownFile,
   renderDecisions,
   renderWithMarkers,
-  resolveRepositoryRoot,
   writeMarkdownFile,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -15,6 +14,7 @@ import {
   printSessionSkip,
   renderCliError,
 } from "../lib/error-render.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 export type DecisionsGenerateOptions = { verbose?: boolean };
 
@@ -56,7 +56,7 @@ export async function doRunDecisionsGenerate(
 ): Promise<void> {
   void options;
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForDecisions(cwd);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "decisions generate");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
 
@@ -73,20 +73,6 @@ export async function doRunDecisionsGenerate(
   await writeMarkdownFile(paths.files.decisions, finalBody);
 
   console.log(`Generated .basou/decisions.md (decisions: ${result.decisionCount})`);
-}
-
-async function resolveRepositoryRootForDecisions(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error(
-        "Not a git repository. Run 'git init' first, then re-run 'basou decisions generate'.",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
 }
 
 async function assertWorkspaceInitialized(basouRoot: string): Promise<void> {

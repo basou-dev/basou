@@ -1,11 +1,15 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveBasouRootForCommand, resolveMemberToMaster } from "./repo-root.js";
+import {
+  resolveBasouRootForCommand,
+  resolveMemberToMaster,
+  resolveRepositoryRootInPlace,
+} from "./repo-root.js";
 
 const execFileAsync = promisify(execFile);
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
@@ -229,5 +233,66 @@ describe("resolveBasouRootForCommand (member → master)", () => {
       portfolioConfigPath: join(parent, "nope.yaml"),
     });
     expect(await realpath(root)).toBe(await realpath(member));
+  });
+});
+
+describe("resolveRepositoryRootInPlace", () => {
+  /** A git-untracked directory under `parent` that links each target by name. */
+  async function view(links: Record<string, string>): Promise<string> {
+    const dir = join(parent, "fixture-workspace");
+    await mkdir(dir);
+    for (const [name, target] of Object.entries(links)) await symlink(target, join(dir, name));
+    return dir;
+  }
+
+  async function messageOf(cwd: string, commandName: string): Promise<string> {
+    try {
+      await resolveRepositoryRootInPlace(cwd, commandName);
+    } catch (error: unknown) {
+      return (error as Error).message;
+    }
+    throw new Error("expected a rejection");
+  }
+
+  it("returns the toplevel of the repository it runs in, never redirecting", async () => {
+    const m = await master("planning", ["."]);
+    const sub = join(m, "src");
+    await mkdir(sub);
+    expect(await realpath(await resolveRepositoryRootInPlace(sub, "exec"))).toBe(await realpath(m));
+  });
+
+  it("says a workspace view is one instead of advising git init", async () => {
+    const m = await master("planning", ["."]);
+    const v = await view({ "fixture-planning": m });
+    const message = await messageOf(v, "init");
+    expect(message).toBe(
+      "Not a git repository: this is a workspace view (it links fixture-planning). Run 'basou init' inside a repository instead.",
+    );
+    expect(message).not.toContain(parent);
+  });
+
+  it("says so for a view that links more than one repository with a store", async () => {
+    const a = await master("planning-a", ["."]);
+    const b = await master("planning-b", ["."]);
+    const v = await view({ a, b });
+    expect(await messageOf(v, "run")).toBe(
+      "Not a git repository: this is a workspace view (it links more than one repository with a .basou store). Run 'basou run' inside a repository instead.",
+    );
+  });
+
+  it("keeps the git init advice for a directory whose links hold no store", async () => {
+    const plain = await gitRepo("plain");
+    const v = await view({ plain });
+    expect(await messageOf(v, "project new")).toBe(
+      "Not a git repository. Run 'git init' first, then re-run 'basou project new'.",
+    );
+  });
+
+  it("keeps the git init advice for a plain directory", async () => {
+    const dir = join(parent, "plain-dir");
+    await mkdir(dir);
+    expect(await messageOf(dir, "exec")).toBe(
+      "Not a git repository. Run 'git init' first, then re-run 'basou exec'.",
+    );
   });
 });

@@ -494,3 +494,22 @@ describe("basou verify --json as documented", () => {
     expect(process.exitCode).toBe(1);
   });
 });
+
+describe("basou verify from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links", async () => {
+    const repo = await setupInitedRepo();
+    const importedId = await importChainedSession(repo);
+    const view = await mkdtemp(join(tmpdir(), "basou-verify-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const out = captureStdout();
+      const err = captureStderr();
+      await runVerify({}, { cwd: view });
+      expect(joinCalls(out).split("\n")).toContain(`${importedId}  verified (3 events)`);
+      expect(joinCalls(err)).toContain("Resolved workspace view to");
+      expect(process.exitCode ?? 0).toBe(0);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});

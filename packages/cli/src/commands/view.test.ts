@@ -1595,3 +1595,22 @@ describe("basou view: the board page", () => {
     ]);
   });
 });
+
+describe("basou view from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links", async () => {
+    const repo = await setupInitedRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-view-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      await withServer(view, {}, async (handle) => {
+        const { status, data } = await getJson(handle, "/api/overview");
+        expect(status).toBe(200);
+        expect((data as { repoRoot: string }).repoRoot).toBe(repo);
+      });
+      expect(err.mock.calls.flat().join(" ")).toContain("Resolved workspace view to");
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});

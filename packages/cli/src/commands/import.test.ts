@@ -1663,3 +1663,24 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+describe("basou import claude-code from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links and imports there", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, "sess-view", actionTranscript(repo));
+    const view = await mkdtemp(join(tmpdir(), "basou-import-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      await doRunImportClaudeCode(
+        { all: true },
+        { cwd: view, claudeProjectsDir: getProjectsRoot() },
+      );
+      expect(await listSessionDirs(repo)).toHaveLength(1);
+      expect(err.mock.calls.flat().join(" ")).toContain("Resolved workspace view to");
+      expect(await readdir(view)).toEqual(["fixture-planning"]);
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
+  });
+});

@@ -5,12 +5,12 @@ import {
   findErrorCode,
   type Manifest,
   readManifest,
-  resolveRepositoryRoot,
   type StatusSnapshot,
   writeStatus,
 } from "@basou/core";
 import type { Command } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
+import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 export type StatusOptions = {
   json?: boolean;
@@ -61,7 +61,7 @@ export async function runStatus(options: StatusOptions, ctx: StatusContext = {})
  */
 export async function doRunStatus(options: StatusOptions, ctx: StatusContext): Promise<void> {
   const cwd = ctx.cwd ?? process.cwd();
-  const repositoryRoot = await resolveRepositoryRootForStatus(cwd);
+  const repositoryRoot = await resolveBasouRootForCommand(cwd, "status");
   const paths = basouPaths(repositoryRoot);
 
   // Pre-condition: refuse to operate on a swapped/non-directory .basou root
@@ -121,24 +121,6 @@ function renderTextStatus(s: StatusSnapshot): void {
   const total = Object.keys(dp).length;
   const present = Object.values(dp).filter((v) => v === true).length;
   console.log(`Subdirectories present: ${present}/${total}`);
-}
-
-/**
- * Wrap the core git capability so the CLI surfaces the command-specific
- * "Run 'git init' first, then re-run 'basou status'." suffix while the
- * capability layer remains command-agnostic.
- */
-async function resolveRepositoryRootForStatus(cwd: string): Promise<string> {
-  try {
-    return await resolveRepositoryRoot(cwd);
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === "Not a git repository") {
-      throw new Error("Not a git repository. Run 'git init' first, then re-run 'basou status'.", {
-        cause: error,
-      });
-    }
-    throw error;
-  }
 }
 
 /**

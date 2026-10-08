@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -362,5 +362,22 @@ describe("basou stats", () => {
     await runStats({}, ctx(repo));
     expect(process.exitCode).toBe(1);
     expect(errSpy.mock.calls.flat().join(" ")).toContain("Workspace not initialized");
+  });
+});
+
+describe("basou stats from a workspace view", () => {
+  it("resolves a git-untracked view to the repo it links", async () => {
+    const repo = await setupInitedRepo();
+    const view = await mkdtemp(join(tmpdir(), "basou-stats-view-"));
+    try {
+      await symlink(repo, join(view, "fixture-planning"));
+      const out = captureStdout();
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      await doRunStats({}, ctx(view));
+      expect(out.join("\n")).toContain("Sessions: 0");
+      expect(err.mock.calls.flat().join(" ")).toContain("Resolved workspace view to");
+    } finally {
+      await rm(view, { recursive: true, force: true });
+    }
   });
 });
