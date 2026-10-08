@@ -476,7 +476,7 @@ describe("boardGuide: the commands run", () => {
     };
     expect(
       await run(
-        '<meta name="generator" content="Starlight v0.39.2"><p>Node.js 20.10.0, latest v1.2.3-rc.1</p><p>v9.9.9</p>',
+        '<meta name="generator" content="Starlight v0.39.2"><p>Node.js 20.10.0, tool-dev2.0.0, 1.v3.0.0, latest v1.2.3-rc.1</p><p>v9.9.9</p>',
       ),
     ).toBe("v1.2.3-rc.1\nexit=0\n");
     expect(await run("<p>no version, 1.2.3 alone</p>")).toBe("exit=1\n");
