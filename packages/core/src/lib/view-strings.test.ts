@@ -6,6 +6,7 @@ import type { Manifest } from "../schemas/manifest.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { createManifest, writeManifest } from "../storage/manifest.js";
 import {
+  isPositionBoardLine,
   presetStrings,
   resolveAnchorContentLanguage,
   resolveRepoContentLanguage,
@@ -161,6 +162,9 @@ describe("viewStrings", () => {
         t.orientation.verdictCurrent("1h ago", "terminal", false),
         t.orientation.verdictCurrent("1h ago", "terminal", true),
         t.orientation.verdictSuspectsCaveat(1),
+        t.orientation.boardLine(undefined, null),
+        t.orientation.boardLine(null, 1),
+        t.orientation.boardLine({ date: "2026-05-08", age: "1d ago" }, 2),
       ];
       for (const line of rendered) {
         expect(typeof line).toBe("string");
@@ -244,5 +248,31 @@ describe("presetStrings", () => {
         expect(line.length).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+describe("isPositionBoardLine", () => {
+  it("knows the progress-board line in either language, as the position bullets it", () => {
+    for (const lang of ["en", "ja"] as const) {
+      const t = viewStrings(lang);
+      for (const line of [
+        t.orientation.boardLine(undefined, null),
+        t.orientation.boardLine(null, 1),
+        t.orientation.boardLine({ date: "2026-05-08", age: "3d ago" }, 12),
+      ]) {
+        expect(isPositionBoardLine(`- ${line}`)).toBe(true);
+        expect(isPositionBoardLine(line)).toBe(false);
+        expect(isPositionBoardLine(`  - ${line}`)).toBe(false);
+      }
+    }
+  });
+
+  it("does not take a line that only begins or ends like it, or holds more code", () => {
+    const line = viewStrings("en").orientation.boardLine(null, 1);
+    expect(isPositionBoardLine(`- ${line} and more`)).toBe(false);
+    expect(isPositionBoardLine(`- Latest decision: ${line}`)).toBe(false);
+    expect(
+      isPositionBoardLine("- Progress board: `x`. To update it, follow `basou board guide`."),
+    ).toBe(false);
   });
 });

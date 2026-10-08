@@ -1,6 +1,5 @@
 import { dirname, join } from "node:path";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "../approval/approval-store.js";
-import { todayIn } from "../board/effort.js";
 import type { BoardGlance } from "../board/glance.js";
 import { countOpenDecisionGaps, type DecisionForGapCount } from "../decision-gaps/index.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
@@ -917,7 +916,7 @@ function formatOrientationBody(
       at === null || at === undefined
         ? at
         : {
-            date: todayIn(undefined, new Date(at)) ?? at.slice(0, 10),
+            date: localDay(new Date(at)),
             age: t.relativeAge(at, now),
           };
     lines.push(`- ${t.orientation.boardLine(last, opts.board.axisVersion)}`);
@@ -1360,4 +1359,11 @@ function shortId(id: string): string {
   const sep = id.indexOf("_");
   if (sep === -1) return id.slice(0, 10);
   return id.slice(0, sep + 1) + id.slice(sep + 1, sep + 1 + 10);
+}
+
+// The day of an instant on this host's clock, as YYYY-MM-DD: the Date's own
+// local fields, which follow TZ even where the zone has no name.
+function localDay(at: Date): string {
+  const pad = (n: number, width: number) => String(n).padStart(width, "0");
+  return `${pad(at.getFullYear(), 4)}-${pad(at.getMonth() + 1, 2)}-${pad(at.getDate(), 2)}`;
 }

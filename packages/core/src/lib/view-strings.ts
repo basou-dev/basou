@@ -245,6 +245,28 @@ function relativeAgeJa(startedAt: string | null, now: Date): string {
   return `${mins}分前`;
 }
 
+// How the position's progress-board line begins and ends in each language.
+// Between them stand only a date, an age and a version, which basou writes.
+const BOARD_LINE = {
+  en: { head: "Progress board: ", tail: ". To update it, follow `basou board guide`." },
+  ja: { head: "進捗盤: ", tail: "。更新は `basou board guide` の手順で。" },
+} as const;
+
+/**
+ * Whether a line of a position is the progress-board line, as a bullet:
+ * fixed words of basou's around a date, an age and a version, which carry no
+ * name of the operator's. A scan for other workspaces' names passes it over,
+ * so a workspace named like one of its words does not silence a position.
+ */
+export function isPositionBoardLine(line: string): boolean {
+  return Object.values(BOARD_LINE).some(
+    ({ head, tail }) =>
+      line.startsWith(`- ${head}`) &&
+      line.endsWith(tail) &&
+      !line.slice(2 + head.length, line.length - tail.length).includes("`"),
+  );
+}
+
 const EN: ViewStrings = {
   relativeAge: relativeAgeEn,
   common: {
@@ -344,7 +366,7 @@ const EN: ViewStrings = {
             ? "no record yet"
             : `last record ${last.date} (${last.age})`;
       const axis = axisVersion === null ? "axis version unknown" : `axis v${axisVersion}`;
-      return `Progress board: ${record}, ${axis}. To update it, follow \`basou board guide\`.`;
+      return `${BOARD_LINE.en.head}${record}, ${axis}${BOARD_LINE.en.tail}`;
     },
   },
   handoff: {
@@ -477,7 +499,7 @@ const JA: ViewStrings = {
             ? "記録なし"
             : `最後の記録 ${last.date}（${last.age}）`;
       const axis = axisVersion === null ? "軸の版は不明" : `軸 v${axisVersion}`;
-      return `進捗盤: ${record}・${axis}。更新は \`basou board guide\` の手順で。`;
+      return `${BOARD_LINE.ja.head}${record}・${axis}${BOARD_LINE.ja.tail}`;
     },
   },
   handoff: {

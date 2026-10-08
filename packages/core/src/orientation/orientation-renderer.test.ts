@@ -2582,34 +2582,30 @@ describe("orientation: the workspace's progress board", () => {
       result.body.indexOf("## Where you are now"),
       result.body.indexOf("## Recent direction"),
     );
-    const day = new Intl.DateTimeFormat("en-CA", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date(at));
+    const d = new Date(at);
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     expect(where).toContain(
       `- Progress board: last record ${day} (3d ago), axis v2. To update it, follow \`basou board guide\`.\n`,
     );
   });
 
-  it("gives the record's day in this host's time zone", async () => {
-    const resolved = Intl.DateTimeFormat.prototype.resolvedOptions;
-    const spy = vi
-      .spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions")
-      .mockImplementation(function (this: Intl.DateTimeFormat) {
-        return { ...resolved.call(this), timeZone: "Asia/Tokyo" };
-      });
+  it("gives the record's day on this host's clock, even in a zone with no name", async () => {
+    const saved = process.env.TZ;
     try {
-      const paths = await setupPaths();
-      const result = await renderOrientation({
-        paths,
-        nowIso: FIXED_NOW_ISO,
-        // 05:00 on 2026-05-06 in Tokyo, though still 2026-05-05 in UTC.
-        board: { lastRecordAt: "2026-05-05T20:00:00.000Z", axisVersion: 1 },
-      });
-      expect(result.body).toContain("- Progress board: last record 2026-05-06 (");
+      for (const tz of ["Asia/Tokyo", "JST-9"]) {
+        process.env.TZ = tz;
+        const paths = await setupPaths();
+        const result = await renderOrientation({
+          paths,
+          nowIso: FIXED_NOW_ISO,
+          // 05:00 on 2026-05-06 in Tokyo, though still 2026-05-05 in UTC.
+          board: { lastRecordAt: "2026-05-05T20:00:00.000Z", axisVersion: 1 },
+        });
+        expect(result.body).toContain("- Progress board: last record 2026-05-06 (");
+      }
     } finally {
-      spy.mockRestore();
+      if (saved === undefined) delete process.env.TZ;
+      else process.env.TZ = saved;
     }
   });
 

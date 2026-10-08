@@ -271,6 +271,7 @@ export type {
 export {
   boardInitStrings,
   boardPageStrings,
+  isPositionBoardLine,
   presetStrings,
   resolveAnchorContentLanguage,
   resolveRepoContentLanguage,

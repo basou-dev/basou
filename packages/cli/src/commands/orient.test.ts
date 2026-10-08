@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
@@ -13,6 +13,8 @@ import {
 } from "@basou/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { regenerateOrientation } from "../lib/provenance-actions.js";
+import { renderRegisteredWorkspacePosition } from "./hook.js";
 import {
   doRunOrient,
   registerOrientCommand,
@@ -395,16 +397,19 @@ describe("basou orient: the workspace's progress board", () => {
   }
 
   it("says when the default board was last recorded, and how to update it", async () => {
+    // Three days before the fixed clock.
     const repo = await withBoard("private", "axis: { version: 2 }\n", [
-      "01M4A00000000000000000000A",
+      ulidAt(FIXED_DATE.getTime() - 3 * 86_400_000),
     ]);
     const out = captureStdout();
+    const err = captureStderr();
     await doRunOrient({}, ctxFor(repo));
+    expect(joinCalls(err)).toBe("");
     const line = joinCalls(out)
       .split("\n")
       .find((l) => l.startsWith("- Progress board: "));
     expect(line).toMatch(
-      /^- Progress board: last record \d{4}-\d{2}-\d{2} \(.+\), axis v2\. To update it, follow `basou board guide`\.$/,
+      /^- Progress board: last record \d{4}-\d{2}-\d{2} \(3d ago\), axis v2\. To update it, follow `basou board guide`\.$/,
     );
     // The hook's position says the same, writing nothing.
     const rendered = await renderOrientationForRoot(repo, {}, ctxFor(repo), { write: false });
@@ -435,5 +440,59 @@ describe("basou orient: the workspace's progress board", () => {
       "- Progress board: its records cannot be read, axis version unknown. To update it, follow `basou board guide`.",
     );
     expect(process.exitCode ?? 0).toBe(0);
+  });
+});
+
+// A ULID of the time given, its random part all zeros.
+function ulidAt(ms: number): string {
+  const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  let time = "";
+  for (let rest = ms, i = 0; i < 10; i++, rest = Math.floor(rest / 32)) {
+    time = alphabet[rest % 32] + time;
+  }
+  return `${time}${"0".repeat(16)}`;
+}
+
+describe("the progress-board line, wherever the position is written", () => {
+  async function privateBoard(): Promise<string> {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    const manifest = createManifest({
+      workspaceName: "fixture-ws",
+      now: FIXED_DATE,
+      workspaceId: FIXED_WS_ID,
+    });
+    await writeManifest(
+      paths,
+      { ...manifest, repos: [{ path: ".", visibility: "private" }] },
+      {
+        force: true,
+      },
+    );
+    await mkdir(join(repo, "board", "records"), { recursive: true });
+    await writeFile(join(repo, "board", "board.yaml"), "axis: { version: 4 }\n");
+    return repo;
+  }
+
+  it("is in the position basou refresh writes too", async () => {
+    const repo = await privateBoard();
+    await regenerateOrientation(basouPaths(repo), FIXED_DATE.toISOString());
+    expect(await readFile(basouPaths(repo).files.orientation, "utf8")).toContain(
+      "- Progress board: no record yet, axis v4. To update it, follow `basou board guide`.",
+    );
+  });
+
+  it("does not silence the hook's position when another workspace is named like one of its words", async () => {
+    const repo = await privateBoard();
+    const guide = join(dirname(repo), `${basename(repo)}-x`, "guide");
+    await mkdir(guide, { recursive: true });
+    const portfolio = join(repo, "portfolio.yaml");
+    await writeFile(portfolio, `workspaces:\n  - path: ${repo}\n  - path: ${guide}\n`);
+    const { body } = await renderRegisteredWorkspacePosition(repo, portfolio);
+    expect(body).toContain("- Progress board: no record yet, axis v4.");
+    const err = captureStderr();
+    captureStdout();
+    await doRunOrient({}, { ...ctxFor(repo), portfolioConfigPath: portfolio });
+    expect(joinCalls(err)).toBe("");
   });
 });

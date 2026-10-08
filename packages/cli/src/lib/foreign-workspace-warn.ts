@@ -1,6 +1,11 @@
 import { realpath } from "node:fs/promises";
 import { dirname } from "node:path";
-import { type BasouPaths, loadPortfolioConfig, readMarkdownFile } from "@basou/core";
+import {
+  type BasouPaths,
+  isPositionBoardLine,
+  loadPortfolioConfig,
+  readMarkdownFile,
+} from "@basou/core";
 import { scanForeignWorkspaceNames } from "./foreign-workspace-scan.js";
 
 /**
@@ -73,11 +78,13 @@ export async function findForeignWorkspaceNames(args: {
     return null;
   }
 
-  const hits = scanForeignWorkspaceNames({
-    text: args.text,
-    workspacePaths,
-    selfPath,
-  });
+  // The progress-board line is basou's own words around a date and a
+  // version; blanked, not dropped, so the line numbers stay the text's.
+  const text = args.text
+    .split("\n")
+    .map((line) => (isPositionBoardLine(line) ? "" : line))
+    .join("\n");
+  const hits = scanForeignWorkspaceNames({ text, workspacePaths, selfPath });
   if (hits.length === 0) return null;
 
   const lines = [...new Set(hits.flatMap((h) => h.lines))].sort((a, b) => a - b);
