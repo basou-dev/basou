@@ -1157,6 +1157,7 @@ describe("basou board record", () => {
           footnotes: ["fine", name],
         },
         axis_review: { triggers: ["d"], summary: `cut as ${name} was` },
+        judged_by: { model: `${name} model`, self_reported: true },
       };
       const { out, err } = capture();
       for (const dryRun of [true, false]) {
@@ -1176,6 +1177,7 @@ describe("basou board record", () => {
           "  - observed (entry 2).source",
           "  - cells[1].reason",
           "  - axis_review.summary",
+          "  - judged_by.model",
         ]);
         expect(process.exitCode).toBe(1);
         process.exitCode = undefined;

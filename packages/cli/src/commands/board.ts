@@ -639,6 +639,7 @@ function judgedTexts(input: BoardRecordInput): { at: string; text: string }[] {
   if (input.axis_review !== null) {
     out.push({ at: "axis_review.summary", text: input.axis_review.summary });
   }
+  out.push({ at: "judged_by.model", text: input.judged_by.model });
   return out;
 }
 
