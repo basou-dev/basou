@@ -523,6 +523,19 @@ describe("boardPage", () => {
     const withoutKey = await boardPage(records);
     if (withoutKey.status !== "ok") throw new Error(withoutKey.why);
     expect(withoutKey.board.footnotes.axis.this_review).toBeNull();
+    // A review not in its shape is drawn as none; the record is still drawn.
+    for (const axis_review of [
+      { triggers: ["d"] },
+      { triggers: ["d"], summary: null },
+      { triggers: "d", summary: "s" },
+      "d",
+    ]) {
+      await place(A, record({ axis_review }));
+      const odd = await boardPage(records);
+      if (odd.status !== "ok") throw new Error(`${JSON.stringify(axis_review)}: ${odd.why}`);
+      expect(odd.board.footnotes.axis.this_review).toBeNull();
+      expect(odd.board.footnotes.notes).toEqual(["Measured with care."]);
+    }
   });
 
   it("does not draw a record it cannot read, of a version it does not know, or not in the shape of one", async () => {

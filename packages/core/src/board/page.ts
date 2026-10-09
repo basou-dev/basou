@@ -91,10 +91,13 @@ const pageRecordSchema = z.looseObject({
     footnotes: z.array(text),
   }),
   judged_by: z.looseObject({ model: text }),
+  // A review not in its shape is drawn as none, not taken for a record that
+  // cannot be drawn: the rest of the record is drawn as it was before.
   axis_review: z
     .looseObject({ triggers: z.array(text), summary: text })
     .nullable()
-    .optional(),
+    .optional()
+    .catch(null),
   order_anomalies: z.array(z.looseObject({ lane: text, stage: text, state: text, before: text })),
 });
 

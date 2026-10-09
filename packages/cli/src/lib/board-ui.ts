@@ -675,7 +675,7 @@ export const BOARD_HTML = `<!doctype html>
     // The last review and the need were measured before the record was
     // written: when it reviews the axis itself, they are the ones before it.
     var own = f.axis.this_review || null;
-    var review = !f.axis.last_review_known ? S.footnotes.reviewUnknown
+    var review = !f.axis.last_review_known ? (own ? S.footnotes.previousReviewUnknown : S.footnotes.reviewUnknown)
       : last === null ? (own ? S.footnotes.noPreviousReview : S.footnotes.noReview)
       : last.from === 'record' ? fill(own ? S.footnotes.previousReviewFromRecord : S.footnotes.lastReviewFromRecord, { date: last.date, model: last.model, record: last.record || '' })
       : fill(own ? S.footnotes.previousReview : S.footnotes.lastReview, { date: last.date, model: last.model });
