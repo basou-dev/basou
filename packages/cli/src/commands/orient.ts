@@ -7,6 +7,7 @@ import {
   writeMarkdownFile,
 } from "@basou/core";
 import type { Command } from "commander";
+import { glanceDefaultBoard } from "../lib/board-glance.js";
 import {
   isVerbose,
   printReplayWarning,
@@ -199,6 +200,7 @@ export async function renderOrientationForRoot(
     paths,
     nowIso,
     staleness,
+    board: await glanceDefaultBoard(repositoryRoot, paths),
     verbose: options.verbose === true,
     federatedRoots,
     onWarning: (w, sid) => printReplayWarning(w, sid),

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { LOCAL_CLI_EVENT_SOURCE } from "../schemas/shared.schema.js";
 import type { TaskStatus } from "../schemas/task.schema.js";
@@ -2554,5 +2554,86 @@ describe("orientation: an out-of-root file name that carries line breaks", () =>
     expect(warnLine).toContain("/etc/new\\n\\n## Forged section\\ntext\\x1b[2J.txt");
     expect(body).not.toMatch(/^## Forged section/m);
     expect(body).not.toContain("\u001b");
+  });
+});
+
+describe("orientation: the workspace's progress board", () => {
+  const LINE = /^- Progress board: /m;
+
+  it("says nothing of a board when there is none", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, { id: SES("S01"), status: "completed" });
+    const omitted = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(omitted.body).not.toMatch(LINE);
+    const none = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO, board: null });
+    expect(none.body).toBe(omitted.body);
+  });
+
+  it("says when the board was last recorded, its axis, and to follow the guide, in where you are now", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, { id: SES("S01"), status: "completed" });
+    const at = new Date(Date.parse(FIXED_NOW_ISO) - 3 * 86_400_000).toISOString();
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      board: { lastRecordAt: at, axisVersion: 2 },
+    });
+    const where = result.body.slice(
+      result.body.indexOf("## Where you are now"),
+      result.body.indexOf("## Recent direction"),
+    );
+    const d = new Date(at);
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    expect(where).toContain(
+      `- Progress board: last record ${day} (3d ago), axis v2. To update it, follow \`basou board guide\`.\n`,
+    );
+  });
+
+  it("gives the record's day on this host's clock, even in a zone with no name", async () => {
+    const saved = process.env.TZ;
+    try {
+      for (const tz of ["Asia/Tokyo", "JST-9"]) {
+        process.env.TZ = tz;
+        const paths = await setupPaths();
+        const result = await renderOrientation({
+          paths,
+          nowIso: FIXED_NOW_ISO,
+          // 05:00 on 2026-05-06 in Tokyo, though still 2026-05-05 in UTC.
+          board: { lastRecordAt: "2026-05-05T20:00:00.000Z", axisVersion: 1 },
+        });
+        expect(result.body).toContain("- Progress board: last record 2026-05-06 (");
+      }
+    } finally {
+      if (saved === undefined) delete process.env.TZ;
+      else process.env.TZ = saved;
+    }
+  });
+
+  it("says when there is no record yet, when the records cannot be read, and when the axis is not known", async () => {
+    const paths = await setupPaths();
+    const body = async (board: {
+      lastRecordAt: string | null | undefined;
+      axisVersion: number | null;
+    }) => (await renderOrientation({ paths, nowIso: FIXED_NOW_ISO, board })).body;
+    expect(await body({ lastRecordAt: null, axisVersion: 1 })).toContain(
+      "- Progress board: no record yet, axis v1. To update it, follow `basou board guide`.",
+    );
+    expect(await body({ lastRecordAt: undefined, axisVersion: null })).toContain(
+      "- Progress board: its records cannot be read, axis version unknown. To update it, follow `basou board guide`.",
+    );
+  });
+
+  it("writes the line in the anchor's language", async () => {
+    const paths = await setupPaths();
+    const result = await renderOrientation({
+      paths,
+      nowIso: FIXED_NOW_ISO,
+      language: "ja",
+      board: { lastRecordAt: null, axisVersion: 3 },
+    });
+    const line = result.body.split("\n").find((l) => l.includes("basou board guide")) ?? "";
+    expect(line.startsWith("- ")).toBe(true);
+    expect(line).not.toContain("Progress board");
+    expect(line).toContain("v3");
   });
 });

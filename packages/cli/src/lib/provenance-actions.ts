@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import {
   assertApprovalStoreSafe,
   assertLockStoreSafe,
@@ -16,6 +17,7 @@ import {
   type ImportContext,
   type ImportOptions,
 } from "../commands/import.js";
+import { glanceDefaultBoard } from "./board-glance.js";
 
 /**
  * Shared provenance actions reused by both `basou refresh` (one-shot CLI) and
@@ -267,7 +269,12 @@ export async function regenerateOrientation(
   nowIso: string,
   callbacks?: Omit<Parameters<typeof renderOrientation>[0], "paths" | "nowIso">,
 ): Promise<OrientationCounts> {
-  const result = await renderOrientation({ paths, nowIso, ...callbacks });
+  const result = await renderOrientation({
+    paths,
+    nowIso,
+    board: await glanceDefaultBoard(dirname(paths.root), paths),
+    ...callbacks,
+  });
   await writeMarkdownFile(paths.files.orientation, `${result.body}\n`);
   return {
     sessionCount: result.sessionCount,

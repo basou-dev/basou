@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "../approval/approval-store.js";
+import type { BoardGlance } from "../board/glance.js";
 import { countOpenDecisionGaps, type DecisionForGapCount } from "../decision-gaps/index.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { displayPath } from "../lib/display-path.js";
@@ -71,6 +72,12 @@ export type OrientationRendererInput = {
    * store and other hosts still render. An absent root path is silently empty.
    */
   onHostUnavailable?: (host: string, error: unknown) => void;
+  /**
+   * The workspace's progress board, as the CLI glanced at it: a line in "where
+   * am I now" says when it was last recorded and how to update it. Omitted or
+   * null = no board, and no line.
+   */
+  board?: BoardGlance | null;
 };
 
 export type OrientationRendererResult = {
@@ -772,6 +779,7 @@ export async function renderOrientation(
       staleness: input.staleness ?? null,
       verbose: input.verbose === true,
       language,
+      board: input.board ?? null,
     }),
     sessionCount: summary.sessionCount,
     pendingApprovalsCount: summary.pendingApprovals.length,
@@ -792,6 +800,7 @@ function formatOrientationBody(
     } | null;
     verbose: boolean;
     language: ViewLanguage;
+    board: BoardGlance | null;
   },
 ): string {
   const t = viewStrings(opts.language);
@@ -900,6 +909,17 @@ function formatOrientationBody(
     }
   } else {
     lines.push(`- ${t.common.recentFilesLabel}: (none recorded)`);
+  }
+  if (opts.board !== null) {
+    const at = opts.board.lastRecordAt;
+    const last =
+      at === null || at === undefined
+        ? at
+        : {
+            date: localDay(new Date(at)),
+            age: t.relativeAge(at, now),
+          };
+    lines.push(`- ${t.orientation.boardLine(last, opts.board.axisVersion)}`);
   }
   lines.push("");
 
@@ -1339,4 +1359,11 @@ function shortId(id: string): string {
   const sep = id.indexOf("_");
   if (sep === -1) return id.slice(0, 10);
   return id.slice(0, sep + 1) + id.slice(sep + 1, sep + 1 + 10);
+}
+
+// The day of an instant on this host's clock, as YYYY-MM-DD: the Date's own
+// local fields, which follow TZ even where the zone has no name.
+function localDay(at: Date): string {
+  const pad = (n: number, width: number) => String(n).padStart(width, "0");
+  return `${pad(at.getFullYear(), 4)}-${pad(at.getMonth() + 1, 2)}-${pad(at.getDate(), 2)}`;
 }

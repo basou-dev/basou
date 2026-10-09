@@ -48,6 +48,8 @@ export type { BoardActiveMs, BoardEffort, BoardEffortDay } from "./effort.js";
 export { BOARD_EFFORT_METHOD, effortStartOf } from "./effort.js";
 export type { BoardFreshness, BoardImportProbe } from "./freshness.js";
 export { BOARD_FRESHNESS_METHOD } from "./freshness.js";
+export type { BoardGlance } from "./glance.js";
+export { glanceBoard } from "./glance.js";
 export type { GlobMatcher } from "./glob.js";
 export { compileGlob, compileGlobs } from "./glob.js";
 export type { BoardGuideInput } from "./guide.js";

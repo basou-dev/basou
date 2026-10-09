@@ -100,6 +100,7 @@ export type {
   BoardEffort,
   BoardEffortDay,
   BoardFreshness,
+  BoardGlance,
   BoardGuideInput,
   BoardImportProbe,
   BoardInitInput,
@@ -180,6 +181,7 @@ export {
   diffMeasurements,
   diffObserved,
   effortStartOf,
+  glanceBoard,
   isBoardTimeZone,
   measureBoard,
   measureBoardLive,
@@ -269,6 +271,7 @@ export type {
 export {
   boardInitStrings,
   boardPageStrings,
+  isPositionBoardLine,
   presetStrings,
   resolveAnchorContentLanguage,
   resolveRepoContentLanguage,

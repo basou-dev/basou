@@ -165,6 +165,16 @@ export type ViewStrings = {
     toolHuman: string;
     toolImport: string;
     toolUnknown: string;
+    /**
+     * The line saying the workspace keeps a progress board: when its last
+     * record was written (null when there is none, undefined when the
+     * records cannot be read), the axis's version (null when it cannot be
+     * read), and how to update it.
+     */
+    boardLine: (
+      last: { date: string; age: string } | null | undefined,
+      axisVersion: number | null,
+    ) => string;
   };
   handoff: {
     headingCurrentState: string;
@@ -233,6 +243,28 @@ function relativeAgeJa(startedAt: string | null, now: Date): string {
   if (days > 0) return hours > 0 ? `${days}日${hours}時間前` : `${days}日前`;
   if (hours > 0) return mins > 0 ? `${hours}時間${mins}分前` : `${hours}時間前`;
   return `${mins}分前`;
+}
+
+// How the position's progress-board line begins and ends in each language.
+// Between them stand only a date, an age and a version, which basou writes.
+const BOARD_LINE = {
+  en: { head: "Progress board: ", tail: ". To update it, follow `basou board guide`." },
+  ja: { head: "進捗盤: ", tail: "。更新は `basou board guide` の手順で。" },
+} as const;
+
+/**
+ * Whether a line of a position is the progress-board line, as a bullet:
+ * fixed words of basou's around a date, an age and a version, which carry no
+ * name of the operator's. A scan for other workspaces' names passes it over,
+ * so a workspace named like one of its words does not silence a position.
+ */
+export function isPositionBoardLine(line: string): boolean {
+  return Object.values(BOARD_LINE).some(
+    ({ head, tail }) =>
+      line.startsWith(`- ${head}`) &&
+      line.endsWith(tail) &&
+      !line.slice(2 + head.length, line.length - tail.length).includes("`"),
+  );
 }
 
 const EN: ViewStrings = {
@@ -326,6 +358,16 @@ const EN: ViewStrings = {
     toolHuman: "manual note",
     toolImport: "another workspace",
     toolUnknown: "unknown",
+    boardLine: (last, axisVersion) => {
+      const record =
+        last === undefined
+          ? "its records cannot be read"
+          : last === null
+            ? "no record yet"
+            : `last record ${last.date} (${last.age})`;
+      const axis = axisVersion === null ? "axis version unknown" : `axis v${axisVersion}`;
+      return `${BOARD_LINE.en.head}${record}, ${axis}${BOARD_LINE.en.tail}`;
+    },
   },
   handoff: {
     headingCurrentState: "## Current state",
@@ -449,6 +491,16 @@ const JA: ViewStrings = {
     toolHuman: "手動メモ",
     toolImport: "他ワークスペース",
     toolUnknown: "不明",
+    boardLine: (last, axisVersion) => {
+      const record =
+        last === undefined
+          ? "記録が読めない"
+          : last === null
+            ? "記録なし"
+            : `最後の記録 ${last.date}（${last.age}）`;
+      const axis = axisVersion === null ? "軸の版は不明" : `軸 v${axisVersion}`;
+      return `${BOARD_LINE.ja.head}${record}・${axis}${BOARD_LINE.ja.tail}`;
+    },
   },
   handoff: {
     headingCurrentState: "## 現在の状態",
