@@ -13,8 +13,15 @@ import { TaskStatusSchema } from "../schemas/task.schema.js";
  * The file is user-written and is read strictly: an unknown key anywhere is
  * an error, so a typo is refused instead of silently ignored, and every
  * problem the reader can see is reported at once.
+ *
+ * Every version ever written is read: 1, and 2, which adds what to observe
+ * outside basou (`observe`) and what to look at when judging a stage
+ * (`stages.<id>.look` and `.notes`).
  */
-export const BOARD_VERSION = 1;
+export const BOARD_VERSION = 2;
+
+/** The board versions this basou reads. A version is added here, never removed. */
+export const BOARD_VERSIONS = [1, 2] as const;
 
 /** The stage ids of every board. Their order is fixed; a board sets only their meanings. */
 export const BOARD_STAGE_IDS = ["01", "02", "03", "04", "05", "06"] as const;
@@ -245,19 +252,121 @@ const measureSchema = z.discriminatedUnion("kind", [
   trailCountSchema,
 ]);
 
-const stageSchema = z.strictObject({ meaning: nonEmptyText });
+/**
+ * What a board can declare to observe outside basou. basou never makes these
+ * observations (it sends nothing): the judge makes each and records what it
+ * found under the same key.
+ */
+export const BOARD_OBSERVE_KINDS = [
+  "npm_version",
+  "github_release",
+  "github_open_issues",
+  "github_open_prs",
+  "github_ci",
+  "page_version",
+  "manual",
+] as const;
 
-const boardSchema = z.strictObject({
-  board_version: z.literal(BOARD_VERSION),
-  title: nonEmptyText,
-  stages: z.strictObject({
-    "01": stageSchema,
-    "02": stageSchema,
-    "03": stageSchema,
-    "04": stageSchema,
-    "05": stageSchema,
-    "06": stageSchema,
+/** The branch a `github_ci` observation looks at when it names none. */
+export const BOARD_DEFAULT_CI_BRANCH = "main";
+
+// The values of an observation are put into the commands a judge runs, each
+// as one single-quoted shell word. Each is held to a shape that, quoted so,
+// cannot end its quotation (no "'") or, where a command takes it as an
+// argument, start an option (no leading '-'). A manual observation's `how` is
+// words for a person, never a word of a command.
+
+// An npm package name, scoped or not, in lowercase.
+const NPM_PACKAGE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const npmPackage = z.string().refine((s) => s.length <= 214 && NPM_PACKAGE.test(s), {
+  error: "must be an npm package name such as name or @scope/name, in lowercase",
+});
+
+// A GitHub repository as owner/name.
+// An owner may hold '_' (a managed user's handle does).
+const GITHUB_REPO = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\/[A-Za-z0-9._-]{1,100}$/;
+const githubRepo = z.string().refine((s) => GITHUB_REPO.test(s) && !/\/\.{1,2}$/.test(s), {
+  error: "must be a GitHub repository written as owner/name",
+});
+
+// The file name of a workflow, as gh run list --workflow takes it.
+const workflowFile = z
+  .string()
+  .refine((s) => s.length <= 255 && /^[A-Za-z0-9_][A-Za-z0-9._-]*\.ya?ml$/.test(s), {
+    error: "must be the file name of a workflow, such as quality.yml",
+  });
+
+// A branch name without what a shell or git would read as something else.
+const branchName = z
+  .string()
+  .refine(
+    (s) =>
+      /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(s) &&
+      !s.includes("..") &&
+      !s.includes("//") &&
+      !/[/.]$/.test(s),
+    {
+      error: "must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",
+    },
+  );
+
+// Why a text is not an https:// URL a command can be given as it is, or undefined.
+function httpsUrlProblem(s: string): string | undefined {
+  if (!/^[\x21-\x7e]+$/.test(s)) return "must be printable ASCII with no spaces";
+  if (/['"`\\<>]/.test(s)) return "must not contain quotes, backslashes, '<' or '>'";
+  if (!s.startsWith("https://")) return "must be an https:// URL";
+  // As written, not as the URL parser reads it: the parser drops a slash too
+  // many and an empty user name, but the text is what a command is given.
+  const authority = s.slice("https://".length).split(/[/?#]/)[0] ?? "";
+  if (authority === "") return "must name a host";
+  if (authority.includes("@")) return "must not carry a user name or a password";
+  try {
+    new URL(s);
+  } catch {
+    return "must be an https:// URL";
+  }
+  return undefined;
+}
+
+const httpsUrl = z.string().superRefine((s, ctx) => {
+  const problem = httpsUrlProblem(s);
+  if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
+});
+
+const observeSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ key: idText, kind: z.literal("npm_version"), package: npmPackage }),
+  z.strictObject({ key: idText, kind: z.literal("github_release"), repo: githubRepo }),
+  z.strictObject({ key: idText, kind: z.literal("github_open_issues"), repo: githubRepo }),
+  z.strictObject({ key: idText, kind: z.literal("github_open_prs"), repo: githubRepo }),
+  z.strictObject({
+    key: idText,
+    kind: z.literal("github_ci"),
+    repo: githubRepo,
+    workflow: workflowFile,
+    branch: branchName.default(BOARD_DEFAULT_CI_BRANCH),
   }),
+  z.strictObject({ key: idText, kind: z.literal("page_version"), url: httpsUrl }),
+  z.strictObject({ key: idText, kind: z.literal("manual"), how: nonEmptyText }),
+]);
+
+const stageSchemaV1 = z.strictObject({ meaning: nonEmptyText });
+
+const stageSchemaV2 = z.strictObject({
+  meaning: nonEmptyText,
+  look: z.array(nonEmptyText).optional(),
+  notes: z.array(nonEmptyText).optional(),
+});
+
+const stagesOf = <S extends z.ZodType>(stage: S) =>
+  z.strictObject({ "01": stage, "02": stage, "03": stage, "04": stage, "05": stage, "06": stage });
+
+const boardVersionText = z.literal(BOARD_VERSIONS, {
+  error: `must be a board version this basou reads (${BOARD_VERSIONS.join(" or ")})`,
+});
+
+// The keys every version has after its stages, in the order a problem with
+// them is reported.
+const boardFields = {
   lanes: z
     .array(
       z.strictObject({
@@ -309,11 +418,33 @@ const boardSchema = z.strictObject({
       .array(z.strictObject({ date: dateText, label: nonEmptyText, ref: nonEmptyText }))
       .optional(),
   }),
+};
+
+const boardSchemaV1 = z.strictObject({
+  board_version: boardVersionText,
+  title: nonEmptyText,
+  stages: stagesOf(stageSchemaV1),
+  ...boardFields,
 });
 
-export type BoardDeclaration = z.output<typeof boardSchema>;
+const boardSchemaV2 = z.strictObject({
+  board_version: boardVersionText,
+  title: nonEmptyText,
+  stages: stagesOf(stageSchemaV2),
+  ...boardFields,
+  observe: z.array(observeSchema).default([]),
+});
+
+/**
+ * A declaration as read, whatever its version: one of version 1 has no
+ * observations and no stage has `look` or `notes`.
+ */
+export type BoardDeclaration = z.output<typeof boardSchemaV2>;
 export type BoardMeasure = BoardDeclaration["measures"][number];
 export type BoardMeasureKind = BoardMeasure["kind"];
+/** One entry of `observe`: what to observe outside basou, and the key it is recorded under. */
+export type BoardObserve = BoardDeclaration["observe"][number];
+export type BoardObserveKind = BoardObserve["kind"];
 
 /** What the reader needs from outside the file. */
 export type BoardDeclarationContext = {
@@ -384,10 +515,12 @@ export function parseBoardDeclaration(
   // Before the warnings and the keys: a file in a newer shape may use what
   // this basou does not know, and the version is what it should be told.
   const version = raw.board_version;
-  if (typeof version === "number" && version !== BOARD_VERSION) {
+  if (typeof version === "number" && !(BOARD_VERSIONS as readonly number[]).includes(version)) {
     return {
       ok: false,
-      errors: [`board_version: this basou reads board_version ${BOARD_VERSION}, not ${version}`],
+      errors: [
+        `board_version: this basou reads board_version ${BOARD_VERSIONS.join(" or ")}, not ${version}`,
+      ],
     };
   }
   const yamlErrors = [
@@ -397,13 +530,45 @@ export function parseBoardDeclaration(
   if (yamlErrors.length > 0) return { ok: false, errors: yamlErrors };
 
   const errors: string[] = [];
-  const parsed = boardSchema.safeParse(raw);
+  // A file with no version, or one that is not a number, is held to the
+  // newest shape.
+  if (version === 1) {
+    const parsed = boardSchemaV1.safeParse(raw);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) errors.push(...formatVersion1Issue(issue));
+    }
+    errors.push(...crossCheck(raw, context));
+    if (errors.length > 0 || !parsed.success) return { ok: false, errors };
+    return { ok: true, declaration: { ...parsed.data, observe: [] } };
+  }
+  const parsed = boardSchemaV2.safeParse(raw);
   if (!parsed.success) {
     for (const issue of parsed.error.issues) errors.push(formatIssue(issue));
   }
   errors.push(...crossCheck(raw, context));
   if (errors.length > 0 || !parsed.success) return { ok: false, errors };
   return { ok: true, declaration: parsed.data };
+}
+
+// The keys version 2 added, where it added them: a file of version 1 that
+// has one is told so apart from the keys no version reads.
+function formatVersion1Issue(issue: Issue): string[] {
+  if (issue.code !== "unrecognized_keys") return [formatIssue(issue)];
+  const added =
+    issue.path.length === 0
+      ? ["observe"]
+      : issue.path.length === 2 && issue.path[0] === "stages"
+        ? ["look", "notes"]
+        : [];
+  const later = issue.keys.filter((k) => added.includes(k));
+  if (later.length === 0) return [formatIssue(issue)];
+  const others = issue.keys.filter((k) => !added.includes(k));
+  const out = others.length === 0 ? [] : [formatIssue({ ...issue, keys: others })];
+  const named = later.map((k) => `'${k}'`).join(", ");
+  out.push(
+    `${formatPath(issue.path)}: ${named} ${later.length === 1 ? "is" : "are"} read from board_version 2 on; this file is board_version 1`,
+  );
+  return out;
 }
 
 // The first line of a parser message, without the ':' that introduces the
@@ -524,22 +689,27 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
   const errors: string[] = [];
 
   // The ids of a list, reporting duplicates; undefined when it is not a list.
-  const idsOf = (key: string, what: string): Set<string> | undefined => {
+  const idsOf = (key: string, what: string, field = "id"): Set<string> | undefined => {
     const list = entries(raw, key);
     if (list === undefined) return undefined;
     const seen = new Map<string, number>();
     for (const [i, entry] of list) {
-      const id = stringAt(entry, "id");
+      const id = stringAt(entry, field);
       if (id === undefined) continue;
       const first = seen.get(id);
       if (first === undefined) seen.set(id, i);
-      else errors.push(`${key}[${i}].id: duplicate ${what} id '${id}' (first at ${key}[${first}])`);
+      else
+        errors.push(
+          `${key}[${i}].${field}: duplicate ${what} ${field} '${id}' (first at ${key}[${first}])`,
+        );
     }
     return new Set(seen.keys());
   };
   const laneIds = idsOf("lanes", "lane");
   const measureIds = idsOf("measures", "measure");
   idsOf("ratios", "ratio");
+  // A version 1 file has no observations: its `observe` is refused as a key.
+  if (raw.board_version !== 1) idsOf("observe", "observation", "key");
 
   const repoPaths = new Set(context.manifestRepoPaths);
   const declared =

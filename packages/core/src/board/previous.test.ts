@@ -58,6 +58,19 @@ describe("readPreviousRecords", () => {
     });
   });
 
+  it("reads a record of version 2 after one of version 1", async () => {
+    await mkdir(records);
+    await place(`${A}.json`, record({ axis_review: REVIEW }));
+    await place(`${B}.json`, record({ record_version: 2 }));
+    const read = await readPreviousRecords(records);
+    expect(read.last).toMatchObject({ status: "found", id: B, record: { record_version: 2 } });
+    expect(read.lastReview).toMatchObject({
+      status: "found",
+      id: A,
+      record: { record_version: 1 },
+    });
+  });
+
   it("takes the last by name as the previous record, and the last with an axis review", async () => {
     await mkdir(records);
     await place(`${A}.json`, record({ axis_review: REVIEW, judged_by: { model: "Old Model" } }));
@@ -99,10 +112,10 @@ describe("readPreviousRecords", () => {
       status: "unreadable",
       reason: `the record ${B} could not be read as JSON`,
     });
-    await place(`${C}.json`, record({ record_version: 2 }));
+    await place(`${C}.json`, record({ record_version: 3 }));
     const unread = {
       status: "unreadable",
-      reason: `the record ${C} is of record_version 2, which this basou does not read`,
+      reason: `the record ${C} is of record_version 3, which this basou does not read`,
     };
     expect(await readPreviousRecords(records)).toEqual({ last: unread, lastReview: unread });
     await place(`${C}.json`, record({ cells: "all done" }));

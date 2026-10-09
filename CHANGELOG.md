@@ -3,6 +3,31 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **A board can declare what to observe outside basou, and what to look at
+  when judging each stage (`board_version: 2`, experimental).** `observe`
+  lists observations, each under the `key` its record holds it by, of seven
+  kinds: an npm package's published version (`npm_version`, `package`), a
+  GitHub repository's latest release, open issues or open pull requests
+  (`github_release`, `github_open_issues`, `github_open_prs`, `repo` as
+  `owner/name`), the conclusion of a workflow's latest run on a branch
+  (`github_ci`, `repo`, `workflow` as its file name, `branch`, by default
+  `main`), the version a web page shows (`page_version`, an `https://` URL
+  with no user name or password), and one only a person can make (`manual`,
+  `how`, in words). basou does not make them and sends nothing; each value is
+  held to its shape when the board is read, since the steps a judge follows
+  turn it into a command. A stage may add `look` (what to look at) and
+  `notes` (what to mind when judging it). A version 1 board is read as
+  before, and is told that version 2 reads these keys when it has them. A
+  record of a board that declares observations must give exactly those, one
+  not made as `null` with its error: one left out, or one the board does not
+  declare, is refused, nothing written. Records are now `record_version: 2`,
+  holding the observations and the stages' `look` and `notes` the board
+  declared; a record of version 1 is still read, compared with and drawn.
+
 ## 0.67.0 — 2026-10-08
 
 ### Added

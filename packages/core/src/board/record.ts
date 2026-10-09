@@ -19,9 +19,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * The version of a record's shape, the shape of the measurement it holds
- * included. Raised whenever that shape changes.
+ * included. Raised whenever that shape changes: 2 added the observations the
+ * declaration names (`declaration.observe`) and what each stage is judged by
+ * (`look` and `notes` of `declaration.stages`). Every version is read.
  */
-export const BOARD_RECORD_VERSION = 1;
+export const BOARD_RECORD_VERSION = 2;
+
+/** The record versions this basou reads. A version is added here, never removed. */
+export const BOARD_RECORD_VERSIONS = [1, 2] as const;
 
 /** The states a cell of the board can be in. */
 export const BOARD_CELL_STATES = [
@@ -176,9 +181,11 @@ export type BoardRecordInputResult =
  * report every problem at once, each starting with where it is: each part
  * whose shape is right is held against the declaration even when another
  * part's shape is wrong. An unknown key is refused at every level but the
- * keys of `observed` and of `prose.lanes`, which the latter limits to the
- * declaration's lane ids. Every lane has a cell at every stage, once. The
- * value is what JSON.parse read, so a key given twice has kept its last.
+ * keys of `observed` and of `prose.lanes`: the latter are limited to the
+ * declaration's lane ids, and the former, when the declaration names what to
+ * observe, are exactly those names. Every lane has a cell at every stage,
+ * once. The value is what JSON.parse read, so a key given twice has kept
+ * its last.
  */
 export function parseRecordInput(
   value: unknown,
@@ -207,6 +214,27 @@ export function parseRecordInput(
     for (const key of Object.keys(given.observed)) {
       if (key.trim() === "") {
         errors.push(`${formatPath(["observed", key])}: is not a name it can have`);
+      }
+    }
+  }
+  // A board that declares what to observe is recorded with exactly those
+  // observations: one that was not made is given as null with its error, so
+  // a closed exit is never dropped from the board unsaid, and a name the
+  // declaration does not hold (a typo) would never meet the value the
+  // previous record has under the right one.
+  const observed = given.observed === undefined ? {} : given.observed;
+  if (declaration.observe.length > 0 && isRecord(value) && isRecord(observed)) {
+    const declared = new Set(declaration.observe.map((o) => o.key));
+    for (const key of declared) {
+      if (!Object.hasOwn(observed, key)) {
+        errors.push(
+          `${formatPath(["observed", key])}: the board declares it, so it must be given (null, with an error, when it was not observed)`,
+        );
+      }
+    }
+    for (const key of Object.keys(observed)) {
+      if (!declared.has(key) && key.trim() !== "" && key !== "__proto__") {
+        errors.push(`${formatPath(["observed", key])}: is not an observation the board declares`);
       }
     }
   }
@@ -311,6 +339,7 @@ export type BoardRecord = {
     components: BoardDeclaration["components"];
     axis: BoardDeclaration["axis"];
     effort: BoardDeclaration["effort"];
+    observe: BoardDeclaration["observe"];
   };
   /**
    * What basou measured as it recorded, the digest the judge saw included,
@@ -349,6 +378,7 @@ export function buildRecord(input: {
       components: d.components,
       axis: d.axis,
       effort: d.effort,
+      observe: d.observe,
     },
     measure,
     observed: r.observed,

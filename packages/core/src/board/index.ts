@@ -18,14 +18,19 @@ export type {
   BoardDeclarationResult,
   BoardMeasure,
   BoardMeasureKind,
+  BoardObserve,
+  BoardObserveKind,
 } from "./declaration.js";
 export {
   BOARD_DEFAULT_AT,
   BOARD_DEFAULT_CAPTURE_GROUP,
+  BOARD_DEFAULT_CI_BRANCH,
+  BOARD_OBSERVE_KINDS,
   BOARD_REGEX_FLAGS,
   BOARD_STAGE_IDS,
   BOARD_TRAIL_COUNTS,
   BOARD_VERSION,
+  BOARD_VERSIONS,
   parseBoardDeclaration,
 } from "./declaration.js";
 export type {
@@ -83,6 +88,7 @@ export {
   BOARD_AXIS_REVIEW_TRIGGERS,
   BOARD_CELL_STATES,
   BOARD_RECORD_VERSION,
+  BOARD_RECORD_VERSIONS,
   buildRecord,
   orderAnomalies,
   parseRecordInput,

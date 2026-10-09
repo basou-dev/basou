@@ -6,9 +6,11 @@ import { findErrorCode } from "../lib/error-codes.js";
 import { isCalendarDate } from "./declaration.js";
 import { diffCells } from "./diff.js";
 import { readBoardRecordFile, recordIds } from "./previous.js";
+import { BOARD_RECORD_VERSIONS } from "./record.js";
 
-// The record versions the page draws. A version is added here, never removed.
-const DRAWN_VERSIONS = new Set([1]);
+// The record versions the page draws: every version a record has had (a
+// version is added to BOARD_RECORD_VERSIONS, never removed).
+const DRAWN_VERSIONS = new Set<number>(BOARD_RECORD_VERSIONS);
 
 const text = z.string();
 const count = z.number().nullable();

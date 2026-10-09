@@ -925,7 +925,7 @@ describe("basou board record", () => {
     expect(await readdir(join(repo, "board", "records"))).toEqual([name]);
     const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
     expect(written).toMatchObject({
-      record_version: 1,
+      record_version: 2,
       measure: { digest: input.measure_digest },
       judged_by: { model: "Claude Opus 5.5", self_reported: true },
       order_anomalies: [],
@@ -936,6 +936,36 @@ describe("basou board record", () => {
       "c",
     ]);
     expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("records a version 2 board with exactly the observations it declares", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 2;
+    board.stages["05"].look = ["the published version"];
+    board.observe = [{ key: "npm_cli", kind: "npm_version", package: "@scope/cli" }];
+    const { repo, input } = await judged(undefined, JSON.stringify(board));
+    const { err } = capture();
+    await runBoardRecord({}, fed(repo, input));
+    expect(err.join("\n")).toContain(
+      "observed.npm_cli: the board declares it, so it must be given (null, with an error, when it was not observed)",
+    );
+    expect(err.join("\n")).toContain("nothing was written");
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
+    const observed = {
+      npm_cli: { value: null, observed_at: "2026-10-08", source: "npm", error: "offline" },
+    };
+    const result = await doRunBoardRecord({}, fed(repo, { ...input, observed }));
+    const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
+    expect(written).toMatchObject({
+      record_version: 2,
+      measure: { board_version: 2 },
+      observed,
+      declaration: {
+        observe: [{ key: "npm_cli", kind: "npm_version", package: "@scope/cli" }],
+        stages: { "05": { meaning: "stage 05", look: ["the published version"] } },
+      },
+    });
   });
 
   it("checks and measures but writes nothing with --dry-run, and reports as JSON", async () => {
@@ -983,7 +1013,7 @@ describe("basou board record", () => {
     );
     expect(out.join("\n")).toBe(`Recorded ${result.record}\nNot compared with a previous record.`);
     await expect(readFile(join(deeper, result.record ?? ""), "utf8")).resolves.toContain(
-      '"record_version": 1',
+      '"record_version": 2',
     );
   });
 
