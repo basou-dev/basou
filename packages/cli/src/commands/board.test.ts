@@ -1575,9 +1575,23 @@ describe("basou board init", () => {
       ) {
         return { ...resolved.call(this), timeZone: name as string };
       });
+    // Some Node versions take an offset as a zone, and name the host's zone so
+    // under TZ=GMT; older ones refuse it, and the host's zone then has no name.
+    const takesOffset = (() => {
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: "+00:00" });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    const unnamed = "no name, so effort.start is today in UTC and effort.time_zone is left out";
     for (const [zone, said] of [
-      ["+00:00", "no name a board can declare, so effort.time_zone is left out"],
-      [undefined, "no name, so effort.start is today in UTC and effort.time_zone is left out"],
+      [
+        "+00:00",
+        takesOffset ? "no name a board can declare, so effort.time_zone is left out" : unnamed,
+      ],
+      [undefined, unnamed],
     ] as const) {
       const spy = zoneIs(zone);
       const out: string[] = [];
@@ -1592,7 +1606,9 @@ describe("basou board init", () => {
         const parsed = parseBoardDeclaration(text, { manifestRepoPaths: ["."] });
         if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
         expect(parsed.declaration.effort.time_zone).toBeUndefined();
-        expect(text.includes(boardInitStrings("en").comments.effortToday)).toBe(zone === undefined);
+        expect(text.includes(boardInitStrings("en").comments.effortToday)).toBe(
+          zone === undefined || !takesOffset,
+        );
       } finally {
         spy.mockRestore();
         vi.restoreAllMocks();
