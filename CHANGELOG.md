@@ -7,6 +7,30 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Added
 
+- **`basou board guide` (experimental) prints the steps an agent follows to
+  judge the board and record it, so a workspace needs no skill of its own
+  for that.** The steps are filled in with the workspace's default board
+  (`board/board.yaml`, read only when the manifest declares the workspace's
+  own repo private): where it is, its last record and when, the axis's
+  version and last review, the language the prose is written in, the port
+  its page opens on (chosen from the workspace's path, never `basou view`'s
+  default) and a working directory of its own; the commands that take the
+  other repos' state before and after (each one's HEAD and a hash of what
+  its working tree holds beyond it), measure, record and open the board,
+  runnable as printed once the judging model's name is put in (they stop
+  without it); how to make each observation the board declares
+  (the read-only command, the value to take from it, its source, and how to
+  write one that could not be made), the manual ones listed as the
+  operator's; the principles of judging, with each stage's meaning, `look`
+  and `notes` and each lane's notes; the record's input to fill in, with
+  every cell's state left empty and the previous record's state and reason
+  beside it (record refuses the template as printed, so it cannot be passed
+  on unjudged); the gates before a commit; and what not to do. With no
+  board declared, it says how to declare one. It writes nothing and sends
+  nothing, and has no `--json`: the text is for an agent to read and its
+  shape is not promised. It exits 1, saying why on stderr, when the
+  workspace's own repo is not declared private or its `board.yaml` does
+  not read.
 - **A board can declare what to observe outside basou, and what to look at
   when judging each stage (`board_version: 2`, experimental).** `observe`
   lists observations, each under the `key` its record holds it by, of seven

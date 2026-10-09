@@ -27,9 +27,11 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeStaleness } from "../lib/provenance-actions.js";
 import {
+  doRunBoardGuide,
   doRunBoardMeasure,
   doRunBoardRecord,
   measureLiveBoard,
+  runBoardGuide,
   runBoardMeasure,
   runBoardRecord,
 } from "./board.js";
@@ -1357,6 +1359,116 @@ describe("basou board measure and record against the previous record", () => {
       "\n\nThe previous record could not be read (see Not measured).\n",
     );
     expect(out.join("\n")).toContain("Components:\n  0 found, 0 unacknowledged, gone not known\n");
+  });
+});
+
+describe("basou board guide", () => {
+  const guideCtx = (repo: string) => ({ ...ctx(repo), basouCommand: "basou-under-test" });
+
+  // Every path under a directory with, for a file, its size, modification
+  // time and content.
+  async function tree(dir: string): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        out[path] = "dir";
+        Object.assign(out, await tree(path));
+      } else {
+        const s = await stat(path, { bigint: true });
+        out[path] = `${s.size}:${s.mtimeNs}:${createHash("sha256")
+          .update(await readFile(path))
+          .digest("hex")}`;
+      }
+    }
+    return out;
+  }
+
+  it("prints the steps for the board declared, with its last record, and writes nothing", async () => {
+    const repo = await workspace([
+      { path: ".", visibility: "private", language: "ja" },
+      { path: "../elsewhere" },
+    ]);
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 2;
+    board.observe = [{ key: "npm_cli", kind: "npm_version", package: "@scope/cli" }];
+    await placeBoard(repo, JSON.stringify(board));
+    await mkdir(join(repo, "board", "records"));
+    const id = "01M4A00000000000000000000A";
+    await writeFile(
+      join(repo, "board", "records", `${id}.json`),
+      JSON.stringify({
+        record_version: 1,
+        recorded_at: "2026-10-07T00:00:00.000Z",
+        measure: { methods: {}, components: { found: null } },
+        observed: {},
+        cells: [{ lane: "core", stage: "01", state: "done" }],
+        judged_by: { model: "Claude Opus 5.5", self_reported: true },
+        axis_review: null,
+      }),
+    );
+    const before = await tree(repo);
+    const { out } = capture();
+    const guide = await doRunBoardGuide({}, guideCtx(repo));
+    expect(out.join("\n")).toBe(guide.trimEnd());
+    expect(guide).toContain(`- Workspace (its own repo): ${repo}`);
+    expect(guide).toContain(`board/records/, 1 record; the last is ${id}`);
+    expect(guide).toContain("in Japanese (ja)");
+    expect(guide).toContain("`basou-under-test` printed this");
+    expect(guide).toContain("npm view '@scope/cli' version");
+    expect(guide).toContain("for d in '../elsewhere'; do");
+    expect(guide).toContain('{"lane":"core","stage":"01","state":"","previous":{"state":"done"}}');
+    expect(await tree(repo)).toEqual(before);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("says how to declare a board when there is none", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const { out } = capture();
+    await runBoardGuide({}, guideCtx(repo));
+    expect(out.join("\n")).toContain("## No board is declared yet");
+    expect(process.exitCode ?? 0).toBe(0);
+    await expect(readdir(join(repo, "board"))).rejects.toThrow();
+  });
+
+  it("refuses a workspace whose own repo is not declared private", async () => {
+    const repo = await workspace([{ path: ".", visibility: "public" }]);
+    await placeBoard(repo, boardYaml([]));
+    const { out, err } = capture();
+    await runBoardGuide({}, guideCtx(repo));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain(
+      "The board is kept at board/board.yaml only in a workspace whose manifest declares its own repo (path: .) private",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("refuses a repo path holding a control character, which its commands would carry", async () => {
+    const repo = await workspace([
+      { path: ".", visibility: "private" },
+      { path: `../o${String.fromCharCode(27)}[31mther` },
+    ]);
+    await placeBoard(repo, boardYaml([]));
+    const { out, err } = capture();
+    await runBoardGuide({}, guideCtx(repo));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain(
+      "The workspace's path, or a repo path the manifest declares, holds a control character",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("refuses a declaration that does not read, listing why", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, JSON.stringify({ ...JSON.parse(boardYaml([])), title: "" }));
+    const { out, err } = capture();
+    await runBoardGuide({}, guideCtx(repo));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain(
+      "board/board.yaml is not a valid board declaration, so there are no steps to print until it reads",
+    );
+    expect(err.join("\n")).toContain("  - title: must be a non-empty string");
+    expect(process.exitCode).toBe(1);
   });
 });
 

@@ -49,6 +49,14 @@ export type { BoardFreshness, BoardImportProbe } from "./freshness.js";
 export { BOARD_FRESHNESS_METHOD } from "./freshness.js";
 export type { GlobMatcher } from "./glob.js";
 export { compileGlob, compileGlobs } from "./glob.js";
+export type { BoardGuideInput } from "./guide.js";
+export {
+  BOARD_GUIDE_PORTS,
+  boardGuide,
+  boardGuidePort,
+  boardGuideWorkDir,
+  shellWord,
+} from "./guide.js";
 export type { BoardIntegrity } from "./integrity.js";
 export { BOARD_INTEGRITY_METHOD } from "./integrity.js";
 export type { BoardLiveMeasurement, BoardLivePage, MeasureBoardLiveInput } from "./live.js";
@@ -77,7 +85,7 @@ export type {
   PreviousOutcome,
   ReadBoardRecord,
 } from "./previous.js";
-export { NO_PREVIOUS_RECORDS, readPreviousRecords } from "./previous.js";
+export { NO_PREVIOUS_RECORDS, readPreviousRecords, recordIds } from "./previous.js";
 export type {
   BoardOrderAnomaly,
   BoardRecord,

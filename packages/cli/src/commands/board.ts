@@ -1,4 +1,4 @@
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   assertBasouRootSafe,
@@ -15,6 +15,7 @@ import {
   type BoardPreviousRecords,
   type BoardRepo,
   basouPaths,
+  boardGuide,
   buildRecord,
   byCodePoint,
   diffCells,
@@ -29,6 +30,9 @@ import {
   parseRecordInput,
   readManifest,
   readPreviousRecords,
+  recordIds,
+  resolveViewLanguage,
+  shellWord,
   writeRecord,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -62,6 +66,8 @@ export type BoardRecordOptions = {
   verbose?: boolean;
 };
 
+export type BoardGuideOptions = { verbose?: boolean };
+
 export type BoardContext = {
   /** Defaults to `process.cwd()`. Injectable for tests. */
   cwd?: string;
@@ -82,6 +88,11 @@ export type BoardContext = {
    * not depend on a real stdin stream. Ignored when `--file` names a file.
    */
   readInput?: () => Promise<string>;
+  /**
+   * How the guide says to call basou where `basou` is not on PATH. Defaults
+   * to the node and the script running now. Injectable for tests.
+   */
+  basouCommand?: string;
 };
 
 /** Where a board's declaration is read from when `--board` is not given. */
@@ -158,6 +169,127 @@ written; the reasons are on stderr).`,
     .action(async (options: BoardRecordOptions) => {
       await runBoardRecord(options);
     });
+  board
+    .command("guide")
+    .description(
+      "Print the steps an agent follows to judge the board and record it (writes nothing, sends nothing)",
+    )
+    .option("-v, --verbose", "Show error causes")
+    .addHelpText(
+      "after",
+      `
+The steps are filled in with this workspace's board (${DEFAULT_BOARD_PATH},
+read only when the manifest declares the workspace's own repo private): where
+it is and its last record, the commands that measure, observe, record and show
+it, what each stage is judged by, and the record's input to fill in, with the
+previous record's state of each cell beside it. With no board declared yet, it
+says how to declare one. The text is for an agent to read; its shape may change
+at any release. Exit codes: 0 when the steps were printed; 1 when the workspace,
+its manifest or its board.yaml cannot be read, or its own repo is not declared
+private (the reason is on stderr).`,
+    )
+    .action(async (options: BoardGuideOptions) => {
+      await runBoardGuide(options);
+    });
+}
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunBoardGuide}. */
+export async function runBoardGuide(
+  options: BoardGuideOptions,
+  ctx: BoardContext = {},
+): Promise<void> {
+  try {
+    await doRunBoardGuide(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Print the steps that judge and record the workspace's default board, read
+ * from its board.yaml and the records beside it. Reads, never writes.
+ */
+export async function doRunBoardGuide(
+  _options: BoardGuideOptions,
+  ctx: BoardContext,
+): Promise<string> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const root = await resolveBasouRootForCommand(
+    cwd,
+    "board guide",
+    ctx.portfolioConfigPath === undefined ? {} : { portfolioConfigPath: ctx.portfolioConfigPath },
+  );
+  const paths = basouPaths(root);
+  await assertWorkspaceInitialized(paths.root);
+  const manifest = await readManifest(paths);
+  const own = (manifest.repos ?? []).find((repo) => repo.path === ".");
+  if (own?.visibility !== "private") {
+    throw new Error(
+      `The board is kept at ${DEFAULT_BOARD_PATH} only in a workspace whose manifest declares its own repo (path: .) private, since a record holds what the trail holds (open tracks, time worked, model names). This one does not, so it has no judged board; basou view's /board page shows what is measured without one.`,
+    );
+  }
+  const board: BoardLocation = {
+    path: join(root, DEFAULT_BOARD_PATH),
+    shown: DEFAULT_BOARD_PATH,
+    given: false,
+  };
+  let text: string | null;
+  try {
+    text = await readDeclaration(board);
+  } catch (error: unknown) {
+    if (!findErrorCode(error, "ENOENT")) throw error;
+    text = null;
+  }
+  const otherRepos = (manifest.repos ?? []).map((repo) => repo.path).filter((p) => p !== ".");
+  // The commands carry these paths as they are, and a control character in
+  // one would reach the terminal of whoever reads the guide.
+  if ([root, ...otherRepos].some((path) => displayPath(path) !== path)) {
+    throw new Error(
+      "The workspace's path, or a repo path the manifest declares, holds a control character, which the guide's commands cannot carry safely. Rename it, or follow the steps by hand.",
+    );
+  }
+  const common = {
+    // As basou resolves it, the root measure resolves the repos' paths against.
+    anchor: root,
+    otherRepos,
+    language: resolveViewLanguage(manifest),
+    basouCommand:
+      ctx.basouCommand ??
+      [process.execPath, process.argv[1] ?? ""]
+        .filter((part) => part !== "")
+        .map(shellWord)
+        .join(" "),
+    basouVersion: BASOU_CLI_VERSION,
+    now: ctx.nowProvider?.() ?? new Date(),
+  };
+  let guide: string;
+  if (text === null) {
+    guide = boardGuide({ ...common, board: { status: "undeclared" } });
+  } else {
+    const parsed = parseBoardDeclaration(text, {
+      manifestRepoPaths: (manifest.repos ?? []).map((repo) => repo.path),
+    });
+    if (!parsed.ok) {
+      throw new Error(
+        `${DEFAULT_BOARD_PATH} is not a valid board declaration, so there are no steps to print until it reads (fix it through an axis review when it changes the lanes or the stages):\n${parsed.errors
+          .map((e) => `  - ${displayPath(e)}`)
+          .join("\n")}`,
+      );
+    }
+    const recordsDir = join(dirname(board.path), "records");
+    guide = boardGuide({
+      ...common,
+      board: {
+        status: "declared",
+        declaration: parsed.declaration,
+        recordCount: recordIds(await readdir(recordsDir).catch(() => [])).length,
+        previous: await readPreviousRecords(recordsDir),
+      },
+    });
+  }
+  console.log(guide.trimEnd());
+  return guide;
 }
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunBoardMeasure}. */
