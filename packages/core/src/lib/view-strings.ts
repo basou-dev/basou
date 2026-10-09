@@ -995,6 +995,13 @@ export type BoardPageStrings = {
     reviewNeededYes: string;
     reviewNeededNo: string;
     reviewNeededUnknown: string;
+    /** In place of lastReview and the rest when the record reviews the axis itself. */
+    previousReview: string;
+    previousReviewFromRecord: string;
+    noPreviousReview: string;
+    reviewNeededBefore: string;
+    /** Followed by the review's summary. */
+    thisReview: string;
     judgedBy: string;
     reportedNote: string;
     notMeasured: string;
@@ -1153,6 +1160,11 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     reviewNeededYes: "yes",
     reviewNeededNo: "no",
     reviewNeededUnknown: "not known",
+    previousReview: "previous review {date} by {model} (declared)",
+    previousReviewFromRecord: "previous review {date} by {model} (record {record})",
+    noPreviousReview: "no review before this one on record",
+    reviewNeededBefore: "Review needed before this record: {answer}",
+    thisReview: "This record reviews the axis (triggers: {triggers}): ",
     judgedBy: "The cells and prose were written by {model}, as it reported itself.",
     reportedNote:
       "Marked reported: what the judge wrote (cells, prose and observations outside). Everything else was measured by basou.",
@@ -1316,6 +1328,11 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     reviewNeededYes: "要",
     reviewNeededNo: "不要",
     reviewNeededUnknown: "分からない",
+    previousReview: "前回の見直し {date}・{model}（宣言）",
+    previousReviewFromRecord: "前回の見直し {date}・{model}（記録 {record}）",
+    noPreviousReview: "前回の見直しの記録なし",
+    reviewNeededBefore: "この記録の前の見直しの要否: {answer}",
+    thisReview: "この記録で軸を見直した（きっかけ: {triggers}）: ",
     judgedBy: "セルと文章を書いたのは {model}（自己申告）。",
     reportedNote:
       "「申告」の印は、判定したモデルが書いたもの（セル・文章・外の観測）。それ以外は basou が測った値。",

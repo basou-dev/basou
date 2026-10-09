@@ -91,6 +91,10 @@ const pageRecordSchema = z.looseObject({
     footnotes: z.array(text),
   }),
   judged_by: z.looseObject({ model: text }),
+  axis_review: z
+    .looseObject({ triggers: z.array(text), summary: text })
+    .nullable()
+    .optional(),
   order_anomalies: z.array(z.looseObject({ lane: text, stage: text, state: text, before: text })),
 });
 
@@ -236,13 +240,18 @@ export type BoardPageBody = {
     notes: string[];
     axis: {
       version: number;
+      /** Measured before this record was written, so before its own review. */
       review_needed: boolean | null;
       /**
+       * The last review as measured before this record was written: when the
+       * record reviews the axis itself (`this_review`), the review before it.
        * Null when there is none on record, or, with `last_review_known`
        * false, when a record that may hold it could not be read.
        */
       last_review: { date: string; model: string; from: string; record?: string } | null;
       last_review_known: boolean;
+      /** The record's own review of the axis, as the judge reported it, or null. */
+      this_review: { triggers: string[]; summary: string } | null;
     };
     model: string;
     not_found: { at: string; reason: string }[];
@@ -539,6 +548,10 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
                   : { record: m.axis.last_review.record }),
               },
         last_review_known: !m.not_found.some((n) => n.at === "axis.last_review"),
+        this_review:
+          r.axis_review === null || r.axis_review === undefined
+            ? null
+            : { triggers: [...r.axis_review.triggers], summary: r.axis_review.summary },
       },
       model: r.judged_by.model,
       not_found: m.not_found.map(({ at, reason }) => ({ at, reason })),

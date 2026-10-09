@@ -1453,6 +1453,52 @@ describe("basou view: the board page", () => {
     expect(foot.text()).not.toContain(boardPageStrings("en").footnotes.noReview);
   });
 
+  it("draws a record's own review of the axis in the footnotes, reported, after the review before it", () => {
+    const { call } = drawing(["footnotes"]);
+    const foot = (axis: Record<string, unknown>) =>
+      call("footnotes", {
+        footnotes: {
+          notes: [],
+          axis: { version: 1, review_needed: false, last_review_known: true, ...axis },
+          model: "m",
+          not_found: [],
+          measured_with: { basou: "0", build: null },
+        },
+      }) as Node;
+    const last = { date: "2026-10-08", model: "M", from: "record", record: "REC" };
+    const own = { triggers: ["d", "b"], summary: "Moved `observe` in." };
+    const reviewed = foot({ last_review: last, this_review: own });
+    expect(reviewed.text()).toContain("previous review 2026-10-08 by M (record REC)");
+    expect(reviewed.text()).toContain("Review needed before this record: no");
+    expect(reviewed.text()).not.toContain("last reviewed");
+    const item = reviewed
+      .find((n) => n.tag === "li")
+      .filter((li) => li.text().startsWith("This record reviews the axis (triggers: d, b): "));
+    expect(item).toHaveLength(1);
+    expect(item[0]?.text()).toContain("Moved observe in.");
+    expect(item[0]?.find((n) => n.tag === "code").map((c) => c.text())).toEqual(["observe"]);
+    expect(item[0]?.find((n) => n.className === "reported")).toHaveLength(1);
+    // The review before it may be declared, or none, or not known.
+    const seed = { date: "2026-09-28", model: "M", from: "seed" };
+    expect(foot({ last_review: seed, this_review: own }).text()).toContain(
+      "previous review 2026-09-28 by M (declared)",
+    );
+    expect(foot({ last_review: null, this_review: own }).text()).toContain(
+      "no review before this one on record",
+    );
+    expect(
+      foot({ last_review: null, last_review_known: false, this_review: own }).text(),
+    ).toContain(boardPageStrings("en").footnotes.reviewUnknown);
+    // A record that reviews nothing keeps the last review and the need as they were.
+    for (const none of [{ this_review: null }, {}]) {
+      const plain = foot({ last_review: last, ...none });
+      expect(plain.text()).toContain("last reviewed 2026-10-08 by M (record REC)");
+      expect(plain.text()).toContain("Review needed: no");
+      expect(plain.text()).not.toContain("This record reviews the axis");
+      expect(plain.text()).not.toContain("previous review");
+    }
+  });
+
   it("draws the days of the effort: Claude's time, the rest above it, the running total and the weeks", () => {
     const { call } = drawing(["effort"]);
     const day = (
