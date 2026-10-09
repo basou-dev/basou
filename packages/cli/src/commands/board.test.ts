@@ -1121,6 +1121,164 @@ describe("basou board record", () => {
     );
   });
 
+  describe("the names of other registered workspaces", () => {
+    // A portfolio beside the workspace registering it and one other, whose
+    // directory name is `name`.
+    async function registered(repo: string, name = "other-shop-planning"): Promise<string> {
+      const other = join(`${repo}-x`, name);
+      await mkdir(other, { recursive: true });
+      await writeFile(
+        ctx(repo).portfolioConfigPath,
+        `workspaces:\n  - path: ${repo}\n  - path: ${other}\n`,
+      );
+      return name;
+    }
+
+    it("refuses, writing nothing and naming no workspace, every text of the judge's that names one", async () => {
+      const { repo, input } = await judged(["done", "blocked", "none", "none", "none", "none"]);
+      const name = await registered(repo);
+      const cells = input.cells as { reason?: string }[];
+      (cells[1] as { reason?: string }).reason = `waits on ${name}`;
+      const named = {
+        ...input,
+        observed: {
+          [`${name}_npm`]: { value: null, observed_at: "2026-10-08", source: "npm", error: "x" },
+          npm: {
+            value: `${name} 1.0`,
+            observed_at: "2026-10-08",
+            source: `see ${name}`,
+            error: undefined,
+          },
+        },
+        prose: {
+          summary: `like ${name}`,
+          lanes: { core: `as in ~/projects/${name}` },
+          operator_turns: [{ text: "fine", source: name }],
+          footnotes: ["fine", name],
+        },
+        axis_review: { triggers: ["d"], summary: `cut as ${name} was` },
+        judged_by: { model: `${name} model`, self_reported: true },
+      };
+      const { out, err } = capture();
+      for (const dryRun of [true, false]) {
+        await runBoardRecord({ dryRun }, fed(repo, named));
+        const said = err.join("\n");
+        expect(said).toContain(
+          "The record's input names another workspace the portfolio registers, and a board holds this workspace's own work only; nothing was written:",
+        );
+        expect(said).not.toContain(name);
+        expect(said.split("\n").filter((l) => l.startsWith("  - "))).toEqual([
+          "  - cells[1].reason",
+          "  - prose.summary",
+          "  - prose.lanes (a named entry)",
+          "  - prose.operator_turns[0].source",
+          "  - prose.footnotes[1]",
+          "  - judged_by.model",
+          "  - observed: a name",
+          "  - observed (a named entry).value",
+          "  - observed (a named entry).source",
+          "  - axis_review.summary",
+        ]);
+        expect(process.exitCode).toBe(1);
+        process.exitCode = undefined;
+        err.length = 0;
+      }
+      expect(out).toEqual([]);
+      await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
+    });
+
+    // The digest after the portfolio changed beside the workspace.
+    async function measuredAgain(repo: string): Promise<string> {
+      const { out } = capture();
+      const digest = (await doRunBoardMeasure({ json: true }, ctx(repo))).digest;
+      out.length = 0;
+      vi.restoreAllMocks();
+      return digest;
+    }
+
+    it("refuses before the shape is checked, so no other refusal quotes the name", async () => {
+      const { repo, input } = await judged();
+      const name = await registered(repo);
+      const cells = input.cells as { lane: string }[];
+      (cells[0] as { lane: string }).lane = name;
+      const named = {
+        ...input,
+        [name]: 1,
+        observed: {
+          a: { value: { k: [`~/x/${name}`] }, observed_at: "2026-10-08", source: "s" },
+          b: { value: null, observed_at: "2026-10-08", source: "s", error: `on ${name}` },
+          // Named like a word of the input's shape, and twice in one place.
+          lane: { value: name, observed_at: "2026-10-08", source: "s" },
+          d: { value: name, observed_at: "2026-10-08", source: "s" },
+          // Keys of the input's shape inside a value are the judge's words.
+          e: {
+            value: { state: name, triggers: [name], observed_at: name, measure_digest: name },
+            observed_at: "2026-10-08",
+            source: "s",
+          },
+        },
+        prose: { summary: "fine", operator_turns: [{ text: `ask ${name}`, source: "x" }] },
+      };
+      const { err } = capture();
+      await runBoardRecord({ dryRun: true }, fed(repo, named));
+      const said = err.join("\n");
+      expect(said).not.toContain(name);
+      expect(said).not.toContain("is not a lane of the board");
+      expect(said.split("\n").filter((l) => l.startsWith("  - "))).toEqual([
+        "  - (top level): a name",
+        "  - cells[0].lane",
+        "  - prose.operator_turns[0].text",
+        "  - observed (a named entry).value (a named entry)[0]",
+        "  - observed (a named entry).error",
+        "  - observed (a named entry).value",
+        "  - observed (a named entry).value.state",
+        "  - observed (a named entry).value.triggers[0]",
+        "  - observed (a named entry).value.observed_at",
+        "  - observed (a named entry).value.measure_digest",
+      ]);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("reads a number in a value as the text it is written as", async () => {
+      const { repo, input } = await judged();
+      const name = await registered(repo, "424242");
+      const named = {
+        ...input,
+        observed: { a: { value: Number(name), observed_at: "2026-10-08", source: "s" } },
+      };
+      const { err } = capture();
+      await runBoardRecord({ dryRun: true }, fed(repo, named));
+      expect(err.join("\n")).toContain("  - observed (a named entry).value");
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("takes the workspace's own name, and records with no portfolio to check against", async () => {
+      const { repo, input } = await judged();
+      const own: Record<string, unknown> = {
+        ...input,
+        prose: { summary: `the ${basename(repo)} board` },
+      };
+      capture();
+      expect((await doRunBoardRecord({ dryRun: true }, fed(repo, own))).dry_run).toBe(true);
+      await registered(repo);
+      own.measure_digest = await measuredAgain(repo);
+      capture();
+      expect((await doRunBoardRecord({ dryRun: true }, fed(repo, own))).dry_run).toBe(true);
+    });
+
+    it("records unchecked, and says so, when the portfolio cannot be read", async () => {
+      const { repo, input } = await judged();
+      await writeFile(ctx(repo).portfolioConfigPath, "workspaces: [\n");
+      input.measure_digest = await measuredAgain(repo);
+      const { err } = capture();
+      const result = await doRunBoardRecord({}, fed(repo, input));
+      expect(result.record).not.toBeNull();
+      expect(err.join("\n")).toContain(
+        "basou: ~/.basou/portfolio.yaml could not be read, or does not list workspaces as basou reads them, so the record's input was not checked for the names of other registered workspaces.",
+      );
+    });
+  });
+
   it("refuses, and writes nothing, when the board moved since the judgement", async () => {
     const { repo, input } = await judged();
     await writeFile(join(repo, "LATER.md"), "# later\n");

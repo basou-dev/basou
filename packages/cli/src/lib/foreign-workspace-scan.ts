@@ -16,7 +16,7 @@ import { basename, normalize, sep } from "node:path";
  * one engagement, carries that name into a session that has no business seeing
  * it. This is the read-only primitive the warnings and the hook's gate share:
  * it reports and never rewrites the text. What a caller does with a hit — warn,
- * or withhold — is the caller's.
+ * withhold, or refuse — is the caller's.
  *
  * Matching is on PATHS AND DIRECTORY NAMES, never on the portfolio's display
  * labels. A label is a product name ("basou"), and a product name legitimately

@@ -46,6 +46,7 @@ import {
   printTaskSkip,
   renderCliError,
 } from "../lib/error-render.js";
+import { findForeignWorkspaceFields } from "../lib/foreign-workspace-warn.js";
 import { probeStaleness } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import { BASOU_BUILD, BASOU_CLI_VERSION } from "../program.js";
@@ -541,6 +542,9 @@ async function checkAndRecord(
       cause: error,
     });
   }
+  // Before the shape is checked: a refusal of the shape quotes what it
+  // refuses, and that may be another workspace's name.
+  await refuseOtherWorkspaces(value, loaded.root, ctx);
   const parsed = parseRecordInput(value, loaded.declaration);
   if (!parsed.ok) {
     throw new RecordRefusal(
@@ -597,6 +601,116 @@ async function checkAndRecord(
     order_anomalies: record.order_anomalies,
     diff,
   };
+}
+
+// The keys of a record's input, which a location may name: the words of its
+// shape. Any other key is a name someone chose (an observation's, a lane's,
+// or one the input should not have), which may be the very name found.
+const INPUT_KEYS = new Set([
+  "measure_digest",
+  "observed",
+  "cells",
+  "prose",
+  "judged_by",
+  "axis_review",
+  "value",
+  "observed_at",
+  "source",
+  "error",
+  "lane",
+  "stage",
+  "state",
+  "reason",
+  "summary",
+  "lanes",
+  "operator_turns",
+  "footnotes",
+  "text",
+  "model",
+  "self_reported",
+  "triggers",
+]);
+
+// The places whose values are held to a shape a refusal does not quote (a
+// digest, a time, a state, a trigger), which carry no words of the judge's.
+// Only at those places: the same key inside an observation's value is the
+// judge's, and is looked at. A lane and a stage are quoted when they are not
+// the board's, so they are looked at too.
+const SHAPED_PLACES = [
+  /^measure_digest$/,
+  /^observed \(a named entry\)\.observed_at$/,
+  /^cells\[\d+\]\.state$/,
+  /^axis_review\.triggers$/,
+];
+
+// The maps whose keys are names: an observation's, a lane's.
+const NAMED_MAPS = new Set(["observed", "prose.lanes"]);
+
+/**
+ * Every text of a record's input as JSON.parse read it, keys included, with
+ * where it is: what the judge wrote, and what any key or value the input
+ * should not have says. A location names only the words of the input's
+ * shape; a name someone chose is said to be one, never spelled.
+ */
+function inputTexts(value: unknown): { at: string; text: string }[] {
+  const out: { at: string; text: string }[] = [];
+  const stack: { value: unknown; at: string }[] = [{ value, at: "" }];
+  for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
+    const { value: v, at } = next;
+    if (SHAPED_PLACES.some((place) => place.test(at))) continue;
+    if (typeof v === "string" || typeof v === "number") {
+      out.push({ at: at === "" ? "(top level)" : at, text: String(v) });
+    } else if (Array.isArray(v)) {
+      // Reversed onto the stack, so that it is read in the order written.
+      for (let i = v.length - 1; i >= 0; i--) stack.push({ value: v[i], at: `${at}[${i}]` });
+    } else if (typeof v === "object" && v !== null) {
+      const named = NAMED_MAPS.has(at);
+      const where = at === "" ? "(top level)" : at;
+      const children: { value: unknown; at: string }[] = [];
+      for (const [k, child] of Object.entries(v)) {
+        if (!named && INPUT_KEYS.has(k)) {
+          children.push({ value: child, at: at === "" ? k : `${at}.${k}` });
+        } else {
+          out.push({ at: `${where}: a name`, text: k });
+          children.push({ value: child, at: `${where} (a named entry)` });
+        }
+      }
+      stack.push(...children.reverse());
+    }
+  }
+  return out;
+}
+
+// A board holds one workspace's own work: its record is refused when its
+// input names another workspace the portfolio registers. The refusal says
+// where, never which workspace, so it does not carry the name on itself, and
+// it comes before any other refusal of the input, which would quote it. With no portfolio there is nothing to check against; one that
+// cannot be read is said to be so, and the record goes on unchecked.
+async function refuseOtherWorkspaces(
+  input: unknown,
+  root: string,
+  ctx: BoardContext,
+): Promise<void> {
+  const found = await findForeignWorkspaceFields({
+    fields: inputTexts(input),
+    selfPath: root,
+    configPath: ctx.portfolioConfigPath,
+  });
+  if (found.status === "unreadable") {
+    console.error(
+      "basou: ~/.basou/portfolio.yaml could not be read, or does not list workspaces as basou reads them, so the record's input was not checked for the names of other registered workspaces.",
+    );
+    return;
+  }
+  if (found.status === "checked" && found.at.length > 0) {
+    throw new RecordRefusal(
+      `The record's input names another workspace the portfolio registers, and a board holds this workspace's own work only; nothing was written:\n${[
+        ...new Set(found.at),
+      ]
+        .map((where) => `  - ${displayPath(where)}`)
+        .join("\n")}`,
+    );
+  }
 }
 
 // Only a file named board.yaml has records: one board a records/ directory.

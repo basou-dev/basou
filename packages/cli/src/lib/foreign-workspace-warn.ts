@@ -4,6 +4,7 @@ import {
   type BasouPaths,
   isPositionBoardLine,
   loadPortfolioConfig,
+  PortfolioConfigMissingError,
   readMarkdownFile,
 } from "@basou/core";
 import { scanForeignWorkspaceNames } from "./foreign-workspace-scan.js";
@@ -13,18 +14,20 @@ import { scanForeignWorkspaceNames } from "./foreign-workspace-scan.js";
  * scan a text basou is about to hand to an agent for the names of OTHER
  * registered workspaces.
  *
- * On the commands a person runs, the scan is advisory and never blocks.
- * Refusing to render a position or a protocol block would stop `basou refresh`
- * — the command the operator runs many times a day — on prose they may have
- * written deliberately; a warning they can act on is the honest trade. The
- * warning also names no workspace and quotes no matched text: it reports WHERE
- * to look, so the warning itself cannot become the leak it is reporting. The
- * one automatic path, `basou hook session-start`, has no reader for a warning
- * and withholds the position instead.
+ * On the position and the protocol block, the scan is advisory and never
+ * blocks. Refusing to render one would stop `basou refresh` — the command the
+ * operator runs many times a day — on prose they may have written
+ * deliberately; a warning they can act on is the honest trade. The warning
+ * also names no workspace and quotes no matched text: it reports WHERE to
+ * look, so the warning itself cannot become the leak it is reporting. The one
+ * automatic path, `basou hook session-start`, has no reader for a warning and
+ * withholds the position instead. A progress board's record is the one thing
+ * refused outright ({@link findForeignWorkspaceFields}): it is written for
+ * good and kept in git, where a warning read once would not undo it.
  *
- * A missing, unreadable or empty registry yields `null` (silence): the scan is
- * a courtesy to an operator who registered several workspaces, not a
- * prerequisite for using basou with one.
+ * For the position and the protocol block, a missing, unreadable or empty
+ * registry yields `null` (silence): the scan is a courtesy to an operator who
+ * registered several workspaces, not a prerequisite for using basou with one.
  */
 
 /** How many line numbers a warning spells out before summarizing the rest. */
@@ -89,6 +92,43 @@ export async function findForeignWorkspaceNames(args: {
 
   const lines = [...new Set(hits.flatMap((h) => h.lines))].sort((a, b) => a - b);
   return { workspaceCount: hits.length, lines };
+}
+
+/** Which of several texts name another registered workspace, or why none was checked. */
+export type ForeignWorkspaceFields =
+  | { status: "checked"; at: string[] }
+  | { status: "no_registry" }
+  | { status: "unreadable" };
+
+/**
+ * Scan each of several texts, each named by where it is, for the names of
+ * registered workspaces other than `selfPath`, reading the registry once.
+ * Says which texts name one (never which workspace), or that there is no
+ * registry to check against, or that it could not be read. Never throws.
+ */
+export async function findForeignWorkspaceFields(args: {
+  fields: readonly { at: string; text: string }[];
+  selfPath: string;
+  configPath?: string | undefined;
+}): Promise<ForeignWorkspaceFields> {
+  let workspacePaths: string[];
+  let selfPath: string;
+  try {
+    const workspaces = await loadPortfolioConfig(args.configPath);
+    workspacePaths = await Promise.all(workspaces.map((w) => canonicalize(w.path)));
+    selfPath = await canonicalize(args.selfPath);
+  } catch (error: unknown) {
+    return error instanceof PortfolioConfigMissingError
+      ? { status: "no_registry" }
+      : { status: "unreadable" };
+  }
+  const at = args.fields
+    .filter(
+      (field) =>
+        scanForeignWorkspaceNames({ text: field.text, workspacePaths, selfPath }).length > 0,
+    )
+    .map((field) => field.at);
+  return { status: "checked", at };
 }
 
 /**
