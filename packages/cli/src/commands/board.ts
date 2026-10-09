@@ -3,6 +3,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   assertBasouRootSafe,
   type BasouPaths,
+  BOARD_INIT_SAVE,
   type BoardCellChange,
   type BoardDeclaration,
   type BoardDiff,
@@ -16,12 +17,15 @@ import {
   type BoardRepo,
   basouPaths,
   boardGuide,
+  boardInitText,
   buildRecord,
   byCodePoint,
   diffCells,
   diffObserved,
   displayPath,
+  effortStartOf,
   findErrorCode,
+  isBoardTimeZone,
   type Manifest,
   measureBoard,
   measureBoardLive,
@@ -67,6 +71,8 @@ export type BoardRecordOptions = {
 };
 
 export type BoardGuideOptions = { verbose?: boolean };
+
+export type BoardInitOptions = { verbose?: boolean };
 
 export type BoardContext = {
   /** Defaults to `process.cwd()`. Injectable for tests. */
@@ -191,6 +197,131 @@ private (the reason is on stderr).`,
     .action(async (options: BoardGuideOptions) => {
       await runBoardGuide(options);
     });
+  board
+    .command("init")
+    .description("Print a board.yaml to start a board from (writes nothing)")
+    .option("-v, --verbose", "Show error causes")
+    .addHelpText(
+      "after",
+      `
+It prints a declaration of the newest board_version, in the language the
+manifest declares for the workspace's own repo: a title from the workspace's
+name, the six stages with a meaning each, one lane to cut again, nothing to
+observe, no component registered, an axis of version 1, and the effort from
+the day of the first session, in this host's time zone. It writes nothing:
+save it, from the workspace's own repo, only where no board is, through a file
+of its own:
+
+  ${INIT_SAVE}
+
+Never print it straight into ${DEFAULT_BOARD_PATH}: the shell empties that file
+before init runs, so a board already there would be lost.
+
+Exit codes: 0 when it was printed; 1 when the manifest does not declare the
+workspace's own repo private (a board's records hold what the trail holds),
+when ${DEFAULT_BOARD_PATH} is already there, or when the workspace cannot be
+read (the reason is on stderr, and nothing is printed on stdout).`,
+    )
+    .action(async (options: BoardInitOptions) => {
+      await runBoardInit(options);
+    });
+}
+
+/** How a printed board is saved (see BOARD_INIT_SAVE in @basou/core). */
+export const INIT_SAVE = BOARD_INIT_SAVE;
+
+/** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunBoardInit}. */
+export async function runBoardInit(
+  options: BoardInitOptions,
+  ctx: BoardContext = {},
+): Promise<void> {
+  try {
+    await doRunBoardInit(options, ctx);
+  } catch (error: unknown) {
+    renderCliError(error, { verbose: isVerbose(options) });
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Print a board.yaml to start from, for a workspace whose own repo the
+ * manifest declares private and that has no board yet. Reads, never writes.
+ */
+export async function doRunBoardInit(
+  _options: BoardInitOptions,
+  ctx: BoardContext,
+): Promise<string> {
+  const { root, paths, manifest } = await privateWorkspace(ctx, "board init");
+  // The way to save it writes board/board.yaml in the current directory, so
+  // init runs only where that is the workspace's own: from a member repo, a
+  // workspace view or a subdirectory the board would land elsewhere.
+  const cwd = ctx.cwd ?? process.cwd();
+  if ((await realpath(cwd).catch(() => cwd)) !== (await realpath(root).catch(() => root))) {
+    throw new Error(
+      `Run basou board init from the top of the workspace's own repo, where its .basou/ is: the way to save what it prints writes ${DEFAULT_BOARD_PATH} in the current directory.`,
+    );
+  }
+  const board = join(root, DEFAULT_BOARD_PATH);
+  try {
+    await lstat(board);
+    throw new Error(
+      `${DEFAULT_BOARD_PATH} is already there, so there is no board to start: change that one (through an axis review when it changes the lanes or the stages).`,
+    );
+  } catch (error: unknown) {
+    if (!findErrorCode(error, "ENOENT")) throw error;
+  }
+  const { start, timeZone, sessionsRead } = await effortStartOf(
+    paths,
+    ctx.nowProvider?.() ?? new Date(),
+  );
+  if (timeZone === undefined) {
+    console.error(
+      "basou: this host's time zone has no name, so effort.start is today in UTC and effort.time_zone is left out; write both.",
+    );
+  } else if (!sessionsRead) {
+    console.error(
+      "basou: the sessions could not be read, so effort.start is today; set it to the day the work began.",
+    );
+  } else if (!isBoardTimeZone(timeZone)) {
+    console.error(
+      "basou: this host's time zone has no name a board can declare, so effort.time_zone is left out; write one.",
+    );
+  }
+  const text = boardInitText({
+    name: manifest.workspace.name,
+    language: resolveViewLanguage(manifest),
+    start,
+    startIsFirstSession: timeZone !== undefined,
+    // An offset such as +00:00, which some hosts name their zone, is not
+    // one a board can declare.
+    timeZone: timeZone !== undefined && isBoardTimeZone(timeZone) ? timeZone : undefined,
+  });
+  process.stdout.write(text);
+  return text;
+}
+
+// The workspace a board command works in, when the manifest declares its own
+// repo private; otherwise why there is no board for it.
+async function privateWorkspace(
+  ctx: BoardContext,
+  command: string,
+): Promise<{ root: string; paths: BasouPaths; manifest: Manifest }> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const root = await resolveBasouRootForCommand(
+    cwd,
+    command,
+    ctx.portfolioConfigPath === undefined ? {} : { portfolioConfigPath: ctx.portfolioConfigPath },
+  );
+  const paths = basouPaths(root);
+  await assertWorkspaceInitialized(paths.root);
+  const manifest = await readManifest(paths);
+  const own = (manifest.repos ?? []).find((repo) => repo.path === ".");
+  if (own?.visibility !== "private") {
+    throw new Error(
+      `The board is kept at ${DEFAULT_BOARD_PATH} only in a workspace whose manifest declares its own repo (path: .) private, since a record holds what the trail holds (open tracks, time worked, model names). This one does not, so it has no judged board; basou view's /board page shows what is measured without one.`,
+    );
+  }
+  return { root, paths, manifest };
 }
 
 /** Programmatic entry that owns `process.exitCode`. Tests prefer {@link doRunBoardGuide}. */
@@ -214,21 +345,7 @@ export async function doRunBoardGuide(
   _options: BoardGuideOptions,
   ctx: BoardContext,
 ): Promise<string> {
-  const cwd = ctx.cwd ?? process.cwd();
-  const root = await resolveBasouRootForCommand(
-    cwd,
-    "board guide",
-    ctx.portfolioConfigPath === undefined ? {} : { portfolioConfigPath: ctx.portfolioConfigPath },
-  );
-  const paths = basouPaths(root);
-  await assertWorkspaceInitialized(paths.root);
-  const manifest = await readManifest(paths);
-  const own = (manifest.repos ?? []).find((repo) => repo.path === ".");
-  if (own?.visibility !== "private") {
-    throw new Error(
-      `The board is kept at ${DEFAULT_BOARD_PATH} only in a workspace whose manifest declares its own repo (path: .) private, since a record holds what the trail holds (open tracks, time worked, model names). This one does not, so it has no judged board; basou view's /board page shows what is measured without one.`,
-    );
-  }
+  const { root, manifest } = await privateWorkspace(ctx, "board guide");
   const board: BoardLocation = {
     path: join(root, DEFAULT_BOARD_PATH),
     shown: DEFAULT_BOARD_PATH,
@@ -239,6 +356,18 @@ export async function doRunBoardGuide(
     text = await readDeclaration(board);
   } catch (error: unknown) {
     if (!findErrorCode(error, "ENOENT")) throw error;
+    // A link to nothing is there, though it cannot be read: init would not
+    // replace it, so it is not a board to declare.
+    if (
+      await lstat(board.path).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      throw new Error(
+        `${DEFAULT_BOARD_PATH} is there but cannot be read (a link to nothing?). Fix it before the board is updated.`,
+      );
+    }
     text = null;
   }
   const otherRepos = (manifest.repos ?? []).map((repo) => repo.path).filter((p) => p !== ".");

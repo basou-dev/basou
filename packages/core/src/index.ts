@@ -102,6 +102,7 @@ export type {
   BoardFreshness,
   BoardGuideInput,
   BoardImportProbe,
+  BoardInitInput,
   BoardIntegrity,
   BoardLastReview,
   BoardLiveMeasurement,
@@ -149,6 +150,9 @@ export {
   BOARD_EFFORT_METHOD,
   BOARD_FRESHNESS_METHOD,
   BOARD_GUIDE_PORTS,
+  BOARD_INIT_LANE_ID,
+  BOARD_INIT_REVIEW_DUE_DAYS,
+  BOARD_INIT_SAVE,
   BOARD_INTEGRITY_METHOD,
   BOARD_OBSERVE_KINDS,
   BOARD_PORTFOLIO_METHOD,
@@ -166,6 +170,7 @@ export {
   boardGuide,
   boardGuidePort,
   boardGuideWorkDir,
+  boardInitText,
   boardLivePage,
   boardPage,
   boardPageUnavailable,
@@ -174,6 +179,8 @@ export {
   diffCells,
   diffMeasurements,
   diffObserved,
+  effortStartOf,
+  isBoardTimeZone,
   measureBoard,
   measureBoardLive,
   modelKey,
@@ -253,12 +260,14 @@ export {
 export type { SourceRootScope } from "./lib/source-root-scope.js";
 export { AGENT_INFRA_DIRS, classifyFilesBySourceRoot } from "./lib/source-root-scope.js";
 export type {
+  BoardInitStrings,
   BoardPageStrings,
   PresetStrings,
   ViewLanguage,
   ViewStrings,
 } from "./lib/view-strings.js";
 export {
+  boardInitStrings,
   boardPageStrings,
   presetStrings,
   resolveAnchorContentLanguage,

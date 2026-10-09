@@ -17,10 +17,12 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
+  boardInitStrings,
   chainEvents,
   createManifest,
   type Event,
   ensureBasouDirectory,
+  parseBoardDeclaration,
   type RepoEntry,
   writeManifest,
 } from "@basou/core";
@@ -28,10 +30,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeStaleness } from "../lib/provenance-actions.js";
 import {
   doRunBoardGuide,
+  doRunBoardInit,
   doRunBoardMeasure,
   doRunBoardRecord,
+  INIT_SAVE,
   measureLiveBoard,
   runBoardGuide,
+  runBoardInit,
   runBoardMeasure,
   runBoardRecord,
 } from "./board.js";
@@ -1458,6 +1463,19 @@ describe("basou board guide", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("refuses a board.yaml that is a link to nothing, as init would not replace it", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await mkdir(join(repo, "board"));
+    await symlink(join(repo, "nowhere.yaml"), join(repo, "board", "board.yaml"));
+    const { out, err } = capture();
+    await runBoardGuide({}, guideCtx(repo));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain(
+      "board/board.yaml is there but cannot be read (a link to nothing?)",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("refuses a declaration that does not read, listing why", async () => {
     const repo = await workspace([{ path: ".", visibility: "private" }]);
     await placeBoard(repo, JSON.stringify({ ...JSON.parse(boardYaml([])), title: "" }));
@@ -1468,6 +1486,172 @@ describe("basou board guide", () => {
       "board/board.yaml is not a valid board declaration, so there are no steps to print until it reads",
     );
     expect(err.join("\n")).toContain("  - title: must be a non-empty string");
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("basou board init", () => {
+  it("prints a board that reads under the workspace's manifest, and writes nothing", async () => {
+    const repo = await workspace([
+      { path: ".", visibility: "private", language: "en" },
+      { path: "../elsewhere" },
+    ]);
+    const before = await readdir(repo);
+    const out: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      out.push(String(chunk));
+      return true;
+    });
+    const text = await doRunBoardInit({}, ctx(repo));
+    expect(out.join("")).toBe(text);
+    const parsed = parseBoardDeclaration(text, { manifestRepoPaths: [".", "../elsewhere"] });
+    if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+    expect(parsed.declaration.title).toBe("board-ws progress board");
+    expect(parsed.declaration.board_version).toBe(2);
+    // No session yet: the effort starts today.
+    expect(parsed.declaration.effort.start).toBe(
+      new Intl.DateTimeFormat("en-CA", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(NOW),
+    );
+    expect(await readdir(repo)).toEqual(before);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("writes its words in the language the manifest declares for the workspace's own repo", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private", language: "ja" }]);
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const text = await doRunBoardInit({}, ctx(repo));
+    const parsed = parseBoardDeclaration(text, { manifestRepoPaths: ["."] });
+    if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+    expect(parsed.declaration.title).toBe(
+      boardInitStrings("ja").title.replace("{name}", "board-ws"),
+    );
+  });
+
+  it("says to save it through a file of its own in board/, and only where no board is", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-board-init-save-")));
+    try {
+      const bin = join(dir, "bin");
+      await mkdir(bin);
+      await writeFile(join(bin, "basou"), "#!/bin/sh\necho 'title: printed'\n", { mode: 0o755 });
+      const run = () =>
+        promisify(execFile)("sh", ["-c", `${INIT_SAVE}; echo "exit=$?"`], {
+          cwd: dir,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+      expect((await run()).stdout).toBe("exit=0\n");
+      expect(await readFile(join(dir, "board", "board.yaml"), "utf8")).toBe("title: printed\n");
+      await writeFile(join(dir, "board", "board.yaml"), "title: mine\n");
+      expect((await run()).stdout).toBe("exit=1\n");
+      expect(await readFile(join(dir, "board", "board.yaml"), "utf8")).toBe("title: mine\n");
+      expect(await readdir(join(dir, "board"))).toEqual(["board.yaml"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs only from the top of the workspace's own repo, where the save writes", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await mkdir(join(repo, "docs"));
+    const write = vi.spyOn(process.stdout, "write");
+    const { err } = capture();
+    await runBoardInit({}, { ...ctx(repo), cwd: join(repo, "docs") });
+    expect(write).not.toHaveBeenCalled();
+    expect(err.join("\n")).toContain(
+      "Run basou board init from the top of the workspace's own repo, where its .basou/ is",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("leaves out a time zone a board cannot declare, and says when the start is not the first session's", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const resolved = Intl.DateTimeFormat.prototype.resolvedOptions;
+    const zoneIs = (name: string | undefined) =>
+      vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (
+        this: Intl.DateTimeFormat,
+      ) {
+        return { ...resolved.call(this), timeZone: name as string };
+      });
+    // Some Node versions take an offset as a zone, and name the host's zone so
+    // under TZ=GMT; older ones refuse it, and the host's zone then has no name.
+    const takesOffset = (() => {
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: "+00:00" });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    const unnamed = "no name, so effort.start is today in UTC and effort.time_zone is left out";
+    for (const [zone, said] of [
+      [
+        "+00:00",
+        takesOffset ? "no name a board can declare, so effort.time_zone is left out" : unnamed,
+      ],
+      [undefined, unnamed],
+    ] as const) {
+      const spy = zoneIs(zone);
+      const out: string[] = [];
+      vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+        out.push(String(chunk));
+        return true;
+      });
+      const { err } = capture();
+      try {
+        const text = await doRunBoardInit({}, ctx(repo));
+        expect(err.join("\n")).toContain(said);
+        const parsed = parseBoardDeclaration(text, { manifestRepoPaths: ["."] });
+        if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+        expect(parsed.declaration.effort.time_zone).toBeUndefined();
+        expect(text.includes(boardInitStrings("en").comments.effortToday)).toBe(
+          zone === undefined || !takesOffset,
+        );
+      } finally {
+        spy.mockRestore();
+        vi.restoreAllMocks();
+      }
+    }
+  });
+
+  it("says when the sessions could not be read, so the start is today", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const sessions = join(repo, ".basou", "sessions", "ses_01HXABCDEF1234567890ABCS01");
+    await mkdir(sessions, { recursive: true });
+    await writeFile(join(sessions, "session.yaml"), "session: [broken]\n");
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const { err } = capture();
+    await doRunBoardInit({}, ctx(repo));
+    expect(err.join("\n")).toContain(
+      "basou: the sessions could not be read, so effort.start is today; set it to the day the work began.",
+    );
+  });
+
+  it("refuses, printing nothing, where a board is already declared", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([]));
+    const write = vi.spyOn(process.stdout, "write");
+    const { err } = capture();
+    await runBoardInit({}, ctx(repo));
+    expect(write).not.toHaveBeenCalled();
+    expect(err.join("\n")).toContain(
+      "board/board.yaml is already there, so there is no board to start",
+    );
+    expect(process.exitCode).toBe(1);
+    expect(await readFile(join(repo, "board", "board.yaml"), "utf8")).toBe(boardYaml([]));
+  });
+
+  it("refuses a workspace whose own repo is not declared private", async () => {
+    const repo = await workspace([{ path: "." }]);
+    const write = vi.spyOn(process.stdout, "write");
+    const { err } = capture();
+    await runBoardInit({}, ctx(repo));
+    expect(write).not.toHaveBeenCalled();
+    expect(err.join("\n")).toContain(
+      "The board is kept at board/board.yaml only in a workspace whose manifest declares its own repo (path: .) private",
+    );
     expect(process.exitCode).toBe(1);
   });
 });

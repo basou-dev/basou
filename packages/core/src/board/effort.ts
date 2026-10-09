@@ -266,6 +266,29 @@ export async function measureEffort(input: EffortInput): Promise<{
 }
 
 /**
+ * Where the effort starts when a board declares no start, as this section
+ * counts it then: the day of the first session in this host's time zone, or
+ * today when there is none or the sessions cannot be read (`sessionsRead`
+ * false). With no name for this host's zone, `timeZone` is undefined and the
+ * day is today in UTC.
+ */
+export async function effortStartOf(
+  paths: BasouPaths,
+  now: Date,
+): Promise<{ start: string; timeZone: string | undefined; sessionsRead: boolean }> {
+  const zone = namedZone(undefined);
+  if (zone === undefined) {
+    return { start: now.toISOString().slice(0, 10), timeZone: undefined, sessionsRead: false };
+  }
+  const calendar = new Calendar(zone);
+  const today = calendar.dateOf(now.getTime());
+  const sessions = await readSessions(paths, now, zone);
+  return sessions.ok
+    ? { start: firstDay(sessions.sessions, calendar, today), timeZone: zone, sessionsRead: true }
+    : { start: today, timeZone: zone, sessionsRead: false };
+}
+
+/**
  * Today's date in the zone the effort section counts days in (the declared
  * one, or this host's), or undefined when this host's cannot be named.
  */
