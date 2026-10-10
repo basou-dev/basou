@@ -19,13 +19,16 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+// The real method, taken before any test spies on it. Vitest 4 hands back the
+// spy already in place, so one taken inside hostZoneIs would call itself.
+const realResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+
 // This host's zone, as `Intl` would name it under an empty or unknown TZ.
 function hostZoneIs(name: string | undefined): void {
-  const resolved = Intl.DateTimeFormat.prototype.resolvedOptions;
   vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (
     this: Intl.DateTimeFormat,
   ) {
-    const options = resolved.call(this);
+    const options = realResolvedOptions.call(this);
     return { ...options, timeZone: name as string };
   });
 }

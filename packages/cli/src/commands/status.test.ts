@@ -83,12 +83,20 @@ async function setupInitedRepo(): Promise<{ repo: string; paths: BasouPaths }> {
   return { repo, paths };
 }
 
+// Vitest 4 hands back the spy already on a console method rather than a new
+// one, so each capture clears it and starts from an empty record.
 function captureStdout() {
-  return vi.spyOn(console, "log").mockImplementation(() => undefined);
+  return vi
+    .spyOn(console, "log")
+    .mockImplementation(() => undefined)
+    .mockClear();
 }
 
 function captureStderr() {
-  return vi.spyOn(console, "error").mockImplementation(() => undefined);
+  return vi
+    .spyOn(console, "error")
+    .mockImplementation(() => undefined)
+    .mockClear();
 }
 
 function joinCalls(spy: ReturnType<typeof captureStdout>): string {

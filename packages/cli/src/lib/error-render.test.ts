@@ -1,5 +1,5 @@
 import { FailedToFinalizeError, type ReplayWarning } from "@basou/core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   type ErrorClassifier,
   extractCauseLabel,
@@ -14,11 +14,16 @@ import {
   shortTaskId,
 } from "./error-render.js";
 
-function captureStderr(): ReturnType<typeof vi.spyOn> {
-  return vi.spyOn(console, "error").mockImplementation(() => undefined);
+// Vitest 4 hands back the spy already on a console method rather than a new
+// one, so each capture clears it and starts from an empty record.
+function captureStderr(): MockInstance<(...args: unknown[]) => void> {
+  return vi
+    .spyOn(console, "error")
+    .mockImplementation(() => undefined)
+    .mockClear();
 }
 
-function joinCalls(spy: ReturnType<typeof vi.spyOn>): string {
+function joinCalls(spy: MockInstance<(...args: unknown[]) => void>): string {
   return spy.mock.calls.map((c) => String(c[0])).join("\n");
 }
 

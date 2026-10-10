@@ -13,7 +13,7 @@ import {
   writeYamlFile,
 } from "@basou/core";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { doRunHandoffGenerate, registerHandoffCommand, runHandoffGenerate } from "./handoff.js";
 
 const execFileAsync = promisify(execFile);
@@ -162,15 +162,15 @@ async function placePendingApproval(repo: string, approvalId: string): Promise<v
   });
 }
 
-function captureStdout(): ReturnType<typeof vi.spyOn> {
+function captureStdout(): MockInstance<(...args: unknown[]) => void> {
   return vi.spyOn(console, "log").mockImplementation(() => undefined);
 }
 
-function captureStderr(): ReturnType<typeof vi.spyOn> {
+function captureStderr(): MockInstance<(...args: unknown[]) => void> {
   return vi.spyOn(console, "error").mockImplementation(() => undefined);
 }
 
-function joinCalls(spy: ReturnType<typeof vi.spyOn>): string {
+function joinCalls(spy: MockInstance<(...args: unknown[]) => void>): string {
   return spy.mock.calls.map((args) => args.map(String).join(" ")).join("\n");
 }
 

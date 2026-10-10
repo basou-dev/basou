@@ -10,7 +10,7 @@ import {
   protocolSectionsFrom,
 } from "@basou/core";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   doRunProtocolList,
   doRunProtocolSync,
@@ -38,15 +38,23 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function captureStdout(): ReturnType<typeof vi.spyOn> {
-  return vi.spyOn(console, "log").mockImplementation(() => undefined);
+// Vitest 4 hands back the spy already on a console method rather than a new
+// one, so each capture clears it and starts from an empty record.
+function captureStdout(): MockInstance<(...args: unknown[]) => void> {
+  return vi
+    .spyOn(console, "log")
+    .mockImplementation(() => undefined)
+    .mockClear();
 }
 
-function captureStderr(): ReturnType<typeof vi.spyOn> {
-  return vi.spyOn(console, "error").mockImplementation(() => undefined);
+function captureStderr(): MockInstance<(...args: unknown[]) => void> {
+  return vi
+    .spyOn(console, "error")
+    .mockImplementation(() => undefined)
+    .mockClear();
 }
 
-function joinCalls(spy: ReturnType<typeof vi.spyOn>): string {
+function joinCalls(spy: MockInstance<(...args: unknown[]) => void>): string {
   return spy.mock.calls.map((args) => args.map(String).join(" ")).join("\n");
 }
 
