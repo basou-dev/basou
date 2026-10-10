@@ -481,6 +481,7 @@ describe("boardPage", () => {
         review_needed: false,
         last_review: { date: "2026-09-28", model: "Claude Opus 5.5", from: "seed" },
         last_review_known: true,
+        this_review: null,
       },
       model: "Claude Opus 5.5",
       not_found: [{ at: "measures.test", reason: "no such file" }],
@@ -500,6 +501,41 @@ describe("boardPage", () => {
       last_review: null,
       last_review_known: false,
     });
+    // A record that reviews the axis itself carries its review beside the one
+    // measured before it was written.
+    await place(
+      A,
+      record({ axis_review: { triggers: ["d", "b"], summary: "Moved `observe` in." } }),
+    );
+    const reviewed = await boardPage(records);
+    if (reviewed.status !== "ok") throw new Error(reviewed.why);
+    expect(reviewed.board.footnotes.axis).toEqual({
+      version: 2,
+      review_needed: false,
+      last_review: { date: "2026-09-28", model: "Claude Opus 5.5", from: "seed" },
+      last_review_known: true,
+      this_review: { triggers: ["d", "b"], summary: "Moved `observe` in." },
+    });
+    // A record without the key at all is drawn as one that reviewed nothing.
+    const bare: Record<string, unknown> = record();
+    delete bare.axis_review;
+    await place(A, bare);
+    const withoutKey = await boardPage(records);
+    if (withoutKey.status !== "ok") throw new Error(withoutKey.why);
+    expect(withoutKey.board.footnotes.axis.this_review).toBeNull();
+    // A review not in its shape is drawn as none; the record is still drawn.
+    for (const axis_review of [
+      { triggers: ["d"] },
+      { triggers: ["d"], summary: null },
+      { triggers: "d", summary: "s" },
+      "d",
+    ]) {
+      await place(A, record({ axis_review }));
+      const odd = await boardPage(records);
+      if (odd.status !== "ok") throw new Error(`${JSON.stringify(axis_review)}: ${odd.why}`);
+      expect(odd.board.footnotes.axis.this_review).toBeNull();
+      expect(odd.board.footnotes.notes).toEqual(["Measured with care."]);
+    }
   });
 
   it("does not draw a record it cannot read, of a version it does not know, or not in the shape of one", async () => {

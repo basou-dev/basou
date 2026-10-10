@@ -3,6 +3,21 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **`basou view`'s board page draws a record's own review of the axis.** A
+  record that reviews the axis (`axis_review` in the input of the
+  experimental `basou board record`) said so nowhere on the page: the
+  footnotes gave the last review, and whether one was needed, as measured
+  before the record was written, so the record's own review was left out and
+  the one before it was called the last. For such a record the footnotes now
+  add its review (the triggers and the summary, marked as reported), call the
+  measured one the previous review, and the need the one before this record.
+  The page's data (`GET /api/board`) gives it as `footnotes.axis.this_review`,
+  null for a record that reviews nothing. Those are drawn as before.
+
 ## 0.68.0 — 2026-10-09
 
 ### Added

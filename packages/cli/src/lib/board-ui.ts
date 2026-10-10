@@ -672,13 +672,23 @@ export const BOARD_HTML = `<!doctype html>
     var f = b.footnotes;
     var items = f.notes.map(function (n) { return el('li', null, [prose(n, 'span'), reported()]); });
     var last = f.axis.last_review;
-    var review = !f.axis.last_review_known ? S.footnotes.reviewUnknown
-      : last === null ? S.footnotes.noReview
-      : last.from === 'record' ? fill(S.footnotes.lastReviewFromRecord, { date: last.date, model: last.model, record: last.record || '' })
-      : fill(S.footnotes.lastReview, { date: last.date, model: last.model });
+    // The last review and the need were measured before the record was
+    // written: when it reviews the axis itself, they are the ones before it.
+    var own = f.axis.this_review || null;
+    var review = !f.axis.last_review_known ? (own ? S.footnotes.previousReviewUnknown : S.footnotes.reviewUnknown)
+      : last === null ? (own ? S.footnotes.noPreviousReview : S.footnotes.noReview)
+      : last.from === 'record' ? fill(own ? S.footnotes.previousReviewFromRecord : S.footnotes.lastReviewFromRecord, { date: last.date, model: last.model, record: last.record || '' })
+      : fill(own ? S.footnotes.previousReview : S.footnotes.lastReview, { date: last.date, model: last.model });
     var answer = f.axis.review_needed === true ? S.footnotes.reviewNeededYes
       : f.axis.review_needed === false ? S.footnotes.reviewNeededNo : S.footnotes.reviewNeededUnknown;
-    items.push(el('li', { text: fill(S.footnotes.axis, { version: f.axis.version }) + '  /  ' + review + '  /  ' + fill(S.footnotes.reviewNeeded, { answer: answer }) }));
+    items.push(el('li', { text: fill(S.footnotes.axis, { version: f.axis.version }) + '  /  ' + review + '  /  ' + fill(own ? S.footnotes.reviewNeededBefore : S.footnotes.reviewNeeded, { answer: answer }) }));
+    if (own) {
+      items.push(el('li', null, [
+        el('span', { text: fill(S.footnotes.thisReview, { triggers: own.triggers.join(', ') }) }),
+        prose(own.summary, 'span'),
+        reported()
+      ]));
+    }
     items.push(el('li', { text: fill(S.footnotes.judgedBy, { model: f.model }) }));
     items.push(el('li', { text: S.footnotes.reportedNote }));
     if (f.not_found.length > 0) {

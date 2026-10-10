@@ -1453,6 +1453,68 @@ describe("basou view: the board page", () => {
     expect(foot.text()).not.toContain(boardPageStrings("en").footnotes.noReview);
   });
 
+  it("draws a record's own review of the axis in the footnotes, reported, after the review before it", () => {
+    const { call } = drawing(["footnotes"]);
+    const foot = (axis: Record<string, unknown>) =>
+      call("footnotes", {
+        footnotes: {
+          notes: [],
+          axis: { version: 1, review_needed: false, last_review_known: true, ...axis },
+          model: "m",
+          not_found: [],
+          measured_with: { basou: "0", build: null },
+        },
+      }) as Node;
+    // The footnote items in order: the axis line, and the record's own review
+    // right after it when there is one.
+    const items = (node: Node) =>
+      (node.find((n) => n.className === "foot")[0] as Node).children.map((li) => li.text());
+    const AXIS = "Axis v1  /  ";
+    const OWN = "This record reviews the axis (triggers: d, b): ";
+    const last = { date: "2026-10-08", model: "M", from: "record", record: "REC" };
+    const seed = { date: "2026-09-28", model: "M", from: "seed" };
+    const own = { triggers: ["d", "b"], summary: "Moved `observe` in." };
+    const reviewed = foot({ last_review: last, this_review: own });
+    const ownItem = reviewed.find((n) => n.tag === "li").filter((li) => li.text().startsWith(OWN));
+    expect(ownItem).toHaveLength(1);
+    expect(ownItem[0]?.text()).toBe(`${OWN}Moved observe in.reported`);
+    expect(ownItem[0]?.find((n) => n.tag === "code").map((c) => c.text())).toEqual(["observe"]);
+    expect(ownItem[0]?.find((n) => n.className === "reported")).toHaveLength(1);
+    // The review before it may be from a record, declared, none, or not known.
+    for (const [axis, previous] of [
+      [{ last_review: last }, "previous review 2026-10-08 by M (record REC)"],
+      [{ last_review: seed }, "previous review 2026-09-28 by M (declared)"],
+      [{ last_review: null }, "no review before this one on record"],
+      [
+        { last_review: null, last_review_known: false },
+        "the previous review is not known (a record that may hold it could not be read)",
+      ],
+    ] as const) {
+      const lines = items(foot({ ...axis, this_review: own }));
+      const at = lines.findIndex((l) => l.startsWith(AXIS));
+      expect(lines[at]).toBe(`${AXIS}${previous}  /  Review needed before this record: no`);
+      expect(lines[at + 1]).toBe(`${OWN}Moved observe in.reported`);
+      expect(lines.filter((l) => l.startsWith(OWN))).toHaveLength(1);
+      expect(lines.join("\n")).not.toMatch(/last review/);
+    }
+    // A record that reviews nothing keeps the last review and the need as they were.
+    for (const none of [{ this_review: null }, {}]) {
+      for (const [axis, lastLine] of [
+        [{ last_review: last }, "last reviewed 2026-10-08 by M (record REC)"],
+        [{ last_review: seed }, "last reviewed 2026-09-28 by M (declared)"],
+        [{ last_review: null }, "no review on record"],
+        [
+          { last_review: null, last_review_known: false },
+          "the last review is not known (a record that may hold it could not be read)",
+        ],
+      ] as const) {
+        const lines = items(foot({ ...axis, ...none }));
+        expect(lines).toContain(`${AXIS}${lastLine}  /  Review needed: no`);
+        expect(lines.join("\n")).not.toMatch(/This record reviews the axis|previous review/);
+      }
+    }
+  });
+
   it("draws the days of the effort: Claude's time, the rest above it, the running total and the weeks", () => {
     const { call } = drawing(["effort"]);
     const day = (
