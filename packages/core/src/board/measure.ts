@@ -9,7 +9,9 @@ import {
   BOARD_DEFAULT_AT,
   BOARD_REGEX_FLAGS,
   type BoardDeclaration,
+  type BoardDeclarationSnapshot,
   type BoardMeasure,
+  boardDeclarationSnapshot,
 } from "./declaration.js";
 import { type BoardDiff, diffMeasurements } from "./diff.js";
 import { BOARD_EFFORT_METHOD, type BoardEffort, measureEffort, todayIn } from "./effort.js";
@@ -95,13 +97,16 @@ export type BoardMeasurement = {
   /**
    * `sha256:` and the hex digest of the measurement without `measured_at`,
    * `digest`, `freshness`, `axis` and its not_found entries, `diff`,
-   * `effort.elapsed_days` and today's row of `effort.daily`, serialized with
-   * its keys sorted. Two measurements with the
-   * same values have the same digest whenever they were taken. The freshness
+   * `effort.elapsed_days` and today's row of `effort.daily`, with the
+   * declaration it was measured by (see {@link boardDigest}), serialized with
+   * its keys sorted. Two measurements with the same values by the same
+   * declaration have the same digest whenever they were taken. The freshness
    * moves as work goes on, the measuring session's own included, the axis
    * rests on the day, the model and the records, the diff is derived from the
    * previous record, and the others move with the clock, so they are left
-   * out.
+   * out. The declaration is in it because a record keeps the declaration it
+   * was measured by: one changed after the judgement would be kept as if the
+   * judgement had seen it.
    */
   digest: string;
   /**
@@ -336,7 +341,7 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
     measured_with,
     complete,
     not_found,
-    digest: boardDigest(body),
+    digest: boardDigest(body, boardDeclarationSnapshot(declaration)),
     methods,
     repos: body.repos,
     measures,
@@ -363,9 +368,12 @@ const UNDIGESTED = new Set(["measured_at", "digest", "freshness", "axis", "diff"
  * The digest of a measurement: sha256 over the measurement without
  * `measured_at`, `digest`, `freshness`, `axis` and its not_found entries,
  * `diff`, `effort.elapsed_days` and the last row of `effort.daily` (today's),
- * with every object's keys sorted.
+ * with the snapshot of the declaration it was measured by under
+ * `declaration`, every object's keys sorted. A record keeps both, so its
+ * digest is `boardDigest(record.measure, record.declaration)`, except in a
+ * record written before the digest covered the declaration.
  */
-export function boardDigest(measurement: object): string {
+export function boardDigest(measurement: object, declaration: BoardDeclarationSnapshot): string {
   const hashed = Object.fromEntries(
     Object.entries(measurement)
       .filter(([key]) => !UNDIGESTED.has(key))
@@ -374,6 +382,7 @@ export function boardDigest(measurement: object): string {
         key === "effort" ? withoutClock(value) : key === "not_found" ? notOfAxis(value) : value,
       ]),
   );
+  hashed.declaration = declaration;
   return `sha256:${createHash("sha256").update(canonicalJson(hashed)).digest("hex")}`;
 }
 

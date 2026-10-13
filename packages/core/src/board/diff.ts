@@ -21,7 +21,8 @@ export type BoardMethodChange = { section: string; before: number | null; after:
 
 /**
  * What moved since the previous record, value by value. Compared are the
- * values the digest holds (so not the axis's not_found entries either) but
+ * measurement's values the digest holds (so not the axis's not_found entries
+ * either, nor the declaration, which the digest also covers) but
  * `measured_with`, the methods (compared on their own), `effort.daily`, whose
  * rows only grow, and `components.kind_changed`, already a change since the
  * previous record. Values are equal when their JSON is, keys sorted. A list whose entries name

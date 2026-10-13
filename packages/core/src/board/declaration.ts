@@ -448,6 +448,29 @@ export type BoardMeasureKind = BoardMeasure["kind"];
 export type BoardObserve = BoardDeclaration["observe"][number];
 export type BoardObserveKind = BoardObserve["kind"];
 
+/**
+ * The declaration a board was measured by, as parsed (its defaults filled
+ * in), without `board_version`, which the measurement holds itself. A record
+ * keeps it, and a measurement's digest covers it, so a record keeps the
+ * declaration its judgement saw.
+ */
+export type BoardDeclarationSnapshot = Omit<BoardDeclaration, "board_version">;
+
+/** The snapshot of a declaration: every key but `board_version`. */
+export function boardDeclarationSnapshot(d: BoardDeclaration): BoardDeclarationSnapshot {
+  return {
+    title: d.title,
+    stages: d.stages,
+    lanes: d.lanes,
+    measures: d.measures,
+    ratios: d.ratios,
+    components: d.components,
+    axis: d.axis,
+    effort: d.effort,
+    observe: d.observe,
+  };
+}
+
 /** What the reader needs from outside the file. */
 export type BoardDeclarationContext = {
   /** The `path` of each entry of the manifest's `repos:`, as written there. */

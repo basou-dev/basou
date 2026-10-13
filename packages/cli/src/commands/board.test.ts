@@ -17,6 +17,7 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
+  boardDigest,
   boardInitStrings,
   chainEvents,
   createManifest,
@@ -28,6 +29,7 @@ import {
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeStaleness } from "../lib/provenance-actions.js";
+import { BASOU_CLI_VERSION } from "../program.js";
 import {
   doRunBoardGuide,
   doRunBoardInit,
@@ -1289,10 +1291,39 @@ describe("basou board record", () => {
       `measure_digest is ${input.measure_digest}, but the board measures sha256:`,
     );
     expect(err.join("\n")).toContain(
-      "something it measures moved since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.",
+      "something it measures or board.yaml changed since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.",
     );
     expect(process.exitCode).toBe(1);
     await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
+  });
+
+  it("refuses when board.yaml declares anything else since the judgement, not when only its text moved", async () => {
+    const { repo, input } = await judged();
+    const board = JSON.parse(boardYaml([MD]));
+    // The same declaration written another way: the digest covers it as read.
+    await placeBoard(repo, `${JSON.stringify(board)}\n`);
+    capture();
+    expect((await doRunBoardRecord({ dryRun: true }, fed(repo, input))).dry_run).toBe(true);
+    // Nothing measures a lane's notes, but the record would keep them.
+    board.lanes[0].notes = ["added after the judgement"];
+    await placeBoard(repo, JSON.stringify(board, null, 2));
+    const { out, err } = capture();
+    await runBoardRecord({}, fed(repo, input));
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain(
+      `measure_digest is ${input.measure_digest}, but the board measures sha256:`,
+    );
+    expect(process.exitCode).toBe(1);
+    await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);
+  });
+
+  it("keeps the declaration its digest covers, so the digest can be computed from the record", async () => {
+    const { repo, input } = await judged();
+    capture();
+    const result = await doRunBoardRecord({}, fed(repo, input));
+    const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
+    expect(written.measure.digest).toBe(input.measure_digest);
+    expect(boardDigest(written.measure, written.declaration)).toBe(input.measure_digest);
   });
 
   it("refuses an input it cannot read, saying everything wrong with it at once", async () => {
@@ -1583,6 +1614,22 @@ describe("basou board guide", () => {
     expect(guide).toContain('{"lane":"core","stage":"01","state":"","previous":{"state":"done"}}');
     expect(await tree(repo)).toEqual(before);
     expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("names the build that printed the guide, and none for a basou without a build stamp", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([MD]));
+    capture();
+    const built = await doRunBoardGuide({}, { ...guideCtx(repo), basouBuild: "feedbee" });
+    expect(built).toContain(
+      `Where \`basou --version\` prints version ${BASOU_CLI_VERSION}, build feedbee,`,
+    );
+    capture();
+    // Tests run from the source, which has no build stamp.
+    const unstamped = await doRunBoardGuide({}, guideCtx(repo));
+    expect(unstamped).toContain(
+      `Where \`basou --version\` prints version ${BASOU_CLI_VERSION} (source),`,
+    );
   });
 
   it("says how to declare a board when there is none", async () => {

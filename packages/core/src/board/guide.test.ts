@@ -80,6 +80,7 @@ function guideInput(over: Partial<BoardGuideInput> = {}): BoardGuideInput {
     language: "ja",
     basouCommand: "'/usr/bin/node' '/opt/basou/index.js'",
     basouVersion: "0.0.0-test",
+    basouBuild: "abc1234",
     now: NOW,
     board: {
       status: "declared",
@@ -425,6 +426,33 @@ describe("boardGuide: the record's input", () => {
     (template.judged_by as Record<string, unknown>).model = "Claude Opus 5.5";
     const taken = parseRecordInput(template, d);
     expect(taken.ok ? [] : taken.errors).toEqual([]);
+  });
+});
+
+describe("boardGuide: which basou to call, and what the digest covers", () => {
+  it("calls basou as it is where it is this version and build, and the command otherwise", () => {
+    const guide = boardGuide(guideInput());
+    expect(guide).toContain(
+      "basou: `'/usr/bin/node' '/opt/basou/index.js'` printed this. Where `basou --version` prints version 0.0.0-test, build abc1234, as this one is, call `basou` as the commands below do (an alias of your shell is as good). Otherwise (another version or build, or no `basou`), write that command in place of `basou` in every block. Use the same one at every step: a measurement records which basou measured it.",
+    );
+    expect(guide).not.toContain("not on PATH");
+  });
+
+  it("names no build for a basou without a build stamp", () => {
+    expect(boardGuide(guideInput({ basouBuild: null }))).toContain(
+      "Where `basou --version` prints version 0.0.0-test (source), as this one is,",
+    );
+  });
+
+  it("says the digest covers board.yaml, and holds the counts of uncommitted paths", () => {
+    const guide = boardGuide(guideInput());
+    expect(guide).toContain(
+      "the repos' commits and their counts of files and of uncommitted paths, the basou that measured, the portfolio's counts",
+    );
+    expect(guide).toContain(
+      "The digest covers board.yaml as read too, so any change to what it declares moves it.",
+    );
+    expect(guide).toContain("A digest that differs means something measured or board.yaml changed");
   });
 });
 

@@ -16,6 +16,7 @@ export type {
   BoardDeclaration,
   BoardDeclarationContext,
   BoardDeclarationResult,
+  BoardDeclarationSnapshot,
   BoardMeasure,
   BoardMeasureKind,
   BoardObserve,
@@ -31,6 +32,7 @@ export {
   BOARD_TRAIL_COUNTS,
   BOARD_VERSION,
   BOARD_VERSIONS,
+  boardDeclarationSnapshot,
   isBoardTimeZone,
   parseBoardDeclaration,
 } from "./declaration.js";
