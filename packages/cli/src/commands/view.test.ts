@@ -1411,12 +1411,18 @@ describe("basou view: the board page", () => {
     await withView(repo, {}, async (h) => {
       const board = (await getJson(h, "/api/board")).data;
       const live = (await getJson(h, "/api/board/live")).data;
-      const { call, document } = drawing(PAGE_DRAWERS);
+      const { call, byId, document } = drawing(PAGE_DRAWERS);
+      const words = boardPageStrings("en").effort;
       call("draw", board);
       expect(document.title).toBe("Board");
+      // The record's board declares no milestones, and says so.
+      expect(byId.board?.text()).toContain(words.noMilestones);
+      expect(byId.board?.text()).not.toContain(words.milestonesNotRead);
       // Not null: the board was asked for, so no record list is fetched.
       call("drawLive", live, "no_records");
       expect(document.title).toBe("view-ws");
+      expect(byId.board?.text()).toContain(words.milestonesNotRead);
+      expect(byId.board?.text()).not.toContain(words.noMilestones);
     });
     const { call } = drawing(["effort"]);
     const effort = (milestones: unknown[], live: boolean) =>

@@ -470,7 +470,7 @@ describe("boardGuide: the gate on readers, the Stop hook and where a measure is 
 
   it("puts its own rule before a Stop hook's ask between measure and record", () => {
     expect(boardGuide(guideInput())).toContain(
-      "- A Stop hook may ask you, as a turn ends, to capture decisions or a note. From the measure of step 2 to the record of step 7, do not: say that the board is between its measure and its record, and capture after step 7.",
+      "- A Stop hook may ask you, as a turn ends, to capture decisions or a note. From the measure of step 2 to the record of step 7, write nothing it asks for: say that the board is between its measure and its record. After step 7, capture what is worth capturing. This rule comes first while a board is being judged.",
     );
   });
 
@@ -479,7 +479,9 @@ describe("boardGuide: the gate on readers, the Stop hook and where a measure is 
     expect(guide).toContain(
       "A measure with `lane:` is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
     );
-    expect(guide).toContain("no collaborator but the owner and the operator, and no invitation");
+    expect(guide).toContain(
+      "no collaborator but the owner and you (the account gh is signed in as), and no invitation",
+    );
   });
 });
 

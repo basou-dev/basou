@@ -15,9 +15,9 @@ All notable changes to **basou** are recorded here. The project follows
 - **`basou board guide` says which comes first when a Stop hook asks for a
   capture between measure and record.** A Stop hook may ask, as a turn ends,
   for decisions or a note, while the guide says to write nothing to basou
-  from the measure to the record. The guide now says to write nothing then,
-  to say that the board is between its measure and its record, and to
-  capture after the record.
+  from the measure to the record. The guide now says to write nothing it
+  asks for then, to say that the board is between its measure and its
+  record, and to capture after the record what is worth capturing.
 - **`basou view`'s board page names its tab after the board, and the board
   measured now no longer says that no milestones are declared.** The tab
   read "Progress board" whatever board it drew, so boards open in other tabs
