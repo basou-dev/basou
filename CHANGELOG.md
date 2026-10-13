@@ -3,6 +3,36 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **`basou board guide` (experimental) no longer counts the operator as
+  someone who can read the repo from outside.** Its gate (f) counted every
+  collaborator but the repo's owner, so on a repo an organization owns the
+  operator, an admin of it, made a repo no one else can read print 1 where
+  the guide says 0. It now leaves out the account gh is signed in as too.
+- **`basou board guide` says which comes first when a Stop hook asks for a
+  capture between measure and record.** A Stop hook may ask, as a turn ends,
+  for decisions or a note, while the guide says to write nothing to basou
+  from the measure to the record. The guide now says to write nothing it
+  asks for then, to say that the board is between its measure and its
+  record, and to capture after the record what is worth capturing.
+- **`basou view`'s board page names its tab after the board, and the board
+  measured now no longer says that no milestones are declared.** The tab
+  read "Progress board" whatever board it drew, so boards open in other tabs
+  could not be told apart; it now reads the heading's title. The board
+  measured now (`/board?live=1`, or a workspace with no record) reads no
+  `board.yaml`, yet its period said "No milestones declared." where
+  `board.yaml` declares some; it now says that it does not read
+  `board.yaml`.
+- **`basou board init` and `basou board guide` say which measures the board
+  page draws.** A measure with `lane:` is drawn in that lane's section of
+  the page, and one without is kept only in the records and their
+  differences, but neither said so. `basou board init` now prints
+  `measures: []` with that and the kinds a measure can be, and the guide's
+  steps for declaring a board say it too.
+
 ## 0.68.2 — 2026-10-13
 
 ### Fixed

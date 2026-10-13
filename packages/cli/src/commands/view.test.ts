@@ -1309,6 +1309,8 @@ describe("basou view: the board page", () => {
   function drawing(names: string[]) {
     const byId: Record<string, Node> = {};
     const document = {
+      title: "",
+      documentElement: { lang: "" },
       createElement: (tag: string) => new Node(tag),
       createElementNS: (_ns: string, tag: string) => new Node(tag),
       createTextNode: (text: string) => Object.assign(new Node("#text"), { textContent: text }),
@@ -1350,6 +1352,7 @@ describe("basou view: the board page", () => {
     const source = [
       liftVar("SVGNS"),
       liftVar("CHART"),
+      ...(names.includes("drawLive") ? [liftVar("liveDrawn")] : []),
       ...[...helpers, ...names.filter((n) => !helpers.includes(n))].map(lift),
     ].join("\n");
     const fns = new Function("document", "S", "lang", `${source}; return { ${names.join(", ")} };`)(
@@ -1362,8 +1365,75 @@ describe("basou view: the board page", () => {
       if (fn === undefined) throw new Error(`no ${name}`);
       return fn(...args);
     };
-    return { call, byId };
+    return { call, byId, document };
   }
+
+  // Every function the page's two drawers call, with the helpers drawing() lifts.
+  const PAGE_DRAWERS = [
+    "draw",
+    "drawLive",
+    "records",
+    "recordLinks",
+    "setStatus",
+    "heading",
+    "summary",
+    "effort",
+    "matrix",
+    "lanes",
+    "composition",
+    "turns",
+    "footnotes",
+    "liveHeading",
+    "liveRepos",
+    "liveTrail",
+    "liveComponents",
+    "liveFootnotes",
+    "liveTile",
+    "missingIn",
+  ];
+  const EMPTY_EFFORT = {
+    start: "2026-04-28",
+    time_zone: null,
+    elapsed_days: null,
+    active_ms: { union: null, claude: null, codex: null },
+    output_tokens: null,
+    sessions_without_tokens: null,
+    commits: null,
+    milestones: [],
+    active_days: null,
+    daily: null,
+    weeks: null,
+  };
+
+  it("names the tab after the board it draws, and says the board measured now reads no milestones", async () => {
+    const repo = await workspaceWith([{ path: ".", visibility: "private" }]);
+    await recorded(repo);
+    await withView(repo, {}, async (h) => {
+      const board = (await getJson(h, "/api/board")).data;
+      const live = (await getJson(h, "/api/board/live")).data;
+      const { call, byId, document } = drawing(PAGE_DRAWERS);
+      const words = boardPageStrings("en").effort;
+      call("draw", board);
+      expect(document.title).toBe("Board");
+      // The record's board declares no milestones, and says so.
+      expect(byId.board?.text()).toContain(words.noMilestones);
+      expect(byId.board?.text()).not.toContain(words.milestonesNotRead);
+      // Not null: the board was asked for, so no record list is fetched.
+      call("drawLive", live, "no_records");
+      expect(document.title).toBe("view-ws");
+      expect(byId.board?.text()).toContain(words.milestonesNotRead);
+      expect(byId.board?.text()).not.toContain(words.noMilestones);
+    });
+    const { call } = drawing(["effort"]);
+    const effort = (milestones: unknown[], live: boolean) =>
+      call("effort", { effort: { ...EMPTY_EFFORT, milestones } }, live).text();
+    const declared = [{ date: "2026-05-01", label: "first", ref: "v0.1.0" }];
+    const en = boardPageStrings("en").effort;
+    expect(effort([], false)).toContain(en.noMilestones);
+    expect(effort(declared, false)).toContain("first");
+    expect(effort([], true)).toContain(en.milestonesNotRead);
+    expect(effort([], true)).not.toContain(en.noMilestones);
+  });
 
   it("draws a page it cannot draw around the record asked for", () => {
     const { call, byId } = drawing(["records", "recordLinks"]);
