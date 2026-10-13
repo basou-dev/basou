@@ -168,10 +168,10 @@ The input is a JSON object: measure_digest (the digest of the measurement the
 judgement saw), observed (exactly the observations the board declares, when it
 declares any), cells (every lane at every stage), prose, judged_by and
 axis_review. The board is measured again, and nothing is written when the
-digest differs. Records are never written under a .basou/ directory. Exit
-codes: 0 when the record was written, or with --dry-run when everything
-checked out (nothing is written then); 1 when it was refused (nothing is
-written; the reasons are on stderr).`,
+digest differs (it covers board.yaml as read). Records are never written
+under a .basou/ directory. Exit codes: 0 when the record was written, or with
+--dry-run when everything checked out (nothing is written then); 1 when it
+was refused (nothing is written; the reasons are on stderr).`,
     )
     .action(async (options: BoardRecordOptions) => {
       await runBoardRecord(options);
@@ -391,6 +391,7 @@ export async function doRunBoardGuide(
         .map(shellWord)
         .join(" "),
     basouVersion: BASOU_CLI_VERSION,
+    basouBuild: BASOU_BUILD?.commit ?? null,
     now: ctx.nowProvider?.() ?? new Date(),
   };
   let guide: string;
@@ -558,7 +559,7 @@ async function checkAndRecord(
   const measurement = await measureLoaded(loaded, ctx, parsed.input.judged_by.model, previous);
   if (measurement.digest !== parsed.input.measure_digest) {
     throw new RecordRefusal(
-      `measure_digest is ${parsed.input.measure_digest}, but the board measures ${measurement.digest} now: something it measures moved since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.`,
+      `measure_digest is ${parsed.input.measure_digest}, but the board measures ${measurement.digest} now: something it measures or board.yaml changed since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.`,
     );
   }
   const record = buildRecord({

@@ -7,6 +7,8 @@ import { findErrorCode } from "../lib/error-codes.js";
 import {
   BOARD_STAGE_IDS,
   type BoardDeclaration,
+  type BoardDeclarationSnapshot,
+  boardDeclarationSnapshot,
   formatIssue,
   formatPath,
   isCalendarDate,
@@ -328,19 +330,9 @@ export type BoardRecord = {
   recorded_with: { basou: string; build: string | null };
   /**
    * The declaration the board was measured and judged by, as parsed (its
-   * defaults filled in).
+   * defaults filled in). The measurement's digest covers it.
    */
-  declaration: {
-    title: string;
-    stages: BoardDeclaration["stages"];
-    lanes: BoardDeclaration["lanes"];
-    measures: BoardDeclaration["measures"];
-    ratios: BoardDeclaration["ratios"];
-    components: BoardDeclaration["components"];
-    axis: BoardDeclaration["axis"];
-    effort: BoardDeclaration["effort"];
-    observe: BoardDeclaration["observe"];
-  };
+  declaration: BoardDeclarationSnapshot;
   /**
    * What basou measured as it recorded, the digest the judge saw included,
    * but not its diff, which the previous record derives. What the digest
@@ -369,17 +361,7 @@ export function buildRecord(input: {
     record_version: BOARD_RECORD_VERSION,
     recorded_at: input.recordedAt.toISOString(),
     recorded_with: input.recordedWith,
-    declaration: {
-      title: d.title,
-      stages: d.stages,
-      lanes: d.lanes,
-      measures: d.measures,
-      ratios: d.ratios,
-      components: d.components,
-      axis: d.axis,
-      effort: d.effort,
-      observe: d.observe,
-    },
+    declaration: boardDeclarationSnapshot(d),
     measure,
     observed: r.observed,
     cells: r.cells,

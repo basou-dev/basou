@@ -18,7 +18,11 @@ import { stringify } from "yaml";
 import { chainEvents } from "../events/chain.js";
 import type { Event } from "../schemas/event.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
-import { type BoardDeclaration, parseBoardDeclaration } from "./declaration.js";
+import {
+  type BoardDeclaration,
+  boardDeclarationSnapshot,
+  parseBoardDeclaration,
+} from "./declaration.js";
 import { type BoardMeasurement, boardDigest, measureBoard } from "./measure.js";
 import type { BoardPreviousRecords, ReadBoardRecord } from "./previous.js";
 
@@ -902,16 +906,32 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
     expect(later.measured_at).not.toBe(first.measured_at);
     expect(later.digest).toBe(first.digest);
     expect(first.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(boardDigest(first)).toBe(first.digest);
+    expect(boardDigest(first, boardDeclarationSnapshot(declaration))).toBe(first.digest);
     await writeFile(join(root, "app", "a.ts"), "1\n");
     expect((await measure(declaration)).digest).not.toBe(first.digest);
+  });
+
+  it("moves with the declaration as read, though nothing more is measured", async () => {
+    const declaration = declare(MEASURES.slice(0, 2));
+    const first = await measure(declaration);
+    // The same declaration read again: the digest covers what it declares.
+    expect((await measure(declare(MEASURES.slice(0, 2)))).digest).toBe(first.digest);
+    const noted = await measure(
+      declare(MEASURES.slice(0, 2), { lanes: [{ id: "core", name: "Core", notes: ["later"] }] }),
+    );
+    expect({ ...noted, digest: first.digest }).toEqual(first);
+    expect(noted.digest).not.toBe(first.digest);
+    expect(boardDigest(first, { ...boardDeclarationSnapshot(declaration), title: "x" })).not.toBe(
+      first.digest,
+    );
   });
 
   it("does not depend on the order of keys", () => {
     const a = { b: 1, a: { d: [1, { y: 2, x: 1 }], c: null } };
     const b = { a: { c: null, d: [1, { x: 1, y: 2 }] }, b: 1 };
-    expect(boardDigest(a)).toBe(boardDigest(b));
-    expect(boardDigest({ ...a, measured_at: "x", digest: "y" })).toBe(boardDigest(a));
+    const d = boardDeclarationSnapshot(declare([]));
+    expect(boardDigest(a, d)).toBe(boardDigest(b, d));
+    expect(boardDigest({ ...a, measured_at: "x", digest: "y" }, d)).toBe(boardDigest(a, d));
   });
 });
 
@@ -3312,14 +3332,18 @@ describe("measureBoard: the freshness section", () => {
       unverifiableSessions: 2,
     }));
     expect(other.digest).toBe(m.digest);
+    const d = boardDeclarationSnapshot(declare([]));
     expect(
-      boardDigest({
-        ...m,
-        freshness: { newest_session_at: "2026-12-01T00:00:00Z", unimported: null },
-      }),
+      boardDigest(
+        {
+          ...m,
+          freshness: { newest_session_at: "2026-12-01T00:00:00Z", unimported: null },
+        },
+        d,
+      ),
     ).toBe(m.digest);
     // Everything else stays in it.
-    expect(boardDigest({ ...m, title: "Another board" })).not.toBe(m.digest);
+    expect(boardDigest({ ...m, title: "Another board" }, d)).not.toBe(m.digest);
   });
 });
 
@@ -3614,6 +3638,7 @@ describe("measureBoard: the effort section", () => {
   it("names its method's version, and leaves the days elapsed and today's row out of the digest", async () => {
     await placeWork();
     const m = await measure(declare([], TOKYO));
+    const d = boardDeclarationSnapshot(declare([], TOKYO));
     expect(m.methods.effort).toBe(1);
     // Later the same day, nothing else changed.
     expect((await measure(declare([], TOKYO), new Date("2026-10-05T09:00:00.000Z"))).digest).toBe(
@@ -3623,12 +3648,12 @@ describe("measureBoard: the effort section", () => {
     const yesterday = rows(m).at(-2);
     if (today === undefined || yesterday === undefined) throw new Error("no rows");
     const changed = (daily: ReturnType<typeof rows>, days = m.effort.elapsed_days) =>
-      boardDigest({ ...m, effort: { ...m.effort, elapsed_days: days, daily } });
+      boardDigest({ ...m, effort: { ...m.effort, elapsed_days: days, daily } }, d);
     expect(changed([...rows(m).slice(0, -1), { ...today, output_tokens: 9 }], 99)).toBe(m.digest);
     expect(changed([...rows(m).slice(0, -2), { ...yesterday, output_tokens: 9 }, today])).not.toBe(
       m.digest,
     );
-    expect(boardDigest({ ...m, effort: { ...m.effort, output_tokens: 9 } })).not.toBe(m.digest);
+    expect(boardDigest({ ...m, effort: { ...m.effort, output_tokens: 9 } }, d)).not.toBe(m.digest);
   });
 });
 
@@ -3809,7 +3834,12 @@ describe("measureBoard: the components section", () => {
     const second = await measure(declaration, NOW, ["app"]);
     expect(second.components.unacknowledged).toEqual(["app", "app/svc"]);
     expect(second.digest).not.toBe(first.digest);
-    expect(boardDigest({ ...second, components: first.components })).not.toBe(second.digest);
+    expect(
+      boardDigest(
+        { ...second, components: first.components },
+        boardDeclarationSnapshot(declaration),
+      ),
+    ).not.toBe(second.digest);
   });
 });
 
@@ -3891,7 +3921,12 @@ describe("measureBoard: the axis section", () => {
     const m = await measure(declaration);
     expect(m.methods.axis).toBe(2);
     expect(m.axis.review_needed).toBe(false);
-    expect(boardDigest({ ...m, axis: { ...m.axis, review_needed: true } })).toBe(m.digest);
+    expect(
+      boardDigest(
+        { ...m, axis: { ...m.axis, review_needed: true } },
+        boardDeclarationSnapshot(declaration),
+      ),
+    ).toBe(m.digest);
   });
 });
 
@@ -3957,7 +3992,9 @@ describe("measureBoard: against the previous record", () => {
       added: [],
       removed: [],
     });
-    expect(boardDigest({ ...second, diff: null })).toBe(second.digest);
+    expect(boardDigest({ ...second, diff: null }, boardDeclarationSnapshot(declaration))).toBe(
+      second.digest,
+    );
     expect(second.complete).toBe(true);
   });
 

@@ -27,10 +27,12 @@ export type BoardGuideInput = {
   otherRepos: readonly string[];
   /** The language the prose and reasons are written in: the anchor's. */
   language: "en" | "ja";
-  /** The command that printed the guide, to call when `basou` is not on PATH. */
+  /** The command that printed the guide, to call when `basou` is not the same basou. */
   basouCommand: string;
   /** The version of basou printing the guide. */
   basouVersion: string;
+  /** The commit its build was made from, or null when it has no build stamp. */
+  basouBuild: string | null;
   now: Date;
   board:
     | { status: "undeclared" }
@@ -133,7 +135,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "",
     "- Run each block on its own: a shell variable does not carry over to the next call. Each block that uses W goes to the workspace and names W first.",
     "- Keep working files in W, never in a repo. A block stops before using W unless it is a directory of your own and not a link (it says so on stderr), and makes it readable by you alone: it holds what the trail holds.",
-    "- From the measure of step 2 to the record of step 7, write nothing to basou (`decision capture`, `note`, `task`, `review record`, `refresh`), put no file in and change no file of any repo the manifest declares, do not rebuild or upgrade basou, and do not change `~/.basou/portfolio.yaml`. Each of these can move what the measurement's digest covers (the trail, the repos' files and uncommitted paths, the basou that measured, the portfolio's counts), and record refuses a digest that moved; not every change moves it, so do not count on record to catch one.",
+    "- From the measure of step 2 to the record of step 7, write nothing to basou (`decision capture`, `note`, `task`, `review record`, `refresh`), put no file in and change no file of any repo the manifest declares, do not rebuild or upgrade basou, and do not change `~/.basou/portfolio.yaml`. Each of these can move what the measurement's digest covers (the trail, the repos' commits and their counts of files and of uncommitted paths, the basou that measured, the portfolio's counts), and record refuses a digest that moved; not every change moves it, so do not count on record to catch one. The digest covers board.yaml as read too, so any change to what it declares moves it.",
     '- The model name is your own report of yourself. Use the same name every time, as measure\'s `--model` and as `judged_by.model`. In the commands, `$MODEL` stands for it: put the name in its place, or set `MODEL="<name>"` at the start of each block. A block run with it unset stops: measure refuses an empty `--model`.',
     "- Isolation, both ways: read and write only this workspace. Do not open another project's repos, planning, `.basou/` or transcripts (other directories under `~/.claude/projects`, `~/.codex/sessions`), not even to read. Write the board only under board/ of this repo; never write it, its numbers or this work into a public repo or one whose contents are published (no file, `.gitignore` comment, commit message, issue or pull request). Do not bring other projects' names, paths, numbers or ids into the board, nor take this one's out (record refuses an input whose words name another workspace the portfolio registers, and says where without naming it). Asked about another project, decline and suggest a session of its own.",
     "",
@@ -252,7 +254,7 @@ export function boardGuide(input: BoardGuideInput): string {
   );
   block(`${go} && basou board record --file "$W/input.json" --dry-run; echo "exit=$?"`);
   line(
-    "A refusal lists every reason on stderr. A digest that differs means something measured moved since step 2, or basou was rebuilt or upgraded: measure again from step 2 (the judgement can be kept where nothing it rests on moved). When it checks out, write it:",
+    "A refusal lists every reason on stderr. A digest that differs means something measured or board.yaml changed since step 2, or basou was rebuilt or upgraded: measure again from step 2 (the judgement can be kept where nothing it rests on moved). When it checks out, write it:",
   );
   block(`${go} && basou board record --file "$W/input.json"; echo "exit=$?"`);
   line(
@@ -358,7 +360,11 @@ export function boardGuide(input: BoardGuideInput): string {
 }
 
 function basouLine(input: BoardGuideInput): string {
-  return `basou: \`${displayPath(input.basouCommand)}\` printed this. Where \`basou\` is not on PATH (an alias of an interactive shell) or is another version, call that instead, and the same one at every step: a measurement records which basou measured it.`;
+  const self =
+    input.basouBuild === null
+      ? `version ${input.basouVersion} (source)`
+      : `version ${input.basouVersion}, build ${input.basouBuild}`;
+  return `basou: \`${displayPath(input.basouCommand)}\` printed this. Where \`basou --version\` prints ${self}, as this one is, call \`basou\` as the commands below do (an alias of your shell is as good). Otherwise (another version or build, or no \`basou\`), write that command in place of \`basou\` in every block. Use the same one at every step: a measurement records which basou measured it.`;
 }
 
 function count(n: number, noun: string): string {

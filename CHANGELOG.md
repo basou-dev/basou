@@ -3,6 +3,33 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **`basou board record` (experimental) refuses a judgement made before
+  `board.yaml` changed.** The digest a judgement names covered what basou
+  measured but not the declaration itself, and the repos' uncommitted paths
+  are counted, not listed, so editing a `board.yaml` that was already
+  uncommitted moved nothing the digest covered. A lane's notes, an
+  observation or anything else nothing measures could then change between
+  `basou board measure` and `basou board record`, and the record kept the
+  changed declaration as the one its judgement saw. The digest now covers
+  the declaration as read (its defaults filled in): it moves with any change
+  to what `board.yaml` declares, and not with one to its comments or layout.
+  A record's digest is now `boardDigest(record.measure, record.declaration)`
+  (`@basou/core`'s `boardDigest` takes the declaration as a second argument,
+  and `boardDeclarationSnapshot` gives it). A digest an earlier basou gave
+  differs from this one's, as after any upgrade: measure again.
+- **`basou board guide` (experimental) no longer sends an agent around a
+  working alias.** It told an agent to call the command that printed it
+  wherever `basou` is an alias of an interactive shell, which led one to
+  replace the alias by hand where it worked. It now says to call `basou` as
+  it is, an alias included, where `basou --version` prints the version and
+  build that printed the guide, and that command otherwise. It also says
+  that the digest covers `board.yaml`, and that the repos' uncommitted paths
+  are counted.
+
 ## 0.68.1 — 2026-10-10
 
 ### Fixed
