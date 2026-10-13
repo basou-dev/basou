@@ -33,6 +33,24 @@ describe("boardInitText", () => {
     expect(text.split("\n")[0]).toMatch(/^# A progress board, printed by `basou board init`\./);
   });
 
+  it("says, above an empty measures, which measures the board page draws", () => {
+    for (const [language, words] of [
+      ["en", en],
+      ["ja", ja],
+    ] as const) {
+      const text = boardInitText({
+        name: "shop",
+        language,
+        start: "2026-09-21",
+        startIsFirstSession: true,
+        timeZone: "UTC",
+      });
+      expect(text).toContain(`# ${words.comments.measures}\nmeasures: []\n`);
+    }
+    expect(en.comments.measures).toContain("One with a lane is drawn in that lane's section");
+    expect(ja.comments.measures).toContain("lane を付けたものは盤のページのそのレーンの節に描かれ");
+  });
+
   it("writes the words in Japanese for a Japanese anchor", () => {
     const result = read(
       boardInitText({

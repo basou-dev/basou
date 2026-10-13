@@ -136,6 +136,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- Run each block on its own: a shell variable does not carry over to the next call. Each block that uses W goes to the workspace and names W first.",
     "- Keep working files in W, never in a repo. A block stops before using W unless it is a directory of your own and not a link (it says so on stderr), and makes it readable by you alone: it holds what the trail holds.",
     "- From the measure of step 2 to the record of step 7, write nothing to basou (`decision capture`, `note`, `task`, `review record`, `refresh`), put no file in and change no file of any repo the manifest declares, do not rebuild or upgrade basou, and do not change `~/.basou/portfolio.yaml`. Each of these can move what the measurement's digest covers (the trail, the repos' commits and their counts of files and of uncommitted paths, the basou that measured, the portfolio's counts), and record refuses a digest that moved; not every change moves it, so do not count on record to catch one. The digest covers board.yaml as read too, so any change to what it declares moves it.",
+    "- A Stop hook may ask you, as a turn ends, to capture decisions or a note. From the measure of step 2 to the record of step 7, do not: say that the board is between its measure and its record, and capture after step 7. This rule comes first while a board is being judged.",
     '- The model name is your own report of yourself. Use the same name every time, as measure\'s `--model` and as `judged_by.model`. In the commands, `$MODEL` stands for it: put the name in its place, or set `MODEL="<name>"` at the start of each block. A block run with it unset stops: measure refuses an empty `--model`.',
     "- Isolation, both ways: read and write only this workspace. Do not open another project's repos, planning, `.basou/` or transcripts (other directories under `~/.claude/projects`, `~/.codex/sessions`), not even to read. Write the board only under board/ of this repo; never write it, its numbers or this work into a public repo or one whose contents are published (no file, `.gitignore` comment, commit message, issue or pull request). Do not bring other projects' names, paths, numbers or ids into the board, nor take this one's out (record refuses an input whose words name another workspace the portfolio registers, and says where without naming it). Asked about another project, decline and suggest a session of its own.",
     "",
@@ -299,13 +300,13 @@ export function boardGuide(input: BoardGuideInput): string {
     `cd ${anchor} && git add -- board && if git diff --cached --name-only | grep -v '^board/'; then echo "(e) more than board/ is staged"; false; else echo "(e) only board/"; fi`,
   );
   line(
-    "(f) No one outside can read this repo. On GitHub: visibility PRIVATE, no collaborator but the owner, no invitation. Look at the numbers only, never the names:",
+    "(f) No one outside can read this repo. On GitHub: visibility PRIVATE, no collaborator but the owner and you (the account gh is signed in as), no invitation. Look at the numbers only, never the names:",
   );
   block(
-    `cd ${anchor} && SLUG=$(git remote get-url origin | sed -E 's#.*github.com[:/]##; s#\\.git$##') && gh repo view "$SLUG" --json visibility -q .visibility && gh api "repos/$SLUG/collaborators?affiliation=all" --jq "[.[] | select(.login != \\"\${SLUG%%/*}\\")] | length" && gh api "repos/$SLUG/invitations" --jq length`,
+    `cd ${anchor} && SLUG=$(git remote get-url origin | sed -E 's#.*github.com[:/]##; s#\\.git$##') && gh repo view "$SLUG" --json visibility -q .visibility && ME=$(gh api user --jq .login) && gh api "repos/$SLUG/collaborators?affiliation=all" --jq "[.[] | select(.login != \\"\${SLUG%%/*}\\" and .login != \\"$ME\\")] | length" && gh api "repos/$SLUG/invitations" --jq length`,
   );
   line(
-    "It should print PRIVATE, 0 and 0 (for a repo an organization owns, ask the operator who can read it). Not on GitHub: ask the operator. Then commit:",
+    "It should print PRIVATE, 0 and 0: neither the owner nor you is counted, so a repo an organization owns prints 0 too when no one else can read it. Anything else: ask the operator who can read it. Not on GitHub: ask the operator. Then commit:",
   );
   block(`cd ${anchor} && git commit -m "board: record of $(date +%Y-%m-%d)"`);
   line(
@@ -641,12 +642,12 @@ function undeclared(
     "",
     `This workspace (${displayPath(input.anchor)}) declares no board at board/board.yaml. \`basou view\`'s /board page already draws what can be measured without one (the period and effort, the repos, the trail, the components). A judged board (the reach matrix, the lanes, the operator's turns) needs a declaration first.`,
     "",
-    "1. Check that no one outside can read this repo: records hold what the trail holds (open tracks, time worked, model names). Step 9 (f) of this guide, once a board is declared, says how; on GitHub it is visibility PRIVATE, no collaborator but the owner and no invitation. Never keep a board in a repo shared with a client.",
+    "1. Check that no one outside can read this repo: records hold what the trail holds (open tracks, time worked, model names). Step 9 (f) of this guide, once a board is declared, says how; on GitHub it is visibility PRIVATE, no collaborator but the owner and the operator, and no invitation. Never keep a board in a repo shared with a client.",
     "2. Print a board to start from, and save it only where no board is. Never print it straight into board/board.yaml: the shell empties that file before init runs.",
   );
   block(`${go} && ${BOARD_INIT_SAVE}; echo "exit=$?"`);
   line(
-    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Measures, ratios and components may stay empty at first.",
+    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Measures, ratios and components may stay empty at first. A measure with `lane:` is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
     "4. Check it until it reads (every problem with it is listed at once):",
   );
   block(`${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`);

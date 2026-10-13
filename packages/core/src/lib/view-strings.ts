@@ -947,6 +947,8 @@ export type BoardPageStrings = {
     commits: string;
     milestones: string;
     noMilestones: string;
+    /** The board measured now reads no declaration, so it has no milestones to draw. */
+    milestonesNotRead: string;
     notMeasured: string;
     dailyTitle: string;
     notClaude: string;
@@ -1113,6 +1115,8 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     commits: "Commits since the start: {list}",
     milestones: "Milestones",
     noMilestones: "No milestones declared.",
+    milestonesNotRead:
+      "The board measured now does not read board.yaml, so it draws no milestones.",
     notMeasured: "not measured",
     dailyTitle: "Active time by day",
     notClaude: "Not Claude (Codex, by hand, in a terminal; not at the same time as Claude)",
@@ -1283,6 +1287,7 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     commits: "開始日以降の commit: {list}",
     milestones: "節目",
     noMilestones: "節目の宣言はない。",
+    milestonesNotRead: "その場の盤は board.yaml を読まないので、節目は描かない。",
     notMeasured: "測れなかった",
     dailyTitle: "日ごとの実働",
     notClaude: "Claude 以外（Codex・人手・端末など。Claude と重ならない分）",
@@ -1410,6 +1415,7 @@ export type BoardInitStrings = {
     head: string;
     stages: string;
     lanes: string;
+    measures: string;
     observe: string;
     components: string;
     axis: string;
@@ -1440,6 +1446,8 @@ const BOARD_INIT_EN: BoardInitStrings = {
     stages:
       "The six stages are fixed; only what each means is the board's. Keep 04 (merged) apart from 05 (in users' hands). `look` and `notes` say what to look at and mind when judging a stage.",
     lanes: "At least one lane. Its id is lowercase ASCII and stays: records join on it.",
+    measures:
+      "What to count in the repos (file_count, dir_count, line_count, match_count, regex_capture, json_length, trail_count). One with a lane is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
     observe:
       "What to observe outside basou (npm_version, github_release, github_open_issues, github_open_prs, github_ci, page_version, manual). basou never makes these; the guide says how.",
     components:
@@ -1473,6 +1481,8 @@ const BOARD_INIT_JA: BoardInitStrings = {
     stages:
       "6 段の id は固定で、盤が決めるのは意味だけ。04 本番（main に入った）と 05 開通（利用者が手に取れる）を分ける。look と notes は、その段を判定するときに見るものと注意。",
     lanes: "レーンは 1 本以上。id は小文字の ASCII で、記録の照合に使うので変えない。",
+    measures:
+      "repo の中で数えるもの（file_count・dir_count・line_count・match_count・regex_capture・json_length・trail_count）。lane を付けたものは盤のページのそのレーンの節に描かれ、付けないものは記録と差分（と、それを使う ratio）にだけ残る。",
     observe:
       "basou の外で観測するもの（npm_version・github_release・github_open_issues・github_open_prs・github_ci・page_version・manual）。basou は取りに行かない。取り方は guide が出す。",
     components:

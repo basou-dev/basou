@@ -456,6 +456,33 @@ describe("boardGuide: which basou to call, and what the digest covers", () => {
   });
 });
 
+describe("boardGuide: the gate on readers, the Stop hook and where a measure is drawn", () => {
+  it("counts neither the owner nor the account gh is signed in as among the collaborators", () => {
+    const guide = boardGuide(guideInput());
+    expect(guide).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell parameter expansion in the command the guide prints
+      'ME=$(gh api user --jq .login) && gh api "repos/$SLUG/collaborators?affiliation=all" --jq "[.[] | select(.login != \\"${SLUG%%/*}\\" and .login != \\"$ME\\")] | length"',
+    );
+    expect(guide).toContain(
+      "It should print PRIVATE, 0 and 0: neither the owner nor you is counted, so a repo an organization owns prints 0 too when no one else can read it.",
+    );
+  });
+
+  it("puts its own rule before a Stop hook's ask between measure and record", () => {
+    expect(boardGuide(guideInput())).toContain(
+      "- A Stop hook may ask you, as a turn ends, to capture decisions or a note. From the measure of step 2 to the record of step 7, do not: say that the board is between its measure and its record, and capture after step 7.",
+    );
+  });
+
+  it("says, before a board is declared, which measures the page draws and who may read the repo", () => {
+    const guide = boardGuide(guideInput({ board: { status: "undeclared" } }));
+    expect(guide).toContain(
+      "A measure with `lane:` is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
+    );
+    expect(guide).toContain("no collaborator but the owner and the operator, and no invitation");
+  });
+});
+
 describe("boardGuide: no board declared", () => {
   it("says how to declare one instead of the steps", () => {
     const guide = boardGuide(guideInput({ board: { status: "undeclared" } }));

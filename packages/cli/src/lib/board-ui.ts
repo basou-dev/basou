@@ -537,7 +537,8 @@ export const BOARD_HTML = `<!doctype html>
     ]);
   }
 
-  function effort(b) {
+  // live: the board measured now, which reads no declaration.
+  function effort(b, live) {
     var e = b.effort;
     var tile = function (k, v, sub) {
       return el('div', { class: 'tile' }, [
@@ -570,7 +571,9 @@ export const BOARD_HTML = `<!doctype html>
       children.push(dailyChart(days));
       children.push(cumulativeChart(days, e.milestones));
     }
-    children.push(e.milestones.length === 0
+    children.push(live
+      ? el('p', { class: 'muted', text: S.effort.milestonesNotRead })
+      : e.milestones.length === 0
       ? el('p', { class: 'muted', text: S.effort.noMilestones })
       : el('ul', null, e.milestones.map(function (m) {
           return el('li', null, [m.date + '  ', el('b', { text: m.label }), el('span', { class: 'muted', text: '  ' + m.ref })]);
@@ -728,7 +731,9 @@ export const BOARD_HTML = `<!doctype html>
     }
     setStatus('', false);
     var b = page.board;
-    [heading(b), summary(b), effort(b), matrix(b), lanes(b), composition(b), turns(b), footnotes(b)]
+    // The board's own title, so that boards open in other tabs can be told apart.
+    document.title = b.heading.title;
+    [heading(b), summary(b), effort(b, false), matrix(b), lanes(b), composition(b), turns(b), footnotes(b)]
       .forEach(function (node) { root.appendChild(node); });
   }
 
@@ -837,7 +842,8 @@ export const BOARD_HTML = `<!doctype html>
     S = d.strings;
     lang = d.language;
     document.documentElement.lang = lang;
-    document.title = S.pageTitle;
+    // As the heading names it, so that boards open in other tabs can be told apart.
+    document.title = d.live.heading.title;
     var drawn = ++liveDrawn;
     var nav = $('records');
     clear(nav);
@@ -852,7 +858,7 @@ export const BOARD_HTML = `<!doctype html>
     clear(root);
     setStatus('', false);
     var l = d.live;
-    [liveHeading(l, why), effort(l), liveRepos(l), liveTrail(l), liveComponents(l), liveFootnotes(l, why)]
+    [liveHeading(l, why), effort(l, true), liveRepos(l), liveTrail(l), liveComponents(l), liveFootnotes(l, why)]
       .forEach(function (node) { root.appendChild(node); });
   }
 
