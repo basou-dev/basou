@@ -96,10 +96,16 @@ export type BoardContext = {
    */
   readInput?: () => Promise<string>;
   /**
-   * How the guide says to call basou where `basou` is not on PATH. Defaults
-   * to the node and the script running now. Injectable for tests.
+   * The command the guide says to call where `basou --version` is not this
+   * version and build, or there is no `basou`. Defaults to the node and the
+   * script running now. Injectable for tests.
    */
   basouCommand?: string;
+  /**
+   * The build the guide names as this basou's: the commit of its build stamp,
+   * or null without one. Defaults to the build stamp's. Injectable for tests.
+   */
+  basouBuild?: string | null;
 };
 
 /** Where a board's declaration is read from when `--board` is not given. */
@@ -391,7 +397,7 @@ export async function doRunBoardGuide(
         .map(shellWord)
         .join(" "),
     basouVersion: BASOU_CLI_VERSION,
-    basouBuild: BASOU_BUILD?.commit ?? null,
+    basouBuild: ctx.basouBuild !== undefined ? ctx.basouBuild : (BASOU_BUILD?.commit ?? null),
     now: ctx.nowProvider?.() ?? new Date(),
   };
   let guide: string;

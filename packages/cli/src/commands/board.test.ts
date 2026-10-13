@@ -29,6 +29,7 @@ import {
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeStaleness } from "../lib/provenance-actions.js";
+import { BASOU_CLI_VERSION } from "../program.js";
 import {
   doRunBoardGuide,
   doRunBoardInit,
@@ -1613,6 +1614,22 @@ describe("basou board guide", () => {
     expect(guide).toContain('{"lane":"core","stage":"01","state":"","previous":{"state":"done"}}');
     expect(await tree(repo)).toEqual(before);
     expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("names the build that printed the guide, and none for a basou without a build stamp", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, boardYaml([MD]));
+    capture();
+    const built = await doRunBoardGuide({}, { ...guideCtx(repo), basouBuild: "feedbee" });
+    expect(built).toContain(
+      `Where \`basou --version\` prints version ${BASOU_CLI_VERSION}, build feedbee,`,
+    );
+    capture();
+    // Tests run from the source, which has no build stamp.
+    const unstamped = await doRunBoardGuide({}, guideCtx(repo));
+    expect(unstamped).toContain(
+      `Where \`basou --version\` prints version ${BASOU_CLI_VERSION} (source),`,
+    );
   });
 
   it("says how to declare a board when there is none", async () => {

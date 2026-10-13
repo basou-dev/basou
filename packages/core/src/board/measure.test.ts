@@ -20,6 +20,7 @@ import type { Event } from "../schemas/event.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import {
   type BoardDeclaration,
+  type BoardDeclarationSnapshot,
   boardDeclarationSnapshot,
   parseBoardDeclaration,
 } from "./declaration.js";
@@ -924,6 +925,44 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
     expect(boardDigest(first, { ...boardDeclarationSnapshot(declaration), title: "x" })).not.toBe(
       first.digest,
     );
+  });
+
+  it("covers every key of the declaration a record keeps", async () => {
+    const declaration = declare(MEASURES.slice(0, 2), {
+      board_version: 2,
+      stages: { ...STAGES, "01": { meaning: "stage 01", look: ["a look"], notes: ["a note"] } },
+      lanes: [{ id: "core", name: "Core", about: "what it is", notes: ["a note"] }],
+      ratios: [{ id: "ratio", label: "r", numerator: "test", denominator: "src" }],
+      components: { app: { lane: "-", note: "x" } },
+      axis: { version: 2, review_due_days: 30, seed_review: { date: "2026-09-28", model: "Seed" } },
+      effort: {
+        start: "2026-04-28",
+        time_zone: "UTC",
+        milestones: [{ date: "2026-05-01", label: "first", ref: "v0.1.0" }],
+      },
+      observe: [
+        { key: "npm_cli", kind: "npm_version", package: "@scope/cli" },
+        { key: "asked", kind: "manual", how: "ask the operator" },
+      ],
+    });
+    const snapshot = boardDeclarationSnapshot(declaration);
+    const m = await measure(declaration);
+    // The measurement's digest covers the whole snapshot, not a part of it.
+    expect(boardDigest(m, snapshot)).toBe(m.digest);
+    const other: BoardDeclarationSnapshot = {
+      title: "Another board",
+      stages: { ...snapshot.stages, "01": { meaning: "stage 01", look: ["another look"] } },
+      lanes: snapshot.lanes.map((lane) => ({ ...lane, about: "something else" })),
+      measures: snapshot.measures.map((measure) => ({ ...measure, unit: "loc" })),
+      ratios: snapshot.ratios.map((ratio) => ({ ...ratio, label: "another" })),
+      components: { app: { lane: ["core"] } },
+      axis: { ...snapshot.axis, review_due_days: 31 },
+      effort: { ...snapshot.effort, milestones: [] },
+      observe: snapshot.observe.slice(1),
+    };
+    for (const key of Object.keys(other) as (keyof BoardDeclarationSnapshot)[]) {
+      expect(boardDigest(m, { ...snapshot, [key]: other[key] }), key).not.toBe(m.digest);
+    }
   });
 
   it("does not depend on the order of keys", () => {

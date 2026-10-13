@@ -15,11 +15,13 @@ All notable changes to **basou** are recorded here. The project follows
   observation or anything else nothing measures could then change between
   `basou board measure` and `basou board record`, and the record kept the
   changed declaration as the one its judgement saw. The digest now covers
-  the declaration as read (its defaults filled in): it moves with any change
-  to what `board.yaml` declares, and not with one to its comments or layout.
-  A record's digest is now `boardDigest(record.measure, record.declaration)`
-  (`@basou/core`'s `boardDigest` takes the declaration as a second argument,
-  and `boardDeclarationSnapshot` gives it). A digest an earlier basou gave
+  the declaration as read (its defaults filled in), so it moves with any
+  change to what `board.yaml` declares. Its comments and layout are not part
+  of the declaration, though editing them can still move the repos' counts,
+  as editing any file can. A record's digest is now
+  `boardDigest(record.measure, record.declaration)` (`@basou/core`'s
+  `boardDigest` takes the declaration as a second argument, and
+  `boardDeclarationSnapshot` gives it). A digest an earlier basou gave
   differs from this one's, as after any upgrade: measure again.
 - **`basou board guide` (experimental) no longer sends an agent around a
   working alias.** It told an agent to call the command that printed it
