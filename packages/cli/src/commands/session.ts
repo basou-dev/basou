@@ -739,6 +739,7 @@ export async function doRunSessionImport(
   options: SessionImportOptions,
   ctx: SessionContext,
 ): Promise<void> {
+  refuseDashInputFile("--from", options.from, "file-only");
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveRepositoryRootForSession(cwd, "import");
   const paths = basouPaths(repositoryRoot);
@@ -908,7 +909,7 @@ export async function doRunSessionNote(
   if (hasBody && hasFromFile) {
     throw new Error("--body and --from-file are mutually exclusive");
   }
-  refuseDashInputFile("--from-file", options.fromFile, false);
+  refuseDashInputFile("--from-file", options.fromFile, { textFlag: "--body" });
 
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveRepositoryRootForSession(cwd, "note");

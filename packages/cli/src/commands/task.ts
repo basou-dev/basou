@@ -283,7 +283,7 @@ export async function doRunTaskNew(options: TaskNewOptions, ctx: TaskContext): P
   if (options.description !== undefined && options.fromFile !== undefined) {
     throw new Error("--description and --from-file are mutually exclusive");
   }
-  refuseDashInputFile("--from-file", options.fromFile, false);
+  refuseDashInputFile("--from-file", options.fromFile, { textFlag: "--description" });
 
   const initialStatus = options.status ?? "planned";
   // `--completed-at` only makes sense paired with a terminal status. Catching

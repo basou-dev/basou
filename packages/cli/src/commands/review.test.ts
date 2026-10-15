@@ -345,15 +345,24 @@ describe("doRunReviewRecord (validation errors surface to the agent)", () => {
   });
 
   it("rev-err-4: --file - is refused as reserved for stdin, before the workspace is read", async () => {
-    // Never initialized: the refusal comes before the workspace is looked up.
+    // Never initialized: the refusal comes before the workspace is looked up,
+    // and stdin is not read for it either, whatever else is passed.
     const repo = await realpath(getTmpRepo());
-    await expect(
-      doRunReviewRecord({ file: "-" }, ctx(repo, '{ "reviewer": "codex", "target": "wt" }')),
-    ).rejects.toHaveProperty(
-      "message",
-      "--file - is reserved for standard input and is refused. " +
-        "Omit --file to read stdin, or pass --file ./- to read a file named -.",
-    );
+    const readInput = vi.fn(async () => '{ "reviewer": "codex", "target": "wt" }');
+    for (const extra of [{}, { dryRun: true }, { json: true }]) {
+      await expect(
+        doRunReviewRecord(
+          { file: "-", ...extra },
+          { cwd: repo, nowProvider: () => FIXED_NOW, readInput },
+        ),
+        JSON.stringify(extra),
+      ).rejects.toHaveProperty(
+        "message",
+        "--file - is reserved for standard input and is refused. " +
+          "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+      );
+    }
+    expect(readInput).not.toHaveBeenCalled();
   });
 
   it("rev-err-5: a --file path that names a file called - is read", async () => {

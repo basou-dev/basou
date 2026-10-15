@@ -203,7 +203,8 @@ const EVT = (suffix: string) => `evt_01HXABCDEF1234567890ABC${suffix}`;
 
 const DASH_FROM_FILE_REFUSED =
   "--from-file - is reserved for standard input and is refused. " +
-  "Pass --from-file ./- to read a file named -.";
+  "This command does not read stdin: pass the text with --body, " +
+  "or pass --from-file ./- to read a file named -.";
 
 const SESSION_STARTED_LINE = (sessionId: string, suffix: string, occurredAt: string) =>
   `${JSON.stringify({
@@ -925,6 +926,32 @@ describe("doRunSessionShow", () => {
 });
 
 describe("runSessionImport", () => {
+  it("import-dash-1: --from - is refused as reserved for stdin, before the workspace is read", async () => {
+    // Never initialized: the refusal comes before the workspace is looked up,
+    // whatever else is passed.
+    const repo = await realpath(getTmpRepo());
+    const err = captureStderr();
+    for (const extra of [{}, { dryRun: true }, { json: true }]) {
+      err.mockClear();
+      process.exitCode = 0;
+      await runSessionImport({ format: "json", from: "-", ...extra }, { cwd: repo });
+      expect(joinCalls(err), JSON.stringify(extra)).toBe(
+        "--from - is reserved for standard input and is refused. " +
+          "This command does not read stdin: pass --from ./- to read a file named -.",
+      );
+      expect(process.exitCode, JSON.stringify(extra)).toBe(1);
+    }
+  });
+
+  it("import-dash-2: a --from path that names a file called - is read", async () => {
+    const repo = await setupInitedRepo();
+    await writeFile(join(repo, "-"), await readFile(FIXTURE_PATH, "utf8"));
+    const out = captureStdout();
+    await runSessionImport({ format: "json", from: join(repo, "-") }, { cwd: repo });
+    expect(joinCalls(out)).toMatch(/^Imported session \w+ \(7 events\) from -$/);
+    expect(process.exitCode).not.toBe(1);
+  });
+
   it("import-1: happy path writes Imported session line and creates session dir", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
@@ -1512,12 +1539,26 @@ describe("doRunSessionNote", () => {
   });
 
   it("note-15: --from-file - is refused as reserved for stdin, before any disk I/O", async () => {
-    // Never initialized and no session: the refusal comes before either is read.
+    // Never initialized and no session: the refusal comes before either is
+    // read, whatever else is passed.
     const repo = await realpath(getTmpRepo());
     const err = captureStderr();
-    await runSessionNote(SES("N15"), { fromFile: "-" }, { cwd: repo });
-    expect(joinCalls(err)).toBe(DASH_FROM_FILE_REFUSED);
-    expect(process.exitCode).toBe(1);
+    for (const extra of [{}, { json: true }]) {
+      err.mockClear();
+      process.exitCode = 0;
+      await runSessionNote(SES("N15"), { fromFile: "-", ...extra }, { cwd: repo });
+      expect(joinCalls(err), JSON.stringify(extra)).toBe(DASH_FROM_FILE_REFUSED);
+      expect(process.exitCode, JSON.stringify(extra)).toBe(1);
+    }
+  });
+
+  it("note-15c: --body - is a note body, not refused", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N15");
+    await createSession(repo, { id: sid, status: "running" });
+    const out = captureStdout();
+    await doRunSessionNote(sid, { body: "-", json: true }, { cwd: repo });
+    expect(JSON.parse(joinCalls(out))).toMatchObject({ body_length: 1 });
   });
 
   it("note-15b: a path that names a file called - is read", async () => {

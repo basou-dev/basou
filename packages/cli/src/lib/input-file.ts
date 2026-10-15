@@ -1,9 +1,21 @@
 /**
  * The flags that name a file to read a command's input from: `--file`
- * (`basou decision capture`, `basou review record`, `basou note`) and
- * `--from-file` (`basou task new`, `basou session note`).
+ * (`basou decision capture`, `basou review record`, `basou note`),
+ * `--from-file` (`basou task new`, `basou session note`) and `--from`
+ * (`basou session import`).
  */
-export type InputFileFlag = "--file" | "--from-file";
+export type InputFileFlag = "--file" | "--from-file" | "--from";
+
+/**
+ * Where a command takes its input when not from the file:
+ *
+ * - `"stdin"` — it reads stdin when the flag is left out.
+ * - `{ textFlag }` — it does not read stdin; the text can be passed inline with
+ *   `textFlag`.
+ * - `"file-only"` — it does not read stdin and takes the input only from the
+ *   file.
+ */
+export type InputFileAlternative = "stdin" | { textFlag: string } | "file-only";
 
 /**
  * Refuse `-` as the value of an input-file flag. `-` is reserved for standard
@@ -13,17 +25,22 @@ export type InputFileFlag = "--file" | "--from-file";
  * named `-` stays reachable as `./-`, which the message says.
  *
  * Call it before any disk I/O, so the refusal never depends on what is on disk.
- * `stdinWhenOmitted` is true for a command that reads stdin when the flag is
- * left out; the message then says so.
+ * The message names the command's other way in (see
+ * {@link InputFileAlternative}), so that a command that does not read stdin
+ * does not read as one that does.
  */
 export function refuseDashInputFile(
   flag: InputFileFlag,
   value: string | undefined,
-  stdinWhenOmitted: boolean,
+  alternative: InputFileAlternative,
 ): void {
   if (value !== "-") return;
-  const hint = stdinWhenOmitted
-    ? `Omit ${flag} to read stdin, or pass ${flag} ./- to read a file named -.`
-    : `Pass ${flag} ./- to read a file named -.`;
+  const toFile = `pass ${flag} ./- to read a file named -`;
+  const hint =
+    alternative === "stdin"
+      ? `Omit ${flag} to read stdin, or ${toFile}.`
+      : alternative === "file-only"
+        ? `This command does not read stdin: ${toFile}.`
+        : `This command does not read stdin: pass the text with ${alternative.textFlag}, or ${toFile}.`;
   throw new Error(`${flag} - is reserved for standard input and is refused. ${hint}`);
 }

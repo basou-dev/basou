@@ -245,15 +245,38 @@ describe("doRunTaskNew (ad-hoc path)", () => {
   });
 
   it("t-new-7: --from-file - is refused as reserved for stdin, before any disk read", async () => {
-    // Never initialized: the refusal comes before the workspace is looked up.
+    // Never initialized: the refusal comes before the workspace is looked up,
+    // whatever else is passed.
     const repo = await realpath(getTmpRepo());
     const err = captureStderr();
-    await runTaskNew({ title: "x", fromFile: "-" }, { cwd: repo, ...FIXED_CTX });
-    expect(joinCalls(err)).toBe(
-      "--from-file - is reserved for standard input and is refused. " +
-        "Pass --from-file ./- to read a file named -.",
-    );
-    expect(process.exitCode).toBe(1);
+    for (const extra of [
+      {},
+      { session: SES("T07") },
+      { status: "done" as const },
+      { json: true },
+    ]) {
+      err.mockClear();
+      process.exitCode = 0;
+      await runTaskNew({ title: "x", fromFile: "-", ...extra }, { cwd: repo, ...FIXED_CTX });
+      expect(joinCalls(err), JSON.stringify(extra)).toBe(
+        "--from-file - is reserved for standard input and is refused. " +
+          "This command does not read stdin: pass the text with --description, " +
+          "or pass --from-file ./- to read a file named -.",
+      );
+      expect(process.exitCode, JSON.stringify(extra)).toBe(1);
+    }
+  });
+
+  it("t-new-7c: --description - is a description, and with --from-file - the two-sources error comes first", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "x", description: "-" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md.trimEnd().endsWith("\n-")).toBe(true);
+    await expect(
+      doRunTaskNew({ title: "y", description: "-", fromFile: "-" }, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toHaveProperty("message", "--description and --from-file are mutually exclusive");
   });
 
   it("t-new-7b: a path that names a file called - is read", async () => {

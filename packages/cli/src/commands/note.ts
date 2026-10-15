@@ -163,7 +163,6 @@ export async function doRunNote(
   options: NoteOptions,
   ctx: NoteContext,
 ): Promise<void> {
-  refuseDashInputFile("--file", options.file, true);
   const cwd = ctx.cwd ?? process.cwd();
   const { body, source } = await readNoteBody(bodyArgument, options, ctx, cwd);
   // Nothing on stdin is almost always "forgot to pipe the text", not an
@@ -310,6 +309,10 @@ async function readNoteBody(
   if (bodyArgument !== undefined && options.file !== undefined) {
     throw new Error("Pass the note text either as an argument or with --file, not both.");
   }
+  // After the check above, so that `basou note "text" --file -` is told to drop
+  // one of the two rather than that omitting --file reads stdin (it would not:
+  // the argument wins).
+  refuseDashInputFile("--file", options.file, "stdin");
   if (bodyArgument !== undefined) {
     return { body: bodyArgument, source: "argument" };
   }

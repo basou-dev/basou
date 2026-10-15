@@ -160,7 +160,7 @@ export async function doRunReviewRecord(
   options: ReviewRecordOptions,
   ctx: ReviewRecordContext,
 ): Promise<void> {
-  refuseDashInputFile("--file", options.file, true);
+  refuseDashInputFile("--file", options.file, "stdin");
   const cwd = ctx.cwd ?? process.cwd();
   // View-aware resolution (like decision capture / orient / note) so review
   // record works from a workspace-view dir, redirecting to the planning repo

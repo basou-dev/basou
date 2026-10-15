@@ -431,7 +431,7 @@ export async function doRunDecisionCapture(
   options: DecisionCaptureOptions,
   ctx: DecisionCaptureContext,
 ): Promise<void> {
-  refuseDashInputFile("--file", options.file, true);
+  refuseDashInputFile("--file", options.file, "stdin");
   const cwd = ctx.cwd ?? process.cwd();
   // View-aware resolution (like orient / refresh / note / decision record) so
   // capture works from a workspace-view dir, redirecting to the planning repo

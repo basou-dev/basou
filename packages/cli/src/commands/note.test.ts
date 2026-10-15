@@ -300,17 +300,32 @@ describe("doRunNote (text from stdin or --file)", () => {
 
   it("refuses --file - as reserved for stdin, before the workspace is read", async () => {
     // Never initialized: the refusal comes before the workspace is looked up,
-    // and stdin is not read for it either.
+    // and stdin is not read for it either, whatever else is passed.
     const repo = await realpath(getTmpRepo());
     const readInput = vi.fn(async () => "from stdin");
+    for (const extra of [{}, { session: SES("S04") }, { json: true }]) {
+      await expect(
+        doRunNote(undefined, { file: "-", ...extra }, { cwd: repo, ...FIXED_CTX, readInput }),
+        JSON.stringify(extra),
+      ).rejects.toHaveProperty(
+        "message",
+        "--file - is reserved for standard input and is refused. " +
+          "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+      );
+    }
+    expect(readInput).not.toHaveBeenCalled();
+  });
+
+  it("refuses an argument with --file - as two sources, not with the stdin hint", async () => {
+    // Omitting --file here would record the argument, not read stdin, so the
+    // two-sources error comes first.
+    const repo = await realpath(getTmpRepo());
     await expect(
-      doRunNote(undefined, { file: "-" }, { cwd: repo, ...FIXED_CTX, readInput }),
+      doRunNote("some text", { file: "-" }, { cwd: repo, ...FIXED_CTX }),
     ).rejects.toHaveProperty(
       "message",
-      "--file - is reserved for standard input and is refused. " +
-        "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+      "Pass the note text either as an argument or with --file, not both.",
     );
-    expect(readInput).not.toHaveBeenCalled();
   });
 
   it("reads --file ./- as the file named -", async () => {

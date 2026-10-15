@@ -1324,17 +1324,24 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
 
   it("cap-err-9b: --file - is refused as reserved for stdin, before the workspace is read", async () => {
     // Never initialized: the refusal comes before the workspace is looked up,
-    // and stdin is not read for it either.
+    // and stdin is not read for it either, whatever else is passed.
     const repo = await realpath(getTmpRepo());
     const readInput = vi.fn(async () => JSON.stringify([{ title: "x", kind: "decision" }]));
     const err = captureStderr();
-    await runDecisionCapture({ file: "-" }, { cwd: repo, nowProvider: () => FIXED_NOW, readInput });
-    expect(joinCalls(err)).toBe(
-      "--file - is reserved for standard input and is refused. " +
-        "Omit --file to read stdin, or pass --file ./- to read a file named -.",
-    );
+    for (const extra of [{}, { dryRun: true }, { json: true }, { verbose: true }]) {
+      err.mockClear();
+      process.exitCode = 0;
+      await runDecisionCapture(
+        { file: "-", ...extra },
+        { cwd: repo, nowProvider: () => FIXED_NOW, readInput },
+      );
+      expect(joinCalls(err), JSON.stringify(extra)).toBe(
+        "--file - is reserved for standard input and is refused. " +
+          "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+      );
+      expect(process.exitCode, JSON.stringify(extra)).toBe(1);
+    }
     expect(readInput).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
   });
 
   it("cap-err-10: a non-initialized workspace is reported with the init hint", async () => {

@@ -83,7 +83,8 @@ basou session import --format json --from <path>
 ```
 
 - `--format` and `--from` are both required; the JSON is read from the
-  `--from` file (not from stdin).
+  `--from` file (not from stdin). `--from -` is refused: `-` is reserved for
+  standard input. A file named `-` is read with `--from ./-`.
 - It is converted to the basou event schema.
 - Events are appended to
   `.basou/sessions/<session_id>/events.jsonl`.
