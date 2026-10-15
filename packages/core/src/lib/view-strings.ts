@@ -1423,6 +1423,7 @@ export type BoardInitStrings = {
     /** The start is today in UTC: this host's zone has no name. */
     effortToday: string;
     timeZone: string;
+    milestones: string;
   };
 };
 
@@ -1458,6 +1459,8 @@ const BOARD_INIT_EN: BoardInitStrings = {
       "start is today in UTC: this host's time zone has no name, so the day of the first session is not known. Set start to the day the work began.",
     timeZone:
       "This host's time zone has no name a board can declare: write effort.time_zone (such as Asia/Tokyo), or the days are counted in an unnamed zone or not at all.",
+    milestones:
+      "Days marked on the period and effort chart, each { date: YYYY-MM-DD, label, ref }: only what was reached (a release, a launch), with ref saying where it can be checked (a tag and its commit). A board moved from another keeps its milestones here.",
   },
 };
 
@@ -1493,6 +1496,8 @@ const BOARD_INIT_JA: BoardInitStrings = {
       "start は UTC の今日。このホストの time zone に名前が無く、最初の session の日が分からないため。仕事を始めた日に直す。",
     timeZone:
       "このホストの time zone に、盤に書ける名前が無い。effort.time_zone（例 Asia/Tokyo）を書かないと、期間と労力は名前の無い zone で数えられるか、測られない。",
+    milestones:
+      "期間と労力の図に印を付ける日。各 { date: YYYY-MM-DD, label, ref }。到達したもの（出荷・公開）だけを書き、ref に確かめられる出所（tag とその commit）を書く。他の盤から移すときは、その節目をここに移す。",
   },
 };
 

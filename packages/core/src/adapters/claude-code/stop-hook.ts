@@ -324,7 +324,7 @@ function renderReviewNudge(): string {
   return [
     "This session shipped code (a push / PR / merge) after substantive edits but recorded no review.",
     "An adversarial / second-opinion review before shipping is the discipline here. If a review ran, record it now so it lands on the durable trail:",
-    '  - run `basou review record` and pipe a JSON object: { "reviewer": "...", "target": "...", with optional "verdict" / "findings" / "blocked" } (an explicit "blocked": [] records that you blocked nothing).',
+    '  - run `basou review record` and pipe a JSON object: { "reviewer": "...", "target": "..." }, with optional "verdict" (one of "pass", "needs-attention", "fail"), "findings" (a list of objects: { "title", with optional "severity" of "high" / "medium" / "low", "location", "summary" }) and "blocked" (a list of objects: { "title", "reason" of "spec-deviation" / "design-reversal", with optional "why" }). An explicit "blocked": [] records that you blocked nothing. `basou review record --help` shows the whole shape.',
     "If no review ran, that is the gap this is meant to catch — review before relying on this. If a review genuinely was not warranted, just stop — do not fabricate a review record.",
   ].join("\n");
 }

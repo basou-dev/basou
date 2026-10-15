@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseReviewRecordInput } from "../../review/review-record.js";
 import { DEFAULT_STOP_HOOK_MIN_EDITS, evaluateStopHook, transcriptStartedAt } from "./stop-hook.js";
 import type { ClaudeTranscriptRecord } from "./transcript-importer.js";
 
@@ -303,6 +304,44 @@ describe("evaluateStopHook (review gate)", () => {
     expect(result.review.additionalContext).toContain("shipped");
     // It gives the model an out so it does not fabricate a review.
     expect(result.review.additionalContext).toContain("just stop");
+  });
+
+  it("names the shape of each optional field as review record takes it, and where the whole shape is", () => {
+    const result = evaluateStopHook({
+      records: [edits(2), bash("git push origin main")],
+      stopHookActive: false,
+    });
+    if (!result.review.fires) throw new Error("expected review to fire");
+    const text = result.review.additionalContext;
+    expect(text).toContain('"findings" (a list of objects: { "title"');
+    expect(text).toContain('"blocked" (a list of objects: { "title", "reason"');
+    expect(text).toContain("`basou review record --help` shows the whole shape.");
+    // Every value it names is one review record takes.
+    const verdicts = ["pass", "needs-attention", "fail"] as const;
+    const severities = ["high", "medium", "low"] as const;
+    const reasons = ["spec-deviation", "design-reversal"] as const;
+    for (const v of [...verdicts, ...severities, ...reasons]) expect(text).toContain(`"${v}"`);
+    for (const verdict of verdicts) {
+      const review = parseReviewRecordInput(
+        JSON.stringify({
+          reviewer: "r",
+          target: "t",
+          verdict,
+          findings: severities.map((severity) => ({
+            title: "f",
+            severity,
+            location: "a.ts:1",
+            summary: "s",
+          })),
+          blocked: reasons.map((reason) => ({ title: "b", reason, why: "w" })),
+        }),
+      );
+      expect(review.verdict).toBe(verdict);
+    }
+    // A finding written as a string, which the text no longer leaves open, is refused.
+    expect(() =>
+      parseReviewRecordInput(JSON.stringify({ reviewer: "r", target: "t", findings: ["f"] })),
+    ).toThrow("findings[0] must be a JSON object.");
   });
 
   it("fires for each built-in ship act at a segment boundary", () => {
