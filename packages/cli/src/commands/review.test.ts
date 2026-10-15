@@ -421,6 +421,24 @@ describe("doRunReviewRecord (validation errors surface to the agent)", () => {
     expect(dirs).toHaveLength(0);
   });
 
+  it("rev-err-7: a relative --file is read from the working directory, not the workspace root", async () => {
+    const repo = await setupInitedRepo();
+    const sub = join(repo, "sub");
+    await mkdir(sub);
+    await writeFile(join(sub, "rev.json"), '{ "reviewer": "from-sub", "target": "wt" }');
+    await writeFile(join(repo, "rev.json"), '{ "reviewer": "from-root", "target": "wt" }');
+    captureStdout();
+    const previous = process.cwd();
+    process.chdir(sub);
+    try {
+      await doRunReviewRecord({ file: "rev.json" }, { cwd: sub, nowProvider: () => FIXED_NOW });
+    } finally {
+      process.chdir(previous);
+    }
+    const reviews = (await readAdHocEvents(repo)).filter((e) => e.type === "review_recorded");
+    expect(reviews.map((e) => e.reviewer)).toEqual(["from-sub"]);
+  });
+
   it("rev-err-5: a --file path that names a file called - is read", async () => {
     const repo = await setupInitedRepo();
     captureStdout();

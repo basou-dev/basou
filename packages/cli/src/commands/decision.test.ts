@@ -1360,6 +1360,47 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
     expect(dirs.filter((d) => d.startsWith("ses_"))).toEqual([]);
   });
 
+  it("cap-err-9c: --verbose adds the code of the cause, still with no path", async () => {
+    const repo = await setupInitedRepo();
+    const err = captureStderr();
+    await runDecisionCapture(
+      { file: join(repo, "missing.json"), verbose: true },
+      { cwd: repo, nowProvider: () => FIXED_NOW },
+    );
+    expect(joinCalls(err)).toBe("--file names a file that does not exist\nCaused by: ENOENT");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-9d: a relative --file is read from the working directory, not the workspace root", async () => {
+    const repo = await setupInitedRepo();
+    const sub = join(repo, "sub");
+    await mkdir(sub);
+    await writeFile(
+      join(sub, "rel.json"),
+      JSON.stringify([{ title: "from sub", kind: "decision" }]),
+    );
+    await writeFile(
+      join(repo, "rel.json"),
+      JSON.stringify([{ title: "from root", kind: "decision" }]),
+    );
+    captureStdout();
+    const previous = process.cwd();
+    process.chdir(sub);
+    try {
+      await doRunDecisionCapture({ file: "rel.json" }, { cwd: sub, nowProvider: () => FIXED_NOW });
+    } finally {
+      process.chdir(previous);
+    }
+    const sid = await findAdHocSessionId(repo);
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.filter((e) => e.type === "decision_recorded").map((e) => e.title)).toEqual([
+      "from sub",
+    ]);
+  });
+
   it("cap-err-9b: --file - is refused as reserved for stdin, before the root lookup and whatever is on disk", async () => {
     const input = JSON.stringify([{ title: "x", kind: "decision" }]);
     const readInput = vi.fn(async () => input);

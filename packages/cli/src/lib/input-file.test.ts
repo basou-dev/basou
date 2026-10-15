@@ -82,6 +82,9 @@ describe("readInputFileText", () => {
         expect(error, name).toBeInstanceOf(Error);
         expect((error as Error).message, name).toBe(message);
         expect((error as Error).message, name).not.toContain(dir);
+        // An Error, so that --verbose can print its code (renderCliError reads
+        // the code only off an Error).
+        expect((error as Error).cause, name).toBeInstanceOf(Error);
         expect(((error as Error).cause as NodeJS.ErrnoException).code, name).toBe(code);
       }
     } finally {

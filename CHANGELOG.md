@@ -59,9 +59,9 @@ All notable changes to **basou** are recorded here. The project follows
   of `0`, so basou still exits `0` for it.
 - **`basou decision capture` and `basou review record` no longer print the
   path of a `--file` they cannot read.** `Input file not found: <path>`
-  carried the path as given, which can be absolute, and any other failure to
-  read it (a file without read permission, say) passed on Node's own message,
-  path included. They now say `--file names a file that does not exist`,
+  carried the path as given, which can be absolute, and most other failures
+  to read it (a file without read permission, say) passed on Node's own
+  message, which names the path. They now say `--file names a file that does not exist`,
   `--file names a directory, not a file` or `Could not read the file --file
   names`, as `basou note` does, and `--verbose` adds the cause's code.
 
