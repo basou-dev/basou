@@ -24,12 +24,17 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Fixed
 
-- **`basou exec` and `basou run` exit with `128` plus the number of any
-  signal that ends the child.** A signal other than `SIGHUP`, `SIGINT`,
-  `SIGQUIT`, `SIGKILL` and `SIGTERM` gave `129`, `SIGHUP`'s value, whatever
-  it was. `SIGSEGV` now gives `139` and `SIGPIPE` `141`, as a shell reports
-  them, and a signal whose number differs between platforms, such as
-  `SIGUSR1`, gives this platform's.
+- **`basou exec` and `basou run` exit as the platform's shell reports a child
+  a signal ended, for every signal Node names.** A signal other than
+  `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGKILL` and `SIGTERM` gave `129`,
+  `SIGHUP`'s value, whatever it was. It now gives `128` plus the signal's
+  number on the platform basou runs on: `SIGSEGV` gives `139` and `SIGPIPE`
+  `141` on Linux and macOS, while `SIGUSR1` gives `138` on Linux and `158` on
+  macOS, so such a value is comparable only on one platform, and the recorded
+  signal name says which signal it was. Only the five signals' values are
+  promised. A signal Node has no name for (`SIGEMT` on macOS, the real-time
+  signals on Linux) still reaches basou as an exit code of `0`, so basou
+  still exits `0` for it.
 
 ## 0.68.4 — 2026-10-15
 

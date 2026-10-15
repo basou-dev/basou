@@ -648,6 +648,35 @@ describe("runClaudeCode", () => {
     expect(exitCode).toBe(139);
   });
 
+  it("exits 143 when basou itself receives SIGTERM, even if the child then ends by SIGKILL", async () => {
+    const repo = await setupInitedRepo();
+    const runner: ProcessRunner = {
+      run: async (_cmd, _args, options: CoreRunOptions): Promise<RunResult> => {
+        process.emit("SIGTERM");
+        await Promise.resolve();
+        return {
+          command: "claude-code",
+          args: [],
+          cwd: options.cwd,
+          exit_code: null,
+          signal: "SIGKILL",
+          stdout: "",
+          stderr: "",
+          started_at: FIXED_DATE.toISOString(),
+          ended_at: FIXED_DATE.toISOString(),
+          duration_ms: 0,
+          pid: 1,
+        };
+      },
+    };
+    const exitCode = await runClaudeCode(
+      [],
+      { cwd: repo, snapshot: false },
+      { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+    );
+    expect(exitCode).toBe(143);
+  });
+
   // 9
   it("records signal and exit code 130 on parent SIGINT (POSIX 128+2)", async () => {
     const repo = await setupInitedRepo();

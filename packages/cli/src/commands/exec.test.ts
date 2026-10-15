@@ -567,6 +567,55 @@ describe("runExec", () => {
     expect(exitCode).toBe(139);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "exits as the shell does for a real child a signal ends (SIGSEGV 139, SIGPIPE 141)",
+    async () => {
+      const repo = await setupInitedRepo();
+      for (const [sig, code] of [
+        ["SEGV", 139],
+        ["PIPE", 141],
+      ] as const) {
+        const exitCode = await runExec(
+          "sh",
+          ["-c", `kill -${sig} $$`],
+          { cwd: repo, snapshot: false },
+          { now: () => FIXED_DATE },
+        );
+        expect(exitCode, sig).toBe(code);
+      }
+    },
+  );
+
+  it("exits 143 when basou itself receives SIGTERM, even if the child then ends by SIGKILL", async () => {
+    const repo = await setupInitedRepo();
+    const runner: ProcessRunner = {
+      run: async (_cmd, _args, options: RunOptions): Promise<RunResult> => {
+        process.emit("SIGTERM");
+        await Promise.resolve();
+        return {
+          command: "node",
+          args: [],
+          cwd: options.cwd,
+          exit_code: null,
+          signal: "SIGKILL",
+          stdout: "",
+          stderr: "",
+          started_at: FIXED_DATE.toISOString(),
+          ended_at: FIXED_DATE.toISOString(),
+          duration_ms: 0,
+          pid: 1,
+        };
+      },
+    };
+    const exitCode = await runExec(
+      "node",
+      [],
+      { cwd: repo, snapshot: false },
+      { runner, now: () => FIXED_DATE },
+    );
+    expect(exitCode).toBe(143);
+  });
+
   // 8
   it("records signal and exit code 130 on parent SIGINT (POSIX 128+2)", async () => {
     const repo = await setupInitedRepo();
