@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import {
@@ -24,7 +23,7 @@ import {
   renderCliError,
   shortSessionId,
 } from "../lib/error-render.js";
-import { refuseDashInputFile } from "../lib/input-file.js";
+import { readInputFileText, refuseDashInputFile } from "../lib/input-file.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 // Single words that are almost certainly a mistyped subcommand rather than a
@@ -317,20 +316,7 @@ async function readNoteBody(
     return { body: bodyArgument, source: "argument" };
   }
   if (options.file !== undefined) {
-    let raw: string;
-    try {
-      raw = await readFile(resolve(cwd, options.file), "utf8");
-    } catch (error: unknown) {
-      // Fixed messages, like `basou task new --from-file`: the error surface
-      // never carries a path. The cause (shown with --verbose) has the detail.
-      if (findErrorCode(error, "ENOENT")) {
-        throw new Error("--file names a file that does not exist", { cause: error });
-      }
-      if (findErrorCode(error, "EISDIR")) {
-        throw new Error("--file names a directory, not a file", { cause: error });
-      }
-      throw new Error("Could not read the file --file names", { cause: error });
-    }
+    const raw = await readInputFileText("--file", resolve(cwd, options.file));
     return { body: dropTrailingNewlines(raw), source: "file" };
   }
   if (ctx.readInput !== undefined) {

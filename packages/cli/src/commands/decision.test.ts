@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -1333,15 +1334,30 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("cap-err-9: --file that does not exist is rejected without hanging", async () => {
+  it("cap-err-9: a --file that cannot be read is refused with a fixed message that carries no path", async () => {
     const repo = await setupInitedRepo();
+    await mkdir(join(repo, "a-directory"));
+    await writeFile(join(repo, "locked.json"), "[]");
+    await chmod(join(repo, "locked.json"), 0o000);
+    const cases: Array<[string, string]> = [
+      [join(repo, "missing.json"), "--file names a file that does not exist"],
+      [join(repo, "a-directory"), "--file names a directory, not a file"],
+    ];
+    // Root reads a 0o000 file anyway, so the permission case only means
+    // something for an ordinary user.
+    if (process.getuid?.() !== 0) {
+      cases.push([join(repo, "locked.json"), "Could not read the file --file names"]);
+    }
     const err = captureStderr();
-    await runDecisionCapture(
-      { file: join(repo, "missing.json") },
-      { cwd: repo, nowProvider: () => FIXED_NOW },
-    );
-    expect(joinCalls(err)).toContain("Input file not found:");
-    expect(process.exitCode).toBe(1);
+    for (const [file, message] of cases) {
+      err.mockClear();
+      process.exitCode = 0;
+      await runDecisionCapture({ file }, { cwd: repo, nowProvider: () => FIXED_NOW });
+      expect(joinCalls(err), file).toBe(message);
+      expect(process.exitCode, file).toBe(1);
+    }
+    const dirs = await readdir(basouPaths(repo).sessions);
+    expect(dirs.filter((d) => d.startsWith("ses_"))).toEqual([]);
   });
 
   it("cap-err-9b: --file - is refused as reserved for stdin, before the root lookup and whatever is on disk", async () => {

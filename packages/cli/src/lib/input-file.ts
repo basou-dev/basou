@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { findErrorCode } from "@basou/core";
+
 /**
  * The flags that name a file to read a command's input from: `--file`
  * (`basou decision capture`, `basou review record`, `basou note`),
@@ -51,4 +54,24 @@ export function refuseDashInputFile(
     `${flag} - is refused: - is reserved for standard input, which this command does not read. ` +
       `${toFile}; a file named - is read with ${flag} ./-.`,
   );
+}
+
+/**
+ * Read the text of the file an input-file flag names. A failure is a fixed
+ * message that names the flag and never the path, per the CLI's pathless error
+ * contract (a path the caller gave can be absolute); the cause, shown with
+ * `--verbose` as its code, has the detail.
+ */
+export async function readInputFileText(flag: InputFileFlag, path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) {
+      throw new Error(`${flag} names a file that does not exist`, { cause: error });
+    }
+    if (findErrorCode(error, "EISDIR")) {
+      throw new Error(`${flag} names a directory, not a file`, { cause: error });
+    }
+    throw new Error(`Could not read the file ${flag} names`, { cause: error });
+  }
 }

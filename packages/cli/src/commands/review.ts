@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import {
@@ -24,7 +23,7 @@ import {
   renderCliError,
   shortSessionId,
 } from "../lib/error-render.js";
-import { refuseDashInputFile } from "../lib/input-file.js";
+import { readInputFileText, refuseDashInputFile } from "../lib/input-file.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 /**
@@ -260,14 +259,7 @@ async function readReviewInput(
   ctx: ReviewRecordContext,
 ): Promise<string> {
   if (options.file !== undefined) {
-    try {
-      return await readFile(options.file, "utf8");
-    } catch (error: unknown) {
-      if (findErrorCode(error, "ENOENT")) {
-        throw new Error(`Input file not found: ${options.file}`);
-      }
-      throw error;
-    }
+    return await readInputFileText("--file", options.file);
   }
   if (ctx.readInput !== undefined) {
     return await ctx.readInput();
