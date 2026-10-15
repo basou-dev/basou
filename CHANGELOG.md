@@ -21,6 +21,19 @@ All notable changes to **basou** are recorded here. The project follows
   `--from-file ./-` for a file named `-`. With `-` refused by all six flags,
   a later release can read stdin for it by adding to what they accept,
   without changing what any of them means.
+- **`docs/spec/compatibility.md` reserves `-` for standard input, guarantees
+  `basou review record`'s input shape, and says what a signal's exit code
+  means across platforms.** A flag coming to accept a value it refuses is
+  additive within `1.x`, and if one of the six input-file flags comes to
+  accept `-`, it will read standard input. `basou review record`'s JSON input
+  is now a documented input shape, like `basou decision capture`'s. For a
+  child of `basou exec` or `basou run` that a signal ended, any signal but the
+  five with fixed values gives `128` plus its number on the platform basou
+  runs on, comparable only there, and a signal Node has no name for is outside
+  the promise, as basou exits `0` for it. The deprecation policy records
+  refusing `-` before `1.0` as its one exception to a flag keeping what it
+  accepts through `0.x`. `docs/spec/terminal-and-import.md` points
+  `session import`'s refusal of `--from -` at the reservation.
 
 ### Fixed
 
