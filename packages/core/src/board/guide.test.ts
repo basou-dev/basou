@@ -485,6 +485,100 @@ describe("boardGuide: the gate on readers, the Stop hook and where a measure is 
   });
 });
 
+describe("boardGuide: an observation not made, the milestones, isolation and what cannot be confirmed", () => {
+  it("says an observation not made still takes the time it was tried, as record requires", () => {
+    const d = declaration();
+    const guide = boardGuide(
+      guideInput({
+        board: {
+          status: "declared",
+          declaration: d,
+          recordCount: 0,
+          previous: NO_PREVIOUS_RECORDS,
+        },
+      }),
+    );
+    expect(guide).toContain(
+      'write `"value": null` and an `"error"` saying why, and still the `observed_at` of when you tried: record refuses one left empty.',
+    );
+    expect(guide).toContain(
+      "With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`.",
+    );
+    expect(guide).toContain(
+      'one not made has `"value": null`, an `error` and the `observed_at` of when it was tried. The template leaves each `observed_at` empty: fill every one.',
+    );
+    // What the guide says is so: with only the error added, record refuses
+    // the observed_at the template left empty; with the time, it takes it.
+    const template = templateIn(guide);
+    template.measure_digest = `sha256:${"a".repeat(64)}`;
+    template.cells = (template.cells as Record<string, unknown>[]).map((cell) => ({
+      ...cell,
+      state: "none",
+    }));
+    (template.judged_by as Record<string, unknown>).model = "Claude Opus 5.5";
+    const observed = template.observed as Record<string, Record<string, unknown>>;
+    for (const o of Object.values(observed)) o.error = "no answer this time";
+    const refused = parseRecordInput(template, d);
+    expect(refused.ok ? [] : refused.errors).toEqual(
+      d.observe.map(
+        (o) =>
+          `observed.${o.key}.observed_at: must be a calendar date (YYYY-MM-DD), or one with a time of day and its offset`,
+      ),
+    );
+    for (const o of Object.values(observed)) o.observed_at = "2026-10-09T03:00:00Z";
+    const taken = parseRecordInput(template, d);
+    expect(taken.ok ? [] : taken.errors).toEqual([]);
+  });
+
+  it("says how many milestones are declared and what one holds", () => {
+    const withMilestones = (n: number) =>
+      boardGuide(
+        guideInput({
+          board: {
+            status: "declared",
+            declaration: declaration({
+              effort: {
+                start: "2026-04-28",
+                time_zone: "UTC",
+                milestones: Array.from({ length: n }, (_, i) => ({
+                  date: `2026-05-0${i + 1}`,
+                  label: `v0.${i + 1}.0`,
+                  ref: `tag v0.${i + 1}.0`,
+                })),
+              },
+            }),
+            recordCount: 0,
+            previous: NO_PREVIOUS_RECORDS,
+          },
+        }),
+      );
+    const holds =
+      "under effort.milestones, each `{ date, label, ref }`: only what was reached (a release, a launch), with `ref` saying where it can be checked (a tag and its commit). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
+    expect(boardGuide(guideInput())).toContain(`- Milestones: none declared ${holds}`);
+    expect(boardGuide(guideInput())).toContain(
+      "- Approving a milestone before it is added to board.yaml.",
+    );
+    expect(withMilestones(0)).toContain(`- Milestones: none declared ${holds}`);
+    expect(withMilestones(1)).toContain(`- Milestones: 1 milestone declared ${holds}`);
+    expect(withMilestones(2)).toContain(`- Milestones: 2 milestones declared ${holds}`);
+    expect(boardGuide(guideInput({ board: { status: "undeclared" } }))).toContain(
+      "Declare under `effort.milestones` the days to mark on the period and effort chart: only what was reached, each with a `ref` saying where it can be checked; a board moved from another keeps its milestones there.",
+    );
+  });
+
+  it("keeps other projects out of what the agent writes, and says the portfolio section is basou's own", () => {
+    expect(boardGuide(guideInput())).toContain(
+      "Do not bring other projects' names, paths, numbers or ids into what you write for the board (board.yaml, the prose, the reasons, the observations), nor take this one's out (record refuses an input whose words name another workspace the portfolio registers, and says where without naming it). The record's `portfolio` section is basou's own measure: how many workspaces this machine's portfolio registers, with no names.",
+    );
+  });
+
+  it("gives what only the operator can see to unverified, and a screen checked every time to a manual observation", () => {
+    expect(boardGuide(guideInput())).toContain(
+      "- `unverified` (?): you cannot confirm it from where you judge: a run only another workspace can make, or a screen only the operator can see and did not check this time. Needs a reason saying who or what could confirm it. Not when this board could check it and you did not: measure it, or say in a footnote why not. When the operator did check, judge by what they saw. A screen the operator would check at every record is better declared as a `manual` observation (through step 2b): their answer is then kept in the record",
+    );
+  });
+});
+
 describe("boardGuide: no board declared", () => {
   it("says how to declare one instead of the steps", () => {
     const guide = boardGuide(guideInput({ board: { status: "undeclared" } }));

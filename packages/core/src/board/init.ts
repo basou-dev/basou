@@ -55,8 +55,8 @@ function comment(text: string): string {
  * registered (the first measurement names every one it finds, which fires
  * the axis review that registers them), an axis of version 1 with no review
  * on record (the first record is its first review), and the effort from the
- * day given, in this host's time zone when it has a name. It reads as a
- * declaration as it is.
+ * day given, in this host's time zone when it has a name, with no milestone
+ * (a comment says what one holds). It reads as a declaration as it is.
  */
 export function boardInitText(input: BoardInitInput): string {
   const t = boardInitStrings(input.language);
@@ -97,6 +97,8 @@ export function boardInitText(input: BoardInitInput): string {
     input.timeZone === undefined
       ? `  ${comment(t.comments.timeZone)}`
       : `  time_zone: ${quoted(input.timeZone)}`,
+    `  ${comment(t.comments.milestones)}`,
+    "  milestones: []",
   ];
   return `${lines.join("\n")}\n`;
 }

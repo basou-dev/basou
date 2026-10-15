@@ -123,6 +123,9 @@ export function boardGuide(input: BoardGuideInput): string {
   line(`- Records: board/records/, ${recordsLine(input, recordCount)}`);
   line(`- Axis: ${axisLine(input)}`);
   line(
+    `- Milestones: ${milestonesLine(d)} under effort.milestones, each \`{ date, label, ref }\`: only what was reached (a release, a launch), with \`ref\` saying where it can be checked (a tag and its commit). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.`,
+  );
+  line(
     `- Language: write every prose string and reason in ${LANGUAGE_NAMES[input.language]}, the language this board's page is drawn in (Japanese when the manifest declares ja for this repo, English otherwise)`,
   );
   line(`- Board page port: ${port}`);
@@ -138,7 +141,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- From the measure of step 2 to the record of step 7, write nothing to basou (`decision capture`, `note`, `task`, `review record`, `refresh`), put no file in and change no file of any repo the manifest declares, do not rebuild or upgrade basou, and do not change `~/.basou/portfolio.yaml`. Each of these can move what the measurement's digest covers (the trail, the repos' commits and their counts of files and of uncommitted paths, the basou that measured, the portfolio's counts), and record refuses a digest that moved; not every change moves it, so do not count on record to catch one. The digest covers board.yaml as read too, so any change to what it declares moves it.",
     "- A Stop hook may ask you, as a turn ends, to capture decisions or a note. From the measure of step 2 to the record of step 7, write nothing it asks for: say that the board is between its measure and its record. After step 7, capture what is worth capturing. This rule comes first while a board is being judged.",
     '- The model name is your own report of yourself. Use the same name every time, as measure\'s `--model` and as `judged_by.model`. In the commands, `$MODEL` stands for it: put the name in its place, or set `MODEL="<name>"` at the start of each block. A block run with it unset stops: measure refuses an empty `--model`.',
-    "- Isolation, both ways: read and write only this workspace. Do not open another project's repos, planning, `.basou/` or transcripts (other directories under `~/.claude/projects`, `~/.codex/sessions`), not even to read. Write the board only under board/ of this repo; never write it, its numbers or this work into a public repo or one whose contents are published (no file, `.gitignore` comment, commit message, issue or pull request). Do not bring other projects' names, paths, numbers or ids into the board, nor take this one's out (record refuses an input whose words name another workspace the portfolio registers, and says where without naming it). Asked about another project, decline and suggest a session of its own.",
+    "- Isolation, both ways: read and write only this workspace. Do not open another project's repos, planning, `.basou/` or transcripts (other directories under `~/.claude/projects`, `~/.codex/sessions`), not even to read. Write the board only under board/ of this repo; never write it, its numbers or this work into a public repo or one whose contents are published (no file, `.gitignore` comment, commit message, issue or pull request). Do not bring other projects' names, paths, numbers or ids into what you write for the board (board.yaml, the prose, the reasons, the observations), nor take this one's out (record refuses an input whose words name another workspace the portfolio registers, and says where without naming it). The record's `portfolio` section is basou's own measure: how many workspaces this machine's portfolio registers, with no names. Asked about another project, decline and suggest a session of its own.",
     "",
   );
 
@@ -240,7 +243,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "Write it to `$W/input.json` from a file you edit, not a heredoc (a shell expands backquotes in one and drops words), starting from the template below:",
     "",
     "- `measure_digest`: the `digest` of `$W/measure.json`.",
-    '- `observed`: when the board declares observations, one entry per declared observation, under its key, each as step 3 says; nothing else and nothing left out, or record refuses it. An observation made has no `error`; one not made has `"value": null` and an `error`. With none declared, `observed` may stay empty.',
+    '- `observed`: when the board declares observations, one entry per declared observation, under its key, each as step 3 says; nothing else and nothing left out, or record refuses it. An observation made has no `error`; one not made has `"value": null`, an `error` and the `observed_at` of when it was tried. The template leaves each `observed_at` empty: fill every one. With none declared, `observed` may stay empty.',
     "- `cells`: every lane at every stage. Set each `state` and delete each `previous`: record refuses a cell with an empty state or a `previous`. `blocked`, `shelved` and `unverified` need a `reason`.",
     `- \`prose\`: \`summary\`, \`lanes\`, \`operator_turns\` as \`{ "text", "source" }\` and \`footnotes\`, all plain strings (HTML is shown as text; only \`\` \`code\` \`\` is drawn as code). Do not repeat what basou draws (the heading, the tiles, the period and effort, the matrix, the ratios, the axis version and the model). Do not start a lane's prose with its \`about\`: the page draws the about right before it. Give \`lanes\` an entry only for a lane you have something to say about (an empty string is drawn as an empty paragraph); the lane ids are ${d.lanes.map((l) => `\`${l.id}\``).join(", ")}.`,
     '- `axis_review`: null, or `{ "triggers": [...], "summary": "..." }` as step 2b says.',
@@ -352,6 +355,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "",
     "- Running `basou refresh` when step 1 finds sessions not imported.",
     "- Approving an axis review (step 2b) before anything in board.yaml changes.",
+    "- Approving a milestone before it is added to board.yaml.",
   );
   for (const o of d.observe) {
     if (o.kind === "manual") line(`- Observing \`${o.key}\`: ${displayPath(o.how)}`);
@@ -404,6 +408,11 @@ function recordsLine(input: BoardGuideInput, recordCount: number): string {
   return count(recordCount, "record");
 }
 
+function milestonesLine(d: BoardDeclaration): string {
+  const n = d.effort.milestones?.length ?? 0;
+  return n === 0 ? "none declared" : `${count(n, "milestone")} declared`;
+}
+
 function axisLine(input: BoardGuideInput): string {
   if (input.board.status !== "declared") return "";
   const { declaration: d, previous } = input.board;
@@ -442,7 +451,7 @@ function observeSteps(
     return;
   }
   line(
-    'Read only: these commands write nothing and change nothing. Make each one, and write it under its key in `observed` as `{ "value": <value>, "observed_at": <when>, "source": <what you asked> }`. `observed_at` is the time with its offset, such as `date -u +%Y-%m-%dT%H:%M:%SZ` prints. When it cannot be made (a command failed, nothing to read, no answer), write `"value": null` and an `"error"` saying why: the board then shows it as not confirmed, with the previous record\'s value. Never carry an old value forward as today\'s. Keep the keys: they join each value to the previous record\'s.',
+    'Read only: these commands write nothing and change nothing. Make each one, and write it under its key in `observed` as `{ "value": <value>, "observed_at": <when>, "source": <what you asked> }`. `observed_at` is when you made it, or tried to, with its offset, such as `date -u +%Y-%m-%dT%H:%M:%SZ` prints. When it cannot be made (a command failed, nothing to read, no answer), write `"value": null` and an `"error"` saying why, and still the `observed_at` of when you tried: record refuses one left empty. The board then shows it as not confirmed, with the previous record\'s value. Never carry an old value forward as today\'s. Keep the keys: they join each value to the previous record\'s.',
     "",
   );
   for (const o of observe) {
@@ -506,7 +515,7 @@ function observeSteps(
         line(
           `Only the operator can make this one: ${displayPath(o.how)}`,
           "",
-          "Ask the operator, and do not make it yourself. With no answer this time, write a null and say so as the error. Source: `the operator`.",
+          "Ask the operator, and do not make it yourself. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`.",
           "",
         );
         break;
@@ -537,7 +546,7 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
     "- `blocked` (\u25a0): stuck here; what the next step needs is missing. Needs a reason",
     "- `shelved` (\u2298): stopped on purpose, by a settled decision. Needs a reason naming that decision. Not a failure",
     "- `none` (\u25cb): not started",
-    "- `unverified` (?): this board cannot confirm it (a run only another workspace can make). Needs a reason. Not when this board could check it and you did not: measure it, or say in a footnote why not",
+    "- `unverified` (?): you cannot confirm it from where you judge: a run only another workspace can make, or a screen only the operator can see and did not check this time. Needs a reason saying who or what could confirm it. Not when this board could check it and you did not: measure it, or say in a footnote why not. When the operator did check, judge by what they saw. A screen the operator would check at every record is better declared as a `manual` observation (through step 2b): their answer is then kept in the record",
     "",
     "Principles:",
     "",
@@ -647,7 +656,7 @@ function undeclared(
   );
   block(`${go} && ${BOARD_INIT_SAVE}; echo "exit=$?"`);
   line(
-    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Measures, ratios and components may stay empty at first. A measure with `lane:` is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
+    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only what was reached, each with a `ref` saying where it can be checked; a board moved from another keeps its milestones there. Measures, ratios and components may stay empty at first. A measure with `lane:` is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
     "4. Check it until it reads (every problem with it is listed at once):",
   );
   block(`${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`);

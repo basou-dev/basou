@@ -3,6 +3,45 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **`basou board guide` (experimental) says that an observation not made
+  still takes the time it was tried.** It said to write a null value and an
+  error for an observation that could not be made, and its template leaves
+  every `observed_at` empty, but `basou board record` refuses an empty
+  `observed_at` whatever the value. Step 3, the steps for a manual
+  observation and the description of the record's input now say to give the
+  time it was tried (for a manual one, the time the operator was asked).
+- **`basou board init` and `basou board guide` (experimental) say where a
+  board's milestones go.** `effort.milestones` was declared nowhere but the
+  schema, so a board moved from another could lose its milestones. `init`
+  now prints an empty `milestones` under `effort` with a comment saying what
+  one holds, and its help says so. The guide says how many a board declares,
+  what one holds, that one is drawn from the next record on, and that one is
+  added with the operator's approval before the measure or after the record,
+  never between.
+- **`basou board guide` (experimental) says what to judge a cell that only
+  the operator can see.** `unverified` was described as a run only another
+  workspace can make, so a cell only the operator's own screen can confirm
+  was judged `part` with a footnote on one board and `unverified` on
+  another. It now covers both, asks for a reason saying who could confirm
+  it, and suggests a `manual` observation for a screen checked at every
+  record.
+- **`basou board guide` (experimental) no longer contradicts the record's
+  `portfolio` section.** Its isolation rule told the agent to bring no other
+  project's numbers into the board, while every record holds how many
+  workspaces the portfolio registers. The rule now covers what the agent
+  writes (board.yaml, the prose, the reasons, the observations), and says
+  that the `portfolio` section is basou's own measure, with no names.
+- **The review gate of `basou hook stop` names the shape `basou review
+  record` takes.** It listed `verdict`, `findings` and `blocked` as optional
+  with no shape, so a review written with findings as strings was refused.
+  It now names the values of `verdict`, says that `findings` and `blocked`
+  are lists of objects with their fields, and points to
+  `basou review record --help`.
+
 ## 0.68.3 — 2026-10-13
 
 ### Fixed

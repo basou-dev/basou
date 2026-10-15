@@ -29,7 +29,7 @@ describe("boardInitText", () => {
     expect(d.components).toEqual({});
     expect(d.measures).toEqual([]);
     expect(d.axis).toEqual({ version: 1, review_due_days: 60 });
-    expect(d.effort).toEqual({ start: "2026-09-21", time_zone: "Asia/Tokyo" });
+    expect(d.effort).toEqual({ start: "2026-09-21", time_zone: "Asia/Tokyo", milestones: [] });
     expect(text.split("\n")[0]).toMatch(/^# A progress board, printed by `basou board init`\./);
   });
 
@@ -80,7 +80,31 @@ describe("boardInitText", () => {
     expect(text).not.toContain(en.comments.effort);
     const result = read(text);
     if (!result.ok) throw new Error(result.errors.join("\n"));
-    expect(result.declaration.effort).toEqual({ start: "2026-10-05" });
+    expect(result.declaration.effort).toEqual({ start: "2026-10-05", milestones: [] });
+  });
+
+  it("says, above an empty milestones under the effort, what a milestone holds", () => {
+    for (const [language, words] of [
+      ["en", en],
+      ["ja", ja],
+    ] as const) {
+      for (const timeZone of ["UTC", undefined]) {
+        const text = boardInitText({
+          name: "shop",
+          language,
+          start: "2026-09-21",
+          startIsFirstSession: true,
+          timeZone,
+        });
+        expect(text.endsWith(`  # ${words.comments.milestones}\n  milestones: []\n`)).toBe(true);
+      }
+    }
+    expect(en.comments.milestones).toContain("{ date: YYYY-MM-DD, label, ref }");
+    expect(en.comments.milestones).toContain(
+      "A board moved from another keeps its milestones here.",
+    );
+    expect(ja.comments.milestones).toContain("{ date: YYYY-MM-DD, label, ref }");
+    expect(ja.comments.milestones).toContain("他の盤から移すときは、その節目をここに移す。");
   });
 
   it("keeps a name as written, whatever it holds", () => {
