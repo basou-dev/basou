@@ -1,7 +1,11 @@
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type InputFileAlternative,
   type InputFileFlag,
+  readInputFileText,
   refuseDashInputFile,
 } from "./input-file.js";
 
@@ -44,6 +48,48 @@ describe("refuseDashInputFile", () => {
       for (const [flag, alternative] of cases) {
         expect(() => refuseDashInputFile(flag, value, alternative), String(value)).not.toThrow();
       }
+    }
+  });
+});
+
+describe("readInputFileText", () => {
+  it("reads the file, and refuses one it cannot read with a message that names the flag, not the path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "basou-input-file-"));
+    try {
+      await writeFile(join(dir, "in.json"), "[1]\n");
+      await mkdir(join(dir, "a-directory"));
+      await writeFile(join(dir, "locked.json"), "[]");
+      await chmod(join(dir, "locked.json"), 0o000);
+      expect(await readInputFileText("--file", join(dir, "in.json"))).toBe("[1]\n");
+      const cases: Array<[InputFileFlag, string, string, string]> = [
+        ["--file", "missing.json", "--file names a file that does not exist", "ENOENT"],
+        ["--from", "a-directory", "--from names a directory, not a file", "EISDIR"],
+      ];
+      // Root reads a 0o000 file anyway.
+      if (process.getuid?.() !== 0) {
+        cases.push([
+          "--from-file",
+          "locked.json",
+          "Could not read the file --from-file names",
+          "EACCES",
+        ]);
+      }
+      for (const [flag, name, message, code] of cases) {
+        const error = await readInputFileText(flag, join(dir, name)).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(error, name).toBeInstanceOf(Error);
+        expect((error as Error).message, name).toBe(message);
+        expect((error as Error).message, name).not.toContain(dir);
+        // An Error, so that --verbose can print its code (renderCliError reads
+        // the code only off an Error).
+        expect((error as Error).cause, name).toBeInstanceOf(Error);
+        expect(((error as Error).cause as NodeJS.ErrnoException).code, name).toBe(code);
+      }
+    } finally {
+      await chmod(join(dir, "locked.json"), 0o600).catch(() => undefined);
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

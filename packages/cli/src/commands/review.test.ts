@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -385,6 +395,48 @@ describe("doRunReviewRecord (validation errors surface to the agent)", () => {
       }
     });
     expect(readInput).not.toHaveBeenCalled();
+  });
+
+  it("rev-err-6: a --file that cannot be read is refused with a fixed message that carries no path", async () => {
+    const repo = await setupInitedRepo();
+    await mkdir(join(repo, "a-directory"));
+    await writeFile(join(repo, "locked.json"), "[]");
+    await chmod(join(repo, "locked.json"), 0o000);
+    const cases: Array<[string, string]> = [
+      [join(repo, "missing.json"), "--file names a file that does not exist"],
+      [join(repo, "a-directory"), "--file names a directory, not a file"],
+    ];
+    // Root reads a 0o000 file anyway, so the permission case only means
+    // something for an ordinary user.
+    if (process.getuid?.() !== 0) {
+      cases.push([join(repo, "locked.json"), "Could not read the file --file names"]);
+    }
+    for (const [file, message] of cases) {
+      await expect(
+        doRunReviewRecord({ file }, { cwd: repo, nowProvider: () => FIXED_NOW }),
+        file,
+      ).rejects.toHaveProperty("message", message);
+    }
+    const dirs = (await readdir(basouPaths(repo).sessions)).filter((d) => d.startsWith("ses_"));
+    expect(dirs).toHaveLength(0);
+  });
+
+  it("rev-err-7: a relative --file is read from the working directory, not the workspace root", async () => {
+    const repo = await setupInitedRepo();
+    const sub = join(repo, "sub");
+    await mkdir(sub);
+    await writeFile(join(sub, "rev.json"), '{ "reviewer": "from-sub", "target": "wt" }');
+    await writeFile(join(repo, "rev.json"), '{ "reviewer": "from-root", "target": "wt" }');
+    captureStdout();
+    const previous = process.cwd();
+    process.chdir(sub);
+    try {
+      await doRunReviewRecord({ file: "rev.json" }, { cwd: sub, nowProvider: () => FIXED_NOW });
+    } finally {
+      process.chdir(previous);
+    }
+    const reviews = (await readAdHocEvents(repo)).filter((e) => e.type === "review_recorded");
+    expect(reviews.map((e) => e.reviewer)).toEqual(["from-sub"]);
   });
 
   it("rev-err-5: a --file path that names a file called - is read", async () => {

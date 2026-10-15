@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -1333,15 +1334,71 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("cap-err-9: --file that does not exist is rejected without hanging", async () => {
+  it("cap-err-9: a --file that cannot be read is refused with a fixed message that carries no path", async () => {
+    const repo = await setupInitedRepo();
+    await mkdir(join(repo, "a-directory"));
+    await writeFile(join(repo, "locked.json"), "[]");
+    await chmod(join(repo, "locked.json"), 0o000);
+    const cases: Array<[string, string]> = [
+      [join(repo, "missing.json"), "--file names a file that does not exist"],
+      [join(repo, "a-directory"), "--file names a directory, not a file"],
+    ];
+    // Root reads a 0o000 file anyway, so the permission case only means
+    // something for an ordinary user.
+    if (process.getuid?.() !== 0) {
+      cases.push([join(repo, "locked.json"), "Could not read the file --file names"]);
+    }
+    const err = captureStderr();
+    for (const [file, message] of cases) {
+      err.mockClear();
+      process.exitCode = 0;
+      await runDecisionCapture({ file }, { cwd: repo, nowProvider: () => FIXED_NOW });
+      expect(joinCalls(err), file).toBe(message);
+      expect(process.exitCode, file).toBe(1);
+    }
+    const dirs = await readdir(basouPaths(repo).sessions);
+    expect(dirs.filter((d) => d.startsWith("ses_"))).toEqual([]);
+  });
+
+  it("cap-err-9c: --verbose adds the code of the cause, still with no path", async () => {
     const repo = await setupInitedRepo();
     const err = captureStderr();
     await runDecisionCapture(
-      { file: join(repo, "missing.json") },
+      { file: join(repo, "missing.json"), verbose: true },
       { cwd: repo, nowProvider: () => FIXED_NOW },
     );
-    expect(joinCalls(err)).toContain("Input file not found:");
+    expect(joinCalls(err)).toBe("--file names a file that does not exist\nCaused by: ENOENT");
     expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-9d: a relative --file is read from the working directory, not the workspace root", async () => {
+    const repo = await setupInitedRepo();
+    const sub = join(repo, "sub");
+    await mkdir(sub);
+    await writeFile(
+      join(sub, "rel.json"),
+      JSON.stringify([{ title: "from sub", kind: "decision" }]),
+    );
+    await writeFile(
+      join(repo, "rel.json"),
+      JSON.stringify([{ title: "from root", kind: "decision" }]),
+    );
+    captureStdout();
+    const previous = process.cwd();
+    process.chdir(sub);
+    try {
+      await doRunDecisionCapture({ file: "rel.json" }, { cwd: sub, nowProvider: () => FIXED_NOW });
+    } finally {
+      process.chdir(previous);
+    }
+    const sid = await findAdHocSessionId(repo);
+    const events = (await readFile(join(basouPaths(repo).sessions, sid, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.filter((e) => e.type === "decision_recorded").map((e) => e.title)).toEqual([
+      "from sub",
+    ]);
   });
 
   it("cap-err-9b: --file - is refused as reserved for stdin, before the root lookup and whatever is on disk", async () => {
