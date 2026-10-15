@@ -201,6 +201,33 @@ function joinCalls(spy: ReturnType<typeof captureStdout>): string {
 const SES = (suffix: string) => `ses_01HXABCDEF1234567890ABC${suffix}`;
 const EVT = (suffix: string) => `evt_01HXABCDEF1234567890ABC${suffix}`;
 
+const DASH_FROM_FILE_REFUSED =
+  "--from-file - is refused: - is reserved for standard input, which this command does not read. " +
+  "Write the text to a file and pass --from-file <path>, or pass it with --body; " +
+  "a file named - is read with --from-file ./-.";
+
+/**
+ * Run `fn` from a fresh directory that is not a git repository and holds a
+ * file named `-` with `content`, as both the process cwd and the cwd passed in:
+ * a refusal of `-` then shows that it comes before the root lookup and ignores
+ * the file.
+ */
+async function inBareDirWithDashFile(
+  content: string,
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-dash-")));
+  await writeFile(join(dir, "-"), content);
+  const previous = process.cwd();
+  process.chdir(dir);
+  try {
+    await fn(dir);
+  } finally {
+    process.chdir(previous);
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 const SESSION_STARTED_LINE = (sessionId: string, suffix: string, occurredAt: string) =>
   `${JSON.stringify({
     schema_version: "0.2.0",
@@ -921,6 +948,38 @@ describe("doRunSessionShow", () => {
 });
 
 describe("runSessionImport", () => {
+  it("import-dash-1: --from - is refused as reserved for stdin, before the root lookup and whatever is on disk", async () => {
+    const err = captureStderr();
+    await inBareDirWithDashFile(await readFile(FIXTURE_PATH, "utf8"), async (dir) => {
+      for (const extra of [
+        {},
+        { dryRun: true },
+        { json: true },
+        { verbose: true },
+        { label: "l" },
+        { task: "task_01HXABCDEF1234567890ABCDEF" },
+      ]) {
+        err.mockClear();
+        process.exitCode = 0;
+        await runSessionImport({ format: "json", from: "-", ...extra }, { cwd: dir });
+        expect(joinCalls(err), JSON.stringify(extra)).toBe(
+          "--from - is refused: - is reserved for standard input, which this command does not read. " +
+            "Write the JSON to a file and pass its path with --from; a file named - is read with --from ./-.",
+        );
+        expect(process.exitCode, JSON.stringify(extra)).toBe(1);
+      }
+    });
+  });
+
+  it("import-dash-2: a --from path that names a file called - is read", async () => {
+    const repo = await setupInitedRepo();
+    await writeFile(join(repo, "-"), await readFile(FIXTURE_PATH, "utf8"));
+    const out = captureStdout();
+    await runSessionImport({ format: "json", from: join(repo, "-") }, { cwd: repo });
+    expect(joinCalls(out)).toMatch(/^Imported session \w+ \(7 events\) from -$/);
+    expect(process.exitCode).not.toBe(1);
+  });
+
   it("import-1: happy path writes Imported session line and creates session dir", async () => {
     const repo = await setupInitedRepo();
     const out = captureStdout();
@@ -1507,14 +1566,44 @@ describe("doRunSessionNote", () => {
     expect(joinCalls(out)).toContain("(waiting_approval)");
   });
 
-  it("note-15: --from-file - (stdin) is rejected before any disk I/O", async () => {
+  it("note-15: --from-file - is refused as reserved for stdin, before the root lookup and whatever is on disk", async () => {
+    // No session either: the refusal comes before anything is read.
+    const err = captureStderr();
+    await inBareDirWithDashFile("from the dash file", async (dir) => {
+      for (const extra of [{}, { json: true }, { verbose: true }]) {
+        err.mockClear();
+        process.exitCode = 0;
+        await runSessionNote(SES("N15"), { fromFile: "-", ...extra }, { cwd: dir });
+        expect(joinCalls(err), JSON.stringify(extra)).toBe(DASH_FROM_FILE_REFUSED);
+        expect(process.exitCode, JSON.stringify(extra)).toBe(1);
+      }
+    });
+  });
+
+  it("note-15d: --body with --from-file - is the two-sources error, not the refusal", async () => {
+    const repo = await realpath(getTmpRepo());
+    await expect(
+      doRunSessionNote(SES("N15"), { body: "y", fromFile: "-" }, { cwd: repo }),
+    ).rejects.toHaveProperty("message", "--body and --from-file are mutually exclusive");
+  });
+
+  it("note-15c: --body - is a note body, not refused", async () => {
     const repo = await setupInitedRepo();
     const sid = SES("N15");
     await createSession(repo, { id: sid, status: "running" });
-    const err = captureStderr();
-    await runSessionNote(sid, { fromFile: "-" }, { cwd: repo });
-    expect(joinCalls(err)).toContain("--from-file - (stdin) is not supported in v0.1");
-    expect(process.exitCode).toBe(1);
+    const out = captureStdout();
+    await doRunSessionNote(sid, { body: "-", json: true }, { cwd: repo });
+    expect(JSON.parse(joinCalls(out))).toMatchObject({ body_length: 1 });
+  });
+
+  it("note-15b: a path that names a file called - is read", async () => {
+    const repo = await setupInitedRepo();
+    const sid = SES("N15");
+    await createSession(repo, { id: sid, status: "running" });
+    await writeFile(join(repo, "-"), "from the dash file");
+    const out = captureStdout();
+    await doRunSessionNote(sid, { fromFile: join(repo, "-") }, { cwd: repo });
+    expect(joinCalls(out)).toContain("from the dash file");
   });
 
   it("note-16: pathless contract: non-verbose stderr does not leak absolute paths", async () => {
@@ -1538,8 +1627,7 @@ describe("doRunSessionNote", () => {
     const err = captureStderr();
     await runSessionNote(sid, { fromFile: "-", verbose: true }, { cwd: repo });
     const stderr = joinCalls(err);
-    expect(stderr).toContain("--from-file - (stdin) is not supported in v0.1");
-    expect(stderr).not.toContain("Caused by:");
+    expect(stderr).toBe(DASH_FROM_FILE_REFUSED);
     expect(process.exitCode).toBe(1);
   });
 

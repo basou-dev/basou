@@ -42,6 +42,7 @@ import {
   renderCliError,
 } from "../lib/error-render.js";
 import { formatDurationMs } from "../lib/format-duration.js";
+import { refuseDashInputFile } from "../lib/input-file.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 const SES_PREFIX = "ses_";
@@ -738,6 +739,7 @@ export async function doRunSessionImport(
   options: SessionImportOptions,
   ctx: SessionContext,
 ): Promise<void> {
+  refuseDashInputFile("--from", options.from, { fileOnly: "the JSON" });
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveRepositoryRootForSession(cwd, "import");
   const paths = basouPaths(repositoryRoot);
@@ -907,11 +909,7 @@ export async function doRunSessionNote(
   if (hasBody && hasFromFile) {
     throw new Error("--body and --from-file are mutually exclusive");
   }
-  // The stdin pipe path is not supported in v0.1. Surface a dedicated
-  // pathless error before any disk I/O so the failure mode is obvious.
-  if (hasFromFile && options.fromFile === "-") {
-    throw new Error("--from-file - (stdin) is not supported in v0.1");
-  }
+  refuseDashInputFile("--from-file", options.fromFile, { textFlag: "--body" });
 
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveRepositoryRootForSession(cwd, "note");

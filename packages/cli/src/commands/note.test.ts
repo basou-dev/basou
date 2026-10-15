@@ -40,6 +40,28 @@ const FIXED_CTX = { nowProvider: () => FIXED_NOW };
 
 const SES = (suffix: string) => `ses_01HXABCDEF1234567890ABC${suffix}`;
 
+/**
+ * Run `fn` from a fresh directory that is not a git repository and holds a
+ * file named `-` with `content`, as both the process cwd and the cwd passed in:
+ * a refusal of `-` then shows that it comes before the root lookup and ignores
+ * the file.
+ */
+async function inBareDirWithDashFile(
+  content: string,
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-dash-")));
+  await writeFile(join(dir, "-"), content);
+  const previous = process.cwd();
+  process.chdir(dir);
+  try {
+    await fn(dir);
+  } finally {
+    process.chdir(previous);
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 let tmpRepo: string | undefined;
 
 beforeEach(async () => {
@@ -296,6 +318,43 @@ describe("doRunNote (text from stdin or --file)", () => {
     expect(await readNoteBody(repo)).toBe("from an absolute path");
     // An absolute path would put the machine's layout into `.basou/`.
     expect(await readInvocationArgs(repo)).toEqual(["--file", "next.txt"]);
+  });
+
+  it("refuses --file - as reserved for stdin, before the root lookup and whatever is on disk", async () => {
+    const readInput = vi.fn(async () => "from stdin");
+    await inBareDirWithDashFile("from the dash file\n", async (dir) => {
+      for (const extra of [{}, { session: SES("S04") }, { json: true }, { verbose: true }]) {
+        await expect(
+          doRunNote(undefined, { file: "-", ...extra }, { cwd: dir, ...FIXED_CTX, readInput }),
+          JSON.stringify(extra),
+        ).rejects.toHaveProperty(
+          "message",
+          "--file - is refused: - is reserved for standard input. " +
+            "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+        );
+      }
+    });
+    expect(readInput).not.toHaveBeenCalled();
+  });
+
+  it("refuses an argument with --file - as two sources, not with the stdin hint", async () => {
+    // Omitting --file here would record the argument, not read stdin, so the
+    // two-sources error comes first.
+    const repo = await realpath(getTmpRepo());
+    await expect(
+      doRunNote("some text", { file: "-" }, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toHaveProperty(
+      "message",
+      "Pass the note text either as an argument or with --file, not both.",
+    );
+  });
+
+  it("reads --file ./- as the file named -", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await writeFile(join(repo, "-"), "from the dash file\n");
+    await doRunNote(undefined, { file: "./-" }, { cwd: repo, ...FIXED_CTX });
+    expect(await readNoteBody(repo)).toBe("from the dash file");
   });
 
   it("keeps an argument exactly as passed, trailing newline included", async () => {

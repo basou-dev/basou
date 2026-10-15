@@ -24,6 +24,7 @@ import {
   renderCliError,
   shortSessionId,
 } from "../lib/error-render.js";
+import { refuseDashInputFile } from "../lib/input-file.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 // Single words that are almost certainly a mistyped subcommand rather than a
@@ -308,6 +309,10 @@ async function readNoteBody(
   if (bodyArgument !== undefined && options.file !== undefined) {
     throw new Error("Pass the note text either as an argument or with --file, not both.");
   }
+  // After the check above, so that `basou note "text" --file -` is told to drop
+  // one of the two rather than that omitting --file reads stdin (it would not:
+  // the argument wins).
+  refuseDashInputFile("--file", options.file, "stdin");
   if (bodyArgument !== undefined) {
     return { body: bodyArgument, source: "argument" };
   }

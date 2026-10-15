@@ -163,6 +163,28 @@ async function findCreatedTaskId(repo: string): Promise<string> {
 const FIXED_CTX = { nowProvider: () => FIXED_NOW };
 const FIXED_CTX_2 = { nowProvider: () => FIXED_NOW_2 };
 
+/**
+ * Run `fn` from a fresh directory that is not a git repository and holds a
+ * file named `-` with `content`, as both the process cwd and the cwd passed in:
+ * a refusal of `-` then shows that it comes before the root lookup and ignores
+ * the file.
+ */
+async function inBareDirWithDashFile(
+  content: string,
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-dash-")));
+  await writeFile(join(dir, "-"), content);
+  const previous = process.cwd();
+  process.chdir(dir);
+  try {
+    await fn(dir);
+  } finally {
+    process.chdir(previous);
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 // ============================================================================
 // task new
 // ============================================================================
@@ -244,12 +266,51 @@ describe("doRunTaskNew (ad-hoc path)", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("t-new-7: --from-file - is rejected before any disk read", async () => {
-    const repo = await setupInitedRepo();
+  it("t-new-7: --from-file - is refused as reserved for stdin, before the root lookup and whatever is on disk", async () => {
     const err = captureStderr();
-    await runTaskNew({ title: "x", fromFile: "-" }, { cwd: repo, ...FIXED_CTX });
-    expect(joinCalls(err)).toContain("--from-file - (stdin) is not supported in v0.1");
-    expect(process.exitCode).toBe(1);
+    await inBareDirWithDashFile("from the dash file\n", async (dir) => {
+      for (const extra of [
+        {},
+        { session: SES("T07") },
+        { status: "done" as const },
+        { status: "done" as const, completedAt: "2026-10-01T00:00:00Z" },
+        { label: "l" },
+        { json: true },
+        { verbose: true },
+      ]) {
+        err.mockClear();
+        process.exitCode = 0;
+        await runTaskNew({ title: "x", fromFile: "-", ...extra }, { cwd: dir, ...FIXED_CTX });
+        expect(joinCalls(err), JSON.stringify(extra)).toBe(
+          "--from-file - is refused: - is reserved for standard input, which this command does not read. " +
+            "Write the text to a file and pass --from-file <path>, or pass it with --description; " +
+            "a file named - is read with --from-file ./-.",
+        );
+        expect(process.exitCode, JSON.stringify(extra)).toBe(1);
+      }
+    });
+  });
+
+  it("t-new-7c: --description - is a description, and with --from-file - the two-sources error comes first", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await doRunTaskNew({ title: "x", description: "-" }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md.trimEnd().endsWith("\n-")).toBe(true);
+    await expect(
+      doRunTaskNew({ title: "y", description: "-", fromFile: "-" }, { cwd: repo, ...FIXED_CTX }),
+    ).rejects.toHaveProperty("message", "--description and --from-file are mutually exclusive");
+  });
+
+  it("t-new-7b: a path that names a file called - is read", async () => {
+    const repo = await setupInitedRepo();
+    await writeFile(join(repo, "-"), "from the dash file\n");
+    captureStdout();
+    await doRunTaskNew({ title: "x", fromFile: join(repo, "-") }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("from the dash file");
   });
 
   it("t-new-8: missing description file is reported with a fixed message", async () => {

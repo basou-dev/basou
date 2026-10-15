@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, realpath, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -82,6 +82,28 @@ async function readAdHocEvents(repo: string): Promise<Record<string, unknown>[]>
     .split("\n")
     .filter((l) => l.length > 0)
     .map((l) => JSON.parse(l) as Record<string, unknown>);
+}
+
+/**
+ * Run `fn` from a fresh directory that is not a git repository and holds a
+ * file named `-` with `content`, as both the process cwd and the cwd passed in:
+ * a refusal of `-` then shows that it comes before the root lookup and ignores
+ * the file.
+ */
+async function inBareDirWithDashFile(
+  content: string,
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-dash-")));
+  await writeFile(join(dir, "-"), content);
+  const previous = process.cwd();
+  process.chdir(dir);
+  try {
+    await fn(dir);
+  } finally {
+    process.chdir(previous);
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 const ctx = (repo: string, input: string) => ({
@@ -342,6 +364,36 @@ describe("doRunReviewRecord (validation errors surface to the agent)", () => {
         ),
       ),
     ).rejects.toThrow(/blocked\[0\]\.reason must be one of/);
+  });
+
+  it("rev-err-4: --file - is refused as reserved for stdin, before the root lookup and whatever is on disk", async () => {
+    const input = '{ "reviewer": "codex", "target": "wt" }';
+    const readInput = vi.fn(async () => input);
+    await inBareDirWithDashFile(input, async (dir) => {
+      for (const extra of [{}, { dryRun: true }, { json: true }, { verbose: true }]) {
+        await expect(
+          doRunReviewRecord(
+            { file: "-", ...extra },
+            { cwd: dir, nowProvider: () => FIXED_NOW, readInput },
+          ),
+          JSON.stringify(extra),
+        ).rejects.toHaveProperty(
+          "message",
+          "--file - is refused: - is reserved for standard input. " +
+            "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+        );
+      }
+    });
+    expect(readInput).not.toHaveBeenCalled();
+  });
+
+  it("rev-err-5: a --file path that names a file called - is read", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await writeFile(join(repo, "-"), '{ "reviewer": "from-dash-file", "target": "wt" }', "utf8");
+    await doRunReviewRecord({ file: join(repo, "-") }, { cwd: repo, nowProvider: () => FIXED_NOW });
+    const reviews = (await readAdHocEvents(repo)).filter((e) => e.type === "review_recorded");
+    expect(reviews.map((e) => e.reviewer)).toEqual(["from-dash-file"]);
   });
 });
 
