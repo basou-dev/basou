@@ -42,6 +42,7 @@ import type { Command } from "commander";
 import { describeCodexHookTrust } from "../lib/codex-hook-trust.js";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { resolveRepositoryRootInPlace } from "../lib/repo-root.js";
+import { signalToExitCode } from "../lib/signal-exit-code.js";
 import { codexHookTrustFor, DEFAULT_CODEX_HOOKS_PATH } from "./hook.js";
 
 // Appends one event to the session's events.jsonl. The `sessionDir` argument
@@ -526,20 +527,6 @@ function decideFinalStatus(
   }
   if (result.exit_code === 0) return "completed";
   return "failed";
-}
-
-const SIGNUM_MAP: Record<string, number> = {
-  SIGHUP: 1,
-  SIGINT: 2,
-  SIGQUIT: 3,
-  SIGKILL: 9,
-  SIGTERM: 15,
-};
-
-function signalToExitCode(sig: NodeJS.Signals | null): number {
-  if (sig === null) return 1;
-  const num = SIGNUM_MAP[sig] ?? 1;
-  return 128 + num;
 }
 
 async function tryAppendGitSnapshot(
