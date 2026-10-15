@@ -9,27 +9,27 @@ describe("refuseDashInputFile", () => {
   it("refuses exactly - and says to omit the flag when the command reads stdin", () => {
     expect(() => refuseDashInputFile("--file", "-", "stdin")).toThrow(
       new Error(
-        "--file - is reserved for standard input and is refused. " +
+        "--file - is refused: - is reserved for standard input. " +
           "Omit --file to read stdin, or pass --file ./- to read a file named -.",
       ),
     );
   });
 
-  it("refuses exactly - and names the inline flag when the command does not read stdin", () => {
+  it("refuses exactly - and offers a file, then the inline flag, when the command does not read stdin", () => {
     expect(() => refuseDashInputFile("--from-file", "-", { textFlag: "--description" })).toThrow(
       new Error(
-        "--from-file - is reserved for standard input and is refused. " +
-          "This command does not read stdin: pass the text with --description, " +
-          "or pass --from-file ./- to read a file named -.",
+        "--from-file - is refused: - is reserved for standard input, which this command does not read. " +
+          "Write the text to a file and pass --from-file <path>, or pass it with --description; " +
+          "a file named - is read with --from-file ./-.",
       ),
     );
   });
 
-  it("refuses exactly - and offers only ./- when the command reads the file alone", () => {
-    expect(() => refuseDashInputFile("--from", "-", "file-only")).toThrow(
+  it("refuses exactly - and offers only a file when the command reads its input from a file alone", () => {
+    expect(() => refuseDashInputFile("--from", "-", { fileOnly: "the JSON" })).toThrow(
       new Error(
-        "--from - is reserved for standard input and is refused. " +
-          "This command does not read stdin: pass --from ./- to read a file named -.",
+        "--from - is refused: - is reserved for standard input, which this command does not read. " +
+          "Write the JSON to a file and pass its path with --from; a file named - is read with --from ./-.",
       ),
     );
   });
@@ -38,7 +38,7 @@ describe("refuseDashInputFile", () => {
     const cases: Array<[InputFileFlag, InputFileAlternative]> = [
       ["--file", "stdin"],
       ["--from-file", { textFlag: "--body" }],
-      ["--from", "file-only"],
+      ["--from", { fileOnly: "the JSON" }],
     ];
     for (const value of [undefined, "", "./-", "/abs/-", "-.json", "--", " -", "- ", "dir/-"]) {
       for (const [flag, alternative] of cases) {

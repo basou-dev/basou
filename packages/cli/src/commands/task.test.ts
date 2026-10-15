@@ -163,6 +163,28 @@ async function findCreatedTaskId(repo: string): Promise<string> {
 const FIXED_CTX = { nowProvider: () => FIXED_NOW };
 const FIXED_CTX_2 = { nowProvider: () => FIXED_NOW_2 };
 
+/**
+ * Run `fn` from a fresh directory that is not a git repository and holds a
+ * file named `-` with `content`, as both the process cwd and the cwd passed in:
+ * a refusal of `-` then shows that it comes before the root lookup and ignores
+ * the file.
+ */
+async function inBareDirWithDashFile(
+  content: string,
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-dash-")));
+  await writeFile(join(dir, "-"), content);
+  const previous = process.cwd();
+  process.chdir(dir);
+  try {
+    await fn(dir);
+  } finally {
+    process.chdir(previous);
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 // ============================================================================
 // task new
 // ============================================================================
@@ -244,27 +266,29 @@ describe("doRunTaskNew (ad-hoc path)", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("t-new-7: --from-file - is refused as reserved for stdin, before any disk read", async () => {
-    // Never initialized: the refusal comes before the workspace is looked up,
-    // whatever else is passed.
-    const repo = await realpath(getTmpRepo());
+  it("t-new-7: --from-file - is refused as reserved for stdin, before the root lookup and whatever is on disk", async () => {
     const err = captureStderr();
-    for (const extra of [
-      {},
-      { session: SES("T07") },
-      { status: "done" as const },
-      { json: true },
-    ]) {
-      err.mockClear();
-      process.exitCode = 0;
-      await runTaskNew({ title: "x", fromFile: "-", ...extra }, { cwd: repo, ...FIXED_CTX });
-      expect(joinCalls(err), JSON.stringify(extra)).toBe(
-        "--from-file - is reserved for standard input and is refused. " +
-          "This command does not read stdin: pass the text with --description, " +
-          "or pass --from-file ./- to read a file named -.",
-      );
-      expect(process.exitCode, JSON.stringify(extra)).toBe(1);
-    }
+    await inBareDirWithDashFile("from the dash file\n", async (dir) => {
+      for (const extra of [
+        {},
+        { session: SES("T07") },
+        { status: "done" as const },
+        { status: "done" as const, completedAt: "2026-10-01T00:00:00Z" },
+        { label: "l" },
+        { json: true },
+        { verbose: true },
+      ]) {
+        err.mockClear();
+        process.exitCode = 0;
+        await runTaskNew({ title: "x", fromFile: "-", ...extra }, { cwd: dir, ...FIXED_CTX });
+        expect(joinCalls(err), JSON.stringify(extra)).toBe(
+          "--from-file - is refused: - is reserved for standard input, which this command does not read. " +
+            "Write the text to a file and pass --from-file <path>, or pass it with --description; " +
+            "a file named - is read with --from-file ./-.",
+        );
+        expect(process.exitCode, JSON.stringify(extra)).toBe(1);
+      }
+    });
   });
 
   it("t-new-7c: --description - is a description, and with --from-file - the two-sources error comes first", async () => {

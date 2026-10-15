@@ -150,6 +150,28 @@ async function findAdHocSessionId(repo: string): Promise<string> {
 
 const FIXED_CTX = { nowProvider: () => FIXED_NOW };
 
+/**
+ * Run `fn` from a fresh directory that is not a git repository and holds a
+ * file named `-` with `content`, as both the process cwd and the cwd passed in:
+ * a refusal of `-` then shows that it comes before the root lookup and ignores
+ * the file.
+ */
+async function inBareDirWithDashFile(
+  content: string,
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-dash-")));
+  await writeFile(join(dir, "-"), content);
+  const previous = process.cwd();
+  process.chdir(dir);
+  try {
+    await fn(dir);
+  } finally {
+    process.chdir(previous);
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 describe("doRunDecisionRecord (ad-hoc path)", () => {
   it("dec-1: --title only succeeds and writes a 5-event ad-hoc session", async () => {
     const repo = await setupInitedRepo();
@@ -1322,25 +1344,25 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("cap-err-9b: --file - is refused as reserved for stdin, before the workspace is read", async () => {
-    // Never initialized: the refusal comes before the workspace is looked up,
-    // and stdin is not read for it either, whatever else is passed.
-    const repo = await realpath(getTmpRepo());
-    const readInput = vi.fn(async () => JSON.stringify([{ title: "x", kind: "decision" }]));
+  it("cap-err-9b: --file - is refused as reserved for stdin, before the root lookup and whatever is on disk", async () => {
+    const input = JSON.stringify([{ title: "x", kind: "decision" }]);
+    const readInput = vi.fn(async () => input);
     const err = captureStderr();
-    for (const extra of [{}, { dryRun: true }, { json: true }, { verbose: true }]) {
-      err.mockClear();
-      process.exitCode = 0;
-      await runDecisionCapture(
-        { file: "-", ...extra },
-        { cwd: repo, nowProvider: () => FIXED_NOW, readInput },
-      );
-      expect(joinCalls(err), JSON.stringify(extra)).toBe(
-        "--file - is reserved for standard input and is refused. " +
-          "Omit --file to read stdin, or pass --file ./- to read a file named -.",
-      );
-      expect(process.exitCode, JSON.stringify(extra)).toBe(1);
-    }
+    await inBareDirWithDashFile(input, async (dir) => {
+      for (const extra of [{}, { dryRun: true }, { json: true }, { verbose: true }]) {
+        err.mockClear();
+        process.exitCode = 0;
+        await runDecisionCapture(
+          { file: "-", ...extra },
+          { cwd: dir, nowProvider: () => FIXED_NOW, readInput },
+        );
+        expect(joinCalls(err), JSON.stringify(extra)).toBe(
+          "--file - is refused: - is reserved for standard input. " +
+            "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+        );
+        expect(process.exitCode, JSON.stringify(extra)).toBe(1);
+      }
+    });
     expect(readInput).not.toHaveBeenCalled();
   });
 

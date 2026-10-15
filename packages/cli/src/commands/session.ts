@@ -739,7 +739,7 @@ export async function doRunSessionImport(
   options: SessionImportOptions,
   ctx: SessionContext,
 ): Promise<void> {
-  refuseDashInputFile("--from", options.from, "file-only");
+  refuseDashInputFile("--from", options.from, { fileOnly: "the JSON" });
   const cwd = ctx.cwd ?? process.cwd();
   const repositoryRoot = await resolveRepositoryRootForSession(cwd, "import");
   const paths = basouPaths(repositoryRoot);

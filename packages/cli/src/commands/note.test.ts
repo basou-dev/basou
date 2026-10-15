@@ -40,6 +40,28 @@ const FIXED_CTX = { nowProvider: () => FIXED_NOW };
 
 const SES = (suffix: string) => `ses_01HXABCDEF1234567890ABC${suffix}`;
 
+/**
+ * Run `fn` from a fresh directory that is not a git repository and holds a
+ * file named `-` with `content`, as both the process cwd and the cwd passed in:
+ * a refusal of `-` then shows that it comes before the root lookup and ignores
+ * the file.
+ */
+async function inBareDirWithDashFile(
+  content: string,
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "basou-dash-")));
+  await writeFile(join(dir, "-"), content);
+  const previous = process.cwd();
+  process.chdir(dir);
+  try {
+    await fn(dir);
+  } finally {
+    process.chdir(previous);
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 let tmpRepo: string | undefined;
 
 beforeEach(async () => {
@@ -298,21 +320,20 @@ describe("doRunNote (text from stdin or --file)", () => {
     expect(await readInvocationArgs(repo)).toEqual(["--file", "next.txt"]);
   });
 
-  it("refuses --file - as reserved for stdin, before the workspace is read", async () => {
-    // Never initialized: the refusal comes before the workspace is looked up,
-    // and stdin is not read for it either, whatever else is passed.
-    const repo = await realpath(getTmpRepo());
+  it("refuses --file - as reserved for stdin, before the root lookup and whatever is on disk", async () => {
     const readInput = vi.fn(async () => "from stdin");
-    for (const extra of [{}, { session: SES("S04") }, { json: true }]) {
-      await expect(
-        doRunNote(undefined, { file: "-", ...extra }, { cwd: repo, ...FIXED_CTX, readInput }),
-        JSON.stringify(extra),
-      ).rejects.toHaveProperty(
-        "message",
-        "--file - is reserved for standard input and is refused. " +
-          "Omit --file to read stdin, or pass --file ./- to read a file named -.",
-      );
-    }
+    await inBareDirWithDashFile("from the dash file\n", async (dir) => {
+      for (const extra of [{}, { session: SES("S04") }, { json: true }, { verbose: true }]) {
+        await expect(
+          doRunNote(undefined, { file: "-", ...extra }, { cwd: dir, ...FIXED_CTX, readInput }),
+          JSON.stringify(extra),
+        ).rejects.toHaveProperty(
+          "message",
+          "--file - is refused: - is reserved for standard input. " +
+            "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+        );
+      }
+    });
     expect(readInput).not.toHaveBeenCalled();
   });
 
