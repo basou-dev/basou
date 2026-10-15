@@ -215,7 +215,8 @@ It prints a declaration of the newest board_version, in the language the
 manifest declares for the workspace's own repo: a title from the workspace's
 name, the six stages with a meaning each, one lane to cut again, nothing to
 observe, no component registered, an axis of version 1, and the effort from
-the day of the first session, in this host's time zone. It writes nothing:
+the day of the first session, in this host's time zone, with no milestone
+(a comment says what one holds). It writes nothing:
 save it, from the workspace's own repo, only where no board is, through a file
 of its own:
 

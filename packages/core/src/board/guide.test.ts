@@ -553,8 +553,11 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
         }),
       );
     const holds =
-      "under effort.milestones, each `{ date, label, ref }`: only what was reached (a release, a launch), with `ref` saying where it can be checked (a tag and its commit). The page marks them on the period and effort chart. Add one before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
+      "under effort.milestones, each `{ date, label, ref }`: only what was reached (a release, a launch), with `ref` saying where it can be checked (a tag and its commit). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
     expect(boardGuide(guideInput())).toContain(`- Milestones: none declared ${holds}`);
+    expect(boardGuide(guideInput())).toContain(
+      "- Approving a milestone before it is added to board.yaml.",
+    );
     expect(withMilestones(0)).toContain(`- Milestones: none declared ${holds}`);
     expect(withMilestones(1)).toContain(`- Milestones: 1 milestone declared ${holds}`);
     expect(withMilestones(2)).toContain(`- Milestones: 2 milestones declared ${holds}`);
@@ -565,7 +568,7 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
 
   it("keeps other projects out of what the agent writes, and says the portfolio section is basou's own", () => {
     expect(boardGuide(guideInput())).toContain(
-      "Do not bring other projects' names, paths, numbers or ids into what you write for the board (the prose, the reasons, the observations), nor take this one's out (record refuses an input whose words name another workspace the portfolio registers, and says where without naming it). The record's `portfolio` section is basou's own measure: how many workspaces this machine's portfolio registers, with no names.",
+      "Do not bring other projects' names, paths, numbers or ids into what you write for the board (board.yaml, the prose, the reasons, the observations), nor take this one's out (record refuses an input whose words name another workspace the portfolio registers, and says where without naming it). The record's `portfolio` section is basou's own measure: how many workspaces this machine's portfolio registers, with no names.",
     );
   });
 

@@ -123,7 +123,7 @@ export function boardGuide(input: BoardGuideInput): string {
   line(`- Records: board/records/, ${recordsLine(input, recordCount)}`);
   line(`- Axis: ${axisLine(input)}`);
   line(
-    `- Milestones: ${milestonesLine(d)} under effort.milestones, each \`{ date, label, ref }\`: only what was reached (a release, a launch), with \`ref\` saying where it can be checked (a tag and its commit). The page marks them on the period and effort chart. Add one before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.`,
+    `- Milestones: ${milestonesLine(d)} under effort.milestones, each \`{ date, label, ref }\`: only what was reached (a release, a launch), with \`ref\` saying where it can be checked (a tag and its commit). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.`,
   );
   line(
     `- Language: write every prose string and reason in ${LANGUAGE_NAMES[input.language]}, the language this board's page is drawn in (Japanese when the manifest declares ja for this repo, English otherwise)`,
@@ -141,7 +141,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- From the measure of step 2 to the record of step 7, write nothing to basou (`decision capture`, `note`, `task`, `review record`, `refresh`), put no file in and change no file of any repo the manifest declares, do not rebuild or upgrade basou, and do not change `~/.basou/portfolio.yaml`. Each of these can move what the measurement's digest covers (the trail, the repos' commits and their counts of files and of uncommitted paths, the basou that measured, the portfolio's counts), and record refuses a digest that moved; not every change moves it, so do not count on record to catch one. The digest covers board.yaml as read too, so any change to what it declares moves it.",
     "- A Stop hook may ask you, as a turn ends, to capture decisions or a note. From the measure of step 2 to the record of step 7, write nothing it asks for: say that the board is between its measure and its record. After step 7, capture what is worth capturing. This rule comes first while a board is being judged.",
     '- The model name is your own report of yourself. Use the same name every time, as measure\'s `--model` and as `judged_by.model`. In the commands, `$MODEL` stands for it: put the name in its place, or set `MODEL="<name>"` at the start of each block. A block run with it unset stops: measure refuses an empty `--model`.',
-    "- Isolation, both ways: read and write only this workspace. Do not open another project's repos, planning, `.basou/` or transcripts (other directories under `~/.claude/projects`, `~/.codex/sessions`), not even to read. Write the board only under board/ of this repo; never write it, its numbers or this work into a public repo or one whose contents are published (no file, `.gitignore` comment, commit message, issue or pull request). Do not bring other projects' names, paths, numbers or ids into what you write for the board (the prose, the reasons, the observations), nor take this one's out (record refuses an input whose words name another workspace the portfolio registers, and says where without naming it). The record's `portfolio` section is basou's own measure: how many workspaces this machine's portfolio registers, with no names. Asked about another project, decline and suggest a session of its own.",
+    "- Isolation, both ways: read and write only this workspace. Do not open another project's repos, planning, `.basou/` or transcripts (other directories under `~/.claude/projects`, `~/.codex/sessions`), not even to read. Write the board only under board/ of this repo; never write it, its numbers or this work into a public repo or one whose contents are published (no file, `.gitignore` comment, commit message, issue or pull request). Do not bring other projects' names, paths, numbers or ids into what you write for the board (board.yaml, the prose, the reasons, the observations), nor take this one's out (record refuses an input whose words name another workspace the portfolio registers, and says where without naming it). The record's `portfolio` section is basou's own measure: how many workspaces this machine's portfolio registers, with no names. Asked about another project, decline and suggest a session of its own.",
     "",
   );
 
@@ -355,6 +355,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "",
     "- Running `basou refresh` when step 1 finds sessions not imported.",
     "- Approving an axis review (step 2b) before anything in board.yaml changes.",
+    "- Approving a milestone before it is added to board.yaml.",
   );
   for (const o of d.observe) {
     if (o.kind === "manual") line(`- Observing \`${o.key}\`: ${displayPath(o.how)}`);

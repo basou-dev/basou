@@ -316,11 +316,20 @@ describe("evaluateStopHook (review gate)", () => {
     expect(text).toContain('"findings" (a list of objects: { "title"');
     expect(text).toContain('"blocked" (a list of objects: { "title", "reason"');
     expect(text).toContain("`basou review record --help` shows the whole shape.");
-    // Every value it names is one review record takes.
-    const verdicts = ["pass", "needs-attention", "fail"] as const;
-    const severities = ["high", "medium", "low"] as const;
-    const reasons = ["spec-deviation", "design-reversal"] as const;
-    for (const v of [...verdicts, ...severities, ...reasons]) expect(text).toContain(`"${v}"`);
+    // The values as the text names them.
+    const valuesOf = (pattern: RegExp): string[] => {
+      const m = pattern.exec(text);
+      if (m === null) throw new Error(`not in the text: ${pattern}`);
+      return [...(m[1] as string).matchAll(/"([^"]+)"/g)].map((v) => v[1] as string);
+    };
+    const verdicts = valuesOf(/"verdict" \(one of ((?:"[^"]+"(?:, )?)+)\)/);
+    const severities = valuesOf(/"severity" of ((?:"[^"]+"(?: \/ )?)+)/);
+    const reasons = valuesOf(/"reason" of ((?:"[^"]+"(?: \/ )?)+)/);
+    // It names every value review record takes, and nothing else...
+    expect(verdicts).toEqual(["pass", "needs-attention", "fail"]);
+    expect(severities).toEqual(["high", "medium", "low"]);
+    expect(reasons).toEqual(["spec-deviation", "design-reversal"]);
+    // ...and review record takes each one it names.
     for (const verdict of verdicts) {
       const review = parseReviewRecordInput(
         JSON.stringify({

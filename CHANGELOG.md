@@ -18,8 +18,10 @@ All notable changes to **basou** are recorded here. The project follows
   board's milestones go.** `effort.milestones` was declared nowhere but the
   schema, so a board moved from another could lose its milestones. `init`
   now prints an empty `milestones` under `effort` with a comment saying what
-  one holds; the guide says how many a board declares, what one holds, and
-  that one is added before the measure or after the record, never between.
+  one holds, and its help says so. The guide says how many a board declares,
+  what one holds, that one is drawn from the next record on, and that one is
+  added with the operator's approval before the measure or after the record,
+  never between.
 - **`basou board guide` (experimental) says what to judge a cell that only
   the operator can see.** `unverified` was described as a run only another
   workspace can make, so a cell only the operator's own screen can confirm
@@ -31,8 +33,8 @@ All notable changes to **basou** are recorded here. The project follows
   `portfolio` section.** Its isolation rule told the agent to bring no other
   project's numbers into the board, while every record holds how many
   workspaces the portfolio registers. The rule now covers what the agent
-  writes (the prose, the reasons, the observations), and says that the
-  `portfolio` section is basou's own measure, with no names.
+  writes (board.yaml, the prose, the reasons, the observations), and says
+  that the `portfolio` section is basou's own measure, with no names.
 - **The review gate of `basou hook stop` names the shape `basou review
   record` takes.** It listed `verdict`, `findings` and `blocked` as optional
   with no shape, so a review written with findings as strings was refused.
