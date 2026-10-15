@@ -11,7 +11,7 @@ import {
   rm,
   symlink,
 } from "node:fs/promises";
-import { devNull, tmpdir } from "node:os";
+import { constants, devNull, tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -536,6 +536,35 @@ describe("runExec", () => {
       "session_status_changed",
       "session_ended",
     ]);
+  });
+
+  it("exits 128 plus the signal's own number for a signal outside SIGHUP/SIGINT/SIGQUIT/SIGKILL/SIGTERM", async () => {
+    const repo = await setupInitedRepo();
+    // SIGSEGV is 11 on Linux and macOS alike; before, any signal outside the
+    // five gave 129, SIGHUP's value.
+    const runner: ProcessRunner = {
+      run: async (_cmd, _args, options: RunOptions): Promise<RunResult> => ({
+        command: "node",
+        args: [],
+        cwd: options.cwd,
+        exit_code: null,
+        signal: "SIGSEGV",
+        stdout: "",
+        stderr: "",
+        started_at: FIXED_DATE.toISOString(),
+        ended_at: FIXED_DATE.toISOString(),
+        duration_ms: 0,
+        pid: 1,
+      }),
+    };
+    const exitCode = await runExec(
+      "node",
+      [],
+      { cwd: repo, snapshot: false },
+      { runner, now: () => FIXED_DATE },
+    );
+    expect(exitCode).toBe(128 + constants.signals.SIGSEGV);
+    expect(exitCode).toBe(139);
   });
 
   // 8

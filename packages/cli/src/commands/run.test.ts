@@ -12,7 +12,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { devNull, tmpdir } from "node:os";
+import { constants, devNull, tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -618,6 +618,34 @@ describe("runClaudeCode", () => {
     const session = await readSessionYaml(basouPaths(repo), sessionId);
     expect(session.session.related_files).toContain(name);
     expect(session.session.related_files).not.toContain("back/slash.txt");
+  });
+
+  it("exits 128 plus the signal's own number for a signal outside SIGHUP/SIGINT/SIGQUIT/SIGKILL/SIGTERM", async () => {
+    const repo = await setupInitedRepo();
+    // SIGSEGV is 11 on Linux and macOS alike; before, any signal outside the
+    // five gave 129, SIGHUP's value.
+    const runner: ProcessRunner = {
+      run: async (_cmd, _args, options: CoreRunOptions): Promise<RunResult> => ({
+        command: "claude-code",
+        args: [],
+        cwd: options.cwd,
+        exit_code: null,
+        signal: "SIGSEGV",
+        stdout: "",
+        stderr: "",
+        started_at: FIXED_DATE.toISOString(),
+        ended_at: FIXED_DATE.toISOString(),
+        duration_ms: 0,
+        pid: 1,
+      }),
+    };
+    const exitCode = await runClaudeCode(
+      [],
+      { cwd: repo, snapshot: false },
+      { runner, now: () => FIXED_DATE, resolveCommand: okResolve },
+    );
+    expect(exitCode).toBe(128 + constants.signals.SIGSEGV);
+    expect(exitCode).toBe(139);
   });
 
   // 9

@@ -22,6 +22,15 @@ All notable changes to **basou** are recorded here. The project follows
   a later release can read stdin for it by adding to what they accept,
   without changing what any of them means.
 
+### Fixed
+
+- **`basou exec` and `basou run` exit with `128` plus the number of any
+  signal that ends the child.** A signal other than `SIGHUP`, `SIGINT`,
+  `SIGQUIT`, `SIGKILL` and `SIGTERM` gave `129`, `SIGHUP`'s value, whatever
+  it was. `SIGSEGV` now gives `139` and `SIGPIPE` `141`, as a shell reports
+  them, and a signal whose number differs between platforms, such as
+  `SIGUSR1`, gives this platform's.
+
 ## 0.68.4 — 2026-10-15
 
 ### Fixed
