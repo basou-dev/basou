@@ -17,11 +17,19 @@ At `1.0`, semantic versioning applies to exactly three surfaces:
 1. **The `basou` CLI** — the set of commands and subcommands, their flags,
    exit codes, the documented `--json` output shapes of the commands that offer
    one, and the documented JSON **input** shapes of the commands that read one
-   from stdin or `--file` (today: `basou decision capture`). An input shape is a
-   contract for the same reason an output shape is — something else produces it,
-   and tightening what is accepted breaks that producer exactly as surely as
-   dropping a field breaks a consumer. Accepting MORE is additive; accepting
-   less is not.
+   from stdin or an input-file flag (today: `basou decision capture`, `basou
+   review record`, and the envelope of `basou session import`, whose version
+   follows [its own rule](#the-import-envelope-version-may-move-at-a-minor)).
+   An input shape is a contract for the same reason an output shape is —
+   something else produces it, and tightening what is accepted breaks that
+   producer exactly as surely as dropping a field breaks a consumer. Accepting
+   MORE is additive; accepting less is not. For `basou decision capture` and
+   `basou review record`, the documented shape is the `Input format` section of
+   the command's `--help`, which is contract rather than presentation: the
+   fields, their JSON types, which are required, and the values a field
+   enumerates. Whether a `repos` entry of `basou review record` names a
+   repository root on the machine is judged by the rule `basou review-gaps`
+   binds a record with, and may change with that rule.
 2. **The `@basou/sdk` package** — its exported read-only API for reading a
    workspace's provenance.
 3. **The `.basou/` on-disk format** — the durable file schemas (manifest,
@@ -36,6 +44,27 @@ below, and the extension rules of [schemas
 §7.3](schemas.md#73-extension-rules-additive-by-default-breaking-changes-are-gated)
 for the on-disk format, state the exceptions to that rule and what bounds each
 of them.
+
+### A value a flag refuses
+
+Within `1.x` a flag may come to accept a value it refuses today, and that is
+additive, as accepting more of an input shape is — but only when every
+invocation accepted before is parsed and behaves as before. Making an option's
+value optional does not qualify: `--file --json` reads a file named `--json`
+today, and would parse `--json` as a flag instead. Accepting a refused value
+moves the invocations it accepts from a non-zero exit to `0`, the one way an
+invocation crosses zero within `1.x`; a [split of the non-zero
+values](#exit-codes-zero-is-success-and-a-failures-value-may-be-refined) never does.
+
+One such value has its meaning fixed now, so that accepting it later cannot
+surprise anyone: `-` as the file of an input-file flag, a flag that names a
+file basou reads its input from — `--file` on `basou decision capture`, `basou
+review record` and `basou note`, `--from-file` on `basou task new` and `basou
+session note`, and `--from` on `basou session import`. Each of them refuses
+`-` today, and an input-file flag added later either refuses it too or reads
+standard input for it from the start. If one comes to accept it, `-` will mean
+standard input, never a file named `-`. A file named `-` is read by naming it
+`./-`.
 
 ### `--version`: the first token is the contract, the rest is build identity
 
@@ -79,11 +108,25 @@ an error, for instance).
 
 - When the child exits with a code, basou exits with that code.
 - When the child is ended by a signal, basou exits with `128` plus a signal's
-  number: the signal basou itself received while the child ran, when one
-  reached it, and otherwise the signal that ended the child. `basou exec
-  --timeout` ends the child with `SIGTERM`, then `SIGKILL`. The number is
-  exact for `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGKILL` and `SIGTERM`; any other
-  signal gives a value above `128` that does not identify it.
+  number: the `SIGINT` or `SIGTERM` basou itself received while the child ran,
+  when one reached it, and otherwise the signal that ended the child. Any other
+  signal sent to basou ends basou as it ends any process, and the run's
+  `command_executed` event is not written. `basou exec --timeout` ends the
+  child with `SIGTERM`, then `SIGKILL`. The value is the same on every POSIX
+  platform for `SIGHUP` (`129`), `SIGINT` (`130`), `SIGQUIT` (`131`), `SIGKILL`
+  (`137`) and `SIGTERM` (`143`). Any other signal gives `128` plus its number
+  on the platform basou runs on, the value a POSIX shell such as `sh`, `bash`
+  or `zsh` reports there. Those numbers differ between platforms — `138` is
+  `SIGUSR1` on Linux and `SIGBUS` on macOS — so such a value is comparable
+  only on one platform; the signal names recorded on the run's
+  `command_executed` event (`signal`, `received_signal`) say which signal it
+  was.
+- A signal Node has no name for — `SIGEMT` on macOS, the real-time signals on
+  Linux — reaches basou as if the child had exited `0`, and is outside the
+  promise above. Today basou then exits `0`, records an `exit_code` of `0`
+  with no `signal`, and marks the session completed. None of that is
+  promised: a later basou, or a later Node, may report such a signal. A
+  reader cannot rule one out from an `exit_code` of `0`.
 - When basou itself fails, it exits `1` — including when it fails after the
   child has exited, so a child that exited `0` is then reported as `1`. A
   caller cannot tell a basou failure apart from a child that exited `1`, and
@@ -524,6 +567,17 @@ track"; the importer declares no vessel at all and cannot be given one. The
 requirement therefore lands on the input shape. `record` instead names the
 vessel it used on its receipt, which needs no new flag on a surface this line
 treats as frozen.
+
+Since this policy was adopted (`0.31.0`), a flag has also kept what it
+accepts, with one exception: `-` as the file of an input-file flag, refused
+before `1.0` so that `1.0` does not freeze it as a file name in the way of
+the [reservation](#a-value-a-flag-refuses). Four flags read it as a file named
+`-` until the release after `0.68.4`: `--file` on `basou decision capture`,
+`basou review record` and `basou note`, and `--from` on `basou session
+import`. It was refused outright, with no warning release. A warning release
+exists so that a caller does not lose input it cannot easily make again; here
+the input is a file, which stays on disk and is read as `./-`, as the refusal
+says. No other value is refused this way before `1.0`.
 
 After `1.0`, removing or changing the meaning of any guaranteed-surface element
 requires a major bump; additions within a line remain backward-compatible.

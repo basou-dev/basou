@@ -401,6 +401,17 @@ Events written by the import paths additionally carry an optional top-level
 | Review | `review_recorded` | self-reported record that an adversarial / second-opinion review ran. Emitted by `basou review record`. `reviewer` + `target` are required; `repos` (the repository paths reviewed) is what lets `basou review-gaps` bind the record to a unit of work, since the record itself lands in the planning repo. |
 | Adapter | `adapter_output` | adapter output (summary only; raw kept separately) |
 
+### `command_executed`: a signal Node has no name for
+
+`exit_code` is the code the child exited with, and `signal` the signal that
+ended it; an `exit_code` of `null` means no code was observed — a signal ended
+the child, or the source did not record one. One case falls outside that: a
+signal Node has no name for — `SIGEMT` on macOS, the real-time signals on
+Linux — reaches basou as if the child had exited `0`, so the event holds an
+`exit_code` of `0` and no `signal`. An `exit_code` of `0` therefore does not
+rule such a signal out. That is how basou records it today, not a promise (see
+[compatibility](compatibility.md#exit-codes-zero-is-success-and-a-failures-value-may-be-refined)).
+
 ### `file_changed.change_type`
 
 `change_type` is one of `added`, `modified`, `deleted` and `renamed`. It says

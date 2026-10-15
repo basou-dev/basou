@@ -21,6 +21,28 @@ All notable changes to **basou** are recorded here. The project follows
   `--from-file ./-` for a file named `-`. With `-` refused by all six flags,
   a later release can read stdin for it by adding to what they accept,
   without changing what any of them means.
+- **`docs/spec/compatibility.md` reserves `-` for standard input, guarantees
+  `basou review record`'s input shape, and says what a signal's exit code
+  means across platforms.** Within `1.x` a flag may come to accept a value it
+  refuses, as an addition, only when every invocation accepted before parses
+  and behaves as before. If an input-file flag, one of today's six or one
+  added later, comes to accept `-`, it will read standard input. `basou review
+  record`'s JSON input is now a documented input shape, like `basou decision
+  capture`'s: the fields, types, required fields and enumerated values of the
+  `Input format` section of `--help`, while whether a `repos` entry names a
+  repository root follows `basou review-gaps`. The envelope of `basou session
+  import` is named among the input shapes, under its own version rule. For a
+  child of `basou exec` or `basou run` that a signal ended, any signal but the
+  five with fixed values gives `128` plus its number on the POSIX platform
+  basou runs on, comparable only there. A signal sent to basou itself counts
+  only if it is `SIGINT` or `SIGTERM`; any other ends basou before the run is
+  recorded. A signal Node has no name for is outside the promise, and today's
+  exit `0` for it is described, not promised (`docs/spec/schemas.md` says the
+  same of the event). The deprecation policy records refusing `-` as the one
+  exception, since the policy was adopted in `0.31.0`, to a flag keeping what
+  it accepts through `0.x`, and the README says so.
+  `docs/spec/terminal-and-import.md` points `session import`'s refusal of
+  `--from -` at the reservation.
 
 ### Fixed
 
@@ -31,10 +53,10 @@ All notable changes to **basou** are recorded here. The project follows
   number on the platform basou runs on: `SIGSEGV` gives `139` and `SIGPIPE`
   `141` on Linux and macOS, while `SIGUSR1` gives `138` on Linux and `158` on
   macOS, so such a value is comparable only on one platform, and the recorded
-  signal name says which signal it was. Only the five signals' values are
-  promised. A signal Node has no name for (`SIGEMT` on macOS, the real-time
-  signals on Linux) still reaches basou as an exit code of `0`, so basou
-  still exits `0` for it.
+  signal name says which signal it was. `docs/spec/compatibility.md` now
+  promises this (see Changed). A signal Node has no name for (`SIGEMT` on
+  macOS, the real-time signals on Linux) still reaches basou as an exit code
+  of `0`, so basou still exits `0` for it.
 
 ## 0.68.4 — 2026-10-15
 
