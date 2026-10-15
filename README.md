@@ -185,7 +185,10 @@ zero-network design.
 What that means for you today:
 
 - **The `basou` CLI surface is frozen for the `0.x` line** — commands and
-  flags are stable, except the experimental commands that
+  flags are stable, except that `-` as the file of an input-file flag is
+  refused, [reserved for standard
+  input](docs/spec/compatibility.md#a-value-a-flag-refuses), and except the
+  experimental commands that
   [docs/spec/compatibility.md](docs/spec/compatibility.md#what-is-not-guaranteed)
   lists, which may also write files beside one of yours that they read, never
   under `.basou/` (`basou board record` writes records beside its
