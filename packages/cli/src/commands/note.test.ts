@@ -298,6 +298,29 @@ describe("doRunNote (text from stdin or --file)", () => {
     expect(await readInvocationArgs(repo)).toEqual(["--file", "next.txt"]);
   });
 
+  it("refuses --file - as reserved for stdin, before the workspace is read", async () => {
+    // Never initialized: the refusal comes before the workspace is looked up,
+    // and stdin is not read for it either.
+    const repo = await realpath(getTmpRepo());
+    const readInput = vi.fn(async () => "from stdin");
+    await expect(
+      doRunNote(undefined, { file: "-" }, { cwd: repo, ...FIXED_CTX, readInput }),
+    ).rejects.toHaveProperty(
+      "message",
+      "--file - is reserved for standard input and is refused. " +
+        "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+    );
+    expect(readInput).not.toHaveBeenCalled();
+  });
+
+  it("reads --file ./- as the file named -", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await writeFile(join(repo, "-"), "from the dash file\n");
+    await doRunNote(undefined, { file: "./-" }, { cwd: repo, ...FIXED_CTX });
+    expect(await readNoteBody(repo)).toBe("from the dash file");
+  });
+
   it("keeps an argument exactly as passed, trailing newline included", async () => {
     const repo = await setupInitedRepo();
     captureStdout();

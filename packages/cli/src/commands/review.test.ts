@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, realpath, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -342,6 +342,27 @@ describe("doRunReviewRecord (validation errors surface to the agent)", () => {
         ),
       ),
     ).rejects.toThrow(/blocked\[0\]\.reason must be one of/);
+  });
+
+  it("rev-err-4: --file - is refused as reserved for stdin, before the workspace is read", async () => {
+    // Never initialized: the refusal comes before the workspace is looked up.
+    const repo = await realpath(getTmpRepo());
+    await expect(
+      doRunReviewRecord({ file: "-" }, ctx(repo, '{ "reviewer": "codex", "target": "wt" }')),
+    ).rejects.toHaveProperty(
+      "message",
+      "--file - is reserved for standard input and is refused. " +
+        "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+    );
+  });
+
+  it("rev-err-5: a --file path that names a file called - is read", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await writeFile(join(repo, "-"), '{ "reviewer": "from-dash-file", "target": "wt" }', "utf8");
+    await doRunReviewRecord({ file: join(repo, "-") }, { cwd: repo, nowProvider: () => FIXED_NOW });
+    const reviews = (await readAdHocEvents(repo)).filter((e) => e.type === "review_recorded");
+    expect(reviews.map((e) => e.reviewer)).toEqual(["from-dash-file"]);
   });
 });
 

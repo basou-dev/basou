@@ -3,6 +3,20 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`-` as the file of `--file` or `--from-file` is refused: it is reserved
+  for standard input.** `basou decision capture`, `basou review record` and
+  `basou note` read `--file -` as a file named `-`. They now refuse it before
+  reading anything, and say to omit `--file` to read stdin or to pass
+  `--file ./-` to read a file named `-`. `basou task new` and `basou session
+  note` already refused `--from-file -`, saying that stdin was not supported
+  in v0.1; they now give the same reason and point at `--from-file ./-`.
+  With `-` refused by all five flags, a later release can read stdin for it
+  by adding to what they accept, without changing what any of them means.
+
 ## 0.68.4 — 2026-10-15
 
 ### Fixed

@@ -32,6 +32,7 @@ import {
   renderCliError,
   shortSessionId,
 } from "../lib/error-render.js";
+import { refuseDashInputFile } from "../lib/input-file.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import { registerDecisionGapsCommand } from "./decision-gaps.js";
 
@@ -430,6 +431,7 @@ export async function doRunDecisionCapture(
   options: DecisionCaptureOptions,
   ctx: DecisionCaptureContext,
 ): Promise<void> {
+  refuseDashInputFile("--file", options.file, true);
   const cwd = ctx.cwd ?? process.cwd();
   // View-aware resolution (like orient / refresh / note / decision record) so
   // capture works from a workspace-view dir, redirecting to the planning repo

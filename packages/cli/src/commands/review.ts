@@ -24,6 +24,7 @@ import {
   renderCliError,
   shortSessionId,
 } from "../lib/error-render.js";
+import { refuseDashInputFile } from "../lib/input-file.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 /**
@@ -159,6 +160,7 @@ export async function doRunReviewRecord(
   options: ReviewRecordOptions,
   ctx: ReviewRecordContext,
 ): Promise<void> {
+  refuseDashInputFile("--file", options.file, true);
   const cwd = ctx.cwd ?? process.cwd();
   // View-aware resolution (like decision capture / orient / note) so review
   // record works from a workspace-view dir, redirecting to the planning repo

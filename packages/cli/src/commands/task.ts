@@ -47,6 +47,7 @@ import {
   shortSessionId,
   shortTaskId,
 } from "../lib/error-render.js";
+import { refuseDashInputFile } from "../lib/input-file.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 const STATUS_VALUES = TaskStatusSchema.options;
@@ -282,9 +283,7 @@ export async function doRunTaskNew(options: TaskNewOptions, ctx: TaskContext): P
   if (options.description !== undefined && options.fromFile !== undefined) {
     throw new Error("--description and --from-file are mutually exclusive");
   }
-  if (options.fromFile === "-") {
-    throw new Error("--from-file - (stdin) is not supported in v0.1");
-  }
+  refuseDashInputFile("--from-file", options.fromFile, false);
 
   const initialStatus = options.status ?? "planned";
   // `--completed-at` only makes sense paired with a terminal status. Catching

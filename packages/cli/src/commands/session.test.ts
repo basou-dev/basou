@@ -201,6 +201,10 @@ function joinCalls(spy: ReturnType<typeof captureStdout>): string {
 const SES = (suffix: string) => `ses_01HXABCDEF1234567890ABC${suffix}`;
 const EVT = (suffix: string) => `evt_01HXABCDEF1234567890ABC${suffix}`;
 
+const DASH_FROM_FILE_REFUSED =
+  "--from-file - is reserved for standard input and is refused. " +
+  "Pass --from-file ./- to read a file named -.";
+
 const SESSION_STARTED_LINE = (sessionId: string, suffix: string, occurredAt: string) =>
   `${JSON.stringify({
     schema_version: "0.2.0",
@@ -1507,14 +1511,23 @@ describe("doRunSessionNote", () => {
     expect(joinCalls(out)).toContain("(waiting_approval)");
   });
 
-  it("note-15: --from-file - (stdin) is rejected before any disk I/O", async () => {
+  it("note-15: --from-file - is refused as reserved for stdin, before any disk I/O", async () => {
+    // Never initialized and no session: the refusal comes before either is read.
+    const repo = await realpath(getTmpRepo());
+    const err = captureStderr();
+    await runSessionNote(SES("N15"), { fromFile: "-" }, { cwd: repo });
+    expect(joinCalls(err)).toBe(DASH_FROM_FILE_REFUSED);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("note-15b: a path that names a file called - is read", async () => {
     const repo = await setupInitedRepo();
     const sid = SES("N15");
     await createSession(repo, { id: sid, status: "running" });
-    const err = captureStderr();
-    await runSessionNote(sid, { fromFile: "-" }, { cwd: repo });
-    expect(joinCalls(err)).toContain("--from-file - (stdin) is not supported in v0.1");
-    expect(process.exitCode).toBe(1);
+    await writeFile(join(repo, "-"), "from the dash file");
+    const out = captureStdout();
+    await doRunSessionNote(sid, { fromFile: join(repo, "-") }, { cwd: repo });
+    expect(joinCalls(out)).toContain("from the dash file");
   });
 
   it("note-16: pathless contract: non-verbose stderr does not leak absolute paths", async () => {
@@ -1538,8 +1551,7 @@ describe("doRunSessionNote", () => {
     const err = captureStderr();
     await runSessionNote(sid, { fromFile: "-", verbose: true }, { cwd: repo });
     const stderr = joinCalls(err);
-    expect(stderr).toContain("--from-file - (stdin) is not supported in v0.1");
-    expect(stderr).not.toContain("Caused by:");
+    expect(stderr).toBe(DASH_FROM_FILE_REFUSED);
     expect(process.exitCode).toBe(1);
   });
 

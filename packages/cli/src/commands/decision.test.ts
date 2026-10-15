@@ -1199,6 +1199,24 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     // ...and the operator's absolute path never lands in persisted state.
     expect(yaml).not.toContain(file);
   });
+
+  it("cap-11: a --file path that names a file called - is read", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    await writeFile(
+      join(repo, "-"),
+      JSON.stringify([{ title: "from the dash file", kind: "decision" }]),
+      "utf8",
+    );
+    await doRunDecisionCapture(
+      { file: join(repo, "-") },
+      { cwd: repo, nowProvider: () => FIXED_NOW },
+    );
+    const titles = (await readAdHocEvents(repo))
+      .filter((e) => e.type === "decision_recorded")
+      .map((e) => e.title);
+    expect(titles).toEqual(["from the dash file"]);
+  });
 });
 
 describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
@@ -1301,6 +1319,21 @@ describe("doRunDecisionCapture (input validation, agent-facing errors)", () => {
       { cwd: repo, nowProvider: () => FIXED_NOW },
     );
     expect(joinCalls(err)).toContain("Input file not found:");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("cap-err-9b: --file - is refused as reserved for stdin, before the workspace is read", async () => {
+    // Never initialized: the refusal comes before the workspace is looked up,
+    // and stdin is not read for it either.
+    const repo = await realpath(getTmpRepo());
+    const readInput = vi.fn(async () => JSON.stringify([{ title: "x", kind: "decision" }]));
+    const err = captureStderr();
+    await runDecisionCapture({ file: "-" }, { cwd: repo, nowProvider: () => FIXED_NOW, readInput });
+    expect(joinCalls(err)).toBe(
+      "--file - is reserved for standard input and is refused. " +
+        "Omit --file to read stdin, or pass --file ./- to read a file named -.",
+    );
+    expect(readInput).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 

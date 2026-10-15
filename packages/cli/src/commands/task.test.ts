@@ -244,12 +244,26 @@ describe("doRunTaskNew (ad-hoc path)", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("t-new-7: --from-file - is rejected before any disk read", async () => {
-    const repo = await setupInitedRepo();
+  it("t-new-7: --from-file - is refused as reserved for stdin, before any disk read", async () => {
+    // Never initialized: the refusal comes before the workspace is looked up.
+    const repo = await realpath(getTmpRepo());
     const err = captureStderr();
     await runTaskNew({ title: "x", fromFile: "-" }, { cwd: repo, ...FIXED_CTX });
-    expect(joinCalls(err)).toContain("--from-file - (stdin) is not supported in v0.1");
+    expect(joinCalls(err)).toBe(
+      "--from-file - is reserved for standard input and is refused. " +
+        "Pass --from-file ./- to read a file named -.",
+    );
     expect(process.exitCode).toBe(1);
+  });
+
+  it("t-new-7b: a path that names a file called - is read", async () => {
+    const repo = await setupInitedRepo();
+    await writeFile(join(repo, "-"), "from the dash file\n");
+    captureStdout();
+    await doRunTaskNew({ title: "x", fromFile: join(repo, "-") }, { cwd: repo, ...FIXED_CTX });
+    const taskId = await findCreatedTaskId(repo);
+    const md = await readFile(join(basouPaths(repo).tasks, `${taskId}.md`), "utf8");
+    expect(md).toContain("from the dash file");
   });
 
   it("t-new-8: missing description file is reported with a fixed message", async () => {

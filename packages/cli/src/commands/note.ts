@@ -24,6 +24,7 @@ import {
   renderCliError,
   shortSessionId,
 } from "../lib/error-render.js";
+import { refuseDashInputFile } from "../lib/input-file.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 
 // Single words that are almost certainly a mistyped subcommand rather than a
@@ -162,6 +163,7 @@ export async function doRunNote(
   options: NoteOptions,
   ctx: NoteContext,
 ): Promise<void> {
+  refuseDashInputFile("--file", options.file, true);
   const cwd = ctx.cwd ?? process.cwd();
   const { body, source } = await readNoteBody(bodyArgument, options, ctx, cwd);
   // Nothing on stdin is almost always "forgot to pipe the text", not an
