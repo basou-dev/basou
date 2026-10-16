@@ -3,16 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
+import { ulid as monotonicUlid } from "../ids/ulid.js";
 import { type BoardDeclaration, parseBoardDeclaration } from "./declaration.js";
 import type { BoardMeasurement } from "./measure.js";
 import { buildRecord, orderAnomalies, parseRecordInput, writeRecord } from "./record.js";
 
 // Pass-through so one test can make the first name a record already has.
-vi.mock("../ids/ulid.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../ids/ulid.js")>();
+vi.mock("ulid", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ulid")>();
   return { ...actual, ulid: vi.fn(actual.ulid) };
 });
-const { ulid } = await import("../ids/ulid.js");
+const { decodeTime, ulid } = await import("ulid");
 
 // Pass-through so one test can make a write fail after it has begun.
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -457,6 +458,17 @@ describe("buildRecord and writeRecord", () => {
     expect(name).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}\.json$/);
     expect(await readdir(records)).toEqual([name]);
     expect(JSON.parse(await readFile(join(records, name), "utf8"))).toEqual(r);
+  });
+
+  it("names a record by a ULID whose time is its recorded_at, not the time it is written", async () => {
+    // basou's own ULIDs come from a monotonic factory, which, once it has given
+    // out a later time, gives that time again for an earlier one.
+    const later = monotonicUlid();
+    expect(decodeTime(later)).toBeGreaterThan(Date.parse("2026-10-07T00:00:00.000Z"));
+    const name = await writeRecord(join(dir, "records"), record());
+    expect(new Date(decodeTime(name.replace(/\.json$/, ""))).toISOString()).toBe(
+      "2026-10-07T00:00:00.000Z",
+    );
   });
 
   it("does not keep the measurement's diff, which the previous record derives", () => {

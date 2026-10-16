@@ -121,7 +121,7 @@ describe("measureBoardLive", () => {
       ].sort(),
     );
     expect(m.methods).toEqual({
-      repos: 1,
+      repos: 2,
       trail: 2,
       integrity: 2,
       review_gaps: 2,

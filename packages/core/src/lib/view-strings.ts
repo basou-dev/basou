@@ -1205,7 +1205,7 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     lastCommit: "Last commit",
     commits: "Commits",
     uncommitted: "Uncommitted",
-    behindMain: "Behind origin/main",
+    behindMain: "Behind origin's default branch",
     trail: "Trail",
     decisions: "Decisions",
     decisionsAll: "{n} in all, voided ones included",
@@ -1374,7 +1374,7 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     lastCommit: "最終 commit",
     commits: "commit 数",
     uncommitted: "未 commit",
-    behindMain: "origin/main からの遅れ",
+    behindMain: "origin の既定 branch からの遅れ",
     trail: "証跡",
     decisions: "判断",
     decisionsAll: "取り消したものを含めて {n}",
@@ -1460,7 +1460,7 @@ const BOARD_INIT_EN: BoardInitStrings = {
     timeZone:
       "This host's time zone has no name a board can declare: write effort.time_zone (such as Asia/Tokyo), or the days are counted in an unnamed zone or not at all.",
     milestones:
-      "Days marked on the period and effort chart, each { date: YYYY-MM-DD, label, ref }: only what was reached (a release, a launch), with ref saying where it can be checked (a tag and its commit). A board moved from another keeps its milestones here.",
+      "Days marked on the period and effort chart, each { date: YYYY-MM-DD, label, ref }: only what was reached (a release, a launch), with ref saying where it can be checked (a tag and its commit, or a decision id in full). A board moved from another keeps its milestones here.",
   },
 };
 
@@ -1497,7 +1497,7 @@ const BOARD_INIT_JA: BoardInitStrings = {
     timeZone:
       "このホストの time zone に、盤に書ける名前が無い。effort.time_zone（例 Asia/Tokyo）を書かないと、期間と労力は名前の無い zone で数えられるか、測られない。",
     milestones:
-      "期間と労力の図に印を付ける日。各 { date: YYYY-MM-DD, label, ref }。到達したもの（出荷・公開）だけを書き、ref に確かめられる出所（tag とその commit）を書く。他の盤から移すときは、その節目をここに移す。",
+      "期間と労力の図に印を付ける日。各 { date: YYYY-MM-DD, label, ref }。到達したもの（出荷・公開）だけを書き、ref に確かめられる出所（tag とその commit、または完全な decision の ID）を書く。他の盤から移すときは、その節目をここに移す。",
   },
 };
 

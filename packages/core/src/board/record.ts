@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, rmdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { ulid } from "ulid";
 import { z } from "zod";
-import { ulid } from "../ids/ulid.js";
 import { findErrorCode } from "../lib/error-codes.js";
 import {
   BOARD_STAGE_IDS,
@@ -377,7 +377,8 @@ export function buildRecord(input: {
  * goes to a file whose name is not a ULID's, then is linked into place (which
  * fails rather than replace a record of the same name, when another name is
  * tried). On a failure nothing is left behind, not even a records directory
- * made for it. Returns the name written.
+ * made for it. The ULID carries the record's `recorded_at` as its time, so
+ * the name and the record say the same time. Returns the name written.
  */
 export async function writeRecord(recordsDir: string, record: BoardRecord): Promise<string> {
   const made = await mkdir(recordsDir, { recursive: true });
@@ -389,13 +390,15 @@ export async function writeRecord(recordsDir: string, record: BoardRecord): Prom
       });
     }
     const tmp = join(recordsDir, `.record-${randomUUID()}.tmp`);
+    // Not the monotonic factory, which keeps a later time it gave out before.
+    const at = Date.parse(record.recorded_at);
     try {
       await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, {
         encoding: "utf8",
         flag: "wx",
       });
       for (let attempt = 0; ; attempt++) {
-        const name = `${ulid()}.json`;
+        const name = `${ulid(Number.isNaN(at) ? undefined : at)}.json`;
         try {
           await link(tmp, join(recordsDir, name));
           return name;

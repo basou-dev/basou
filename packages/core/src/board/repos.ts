@@ -17,7 +17,7 @@ import {
  * the section would change for the same repository, so a difference between
  * two measurements can be told apart from a change in the repository.
  */
-export const BOARD_REPOS_METHOD = 1;
+export const BOARD_REPOS_METHOD = 2;
 
 /**
  * One repository the manifest declares, measured where it is checked out.
@@ -27,7 +27,8 @@ export const BOARD_REPOS_METHOD = 1;
  * repository could be measured. Three values are `null` with a meaning of
  * their own and no entry: `branch` when HEAD is detached; `head` and
  * `last_commit` when the repository has no commit yet (`commits` is then 0);
- * `behind_main` when there is no `refs/remotes/origin/main`.
+ * `behind_main` when `refs/remotes/origin/HEAD` is not set and there is no
+ * `refs/remotes/origin/main`.
  */
 export type BoardRepo = {
   /** The path as the manifest writes it. */
@@ -53,7 +54,12 @@ export type BoardRepo = {
    * submodules, as it does for anyone who runs it there.
    */
   uncommitted: number | null;
-  /** The commits on `refs/remotes/origin/main` HEAD does not have, as of the last fetch. */
+  /**
+   * The commits on origin's default branch HEAD does not have, as of the last
+   * fetch: the branch `refs/remotes/origin/HEAD` names (set by a clone, or by
+   * `git remote set-head origin --auto`), or `refs/remotes/origin/main` when
+   * it is not set.
+   */
   behind_main: number | null;
 };
 
@@ -77,6 +83,8 @@ type Head =
   | { kind: "error"; reason: string };
 
 type Ref = { kind: "missing" } | { kind: "oid"; oid: string } | { kind: "error"; reason: string };
+
+const ORIGIN_HEAD = "refs/remotes/origin/HEAD";
 
 const ORIGIN_MAIN = "refs/remotes/origin/main";
 
@@ -132,6 +140,26 @@ async function readRef(cwd: string, name: string): Promise<Ref> {
     return { kind: "error", reason: `${name} is a broken ref` };
   }
   return { kind: "missing" };
+}
+
+// The full name of origin's default branch: the branch origin/HEAD names,
+// or origin/main when origin/HEAD is not a symbolic ref (not set at all, as
+// after `git remote add` and a fetch).
+async function defaultBranchOf(
+  cwd: string,
+): Promise<{ kind: "name"; name: string } | { kind: "error"; reason: string }> {
+  const named = await runGit(cwd, ["symbolic-ref", "-q", ORIGIN_HEAD]);
+  if (named.code === 0) {
+    const name = utf8Name(lineBytes(named));
+    return name === undefined
+      ? { kind: "error", reason: `the branch ${ORIGIN_HEAD} names is not valid UTF-8` }
+      : { kind: "name", name };
+  }
+  // 1 is a ref that is not symbolic, or not there.
+  if (named.code === 1 && named.spawnError === undefined) {
+    return { kind: "name", name: ORIGIN_MAIN };
+  }
+  return { kind: "error", reason: failure(named, `${ORIGIN_HEAD} could not be read`) };
 }
 
 // HEAD's commit; or that there is none yet, when HEAD names a branch that
@@ -329,43 +357,58 @@ export async function measureRepos(
     if (history !== undefined) fail("behind_main", history);
     else if (head.kind === "error") fail("behind_main", head.reason);
     else {
-      const main = await readRef(cwd, ORIGIN_MAIN);
-      if (main.kind === "error") fail("behind_main", main.reason);
-      else if (main.kind === "oid") {
-        const commit = await runGit(cwd, [
-          "rev-parse",
-          "--verify",
-          "--quiet",
-          `${main.oid}^{commit}`,
-        ]);
-        if (commit.code !== 0) {
-          fail("behind_main", await notACommit(cwd, main.oid, partial));
-        } else {
-          const range = head.kind === "unborn" ? line(commit) : `${head.oid}..${line(commit)}`;
-          const behind = await runGit(cwd, ["rev-list", "--count", range, "--"]);
-          const n = count(behind);
-          if (n === undefined) {
-            fail(
-              "behind_main",
-              failure(behind, "the commits behind origin/main could not be counted"),
-            );
-          } else {
-            repo.behind_main = n;
-          }
-        }
-      }
-      // A missing origin/main is what the null means.
+      const behind = await behindDefault(cwd, head, partial);
+      if (behind.ok) repo.behind_main = behind.count;
+      else fail("behind_main", behind.reason);
     }
   }
   return result;
 }
 
-// Why origin/main, which names `oid`, gives no commit. Whether the object is
-// there is not asked of a partial clone that this git may fetch it for.
-async function notACommit(cwd: string, oid: string, partial: boolean): Promise<string> {
-  if (partial) return `${ORIGIN_MAIN} is not a commit, or is not in the repository`;
+// The commits on origin's default branch HEAD does not have: null when
+// origin/HEAD is not set and there is no origin/main, which is what the null
+// means; or why they could not be counted.
+async function behindDefault(
+  cwd: string,
+  head: Exclude<Head, { kind: "error" }>,
+  partial: boolean,
+): Promise<{ ok: true; count: number | null } | { ok: false; reason: string }> {
+  const target = await defaultBranchOf(cwd);
+  if (target.kind === "error") return { ok: false, reason: target.reason };
+  const ref = await readRef(cwd, target.name);
+  if (ref.kind === "error") return { ok: false, reason: ref.reason };
+  if (ref.kind === "missing") {
+    return target.name === ORIGIN_MAIN
+      ? { ok: true, count: null }
+      : { ok: false, reason: `${ORIGIN_HEAD} names ${target.name}, which is not there` };
+  }
+  const commit = await runGit(cwd, ["rev-parse", "--verify", "--quiet", `${ref.oid}^{commit}`]);
+  if (commit.code !== 0) {
+    return { ok: false, reason: await notACommit(cwd, target.name, ref.oid, partial) };
+  }
+  const range = head.kind === "unborn" ? line(commit) : `${head.oid}..${line(commit)}`;
+  const behind = await runGit(cwd, ["rev-list", "--count", range, "--"]);
+  const n = count(behind);
+  return n === undefined
+    ? {
+        ok: false,
+        reason: failure(behind, `the commits behind ${target.name} could not be counted`),
+      }
+    : { ok: true, count: n };
+}
+
+// Why the default branch `name`, which names `oid`, gives no commit. Whether
+// the object is there is not asked of a partial clone that this git may fetch
+// it for.
+async function notACommit(
+  cwd: string,
+  name: string,
+  oid: string,
+  partial: boolean,
+): Promise<string> {
+  if (partial) return `${name} is not a commit, or is not in the repository`;
   const there = await runGit(cwd, ["cat-file", "-e", oid]);
   return there.code === 0
-    ? `${ORIGIN_MAIN} is not a commit`
-    : `${ORIGIN_MAIN} points at an object that is not in the repository`;
+    ? `${name} is not a commit`
+    : `${name} points at an object that is not in the repository`;
 }

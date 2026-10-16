@@ -1679,6 +1679,52 @@ describe("measureBoard: the repos section", () => {
     expect(m.not_found).toEqual([]);
   });
 
+  it("counts behind the branch origin/HEAD names, so a default branch of master is measured", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n" });
+    git(upstream, "branch", "-m", "main", "master");
+    git(root, "clone", "-q", upstream, "app");
+    const app = join(root, "app");
+    await commit(upstream, { "b.txt": "1\n" }, "upstream moves on");
+    await commit(upstream, { "b.txt": "2\n" }, "and on");
+    git(app, "fetch", "-q");
+    // A main that HEAD already has does not stand in for the default branch.
+    git(app, "update-ref", "refs/remotes/origin/main", "HEAD");
+    expect(git(app, "symbolic-ref", "refs/remotes/origin/HEAD").trim()).toBe(
+      "refs/remotes/origin/master",
+    );
+    const m = await measureRepos("app");
+    expect(m.repos[0]).toMatchObject({ branch: "master", behind_main: 2 });
+    expect(m.not_found).toEqual([]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("has no count and no entry when origin/HEAD is not set and there is no origin/main", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n" });
+    git(upstream, "branch", "-m", "main", "master");
+    const app = await repo("app", { "a.txt": "1\n" });
+    git(app, "fetch", "-q", upstream, "master:refs/remotes/origin/master");
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.not_found).toEqual([]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("says so when origin/HEAD names a branch that is not there, not falling back to origin/main", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n" });
+    git(root, "clone", "-q", upstream, "app");
+    const app = join(root, "app");
+    git(app, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone");
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.not_found).toEqual([
+      {
+        at: "repos[app].behind_main",
+        reason: "refs/remotes/origin/HEAD names refs/remotes/origin/gone, which is not there",
+      },
+    ]);
+    expect(m.complete).toBe(false);
+  });
+
   it("reports a repo that is not there, not a repository, or not the root of one, once", async () => {
     await repo("app", { "sub/a.txt": "1\n" });
     await mkdir(join(root, "plain"));
@@ -1766,7 +1812,7 @@ describe("measureBoard: the repos section", () => {
     const declaration = declare([], {}, ["app"]);
     const first = await measure(declaration, NOW, ["app"]);
     expect(first.methods).toEqual({
-      repos: 1,
+      repos: 2,
       trail: 2,
       integrity: 2,
       review_gaps: 2,
@@ -2883,7 +2929,7 @@ describe("measureBoard: the integrity section", () => {
     const declaration = declare([]);
     const first = await measure(declaration);
     expect(first.methods).toEqual({
-      repos: 1,
+      repos: 2,
       trail: 2,
       integrity: 2,
       review_gaps: 2,
@@ -3143,7 +3189,7 @@ describe("measureBoard: the review_gaps section", () => {
     );
     const none = await measure(declaration);
     expect(none.methods).toEqual({
-      repos: 1,
+      repos: 2,
       trail: 2,
       integrity: 2,
       review_gaps: 2,
@@ -3263,7 +3309,7 @@ describe("measureBoard: the portfolio section", () => {
     await register(`workspaces:\n  - { path: ${master} }\n`);
     const bare = await measure(declaration);
     expect(bare.methods).toEqual({
-      repos: 1,
+      repos: 2,
       trail: 2,
       integrity: 2,
       review_gaps: 2,

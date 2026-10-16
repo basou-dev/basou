@@ -3,6 +3,40 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **`basou board measure` (experimental) counts how far HEAD is behind
+  origin's default branch, not always `origin/main`.** It read only
+  `refs/remotes/origin/main`, so a repository whose default branch is
+  `master`, or any other name, never had a `behind_main`, and the
+  measurement still said it was complete, as it does for a repository with
+  no origin. It now counts against the branch `refs/remotes/origin/HEAD`
+  names (a clone sets it, and `git remote set-head origin --auto` sets it
+  later), and against `origin/main` when that is not set, as before. When
+  `origin/HEAD` names a branch that is not there, the value is not measured
+  and `not_found` says why. The `repos` method is now 2, so the next record
+  marks `behind_main` as measured another way. `board measure` and the
+  board page say "behind origin's default branch".
+- **`basou board record` (experimental) names a record by its own time.**
+  The record's ULID took the time it was written, after the board was
+  measured again, while `recorded_at` took the time the command started, so
+  the board page's list of records and the guide gave a time a second or so
+  later than the record's heading. The ULID now carries `recorded_at`.
+  Records written before keep their names.
+- **`basou board guide` (experimental) says how to ask for a manual
+  observation, and what to write when the operator hands it over.** It said
+  only to ask the operator and not to make it. It now asks for one thing the
+  operator can do as it is written (the line to run and where to run it, or
+  the page to open, and what to send back), and, when the operator says to
+  make it, to make it and say so in the source.
+- **`basou board guide` and `basou board init` (experimental) ask for
+  decision and task ids in full.** A shortened id in a board's declaration
+  matched two decisions, the first of them voided. The guide asks for all
+  26 characters in the prose and in a milestone's `ref`, and the comment
+  `init` prints on milestones says so.
+
 ## 0.70.0 — 2026-10-16
 
 ### Changed

@@ -273,7 +273,7 @@ describe("basou board measure", () => {
     const unborn = out.join("\n");
     expect(unborn).toMatch(
       new RegExp(
-        `Repos:\\n  \\. \\(${name}\\)  main at no commit yet, last commit none, commits 0, files \\d+, uncommitted \\d+, behind origin/main \\(no origin/main\\)\\n  \\.\\./gone  not measured\\n`,
+        `Repos:\\n  \\. \\(${name}\\)  main at no commit yet, last commit none, commits 0, files \\d+, uncommitted \\d+, behind origin's default branch \\(no origin/HEAD or origin/main\\)\\n  \\.\\./gone  not measured\\n`,
       ),
     );
     expect(unborn).toContain("repos[../gone]: the repo '../gone' is not on disk");
