@@ -207,6 +207,38 @@ describe("boardPage", () => {
     expect(older.status).toBe("ok");
   });
 
+  it("draws a record of version 3, which holds an http observation, its value as it is", async () => {
+    await mkdir(records);
+    await place(A, record({ record_version: 2 }));
+    const v3 = record({
+      record_version: 3,
+      observed: {
+        shop: {
+          value: { status: 404, redirects: 0, final_url: "https://example.com/x", words: [null] },
+          observed_at: "2026-10-07T00:00:00Z",
+          source: "https://example.com/x",
+        },
+      },
+    });
+    v3.declaration = {
+      ...v3.declaration,
+      observe: [{ key: "shop", kind: "http", url: "https://example.com/x", words: ["in stock"] }],
+    } as typeof v3.declaration;
+    await place(B, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.id).toBe(B);
+    expect(page.board.summary.observed).toEqual([
+      {
+        name: "shop",
+        value: { status: 404, redirects: 0, final_url: "https://example.com/x", words: [null] },
+        observed_at: "2026-10-07T00:00:00Z",
+        source: "https://example.com/x",
+      },
+    ]);
+    expect((await boardPage(records, A)).status).toBe("ok");
+  });
+
   it("draws the heading, the tiles and the observations from the record", async () => {
     await mkdir(records);
     await place(A, record());
@@ -554,11 +586,11 @@ describe("boardPage", () => {
       older: null,
       newer: B,
     });
-    await place(A, record({ record_version: 3 }));
+    await place(A, record({ record_version: 4 }));
     expect(await boardPage(records, A)).toMatchObject({
       why: "unknown_version",
       id: A,
-      version: 3,
+      version: 4,
     });
     await place(A, record({ prose: { summary: 1 } }));
     expect(await boardPage(records, A)).toMatchObject({ why: "not_a_record", id: A });

@@ -190,14 +190,14 @@ describe("parseBoardDeclaration: accepted declarations", () => {
 
 describe("parseBoardDeclaration: board_version", () => {
   it("stops at an unknown board_version, naming it, whatever else is wrong", () => {
-    expect(errorsOf(parse({ ...board(), board_version: 3, title: "", extra: 1 }))).toEqual([
-      "board_version: this basou reads board_version 1 or 2, not 3",
+    expect(errorsOf(parse({ ...board(), board_version: 4, title: "", extra: 1 }))).toEqual([
+      "board_version: this basou reads board_version 1, 2 or 3, not 4",
     ]);
   });
 
   it("refuses a board_version that is missing or not a number", () => {
     const { board_version: _v, ...missing } = board();
-    const reads = "board_version: must be a board version this basou reads (1 or 2)";
+    const reads = "board_version: must be a board version this basou reads (1, 2 or 3)";
     expect(errorsOf(parse(missing))).toEqual([reads]);
     expect(errorsOf(parse({ ...board(), board_version: "1" }))).toEqual([reads]);
   });
@@ -1133,11 +1133,11 @@ describe("parseBoardDeclaration: what the review found", () => {
   });
 
   it("names an unknown board_version before a YAML warning", () => {
-    const plain = stringify({ ...board(), board_version: 3 });
+    const plain = stringify({ ...board(), board_version: 4 });
     expect(plain).toContain("title: A board\n");
-    const text = plain.replace("title: A board\n", "title: !v3tag A board\n");
+    const text = plain.replace("title: A board\n", "title: !v4tag A board\n");
     expect(errorsOf(parseBoardDeclaration(text, { manifestRepoPaths: REPOS }))).toEqual([
-      "board_version: this basou reads board_version 1 or 2, not 3",
+      "board_version: this basou reads board_version 1, 2 or 3, not 4",
     ]);
   });
 
@@ -1455,6 +1455,171 @@ describe("parseBoardDeclaration: board_version 2", () => {
     expect(errorsOf(parse(doc))).toEqual([
       "stages.02.look[0]: must be a non-empty string",
       "stages.02.notes: Invalid input: expected array, received string",
+    ]);
+  });
+});
+
+// A version 3 board whose only observation is `observe`.
+function withHttp(observe: Record<string, unknown>): Record<string, unknown> {
+  return { ...boardV2(), board_version: 3, observe: [{ key: "h", kind: "http", ...observe }] };
+}
+
+describe("parseBoardDeclaration: board_version 3 and http", () => {
+  const url = "https://example.com/shop/item-1";
+
+  it("accepts an http observation with what to read off the body, and one with none", () => {
+    const doc: Record<string, unknown> = { ...boardV2(), board_version: 3 };
+    const full = {
+      key: "shop_item",
+      kind: "http",
+      url,
+      words: ["in stock", "\u5728\u5eab\u3042\u308a", "a\\b", "x-y"],
+      count_pattern: "<loc>",
+      capture_pattern: "Version ([0-9.]+)",
+    };
+    doc.observe = [...(doc.observe as unknown[]), full, { key: "bare", kind: "http", url }];
+    const result = parse(doc);
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.board_version).toBe(3);
+    expect(result.declaration.observe.slice(-2)).toEqual([
+      full,
+      { key: "bare", kind: "http", url },
+    ]);
+  });
+
+  it("reads a version 2 board as before", () => {
+    const result = parse(boardV2());
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.board_version).toBe(2);
+  });
+
+  it("refuses a method and any key it does not take, and holds the url to the shape of a page's", () => {
+    expect(errorsOf(parse(withHttp({ url, method: "HEAD", status: 200 })))).toEqual([
+      "observe[0]: unknown keys 'method', 'status'",
+    ]);
+    expect(errorsOf(parse(withHttp({ url: "http://example.com/" })))).toEqual([
+      "observe[0].url: must be an https:// URL",
+    ]);
+    expect(errorsOf(parse(withHttp({})))).toEqual([
+      "observe[0].url: Invalid input: expected string, received undefined",
+    ]);
+  });
+
+  it("refuses a word list that is empty or not a list, and a word a command could misread", () => {
+    expect(errorsOf(parse(withHttp({ url, words: [] })))).toEqual([
+      "observe[0].words: must list at least one word",
+    ]);
+    expect(errorsOf(parse(withHttp({ url, words: "in stock" })))).toEqual([
+      "observe[0].words: Invalid input: expected array, received string",
+    ]);
+    expect(
+      errorsOf(parse(withHttp({ url, words: ["", "  ", "a\tb", "a\u0085b", "-p", "it's", 1] }))),
+    ).toEqual([
+      "observe[0].words[0]: must be a non-empty string",
+      "observe[0].words[1]: must be a non-empty string",
+      "observe[0].words[2]: must not contain control characters",
+      "observe[0].words[3]: must not contain control characters",
+      "observe[0].words[4]: must not start with '-'",
+      'observe[0].words[5]: must not contain "\'"',
+      "observe[0].words[6]: Invalid input: expected string, received number",
+    ]);
+  });
+
+  it("refuses a word given twice, saying where it was first", () => {
+    expect(errorsOf(parse(withHttp({ url, words: ["a", "b", "a", "b", "a"] })))).toEqual([
+      "observe[0].words[2]: duplicate word (first at words[0])",
+      "observe[0].words[3]: duplicate word (first at words[1])",
+      "observe[0].words[4]: duplicate word (first at words[0])",
+    ]);
+  });
+
+  it("refuses a count_pattern that does not compile with gu, matches the empty string or a command could misread", () => {
+    const at = (count_pattern: unknown) => errorsOf(parse(withHttp({ url, count_pattern })));
+    const empty =
+      "observe[0].count_pattern: must not match the empty string: each match is counted";
+    for (const pattern of ["a*", "x?", "^", "$", "(?:)", "a|", "[a-z]{0,3}"]) {
+      expect(at(pattern)).toEqual([empty]);
+    }
+    expect(at("")).toEqual(["observe[0].count_pattern: must be a non-empty string"]);
+    expect(at("-x")).toEqual(["observe[0].count_pattern: must not start with '-'"]);
+    expect(at("a\nb")).toEqual(["observe[0].count_pattern: must not contain control characters"]);
+    expect(at("content='x'")).toEqual([
+      'observe[0].count_pattern: must not contain "\'" (match one as \\x27)',
+    ]);
+    const [broken] = at("(");
+    expect(broken).toMatch(
+      /^observe\[0\]\.count_pattern: is not a valid regular expression with the 'gu' flags \(/,
+    );
+    // An escape the u flag refuses, which a pattern without it would take.
+    expect(at("\\-")[0]).toMatch(/with the 'gu' flags/);
+    for (const pattern of ["<loc>", "^#", "end$", "content=\\x27x\\x27", "\\p{L}+"]) {
+      expect(parse(withHttp({ url, count_pattern: pattern })).ok).toBe(true);
+    }
+  });
+
+  it("refuses a capture_pattern with no capturing group, or one that does not compile with u", () => {
+    const at = (capture_pattern: unknown) => errorsOf(parse(withHttp({ url, capture_pattern })));
+    const group =
+      "observe[0].capture_pattern: must have a capturing group: the value is what the first one holds";
+    expect(at("Version [0-9.]+")).toEqual([group]);
+    expect(at("Version (?:[0-9.]+)")).toEqual([group]);
+    expect(at("-(x)")).toEqual(["observe[0].capture_pattern: must not start with '-'"]);
+    expect(at("(")[0]).toMatch(/with the 'u' flags \(/);
+    for (const pattern of ["Version ([0-9.]+)", "(?<v>[0-9]+)", "a*(b)?", "^(.*)$"]) {
+      expect(parse(withHttp({ url, capture_pattern: pattern })).ok).toBe(true);
+    }
+  });
+
+  it("says that version 3 reads http when version 2 or 1 has it, apart from what no version reads", () => {
+    const doc = boardV2();
+    doc.observe = [
+      { key: "a", kind: "http", url, words: ["x"] },
+      { key: "b", kind: "rss_feed", url },
+      { key: "c", kind: "http", url: "http://example.com/" },
+    ];
+    expect(errorsOf(parse(doc))).toEqual([
+      "observe[0].kind: 'http' is read from board_version 3 on; this file is board_version 2",
+      "observe[1].kind: Invalid discriminator value. Expected 'npm_version' | 'github_release' | 'github_open_issues' | 'github_open_prs' | 'github_ci' | 'page_version' | 'manual'",
+      "observe[2].kind: 'http' is read from board_version 3 on; this file is board_version 2",
+    ]);
+    // Version 1 reads no observe at all: the key is put down to the version that reads it as written.
+    const v1 = board();
+    v1.observe = [{ key: "a", kind: "http", url }];
+    expect(errorsOf(parse(v1))).toEqual([
+      "(top level): 'observe' is read from board_version 3 on; this file is board_version 1",
+    ]);
+    v1.observe = [{ key: "a", kind: "npm_version", package: "x" }];
+    entry(v1.stages, "02").look = ["x"];
+    expect(errorsOf(parse(v1))).toEqual([
+      "stages.02: 'look' is read from board_version 2 on; this file is board_version 1",
+      "(top level): 'observe' is read from board_version 2 on; this file is board_version 1",
+    ]);
+  });
+
+  it("does not put a problem down to a later version that refuses the same part", () => {
+    const doc = boardV2();
+    doc.observe = [{ key: "a", kind: "http" }];
+    // Version 3 takes the kind but not the entry without its url: still read from 3 on.
+    expect(errorsOf(parse(doc))).toEqual([
+      "observe[0].kind: 'http' is read from board_version 3 on; this file is board_version 2",
+    ]);
+    const v1 = board();
+    v1.observe = [{ key: "a", kind: "http" }];
+    // No version reads the key as written (3 refuses the entry inside it):
+    // it is put down to the first version that takes the key.
+    expect(errorsOf(parse(v1))).toEqual([
+      "(top level): 'observe' is read from board_version 2 on; this file is board_version 1",
+    ]);
+    // A key no shape takes inside it does not keep it from being taken.
+    v1.observe = [{ key: "a", kind: "manual", how: "ask", words: ["x"] }];
+    expect(errorsOf(parse(v1))).toEqual([
+      "(top level): 'observe' is read from board_version 2 on; this file is board_version 1",
+    ]);
+    v1.observe = "not a list";
+    entry(v1.stages, "02").look = [""];
+    expect(errorsOf(parse(v1))).toEqual([
+      "stages.02: 'look' is read from board_version 2 on; this file is board_version 1",
+      "(top level): 'observe' is read from board_version 2 on; this file is board_version 1",
     ]);
   });
 });

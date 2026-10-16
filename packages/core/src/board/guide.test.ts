@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import {
   chmod,
   mkdir,
@@ -10,6 +10,8 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -824,6 +826,208 @@ describe("boardGuide: the commands run", () => {
       '<meta content="Hugo v0.120.0" name="generator" />',
     ]) {
       expect(await run(`${meta}<p>release_v9.9.9 then v1.2.3</p>`)).toBe("v1.2.3\nexit=0\n");
+    }
+  });
+});
+
+// The board of a guide's input: declared, with no record yet.
+function declared(d: BoardDeclaration): BoardGuideInput["board"] {
+  return { status: "declared", declaration: d, recordCount: 0, previous: NO_PREVIOUS_RECORDS };
+}
+
+// A board of version 3 whose observations are `observe`.
+function httpDeclaration(observe: Record<string, unknown>[]): BoardDeclaration {
+  return declaration({ board_version: 3, observe });
+}
+
+const SHOP = "https://example.com/shop/item-1";
+const IN_STOCK = "\u5728\u5eab\u3042\u308a";
+
+describe("boardGuide: an http observation", () => {
+  const full = {
+    key: "shop",
+    kind: "http",
+    url: SHOP,
+    words: ["in stock", IN_STOCK, "AT&T"],
+    count_pattern: "<loc>",
+    capture_pattern: "Version ([0-9.]+)",
+  };
+
+  it("gives a GET without -f, then the body read with the patterns and words after --, quoted", () => {
+    const guide = boardGuide(guideInput({ board: declared(httpDeclaration([full])) }));
+    const blocks = blocksIn(guide);
+    const get = blocks.find((b) => b.includes("curl ")) as string;
+    expect(get).toContain(
+      `curl -sS -L --max-redirs 10 --max-time 20 -o "$W/http-shop.body" -w '%{http_code} %{num_redirects} %{url_effective}\\n' '${SHOP}'; echo "curl exit=$?"`,
+    );
+    expect(get).not.toMatch(/ -f|-fsS/);
+    const read = blocks.find((b) => b.includes("node -e")) as string;
+    expect(read).toMatch(/^cd .* && node -e '[^']+' -- /);
+    expect(read).toContain(
+      ` -- '<loc>' 'Version ([0-9.]+)' 'in stock' '${IN_STOCK}' 'AT&T' < "$W/http-shop.body"; echo "exit=$?"`,
+    );
+    expect(read).toContain('readFileSync(0, "utf8")');
+    expect(guide).toContain("#### `shop` (http)");
+    expect(guide).toContain("When the status is 2xx, read the body.");
+    expect(guide).toContain("not line by line as a measure's `pattern` is");
+    expect(guide).toContain(
+      `- \`words\`: whether the body holds each word, as true or false in the order the command gives them (\`in stock\`, \`${IN_STOCK}\`, \`AT&T\`)`,
+    );
+    expect(guide).toContain(
+      "- `count`: how many times `<loc>` matches the body (0 when it does not)",
+    );
+    expect(guide).toContain(
+      "- `capture`: what the first group of the first match of `Version ([0-9.]+)` holds, as a string (null when nothing matches)",
+    );
+    expect(guide).toContain(
+      "When the status is not 2xx, do not read the body: give each of `words`, `count` and `capture` it declares as null",
+    );
+    expect(guide).toContain("A 4xx or 5xx is a value, not an observation not made");
+    expect(guide).toContain("more than 10 redirects: exit 47), or reading the body exits 1,");
+    expect(guide).toContain(`Source: \`${SHOP}\`.`);
+    const observed = templateIn(guide).observed as Record<string, { source: string }>;
+    expect(observed.shop?.source).toBe(SHOP);
+  });
+
+  it("gives '' for a pattern not declared, and no body read when nothing is read off the body", () => {
+    const guide = boardGuide(
+      guideInput({
+        board: declared(
+          httpDeclaration([
+            { key: "words_only", kind: "http", url: SHOP, words: ["x"] },
+            { key: "bare", kind: "http", url: SHOP },
+          ]),
+        ),
+      }),
+    );
+    const blocks = blocksIn(guide);
+    expect(blocks.find((b) => b.includes('"$W/http-words_only.body"; echo'))).toContain(
+      ` -- '' '' 'x' < "$W/http-words_only.body"`,
+    );
+    expect(blocks.some((b) => b.includes("http-bare.body") && b.includes("node -e"))).toBe(false);
+    const bare = guide.slice(guide.indexOf("#### `bare` (http)"));
+    expect(bare).toContain(
+      'Value: `{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string> }`',
+    );
+    expect(bare.slice(0, bare.indexOf("### 4."))).not.toContain("2xx");
+  });
+});
+
+describe("boardGuide: an http observation, run", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "basou-board-http-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  // Run a block of the guide in a shell, with W under dir, and no proxy.
+  const run = (script: string) =>
+    new Promise<{ out: string; err: string }>((resolve) => {
+      execFile(
+        "sh",
+        ["-c", script],
+        { env: { ...process.env, TMPDIR: dir, NO_PROXY: "*", no_proxy: "*" }, encoding: "utf8" },
+        (_error, out, err) => resolve({ out, err }),
+      );
+    });
+
+  const blockOf = (guide: string, key: string, has: string) =>
+    blocksIn(guide).find((b) => b.includes(`"$W/http-${key}.body"`) && b.includes(has)) as string;
+
+  it("reads the words, the count and the capture off the whole body, decoded once and without its BOM", async () => {
+    const guide = boardGuide(
+      guideInput({
+        anchor: dir,
+        board: declared(
+          httpDeclaration([
+            {
+              key: "shop",
+              kind: "http",
+              url: SHOP,
+              words: [IN_STOCK, "sold out", "AT&T"],
+              count_pattern: "^<urlset>|<loc>",
+              capture_pattern: "Version ([0-9.]+)",
+            },
+            { key: "opt", kind: "http", url: SHOP, capture_pattern: "x(y)?" },
+          ]),
+        ),
+      }),
+    );
+    const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
+    await mkdir(work, { recursive: true });
+    const read = blockOf(guide, "shop", "node -e");
+    // The word starts one byte before 64 KiB (after the 3 bytes of the BOM
+    // and the 8 of <urlset>), so a chunk of a stream would cut it.
+    const body = `\ufeff<urlset>${"a".repeat(65535 - 3 - 8)}${IN_STOCK} AT&amp;T <loc>1</loc><loc>2</loc> Version 2.3 and Version 9.9`;
+    await writeFile(join(work, "http-shop.body"), body, "utf8");
+    expect(await run(read)).toEqual({
+      out: '{"words":[true,false,false],"count":3,"capture":"2.3"}\nexit=0\n',
+      err: "",
+    });
+    await writeFile(join(work, "http-shop.body"), "nothing here", "utf8");
+    expect((await run(read)).out).toBe(
+      '{"words":[false,false,false],"count":0,"capture":null}\nexit=0\n',
+    );
+    // A group that took no part in the match gives null, as no match does.
+    await writeFile(join(work, "http-opt.body"), "x", "utf8");
+    expect((await run(blockOf(guide, "opt", "node -e"))).out).toBe('{"capture":null}\nexit=0\n');
+  });
+
+  it("stops rather than count an empty match the declaration could not see", async () => {
+    const guide = boardGuide(
+      guideInput({
+        anchor: dir,
+        board: declared(
+          httpDeclaration([{ key: "edge", kind: "http", url: SHOP, count_pattern: "\\b" }]),
+        ),
+      }),
+    );
+    const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
+    await mkdir(work, { recursive: true });
+    await writeFile(join(work, "http-edge.body"), "a b", "utf8");
+    expect(await run(blockOf(guide, "edge", "node -e"))).toEqual({
+      out: "exit=1\n",
+      err: "count_pattern matched an empty string at 0\n",
+    });
+  });
+
+  it("prints the status, the redirects and where it ended, a 404 with exit 0, and exit 47 past 10 redirects", async () => {
+    const server = createServer((req, res) => {
+      if (req.url === "/moved") {
+        res.writeHead(301, { location: "/item" }).end();
+      } else if (req.url === "/item") {
+        res.writeHead(200, { "content-type": "text/html" }).end(IN_STOCK);
+      } else if (req.url?.startsWith("/loop")) {
+        res.writeHead(302, { location: `/loop${(req.url.length % 50) + 1}` }).end();
+      } else {
+        res.writeHead(404).end("not here");
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const guide = boardGuide(
+        guideInput({
+          anchor: dir,
+          board: declared(httpDeclaration([{ key: "shop", kind: "http", url: SHOP }])),
+        }),
+      );
+      const get = (path: string) =>
+        run(blockOf(guide, "shop", "curl ").replace(`'${SHOP}'`, `'${origin}${path}'`));
+      expect(await get("/moved")).toEqual({
+        out: `200 1 ${origin}/item\ncurl exit=0\n`,
+        err: "",
+      });
+      const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
+      expect(await readFile(join(work, "http-shop.body"), "utf8")).toBe(IN_STOCK);
+      expect((await get("/gone")).out).toBe(`404 0 ${origin}/gone\ncurl exit=0\n`);
+      expect(await readFile(join(work, "http-shop.body"), "utf8")).toBe("not here");
+      const loop = await get("/loop");
+      expect(loop.out).toMatch(/^302 10 .*\ncurl exit=47\n$/);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
     }
   });
 });

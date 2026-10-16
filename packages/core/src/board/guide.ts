@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { decodeTime } from "ulid";
 import { displayPath } from "../lib/display-path.js";
 import {
+  BOARD_HTTP_CAPTURE_FLAGS,
+  BOARD_HTTP_COUNT_FLAGS,
+  BOARD_HTTP_MAX_REDIRECTS,
   BOARD_STAGE_IDS,
   type BoardDeclaration,
   type BoardObserve,
@@ -445,7 +448,7 @@ function observeSteps(
 ): void {
   if (observe.length === 0) {
     line(
-      "This board declares nothing to observe outside basou. If a lane reaches its users through something outside the repos (a package registry, a release, a site, a production database), declare it under `observe` (board_version 2) through an axis review (step 2b).",
+      "This board declares nothing to observe outside basou. If a lane reaches its users through something outside the repos (a package registry, a release, a site, a production database), declare it under `observe` (board_version 2 on, and 3 for `http`) through an axis review (step 2b).",
       "",
     );
     return;
@@ -510,6 +513,9 @@ function observeSteps(
           `Value: the version it prints, as a string (such as "v1.2.3"). A failed fetch, or no version on the page (exit 1), is a null with that as the error. Source: \`${sourceOf(o)}\`.`,
           "",
         );
+        break;
+      case "http":
+        httpSteps(o, go, line, block);
         break;
       case "manual":
         line(
@@ -585,10 +591,77 @@ function sourceOf(o: BoardObserve): string {
     case "github_ci":
       return `gh run list --repo ${o.repo} --workflow ${o.workflow} --branch ${o.branch}`;
     case "page_version":
+    case "http":
       return o.url;
     case "manual":
       return "the operator";
   }
+}
+
+// What reads the values of an http observation off its body, on stdin. The
+// patterns and the words come after `--`, so none is read as an option of
+// node's: the count_pattern, the capture_pattern (each '' when not declared)
+// and the words. The body is decoded only once all of it is read, so a
+// character is never cut where a chunk ends, and a leading BOM is taken
+// off; nothing else of it is decoded. An empty match would count positions,
+// not matches: it stops instead. It prints the values as JSON.
+const HTTP_BODY_SCRIPT = [
+  "const [count, capture, ...words] = process.argv.slice(1);",
+  'let t = require("fs").readFileSync(0, "utf8");',
+  "if (t.charCodeAt(0) === 0xfeff) t = t.slice(1);",
+  "const v = {};",
+  "if (words.length > 0) v.words = words.map((w) => t.includes(w));",
+  `if (count !== "") { let n = 0; for (const m of t.matchAll(new RegExp(count, "${BOARD_HTTP_COUNT_FLAGS}"))) { if (m[0] === "") { console.error("count_pattern matched an empty string at " + m.index); process.exit(1); } n++; } v.count = n; }`,
+  `if (capture !== "") { const m = new RegExp(capture, "${BOARD_HTTP_CAPTURE_FLAGS}").exec(t); v.capture = m === null || m[1] === undefined ? null : m[1]; }`,
+  "console.log(JSON.stringify(v));",
+].join(" ");
+
+// How an http observation is made: a GET, then its body read when the
+// observation declares what to read off it.
+function httpSteps(
+  o: Extract<BoardObserve, { kind: "http" }>,
+  go: string,
+  line: (...lines: string[]) => void,
+  block: (...lines: string[]) => void,
+): void {
+  const body = `"$W/http-${o.key}.body"`;
+  const reads = [
+    ...(o.words === undefined
+      ? []
+      : [
+          `\`words\`: whether the body holds each word, as true or false in the order the command gives them (${o.words.map((w) => `\`${displayPath(w)}\``).join(", ")})`,
+        ]),
+    ...(o.count_pattern === undefined
+      ? []
+      : [
+          `\`count\`: how many times \`${displayPath(o.count_pattern)}\` matches the body (0 when it does not)`,
+        ]),
+    ...(o.capture_pattern === undefined
+      ? []
+      : [
+          `\`capture\`: what the first group of the first match of \`${displayPath(o.capture_pattern)}\` holds, as a string (null when nothing matches)`,
+        ]),
+  ];
+  line(
+    `A GET of ${o.url}, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects. It prints the status of the last response, how many redirects led to it and the URL it ended at (no \`-f\`: a 4xx or 5xx is printed and exits 0):`,
+  );
+  block(
+    `${go} && curl -sS -L --max-redirs ${BOARD_HTTP_MAX_REDIRECTS} --max-time 20 -o ${body} -w '%{http_code} %{num_redirects} %{url_effective}\\n' ${shellWord(o.url)}; echo "curl exit=$?"`,
+  );
+  if (reads.length > 0) {
+    line(
+      "When the status is 2xx, read the body. The words are found as written, character for character, and HTML entities are not decoded; the patterns are matched against the whole body at once, not line by line as a measure's `pattern` is, so `^` and `$` are the body's start and end:",
+    );
+    const args = [o.count_pattern ?? "", o.capture_pattern ?? "", ...(o.words ?? [])];
+    block(
+      `${go} && node -e ${shellWord(HTTP_BODY_SCRIPT)} -- ${args.map(shellWord).join(" ")} < ${body}; echo "exit=$?"`,
+    );
+    line("It prints, as JSON:", "", ...reads.map((r) => `- ${r}`), "");
+  }
+  line(
+    `Value: \`{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string>${reads.length > 0 ? ", <what the body gave>" : ""} }\`, the numbers as numbers. A 4xx or 5xx is a value, not an observation not made: the status is what was observed.${reads.length > 0 ? " When the status is not 2xx, do not read the body: give each of `words`, `count` and `capture` it declares as null (an error page's text is not the page's)." : ""} When curl exits other than 0 (the name does not resolve, TLS fails, the time runs out, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47)${reads.length > 0 ? ", or reading the body exits 1," : ""} the observation is not made: a null with that as the error. Source: \`${sourceOf(o)}\`.`,
+    "",
+  );
 }
 
 // The record's input to fill in: the previous record's cells beside each

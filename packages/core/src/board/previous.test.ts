@@ -112,10 +112,10 @@ describe("readPreviousRecords", () => {
       status: "unreadable",
       reason: `the record ${B} could not be read as JSON`,
     });
-    await place(`${C}.json`, record({ record_version: 3 }));
+    await place(`${C}.json`, record({ record_version: 4 }));
     const unread = {
       status: "unreadable",
-      reason: `the record ${C} is of record_version 3, which this basou does not read`,
+      reason: `the record ${C} is of record_version 4, which this basou does not read`,
     };
     expect(await readPreviousRecords(records)).toEqual({ last: unread, lastReview: unread });
     await place(`${C}.json`, record({ cells: "all done" }));

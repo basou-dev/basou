@@ -3,6 +3,46 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **A board can observe the response to an HTTP GET (`http`, from
+  `board_version: 3`, experimental).** An `http` observation names an
+  `https://` URL, held to the same shape as a `page_version`'s, and may
+  declare what to read off the body: `words` (whether the body holds each,
+  as written), a `count_pattern` (how many times it matches) and a
+  `capture_pattern` (what its first group holds in the first match). It is
+  a GET only, with no method to declare. basou does not make it and sends
+  nothing: `basou board guide` gives the commands, a `curl` without `-f`
+  that prints the status of the last response, how many redirects led to
+  it and the URL it ended at, and, when the board reads the body, a `node`
+  line that reads it whole as UTF-8 (without a leading BOM, decoding
+  nothing else) and is given the patterns and words after `--`. The value
+  is `{ status, redirects, final_url }`, with `words` (true or false in the
+  order declared), `count` and `capture` as declared; a 4xx or 5xx is a
+  value, not an observation not made, and when the status is not 2xx what
+  the body would give is null. Both patterns are matched against the whole
+  body (`^` and `$` are its start and end), not line by line as a measure's
+  `pattern` is: `count_pattern` with the flags `gu`, `capture_pattern` with
+  `u`. A word or a pattern that is empty, holds a control character or a
+  `'`, or starts with `-` is refused, as is a word given twice, a
+  `count_pattern` that matches the empty string and a `capture_pattern`
+  with no capturing group; the guide's line stops, rather than count, at an
+  empty match the declaration could not see.
+
+### Changed
+
+- **Boards are declared in version 3 and records written in version 3
+  (`board_version: 3`, `record_version: 3`, experimental).**
+  `basou board init` prints version 3. A board of version 1 or 2 is read as
+  before, and every record is now written as version 3, whatever the
+  version of its board; records of version 1 and 2 are still read,
+  compared with and drawn. A board of version 1 or 2 that uses what a later
+  version reads is told so on a line of its own (`observe[0].kind: 'http'
+  is read from board_version 3 on; this file is board_version 2`) for a
+  kind or a value as for a key: until now only a key was told so.
+
 ## 0.70.1 — 2026-10-17
 
 ### Fixed
