@@ -83,7 +83,7 @@ describe("a session an older basou imported with seconds-less timestamps", () =>
 
   it("yields every event, not only the one that carried seconds", async () => {
     const warnings: ReplayWarning[] = [];
-    const events = await readAllEvents(sessionDir, { onWarning: (w) => warnings.push(w) });
+    const events = await readAllEvents(paths, SESSION_ID, { onWarning: (w) => warnings.push(w) });
     expect(warnings).toEqual([]);
     expect(events.map((event) => event.occurred_at)).toEqual([
       "2026-09-16T01:23:00Z",
@@ -100,7 +100,7 @@ describe("a session an older basou imported with seconds-less timestamps", () =>
 
   it("is not rewritten by being read", async () => {
     await readSessionYaml(paths, SESSION_ID);
-    await readAllEvents(sessionDir);
+    await readAllEvents(paths, SESSION_ID);
     await verifyEventsChain(paths, SESSION_ID);
     expect(await readFile(join(sessionDir, "session.yaml"), "utf8")).toBe(SESSION_YAML);
     expect(await readFile(join(sessionDir, "events.jsonl"), "utf8")).toBe(EVENTS_JSONL);
@@ -145,7 +145,7 @@ describe("a session an older basou imported with seconds-less timestamps", () =>
     const lines = EVENTS_JSONL.trimEnd().split("\n");
     await writeFile(join(sessionDir, "events.jsonl"), lines.join("\n"));
     const warnings: ReplayWarning[] = [];
-    const events = await readAllEvents(sessionDir, { onWarning: (w) => warnings.push(w) });
+    const events = await readAllEvents(paths, SESSION_ID, { onWarning: (w) => warnings.push(w) });
     expect(events).toHaveLength(3);
     expect(warnings.map((w) => w.kind)).toEqual(["partial_trailing_line"]);
   });

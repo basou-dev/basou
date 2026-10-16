@@ -1,5 +1,5 @@
 import { lstat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { displayPath } from "../lib/display-path.js";
 import { oneLine } from "../lib/one-line.js";
@@ -102,9 +102,8 @@ export async function renderDecisions(
   // without a second pass over events.jsonl.
   const knownEventIds = new Set<string>();
   for (const entry of entries) {
-    const sessionDir = join(input.paths.sessions, entry.sessionId);
     try {
-      for await (const ev of replayEvents(sessionDir, {
+      for await (const ev of replayEvents(input.paths, entry.sessionId, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
         knownEventIds.add(ev.id);

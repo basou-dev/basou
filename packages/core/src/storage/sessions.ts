@@ -105,6 +105,12 @@ export type SessionDirEntries = {
    * follow them; callers report them rather than let them disappear.
    */
   notDirectories: string[];
+  /**
+   * Of {@link notDirectories}, the entries that are symlinks, ascending. The
+   * rest of them are files or anything else that is neither a directory nor a
+   * symlink.
+   */
+  symlinks: string[];
 };
 
 /**
@@ -140,16 +146,18 @@ async function readSessionEntries(paths: BasouPaths): Promise<SessionDirEntries>
   try {
     dirents = await readdir(paths.sessions, { withFileTypes: true });
   } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) return { dirs: [], notDirectories: [] };
+    if (findErrorCode(error, "ENOENT")) return { dirs: [], notDirectories: [], symlinks: [] };
     throw new Error("Failed to enumerate sessions", { cause: error });
   }
   const dirs: string[] = [];
   const notDirectories: string[] = [];
+  const symlinks: string[] = [];
   for (const dirent of dirents) {
     if (!SessionIdSchema.safeParse(dirent.name).success) continue;
     (dirent.isDirectory() ? dirs : notDirectories).push(dirent.name);
+    if (dirent.isSymbolicLink()) symlinks.push(dirent.name);
   }
-  return { dirs: dirs.sort(), notDirectories: notDirectories.sort() };
+  return { dirs: dirs.sort(), notDirectories: notDirectories.sort(), symlinks: symlinks.sort() };
 }
 
 /**
@@ -283,13 +291,12 @@ async function classifyRunningSession(
   now: Date,
   onWarning?: (warning: ReplayWarning) => void,
 ): Promise<{ suspect: boolean; suspectReason: SuspectReason | null }> {
-  const sessionDir = join(paths.sessions, sessionId);
   let endedFound = false;
   let lastEventOccurredAt: string | null = null;
   // Forward onWarning only when supplied — `exactOptionalPropertyTypes`
   // rejects passing a literal `undefined` for an optional property.
   const replayOpts = onWarning !== undefined ? { onWarning } : {};
-  for await (const ev of replayEvents(sessionDir, replayOpts)) {
+  for await (const ev of replayEvents(paths, sessionId, replayOpts)) {
     lastEventOccurredAt = ev.occurred_at;
     if (ev.type === "session_ended") endedFound = true;
   }
@@ -320,8 +327,9 @@ async function classifyRunningSession(
  * The local store (`host: null`) is refused when `.basou/sessions` is a
  * symlink or a file ({@link assertSessionStoreSafe}); a federated mirror is
  * not, since it is a read-only copy outside the store to begin with. Each
- * listed directory is read without being checked again: its dirent already
- * said it is one.
+ * listed directory's `session.yaml` is read without its entry being checked
+ * again, since its dirent already said it is one; a `running` session's events
+ * are read through {@link replayEvents}, which checks the entry itself.
  *
  * `options.now` is taken once and threaded into every {@link classifySuspect}
  * call so age comparisons are consistent across sessions.

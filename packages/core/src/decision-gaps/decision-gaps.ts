@@ -315,9 +315,8 @@ export async function findDecisionGaps(input: DecisionGapsInput): Promise<Decisi
   const voided = new Set<string>();
 
   for (const entry of entries) {
-    const sessionDir = join(input.paths.sessions, entry.sessionId);
     try {
-      for await (const ev of replayEvents(sessionDir, {
+      for await (const ev of replayEvents(input.paths, entry.sessionId, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
         if (ev.type === "decision_voided") {

@@ -293,7 +293,7 @@ export async function doRunApprovalShow(
       `Warning: session ${sessionId} is not a directory (a symlink or a file is not followed); its events are not shown`,
     );
   } else {
-    for await (const ev of replayEvents(join(paths.sessions, sessionId), {
+    for await (const ev of replayEvents(paths, sessionId, {
       onWarning: (w) => printReplayWarning(w, sessionId),
     })) {
       if (isApprovalEvent(ev) && ev.approval_id === id) {
@@ -458,8 +458,7 @@ async function doRunApprovalResolve(
     // for this approval, refuse to fire a second one. This guards the
     // crash-mid-orchestration window where step 8 succeeded but step 10
     // failed (events.jsonl is the source-of-truth, not the YAML mirror).
-    const sessionDir = join(paths.sessions, approval.session_id);
-    for await (const ev of replayEvents(sessionDir, {
+    for await (const ev of replayEvents(paths, approval.session_id, {
       onWarning: (w) => printReplayWarning(w, approval.session_id),
     })) {
       if (

@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { basename, join, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import {
   type BasouPaths,
   type BoardLiveMeasurement,
@@ -26,6 +26,7 @@ import {
   renderHandoff,
   resolveViewLanguageFromPaths,
   SessionIdSchema,
+  SessionNotADirectoryError,
   summarizeOrientation,
   tryRemoteUrl,
 } from "@basou/core";
@@ -697,10 +698,7 @@ async function sessionDetail(
   // followed; the page says so instead of serving what it points to.
   const entry = await inspectSessionEntry(ws.paths, sessionId);
   if (entry === "symlink" || entry === "not_a_directory") {
-    throw new HttpError(
-      404,
-      `Session ${sessionId} is not a directory; a symlink or a file there is not followed`,
-    );
+    throw new HttpError(404, new SessionNotADirectoryError(sessionId, entry).message);
   }
   let session: Awaited<ReturnType<typeof readSessionYaml>>;
   try {
@@ -714,7 +712,7 @@ async function sessionDetail(
   // An unreadable events.jsonl must not 500 the detail view; surface the
   // session with an empty, flagged-degraded timeline (mirrors the list path).
   try {
-    const events = await readAllEvents(join(ws.paths.sessions, sessionId));
+    const events = await readAllEvents(ws.paths, sessionId);
     return { session, events };
   } catch {
     return { session, events: [], degraded: true };

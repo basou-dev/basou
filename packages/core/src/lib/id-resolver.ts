@@ -1,4 +1,5 @@
 import type { BasouPaths } from "../storage/basou-dir.js";
+import { SessionNotADirectoryError } from "../storage/session-dir.js";
 import { enumerateSessionEntries } from "../storage/sessions.js";
 import { enumerateArchivedTaskIds, enumerateTaskIds } from "../storage/tasks.js";
 
@@ -15,10 +16,11 @@ import { enumerateArchivedTaskIds, enumerateTaskIds } from "../storage/tasks.js"
  *
  * An entry named as a session id that is not a directory (a symlink, a file)
  * is matched too, so a prefix it shares with a session is ambiguous. When it
- * is the one match, the call throws
- * `"Session <id> is not a directory; a symlink or a file there is not followed"`
- * unless `options.allowNotDirectory` is set — `basou verify`, which reports
- * the entry instead of reading it, sets it.
+ * is the one match, the call throws {@link SessionNotADirectoryError}
+ * (`"Session <id> is not a directory; a symlink or a file there is not
+ * followed"`), with the `kind` the listing saw, unless
+ * `options.allowNotDirectory` is set — `basou verify`, which reports the entry
+ * instead of reading it, sets it.
  */
 export async function resolveSessionId(
   paths: BasouPaths,
@@ -54,8 +56,13 @@ type KindConfig = {
   noun: string;
   nounPlural: string;
   capNoun: string;
-  /** The ids, and the entries named as one that are not directories. */
-  enumerate: (paths: BasouPaths) => Promise<{ ids: string[]; notDirectories: string[] }>;
+  /**
+   * The ids, the entries named as one that are not directories, and which of
+   * those are symlinks.
+   */
+  enumerate: (
+    paths: BasouPaths,
+  ) => Promise<{ ids: string[]; notDirectories: string[]; symlinks: string[] }>;
 };
 
 const KIND_CONFIG: Record<IdKind, KindConfig> = {
@@ -65,8 +72,8 @@ const KIND_CONFIG: Record<IdKind, KindConfig> = {
     nounPlural: "sessions",
     capNoun: "Session",
     enumerate: async (paths) => {
-      const { dirs, notDirectories } = await enumerateSessionEntries(paths);
-      return { ids: dirs, notDirectories };
+      const { dirs, notDirectories, symlinks } = await enumerateSessionEntries(paths);
+      return { ids: dirs, notDirectories, symlinks };
     },
   },
   task: {
@@ -74,7 +81,11 @@ const KIND_CONFIG: Record<IdKind, KindConfig> = {
     noun: "task",
     nounPlural: "tasks",
     capNoun: "Task",
-    enumerate: async (paths) => ({ ids: await enumerateTaskIds(paths), notDirectories: [] }),
+    enumerate: async (paths) => ({
+      ids: await enumerateTaskIds(paths),
+      notDirectories: [],
+      symlinks: [],
+    }),
   },
 };
 
@@ -93,7 +104,7 @@ async function resolveIdInternal(
   if (normalized.length <= cfg.prefix.length) {
     throw new Error(`${cfg.capNoun} not found: ${input}`);
   }
-  const { ids: primary, notDirectories } = await cfg.enumerate(paths);
+  const { ids: primary, notDirectories, symlinks } = await cfg.enumerate(paths);
   // Merge in archived task ids when the caller opts in. Dedupe via a Set so
   // a single id appearing in both surfaces (shouldn't happen but defend
   // anyway) does not falsely register as ambiguous.
@@ -119,9 +130,11 @@ async function resolveIdInternal(
     );
   }
   const match = matches[0] as string;
+  // Only a session listing reports such an entry; a task listing has none.
   if (notDirectories.includes(match) && options.allowNotDirectory !== true) {
-    throw new Error(
-      `${cfg.capNoun} ${match} is not a directory; a symlink or a file there is not followed`,
+    throw new SessionNotADirectoryError(
+      match,
+      symlinks.includes(match) ? "symlink" : "not_a_directory",
     );
   }
   return match;

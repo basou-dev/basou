@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { type Event, ensureBasouDirectory } from "@basou/core";
@@ -235,6 +235,32 @@ describe("openWorkspace", () => {
       await expect(ws.getSession("01HXABCDEF1234567890ABCS")).rejects.toBeInstanceOf(
         AmbiguousIdError,
       );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reads no events for an entry named as a session that is a symlink or a file",
+    async () => {
+      const root = await setupWorkspace();
+      const sessions = join(root, ".basou", "sessions");
+      // The link points at a full copy of a real session, so a read that
+      // followed it would return that session's events.
+      const linked = "ses_01HXABCDEF1234567890ABCSY2";
+      const outside = join(root, "moved-session");
+      await cp(join(sessions, SES_DONE), outside, { recursive: true });
+      await symlink(outside, join(sessions, linked));
+      const file = "ses_01HXABCDEF1234567890ABCFX2";
+      await writeFile(join(sessions, file), "");
+      const ws = await openWorkspace(root);
+      for (const id of [linked, file]) {
+        expect(await ws.getSession(id)).toBeNull();
+        expect(await ws.readEvents(id)).toEqual([]);
+        const streamed: Event[] = [];
+        for await (const e of ws.streamEvents(id)) streamed.push(e);
+        expect(streamed).toEqual([]);
+      }
+      // Control: the session it copies is read.
+      expect(await ws.readEvents(SES_DONE)).toHaveLength(3);
     },
   );
 

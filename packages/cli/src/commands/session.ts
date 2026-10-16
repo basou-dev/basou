@@ -314,7 +314,7 @@ export async function doRunSessionShow(
   // A dropped line means the stream is incomplete in a way replay cannot see,
   // which the work summary needs to know before it calls a 0 the truth.
   let eventsLostLines = 0;
-  const events = await readAllEvents(sessionDir, {
+  const events = await readAllEvents(paths, sessionId, {
     onWarning: (w) => {
       if (w.kind === "malformed_json" || w.kind === "schema_violation") eventsLostLines++;
       printReplayWarning(w, sessionId);

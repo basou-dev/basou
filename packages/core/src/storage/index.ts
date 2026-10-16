@@ -46,6 +46,7 @@ export {
   assertSessionDirSafe,
   assertSessionStoreSafe,
   inspectSessionEntry,
+  SessionNotADirectoryError,
 } from "./session-dir.js";
 export type {
   ImportSessionOptions,

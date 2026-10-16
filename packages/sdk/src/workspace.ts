@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   ApprovalIdSchema,
   assertBasouRootSafe,
@@ -23,6 +23,7 @@ import {
   resolveSessionId,
   resolveTaskId,
   type SessionEntry,
+  SessionNotADirectoryError,
   type StatusSnapshot,
   type TaskDocument,
   type WorkStatsResult,
@@ -261,14 +262,14 @@ export async function openWorkspace(
     readEvents: async (idOrPrefix) => {
       const id = await resolveSession(idOrPrefix);
       if (id === null) return [];
-      return readAllEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
+      return readAllEvents(paths, id, { onWarning: (w) => onWarning(w, id) });
     },
 
     streamEvents: (idOrPrefix): AsyncIterable<Event> => {
       async function* iterate(): AsyncGenerator<Event> {
         const id = await resolveSession(idOrPrefix);
         if (id === null) return;
-        yield* replayEvents(join(paths.sessions, id), { onWarning: (w) => onWarning(w, id) });
+        yield* replayEvents(paths, id, { onWarning: (w) => onWarning(w, id) });
       }
       return iterate();
     },
@@ -462,9 +463,10 @@ async function* guardStream<T>(root: string, stream: AsyncIterable<T>): AsyncGen
 
 /**
  * Run a core id-resolver and normalize its outcome: a successful resolution
- * returns the id; the "not found" / "empty input" contract errors map to
- * `null` (no such record); the "ambiguous" contract error maps to
- * {@link AmbiguousIdError}. Any other error propagates unchanged.
+ * returns the id; the "not found" / "empty input" contract errors and core's
+ * `SessionNotADirectoryError` map to `null` (no such record); the "ambiguous"
+ * contract error maps to {@link AmbiguousIdError}. Any other error propagates
+ * unchanged.
  */
 async function resolveOrNull(
   resolver: () => Promise<string>,
@@ -473,6 +475,9 @@ async function resolveOrNull(
   try {
     return await resolver();
   } catch (error) {
+    // An entry named as the session that is not a directory (a symlink, a
+    // file) is not followed, so there is no session to return, as before.
+    if (error instanceof SessionNotADirectoryError) return null;
     const message = error instanceof Error ? error.message : String(error);
     // Match the core resolver's exact contract strings (id-resolver.ts), not a
     // loose substring, so an unrelated error that merely contains "not found"
@@ -480,14 +485,9 @@ async function resolveOrNull(
     if (/^Ambiguous (session|task) id /.test(message)) {
       throw new AmbiguousIdError(input, { cause: error });
     }
-    // An entry named as the session that is not a directory (a symlink, a
-    // file) is not followed, so there is no session to return, as before.
     if (
       /^(Session|Task) not found: /.test(message) ||
-      /^(Session|Task) id is empty$/.test(message) ||
-      /^(Session|Task) \S+ is not a directory; a symlink or a file there is not followed$/.test(
-        message,
-      )
+      /^(Session|Task) id is empty$/.test(message)
     ) {
       return null;
     }

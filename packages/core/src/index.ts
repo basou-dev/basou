@@ -674,6 +674,7 @@ export {
   reimportPreservingId,
   removeMarkerSection,
   renderWithMarkers,
+  SessionNotADirectoryError,
   STUCK_THRESHOLD_MS,
   seedMarkers,
   TaskWriteAfterEventError,
