@@ -3,16 +3,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
+import { ulid as monotonicUlid } from "../ids/ulid.js";
 import { type BoardDeclaration, parseBoardDeclaration } from "./declaration.js";
 import type { BoardMeasurement } from "./measure.js";
 import { buildRecord, orderAnomalies, parseRecordInput, writeRecord } from "./record.js";
 
-// Pass-through so one test can make the first name a record already has.
-vi.mock("../ids/ulid.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../ids/ulid.js")>();
-  return { ...actual, ulid: vi.fn(actual.ulid) };
+// Pass-through, so one test can make the next name a record already has.
+const forced = vi.hoisted(() => ({ names: [] as string[] }));
+vi.mock("ulid", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ulid")>();
+  return {
+    ...actual,
+    monotonicFactory: (...args: Parameters<typeof actual.monotonicFactory>) => {
+      const real = actual.monotonicFactory(...args);
+      return (seedTime?: number) => forced.names.shift() ?? real(seedTime);
+    },
+  };
 });
-const { ulid } = await import("../ids/ulid.js");
+const { decodeTime } = await import("ulid");
 
 // Pass-through so one test can make a write fail after it has begun.
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -407,7 +415,7 @@ describe("buildRecord and writeRecord", () => {
     dir = await mkdtemp(join(tmpdir(), "basou-board-record-"));
   });
   afterEach(async () => {
-    vi.mocked(ulid).mockReset();
+    forced.names.length = 0;
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -459,6 +467,17 @@ describe("buildRecord and writeRecord", () => {
     expect(JSON.parse(await readFile(join(records, name), "utf8"))).toEqual(r);
   });
 
+  it("names a record by a ULID whose time is its recorded_at, not the time it is written", async () => {
+    // basou's own ULIDs come from a monotonic factory, which, once it has given
+    // out a later time, gives that time again for an earlier one.
+    const later = monotonicUlid();
+    expect(decodeTime(later)).toBeGreaterThan(Date.parse("2026-10-07T00:00:00.000Z"));
+    const name = await writeRecord(join(dir, "records"), record());
+    expect(new Date(decodeTime(name.replace(/\.json$/, ""))).toISOString()).toBe(
+      "2026-10-07T00:00:00.000Z",
+    );
+  });
+
   it("does not keep the measurement's diff, which the previous record derives", () => {
     const parsed = parseRecordInput(input(), declaration());
     if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
@@ -475,10 +494,21 @@ describe("buildRecord and writeRecord", () => {
   it("tries another name rather than replace a record, and leaves no other file", async () => {
     const records = join(dir, "records");
     const first = await writeRecord(records, record());
-    vi.mocked(ulid).mockReturnValueOnce(first.replace(/\.json$/, ""));
+    forced.names.push(first.replace(/\.json$/, ""));
     const second = await writeRecord(records, record());
     expect(second).not.toBe(first);
+    expect(forced.names).toEqual([]);
+    expect(new Date(decodeTime(second.replace(/\.json$/, ""))).toISOString()).toBe(
+      "2026-10-07T00:00:00.000Z",
+    );
     expect((await readdir(records)).sort()).toEqual([first, second].sort());
+  });
+
+  it("names records with the same recorded_at in the order they are written", async () => {
+    const records = join(dir, "records");
+    const names: string[] = [];
+    for (let i = 0; i < 10; i++) names.push(await writeRecord(records, record()));
+    expect([...names].sort()).toEqual(names);
   });
 
   it("refuses a records path that is not a directory, a link to one included, and writes nothing", async () => {

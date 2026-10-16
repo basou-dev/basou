@@ -123,7 +123,7 @@ export function boardGuide(input: BoardGuideInput): string {
   line(`- Records: board/records/, ${recordsLine(input, recordCount)}`);
   line(`- Axis: ${axisLine(input)}`);
   line(
-    `- Milestones: ${milestonesLine(d)} under effort.milestones, each \`{ date, label, ref }\`: only what was reached (a release, a launch), with \`ref\` saying where it can be checked (a tag and its commit). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.`,
+    `- Milestones: ${milestonesLine(d)} under effort.milestones, each \`{ date, label, ref }\`: only what was reached (a release, a launch), with \`ref\` saying where it can be checked (a tag and its commit, or a decision id in full). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.`,
   );
   line(
     `- Language: write every prose string and reason in ${LANGUAGE_NAMES[input.language]}, the language this board's page is drawn in (Japanese when the manifest declares ja for this repo, English otherwise)`,
@@ -189,7 +189,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- An empty file means it did not run, not that it passed: check that measure.json reads as JSON.",
     '- Never read a null as 0. Write "not confirmed" for it and do not judge by it.',
     "- What moved is the point: the top of measure.txt (`Since the previous record <ULID>:`) and `diff` in the JSON. A value marked `method_changed` may have moved because basou measures it another way now.",
-    "- `repos[].behind_main` counts from the last fetch; measure does not fetch.",
+    "- `repos[].behind_main` counts the commits on origin's default branch (the branch of origin that origin/HEAD names, or origin/main when origin/HEAD names none) as of the last fetch; measure does not fetch.",
     "",
   );
 
@@ -245,7 +245,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- `measure_digest`: the `digest` of `$W/measure.json`.",
     '- `observed`: when the board declares observations, one entry per declared observation, under its key, each as step 3 says; nothing else and nothing left out, or record refuses it. An observation made has no `error`; one not made has `"value": null`, an `error` and the `observed_at` of when it was tried. The template leaves each `observed_at` empty: fill every one. With none declared, `observed` may stay empty.',
     "- `cells`: every lane at every stage. Set each `state` and delete each `previous`: record refuses a cell with an empty state or a `previous`. `blocked`, `shelved` and `unverified` need a `reason`.",
-    `- \`prose\`: \`summary\`, \`lanes\`, \`operator_turns\` as \`{ "text", "source" }\` and \`footnotes\`, all plain strings (HTML is shown as text; only \`\` \`code\` \`\` is drawn as code). Do not repeat what basou draws (the heading, the tiles, the period and effort, the matrix, the ratios, the axis version and the model). Do not start a lane's prose with its \`about\`: the page draws the about right before it. Give \`lanes\` an entry only for a lane you have something to say about (an empty string is drawn as an empty paragraph); the lane ids are ${d.lanes.map((l) => `\`${l.id}\``).join(", ")}.`,
+    `- \`prose\`: \`summary\`, \`lanes\`, \`operator_turns\` as \`{ "text", "source" }\` and \`footnotes\`, all plain strings (HTML is shown as text; only \`\` \`code\` \`\` is drawn as code). Do not repeat what basou draws (the heading, the tiles, the period and effort, the matrix, the ratios, the axis version and the model). Do not start a lane's prose with its \`about\`: the page draws the about right before it. Give \`lanes\` an entry only for a lane you have something to say about (an empty string is drawn as an empty paragraph); the lane ids are ${d.lanes.map((l) => `\`${l.id}\``).join(", ")}. Write a decision or task id in full, all 26 characters after \`decision_\` or \`task_\`: basou prints some of them short, and a short one can match more than one, a voided decision among them.`,
     '- `axis_review`: null, or `{ "triggers": [...], "summary": "..." }` as step 2b says.',
     "",
   );
@@ -515,7 +515,7 @@ function observeSteps(
         line(
           `Only the operator can make this one: ${displayPath(o.how)}`,
           "",
-          "Ask the operator, and do not make it yourself. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`.",
+          "Ask the operator, and do not make it yourself. Ask for one thing they can do as it is written: the line to run and where to run it, or the page to open, and what to send back. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`. When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.",
           "",
         );
         break;

@@ -766,7 +766,7 @@ export const BOARD_HTML = `<!doctype html>
     var rows = l.repos.map(function (r) {
       var at = 'repos[' + r.path + ']';
       // A null the measurement says it could not measure, or one that means
-      // so (a detached HEAD, no commit yet, no origin/main), drawn as '-'.
+      // so (a detached HEAD, no commit yet, no default branch), drawn as '-'.
       var value = function (field, v, show) {
         if (v !== null) return show(v);
         return missing(at) || missing(at + '.' + field) ? S.tiles.notMeasured : '-';

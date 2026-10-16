@@ -286,6 +286,32 @@ describe("boardGuide: a board declared", () => {
     );
   });
 
+  it("says how to ask for a manual observation, and what the source says when the operator hands it over", () => {
+    const guide = boardGuide(guideInput());
+    expect(guide).toContain(
+      "Ask for one thing they can do as it is written: the line to run and where to run it, or the page to open, and what to send back.",
+    );
+    expect(guide).toContain(
+      "When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.",
+    );
+  });
+
+  it("asks for decision and task ids in full, in the prose and in a milestone's ref", () => {
+    const guide = boardGuide(guideInput());
+    expect(guide).toContain(
+      "Write a decision or task id in full, all 26 characters after `decision_` or `task_`: basou prints some of them short, and a short one can match more than one, a voided decision among them.",
+    );
+    expect(guide).toContain(
+      "with `ref` saying where it can be checked (a tag and its commit, or a decision id in full).",
+    );
+  });
+
+  it("says which branch behind_main counts against", () => {
+    expect(boardGuide(guideInput())).toContain(
+      "- `repos[].behind_main` counts the commits on origin's default branch (the branch of origin that origin/HEAD names, or origin/main when origin/HEAD names none) as of the last fetch; measure does not fetch.",
+    );
+  });
+
   it("leaves the model to be named, in the commands and the template, so neither runs as printed", () => {
     const guide = boardGuide(guideInput());
     const blocks = blocksIn(guide).join("\n");
@@ -553,7 +579,7 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
         }),
       );
     const holds =
-      "under effort.milestones, each `{ date, label, ref }`: only what was reached (a release, a launch), with `ref` saying where it can be checked (a tag and its commit). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
+      "under effort.milestones, each `{ date, label, ref }`: only what was reached (a release, a launch), with `ref` saying where it can be checked (a tag and its commit, or a decision id in full). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
     expect(boardGuide(guideInput())).toContain(`- Milestones: none declared ${holds}`);
     expect(boardGuide(guideInput())).toContain(
       "- Approving a milestone before it is added to board.yaml.",
