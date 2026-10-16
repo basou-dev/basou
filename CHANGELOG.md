@@ -33,10 +33,15 @@ All notable changes to **basou** are recorded here. The project follows
   creates either form. Nothing is now read through it or waits on it, and
   nothing is appended or written through it:
   - `basou verify` reports the session `tampered` with a new `reason`,
-    `events_not_a_file` or `yaml_not_a_file`, and `event_count` `0`, as
-    `docs/spec/compatibility.md` allows a `reason` to be added. `session
-    rechain` skips it with the same reason and exits non-zero, and an in-place
-    re-import skips it as a prior whose chain fails verification.
+    `events_not_a_file` or `yaml_not_a_file`, and `event_count` `0`. It used
+    to follow the file and report what it found behind it — `verified`, exit
+    `0`, for an intact log behind a symlink — or wait on a FIFO. A
+    `session.yaml` that is a regular file is still read beside an
+    `events.jsonl` that is not, so a newer basou's session is `unsupported`
+    as before, and `session_yaml_invalid` is reported as on any row. `session
+    rechain` skips such a session with the same reasons and exits non-zero,
+    and an in-place re-import skips it as a prior whose chain fails
+    verification.
   - The commands that read the session by its id stop with `<file> of session
     <id> is not a regular file; a symlink or anything else there is not
     followed`: `session show`, `approval show`, `approve` and `reject` (which
@@ -57,20 +62,31 @@ All notable changes to **basou** are recorded here. The project follows
     session `tampered` instead of stopping without output, and `report
     generate` counts it `tampered` instead of leaving it out of the integrity
     tally.
+- **`docs/spec/compatibility.md` bounds a command coming to refuse a layout
+  basou never creates,** the one way an invocation moves from `0` to a
+  non-zero exit within `1.x`, as this change does: nothing changes on a
+  layout basou creates, the refusal names what it refuses, and the changelog
+  lists it. A `basou verify` row that passed may come to fail as `tampered`
+  under that bound, beside the existing rule that a new `reason` only refines
+  a status.
 - **`basou board measure` raises the method of `integrity`, `trail`,
   `review_gaps`, `freshness` and `effort` to 2,** as each counts such a
-  session differently: `integrity` counts it `tampered`, as `basou verify`
-  does, and the others are not measured when a session they read is such.
+  session differently: `integrity` counts it as `basou verify` judges it, and
+  each other section is not measured when a file it reads is such — `trail`,
+  `review_gaps` and `effort` read the `events.jsonl`, and `review_gaps`,
+  `freshness` and `effort` the `session.yaml`.
 - **`@basou/core` exports `SessionFileNotAFileError`, `lstatSessionFile` and
   the types `SessionFileName` and `SessionFileKind`.** The event readers,
   `readSessionYaml` and the chained append throw the error, which carries the
   `sessionId`, the `file` and the `kind` (`symlink` or `not_a_file`).
   `SessionSkipReason` gains `session_yaml_not_a_file`, and `RechainResult`
   gains `events_not_a_file` and `yaml_not_a_file`.
-- **`@basou/sdk` treats such a file as it treats a session entry that is not a
-  directory.** `listSessions` and `getSession` leave out a session whose
-  `session.yaml` is such, and `readEvents` and `streamEvents` return no events
-  for an `events.jsonl` that is such; each reports it to `onDiagnostic`.
+- **`@basou/sdk` does not follow such a file either.** `listSessions` and
+  `getSession` leave out a session whose `session.yaml` is such, as one whose
+  `session.yaml` cannot be read; `readEvents` and `streamEvents` return no
+  events for an `events.jsonl` that is such, where they read through it or
+  waited on it, and report it to `onDiagnostic` as an unreadable log
+  (`events_jsonl_unreadable`), as `stats` and the renderers do.
 
 ## 0.69.0 — 2026-10-16
 

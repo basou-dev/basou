@@ -226,6 +226,46 @@ describe.skipIf(process.platform === "win32")(
       });
     }
 
+    // The log is not read, but a session.yaml that is a regular file is, so
+    // its version still decides as for any other row.
+    for (const [version, why] of [
+      ["1.0.0", "a format major other than 0"],
+      ["0.99.0", "a newer 0.x.y"],
+    ] as const) {
+      it(`reports an events.jsonl that is not a regular file as unsupported under ${why}`, async () => {
+        const paths = await setupPaths();
+        const fixture = await writeChainedSession(paths, SES_ID, 3);
+        const doc = parseYaml(await readFile(fixture.yamlPath, "utf8")) as Record<string, unknown>;
+        await writeFile(fixture.yamlPath, stringifyYaml({ ...doc, schema_version: version }));
+        await rm(fixture.eventsPath);
+        await symlink(join(paths.root, "..", "nowhere"), fixture.eventsPath);
+        const verdict = await verifyEventsChain(paths, SES_ID);
+        expect(verdict).toMatchObject({ status: "unsupported", eventCount: 0 });
+        expect(verdict.reason).toBeUndefined();
+      });
+    }
+
+    it("marks session_yaml_invalid beside events_not_a_file when session.yaml does not load as a whole", async () => {
+      const paths = await setupPaths();
+      const fixture = await writeChainedSession(paths, SES_ID, 3);
+      const doc = parseYaml(await readFile(fixture.yamlPath, "utf8")) as {
+        session: Record<string, unknown>;
+      };
+      // A field verify does not read, failing the full schema.
+      await writeFile(
+        fixture.yamlPath,
+        stringifyYaml({ ...doc, session: { ...doc.session, label: 42 } }),
+      );
+      await rm(fixture.eventsPath);
+      makeFifo(fixture.eventsPath);
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+        status: "tampered",
+        eventCount: 0,
+        reason: "events_not_a_file",
+        sessionYamlInvalid: true,
+      });
+    });
+
     it("reports events.jsonl first when both files are not regular files", async () => {
       const paths = await setupPaths();
       const fixture = await writeChainedSession(paths, SES_ID, 3);

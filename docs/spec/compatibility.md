@@ -52,9 +52,12 @@ additive, as accepting more of an input shape is — but only when every
 invocation accepted before is parsed and behaves as before. Making an option's
 value optional does not qualify: `--file --json` reads a file named `--json`
 today, and would parse `--json` as a flag instead. Accepting a refused value
-moves the invocations it accepts from a non-zero exit to `0`, the one way an
-invocation crosses zero within `1.x`; a [split of the non-zero
-values](#exit-codes-zero-is-success-and-a-failures-value-may-be-refined) never does.
+moves the invocations it accepts from a non-zero exit to `0`, one of the two
+ways an invocation crosses zero within `1.x`; the other, in the opposite
+direction, is a command [coming to refuse a layout basou never
+creates](#a-layout-basou-never-creates-may-come-to-be-refused). A [split of the
+non-zero values](#exit-codes-zero-is-success-and-a-failures-value-may-be-refined)
+never crosses zero.
 
 One such value has its meaning fixed now, so that accepting it later cannot
 surprise anyone: `-` as the file of an input-file flag, a flag that names a
@@ -180,6 +183,35 @@ The carve-out is bounded by three things:
 `unsupported`, for a session a newer basou wrote, was added this way before
 `1.0`. The row, its fields and today's values of both are listed in [schemas
 §7.5](schemas.md#75-event-log-integrity-hash-chain--head-anchor).
+
+A row whose status passes may also come to fail, as `tampered`, but only for
+a session in a layout basou never creates, as [the next
+section](#a-layout-basou-never-creates-may-come-to-be-refused) bounds; the
+`reason` it gains names what is not followed.
+
+### A layout basou never creates may come to be refused
+
+Within `1.x` a command may come to refuse, or to stop following, an entry of
+the `.basou/` store in a form basou never creates — a symlink, or anything
+other than the directory or regular file basou writes there — and so fail, or
+report a failure, where it succeeded before. A `basou verify` row that passed
+then fails as `tampered`: a log read through a symlink as `verified`, say. The
+SDK's reads follow their own form of this rule ([item 4
+below](#sdk-errors-the-class-is-the-contract-the-message-is-not)). This is the
+one way an invocation moves from `0` to a non-zero exit within `1.x`, and it is
+bounded by three things:
+
+1. **Nothing changes on a layout basou creates.** On a workspace basou laid
+   out, a command that succeeded still succeeds, and a row that passed still
+   passes.
+2. **The refusal names what it refuses:** an error or a warning naming the
+   entry, or a `tampered` row whose `reason` says what is not followed.
+3. **The changelog lists each such change.**
+
+`basou verify`'s `symlink` and `not_a_directory` reasons, for an entry named as
+a session that is not a directory, and its `events_not_a_file` and
+`yaml_not_a_file` reasons, for a session file that is not a regular file, were
+added this way before `1.0`.
 
 ### The import envelope version may move at a minor
 

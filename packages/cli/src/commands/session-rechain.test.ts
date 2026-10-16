@@ -362,6 +362,31 @@ describe("basou session rechain", () => {
     },
   );
 
+  // Each reason alone fails the run: a session whose other file is regular
+  // beside one that is rechained.
+  it.skipIf(process.platform === "win32").each([
+    ["events.jsonl", "events_not_a_file"],
+    ["session.yaml", "yaml_not_a_file"],
+  ] as const)("exits 1 for a %s that is not a regular file on its own", async (file, reason) => {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    const refused = await importLegacySession(repo);
+    const legacyId = await importLegacySession(repo);
+    const path = join(paths.sessions, refused, file);
+    await rename(path, join(repo, `moved-${file}`));
+    await symlink(join(repo, `moved-${file}`), path);
+
+    const out = captureStdout();
+    await runSessionRechain({ all: true, json: true }, { cwd: repo });
+    expect(JSON.parse(joinCalls(out))).toEqual(
+      [
+        { session_id: refused, status: "skipped", reason },
+        { session_id: legacyId, status: "rechained", event_count: 3 },
+      ].sort((a, b) => a.session_id.localeCompare(b.session_id)),
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   // POSIX only: creating a symlink needs privileges on Windows.
   it.skipIf(process.platform === "win32")(
     "gives a symlink or a file named as a session a row, follows neither, and exits 1",

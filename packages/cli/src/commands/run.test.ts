@@ -184,6 +184,41 @@ describe("runClaudeCode", () => {
 
   // POSIX only: creating a symlink needs privileges on Windows.
   it.skipIf(process.platform === "win32")(
+    "does not follow its session.yaml when it is no longer a regular file",
+    async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      const outside = join(repo, "moved-session.yaml");
+      let before = "";
+      // Just before the status write to running, the session.yaml is moved
+      // out and linked back in: following the link would rewrite the copy.
+      const swapping = async (sessionDir: string, event: unknown): Promise<void> => {
+        await appendEvent(sessionDir, event);
+        if ((event as { type?: string }).type !== "session_status_changed") return;
+        await rename(join(sessionDir, "session.yaml"), outside);
+        await symlink(outside, join(sessionDir, "session.yaml"));
+        before = await readFile(outside, "utf8");
+      };
+      const runner = makeFakeRunner({ exit_code: 0 });
+      const run = vi.spyOn(runner, "run");
+      await expect(
+        runClaudeCode(
+          [],
+          { cwd: repo, snapshot: false },
+          { runner, now: () => FIXED_DATE, resolveCommand: okResolve, appendEvent: swapping },
+        ),
+      ).rejects.toThrow(
+        /^session\.yaml of session ses_\w+ is not a regular file; a symlink or anything else there is not followed$/,
+      );
+      expect(await readFile(outside, "utf8")).toBe(before);
+      expect(before).toContain("status: initialized");
+      expect(run).not.toHaveBeenCalled();
+      expect((await readdir(paths.sessions)).length).toBe(1);
+    },
+  );
+
+  // POSIX only: creating a symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
     "starts no session when .basou/locks is a symlink",
     async () => {
       const repo = await setupInitedRepo();

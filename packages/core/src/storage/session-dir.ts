@@ -191,25 +191,47 @@ export async function lstatSessionFile(
 }
 
 /**
- * The first of a session's files that is there but is not a regular file,
- * `events.jsonl` before `session.yaml`, or `null` when neither is. For a
+ * What is at each of a session's files (see {@link SessionFileKind}), for a
  * session whose entry the caller has already found to be a directory.
  *
  * Throws `Error("Failed to read <file>", { cause })` on an lstat failure
  * other than ENOENT.
  */
+export async function inspectSessionFiles(
+  paths: BasouPaths,
+  sessionId: string,
+): Promise<Record<SessionFileName, SessionFileKind>> {
+  const kinds = {} as Record<SessionFileName, SessionFileKind>;
+  for (const file of ["events.jsonl", "session.yaml"] as const) {
+    try {
+      kinds[file] = await lstatSessionFile(paths, sessionId, file);
+    } catch (error: unknown) {
+      throw new Error(`Failed to read ${file}`, { cause: error });
+    }
+  }
+  return kinds;
+}
+
+/** Whether a {@link SessionFileKind} is one that is not followed. */
+export function isUnfollowedFile(kind: SessionFileKind): kind is "symlink" | "not_a_file" {
+  return kind === "symlink" || kind === "not_a_file";
+}
+
+/**
+ * The first of a session's files that is there but is not a regular file,
+ * `events.jsonl` before `session.yaml`, or `null` when neither is. For a
+ * session whose entry the caller has already found to be a directory.
+ *
+ * Throws the {@link inspectSessionFiles} errors.
+ */
 export async function findUnfollowedSessionFile(
   paths: BasouPaths,
   sessionId: string,
 ): Promise<{ file: SessionFileName; kind: "symlink" | "not_a_file" } | null> {
+  const kinds = await inspectSessionFiles(paths, sessionId);
   for (const file of ["events.jsonl", "session.yaml"] as const) {
-    let kind: SessionFileKind;
-    try {
-      kind = await lstatSessionFile(paths, sessionId, file);
-    } catch (error: unknown) {
-      throw new Error(`Failed to read ${file}`, { cause: error });
-    }
-    if (kind === "symlink" || kind === "not_a_file") return { file, kind };
+    const kind = kinds[file];
+    if (isUnfollowedFile(kind)) return { file, kind };
   }
   return null;
 }

@@ -1018,7 +1018,8 @@ Whether the whole document loads is reported beside the verdict:
 `"session_yaml_invalid": true` on the row of `basou verify --json`, and a note
 on the human-readable line, whenever `session.yaml` exists but does not parse
 or fails the full session schema — on `unsupported` and `yaml_unreadable` rows
-as well as beside a verdict decided on the three fields. The commands that
+as well as beside a verdict decided on the three fields — unless verify does
+not read it at all, as for a layout it does not follow (below). The commands that
 read the whole document skip such a session with the same code; they also skip
 an I/O failure under it, which makes verify abort instead.
 
@@ -1078,14 +1079,19 @@ reconcile` and `task refresh-linkage` leave a reference to it as it is.
 
 Inside a session's directory, an `events.jsonl` or a `session.yaml` that is a
 symlink, whatever it points to, or anything but a regular file — a directory,
-or a FIFO, which a read would wait on — is not followed either. Its row is
-`tampered` with `reason` `events_not_a_file` or `yaml_not_a_file` (the first
-when both files are such) and `event_count` `0`: neither file is read. Like a
-`symlink` row, it judges the store's layout, not the log, and putting the file
-back as a regular file repairs it. `session rechain` skips such a session with
-the same reason and exits non-zero, and an in-place re-import skips it as a
-prior whose chain fails verification. What the other commands do with it is
-in [workspace](workspace.md#a-sessions-files-are-not-followed).
+or a FIFO, which a read would wait on — is not followed either, and the log is
+not read. Its row is `tampered` with `reason` `events_not_a_file` or
+`yaml_not_a_file`, naming the file; when both files are such, either may be
+given. A `session.yaml` that is a regular file is still read beside an
+`events.jsonl` that is not, so its version decides as above — `unsupported`
+at a format major other than 0 or at a newer `0.x.y` — and
+`session_yaml_invalid` is reported as on any row. Like a `symlink` row, such a
+row judges the store's layout, not the log, and putting the file back as a
+regular file repairs it. `session rechain` skips such a session with reason
+`events_not_a_file` or `yaml_not_a_file` and exits non-zero, and an in-place
+re-import skips it as a prior whose chain fails verification. What the other
+commands do with it is in
+[workspace](workspace.md#a-sessions-files-are-not-followed).
 
 The workspace's own `.basou/sessions` is not followed either: when it is a
 symlink or a file, the commands that read or write the workspace's sessions
@@ -1093,7 +1099,8 @@ stop with an error saying so — `basou verify` included, which then prints no
 array. A federated mirror, another host's store registered in
 `~/.basou/hosts.yaml`, is a read-only copy kept outside the store to begin
 with, so its `.basou/sessions` may be a symlink; an entry in it that is not a
-directory is still not followed.
+directory is still not followed, and neither is a session file in it that is
+not a regular file.
 
 Each row is an object with these fields:
 
@@ -1101,10 +1108,10 @@ Each row is an object with these fields:
 |---|---|---|---|
 | `session_id` | string | always | the session's full id (the entry's name), also when `--session` was given a prefix |
 | `status` | string | always | the verdict, from the table above |
-| `event_count` | non-negative integer | always | the complete (newline-terminated) lines of `events.jsonl`, as this basou splits the file; an unterminated tail is not counted, and a missing or empty file counts `0`. On an `unsupported` row it counts lines, not necessarily the newer writer's events; on a `symlink`, `not_a_directory`, `events_not_a_file` or `yaml_not_a_file` row it is `0`, as nothing is read |
+| `event_count` | non-negative integer | always | the complete (newline-terminated) lines of `events.jsonl`, as this basou splits the file; an unterminated tail is not counted, and a missing or empty file counts `0`. On an `unsupported` row it counts lines, not necessarily the newer writer's events; on a `symlink`, `not_a_directory`, `events_not_a_file` or `yaml_not_a_file` row, and on an `unsupported` row whose `events.jsonl` is not a regular file, it is `0`, as the log is not read |
 | `reason` | string | always on `tampered` and `incomplete`; today on no other status | what broke, from the table below; read it together with `status`, never instead of it |
 | `line` | positive integer | when one line of the log broke | the 1-based number of the first line that broke; for `torn_tail`, the number the unterminated tail would have |
-| `session_yaml_invalid` | `true` | when `session.yaml` exists but does not load as a whole document | described above; the field is left out rather than set to `false` |
+| `session_yaml_invalid` | `true` | when `session.yaml` exists but does not load as a whole document | described above; the field is left out rather than set to `false`, and where verify does not read `session.yaml` — on a `symlink`, `not_a_directory` or `yaml_not_a_file` row, and on an `events_not_a_file` row whose `session.yaml` is not a regular file either |
 
 `reason` takes these values today. `unsupported` carries neither `reason` nor
 `line` today, also where it stands in for a `tampered` result at a newer
@@ -1129,7 +1136,7 @@ and never changes whether that status fails the command.
 | `symlink` | `tampered` | no | the entry named as the session is a symlink, whatever it points to; it is not followed |
 | `not_a_directory` | `tampered` | no | the entry named as the session is neither a directory nor a symlink (a file, for instance) |
 | `events_not_a_file` | `tampered` | no | the session's `events.jsonl` is a symlink, whatever it points to, or anything but a regular file (a directory, a FIFO); it is not followed |
-| `yaml_not_a_file` | `tampered` | no | the session's `session.yaml` is a symlink, whatever it points to, or anything but a regular file, while its `events.jsonl` is a regular file or absent; it is not followed |
+| `yaml_not_a_file` | `tampered` | no | the session's `session.yaml` is a symlink, whatever it points to, or anything but a regular file; it is not followed |
 
 **Reading the output.** The shape changes only as
 [compatibility](compatibility.md#basou-verify-verdicts-may-gain-values-on-the-failing-side)

@@ -158,21 +158,23 @@ describe("runExec", () => {
     },
   );
 
-  // POSIX only: creating a symlink needs privileges on Windows.
-  it.skipIf(process.platform === "win32")(
-    "does not follow its session.yaml when it is no longer a regular file",
-    async () => {
+  // POSIX only: symlinks need privileges on Windows, and it has no mkfifo.
+  it.skipIf(process.platform === "win32").each(["symlink", "fifo"] as const)(
+    "does not follow its session.yaml when it is no longer a regular file (%s)",
+    async (how) => {
       const repo = await setupInitedRepo();
       const paths = basouPaths(repo);
       const outside = join(repo, "moved-session.yaml");
       let before = "";
       // Just before the status write to running, the session.yaml is moved
-      // out and linked back in: following the link would rewrite the copy.
+      // out and a symlink to it, or a FIFO, is put in its place: following
+      // the link would rewrite the copy, and reading the FIFO would block.
       const swapping = async (sessionDir: string, event: unknown): Promise<void> => {
         await appendEvent(sessionDir, event);
         if ((event as { type?: string }).type !== "session_status_changed") return;
         await rename(join(sessionDir, "session.yaml"), outside);
-        await symlink(outside, join(sessionDir, "session.yaml"));
+        if (how === "symlink") await symlink(outside, join(sessionDir, "session.yaml"));
+        else await execFileAsync("mkfifo", [join(sessionDir, "session.yaml")]);
         before = await readFile(outside, "utf8");
       };
       const runner = makeFakeRunner({ exit_code: 0 });

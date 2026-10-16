@@ -283,9 +283,10 @@ describe("openWorkspace", () => {
       const streamed: Event[] = [];
       for await (const e of ws.streamEvents(SES_DONE)) streamed.push(e);
       expect(streamed).toEqual([]);
+      // In the words stats() and the renderers use for the same log.
       expect(diagnostics).toEqual([
-        `${SES_DONE}:skipped: events_jsonl_not_a_file`,
-        `${SES_DONE}:skipped: events_jsonl_not_a_file`,
+        `${SES_DONE}:skipped: events_jsonl_unreadable`,
+        `${SES_DONE}:skipped: events_jsonl_unreadable`,
       ]);
 
       await rm(events);

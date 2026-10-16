@@ -142,7 +142,8 @@ export interface Workspace {
   /**
    * All events of a session, eagerly, ordered as written. Empty if no match.
    * Empty too when the session's `events.jsonl` is a symlink or anything but a
-   * regular file: it is not followed, and is reported to `onDiagnostic`.
+   * regular file: it is not followed, and is reported to `onDiagnostic` as an
+   * unreadable log.
    */
   readEvents(idOrPrefix: string): Promise<Event[]>;
   /**
@@ -281,7 +282,7 @@ export async function openWorkspace(
         return await readAllEvents(paths, id, { onWarning: (w) => onWarning(w, id) });
       } catch (error) {
         if (!(error instanceof SessionFileNotAFileError)) throw error;
-        onSkip(id, "events_jsonl_not_a_file");
+        onSkip(id, "events_jsonl_unreadable");
         return [];
       }
     },
@@ -296,7 +297,7 @@ export async function openWorkspace(
           yield* replayEvents(paths, id, { onWarning: (w) => onWarning(w, id) });
         } catch (error) {
           if (!(error instanceof SessionFileNotAFileError)) throw error;
-          onSkip(id, "events_jsonl_not_a_file");
+          onSkip(id, "events_jsonl_unreadable");
         }
       }
       return iterate();
