@@ -12,19 +12,25 @@ All notable changes to **basou** are recorded here. The project follows
   `refs/remotes/origin/main`, so a repository whose default branch is
   `master`, or any other name, never had a `behind_main`, and the
   measurement still said it was complete, as it does for a repository with
-  no origin. It now counts against the branch `refs/remotes/origin/HEAD`
-  names (a clone sets it, and `git remote set-head origin --auto` sets it
-  later), and against `origin/main` when that is not set, as before. When
-  `origin/HEAD` names a branch that is not there, the value is not measured
-  and `not_found` says why. The `repos` method is now 2, so the next record
-  marks `behind_main` as measured another way. `board measure` and the
-  board page say "behind origin's default branch".
+  no origin. It now counts against the branch of origin that
+  `refs/remotes/origin/HEAD` names (a clone sets it, and
+  `git remote set-head origin --auto` sets it later), and against
+  `origin/main` when `origin/HEAD` names none (it is not set, or is not a
+  symbolic ref), as before. The value is not measured, and `not_found` says
+  why, when `origin/HEAD` names a branch that is not there (as after the
+  default branch is renamed and a fetch prunes the old one), names a ref
+  outside `refs/remotes/origin/`, or cannot be read by git; it then does not
+  fall back to `origin/main`. The `repos` method is now 2, so the next record
+  marks `behind_main` as measured another way. `board measure` and the board
+  page say "behind origin's default branch".
 - **`basou board record` (experimental) names a record by its own time.**
   The record's ULID took the time it was written, after the board was
   measured again, while `recorded_at` took the time the command started, so
   the board page's list of records and the guide gave a time a second or so
-  later than the record's heading. The ULID now carries `recorded_at`.
-  Records written before keep their names.
+  later than the record's heading. The ULID now carries `recorded_at`, from
+  a monotonic factory of its own, so records with the same `recorded_at`
+  still sort in the order they were written. Records written before keep
+  their names.
 - **`basou board guide` (experimental) says how to ask for a manual
   observation, and what to write when the operator hands it over.** It said
   only to ask the operator and not to make it. It now asks for one thing the
@@ -33,9 +39,10 @@ All notable changes to **basou** are recorded here. The project follows
   make it, to make it and say so in the source.
 - **`basou board guide` and `basou board init` (experimental) ask for
   decision and task ids in full.** A shortened id in a board's declaration
-  matched two decisions, the first of them voided. The guide asks for all
-  26 characters in the prose and in a milestone's `ref`, and the comment
-  `init` prints on milestones says so.
+  matched two decisions, the first of them voided. The guide asks for
+  decision and task ids with all 26 characters in the prose, and for a
+  decision id in full in a milestone's `ref`; the comment `init` prints on
+  milestones says the same.
 
 ## 0.70.0 — 2026-10-16
 

@@ -1725,6 +1725,86 @@ describe("measureBoard: the repos section", () => {
     expect(m.complete).toBe(false);
   });
 
+  it("says so when origin/HEAD names an origin/main that is gone, as after a rename and a prune", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n" });
+    git(root, "clone", "-q", upstream, "app");
+    const app = join(root, "app");
+    git(upstream, "branch", "-m", "main", "master");
+    await commit(upstream, { "b.txt": "1\n" }, "upstream moves on");
+    git(app, "fetch", "-q", "--prune");
+    expect(git(app, "symbolic-ref", "refs/remotes/origin/HEAD").trim()).toBe(
+      "refs/remotes/origin/main",
+    );
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.not_found).toEqual([
+      {
+        at: "repos[app].behind_main",
+        reason: "refs/remotes/origin/HEAD names refs/remotes/origin/main, which is not there",
+      },
+    ]);
+    expect(m.complete).toBe(false);
+  });
+
+  it("reads an origin/HEAD that is not a symbolic ref as naming no branch", async () => {
+    const plain = await repo("plain", { "a.txt": "1\n" });
+    git(plain, "update-ref", "--no-deref", "refs/remotes/origin/HEAD", "HEAD");
+    const withMain = await repo("with-main", { "a.txt": "1\n" });
+    await commit(withMain, { "b.txt": "1\n" }, "ahead");
+    git(withMain, "update-ref", "refs/remotes/origin/main", "HEAD");
+    git(withMain, "reset", "-q", "--hard", "HEAD~1");
+    git(withMain, "update-ref", "--no-deref", "refs/remotes/origin/HEAD", "HEAD");
+    const m = await measureRepos("plain", "with-main");
+    expect(m.repos.map((r) => r.behind_main)).toEqual([null, 1]);
+    expect(m.not_found).toEqual([]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("does not count against an origin/HEAD that names a ref outside origin", async () => {
+    const dir = await repo("app", { "a.txt": "1\n" });
+    git(dir, "branch", "old");
+    git(dir, "update-ref", "refs/remotes/origin/main", "HEAD");
+    git(dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/old");
+    const m = await measureRepos("app");
+    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.not_found).toEqual([
+      {
+        at: "repos[app].behind_main",
+        reason: "refs/remotes/origin/HEAD names refs/heads/old, which is not a branch of origin",
+      },
+    ]);
+  });
+
+  it("does not measure behind_main past an origin/HEAD git cannot read, even with an origin/main", async () => {
+    const looped = await repo("looped", { "a.txt": "1\n" });
+    const odd = await repo("odd", { "a.txt": "1\n" });
+    for (const dir of [looped, odd]) {
+      git(dir, "update-ref", "refs/remotes/origin/main", "HEAD");
+    }
+    await writeFile(
+      join(looped, ".git", "refs", "remotes", "origin", "HEAD"),
+      "ref: refs/remotes/origin/HEAD\n",
+    );
+    await writeFile(
+      join(odd, ".git", "refs", "remotes", "origin", "HEAD"),
+      Buffer.concat([
+        Buffer.from("ref: refs/remotes/origin/x"),
+        Buffer.from([0xff]),
+        Buffer.from("\n"),
+      ]),
+    );
+    const m = await measureRepos("looped", "odd");
+    expect(m.repos.map((r) => r.behind_main)).toEqual([null, null]);
+    expect(m.not_found).toEqual([
+      { at: "repos[looped].behind_main", reason: "refs/remotes/origin/HEAD could not be read" },
+      {
+        at: "repos[odd].behind_main",
+        reason: "the branch refs/remotes/origin/HEAD names is not valid UTF-8",
+      },
+    ]);
+    expect(m.complete).toBe(false);
+  });
+
   it("reports a repo that is not there, not a repository, or not the root of one, once", async () => {
     await repo("app", { "sub/a.txt": "1\n" });
     await mkdir(join(root, "plain"));

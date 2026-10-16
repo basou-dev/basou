@@ -308,7 +308,7 @@ describe("boardGuide: a board declared", () => {
 
   it("says which branch behind_main counts against", () => {
     expect(boardGuide(guideInput())).toContain(
-      "- `repos[].behind_main` counts the commits on origin's default branch (the branch origin/HEAD names, or origin/main when origin/HEAD is not set) as of the last fetch; measure does not fetch.",
+      "- `repos[].behind_main` counts the commits on origin's default branch (the branch of origin that origin/HEAD names, or origin/main when origin/HEAD names none) as of the last fetch; measure does not fetch.",
     );
   });
 

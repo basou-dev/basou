@@ -1910,7 +1910,7 @@ describe("basou view: the board page", () => {
 
     const repos = call("liveRepos", LIVE);
     const cells = repos.find((n) => n.tag === "td").map((c) => c.textContent);
-    // Nulls that mean so: a detached HEAD, no origin/HEAD or origin/main, a last commit unread.
+    // Nulls that mean so: a detached HEAD, no default branch, a last commit unread.
     expect(cells).toEqual(["app", "-", "0123456", "-", "2", "1", "-"]);
     // Nulls the measurement could not measure are said to be.
     const unmeasured = {

@@ -105,6 +105,12 @@ describe("boardInitText", () => {
     );
     expect(ja.comments.milestones).toContain("{ date: YYYY-MM-DD, label, ref }");
     expect(ja.comments.milestones).toContain("他の盤から移すときは、その節目をここに移す。");
+    expect(en.comments.milestones).toContain(
+      "with ref saying where it can be checked (a tag and its commit, or a decision id in full)",
+    );
+    expect(ja.comments.milestones).toContain(
+      "ref に確かめられる出所（tag とその commit、または完全な decision の ID）を書く。",
+    );
   });
 
   it("keeps a name as written, whatever it holds", () => {

@@ -27,8 +27,8 @@ export const BOARD_REPOS_METHOD = 2;
  * repository could be measured. Three values are `null` with a meaning of
  * their own and no entry: `branch` when HEAD is detached; `head` and
  * `last_commit` when the repository has no commit yet (`commits` is then 0);
- * `behind_main` when `refs/remotes/origin/HEAD` is not set and there is no
- * `refs/remotes/origin/main`.
+ * `behind_main` when `refs/remotes/origin/HEAD` names no branch and there is
+ * no `refs/remotes/origin/main`.
  */
 export type BoardRepo = {
   /** The path as the manifest writes it. */
@@ -56,9 +56,10 @@ export type BoardRepo = {
   uncommitted: number | null;
   /**
    * The commits on origin's default branch HEAD does not have, as of the last
-   * fetch: the branch `refs/remotes/origin/HEAD` names (set by a clone, or by
-   * `git remote set-head origin --auto`), or `refs/remotes/origin/main` when
-   * it is not set.
+   * fetch: the branch of origin `refs/remotes/origin/HEAD` names (set by a
+   * clone, or by `git remote set-head origin --auto`), or
+   * `refs/remotes/origin/main` when it names none (it is not set, or is not a
+   * symbolic ref).
    */
   behind_main: number | null;
 };
@@ -142,22 +143,28 @@ async function readRef(cwd: string, name: string): Promise<Ref> {
   return { kind: "missing" };
 }
 
-// The full name of origin's default branch: the branch origin/HEAD names,
-// or origin/main when origin/HEAD is not a symbolic ref (not set at all, as
-// after `git remote add` and a fetch).
+const ORIGIN_BRANCHES = "refs/remotes/origin/";
+
+// The full name of origin's default branch: the branch origin/HEAD names
+// (`named`), or origin/main when origin/HEAD names none: it is not set, as
+// after `git remote add` and a fetch, or is not a symbolic ref.
 async function defaultBranchOf(
   cwd: string,
-): Promise<{ kind: "name"; name: string } | { kind: "error"; reason: string }> {
+): Promise<{ kind: "name"; name: string; named: boolean } | { kind: "error"; reason: string }> {
   const named = await runGit(cwd, ["symbolic-ref", "-q", ORIGIN_HEAD]);
   if (named.code === 0) {
     const name = utf8Name(lineBytes(named));
-    return name === undefined
-      ? { kind: "error", reason: `the branch ${ORIGIN_HEAD} names is not valid UTF-8` }
-      : { kind: "name", name };
+    if (name === undefined) {
+      return { kind: "error", reason: `the branch ${ORIGIN_HEAD} names is not valid UTF-8` };
+    }
+    // Only a hand-made origin/HEAD names a ref of something else.
+    return name.startsWith(ORIGIN_BRANCHES)
+      ? { kind: "name", name, named: true }
+      : { kind: "error", reason: `${ORIGIN_HEAD} names ${name}, which is not a branch of origin` };
   }
   // 1 is a ref that is not symbolic, or not there.
   if (named.code === 1 && named.spawnError === undefined) {
-    return { kind: "name", name: ORIGIN_MAIN };
+    return { kind: "name", name: ORIGIN_MAIN, named: false };
   }
   return { kind: "error", reason: failure(named, `${ORIGIN_HEAD} could not be read`) };
 }
@@ -366,8 +373,8 @@ export async function measureRepos(
 }
 
 // The commits on origin's default branch HEAD does not have: null when
-// origin/HEAD is not set and there is no origin/main, which is what the null
-// means; or why they could not be counted.
+// origin/HEAD names no branch and there is no origin/main, which is what the
+// null means; or why they could not be counted.
 async function behindDefault(
   cwd: string,
   head: Exclude<Head, { kind: "error" }>,
@@ -378,9 +385,9 @@ async function behindDefault(
   const ref = await readRef(cwd, target.name);
   if (ref.kind === "error") return { ok: false, reason: ref.reason };
   if (ref.kind === "missing") {
-    return target.name === ORIGIN_MAIN
-      ? { ok: true, count: null }
-      : { ok: false, reason: `${ORIGIN_HEAD} names ${target.name}, which is not there` };
+    return target.named
+      ? { ok: false, reason: `${ORIGIN_HEAD} names ${target.name}, which is not there` }
+      : { ok: true, count: null };
   }
   const commit = await runGit(cwd, ["rev-parse", "--verify", "--quiet", `${ref.oid}^{commit}`]);
   if (commit.code !== 0) {
