@@ -18,8 +18,8 @@ All notable changes to **basou** are recorded here. The project follows
   every caller already passed an id from a listing or a check.
 - **`@basou/core` exports `SessionNotADirectoryError`**, which carries the
   `sessionId` and the `kind` of the entry (`symlink` or `not_a_directory`).
-  `assertSessionDirSafe`, `resolveSessionId` and the event readers throw it
-  where they threw a plain `Error`; its message is the one they gave.
+  `assertSessionDirSafe` and `resolveSessionId` throw it where they threw a
+  plain `Error`; its message is the one they gave.
   `enumerateSessionEntries` also returns `symlinks`, the entries of
   `notDirectories` that are symlinks.
 - **`@basou/sdk` tells such an entry apart by the error's class instead of

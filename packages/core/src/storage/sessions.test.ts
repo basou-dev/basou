@@ -266,10 +266,14 @@ describe("storage/sessions", () => {
         await rm(join(paths.sessions, linked), { recursive: true });
         await symlink(outside, join(paths.sessions, linked));
         await writeFile(join(paths.sessions, file), "");
+        // Made after the others but named before them, so the lists are
+        // ascending by name rather than by creation.
+        const earlier = SES("XA5");
+        await symlink(outside, join(paths.sessions, earlier));
         expect(await enumerateSessionEntries(paths)).toEqual({
           dirs: [real],
-          notDirectories: [linked, file],
-          symlinks: [linked],
+          notDirectories: [earlier, linked, file],
+          symlinks: [earlier, linked],
         });
         expect(await enumerateSessionDirs(paths)).toEqual([real]);
       },

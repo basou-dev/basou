@@ -311,8 +311,18 @@ describe.skipIf(process.platform === "win32")("a session named by id is not foll
     const paths = await ensureBasouDirectory(getWorkDir());
     await placeLinkedSession(paths, LINKED, "running");
     await writeFile(join(paths.sessions, FILE), startedLine(FILE));
+    // A symlink is refused whatever it points to, including where a reader
+    // that looked for events.jsonl first would find none and yield nothing.
+    const dangling = SES("DG1");
+    await symlink(join(getWorkDir(), "nowhere"), join(paths.sessions, dangling));
+    const toEmpty = SES("EM1");
+    const empty = join(getWorkDir(), "empty-dir");
+    await mkdir(empty);
+    await symlink(empty, join(paths.sessions, toEmpty));
     for (const [id, kind] of [
       [LINKED, "symlink"],
+      [dangling, "symlink"],
+      [toEmpty, "symlink"],
       [FILE, "not_a_directory"],
     ] as const) {
       const eager = await readAllEvents(paths, id).catch((error: unknown) => error);

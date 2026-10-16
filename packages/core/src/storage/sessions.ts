@@ -327,8 +327,9 @@ async function classifyRunningSession(
  * The local store (`host: null`) is refused when `.basou/sessions` is a
  * symlink or a file ({@link assertSessionStoreSafe}); a federated mirror is
  * not, since it is a read-only copy outside the store to begin with. Each
- * listed directory is read without being checked again: its dirent already
- * said it is one.
+ * listed directory's `session.yaml` is read without its entry being checked
+ * again, since its dirent already said it is one; a `running` session's events
+ * are read through {@link replayEvents}, which checks the entry itself.
  *
  * `options.now` is taken once and threaded into every {@link classifySuspect}
  * call so age comparisons are consistent across sessions.

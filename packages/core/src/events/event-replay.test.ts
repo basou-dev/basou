@@ -259,6 +259,27 @@ describe("replayEvents", () => {
     expect(err.cause).toBeInstanceOf(Error);
   });
 
+  it("throws the same pathless error when the session's entry cannot be looked at", async () => {
+    // Without search permission on the store, the lstat of the entry fails
+    // before events.jsonl is reached. Skip as root, which chmod cannot block.
+    if (process.getuid?.() === 0) return;
+    await writeFile(join(sessionDir, "events.jsonl"), startedLine("01"));
+    await chmod(paths.sessions, 0o600);
+    let captured: unknown;
+    try {
+      await readAllEvents(paths, SES);
+    } catch (error: unknown) {
+      captured = error;
+    } finally {
+      await chmod(paths.sessions, 0o755).catch(() => undefined);
+    }
+    expect(captured).toBeInstanceOf(Error);
+    const err = captured as Error;
+    expect(err.message).toBe("Failed to read events.jsonl");
+    expect(err.message).not.toContain(root);
+    expect((err.cause as NodeJS.ErrnoException).code).toBe("EACCES");
+  });
+
   it("forwards warnings from replayEvents through readAllEvents", async () => {
     const body = `${startedLine("01")}{bad\n${endedLine("03")}`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
