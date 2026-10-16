@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { enumerateApprovals, isLazyExpired, loadApproval } from "../approval/approval-store.js";
 import type { BoardGlance } from "../board/glance.js";
 import { countOpenDecisionGaps, type DecisionForGapCount } from "../decision-gaps/index.js";
@@ -381,13 +381,12 @@ export async function summarizeOrientation(
     }
   };
   for (const entry of entries) {
-    const sessionDir = join(entry.sourceRoot.sessions, entry.sessionId);
     const counted = entry.session.session.status !== "archived";
     // Seed with the session boundary so a session whose events are empty or
     // unreadable still contributes its known activity window.
     if (counted) noteActivity(entry.session.session.ended_at ?? entry.session.session.started_at);
     try {
-      for await (const ev of replayEvents(sessionDir, {
+      for await (const ev of replayEvents(entry.sourceRoot, entry.sessionId, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
         if (ev.type === "decision_recorded") {

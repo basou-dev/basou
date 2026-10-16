@@ -560,13 +560,12 @@ export async function findReviewGaps(input: ReviewGapsInput): Promise<ReviewGaps
   const unknownCommits = new Map<string, (number | null)[]>();
 
   for (const entry of entries) {
-    const sessionDir = join(input.paths.sessions, entry.sessionId);
     const isReview = entry.session.session.source.kind === REVIEW_SOURCE;
     const reviewRepos = new Map<string, { examinedDiff: boolean; files: Set<string> }>();
     let reviewEnd: number | null = null;
 
     try {
-      for await (const ev of replayEvents(sessionDir, {
+      for await (const ev of replayEvents(input.paths, entry.sessionId, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
         // A self-reported review. Collected from ANY session (the record lands

@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import {
   enumerateApprovals,
   type LoadedApproval,
@@ -209,9 +208,8 @@ export async function renderReport(input: ReportRendererInput): Promise<ReportRe
   // decision as if it still stands (mirrors decisions.md / orient / handoff).
   const voidedDecisionIds = new Set<string>();
   for (const entry of entries) {
-    const sessionDir = join(input.paths.sessions, entry.sessionId);
     try {
-      for await (const ev of replayEvents(sessionDir, {
+      for await (const ev of replayEvents(input.paths, entry.sessionId, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
         if (ev.type === "decision_recorded") {

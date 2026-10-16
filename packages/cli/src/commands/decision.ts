@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   AGENT_INFRA_DIRS,
   acquireLock,
@@ -656,9 +656,8 @@ function isDecisionId(value: string): boolean {
 async function decisionExists(paths: BasouPaths, decisionId: string): Promise<boolean> {
   const entries = await loadSessionEntries(paths, { now: new Date() });
   for (const entry of entries) {
-    const sessionDir = join(paths.sessions, entry.sessionId);
     try {
-      for await (const ev of replayEvents(sessionDir, {})) {
+      for await (const ev of replayEvents(paths, entry.sessionId, {})) {
         if (ev.type === "decision_recorded" && ev.decision_id === decisionId) return true;
       }
     } catch {

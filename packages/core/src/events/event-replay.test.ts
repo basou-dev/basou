@@ -1,7 +1,8 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type BasouPaths, basouPaths } from "../storage/basou-dir.js";
 import { type ReplayWarning, readAllEvents, replayEvents } from "./event-replay.js";
 
 const SES = "ses_01HXABCDEF1234567890ABCDEF";
@@ -41,19 +42,24 @@ function captureWarnings(): { warnings: ReplayWarning[]; onWarning: (w: ReplayWa
 }
 
 describe("replayEvents", () => {
+  let root: string;
+  let paths: BasouPaths;
   let sessionDir: string;
 
   beforeEach(async () => {
-    sessionDir = await mkdtemp(join(tmpdir(), "basou-event-replay-"));
+    root = await mkdtemp(join(tmpdir(), "basou-event-replay-"));
+    paths = basouPaths(root);
+    sessionDir = join(paths.sessions, SES);
+    await mkdir(sessionDir, { recursive: true });
   });
 
   afterEach(async () => {
-    await rm(sessionDir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   });
 
   it("yields nothing without warning when events.jsonl is missing (ENOENT)", async () => {
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events).toEqual([]);
     expect(warnings).toEqual([]);
   });
@@ -61,14 +67,14 @@ describe("replayEvents", () => {
   it("yields nothing without warning when events.jsonl is empty (0 bytes)", async () => {
     await writeFile(join(sessionDir, "events.jsonl"), "");
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events).toEqual([]);
     expect(warnings).toEqual([]);
   });
 
   it("yields a single valid event", async () => {
     await writeFile(join(sessionDir, "events.jsonl"), startedLine("01"));
-    const events = await readAllEvents(sessionDir);
+    const events = await readAllEvents(paths, SES);
     expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe("session_started");
   });
@@ -85,7 +91,7 @@ describe("replayEvents", () => {
       duration_ms: 1,
     })}\n${endedLine("03", 0)}`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
-    const events = await readAllEvents(sessionDir);
+    const events = await readAllEvents(paths, SES);
     expect(events.map((e) => e.type)).toEqual([
       "session_started",
       "command_executed",
@@ -97,7 +103,7 @@ describe("replayEvents", () => {
     const body = `\n${startedLine("01")}\n\n${endedLine("02")}\n`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events.map((e) => e.type)).toEqual(["session_started", "session_ended"]);
     expect(warnings).toEqual([]);
   });
@@ -106,7 +112,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}{not valid json\n${endedLine("03")}`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events.map((e) => e.type)).toEqual(["session_started", "session_ended"]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatchObject({ kind: "malformed_json", line: 2 });
@@ -117,7 +123,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}${JSON.stringify({ ...EVT_BASE, id: evtId("99") })}\n${endedLine("03")}`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events.map((e) => e.type)).toEqual(["session_started", "session_ended"]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatchObject({ kind: "schema_violation", line: 2 });
@@ -141,7 +147,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}${cmd}\n${endedLine("03")}`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events.map((e) => e.type)).toEqual([
       "session_started",
       "command_executed",
@@ -165,7 +171,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}${cmd}\n${endedLine("03")}`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events).toHaveLength(3);
     expect(warnings).toHaveLength(0);
   });
@@ -183,7 +189,7 @@ describe("replayEvents", () => {
     })}\n`;
     await writeFile(join(sessionDir, "events.jsonl"), adapterLine);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events).toEqual([]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.kind).toBe("schema_violation");
@@ -199,7 +205,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}${lastEvent}`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events).toHaveLength(1);
     expect(events[0]?.id).toBe(evtId("01"));
     expect(warnings).toHaveLength(1);
@@ -213,7 +219,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}{incomplete`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events).toHaveLength(1);
     expect(events[0]?.id).toBe(evtId("01"));
     expect(warnings).toHaveLength(1);
@@ -227,7 +233,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}{still bad`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events.map((e) => e.id)).toEqual([evtId("01")]);
     expect(warnings.some((w) => w.kind === "malformed_json")).toBe(true);
   });
@@ -241,7 +247,7 @@ describe("replayEvents", () => {
     await chmod(filePath, 0o000);
     let captured: unknown;
     try {
-      await readAllEvents(sessionDir);
+      await readAllEvents(paths, SES);
     } catch (error: unknown) {
       captured = error;
     } finally {
@@ -257,7 +263,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}{bad\n${endedLine("03")}`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events.map((e) => e.type)).toEqual(["session_started", "session_ended"]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.kind).toBe("malformed_json");
@@ -267,7 +273,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}${endedLine("02")}`;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const seen: string[] = [];
-    for await (const ev of replayEvents(sessionDir)) {
+    for await (const ev of replayEvents(paths, SES)) {
       seen.push(ev.type);
     }
     expect(seen).toEqual(["session_started", "session_ended"]);
@@ -281,7 +287,7 @@ describe("replayEvents", () => {
     const crlf = lf.replace(/\n/g, "\r\n");
     await writeFile(join(sessionDir, "events.jsonl"), crlf);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events.map((e) => e.type)).toEqual(["session_started", "session_ended"]);
     expect(warnings).toEqual([]);
   });
@@ -292,7 +298,7 @@ describe("replayEvents", () => {
     const body = `${startedLine("01")}\n   \t  `;
     await writeFile(join(sessionDir, "events.jsonl"), body);
     const { warnings, onWarning } = captureWarnings();
-    const events = await readAllEvents(sessionDir, { onWarning });
+    const events = await readAllEvents(paths, SES, { onWarning });
     expect(events.map((e) => e.type)).toEqual(["session_started"]);
     expect(warnings).toEqual([]);
   });

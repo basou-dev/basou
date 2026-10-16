@@ -3,6 +3,29 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`@basou/core`: `replayEvents` and `readAllEvents` take the store's paths
+  and a session id, and check the entry at the session's name themselves.**
+  They took the session's directory and relied on their caller to have
+  checked it. They now refuse an entry that is a symlink, whatever it points
+  to, or a file, with `SessionNotADirectoryError`, and an id that is not a
+  session id with `Invalid session id`, before reading anything. They do not
+  check `.basou/sessions` itself, so they still read a federated mirror whose
+  `.basou/sessions` is a symlink. No command reads anything differently:
+  every caller already passed an id from a listing or a check.
+- **`@basou/core` exports `SessionNotADirectoryError`**, which carries the
+  `sessionId` and the `kind` of the entry (`symlink` or `not_a_directory`).
+  `assertSessionDirSafe`, `resolveSessionId` and the event readers throw it
+  where they threw a plain `Error`; its message is the one they gave.
+  `enumerateSessionEntries` also returns `symlinks`, the entries of
+  `notDirectories` that are symlinks.
+- **`@basou/sdk` tells such an entry apart by the error's class instead of
+  its message.** `getSession`, `readEvents` and `streamEvents` return `null`,
+  an empty list and nothing for it, as before.
+
 ## 0.69.0 — 2026-10-16
 
 ### Changed

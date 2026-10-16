@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { enumerateApprovals } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { displayPath } from "../lib/display-path.js";
@@ -168,11 +167,10 @@ export async function renderHandoff(input: HandoffRendererInput): Promise<Handof
     }
   };
   for (const entry of entries) {
-    const sessionDir = join(input.paths.sessions, entry.sessionId);
     const counted = entry.session.session.status !== "archived";
     if (counted) noteActivity(entry.session.session.ended_at ?? entry.session.session.started_at);
     try {
-      for await (const ev of replayEvents(sessionDir, {
+      for await (const ev of replayEvents(input.paths, entry.sessionId, {
         onWarning: (w) => input.onWarning?.(w, entry.sessionId),
       })) {
         if (counted) noteActivity(ev.occurred_at);

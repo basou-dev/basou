@@ -5,6 +5,13 @@ import { findErrorCode } from "../lib/error-codes.js";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
 import { normalizeEventTimestamps } from "../schemas/iso-timestamp.js";
 import { hasRetiredZeroDuration } from "../schemas/observed-duration.js";
+import { SessionIdSchema } from "../schemas/shared.schema.js";
+import type { BasouPaths } from "../storage/basou-dir.js";
+import {
+  lstatSessionEntry,
+  type SessionEntryKind,
+  SessionNotADirectoryError,
+} from "../storage/session-dir.js";
 
 /**
  * Recoverable warning surfaced via {@link ReplayOptions.onWarning}. The replay
@@ -37,10 +44,18 @@ export type ReplayOptions = {
 };
 
 /**
- * Stream events from `<sessionDir>/events.jsonl` line by line.
+ * Stream the events of session `sessionId` from
+ * `<paths.sessions>/<sessionId>/events.jsonl` line by line.
  *
  * Behavior:
- * - ENOENT or empty file: yields nothing without warning.
+ * - The entry at the session's name is checked first, without following it:
+ *   a symlink or a file throws {@link SessionNotADirectoryError}, and an id
+ *   that is not a session id throws `Error("Invalid session id")`. The store
+ *   (`.basou/sessions`) itself is not checked here; the listing or resolver
+ *   that produced the id checks the local one, and a federated mirror's may
+ *   be a symlink.
+ * - No entry, ENOENT on events.jsonl, or an empty file: yields nothing
+ *   without warning.
  * - I/O error: throws `Error("Failed to read events.jsonl")` with the native
  *   error attached as `cause`. The thrown message never embeds an absolute
  *   path (pathless contract).
@@ -62,10 +77,21 @@ export type ReplayOptions = {
 // directly via the for-await over `createReadStream` and reaches end-of-stream
 // deterministically with the trailing buffer in hand.
 export async function* replayEvents(
-  sessionDir: string,
+  paths: BasouPaths,
+  sessionId: string,
   options: ReplayOptions = {},
 ): AsyncGenerator<Event, void, void> {
-  const filePath = join(sessionDir, "events.jsonl");
+  if (!SessionIdSchema.safeParse(sessionId).success) throw new Error("Invalid session id");
+  let entry: SessionEntryKind;
+  try {
+    entry = await lstatSessionEntry(paths.sessions, sessionId);
+  } catch (error: unknown) {
+    throw new Error("Failed to read events.jsonl", { cause: error });
+  }
+  if (entry === "symlink" || entry === "not_a_directory") {
+    throw new SessionNotADirectoryError(sessionId, entry);
+  }
+  const filePath = join(paths.sessions, sessionId, "events.jsonl");
 
   // Probe existence first so ENOENT (= empty session) is silent while every
   // other I/O failure surfaces as a single fixed-message error.
@@ -164,11 +190,12 @@ function processLine(rawLine: string, lineNo: number, options: ReplayOptions): E
  * (e.g. `basou session show` rendering).
  */
 export async function readAllEvents(
-  sessionDir: string,
+  paths: BasouPaths,
+  sessionId: string,
   options: ReplayOptions = {},
 ): Promise<Event[]> {
   const out: Event[] = [];
-  for await (const ev of replayEvents(sessionDir, options)) {
+  for await (const ev of replayEvents(paths, sessionId, options)) {
     out.push(ev);
   }
   return out;

@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import {
   archiveTask,
   assertBasouRootSafe,
@@ -593,9 +592,8 @@ export async function doRunTaskShow(
   // lines) and unreadable events.jsonl files must reach the operator so
   // silent gaps in the events history don't go unnoticed.
   for (const s of sessions) {
-    const sessionDir = join(paths.sessions, s.sessionId);
     try {
-      for await (const ev of replayEvents(sessionDir, {
+      for await (const ev of replayEvents(paths, s.sessionId, {
         onWarning: (w) => printReplayWarning(w, s.sessionId),
       })) {
         if (

@@ -17,6 +17,49 @@ import { assertStoreDirectorySafe } from "./store-dir.js";
 export type SessionEntryKind = "directory" | "symlink" | "not_a_directory" | "missing";
 
 /**
+ * Thrown where a session is read or written by its id and the entry at that
+ * name is a symlink, whatever it points to, or a file: it is not followed.
+ * `kind` says which, as {@link inspectSessionEntry} classifies it.
+ *
+ * The message is `Session <id> is not a directory; a symlink or a file there
+ * is not followed`. Tell this refusal apart by its class, not by the message.
+ */
+export class SessionNotADirectoryError extends Error {
+  readonly sessionId: string;
+  readonly kind: "symlink" | "not_a_directory";
+
+  constructor(sessionId: string, kind: "symlink" | "not_a_directory") {
+    super(`Session ${sessionId} is not a directory; a symlink or a file there is not followed`);
+    this.name = "SessionNotADirectoryError";
+    this.sessionId = sessionId;
+    this.kind = kind;
+  }
+}
+
+/**
+ * Classify the entry at `<sessionsDir>/<sessionId>` without following it, for
+ * a `sessionId` the caller has already checked to be a session id. Rethrows an
+ * lstat failure other than ENOENT as it is, for the caller to wrap in its own
+ * fixed message. It does not check the store itself: {@link inspectSessionEntry}
+ * does, and the event readers rely on the listing or resolver that produced
+ * the id, so that they also serve a federated mirror, whose store may be a
+ * symlink.
+ */
+export async function lstatSessionEntry(
+  sessionsDir: string,
+  sessionId: string,
+): Promise<SessionEntryKind> {
+  try {
+    const entry = await lstat(join(sessionsDir, sessionId));
+    if (entry.isSymbolicLink()) return "symlink";
+    return entry.isDirectory() ? "directory" : "not_a_directory";
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) return "missing";
+    throw error;
+  }
+}
+
+/**
  * Refuse to operate on `.basou/sessions` if it is a symlink or not a
  * directory, so no session is read from or written to a place outside the
  * store. basou never creates such an entry. Mirrors `assertBasouRootSafe`,
@@ -55,11 +98,8 @@ export async function inspectSessionEntry(
   if (!SessionIdSchema.safeParse(sessionId).success) throw new Error("Invalid session id");
   await assertSessionStoreSafe(paths);
   try {
-    const entry = await lstat(join(paths.sessions, sessionId));
-    if (entry.isSymbolicLink()) return "symlink";
-    return entry.isDirectory() ? "directory" : "not_a_directory";
+    return await lstatSessionEntry(paths.sessions, sessionId);
   } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) return "missing";
     throw new Error(`Failed to read the session directory of ${sessionId}`, { cause: error });
   }
 }
@@ -70,21 +110,18 @@ export async function inspectSessionEntry(
  * chained append / finalize paths call it, and so do `approval approve` and
  * `approval reject` for an approval's recorded `session_id`; `approval show`
  * and `basou view` classify the entry with {@link inspectSessionEntry}
- * instead. A reader that takes a session directory (`replayEvents`,
- * `readAllEvents`) relies on its caller: an id from a listing, from
- * `resolveSessionId`, or from this check or {@link inspectSessionEntry}.
+ * instead. The event readers (`replayEvents`, `readAllEvents`) check the
+ * entry themselves, without the store check.
  *
  * A missing entry passes, so each caller keeps its own "not found" handling.
- * The error message matches `resolveSessionId`'s for the same entry.
+ * `resolveSessionId` throws the same error for the same entry.
  *
- * Throws `"Session <id> is not a directory; a symlink or a file there is not
- * followed"`, or the {@link inspectSessionEntry} errors.
+ * Throws {@link SessionNotADirectoryError}, or the {@link inspectSessionEntry}
+ * errors.
  */
 export async function assertSessionDirSafe(paths: BasouPaths, sessionId: string): Promise<void> {
   const kind = await inspectSessionEntry(paths, sessionId);
   if (kind === "symlink" || kind === "not_a_directory") {
-    throw new Error(
-      `Session ${sessionId} is not a directory; a symlink or a file there is not followed`,
-    );
+    throw new SessionNotADirectoryError(sessionId, kind);
   }
 }

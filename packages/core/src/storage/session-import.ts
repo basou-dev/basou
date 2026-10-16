@@ -538,7 +538,7 @@ export async function reimportPreservingId(
     // Strict read of the prior events: abort on ANY unpreservable line so the
     // atomic rewrite below never silently drops a human / unknown-source event.
     let priorUnreadable = false;
-    const priorEvents = await readAllEvents(sessionDir, {
+    const priorEvents = await readAllEvents(paths, priorSessionId, {
       onWarning: () => {
         priorUnreadable = true;
       },

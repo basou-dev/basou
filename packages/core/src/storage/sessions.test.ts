@@ -243,7 +243,11 @@ describe("storage/sessions", () => {
         await mkdir(join(paths.sessions, name), { recursive: true });
       }
       await writeFile(join(paths.sessions, ".gitkeep"), "");
-      expect(await enumerateSessionEntries(paths)).toEqual({ dirs: [id], notDirectories: [] });
+      expect(await enumerateSessionEntries(paths)).toEqual({
+        dirs: [id],
+        notDirectories: [],
+        symlinks: [],
+      });
       expect(await enumerateSessionDirs(paths)).toEqual([id]);
     });
 
@@ -265,6 +269,7 @@ describe("storage/sessions", () => {
         expect(await enumerateSessionEntries(paths)).toEqual({
           dirs: [real],
           notDirectories: [linked, file],
+          symlinks: [linked],
         });
         expect(await enumerateSessionDirs(paths)).toEqual([real]);
       },
@@ -272,7 +277,11 @@ describe("storage/sessions", () => {
 
     it("returns empty lists when the sessions directory does not exist", async () => {
       const paths = basouPaths(getWorkDir());
-      expect(await enumerateSessionEntries(paths)).toEqual({ dirs: [], notDirectories: [] });
+      expect(await enumerateSessionEntries(paths)).toEqual({
+        dirs: [],
+        notDirectories: [],
+        symlinks: [],
+      });
     });
   });
 

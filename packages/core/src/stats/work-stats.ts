@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import type { Event } from "../schemas/event.schema.js";
 import { readObservedDuration } from "../schemas/observed-duration.js";
@@ -287,7 +286,7 @@ export async function computeWorkStats(input: WorkStatsInput): Promise<WorkStats
     let eventsUnreadable = false;
     let eventsLostLines = 0;
     try {
-      for await (const ev of replayEvents(join(input.paths.sessions, entry.sessionId), {
+      for await (const ev of replayEvents(input.paths, entry.sessionId, {
         onWarning: (w) => {
           if (w.kind === "malformed_json" || w.kind === "schema_violation") eventsLostLines++;
           input.onWarning?.(w, entry.sessionId);

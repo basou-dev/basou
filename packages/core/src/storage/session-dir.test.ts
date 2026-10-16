@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse, stringify } from "yaml";
 import { appendChainedEvent } from "../events/chained-append.js";
+import { readAllEvents, replayEvents } from "../events/event-replay.js";
 import { verifyEventsChain } from "../events/verify.js";
 import type { PrefixedId } from "../ids/ulid.js";
 import type { Event } from "../schemas/event.schema.js";
@@ -17,6 +18,7 @@ import {
   assertSessionDirSafe,
   assertSessionStoreSafe,
   inspectSessionEntry,
+  SessionNotADirectoryError,
 } from "./session-dir.js";
 import {
   importSessionFromJson,
@@ -252,7 +254,34 @@ describe.skipIf(process.platform === "win32")("assertSessionDirSafe", () => {
     await expect(assertSessionDirSafe(paths, LINKED)).rejects.toThrow(NOT_A_DIRECTORY(LINKED));
     await expect(assertSessionDirSafe(paths, FILE)).rejects.toThrow(NOT_A_DIRECTORY(FILE));
   });
+
+  it("refuses with a SessionNotADirectoryError naming the id and what is there", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    await placeLinkedSession(paths, LINKED, "running");
+    await writeFile(join(paths.sessions, FILE), "");
+    const linked = await assertSessionDirSafe(paths, LINKED).catch((error: unknown) => error);
+    expect(linked).toBeInstanceOf(SessionNotADirectoryError);
+    expect(linked).toMatchObject({
+      name: "SessionNotADirectoryError",
+      sessionId: LINKED,
+      kind: "symlink",
+    });
+    const file = await assertSessionDirSafe(paths, FILE).catch((error: unknown) => error);
+    expect(file).toBeInstanceOf(SessionNotADirectoryError);
+    expect(file).toMatchObject({ sessionId: FILE, kind: "not_a_directory" });
+  });
 });
+
+/** Drain {@link replayEvents}, keeping what it yielded before any throw. */
+async function drain(paths: BasouPaths, id: string): Promise<{ yielded: Event[]; error: unknown }> {
+  const yielded: Event[] = [];
+  try {
+    for await (const ev of replayEvents(paths, id)) yielded.push(ev);
+  } catch (error: unknown) {
+    return { yielded, error };
+  }
+  return { yielded, error: undefined };
+}
 
 // POSIX only: creating a symlink needs privileges on Windows.
 describe.skipIf(process.platform === "win32")("a session named by id is not followed", () => {
@@ -276,6 +305,31 @@ describe.skipIf(process.platform === "win32")("a session named by id is not foll
       status: "rechained",
       eventCount: 1,
     });
+  });
+
+  it("the event readers refuse it and read nothing behind it", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    await placeLinkedSession(paths, LINKED, "running");
+    await writeFile(join(paths.sessions, FILE), startedLine(FILE));
+    for (const [id, kind] of [
+      [LINKED, "symlink"],
+      [FILE, "not_a_directory"],
+    ] as const) {
+      const eager = await readAllEvents(paths, id).catch((error: unknown) => error);
+      expect(eager).toBeInstanceOf(SessionNotADirectoryError);
+      expect(eager).toMatchObject({ sessionId: id, kind, message: NOT_A_DIRECTORY(id) });
+      const streamed = await drain(paths, id);
+      expect(streamed.yielded).toEqual([]);
+      expect(streamed.error).toBeInstanceOf(SessionNotADirectoryError);
+    }
+  });
+
+  it("control: the event readers read a session in the store, and nothing for a missing one", async () => {
+    const paths = await ensureBasouDirectory(getWorkDir());
+    await writeSession(join(paths.sessions, REAL), REAL, "running");
+    expect((await readAllEvents(paths, REAL)).map((ev) => ev.session_id)).toEqual([REAL]);
+    expect(await drain(paths, REAL)).toMatchObject({ error: undefined });
+    expect(await readAllEvents(paths, MISSING)).toEqual([]);
   });
 
   it("readSessionYaml refuses it", async () => {
@@ -418,6 +472,7 @@ describe("a name that is not a session id", () => {
       await expect(inspectSessionEntry(paths, name)).rejects.toThrow("Invalid session id");
       await expect(assertSessionDirSafe(paths, name)).rejects.toThrow("Invalid session id");
       await expect(readSessionYaml(paths, name)).rejects.toThrow("Invalid session id");
+      await expect(readAllEvents(paths, name)).rejects.toThrow("Invalid session id");
     }
   });
 });
@@ -494,6 +549,15 @@ describe.skipIf(process.platform === "win32")("a federated mirror", () => {
     expect(entries.map((e) => [e.sessionId, e.host])).toEqual([[REAL, "laptop"]]);
     expect(unavailable).toEqual([]);
     expect(skips).toEqual([`${LINKED}:session_dir_not_directory`]);
+  });
+
+  it("is read by the event readers when its .basou/sessions is a symlink; its own entries still are not followed", async () => {
+    const mirror = await mirrorWithLinkedStore();
+    await placeLinkedSession(mirror, LINKED, "running");
+    expect((await readAllEvents(mirror, REAL)).map((ev) => ev.session_id)).toEqual([REAL]);
+    const linked = await readAllEvents(mirror, LINKED).catch((error: unknown) => error);
+    expect(linked).toBeInstanceOf(SessionNotADirectoryError);
+    expect(linked).toMatchObject({ sessionId: LINKED, kind: "symlink" });
   });
 
   it("does not lift the check from the local store", async () => {

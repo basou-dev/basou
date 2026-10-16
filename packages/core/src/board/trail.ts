@@ -64,7 +64,7 @@ export async function readDecisions(input: TrailInput): Promise<TrailDecisions> 
       // but not an event of the schema is complete, so it is a lost event
       // wherever it is. A retired zero-duration line is not a decision.
       const malformed: number[] = [];
-      const events = await readAllEvents(sessionDir, {
+      const events = await readAllEvents(input.paths, sessionId, {
         onWarning: (warning) => {
           if (warning.kind === "malformed_json") malformed.push(warning.line);
           else if (warning.kind === "schema_violation") lost++;

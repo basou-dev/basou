@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
+import { SessionNotADirectoryError } from "../storage/session-dir.js";
 import { resolveSessionId, resolveTaskId } from "./id-resolver.js";
 
 const SES_A = "ses_01HXABCDEF1234567890ABCDE0";
@@ -154,6 +155,24 @@ describe("resolveSessionId — entries that are not sessions", () => {
         `Session ${SES_A} is not a directory; a symlink or a file there is not followed`,
       );
       expect(await resolveSessionId(paths, SES_A, { allowNotDirectory: true })).toBe(SES_A);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "throws a SessionNotADirectoryError with the kind the listing saw",
+    async () => {
+      const paths = await setupPaths();
+      const outside = join(workDir as string, "moved-session");
+      await mkdir(outside);
+      await symlink(outside, join(paths.sessions, SES_A));
+      await writeFile(join(paths.sessions, SES_B), "");
+      const linked = await resolveSessionId(paths, SES_A).catch((error: unknown) => error);
+      expect(linked).toBeInstanceOf(SessionNotADirectoryError);
+      expect(linked).toMatchObject({ sessionId: SES_A, kind: "symlink" });
+      // Resolved from a prefix, the error names the full id.
+      const file = await resolveSessionId(paths, SES_B.slice(4)).catch((error: unknown) => error);
+      expect(file).toBeInstanceOf(SessionNotADirectoryError);
+      expect(file).toMatchObject({ sessionId: SES_B, kind: "not_a_directory" });
     },
   );
 
