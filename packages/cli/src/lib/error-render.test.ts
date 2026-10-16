@@ -357,6 +357,12 @@ describe("printSessionSkip", () => {
       "Skipped ses_01HXABCDEFG1234567890ABCDE: session_dir_not_directory",
     );
   });
+
+  it("names a session whose session.yaml is not a regular file by its full id", () => {
+    const err = captureStderr();
+    printSessionSkip("ses_01HXABCDEFG1234567890ABCDE", "session_yaml_not_a_file");
+    expect(joinCalls(err)).toBe("Skipped ses_01HXABCDEFG1234567890ABCDE: session_yaml_not_a_file");
+  });
 });
 
 describe("printSessionListSkip", () => {
@@ -385,6 +391,14 @@ describe("printSessionListSkip", () => {
     printSessionListSkip("ses_01HXABCDEFG1234567890ABCDE", "session_dir_not_directory");
     expect(joinCalls(err)).toBe(
       "Skipped ses_01HXABCDEFG1234567890ABCDE: not a directory (a symlink or a file is not followed)",
+    );
+  });
+
+  it("names a session whose session.yaml is not a regular file by its full id", () => {
+    const err = captureStderr();
+    printSessionListSkip("ses_01HXABCDEFG1234567890ABCDE", "session_yaml_not_a_file");
+    expect(joinCalls(err)).toBe(
+      "Skipped ses_01HXABCDEFG1234567890ABCDE: session.yaml is not a regular file (a symlink or anything else is not followed)",
     );
   });
 });

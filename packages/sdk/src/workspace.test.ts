@@ -264,6 +264,41 @@ describe("openWorkspace", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "reads nothing through a session's events.jsonl or session.yaml that is a symlink",
+    async () => {
+      const root = await setupWorkspace();
+      const sessions = join(root, ".basou", "sessions");
+      // The intact files behind the links: a read that followed them would
+      // return the session and its events.
+      const diagnostics: string[] = [];
+      const events = join(sessions, SES_DONE, "events.jsonl");
+      await rename(events, join(root, "moved-events.jsonl"));
+      await symlink(join(root, "moved-events.jsonl"), events);
+      const ws = await openWorkspace(root, {
+        onDiagnostic: (d) => diagnostics.push(`${d.id}:${d.message}`),
+      });
+      // As for a session entry that is not a directory: nothing, reported.
+      expect(await ws.readEvents(SES_DONE)).toEqual([]);
+      const streamed: Event[] = [];
+      for await (const e of ws.streamEvents(SES_DONE)) streamed.push(e);
+      expect(streamed).toEqual([]);
+      expect(diagnostics).toEqual([
+        `${SES_DONE}:skipped: events_jsonl_not_a_file`,
+        `${SES_DONE}:skipped: events_jsonl_not_a_file`,
+      ]);
+
+      await rm(events);
+      await rename(join(root, "moved-events.jsonl"), events);
+      const yaml = join(sessions, SES_DONE, "session.yaml");
+      await rename(yaml, join(root, "moved-session.yaml"));
+      await symlink(join(root, "moved-session.yaml"), yaml);
+      expect(await ws.getSession(SES_DONE)).toBeNull();
+      expect((await ws.listSessions()).map((s) => s.sessionId)).not.toContain(SES_DONE);
+      expect(diagnostics).toContain(`${SES_DONE}:skipped: session_yaml_not_a_file`);
+    },
+  );
+
   it("reads a session's events eagerly and as a stream", async () => {
     const ws = await openWorkspace(await setupWorkspace());
     const events = await ws.readEvents(SES_DONE);

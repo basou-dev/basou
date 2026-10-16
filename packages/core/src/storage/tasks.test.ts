@@ -2027,6 +2027,32 @@ describe("refreshTaskLinkedSessions", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "keeps a link to a session whose session.yaml is a symlink, whose task_id it cannot read",
+    async () => {
+      const { refreshTaskLinkedSessions } = await import("./tasks.js");
+      const paths = await setupPaths();
+      await placeSessionWithTaskId(paths, SES_ID_RUNNING, TASK_ID_A);
+      // The yaml behind the symlink names another task: a refresh that
+      // followed it would remove the link.
+      await placeSessionWithTaskId(paths, SES_ID_OTHER, TASK_ID_B);
+      const yamlPath = join(paths.sessions, SES_ID_OTHER, "session.yaml");
+      const outside = join(getWorkDir(), "moved-session.yaml");
+      await rename(yamlPath, outside);
+      await symlink(outside, yamlPath);
+      await placeTaskWithLinkedSessions(paths, [SES_ID_RUNNING, SES_ID_OTHER]);
+      const result = await refreshTaskLinkedSessions(paths, makeManifest(), {
+        taskId: TASK_ID_A,
+        occurredAt: OCC_AT,
+        workingDirectory: getWorkDir(),
+        write: true,
+      });
+      expect(result.removedLinkedSessions).toEqual([]);
+      const doc = await readTaskFile(paths, TASK_ID_A);
+      expect(doc.task.task.linked_sessions).toContain(SES_ID_OTHER);
+    },
+  );
+
   it("removes a snapshot entry whose session.yaml no longer links to the task", async () => {
     const { refreshTaskLinkedSessions } = await import("./tasks.js");
     const paths = await setupPaths();

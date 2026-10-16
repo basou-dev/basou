@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,9 @@ import {
   assertSessionDirSafe,
   assertSessionStoreSafe,
   inspectSessionEntry,
+  lstatSessionFile,
+  type SessionFileName,
+  SessionFileNotAFileError,
   SessionNotADirectoryError,
 } from "./session-dir.js";
 import {
@@ -418,6 +422,278 @@ describe.skipIf(process.platform === "win32")("a session named by id is not foll
     expect(await snapshot(outside)).toEqual(before);
   });
 });
+
+const FILE_NOT_A_FILE = (file: string, id: string): string =>
+  `${file} of session ${id} is not a regular file; a symlink or anything else there is not followed`;
+
+type FileSwap = "symlink" | "dangling" | "fifo" | "directory";
+
+/**
+ * Replace `file` of session `id` (a directory in the store) with something
+ * that is not a regular file. A `symlink` points at an intact copy of the file
+ * outside the store, so a reader or writer that followed it would succeed;
+ * the copy's path is returned. A `fifo` would block a reader that opened it.
+ */
+async function swapSessionFile(
+  paths: BasouPaths,
+  id: string,
+  file: SessionFileName,
+  how: FileSwap,
+): Promise<string> {
+  const path = join(paths.sessions, id, file);
+  const outside = join(getWorkDir(), `outside-${id.slice(-3)}-${file}`);
+  await writeFile(outside, await readFile(path));
+  await rm(path);
+  if (how === "symlink") await symlink(outside, path);
+  else if (how === "dangling") await symlink(join(getWorkDir(), "nowhere"), path);
+  else if (how === "fifo") execFileSync("mkfifo", [path]);
+  else await mkdir(path);
+  return outside;
+}
+
+// A Crockford base32 code for each swap, to build valid session ids from.
+const CODE: Record<FileSwap, string> = {
+  symlink: "SY",
+  dangling: "DG",
+  fifo: "FF",
+  directory: "DR",
+};
+
+const SWAPS: [FileSwap, "symlink" | "not_a_file"][] = [
+  ["symlink", "symlink"],
+  ["dangling", "symlink"],
+  ["fifo", "not_a_file"],
+  ["directory", "not_a_file"],
+];
+
+// POSIX only: symlinks need privileges on Windows, and it has no mkfifo.
+describe.skipIf(process.platform === "win32")(
+  "a session file that is not a regular file is not followed",
+  () => {
+    it("lstatSessionFile classifies a session file without following it", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      for (const [how] of SWAPS) {
+        const id = SES(`${CODE[how]}1`);
+        await writeSession(join(paths.sessions, id), id, "running");
+        await swapSessionFile(paths, id, "events.jsonl", how);
+      }
+      await writeSession(join(paths.sessions, REAL), REAL, "running");
+      await rm(join(paths.sessions, REAL, "session.yaml"));
+      expect(await lstatSessionFile(paths, REAL, "events.jsonl")).toBe("file");
+      expect(await lstatSessionFile(paths, REAL, "session.yaml")).toBe("missing");
+      expect(await lstatSessionFile(paths, SES("SY1"), "events.jsonl")).toBe("symlink");
+      expect(await lstatSessionFile(paths, SES("DG1"), "events.jsonl")).toBe("symlink");
+      expect(await lstatSessionFile(paths, SES("FF1"), "events.jsonl")).toBe("not_a_file");
+      expect(await lstatSessionFile(paths, SES("DR1"), "events.jsonl")).toBe("not_a_file");
+    });
+
+    it("the event readers refuse an events.jsonl that is not a regular file and read nothing", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      for (const [how, kind] of SWAPS) {
+        const id = SES(`${CODE[how]}2`);
+        await writeSession(join(paths.sessions, id), id, "running");
+        await swapSessionFile(paths, id, "events.jsonl", how);
+        const eager = await readAllEvents(paths, id).catch((error: unknown) => error);
+        expect(eager).toBeInstanceOf(SessionFileNotAFileError);
+        expect(eager).toMatchObject({
+          name: "SessionFileNotAFileError",
+          sessionId: id,
+          file: "events.jsonl",
+          kind,
+          message: FILE_NOT_A_FILE("events.jsonl", id),
+        });
+        const streamed = await drain(paths, id);
+        expect(streamed.yielded).toEqual([]);
+        expect(streamed.error).toBeInstanceOf(SessionFileNotAFileError);
+      }
+    });
+
+    it("control: the event readers read a regular events.jsonl and nothing for a missing one", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      await writeSession(join(paths.sessions, REAL), REAL, "running");
+      expect((await readAllEvents(paths, REAL)).map((ev) => ev.session_id)).toEqual([REAL]);
+      await rm(join(paths.sessions, REAL, "events.jsonl"));
+      expect(await readAllEvents(paths, REAL)).toEqual([]);
+    });
+
+    it("readSessionYaml refuses a session.yaml that is not a regular file", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      for (const [how, kind] of SWAPS) {
+        const id = SES(`${CODE[how]}3`);
+        await writeSession(join(paths.sessions, id), id, "running");
+        await swapSessionFile(paths, id, "session.yaml", how);
+        const error = await readSessionYaml(paths, id).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(SessionFileNotAFileError);
+        expect(error).toMatchObject({
+          sessionId: id,
+          file: "session.yaml",
+          kind,
+          message: FILE_NOT_A_FILE("session.yaml", id),
+        });
+      }
+    });
+
+    it("a listing leaves out a session whose session.yaml is not a regular file and keeps one whose events.jsonl is not", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      const yamlLinked = SES("YM1");
+      const eventsLinked = SES("EV1");
+      await writeSession(join(paths.sessions, REAL), REAL, "running");
+      await writeSession(join(paths.sessions, yamlLinked), yamlLinked, "running");
+      await writeSession(join(paths.sessions, eventsLinked), eventsLinked, "running");
+      await swapSessionFile(paths, yamlLinked, "session.yaml", "symlink");
+      await swapSessionFile(paths, eventsLinked, "events.jsonl", "fifo");
+      const skips: string[] = [];
+      const entries = await loadSessionEntries(paths, {
+        now: new Date("2026-05-08T12:00:00+09:00"),
+        onSkip: (sid, reason) => skips.push(`${sid}:${reason}`),
+      });
+      expect(entries.map((e) => e.sessionId)).toEqual([eventsLinked, REAL]);
+      expect(skips.sort()).toEqual(
+        [`${yamlLinked}:session_yaml_not_a_file`, `${eventsLinked}:events_jsonl_unreadable`].sort(),
+      );
+    });
+
+    it("an append, a note, a task attach and a finalize write nothing through an events.jsonl that is not a regular file", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      for (const how of ["symlink", "fifo"] as const) {
+        const id = SES(`${CODE[how]}4`);
+        await writeSession(join(paths.sessions, id), id, "running");
+        const outside = await swapSessionFile(paths, id, "events.jsonl", how);
+        const before = await readFile(outside, "utf8");
+        const refusal = FILE_NOT_A_FILE("events.jsonl", id);
+        await expect(
+          appendChainedEvent(paths, id, noteEvent(id, "evt_01HXABCDEF1234567890ABCEV6")),
+        ).rejects.toThrow(refusal);
+        await expect(
+          appendEventToExistingSession({
+            paths,
+            sessionId: id,
+            eventBuilder: (eventId) => noteEvent(id, eventId),
+          }),
+        ).rejects.toThrow(refusal);
+        await expect(
+          createTaskWithEvent({
+            mode: "attach",
+            paths,
+            occurredAt: "2026-05-08T12:00:00+09:00",
+            sessionId: id,
+            taskId: TASK_ID,
+            title: "attached",
+            initialStatus: "planned",
+            description: "",
+          }),
+        ).rejects.toThrow(refusal);
+        await expect(
+          finalizeSessionYaml(paths, id, (s) => {
+            s.session.status = "completed";
+          }),
+        ).rejects.toThrow(refusal);
+        expect(await readFile(outside, "utf8")).toBe(before);
+        // The session is left as it was: still running, with no anchor.
+        expect((await readSessionYaml(paths, id)).session).toMatchObject({ status: "running" });
+        expect((await readSessionYaml(paths, id)).session.integrity).toBeUndefined();
+      }
+      expect(await readdir(paths.tasks)).not.toContain(`${TASK_ID}.md`);
+    });
+
+    it("a note, a task attach and a finalize write nothing through a session.yaml that is not a regular file", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      await writeSession(join(paths.sessions, LINKED), LINKED, "running");
+      const outside = await swapSessionFile(paths, LINKED, "session.yaml", "symlink");
+      const before = await snapshot(join(paths.sessions, LINKED));
+      const outsideBefore = await readFile(outside, "utf8");
+      const refusal = FILE_NOT_A_FILE("session.yaml", LINKED);
+      await expect(
+        appendEventToExistingSession({
+          paths,
+          sessionId: LINKED,
+          eventBuilder: (eventId) => noteEvent(LINKED, eventId),
+        }),
+      ).rejects.toThrow(refusal);
+      await expect(
+        createTaskWithEvent({
+          mode: "attach",
+          paths,
+          occurredAt: "2026-05-08T12:00:00+09:00",
+          sessionId: LINKED,
+          taskId: TASK_ID,
+          title: "attached",
+          initialStatus: "planned",
+          description: "",
+        }),
+      ).rejects.toThrow(refusal);
+      await expect(
+        finalizeSessionYaml(paths, LINKED, (s) => {
+          s.session.status = "completed";
+        }),
+      ).rejects.toThrow(refusal);
+      expect(await readFile(outside, "utf8")).toBe(outsideBefore);
+      expect(await snapshot(join(paths.sessions, LINKED))).toEqual(before);
+      expect(await readdir(paths.tasks)).not.toContain(`${TASK_ID}.md`);
+    });
+
+    it("rechain skips it as events_not_a_file / yaml_not_a_file and rewrites nothing", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      const eventsLinked = SES("EV5");
+      const yamlLinked = SES("YM5");
+      await writeSession(join(paths.sessions, eventsLinked), eventsLinked, "imported");
+      await writeSession(join(paths.sessions, yamlLinked), yamlLinked, "imported");
+      const outsideEvents = await swapSessionFile(paths, eventsLinked, "events.jsonl", "symlink");
+      const outsideYaml = await swapSessionFile(paths, yamlLinked, "session.yaml", "symlink");
+      const before = [await readFile(outsideEvents, "utf8"), await readFile(outsideYaml, "utf8")];
+      for (const dryRun of [true, false]) {
+        expect(await rechainSessionInPlace(paths, eventsLinked, { dryRun })).toEqual({
+          status: "skipped",
+          reason: "events_not_a_file",
+        });
+        expect(await rechainSessionInPlace(paths, yamlLinked, { dryRun })).toEqual({
+          status: "skipped",
+          reason: "yaml_not_a_file",
+        });
+      }
+      expect([await readFile(outsideEvents, "utf8"), await readFile(outsideYaml, "utf8")]).toEqual(
+        before,
+      );
+      // The same sessions with their files back in place are rechained.
+      for (const [id, file, outside] of [
+        [eventsLinked, "events.jsonl", outsideEvents],
+        [yamlLinked, "session.yaml", outsideYaml],
+      ] as const) {
+        await rm(join(paths.sessions, id, file));
+        await writeFile(join(paths.sessions, id, file), await readFile(outside));
+        expect(await rechainSessionInPlace(paths, id)).toEqual({
+          status: "rechained",
+          eventCount: 1,
+        });
+      }
+    });
+
+    it("an in-place re-import refuses it as a broken prior and rewrites nothing", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      for (const file of ["events.jsonl", "session.yaml"] as const) {
+        const id = SES(file === "events.jsonl" ? "EV6" : "YM6");
+        await writeSession(join(paths.sessions, id), id, "imported");
+        const outside = await swapSessionFile(paths, id, file, "symlink");
+        const before = await readFile(outside, "utf8");
+        expect(await reimportPreservingId(paths, makeManifest(), id, importPayload(id))).toEqual({
+          status: "skipped",
+          reason: "prior_chain_broken",
+        });
+        expect(await readFile(outside, "utf8")).toBe(before);
+        expect(await lstatSessionFile(paths, id, file)).toBe("symlink");
+      }
+    });
+
+    it("classifySuspect refuses a running session whose events.jsonl is a FIFO without blocking", async () => {
+      const paths = await ensureBasouDirectory(getWorkDir());
+      await writeSession(join(paths.sessions, REAL), REAL, "running");
+      await swapSessionFile(paths, REAL, "events.jsonl", "fifo");
+      await expect(
+        classifySuspect(paths, REAL, sessionDocument(REAL, "running"), new Date()),
+      ).rejects.toThrow(FILE_NOT_A_FILE("events.jsonl", REAL));
+    });
+  },
+);
 
 /** The fixture's session document, as a reader would return it. */
 function sessionDocument(id: string, status: Status): Session {

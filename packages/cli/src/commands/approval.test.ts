@@ -473,15 +473,17 @@ describe("doRunApprovalShow", () => {
   });
 
   it("case 13: events.jsonl I/O failure surfaces Failed to read events.jsonl", async () => {
+    // A directory in place of events.jsonl is refused as not a regular file
+    // rather than read, so the failure is made with chmod, which cannot block
+    // the superuser.
+    if (process.getuid?.() === 0) return;
     const repo = await setupInitedRepo();
     const approvalId = APPR("P01");
     const sessionId = SES("S01");
     await createApproval(repo, { id: approvalId, sessionId });
-    // Drop a *directory* in place of events.jsonl so the read fails with
-    // EISDIR; this is a deterministic substitute for chmod-based exclusion
-    // that does not require running the test as a non-root user.
     const sessionDir = await ensureSessionDir(repo, sessionId);
-    await mkdir(join(sessionDir, "events.jsonl"));
+    await writeFile(join(sessionDir, "events.jsonl"), "");
+    await chmod(join(sessionDir, "events.jsonl"), 0o000);
     let captured: unknown;
     try {
       await doRunApprovalShow(approvalId, {}, { cwd: repo });
@@ -1119,6 +1121,106 @@ describe.skipIf(process.platform === "win32")("a recorded session that is not a 
     expect(await readEventsLines(repo, sessionId)).toHaveLength(2);
   });
 });
+
+// POSIX only: symlinks need privileges on Windows, and it has no mkfifo.
+describe.skipIf(process.platform === "win32")(
+  "a recorded session whose events.jsonl or session.yaml is not a regular file",
+  () => {
+    const notAFile = (file: string, id: string): string =>
+      `${file} of session ${id} is not a regular file; a symlink or anything else there is not followed`;
+
+    // A running (attachable) session in the store with one requested event,
+    // whose `file` is moved out and linked back in: following the link would
+    // succeed. Returns the moved file.
+    async function sessionWithLinkedFile(
+      repo: string,
+      sessionId: string,
+      approvalId: string,
+      file: "events.jsonl" | "session.yaml",
+    ): Promise<string> {
+      const paths = basouPaths(repo);
+      await createApproval(repo, { id: approvalId, sessionId });
+      await appendRequestedEvent(repo, sessionId, approvalId, "2026-05-04T10:00:00+09:00", "E51");
+      await writeYamlFile(join(paths.sessions, sessionId, "session.yaml"), {
+        schema_version: "0.1.0",
+        session: {
+          id: sessionId,
+          task_id: null,
+          workspace_id: FIXED_WS_ID,
+          source: { kind: "claude-code", version: "0.1.0" },
+          started_at: "2026-05-04T09:00:00+09:00",
+          status: "running",
+          working_directory: "~/projects/example",
+          invocation: { command: "claude", args: [], exit_code: null },
+          related_files: [],
+          events_log: "events.jsonl",
+          summary: null,
+        },
+      });
+      const outside = join(repo, `moved-${file}`);
+      await rename(join(paths.sessions, sessionId, file), outside);
+      await symlink(outside, join(paths.sessions, sessionId, file));
+      return outside;
+    }
+
+    for (const file of ["events.jsonl", "session.yaml"] as const) {
+      it(`approve and reject write nothing when ${file} is a symlink, and leave the approval pending`, async () => {
+        const repo = await setupInitedRepo();
+        const approvalId = APPR("P51");
+        const sessionId = SES("S51");
+        const outside = await sessionWithLinkedFile(repo, sessionId, approvalId, file);
+        const paths = basouPaths(repo);
+        const before = await snapshotTree(join(paths.sessions, sessionId));
+        const outsideBefore = await readFile(outside, "utf8");
+
+        const err = captureStderr();
+        await runApprovalApprove(approvalId, {}, { cwd: repo });
+        expect(process.exitCode).toBe(1);
+        expect(joinCalls(err)).toContain(notAFile(file, sessionId));
+        process.exitCode = 0;
+        await runApprovalReject(approvalId, { reason: "no" }, { cwd: repo });
+        expect(process.exitCode).toBe(1);
+
+        expect(await readFile(outside, "utf8")).toBe(outsideBefore);
+        expect(await snapshotTree(join(paths.sessions, sessionId))).toEqual(before);
+        expect(await readdir(paths.approvals.pending)).toContain(`${approvalId}.yaml`);
+        expect(await readdir(paths.approvals.resolved).catch(() => [])).not.toContain(
+          `${approvalId}.yaml`,
+        );
+      });
+    }
+
+    it("show stops with the error when events.jsonl is a FIFO", async () => {
+      const repo = await setupInitedRepo();
+      const approvalId = APPR("P52");
+      const sessionId = SES("S52");
+      const outside = await sessionWithLinkedFile(repo, sessionId, approvalId, "events.jsonl");
+      await rm(join(basouPaths(repo).sessions, sessionId, "events.jsonl"));
+      await execFileAsync("mkfifo", [join(basouPaths(repo).sessions, sessionId, "events.jsonl")]);
+      await rm(outside);
+      const out = captureStdout();
+      const err = captureStderr();
+      await runApprovalShow(approvalId, {}, { cwd: repo });
+      expect(process.exitCode).toBe(1);
+      expect(joinCalls(err)).toContain(notAFile("events.jsonl", sessionId));
+      expect(joinCalls(out)).toBe("");
+    });
+
+    it("control: the same session with its file back in place is approved", async () => {
+      const repo = await setupInitedRepo();
+      const approvalId = APPR("P53");
+      const sessionId = SES("S53");
+      const outside = await sessionWithLinkedFile(repo, sessionId, approvalId, "session.yaml");
+      const yaml = join(basouPaths(repo).sessions, sessionId, "session.yaml");
+      await rm(yaml);
+      await rename(outside, yaml);
+      captureStdout();
+      await runApprovalApprove(approvalId, {}, { cwd: repo });
+      expect(process.exitCode).not.toBe(1);
+      expect(await readEventsLines(repo, sessionId)).toHaveLength(2);
+    });
+  },
+);
 
 /** Every file under `dir`, with its bytes, so a test can prove nothing changed. */
 async function snapshotTree(dir: string): Promise<Record<string, string>> {

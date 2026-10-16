@@ -25,6 +25,7 @@ import {
   renderDecisions,
   renderHandoff,
   resolveViewLanguageFromPaths,
+  SessionFileNotAFileError,
   SessionIdSchema,
   SessionNotADirectoryError,
   summarizeOrientation,
@@ -707,6 +708,8 @@ async function sessionDetail(
     if (error instanceof Error && error.message === "YAML file not found") {
       throw new HttpError(404, "Session not found");
     }
+    // Nor is a session.yaml that is a symlink or anything but a regular file.
+    if (error instanceof SessionFileNotAFileError) throw new HttpError(404, error.message);
     throw error;
   }
   // An unreadable events.jsonl must not 500 the detail view; surface the

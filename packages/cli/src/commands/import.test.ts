@@ -1517,6 +1517,29 @@ describe.skipIf(process.platform === "win32")(
       }
     });
 
+    it("warns once, with the full id, about a session whose session.yaml is not a regular file", async () => {
+      const repo = await setupInitedRepo();
+      await writeTranscript(repo, "sess-1", actionTranscript(repo));
+      await writeTranscript(repo, "sess-2", actionTranscript(repo));
+      const ctx = { cwd: repo, claudeProjectsDir: getProjectsRoot() };
+      await doRunImportClaudeCode({ session: "sess-1" }, ctx);
+      const [linked] = await listSessionDirs(repo);
+      if (linked === undefined) throw new Error("fixture import failed");
+      // The earlier import's session.yaml moved out and linked back in.
+      const yaml = join(basouPaths(repo).sessions, linked, "session.yaml");
+      await rename(yaml, join(repo, "moved-session.yaml"));
+      await symlink(join(repo, "moved-session.yaml"), yaml);
+
+      const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      await doRunImportClaudeCode({ all: true }, ctx);
+      const warnings = err.mock.calls.map((c) => String(c[0])).filter((m) => m.includes(WARNING));
+      expect(warnings).toEqual([
+        `Import: the session.yaml of ${linked} is not a regular file (a symlink or anything else is not followed), so it was not checked for an earlier import; a session imported there may be imported again`,
+      ]);
+      // The link is not followed, so sess-1 is imported again beside it.
+      expect((await listSessionDirs(repo)).filter((d) => d !== linked)).toHaveLength(2);
+    });
+
     it("a .basou/sessions that is a symlink stops the import, --dry-run included", async () => {
       const repo = await setupInitedRepo();
       await writeTranscript(repo, "sess-1", actionTranscript(repo));

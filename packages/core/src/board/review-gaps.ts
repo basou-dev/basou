@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import {
   findReviewGaps,
   type ReviewGapsSummary,
@@ -13,7 +12,7 @@ import { listSessions, lostAmong } from "./sessions.js";
  * review-gaps` judges a unit of work differently, gains a verdict or changes
  * its default window.
  */
-export const BOARD_REVIEW_GAPS_METHOD = 1;
+export const BOARD_REVIEW_GAPS_METHOD = 2;
 
 // Every verdict `basou review-gaps` gives, in the order its type lists them.
 // A Record keyed by the union, so a verdict added to the surfacer fails to
@@ -91,7 +90,7 @@ export async function measureReviewGaps(input: { paths: BasouPaths; now: Date })
 
   let lost = offSchema.size;
   for (const [sessionId, lines] of malformed) {
-    lost += await lostAmong(join(input.paths.sessions, sessionId, "events.jsonl"), [...lines]);
+    lost += await lostAmong(input.paths, sessionId, [...lines]);
   }
   const problems: string[] = [];
   if (lost > 0) problems.push(`${lost} event line${lost === 1 ? "" : "s"} could not be read`);

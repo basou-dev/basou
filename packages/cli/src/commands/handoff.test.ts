@@ -237,7 +237,8 @@ describe("basou handoff generate", () => {
     const repo = await setupInitedRepo();
     const id = SES("X05");
     await placeSession(repo, { id, status: "running" });
-    // Replace events.jsonl with a directory so the read fails with EISDIR.
+    // Replace events.jsonl with a directory, which is not a regular file, so
+    // the read is refused.
     await mkdir(join(basouPaths(repo).sessions, id, "events.jsonl"), { recursive: true });
     captureStdout();
     const err = captureStderr();

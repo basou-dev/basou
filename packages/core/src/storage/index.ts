@@ -41,11 +41,13 @@ export {
   portfolioPathExists,
   portfolioPathInitialized,
 } from "./portfolio-config.js";
-export type { SessionEntryKind } from "./session-dir.js";
+export type { SessionEntryKind, SessionFileKind, SessionFileName } from "./session-dir.js";
 export {
   assertSessionDirSafe,
   assertSessionStoreSafe,
   inspectSessionEntry,
+  lstatSessionFile,
+  SessionFileNotAFileError,
   SessionNotADirectoryError,
 } from "./session-dir.js";
 export type {

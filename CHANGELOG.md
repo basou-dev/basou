@@ -25,6 +25,52 @@ All notable changes to **basou** are recorded here. The project follows
 - **`@basou/sdk` tells such an entry apart by the error's class instead of
   its message.** `getSession`, `readEvents` and `streamEvents` return `null`,
   an empty list and nothing for it, as before.
+- **A session's `events.jsonl` or `session.yaml` that is a symlink, whatever
+  it points to, or anything but a regular file is not followed.** basou read
+  through such a file, reading a log or a `session.yaml` from outside the
+  store, and a FIFO there made `basou verify`, `basou board measure` and every
+  command that reads the session's events wait without end. basou never
+  creates either form. Nothing is now read through it or waits on it, and
+  nothing is appended or written through it:
+  - `basou verify` reports the session `tampered` with a new `reason`,
+    `events_not_a_file` or `yaml_not_a_file`, and `event_count` `0`, as
+    `docs/spec/compatibility.md` allows a `reason` to be added. `session
+    rechain` skips it with the same reason and exits non-zero, and an in-place
+    re-import skips it as a prior whose chain fails verification.
+  - The commands that read the session by its id stop with `<file> of session
+    <id> is not a regular file; a symlink or anything else there is not
+    followed`: `session show`, `approval show`, `approve` and `reject` (which
+    leave the approval pending), `session note`, `decision record`, a `task`
+    command attaching to the session, and `exec` and `run` for the session
+    they started. `approve` and `reject` went on when they could not read the
+    `session.yaml`; they stop for one that is not a regular file. `basou
+    view`'s session page answers `404` with the message for a `session.yaml`,
+    and shows the session without its events for an `events.jsonl`.
+  - The commands that list or summarize sessions leave out a session whose
+    `session.yaml` is such, with a warning naming its full id
+    (`session_yaml_not_a_file`); one whose `events.jsonl` is such is kept, its
+    events unreadable (`events_jsonl_unreadable`). `import` warns that a
+    session whose `session.yaml` is such may be imported again, and `task
+    refresh-linkage` keeps a link to it.
+  - A directory where `events.jsonl` should be, which these commands reported
+    as a failure to read it, is one of these cases: `basou verify` reports the
+    session `tampered` instead of stopping without output, and `report
+    generate` counts it `tampered` instead of leaving it out of the integrity
+    tally.
+- **`basou board measure` raises the method of `integrity`, `trail`,
+  `review_gaps`, `freshness` and `effort` to 2,** as each counts such a
+  session differently: `integrity` counts it `tampered`, as `basou verify`
+  does, and the others are not measured when a session they read is such.
+- **`@basou/core` exports `SessionFileNotAFileError`, `lstatSessionFile` and
+  the types `SessionFileName` and `SessionFileKind`.** The event readers,
+  `readSessionYaml` and the chained append throw the error, which carries the
+  `sessionId`, the `file` and the `kind` (`symlink` or `not_a_file`).
+  `SessionSkipReason` gains `session_yaml_not_a_file`, and `RechainResult`
+  gains `events_not_a_file` and `yaml_not_a_file`.
+- **`@basou/sdk` treats such a file as it treats a session entry that is not a
+  directory.** `listSessions` and `getSession` leave out a session whose
+  `session.yaml` is such, and `readEvents` and `streamEvents` return no events
+  for an `events.jsonl` that is such; each reports it to `onDiagnostic`.
 
 ## 0.69.0 — 2026-10-16
 

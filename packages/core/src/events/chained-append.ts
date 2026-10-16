@@ -1,10 +1,9 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
-import { findErrorCode } from "../lib/error-codes.js";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { acquireLock } from "../storage/lockfile.js";
-import { assertSessionDirSafe } from "../storage/session-dir.js";
+import { assertSessionDirSafe, readSessionFile } from "../storage/session-dir.js";
 import { genesisHash, lineHash, serializeEventLine } from "./chain.js";
 import { assertWritableEvent } from "./event-writer.js";
 
@@ -73,7 +72,9 @@ function carriesPrevHash(line: Buffer): boolean {
  * fragment.
  *
  * Throws the {@link assertSessionDirSafe} errors when the session's entry is
- * a symlink or a file (it is not followed, so nothing is appended through it),
+ * a symlink or a file, and `SessionFileNotAFileError` when its
+ * `events.jsonl` is a symlink or anything but a regular file (neither is
+ * followed, so nothing is appended through it),
  * `Error("Failed to read events.jsonl")` for non-ENOENT I/O,
  * `Error("Unterminated final line in events.jsonl")` for a torn tail, and
  * `Error("events.jsonl is partially chained")` for a mixed first/last line.
@@ -83,18 +84,9 @@ export async function inspectChainTail(
   sessionId: string,
 ): Promise<ChainTailState> {
   await assertSessionDirSafe(paths, sessionId);
-  const filePath = join(paths.sessions, sessionId, "events.jsonl");
-  let raw: Buffer;
-  try {
-    raw = await readFile(filePath);
-  } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) {
-      // A not-yet-created log: the first append chains from the session genesis.
-      return { chained: true, head: genesisHash(sessionId), count: 0 };
-    }
-    throw new Error("Failed to read events.jsonl", { cause: error });
-  }
-  if (raw.length === 0) {
+  const raw = await readSessionFile(paths, sessionId, "events.jsonl");
+  if (raw === null || raw.length === 0) {
+    // A not-yet-created or empty log: the first append chains from the session genesis.
     return { chained: true, head: genesisHash(sessionId), count: 0 };
   }
   if (raw[raw.length - 1] !== 0x0a) {

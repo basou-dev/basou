@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -345,6 +345,8 @@ describe("report-renderer", () => {
   });
 
   it("skips an unreadable session from the integrity tally and still renders", async () => {
+    // chmod cannot block the superuser.
+    if (process.getuid?.() === 0) return;
     const paths = await setupPaths();
     await placeSession(paths, {
       id: SES("0A1"),
@@ -352,10 +354,14 @@ describe("report-renderer", () => {
       sourceKind: "terminal",
       events: startedLine(SES("0A1"), "E01", "2026-05-04T09:00:00.000Z"),
     });
-    // A session whose events.jsonl is a DIRECTORY: readFile throws EISDIR (a
+    // A session whose events.jsonl cannot be read: readFile throws EACCES (a
     // non-ENOENT I/O error), which verifyEventsChain surfaces by throwing.
-    await placeSession(paths, { id: SES("0X1"), startedAt: "2026-05-04T08:00:00.000Z" });
-    await mkdir(join(paths.sessions, SES("0X1"), "events.jsonl"), { recursive: true });
+    await placeSession(paths, {
+      id: SES("0X1"),
+      startedAt: "2026-05-04T08:00:00.000Z",
+      events: startedLine(SES("0X1"), "E02", "2026-05-04T08:00:00.000Z"),
+    });
+    await chmod(join(paths.sessions, SES("0X1"), "events.jsonl"), 0o000);
 
     const skips: Array<{ id: string; reason: string }> = [];
     const { data } = await renderReport({
@@ -370,6 +376,36 @@ describe("report-renderer", () => {
     expect(data.sessions.total).toBe(2);
     expect(data.integrity.total).toBe(1);
     expect(data.integrity.unchained).toBe(1);
+    expect(skips.some((s) => s.id === SES("0X1") && s.reason === "events_jsonl_unreadable")).toBe(
+      true,
+    );
+  });
+
+  it("tallies a session whose events.jsonl is not a regular file as tampered, as verify does", async () => {
+    const paths = await setupPaths();
+    await placeSession(paths, {
+      id: SES("0A1"),
+      startedAt: "2026-05-04T09:00:00.000Z",
+      sourceKind: "terminal",
+      events: startedLine(SES("0A1"), "E01", "2026-05-04T09:00:00.000Z"),
+    });
+    // A DIRECTORY at events.jsonl is not followed: verify judges it, and the
+    // events it holds are unreadable to the rest of the report.
+    await placeSession(paths, { id: SES("0X1"), startedAt: "2026-05-04T08:00:00.000Z" });
+    await mkdir(join(paths.sessions, SES("0X1"), "events.jsonl"), { recursive: true });
+
+    const skips: Array<{ id: string; reason: string }> = [];
+    const { data } = await renderReport({
+      paths,
+      nowIso: NOW_ISO,
+      timeZone: TZ,
+      onSessionSkip: (id, reason) => skips.push({ id, reason }),
+    });
+
+    expect(data.sessions.total).toBe(2);
+    expect(data.integrity.total).toBe(2);
+    expect(data.integrity.unchained).toBe(1);
+    expect(data.integrity.tampered).toBe(1);
     expect(skips.some((s) => s.id === SES("0X1") && s.reason === "events_jsonl_unreadable")).toBe(
       true,
     );

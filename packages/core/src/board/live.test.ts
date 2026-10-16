@@ -122,11 +122,11 @@ describe("measureBoardLive", () => {
     );
     expect(m.methods).toEqual({
       repos: 1,
-      trail: 1,
-      integrity: 1,
-      review_gaps: 1,
-      freshness: 1,
-      effort: 1,
+      trail: 2,
+      integrity: 2,
+      review_gaps: 2,
+      freshness: 2,
+      effort: 2,
       components: 2,
     });
     expect(m.not_found).toEqual([]);

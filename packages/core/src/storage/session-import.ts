@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { chainRawJsonLines } from "../events/chain.js";
@@ -21,7 +21,14 @@ import { TaskIdSchema } from "../schemas/shared.schema.js";
 import { atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
-import { assertSessionStoreSafe, inspectSessionEntry } from "./session-dir.js";
+import {
+  assertSessionStoreSafe,
+  findUnfollowedSessionFile,
+  inspectSessionEntry,
+  readSessionFile,
+  type SessionFileName,
+  SessionFileNotAFileError,
+} from "./session-dir.js";
 import { readSessionYaml } from "./sessions.js";
 import { enumerateTaskIds } from "./tasks.js";
 import { linkYamlFile, overwriteYamlFile } from "./yaml-store.js";
@@ -599,14 +606,7 @@ export async function reimportPreservingId(
       // `priorEvents` here instead would write an UNCHAINED file (the parsed
       // events lost their byte-exact form), contradicting the prior anchor.
       const eventsPath = join(sessionDir, "events.jsonl");
-      let priorEventsRaw: Buffer | null = null;
-      try {
-        priorEventsRaw = await readFile(eventsPath);
-      } catch (error: unknown) {
-        if (!findErrorCode(error, "ENOENT")) {
-          throw new Error("Failed to read events.jsonl", { cause: error });
-        }
-      }
+      const priorEventsRaw = await readSessionFile(paths, priorSessionId, "events.jsonl");
 
       const chainResult = await writeEventsBulk(sessionDir, mergedEvents, { chain: true });
       try {
@@ -677,6 +677,10 @@ export type RechainResult =
       // `symlink` / `not_a_directory`: the entry named as the session is a
       //   symlink or a file; it is not followed, so nothing is read or
       //   rewritten (`basou verify` reports it `tampered`).
+      // `events_not_a_file` / `yaml_not_a_file`: the session's events.jsonl
+      //   or session.yaml is a symlink or anything but a regular file; it is
+      //   not followed either, and `basou verify` reports it `tampered` with
+      //   the same reason.
       reason:
         | "already_chained"
         | "empty"
@@ -687,8 +691,16 @@ export type RechainResult =
         | "yaml_missing"
         | "yaml_unreadable"
         | "symlink"
-        | "not_a_directory";
+        | "not_a_directory"
+        | "events_not_a_file"
+        | "yaml_not_a_file";
     };
+
+// The rechain skip reason for a session file that is not followed, the reason
+// `basou verify` gives it.
+function unfollowedReason(file: SessionFileName): "events_not_a_file" | "yaml_not_a_file" {
+  return file === "events.jsonl" ? "events_not_a_file" : "yaml_not_a_file";
+}
 
 /**
  * Add the tamper-evidence hash chain, IN PLACE, to an imported session that
@@ -721,6 +733,8 @@ export async function rechainSessionInPlace(
   if (entry === "symlink" || entry === "not_a_directory") {
     return { status: "skipped", reason: entry };
   }
+  const unfollowed = await findUnfollowedSessionFile(paths, sessionId);
+  if (unfollowed !== null) return { status: "skipped", reason: unfollowedReason(unfollowed.file) };
   const sessionDir = join(paths.sessions, sessionId);
   // The CLI surfaces per-session error messages verbatim. acquireLock's are
   // pathless ("Lock is held by another process", "Failed to acquire lock", or
@@ -732,6 +746,9 @@ export async function rechainSessionInPlace(
     try {
       record = await readSessionYaml(paths, sessionId);
     } catch (error: unknown) {
+      if (error instanceof SessionFileNotAFileError) {
+        return { status: "skipped", reason: unfollowedReason(error.file) };
+      }
       if (error instanceof Error && error.message === "YAML file not found") {
         return { status: "skipped", reason: "yaml_missing" };
       }
@@ -761,12 +778,17 @@ export async function rechainSessionInPlace(
     // escapes would otherwise be silently rewritten). Every line a basou
     // writer produced satisfies both.
     const eventsPath = join(sessionDir, "events.jsonl");
-    let priorRaw: Buffer;
+    let priorRaw: Buffer | null;
     try {
-      priorRaw = await readFile(eventsPath);
+      priorRaw = await readSessionFile(paths, sessionId, "events.jsonl");
     } catch (error: unknown) {
-      throw new Error("Failed to read events.jsonl", { cause: error });
+      if (error instanceof SessionFileNotAFileError) {
+        return { status: "skipped", reason: unfollowedReason(error.file) };
+      }
+      throw error;
     }
+    // The verdict gate passed `unchained`, which a missing log never is.
+    if (priorRaw === null) throw new Error("Failed to read events.jsonl");
     if (priorRaw.length === 0 || priorRaw[priorRaw.length - 1] !== 0x0a) {
       return { status: "skipped", reason: "events_unreadable" };
     }

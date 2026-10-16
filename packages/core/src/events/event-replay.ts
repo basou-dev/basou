@@ -1,7 +1,5 @@
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { findErrorCode } from "../lib/error-codes.js";
 import { type Event, EventSchema } from "../schemas/event.schema.js";
 import { normalizeEventTimestamps } from "../schemas/iso-timestamp.js";
 import { hasRetiredZeroDuration } from "../schemas/observed-duration.js";
@@ -9,7 +7,10 @@ import { SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import {
   lstatSessionEntry,
+  lstatSessionFile,
   type SessionEntryKind,
+  type SessionFileKind,
+  SessionFileNotAFileError,
   SessionNotADirectoryError,
 } from "../storage/session-dir.js";
 
@@ -56,6 +57,9 @@ export type ReplayOptions = {
  *   be a symlink.
  * - No entry, ENOENT on events.jsonl, or an empty file: yields nothing
  *   without warning.
+ * - An events.jsonl that is a symlink, whatever it points to, or anything but
+ *   a regular file (a directory, a FIFO) is not followed: it throws
+ *   {@link SessionFileNotAFileError} before anything is read.
  * - I/O error: throws `Error("Failed to read events.jsonl")` with the native
  *   error attached as `cause`. The thrown message never embeds an absolute
  *   path (pathless contract).
@@ -93,14 +97,18 @@ export async function* replayEvents(
   }
   const filePath = join(paths.sessions, sessionId, "events.jsonl");
 
-  // Probe existence first so ENOENT (= empty session) is silent while every
-  // other I/O failure surfaces as a single fixed-message error.
+  // Probe the file first, without following it, so ENOENT (= empty session)
+  // is silent, a symlink or anything but a regular file (a FIFO would block
+  // the read) is refused, and every other I/O failure surfaces as a single
+  // fixed-message error.
+  let file: SessionFileKind;
   try {
-    await stat(filePath);
+    file = await lstatSessionFile(paths, sessionId, "events.jsonl");
   } catch (error: unknown) {
-    if (findErrorCode(error, "ENOENT")) return;
     throw new Error("Failed to read events.jsonl", { cause: error });
   }
+  if (file === "missing") return;
+  if (file !== "file") throw new SessionFileNotAFileError(sessionId, "events.jsonl", file);
 
   let stream: ReturnType<typeof createReadStream>;
   try {

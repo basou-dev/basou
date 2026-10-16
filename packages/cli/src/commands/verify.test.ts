@@ -228,6 +228,55 @@ describe("basou verify", () => {
     },
   );
 
+  // POSIX only: symlinks need privileges on Windows, and it has no mkfifo.
+  it.skipIf(process.platform === "win32")(
+    "reports a session whose events.jsonl or session.yaml is not a regular file as tampered, following neither",
+    async () => {
+      const repo = await setupInitedRepo();
+      const importedId = await importChainedSession(repo);
+      await writeLiveSession(repo);
+      const sessions = basouPaths(repo).sessions;
+      // The intact log behind a symlink: following it would verify the session.
+      const events = join(sessions, importedId, "events.jsonl");
+      const outside = join(repo, "moved-events.jsonl");
+      await cp(events, outside);
+      await rm(events);
+      await symlink(outside, events);
+      // A FIFO would block a reader that opened it.
+      const yaml = join(sessions, LIVE_SES_ID, "session.yaml");
+      await rm(yaml);
+      await execFileAsync("mkfifo", [yaml]);
+
+      const out = captureStdout();
+      await runVerify({ json: true }, { cwd: repo });
+      expect(JSON.parse(joinCalls(out))).toEqual(
+        [
+          {
+            session_id: importedId,
+            status: "tampered",
+            event_count: 0,
+            reason: "events_not_a_file",
+          },
+          {
+            session_id: LIVE_SES_ID,
+            status: "tampered",
+            event_count: 0,
+            reason: "yaml_not_a_file",
+          },
+        ].sort((a, b) => (a.session_id < b.session_id ? -1 : 1)),
+      );
+      expect(process.exitCode).toBe(1);
+
+      process.exitCode = 0;
+      out.mockClear();
+      await runVerify({}, { cwd: repo });
+      const lines = joinCalls(out).split("\n");
+      expect(lines).toContain(`${importedId}  TAMPERED (events_not_a_file)`);
+      expect(lines).toContain(`${LIVE_SES_ID}  TAMPERED (yaml_not_a_file)`);
+      expect(process.exitCode).toBe(1);
+    },
+  );
+
   it("reports a null line as tampered and still reports every other session", async () => {
     const repo = await setupInitedRepo();
     const importedId = await importChainedSession(repo);
@@ -433,6 +482,8 @@ const REASONS: Record<NonNullable<VerifyRow["reason"]>, true> = {
   yaml_missing: true,
   symlink: true,
   not_a_directory: true,
+  events_not_a_file: true,
+  yaml_not_a_file: true,
 };
 
 // The cells of each row of the table under `header`, with the first cell's

@@ -30,6 +30,7 @@ import {
   reimportPreservingId,
   SESSION_IMPORT_SCHEMA_VERSION,
   type Session,
+  SessionFileNotAFileError,
   type SessionImportPayload,
   SessionImportPayloadSchema,
   type SessionSourceKind,
@@ -380,13 +381,15 @@ async function importDerivedSessions(
   // (a dry run takes no lock and is not stopped).
   await assertSessionStoreSafe(paths);
   if (options.dryRun !== true) await assertLockStoreSafe(paths);
-  const { byExternalId: existingByExternalId, notDirectories } = await loadExistingByExternalId(
-    paths,
-    sourceKind,
-  );
-  // An entry named as a session that is not a directory is not followed, so
-  // an earlier import it holds is not seen. Said once, when a session is about
-  // to be imported as new.
+  const {
+    byExternalId: existingByExternalId,
+    notDirectories,
+    yamlNotFiles,
+  } = await loadExistingByExternalId(paths, sourceKind);
+  // An entry named as a session that is not a directory is not followed, nor
+  // is a session.yaml that is not a regular file, so an earlier import either
+  // holds is not seen. Said once, when a session is about to be imported as
+  // new.
   let notDirectoriesWarned = false;
   // Session ids imported earlier in THIS run, so two source files that map to
   // one session id never double-import within a single invocation.
@@ -530,14 +533,28 @@ async function importDerivedSessions(
       counts.replaced++;
     }
 
-    if (priors.length === 0 && notDirectories.length > 0 && !notDirectoriesWarned) {
+    if (
+      priors.length === 0 &&
+      (notDirectories.length > 0 || yamlNotFiles.length > 0) &&
+      !notDirectoriesWarned
+    ) {
       notDirectoriesWarned = true;
-      const one = notDirectories.length === 1;
-      console.error(
-        `Import: ${notDirectories.join(", ")} ${one ? "is not a directory" : "are not directories"} ` +
-          `(a symlink or a file is not followed), so ${one ? "it was" : "they were"} not checked ` +
-          "for an earlier import; a session imported there may be imported again",
-      );
+      if (notDirectories.length > 0) {
+        const one = notDirectories.length === 1;
+        console.error(
+          `Import: ${notDirectories.join(", ")} ${one ? "is not a directory" : "are not directories"} ` +
+            `(a symlink or a file is not followed), so ${one ? "it was" : "they were"} not checked ` +
+            "for an earlier import; a session imported there may be imported again",
+        );
+      }
+      if (yamlNotFiles.length > 0) {
+        const one = yamlNotFiles.length === 1;
+        console.error(
+          `Import: the session.yaml of ${yamlNotFiles.join(", ")} ${one ? "is" : "are"} not a regular file ` +
+            `(a symlink or anything else is not followed), so ${one ? "it was" : "they were"} not checked ` +
+            "for an earlier import; a session imported there may be imported again",
+        );
+      }
     }
     const result = await importSessionFromJson(paths, manifest, payload, {
       dryRun: options.dryRun === true,
@@ -704,7 +721,11 @@ type PriorImport = { sessionId: string; sourceSizeBytes?: number };
 async function loadExistingByExternalId(
   paths: BasouPaths,
   sourceKind: SessionSourceKind,
-): Promise<{ byExternalId: Map<string, PriorImport[]>; notDirectories: string[] }> {
+): Promise<{
+  byExternalId: Map<string, PriorImport[]>;
+  notDirectories: string[];
+  yamlNotFiles: string[];
+}> {
   const byExternalId = new Map<string, PriorImport[]>();
   const add = (externalId: string, prior: PriorImport): void => {
     const list = byExternalId.get(externalId);
@@ -716,13 +737,15 @@ async function loadExistingByExternalId(
   try {
     ({ dirs: sessionIds, notDirectories } = await enumerateSessionEntries(paths));
   } catch {
-    return { byExternalId, notDirectories: [] };
+    return { byExternalId, notDirectories: [], yamlNotFiles: [] };
   }
+  const yamlNotFiles: string[] = [];
   for (const sessionId of sessionIds) {
     let session: Session;
     try {
       session = await readSessionYaml(paths, sessionId);
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof SessionFileNotAFileError) yamlNotFiles.push(sessionId);
       continue;
     }
     if (session.session.source.kind !== sourceKind) continue;
@@ -740,7 +763,7 @@ async function loadExistingByExternalId(
     const match = typeof label === "string" ? label.match(/^claude-code import (\S+)$/) : null;
     if (match?.[1] !== undefined) add(match[1], prior);
   }
-  return { byExternalId, notDirectories };
+  return { byExternalId, notDirectories, yamlNotFiles };
 }
 
 /**

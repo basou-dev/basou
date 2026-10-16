@@ -404,8 +404,9 @@ describe("storage/sessions", () => {
       const paths = await setupPaths();
       const id = SES("XAC");
       await placeSession(paths, { id, status: "running" });
-      // Replace events.jsonl with a directory so createReadStream fails with
-      // EISDIR. This is more portable than chmod-based EACCES across CI.
+      // Replace events.jsonl with a directory, which is not a regular file, so
+      // the read is refused. This is more portable than chmod-based EACCES
+      // across CI.
       await mkdir(join(paths.sessions, id, "events.jsonl"), { recursive: true });
       const skips: Array<{ sid: string; reason: SessionSkipReason }> = [];
       const entries = await loadSessionEntries(paths, {
