@@ -7,7 +7,7 @@ import { listSessions } from "./sessions.js";
  * of the section would change for the same trail, as when `basou verify`
  * judges a session differently or gains a status.
  */
-export const BOARD_INTEGRITY_METHOD = 1;
+export const BOARD_INTEGRITY_METHOD = 2;
 
 // Every status `basou verify` gives, in the order its summary line tallies
 // them. A Record keyed by the union, so a status added to the verifier fails
@@ -35,7 +35,8 @@ export type BoardIntegrity = {
    * How many sessions have each status, every status `basou verify` gives
    * included at 0, in the order its summary line tallies them. An entry named
    * as a session that is not a directory (a symlink or a file) is `tampered`,
-   * as `basou verify` judges it.
+   * as `basou verify` judges it, and so is a session whose `events.jsonl` or
+   * `session.yaml` is a symlink or anything but a regular file.
    */
   by_status: Record<string, number> | null;
   /** The sessions whose status is not `verified`, whatever it is. */

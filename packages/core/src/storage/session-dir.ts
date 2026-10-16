@@ -1,4 +1,4 @@
-import { lstat } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { findErrorCode } from "../lib/error-codes.js";
 import { SessionIdSchema } from "../schemas/shared.schema.js";
@@ -123,5 +123,144 @@ export async function assertSessionDirSafe(paths: BasouPaths, sessionId: string)
   const kind = await inspectSessionEntry(paths, sessionId);
   if (kind === "symlink" || kind === "not_a_directory") {
     throw new SessionNotADirectoryError(sessionId, kind);
+  }
+}
+
+/** A file basou keeps in a session's directory and reads back. */
+export type SessionFileName = "events.jsonl" | "session.yaml";
+
+/**
+ * What is at a session file's name, judged without following symlinks:
+ *
+ * - `file` — a regular file.
+ * - `symlink` — a symlink, whatever it points to.
+ * - `not_a_file` — anything else: a directory, a FIFO, a socket, a device.
+ * - `missing` — nothing.
+ */
+export type SessionFileKind = "file" | "symlink" | "not_a_file" | "missing";
+
+/**
+ * Thrown where a session's `events.jsonl` or `session.yaml` is read and the
+ * entry at that name is not a regular file: a symlink, whatever it points to,
+ * or anything else (a directory, a FIFO). It is not followed, so nothing is
+ * read from outside the store and no read waits on a FIFO. `file` says which
+ * file, and `kind` what is there, as {@link lstatSessionFile} classifies it.
+ *
+ * The message is `<file> of session <id> is not a regular file; a symlink or
+ * anything else there is not followed`. Tell this refusal apart by its class,
+ * not by the message.
+ */
+export class SessionFileNotAFileError extends Error {
+  readonly sessionId: string;
+  readonly file: SessionFileName;
+  readonly kind: "symlink" | "not_a_file";
+
+  constructor(sessionId: string, file: SessionFileName, kind: "symlink" | "not_a_file") {
+    super(
+      `${file} of session ${sessionId} is not a regular file; a symlink or anything else there is not followed`,
+    );
+    this.name = "SessionFileNotAFileError";
+    this.sessionId = sessionId;
+    this.file = file;
+    this.kind = kind;
+  }
+}
+
+/**
+ * Classify `<paths.sessions>/<sessionId>/<file>` without following it (see
+ * {@link SessionFileKind}), for a session whose entry the caller has already
+ * found to be a directory. Rethrows an lstat failure other than ENOENT as it
+ * is, for the caller to wrap in its own fixed message.
+ *
+ * Like the checks of the session's entry, this detects a file already
+ * swapped; it does not race-proof the filesystem.
+ */
+export async function lstatSessionFile(
+  paths: BasouPaths,
+  sessionId: string,
+  file: SessionFileName,
+): Promise<SessionFileKind> {
+  try {
+    const entry = await lstat(join(paths.sessions, sessionId, file));
+    if (entry.isSymbolicLink()) return "symlink";
+    return entry.isFile() ? "file" : "not_a_file";
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) return "missing";
+    throw error;
+  }
+}
+
+/**
+ * What is at each of a session's files (see {@link SessionFileKind}), for a
+ * session whose entry the caller has already found to be a directory.
+ *
+ * Throws `Error("Failed to read <file>", { cause })` on an lstat failure
+ * other than ENOENT.
+ */
+export async function inspectSessionFiles(
+  paths: BasouPaths,
+  sessionId: string,
+): Promise<Record<SessionFileName, SessionFileKind>> {
+  const kinds = {} as Record<SessionFileName, SessionFileKind>;
+  for (const file of ["events.jsonl", "session.yaml"] as const) {
+    try {
+      kinds[file] = await lstatSessionFile(paths, sessionId, file);
+    } catch (error: unknown) {
+      throw new Error(`Failed to read ${file}`, { cause: error });
+    }
+  }
+  return kinds;
+}
+
+/** Whether a {@link SessionFileKind} is one that is not followed. */
+export function isUnfollowedFile(kind: SessionFileKind): kind is "symlink" | "not_a_file" {
+  return kind === "symlink" || kind === "not_a_file";
+}
+
+/**
+ * The first of a session's files that is there but is not a regular file,
+ * `events.jsonl` before `session.yaml`, or `null` when neither is. For a
+ * session whose entry the caller has already found to be a directory.
+ *
+ * Throws the {@link inspectSessionFiles} errors.
+ */
+export async function findUnfollowedSessionFile(
+  paths: BasouPaths,
+  sessionId: string,
+): Promise<{ file: SessionFileName; kind: "symlink" | "not_a_file" } | null> {
+  const kinds = await inspectSessionFiles(paths, sessionId);
+  for (const file of ["events.jsonl", "session.yaml"] as const) {
+    const kind = kinds[file];
+    if (isUnfollowedFile(kind)) return { file, kind };
+  }
+  return null;
+}
+
+/**
+ * Read the bytes of a session's `file` when it is a regular file, or `null`
+ * when there is none, for a session whose entry the caller has already found
+ * to be a directory. The file is not followed: a symlink or anything else
+ * there throws {@link SessionFileNotAFileError} before anything is read.
+ *
+ * Throws `Error("Failed to read <file>", { cause })` on any other failure.
+ */
+export async function readSessionFile(
+  paths: BasouPaths,
+  sessionId: string,
+  file: SessionFileName,
+): Promise<Buffer | null> {
+  let kind: SessionFileKind;
+  try {
+    kind = await lstatSessionFile(paths, sessionId, file);
+  } catch (error: unknown) {
+    throw new Error(`Failed to read ${file}`, { cause: error });
+  }
+  if (kind === "missing") return null;
+  if (kind !== "file") throw new SessionFileNotAFileError(sessionId, file, kind);
+  try {
+    return await readFile(join(paths.sessions, sessionId, file));
+  } catch (error: unknown) {
+    if (findErrorCode(error, "ENOENT")) return null;
+    throw new Error(`Failed to read ${file}`, { cause: error });
   }
 }

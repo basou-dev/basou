@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   stat,
   symlink,
@@ -1766,12 +1767,12 @@ describe("measureBoard: the repos section", () => {
     const first = await measure(declaration, NOW, ["app"]);
     expect(first.methods).toEqual({
       repos: 1,
-      trail: 1,
-      integrity: 1,
-      review_gaps: 1,
+      trail: 2,
+      integrity: 2,
+      review_gaps: 2,
       portfolio: 1,
-      freshness: 1,
-      effort: 1,
+      freshness: 2,
+      effort: 2,
       components: 2,
       axis: 2,
     });
@@ -2458,6 +2459,60 @@ describe("measureBoard: the trail section", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "is not measured when a session's events.jsonl or session.yaml is not a regular file",
+    async () => {
+      const s1 = SES("S01");
+      const s2 = SES("S02");
+      await placeSession(s1, decided(s1, "E01", DEC("D01"), "t", "2026-09-01T00:00:00Z", "track"));
+      await placeSession(s2, decided(s2, "E02", DEC("D02"), "u", "2026-09-02T00:00:00Z", "track"));
+      // A FIFO at events.jsonl: the trail, the review gaps and the effort read
+      // the events, and opening it would block.
+      const events = join(paths.sessions, s1, "events.jsonl");
+      await rm(events);
+      execFileSync("mkfifo", [events]);
+      const m = await measure(declare([]));
+      expect(m.trail).toEqual({ decisions_all: null, decisions_live: null, tracks_open: null });
+      expect(m.not_found).toEqual([
+        { at: "trail", reason: "the sessions of the workspace could not be read" },
+        { at: "review_gaps", reason: "1 session could not be read, so the counts are not known" },
+        {
+          at: "effort.active_ms",
+          reason: "1 session could not be read, so the time and tokens are not known",
+        },
+        {
+          at: "effort.output_tokens",
+          reason: "1 session could not be read, so the time and tokens are not known",
+        },
+      ]);
+      // A symlink at session.yaml instead: the trail does not read it; the
+      // freshness, the review gaps and the effort do, and leave it out.
+      await rm(events);
+      await writeFile(events, decided(s1, "E01", DEC("D01"), "t", "2026-09-01T00:00:00Z", "track"));
+      const yaml = join(paths.sessions, s2, "session.yaml");
+      const outside = join(paths.root, "..", "outside-session.yaml");
+      await rename(yaml, outside);
+      await symlink(outside, yaml);
+      const n = await measure(declare([]));
+      expect(n.trail.decisions_all).toBe(2);
+      expect(n.not_found).toEqual([
+        { at: "review_gaps", reason: "1 session could not be read, so the counts are not known" },
+        {
+          at: "freshness.newest_session_at",
+          reason: "1 session could not be read, so the newest may be missing",
+        },
+        {
+          at: "effort.active_ms",
+          reason: "1 session could not be read, so the time and tokens are not known",
+        },
+        {
+          at: "effort.output_tokens",
+          reason: "1 session could not be read, so the time and tokens are not known",
+        },
+      ]);
+    },
+  );
+
   it.skipIf(
     process.platform === "win32" ||
       (typeof process.getuid === "function" && process.getuid() === 0),
@@ -2683,6 +2738,30 @@ describe("measureBoard: the integrity section", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "counts a session whose events.jsonl or session.yaml is not a regular file as tampered, as basou verify does",
+    async () => {
+      await placeChained(SES("S01"));
+      await placeChained(SES("S02"));
+      await placeChained(SES("S03"));
+      // A FIFO would block a reader that opened it; a symlink to the intact
+      // file would be verified by one that followed it.
+      const events = join(paths.sessions, SES("S02"), "events.jsonl");
+      await rm(events);
+      execFileSync("mkfifo", [events]);
+      const yaml = join(paths.sessions, SES("S03"), "session.yaml");
+      const outside = join(paths.root, "..", "outside-session.yaml");
+      await rename(yaml, outside);
+      await symlink(outside, yaml);
+      const m = await measure(declare([]));
+      expect(m.integrity).toMatchObject({
+        by_status: { verified: 1, tampered: 2 },
+        not_verified: 2,
+      });
+      expect(m.not_found.filter((n) => n.at === "integrity")).toEqual([]);
+    },
+  );
+
   it.skipIf(
     process.platform === "win32" ||
       (typeof process.getuid === "function" && process.getuid() === 0),
@@ -2805,12 +2884,12 @@ describe("measureBoard: the integrity section", () => {
     const first = await measure(declaration);
     expect(first.methods).toEqual({
       repos: 1,
-      trail: 1,
-      integrity: 1,
-      review_gaps: 1,
+      trail: 2,
+      integrity: 2,
+      review_gaps: 2,
       portfolio: 1,
-      freshness: 1,
-      effort: 1,
+      freshness: 2,
+      effort: 2,
       components: 2,
       axis: 2,
     });
@@ -3065,12 +3144,12 @@ describe("measureBoard: the review_gaps section", () => {
     const none = await measure(declaration);
     expect(none.methods).toEqual({
       repos: 1,
-      trail: 1,
-      integrity: 1,
-      review_gaps: 1,
+      trail: 2,
+      integrity: 2,
+      review_gaps: 2,
       portfolio: 1,
-      freshness: 1,
-      effort: 1,
+      freshness: 2,
+      effort: 2,
       components: 2,
       axis: 2,
     });
@@ -3185,12 +3264,12 @@ describe("measureBoard: the portfolio section", () => {
     const bare = await measure(declaration);
     expect(bare.methods).toEqual({
       repos: 1,
-      trail: 1,
-      integrity: 1,
-      review_gaps: 1,
+      trail: 2,
+      integrity: 2,
+      review_gaps: 2,
       portfolio: 1,
-      freshness: 1,
-      effort: 1,
+      freshness: 2,
+      effort: 2,
       components: 2,
       axis: 2,
     });
@@ -3364,7 +3443,7 @@ describe("measureBoard: the freshness section", () => {
       updatedSessions: 1,
       unverifiableSessions: 0,
     }));
-    expect(m.methods.freshness).toBe(1);
+    expect(m.methods.freshness).toBe(2);
     const other = await run(async () => ({
       newSessions: 4,
       updatedSessions: 0,
@@ -3678,7 +3757,7 @@ describe("measureBoard: the effort section", () => {
     await placeWork();
     const m = await measure(declare([], TOKYO));
     const d = boardDeclarationSnapshot(declare([], TOKYO));
-    expect(m.methods.effort).toBe(1);
+    expect(m.methods.effort).toBe(2);
     // Later the same day, nothing else changed.
     expect((await measure(declare([], TOKYO), new Date("2026-10-05T09:00:00.000Z"))).digest).toBe(
       m.digest,

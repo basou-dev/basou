@@ -23,6 +23,7 @@ import {
   resolveSessionId,
   resolveTaskId,
   type SessionEntry,
+  SessionFileNotAFileError,
   SessionNotADirectoryError,
   type StatusSnapshot,
   type TaskDocument,
@@ -127,13 +128,28 @@ export interface Workspace {
   /** A freshly computed workspace status snapshot (directory presence + manifest). */
   status(): Promise<StatusSnapshot>;
 
-  /** Every session, ULID-ascending, each with its `suspect` classification. */
+  /**
+   * Every session, ULID-ascending, each with its `suspect` classification. A
+   * session whose `session.yaml` is a symlink or anything but a regular file
+   * is not followed: it is left out and reported to `onDiagnostic`.
+   */
   listSessions(): Promise<SessionEntry[]>;
-  /** One session by id / unique prefix, or `null` if no session matches. */
+  /**
+   * One session by id / unique prefix, or `null` if no session matches, or if
+   * its `session.yaml` is a symlink or anything but a regular file.
+   */
   getSession(idOrPrefix: string): Promise<SessionEntry | null>;
-  /** All events of a session, eagerly, ordered as written. Empty if no match. */
+  /**
+   * All events of a session, eagerly, ordered as written. Empty if no match.
+   * Empty too when the session's `events.jsonl` is a symlink or anything but a
+   * regular file: it is not followed, and is reported to `onDiagnostic` as an
+   * unreadable log.
+   */
   readEvents(idOrPrefix: string): Promise<Event[]>;
-  /** All events of a session as a lazy stream (for large logs). */
+  /**
+   * All events of a session as a lazy stream (for large logs). Nothing when
+   * the session's `events.jsonl` is not followed, as for {@link readEvents}.
+   */
   streamEvents(idOrPrefix: string): AsyncIterable<Event>;
 
   /** Every task (active + lazily-indexed), created-at ascending. */
@@ -262,14 +278,27 @@ export async function openWorkspace(
     readEvents: async (idOrPrefix) => {
       const id = await resolveSession(idOrPrefix);
       if (id === null) return [];
-      return readAllEvents(paths, id, { onWarning: (w) => onWarning(w, id) });
+      try {
+        return await readAllEvents(paths, id, { onWarning: (w) => onWarning(w, id) });
+      } catch (error) {
+        if (!(error instanceof SessionFileNotAFileError)) throw error;
+        onSkip(id, "events_jsonl_unreadable");
+        return [];
+      }
     },
 
     streamEvents: (idOrPrefix): AsyncIterable<Event> => {
       async function* iterate(): AsyncGenerator<Event> {
         const id = await resolveSession(idOrPrefix);
         if (id === null) return;
-        yield* replayEvents(paths, id, { onWarning: (w) => onWarning(w, id) });
+        // The file is checked before the first event is read, so a refusal
+        // ends a stream that has yielded nothing.
+        try {
+          yield* replayEvents(paths, id, { onWarning: (w) => onWarning(w, id) });
+        } catch (error) {
+          if (!(error instanceof SessionFileNotAFileError)) throw error;
+          onSkip(id, "events_jsonl_unreadable");
+        }
       }
       return iterate();
     },

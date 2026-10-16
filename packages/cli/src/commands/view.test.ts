@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import {
   access,
   cp,
@@ -399,6 +399,40 @@ describe("basou view server", () => {
         await rm(join(sessionsDir, id));
         await writeFile(join(sessionsDir, id), "");
         expect(await getJson(handle, `/api/sessions/${id}`)).toEqual(detail);
+      });
+    },
+  );
+
+  // POSIX only: symlinks need privileges on Windows, and it has no mkfifo.
+  it.skipIf(process.platform === "win32")(
+    "does not serve a session whose session.yaml is not a regular file, and shows one whose events.jsonl is not without its events",
+    async () => {
+      const repo = await setupInitedRepo();
+      await writeCodexRollout(repo);
+      await withServer(repo, {}, async (handle) => {
+        await postJson(handle, "/api/import/codex", {});
+        const listed = await getJson(handle, "/api/sessions");
+        const id = (listed.data as { sessions: Array<{ sessionId: string }> }).sessions[0]
+          ?.sessionId as string;
+        const sessionDir = join(repo, ".basou", "sessions", id);
+        const yaml = join(sessionDir, "session.yaml");
+        await rename(yaml, join(repo, "moved-session.yaml"));
+        await symlink(join(repo, "moved-session.yaml"), yaml);
+        expect(await getJson(handle, `/api/sessions/${id}`)).toEqual({
+          status: 404,
+          data: {
+            error: `session.yaml of session ${id} is not a regular file; a symlink or anything else there is not followed`,
+          },
+        });
+        // Back in place, with a FIFO at events.jsonl instead: the session is
+        // shown, its timeline empty and marked degraded, and nothing blocks.
+        await rm(yaml);
+        await rename(join(repo, "moved-session.yaml"), yaml);
+        await rm(join(sessionDir, "events.jsonl"));
+        execFileSync("mkfifo", [join(sessionDir, "events.jsonl")]);
+        const detail = await getJson(handle, `/api/sessions/${id}`);
+        expect(detail.status).toBe(200);
+        expect(detail.data).toMatchObject({ events: [], degraded: true });
       });
     },
   );

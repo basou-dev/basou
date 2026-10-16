@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -276,14 +277,19 @@ describe("basou session rechain", () => {
   });
 
   it("turns a per-session I/O failure into an error row and keeps sweeping", async () => {
+    // chmod cannot block the superuser.
+    if (process.getuid?.() === 0) return;
     const repo = await setupInitedRepo();
     const legacyId = await importLegacySession(repo);
-    // A session whose events.jsonl is a DIRECTORY: reads fail with a
+    // A session whose events.jsonl cannot be read: reads fail with a
     // non-ENOENT error, which must become an error row, not abort the sweep.
+    // (A directory there is not a regular file, and is skipped instead.)
     const paths = basouPaths(repo);
     const brokenId = "ses_01HXABCDEF1234567890ABCBRK";
     const brokenDir = join(paths.sessions, brokenId);
-    await mkdir(join(brokenDir, "events.jsonl"), { recursive: true });
+    await mkdir(brokenDir, { recursive: true });
+    await writeFile(join(brokenDir, "events.jsonl"), "");
+    await chmod(join(brokenDir, "events.jsonl"), 0o000);
     await writeYamlFile(join(brokenDir, "session.yaml"), {
       schema_version: "0.1.0",
       session: {
@@ -308,6 +314,76 @@ describe("basou session rechain", () => {
     expect(text).toContain(`${brokenId}  error (Failed to read events.jsonl)`);
     expect(text).toContain(`${legacyId}  rechained (3 events)`);
     expect(text).toContain("1 errors");
+    expect(process.exitCode).toBe(1);
+  });
+
+  // POSIX only: symlinks need privileges on Windows, and it has no mkfifo.
+  it.skipIf(process.platform === "win32")(
+    "skips a session whose events.jsonl or session.yaml is not a regular file, follows neither, and exits 1",
+    async () => {
+      const repo = await setupInitedRepo();
+      const paths = basouPaths(repo);
+      // Legacy sessions a rechain would chain if it followed the link.
+      const eventsLinked = await importLegacySession(repo);
+      const events = join(paths.sessions, eventsLinked, "events.jsonl");
+      const outside = join(repo, "moved-events.jsonl");
+      await rename(events, outside);
+      await symlink(outside, events);
+      const before = await readFile(outside, "utf8");
+      const yamlId = await importLegacySession(repo);
+      const yaml = join(paths.sessions, yamlId, "session.yaml");
+      await rm(yaml);
+      await execFileAsync("mkfifo", [yaml]);
+
+      const out = captureStdout();
+      await runSessionRechain({ all: true }, { cwd: repo });
+      const text = joinCalls(out);
+      expect(text).toContain(
+        `${eventsLinked}  skipped (events.jsonl NOT A REGULAR FILE — not followed; inspect with 'basou verify')`,
+      );
+      expect(text).toContain(
+        `${yamlId}  skipped (session.yaml NOT A REGULAR FILE — not followed; inspect with 'basou verify')`,
+      );
+      expect(text).toContain("Sessions: 2 total — 0 rechained, 2 skipped, 0 errors");
+      expect(process.exitCode).toBe(1);
+
+      vi.restoreAllMocks();
+      process.exitCode = 0;
+      const json = captureStdout();
+      await runSessionRechain({ all: true, json: true }, { cwd: repo });
+      expect(JSON.parse(joinCalls(json))).toEqual(
+        [
+          { session_id: eventsLinked, status: "skipped", reason: "events_not_a_file" },
+          { session_id: yamlId, status: "skipped", reason: "yaml_not_a_file" },
+        ].sort((a, b) => a.session_id.localeCompare(b.session_id)),
+      );
+      expect(process.exitCode).toBe(1);
+      expect(await readFile(outside, "utf8")).toBe(before);
+    },
+  );
+
+  // Each reason alone fails the run: a session whose other file is regular
+  // beside one that is rechained.
+  it.skipIf(process.platform === "win32").each([
+    ["events.jsonl", "events_not_a_file"],
+    ["session.yaml", "yaml_not_a_file"],
+  ] as const)("exits 1 for a %s that is not a regular file on its own", async (file, reason) => {
+    const repo = await setupInitedRepo();
+    const paths = basouPaths(repo);
+    const refused = await importLegacySession(repo);
+    const legacyId = await importLegacySession(repo);
+    const path = join(paths.sessions, refused, file);
+    await rename(path, join(repo, `moved-${file}`));
+    await symlink(join(repo, `moved-${file}`), path);
+
+    const out = captureStdout();
+    await runSessionRechain({ all: true, json: true }, { cwd: repo });
+    expect(JSON.parse(joinCalls(out))).toEqual(
+      [
+        { session_id: refused, status: "skipped", reason },
+        { session_id: legacyId, status: "rechained", event_count: 3 },
+      ].sort((a, b) => a.session_id.localeCompare(b.session_id)),
+    );
     expect(process.exitCode).toBe(1);
   });
 

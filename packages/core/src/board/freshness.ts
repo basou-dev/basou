@@ -7,7 +7,7 @@ import { listSessions } from "./sessions.js";
  * value of the section would change for the same trail and native logs, as
  * when `basou orient` judges freshness differently.
  */
-export const BOARD_FRESHNESS_METHOD = 1;
+export const BOARD_FRESHNESS_METHOD = 2;
 
 /**
  * What a dry run of `basou refresh` would do on this host: the sessions it

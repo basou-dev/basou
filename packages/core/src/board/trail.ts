@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { type ReplayWarning, readAllEvents } from "../events/event-replay.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
 import { loadTaskEntries, type TaskSkipReason } from "../storage/tasks.js";
@@ -8,7 +7,7 @@ import { listSessions, lostAmong } from "./sessions.js";
  * The version of how the `trail` section measures. Raised whenever a value of
  * the section would change for the same trail.
  */
-export const BOARD_TRAIL_METHOD = 1;
+export const BOARD_TRAIL_METHOD = 2;
 
 /** An open track: a decision recorded with `kind: "track"` and not voided. */
 export type BoardTrack = { id: string; title: string };
@@ -18,9 +17,10 @@ export type BoardTrack = { id: string; title: string };
  * decisions.md), on this host only. A decision recorded twice under one id
  * counts once. All three are null, with one not_found entry at `trail`, when
  * an event line could not be read (a torn last line, a write in progress, is
- * not counted as one), an entry named as a session is not a directory, or
- * the sessions cannot be listed (or `.basou/sessions` is refused, being a
- * symlink or not a directory).
+ * not counted as one), an entry named as a session is not a directory, a
+ * session's `events.jsonl` cannot be read (one that is a symlink or anything
+ * but a regular file is not followed), or the sessions cannot be listed (or
+ * `.basou/sessions` is refused, being a symlink or not a directory).
  */
 export type BoardTrail = {
   decisions_all: number | null;
@@ -59,7 +59,6 @@ export async function readDecisions(input: TrailInput): Promise<TrailDecisions> 
     if (!listed.ok) return { ok: false, reason: listed.reason };
     const { dirs, notDirectories } = listed;
     for (const sessionId of dirs) {
-      const sessionDir = join(input.paths.sessions, sessionId);
       // A line that is not JSON may be a write in progress; one that is JSON
       // but not an event of the schema is complete, so it is a lost event
       // wherever it is. A retired zero-duration line is not a decision.
@@ -71,8 +70,7 @@ export async function readDecisions(input: TrailInput): Promise<TrailDecisions> 
           input.onReplayWarning?.(warning, sessionId);
         },
       });
-      if (malformed.length > 0)
-        lost += await lostAmong(join(sessionDir, "events.jsonl"), malformed);
+      if (malformed.length > 0) lost += await lostAmong(input.paths, sessionId, malformed);
       for (const event of events) {
         if (event.type === "decision_recorded") {
           // One id is one decision: the earliest record of it stands.

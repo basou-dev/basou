@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import type { SessionSourceKind } from "../schemas/session.schema.js";
 import { type IntervalMs, intervalsIsoToMs, mergeIntervals } from "../stats/active-time.js";
 import { computeWorkStats, type SessionWorkStats } from "../stats/work-stats.js";
@@ -11,7 +10,7 @@ import { listSessions, lostAmong } from "./sessions.js";
  * the section would change for the same trail and repositories, as when
  * `basou stats` measures active time differently.
  */
-export const BOARD_EFFORT_METHOD = 1;
+export const BOARD_EFFORT_METHOD = 2;
 
 // Which vendor's work each kind of session is. A Record keyed by the union,
 // so a kind added to the schema fails to compile here until it is placed.
@@ -376,7 +375,7 @@ async function readSessions(
   }
   let lost = offSchema.size;
   for (const [sessionId, lines] of malformed) {
-    lost += await lostAmong(join(paths.sessions, sessionId, "events.jsonl"), [...lines]);
+    lost += await lostAmong(paths, sessionId, [...lines]);
   }
   const problems: string[] = [];
   if (lost > 0) problems.push(`${lost} event line${lost === 1 ? "" : "s"} could not be read`);

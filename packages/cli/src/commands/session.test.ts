@@ -5,6 +5,7 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -322,6 +323,26 @@ describe("doRunSessionList", () => {
     expect(lines[2]).toContain("2026-05-08");
     expect(lines[3]).toContain("2026-05-07");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "leaves out a session whose session.yaml is a symlink, naming it by its full id",
+    async () => {
+      const repo = await setupInitedRepo();
+      await createSession(repo, { id: SES("X01") });
+      await createSession(repo, { id: SES("X02") });
+      const yaml = join(repo, ".basou", "sessions", SES("X02"), "session.yaml");
+      await rename(yaml, join(repo, "moved-session.yaml"));
+      await symlink(join(repo, "moved-session.yaml"), yaml);
+      const out = captureStdout();
+      const err = captureStderr();
+      await doRunSessionList({ json: true }, { cwd: repo });
+      const rows = JSON.parse(joinCalls(out)) as Array<{ id: string }>;
+      expect(rows.map((r) => r.id)).toEqual([SES("X01")]);
+      expect(joinCalls(err)).toBe(
+        `Skipped ${SES("X02")}: session.yaml is not a regular file (a symlink or anything else is not followed)`,
+      );
+    },
+  );
 
   it("case 4: --json emits an array carrying suspect/suspect_reason fields", async () => {
     const repo = await setupInitedRepo();
@@ -837,6 +858,33 @@ describe("doRunSessionShow", () => {
     expect(joinCalls(out)).toContain("Events: 2 total");
     expect(joinCalls(err)).toContain("malformed JSON");
   });
+
+  // POSIX only: symlinks need privileges on Windows, and it has no mkfifo.
+  it.skipIf(process.platform === "win32")(
+    "stops with the error when session.yaml or events.jsonl is not a regular file, following neither",
+    async () => {
+      const repo = await setupInitedRepo();
+      const id = SES("Y30");
+      const events = SESSION_STARTED_LINE(id, "K03", "2026-05-08T11:00:00+09:00");
+      await createSession(repo, { id, events });
+      const sessionDir = join(repo, ".basou", "sessions", id);
+      const yaml = join(sessionDir, "session.yaml");
+      await rename(yaml, join(repo, "moved-session.yaml"));
+      await symlink(join(repo, "moved-session.yaml"), yaml);
+      const out = captureStdout();
+      await expect(doRunSessionShow(id, {}, { cwd: repo })).rejects.toThrow(
+        `session.yaml of session ${id} is not a regular file; a symlink or anything else there is not followed`,
+      );
+      await rm(yaml);
+      await rename(join(repo, "moved-session.yaml"), yaml);
+      await rm(join(sessionDir, "events.jsonl"));
+      await execFileAsync("mkfifo", [join(sessionDir, "events.jsonl")]);
+      await expect(doRunSessionShow(id, {}, { cwd: repo })).rejects.toThrow(
+        `events.jsonl of session ${id} is not a regular file; a symlink or anything else there is not followed`,
+      );
+      expect(joinCalls(out)).toBe("");
+    },
+  );
 
   it("case 19: prefix-only `ses_` input is rejected as not found", async () => {
     const repo = await setupInitedRepo();

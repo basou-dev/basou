@@ -32,6 +32,7 @@ import {
 import { atomicCreate, atomicReplace } from "./atomic.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock, assertLockStoreSafe } from "./lockfile.js";
+import { SessionFileNotAFileError } from "./session-dir.js";
 import { enumerateSessionEntries, readSessionYaml } from "./sessions.js";
 import { assertStoreDirectorySafe } from "./store-dir.js";
 import { readTaskIndex, rebuildTaskIndex, updateTaskIndex } from "./task-index.js";
@@ -2026,13 +2027,15 @@ type DetectedLinkageDelta = {
 // skipped so a single broken session does not abort the workspace-wide
 // refresh; surfacing those is the responsibility of the session-integrity
 // tooling. An entry that is not a directory (a symlink, a file) is not
-// followed, so its `task_id` cannot be read; a link to one is kept as it is
-// rather than removed.
+// followed, nor is a session.yaml that is not a regular file, so its
+// `task_id` cannot be read; a link to one is kept as it is rather than
+// removed.
 async function detectLinkageDelta(
   paths: BasouPaths,
   task: Task["task"],
 ): Promise<DetectedLinkageDelta> {
   const { dirs: sessionIds, notDirectories } = await enumerateSessionEntries(paths);
+  const unfollowed = [...notDirectories];
   const reachable = new Set<string>();
   for (const sid of sessionIds) {
     try {
@@ -2040,7 +2043,10 @@ async function detectLinkageDelta(
       if (doc.session.task_id === task.id) {
         reachable.add(sid);
       }
-    } catch {
+    } catch (error: unknown) {
+      // A session.yaml that is not a regular file is not followed, so its
+      // task_id cannot be read either; a link to it is kept as it is.
+      if (error instanceof SessionFileNotAFileError) unfollowed.push(sid);
       // Missing / malformed session.yaml — skip. Surfacing those is the
       // responsibility of session-integrity tooling, not the linkage-refresh
       // path; a single corrupt session.yaml must not abort the workspace
@@ -2056,7 +2062,7 @@ async function detectLinkageDelta(
   finalSet.add(task.created_in_session);
 
   const currentSet = new Set<string>(task.linked_sessions);
-  for (const sid of notDirectories) {
+  for (const sid of unfollowed) {
     if (currentSet.has(sid)) finalSet.add(sid);
   }
   const addedLinkedSessions: PrefixedId<"ses">[] = [];

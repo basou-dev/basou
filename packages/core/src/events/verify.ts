@@ -1,6 +1,4 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { findErrorCode } from "../lib/error-codes.js";
 import { normalizeSessionTimestamps } from "../schemas/iso-timestamp.js";
 import {
   SESSION_SCHEMA_VERSION,
@@ -12,7 +10,12 @@ import {
 } from "../schemas/session.schema.js";
 import { SchemaVersionSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
-import { inspectSessionEntry } from "../storage/session-dir.js";
+import {
+  inspectSessionEntry,
+  inspectSessionFiles,
+  isUnfollowedFile,
+  readSessionFile,
+} from "../storage/session-dir.js";
 import { readYamlFile } from "../storage/yaml-store.js";
 import { genesisHash, lineHash } from "./chain.js";
 
@@ -122,7 +125,21 @@ export type ChainBreakReason =
    * The entry named as the session is neither a directory nor a symlink — a
    * file, for instance. Nothing is read and `eventCount` is 0.
    */
-  | "not_a_directory";
+  | "not_a_directory"
+  /**
+   * The session's `events.jsonl` is a symlink, whatever it points to, or
+   * anything but a regular file (a directory, a FIFO). It is not followed, so
+   * the log is not read and `eventCount` is 0. A `session.yaml` that is a
+   * regular file is still read, and its version can make the row
+   * `unsupported` instead.
+   */
+  | "events_not_a_file"
+  /**
+   * The session's `session.yaml` is a symlink, whatever it points to, or
+   * anything but a regular file (a directory, a FIFO). Nothing is read and
+   * `eventCount` is 0. When both files are such, either reason may be given.
+   */
+  | "yaml_not_a_file";
 
 /** Result of {@link verifyEventsChain}. */
 export type ChainVerdict = {
@@ -214,15 +231,23 @@ type AnchorState =
  *
  * An entry at the session's name that is not a directory is `tampered` before
  * anything is read — `symlink` for a symlink, `not_a_directory` for anything
- * else (a file) — and is never followed.
+ * else (a file) — and is never followed. So, inside a session's directory, is
+ * an `events.jsonl` or a `session.yaml` that is a symlink, whatever it points
+ * to, or anything but a regular file (a directory, a FIFO): `tampered` with
+ * `events_not_a_file` or `yaml_not_a_file`, and the log is not read. When
+ * only `events.jsonl` is such, a `session.yaml` that is a regular file is read
+ * as usual, so its version still decides: `unsupported` at a format major
+ * other than 0 or a newer 0.x.y, and `sessionYamlInvalid` when it does not
+ * load as a whole. When `session.yaml` is such, nothing is read.
  *
- * Throws `Error("Failed to read events.jsonl")`, or an error naming the
- * session for the session directory or `session.yaml` (`Failed to read
- * session.yaml of <id>`), only for non-ENOENT I/O failures (EACCES etc.) — an
- * unreadable file is an environment problem, not a verdict. A
- * `.basou/sessions` that is a symlink or not a directory throws too (the
- * `assertSessionStoreSafe` errors): no session in it is judged. So does a
- * `sessionId` that is not a session id (`"Invalid session id"`).
+ * Throws `Error("Failed to read events.jsonl")`, `Error("Failed to read
+ * session.yaml")` when what that file is cannot be looked at, or an error
+ * naming the session for the session directory or for reading `session.yaml`
+ * (`Failed to read session.yaml of <id>`), only for non-ENOENT I/O failures
+ * (EACCES etc.) — an unreadable file is an environment problem, not a
+ * verdict. A `.basou/sessions` that is a symlink or not a directory throws
+ * too (the `assertSessionStoreSafe` errors): no session in it is judged. So
+ * does a `sessionId` that is not a session id (`"Invalid session id"`).
  *
  * READ-ONLY and lock-free: a session being finalized concurrently can leave the
  * two files momentarily out of step (old events read before a finalize, new
@@ -242,8 +267,6 @@ export async function verifyEventsChain(
 }
 
 async function verifyOnce(paths: BasouPaths, sessionId: string): Promise<ChainVerdict> {
-  const sessionDir = join(paths.sessions, sessionId);
-
   // A session is a directory inside the store. Anything else at its name is
   // not followed: reading through a symlink would verify files outside the
   // store, and an absent directory falls through to `empty` as before.
@@ -252,17 +275,36 @@ async function verifyOnce(paths: BasouPaths, sessionId: string): Promise<ChainVe
     return { status: "tampered", eventCount: 0, reason: entry };
   }
 
-  let raw: Buffer | null = null;
-  try {
-    raw = await readFile(join(sessionDir, "events.jsonl"));
-  } catch (error: unknown) {
-    if (!findErrorCode(error, "ENOENT")) {
-      throw new Error("Failed to read events.jsonl", { cause: error });
-    }
+  // Nor is a file in it that is not a regular file: reading through a symlink
+  // would verify a file outside the store, and reading a FIFO would block.
+  const files = await inspectSessionFiles(paths, sessionId);
+  if (isUnfollowedFile(files["session.yaml"])) {
+    // No version can be read, so nothing decides the row but the layout.
+    const reason = isUnfollowedFile(files["events.jsonl"])
+      ? "events_not_a_file"
+      : "yaml_not_a_file";
+    return { status: "tampered", eventCount: 0, reason };
+  }
+  if (isUnfollowedFile(files["events.jsonl"])) {
+    // The log is not read, but a session.yaml that is a regular file still
+    // has its version decide, as for any other row.
+    const anchor = await readAnchorState(paths, sessionId);
+    const judged: ChainVerdict =
+      anchor.kind === "unsupported"
+        ? { status: "unsupported", eventCount: 0 }
+        : { status: "tampered", eventCount: 0, reason: "events_not_a_file" };
+    return withAnchorState(judged, anchor);
   }
 
+  const raw = await readSessionFile(paths, sessionId, "events.jsonl");
   const anchor = await readAnchorState(paths, sessionId);
-  const judged = judgeChain(raw, anchor, sessionId);
+  return withAnchorState(judgeChain(raw, anchor, sessionId), anchor);
+}
+
+// A verdict as the document's version and validity qualify it: a `tampered`
+// result under a newer 0.x.y is `unsupported`, and a document that does not
+// load as a whole is marked beside the verdict.
+function withAnchorState(judged: ChainVerdict, anchor: AnchorState): ChainVerdict {
   const newer = (anchor.kind === "present" || anchor.kind === "unreadable") && anchor.newer;
   const verdict: ChainVerdict =
     newer && judged.status === "tampered"

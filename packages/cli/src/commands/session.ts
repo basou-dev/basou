@@ -17,6 +17,7 @@ import {
   importSessionFromJson,
   LOCAL_CLI_EVENT_SOURCE,
   loadSessionEntries,
+  lstatSessionFile,
   normalizeSessionTimestamps,
   type RechainResult,
   readAllEvents,
@@ -28,6 +29,7 @@ import {
   resolveTaskId,
   SESSION_IMPORT_SCHEMA_VERSION,
   type Session,
+  SessionFileNotAFileError,
   SessionImportPayloadSchema,
   SessionSchema,
   type SessionStatus,
@@ -300,6 +302,16 @@ export async function doRunSessionShow(
 
   const sessionDir = join(paths.sessions, sessionId);
   const sessionYamlPath = join(sessionDir, "session.yaml");
+  // A session.yaml that is a symlink or anything but a regular file is not
+  // followed: the command stops with the error saying so.
+  const yamlKind = await lstatSessionFile(paths, sessionId, "session.yaml").catch(
+    (error: unknown) => {
+      throw new Error("Failed to read session", { cause: error });
+    },
+  );
+  if (yamlKind === "symlink" || yamlKind === "not_a_file") {
+    throw new SessionFileNotAFileError(sessionId, "session.yaml", yamlKind);
+  }
   let session: Session;
   try {
     const raw = await readYamlFile(sessionYamlPath);
@@ -1024,7 +1036,8 @@ export async function runSessionRechain(
  * into rows; an I/O failure on one session becomes an `error` row and the
  * sweep CONTINUES, so one unreadable directory cannot hide the rest of the
  * report. Exit is non-zero when any session was found `tampered` (an entry
- * named as a session that is a symlink or a file counts) or errored
+ * named as a session that is a symlink or a file counts, and so does an
+ * events.jsonl or session.yaml in one that is not a regular file) or errored
  * operationally; plain skips and successes exit 0.
  */
 export async function doRunSessionRechain(
@@ -1076,7 +1089,12 @@ export async function doRunSessionRechain(
   }
 
   const tamperedCount = rows.filter(
-    (r) => r.reason === "tampered" || r.reason === "symlink" || r.reason === "not_a_directory",
+    (r) =>
+      r.reason === "tampered" ||
+      r.reason === "symlink" ||
+      r.reason === "not_a_directory" ||
+      r.reason === "events_not_a_file" ||
+      r.reason === "yaml_not_a_file",
   ).length;
   const errorCount = rows.filter((r) => r.status === "error").length;
 
@@ -1110,6 +1128,10 @@ function renderRechainRow(row: RechainRow, dryRun: boolean): string {
       if (row.reason === "tampered") return "skipped (TAMPERED — inspect with 'basou verify')";
       if (row.reason === "symlink" || row.reason === "not_a_directory") {
         return `skipped (${row.reason === "symlink" ? "SYMLINK" : "NOT A DIRECTORY"} — not followed; inspect with 'basou verify')`;
+      }
+      if (row.reason === "events_not_a_file" || row.reason === "yaml_not_a_file") {
+        const file = row.reason === "events_not_a_file" ? "events.jsonl" : "session.yaml";
+        return `skipped (${file} NOT A REGULAR FILE — not followed; inspect with 'basou verify')`;
       }
       return `skipped (${row.reason})`;
     case "error":

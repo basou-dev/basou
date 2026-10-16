@@ -28,6 +28,7 @@ import {
   readSessionYaml,
   readYamlFile,
   replayEvents,
+  SessionFileNotAFileError,
   type UnfollowedApprovalEntry,
 } from "@basou/core";
 import type { Command } from "commander";
@@ -486,11 +487,13 @@ async function doRunApprovalResolve(
     // `verify` would otherwise read as tampered (the at-rest anchor would no
     // longer match the extended log). Only a positively read non-attachable
     // status blocks; a missing or unreadable session.yaml falls through to the
-    // pre-existing behavior.
+    // pre-existing behavior. A session.yaml that is not a regular file is not
+    // followed, and the approval stays pending.
     let sessionStatus: string | null = null;
     try {
       sessionStatus = (await readSessionYaml(paths, approval.session_id)).session.status;
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof SessionFileNotAFileError) throw error;
       sessionStatus = null;
     }
     const attachable =

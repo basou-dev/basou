@@ -1,5 +1,6 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import type { BasouPaths } from "../storage/basou-dir.js";
+import { readSessionFile } from "../storage/session-dir.js";
 import { enumerateSessionEntries, type SessionDirEntries } from "../storage/sessions.js";
 
 /** The entries named as sessions in the workspace's store, or why they were not listed. */
@@ -31,17 +32,24 @@ export async function listSessions(paths: BasouPaths): Promise<ListedSessions> {
 }
 
 /**
- * How many of the lines of an events log that were not JSON were lost events:
- * all but a torn last line, one with no newline after it, which is a write
- * that has not finished. The log is read once, however many there are.
+ * How many of the lines of a session's events log that were not JSON were
+ * lost events: all but a torn last line, one with no newline after it, which
+ * is a write that has not finished. The log is read once, however many there
+ * are, and only when it is a regular file: one that cannot be read, or is no
+ * longer a regular file, counts every line as lost.
  */
-export async function lostAmong(eventsLog: string, malformed: readonly number[]): Promise<number> {
-  let body: Buffer;
+export async function lostAmong(
+  paths: BasouPaths,
+  sessionId: string,
+  malformed: readonly number[],
+): Promise<number> {
+  let body: Buffer | null;
   try {
-    body = await readFile(eventsLog);
+    body = await readSessionFile(paths, sessionId, "events.jsonl");
   } catch {
     return malformed.length;
   }
+  if (body === null) return malformed.length;
   if (body.length === 0 || body[body.length - 1] === 0x0a) return malformed.length;
   let newlines = 0;
   for (const byte of body) if (byte === 0x0a) newlines++;

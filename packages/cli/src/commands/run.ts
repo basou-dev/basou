@@ -20,6 +20,7 @@ import {
   type GitSnapshot,
   getDiff,
   getSnapshot,
+  lstatSessionFile,
   overwriteYamlFile,
   type PrefixedId,
   type ProcessRunner,
@@ -31,6 +32,7 @@ import {
   resolveCodexCommand,
   SESSION_SCHEMA_VERSION,
   type Session,
+  SessionFileNotAFileError,
   SessionSchema,
   type SessionSourceKind,
   sanitizeRelatedFiles,
@@ -342,7 +344,7 @@ async function runTrackedTool(
   // session.yaml writer (e.g. a task attach setting task_id on this session).
   const runningLock = await acquireLock(paths, "session", sessionId);
   try {
-    await mutateSessionYaml(sessionYamlPath, (s) => {
+    await mutateSessionYaml(paths, sessionId, (s) => {
       s.session.status = "running";
     });
   } finally {
@@ -678,9 +680,19 @@ function buildInitialSession(input: {
 }
 
 async function mutateSessionYaml(
-  filePath: string,
+  paths: BasouPaths,
+  sessionId: string,
   mutator: (session: Session) => void,
 ): Promise<void> {
+  // A session.yaml that is not a regular file is not followed, as by every
+  // other reader of a session.
+  const kind = await lstatSessionFile(paths, sessionId, "session.yaml").catch((error: unknown) => {
+    throw new Error("Failed to read YAML file", { cause: error });
+  });
+  if (kind === "symlink" || kind === "not_a_file") {
+    throw new SessionFileNotAFileError(sessionId, "session.yaml", kind);
+  }
+  const filePath = join(paths.sessions, sessionId, "session.yaml");
   const raw = await readYamlFile(filePath);
   const parsed = SessionSchema.parse(raw);
   mutator(parsed);

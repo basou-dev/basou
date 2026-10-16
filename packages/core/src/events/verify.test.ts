@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -151,6 +152,175 @@ describe.skipIf(process.platform === "win32")(
     it("still reports a session with no directory at all as empty", async () => {
       const paths = await setupPaths();
       expect(await verifyEventsChain(paths, SES_ID)).toEqual({ status: "empty", eventCount: 0 });
+    });
+  },
+);
+
+/** Make a FIFO at `path`; reading it would block until a writer opens it. */
+function makeFifo(path: string): void {
+  execFileSync("mkfifo", [path]);
+}
+
+// POSIX only: symlinks need privileges on Windows, and it has no mkfifo.
+describe.skipIf(process.platform === "win32")(
+  "verifyEventsChain — a file in the session's directory that is not a regular file",
+  () => {
+    type Swap = (path: string, paths: BasouPaths) => Promise<void>;
+    // Each replaces the file at `path` with something that is not a regular
+    // file; the first keeps the intact bytes behind a symlink, so a verifier
+    // that followed it would answer `verified`.
+    const swaps: [string, Swap][] = [
+      [
+        "a symlink to the intact file",
+        async (path, paths) => {
+          const outside = join(paths.root, "..", `outside-${path.split("/").pop()}`);
+          await cp(path, outside);
+          await rm(path);
+          await symlink(outside, path);
+        },
+      ],
+      [
+        "a dangling symlink",
+        async (path, paths) => {
+          await rm(path);
+          await symlink(join(paths.root, "..", "nowhere"), path);
+        },
+      ],
+      [
+        "a FIFO",
+        async (path) => {
+          await rm(path);
+          makeFifo(path);
+        },
+      ],
+      [
+        "a directory",
+        async (path) => {
+          await rm(path);
+          await mkdir(path);
+        },
+      ],
+    ];
+
+    for (const [what, swap] of swaps) {
+      it(`reports events.jsonl as ${what} as events_not_a_file without reading it`, async () => {
+        const paths = await setupPaths();
+        const fixture = await writeChainedSession(paths, SES_ID, 3);
+        await swap(fixture.eventsPath, paths);
+        expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+          status: "tampered",
+          eventCount: 0,
+          reason: "events_not_a_file",
+        });
+      });
+
+      it(`reports session.yaml as ${what} as yaml_not_a_file without reading it`, async () => {
+        const paths = await setupPaths();
+        const fixture = await writeChainedSession(paths, SES_ID, 3);
+        await swap(fixture.yamlPath, paths);
+        expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+          status: "tampered",
+          eventCount: 0,
+          reason: "yaml_not_a_file",
+        });
+      });
+    }
+
+    // The log is not read, but a session.yaml that is a regular file is, so
+    // its version still decides as for any other row.
+    for (const [version, why] of [
+      ["1.0.0", "a format major other than 0"],
+      ["0.99.0", "a newer 0.x.y"],
+    ] as const) {
+      it(`reports an events.jsonl that is not a regular file as unsupported under ${why}`, async () => {
+        const paths = await setupPaths();
+        const fixture = await writeChainedSession(paths, SES_ID, 3);
+        const doc = parseYaml(await readFile(fixture.yamlPath, "utf8")) as Record<string, unknown>;
+        await writeFile(fixture.yamlPath, stringifyYaml({ ...doc, schema_version: version }));
+        await rm(fixture.eventsPath);
+        await symlink(join(paths.root, "..", "nowhere"), fixture.eventsPath);
+        const verdict = await verifyEventsChain(paths, SES_ID);
+        expect(verdict).toMatchObject({ status: "unsupported", eventCount: 0 });
+        expect(verdict.reason).toBeUndefined();
+      });
+    }
+
+    it("marks session_yaml_invalid beside events_not_a_file when session.yaml does not load as a whole", async () => {
+      const paths = await setupPaths();
+      const fixture = await writeChainedSession(paths, SES_ID, 3);
+      const doc = parseYaml(await readFile(fixture.yamlPath, "utf8")) as {
+        session: Record<string, unknown>;
+      };
+      // A field verify does not read, failing the full schema.
+      await writeFile(
+        fixture.yamlPath,
+        stringifyYaml({ ...doc, session: { ...doc.session, label: 42 } }),
+      );
+      await rm(fixture.eventsPath);
+      makeFifo(fixture.eventsPath);
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+        status: "tampered",
+        eventCount: 0,
+        reason: "events_not_a_file",
+        sessionYamlInvalid: true,
+      });
+    });
+
+    it("reports events.jsonl first when both files are not regular files", async () => {
+      const paths = await setupPaths();
+      const fixture = await writeChainedSession(paths, SES_ID, 3);
+      for (const path of [fixture.yamlPath, fixture.eventsPath]) {
+        await rm(path);
+        makeFifo(path);
+      }
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+        status: "tampered",
+        eventCount: 0,
+        reason: "events_not_a_file",
+      });
+    });
+
+    it("reports session.yaml that is not a regular file even with no events.jsonl", async () => {
+      const paths = await setupPaths();
+      const fixture = await writeChainedSession(paths, SES_ID, 0);
+      await rm(fixture.eventsPath);
+      await rm(fixture.yamlPath);
+      makeFifo(fixture.yamlPath);
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+        status: "tampered",
+        eventCount: 0,
+        reason: "yaml_not_a_file",
+      });
+    });
+
+    it("control: the same session with both files regular is verified", async () => {
+      const paths = await setupPaths();
+      await writeChainedSession(paths, SES_ID, 3);
+      expect(await verifyEventsChain(paths, SES_ID)).toEqual({
+        status: "verified",
+        eventCount: 3,
+      });
+    });
+
+    it("throws a pathless error when what events.jsonl is cannot be looked at", async () => {
+      // Without search permission on the session's directory, the lstat of
+      // its files fails. Skip as root, which chmod cannot block.
+      if (process.getuid?.() === 0) return;
+      const paths = await setupPaths();
+      const fixture = await writeChainedSession(paths, SES_ID, 3);
+      await chmod(fixture.sessionDir, 0o600);
+      let captured: unknown;
+      try {
+        await verifyEventsChain(paths, SES_ID);
+      } catch (error: unknown) {
+        captured = error;
+      } finally {
+        await chmod(fixture.sessionDir, 0o755).catch(() => undefined);
+      }
+      expect(captured).toBeInstanceOf(Error);
+      expect((captured as Error).message).toBe("Failed to read events.jsonl");
+      expect((captured as Error).message).not.toContain(paths.root);
+      expect(((captured as Error).cause as NodeJS.ErrnoException).code).toBe("EACCES");
     });
   },
 );

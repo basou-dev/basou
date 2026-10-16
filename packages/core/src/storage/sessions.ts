@@ -9,7 +9,13 @@ import { type Session, SessionSchema } from "../schemas/session.schema.js";
 import { SessionIdSchema } from "../schemas/shared.schema.js";
 import type { BasouPaths } from "./basou-dir.js";
 import { acquireLock } from "./lockfile.js";
-import { assertSessionDirSafe, assertSessionStoreSafe } from "./session-dir.js";
+import {
+  assertSessionDirSafe,
+  assertSessionStoreSafe,
+  lstatSessionFile,
+  type SessionFileKind,
+  SessionFileNotAFileError,
+} from "./session-dir.js";
 import { overwriteYamlFile, readYamlFile } from "./yaml-store.js";
 
 /**
@@ -56,12 +62,17 @@ export type SessionEntry = {
  * - `session_dir_not_directory`: an entry named as a session id is not a
  *   directory (a symlink, a file). It is not followed, and is omitted from the
  *   result (see {@link enumerateSessionEntries}).
+ * - `session_yaml_not_a_file`: the session's `session.yaml` is a symlink or
+ *   anything but a regular file. It is not followed, and the entry is omitted
+ *   from the result. An `events.jsonl` that is not a regular file is
+ *   `events_jsonl_unreadable`, as for any other failure to read it.
  */
 export type SessionSkipReason =
   | "session_yaml_missing"
   | "session_yaml_invalid"
   | "events_jsonl_unreadable"
-  | "session_dir_not_directory";
+  | "session_dir_not_directory"
+  | "session_yaml_not_a_file";
 
 export type LoadSessionEntriesOptions = {
   /**
@@ -173,6 +184,9 @@ export async function enumerateSessionDirs(paths: BasouPaths): Promise<string[]>
  *
  * - Throws the {@link assertSessionDirSafe} errors when the session's entry
  *   (or `.basou/sessions`) is a symlink or a file: it is not followed.
+ * - Throws {@link SessionFileNotAFileError} when `session.yaml` itself is a
+ *   symlink, whatever it points to, or anything but a regular file (a
+ *   directory, a FIFO): it is not followed either.
  * - Re-throws the yaml-store fixed-message `"YAML file not found"` for
  *   ENOENT so the caller can branch on it.
  * - Throws `Error("Failed to read session.yaml", { cause })` for parse
@@ -185,8 +199,18 @@ export async function readSessionYaml(paths: BasouPaths, sessionId: string): Pro
 }
 
 // The read itself, for a session the caller has already found to be a
-// directory (a listing classified it from its dirent).
+// directory (a listing classified it from its dirent). The file is not
+// followed: a symlink or anything but a regular file there is refused.
 async function readSessionYamlFile(paths: BasouPaths, sessionId: string): Promise<Session> {
+  let kind: SessionFileKind;
+  try {
+    kind = await lstatSessionFile(paths, sessionId, "session.yaml");
+  } catch (error: unknown) {
+    throw new Error("Failed to read session.yaml", { cause: error });
+  }
+  if (kind === "symlink" || kind === "not_a_file") {
+    throw new SessionFileNotAFileError(sessionId, "session.yaml", kind);
+  }
   const filePath = join(paths.sessions, sessionId, "session.yaml");
   let raw: unknown;
   try {
@@ -323,6 +347,8 @@ async function classifyRunningSession(
  *   so callers can render the session row plus a CLI-side warning.
  * - `session_dir_not_directory`: an entry named as a session id that is not a
  *   directory; it is not read.
+ * - `session_yaml_not_a_file`: a `session.yaml` that is a symlink or anything
+ *   but a regular file; it is not read, and the entry is omitted.
  *
  * The local store (`host: null`) is refused when `.basou/sessions` is a
  * symlink or a file ({@link assertSessionStoreSafe}); a federated mirror is
@@ -348,7 +374,9 @@ async function loadEntriesFromRoot(
     try {
       session = await readSessionYamlFile(paths, sid);
     } catch (error: unknown) {
-      if (error instanceof Error && error.message === "YAML file not found") {
+      if (error instanceof SessionFileNotAFileError) {
+        options.onSkip?.(sid, "session_yaml_not_a_file");
+      } else if (error instanceof Error && error.message === "YAML file not found") {
         options.onSkip?.(sid, "session_yaml_missing");
       } else {
         options.onSkip?.(sid, "session_yaml_invalid");

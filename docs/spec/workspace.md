@@ -142,6 +142,64 @@ through it:
 - `orient`, `handoff generate`, `report generate` and `basou view` leave it
   out of what they show.
 
+### A session's files are not followed
+
+basou writes a session's `events.jsonl` and `session.yaml` as regular files
+and never as anything else. When either of them, inside a session's
+directory, is a symlink, whatever it points to, or anything other than a
+regular file — a directory, or a FIFO, which a read would wait on — it is not
+followed: no command reads through it or waits on it, and the commands that
+add to an existing session or finalize one write nothing through it. This
+holds for a federated mirror's sessions too, although its `.basou/sessions`
+may be a symlink. An absent file is not refused: a session with no
+`events.jsonl` has no events, as before.
+
+- `basou verify` reports the session `tampered` with `reason`
+  `events_not_a_file` or `yaml_not_a_file` — or `unsupported`, when only the
+  `events.jsonl` is such and the `session.yaml` was written by a newer basou —
+  and `session rechain` skips it with reason `events_not_a_file` or
+  `yaml_not_a_file` and exits non-zero; see [schemas](schemas.md).
+- The commands that read the session by its id stop with `<file> of session
+  <id> is not a regular file; a symlink or anything else there is not
+  followed`, before they record anything: `session show`, `approval show`,
+  `approval approve` and `reject` (which leave the approval pending), and the
+  commands that record into an existing session or finalize one — `session
+  note`, `decision record`, a `task` command attaching to a session, and
+  `exec` and `run` for the session they started, which they check at each
+  event they record and when they finalize it. `basou view`'s session page
+  answers `404` with that message for a `session.yaml`; for an
+  `events.jsonl` it shows the session with an empty timeline marked as
+  degraded, as for any log it cannot read.
+- The commands that load sessions to list or summarize them leave out a
+  session whose `session.yaml` is such, with a warning naming its full id:
+  `session list` says `Skipped <id>: session.yaml is not a regular file (a
+  symlink or anything else is not followed)`, and `orient`, `stats`, `handoff
+  generate`, `decisions generate`, `report generate`, `review-gaps` and
+  `decision gaps` say `Skipped <id>: session_yaml_not_a_file`. A session whose
+  `events.jsonl` is such is kept, and its events are treated as unreadable, as
+  for any log that cannot be read (`events_jsonl_unreadable`).
+- `import` cannot tell whether a session whose `session.yaml` is such holds an
+  earlier import of a source, so before importing a session as new it warns
+  once, naming every such session, that a session there may be imported
+  again. An in-place re-import of a session whose `events.jsonl` or
+  `session.yaml` is such is skipped, as one whose prior chain fails
+  verification. `task refresh-linkage` leaves a link to a session whose
+  `session.yaml` is such as it is.
+- `basou board measure` counts such a session in `integrity` as `basou
+  verify` judges it. Each other section is not measured when a file it reads
+  is such: `trail`, `review_gaps` and `effort` read the `events.jsonl`, and
+  `review_gaps`, `freshness` and `effort` the `session.yaml`.
+- In the SDK, `listSessions` and `getSession` leave out a session whose
+  `session.yaml` is such, as one whose `session.yaml` cannot be read, and
+  report it to `onDiagnostic`; `readEvents` and `streamEvents` still read the
+  `events.jsonl` of such a session. For an `events.jsonl` that is such, they
+  return no events and report it to `onDiagnostic` as an unreadable log
+  (`events_jsonl_unreadable`), the words `stats` and the renderers use for
+  it.
+
+Like the checks of the store's directories, this detects a file already in
+such a form; it does not race-proof the filesystem.
+
 ### tasks/ details
 
 - Listing tasks reads `.basou/tasks/index.json` (a small JSON cache of
