@@ -18,7 +18,9 @@ import { TaskStatusSchema } from "../schemas/task.schema.js";
  * outside basou (`observe`) and what to look at when judging a stage
  * (`stages.<id>.look` and `.notes`); and 3, which adds the response to an
  * HTTP GET (`http`) and a check run by its name (`github_check`) as
- * observations, and what to mind when making any observation (`notes`).
+ * observations, what to mind when making any observation (`notes`), and the
+ * name of a file (`file_name`) and the paths of files (`file_paths`) as
+ * measures.
  */
 export const BOARD_VERSION = 3;
 
@@ -231,6 +233,40 @@ const jsonLengthSchema = z.strictObject({
   pointer: jsonPointer,
 });
 
+/** Which file a `file_name` measure picks: the first or the last path, in byte order. */
+export const BOARD_FILE_NAME_PICKS = ["first", "last"] as const;
+
+/**
+ * How many paths a `file_paths` measure holds; one that matches more is not
+ * measured. Fixed with board_version 3: a measure has no method version, so
+ * changing it would turn the same repository's value between null and a list
+ * unseen.
+ */
+export const BOARD_FILE_PATHS_MAX = 1000;
+
+// The name of the first or last file the patterns match, or what a group of
+// `pattern` holds in it. `group` is filled in only when there is a pattern
+// (see parseAs), and refused without one (see crossCheck).
+const fileNameSchema = z.strictObject({
+  kind: z.literal("file_name"),
+  ...measureCommon,
+  ...fileScope,
+  include: globs,
+  exclude: globs.optional(),
+  pick: z.enum(BOARD_FILE_NAME_PICKS, { error: "must be first or last" }),
+  pattern: regexText.optional(),
+  group: z.number().int().min(0).optional(),
+});
+
+// The paths of the files the patterns match.
+const filePathsSchema = z.strictObject({
+  kind: z.literal("file_paths"),
+  ...measureCommon,
+  ...fileScope,
+  include: globs,
+  exclude: globs.optional(),
+});
+
 /** What a `trail_count` measure counts in the workspace's own trail. */
 export const BOARD_TRAIL_COUNTS = [
   "decisions_all",
@@ -246,13 +282,26 @@ const trailCountSchema = z.strictObject({
   status: TaskStatusSchema.optional(),
 });
 
-const measureSchema = z.discriminatedUnion("kind", [
+const measureSchemaV1 = z.discriminatedUnion("kind", [
   fileCountSchema,
   dirCountSchema,
   lineCountSchema,
   matchCountSchema,
   regexCaptureSchema,
   jsonLengthSchema,
+  trailCountSchema,
+]);
+
+// From version 3, a measure may take the name of a file or the paths of files.
+const measureSchemaV3 = z.discriminatedUnion("kind", [
+  fileCountSchema,
+  dirCountSchema,
+  lineCountSchema,
+  matchCountSchema,
+  regexCaptureSchema,
+  jsonLengthSchema,
+  fileNameSchema,
+  filePathsSchema,
   trailCountSchema,
 ]);
 
@@ -521,8 +570,8 @@ const boardVersionText = z.literal(BOARD_VERSIONS, {
 });
 
 // The keys every version has after its stages, in the order a problem with
-// them is reported.
-const boardFields = {
+// them is reported, with the measures the version reads.
+const boardFieldsOf = <M extends z.ZodType>(measure: M) => ({
   lanes: z
     .array(
       z.strictObject({
@@ -533,7 +582,7 @@ const boardFields = {
       }),
     )
     .min(1, { error: "must list at least one lane" }),
-  measures: z.array(measureSchema).default([]),
+  measures: z.array(measure).default([]),
   ratios: z
     .array(
       z.strictObject({
@@ -574,20 +623,20 @@ const boardFields = {
       .array(z.strictObject({ date: dateText, label: nonEmptyText, ref: nonEmptyText }))
       .optional(),
   }),
-};
+});
 
 const boardSchemaV1 = z.strictObject({
   board_version: boardVersionText,
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV1),
-  ...boardFields,
+  ...boardFieldsOf(measureSchemaV1),
 });
 
 const boardSchemaV2 = z.strictObject({
   board_version: boardVersionText,
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV2),
-  ...boardFields,
+  ...boardFieldsOf(measureSchemaV1),
   observe: z.array(observeSchemaV2).default([]),
 });
 
@@ -595,14 +644,15 @@ const boardSchemaV3 = z.strictObject({
   board_version: boardVersionText,
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV2),
-  ...boardFields,
+  ...boardFieldsOf(measureSchemaV3),
   observe: z.array(observeSchemaV3).default([]),
 });
 
 /**
  * A declaration as read, whatever its version: one of version 1 has no
- * observations and no stage has `look` or `notes`, and one of version 2 has
- * no `http` or `github_check` observation and no observation has `notes`.
+ * observations and no stage has `look` or `notes`, and one of version 1 or 2
+ * has no `http` or `github_check` observation, no observation with `notes`
+ * and no `file_name` or `file_paths` measure.
  */
 export type BoardDeclaration = z.output<typeof boardSchemaV3>;
 export type BoardMeasure = BoardDeclaration["measures"][number];
@@ -748,8 +798,18 @@ function parseAs(
   }
   const parsed = (version === 2 ? boardSchemaV2 : boardSchemaV3).safeParse(raw);
   return parsed.success
-    ? { ok: true, declaration: parsed.data }
+    ? { ok: true, declaration: { ...parsed.data, measures: parsed.data.measures.map(withGroup) } }
     : { ok: false, issues: parsed.error.issues };
+}
+
+// A file_name measure with a pattern takes group 1 when it names none; one
+// without a pattern has no group, so its snapshot holds none.
+function withGroup(measure: BoardMeasure): BoardMeasure {
+  return measure.kind === "file_name" &&
+    measure.pattern !== undefined &&
+    measure.group === undefined
+    ? { ...measure, group: BOARD_DEFAULT_CAPTURE_GROUP }
+    : measure;
 }
 
 // The problems of a file of an older version, where a later version reads
@@ -961,7 +1021,12 @@ const REPO_KINDS = new Set([
   "match_count",
   "regex_capture",
   "json_length",
+  "file_name",
+  "file_paths",
 ]);
+
+// The kinds of measure whose value is not a number, so no ratio takes them.
+const NOT_NUMBER_KINDS = new Set(["regex_capture", "file_name", "file_paths"]);
 
 // How many capturing groups a pattern has, or undefined when it does not compile.
 function captureGroups(pattern: string): number | undefined {
@@ -1040,7 +1105,17 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
     if (laneIds !== undefined && isId(lane) && !laneIds.has(lane)) {
       errors.push(`${at}.lane: no lane has the id '${lane}'`);
     }
-    if (measure.kind === "regex_capture") {
+    if (
+      measure.kind === "file_name" &&
+      measure.pattern === undefined &&
+      measure.group !== undefined
+    ) {
+      errors.push(`${at}.group: a file_name takes a group only with a pattern`);
+    }
+    if (
+      measure.kind === "regex_capture" ||
+      (measure.kind === "file_name" && measure.pattern !== undefined)
+    ) {
       const pattern = stringAt(measure, "pattern");
       const group = measure.group ?? BOARD_DEFAULT_CAPTURE_GROUP;
       const groups = pattern === undefined || pattern === "" ? undefined : captureGroups(pattern);
@@ -1072,8 +1147,11 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
         if (!isId(ref)) continue;
         if (!measureIds.has(ref)) {
           errors.push(`ratios[${i}].${side}: no measure has the id '${ref}'`);
-        } else if (measureKinds.get(ref) === "regex_capture") {
-          errors.push(`ratios[${i}].${side}: '${ref}' is a regex_capture, which is not a number`);
+        } else {
+          const kind = measureKinds.get(ref);
+          if (typeof kind === "string" && NOT_NUMBER_KINDS.has(kind)) {
+            errors.push(`ratios[${i}].${side}: '${ref}' is a ${kind}, which is not a number`);
+          }
         }
       }
     }

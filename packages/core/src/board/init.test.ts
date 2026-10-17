@@ -53,6 +53,21 @@ describe("boardInitText", () => {
       expect(en.comments.observe).toContain(kind);
       expect(ja.comments.observe).toContain(kind);
     }
+    // The comment on measures names every kind a board can declare, file_name and file_paths among them.
+    for (const kind of [
+      "file_count",
+      "dir_count",
+      "line_count",
+      "match_count",
+      "regex_capture",
+      "json_length",
+      "file_name",
+      "file_paths",
+      "trail_count",
+    ]) {
+      expect(en.comments.measures).toContain(kind);
+      expect(ja.comments.measures).toContain(kind);
+    }
     expect(ja.comments.measures).toContain("lane を付けたものは盤のページのそのレーンの節に描かれ");
   });
 

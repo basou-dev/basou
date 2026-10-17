@@ -7,6 +7,8 @@ import { BOARD_AXIS_METHOD, type BoardAxis, judgeAxis } from "./axis.js";
 import { BOARD_COMPONENTS_METHOD, type BoardComponents, measureComponents } from "./components.js";
 import {
   BOARD_DEFAULT_AT,
+  BOARD_DEFAULT_CAPTURE_GROUP,
+  BOARD_FILE_PATHS_MAX,
   BOARD_REGEX_FLAGS,
   type BoardDeclaration,
   type BoardDeclarationSnapshot,
@@ -61,7 +63,8 @@ import {
 export type BoardNotFound = { at: string; reason: string };
 
 export type BoardMeasureValue = {
-  value: number | string | null;
+  /** A number, a string, or the paths a `file_paths` measure found. */
+  value: number | string | string[] | null;
   unit: string;
   lane?: string;
 };
@@ -178,7 +181,7 @@ export type MeasureBoardInput = {
   previous?: BoardPreviousRecords;
 };
 
-type Outcome = { value: number | string | null; reason?: string };
+type Outcome = { value: number | string | string[] | null; reason?: string };
 
 const fail = (reason: string): Outcome => ({ value: null, reason });
 
@@ -627,6 +630,8 @@ async function measureOne(
   if (blocked !== undefined) return fail(blocked);
   if (unread !== undefined) return fail(unread);
   if (measure.kind === "file_count") return { value: matched.length };
+  if (measure.kind === "file_paths") return filePaths(matched);
+  if (measure.kind === "file_name") return fileName(measure, matched, scope);
 
   const read = await scope.read(matched);
   const [unreadable] = read.unreadable;
@@ -650,4 +655,51 @@ async function measureOne(
     total += lines.filter((line) => pattern.test(line)).length;
   }
   return { value: total };
+}
+
+// Byte strings in byte order: each character is one byte, so comparing them
+// compares their bytes, as git orders paths.
+function byteOrder(paths: readonly string[]): string[] {
+  return [...paths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+// The paths matched, in byte order, as text.
+function filePaths(matched: readonly string[]): Outcome {
+  // Two paths that are not UTF-8 may read as the same text: it is kept once.
+  const paths = [...new Set(byteOrder(matched).map(shownPath))];
+  if (paths.length > BOARD_FILE_PATHS_MAX) {
+    return fail(
+      `${paths.length} files match, more than the ${BOARD_FILE_PATHS_MAX} a file_paths measure holds`,
+    );
+  }
+  return { value: paths };
+}
+
+// The name of the first or last path matched, in byte order, of those whose
+// name the pattern matches when there is one, or what its group holds. The
+// names are narrowed before one is picked, so a name with no match at the end
+// of the order does not hide the one before it.
+function fileName(
+  measure: Extract<BoardMeasure, { kind: "file_name" }>,
+  matched: readonly string[],
+  scope: RepoScope,
+): Outcome {
+  const pattern =
+    measure.pattern === undefined ? undefined : new RegExp(measure.pattern, BOARD_REGEX_FLAGS);
+  const names = byteOrder(matched).map((p) => shownPath(p.slice(p.lastIndexOf("/") + 1)));
+  const candidates = pattern === undefined ? names : names.filter((name) => pattern.test(name));
+  const name = measure.pick === "first" ? candidates[0] : candidates.at(-1);
+  if (name === undefined) {
+    return fail(
+      pattern === undefined
+        ? `no file is matched ${where(scope)}`
+        : `no file matched has a name the pattern matches ${where(scope)}`,
+    );
+  }
+  if (pattern === undefined) return { value: name };
+  const group = measure.group ?? BOARD_DEFAULT_CAPTURE_GROUP;
+  const captured = pattern.exec(name)?.[group];
+  return typeof captured === "string"
+    ? { value: captured }
+    : fail(`group ${group} took no part in the match of '${name}'`);
 }

@@ -4377,3 +4377,289 @@ describe("measureBoard: against the previous record", () => {
     }
   });
 });
+
+describe("measureBoard: the name of a file and the paths of files", () => {
+  // A version 3 declaration of `measures` over the repo "app".
+  const declare3 = (measures: Record<string, unknown>[]) => declare(measures, { board_version: 3 });
+  const names = (over: Record<string, unknown>) => ({
+    id: "latest",
+    kind: "file_name",
+    repo: "app",
+    include: ["db/migrations/*.sql"],
+    pick: "last",
+    unit: "name",
+    ...over,
+  });
+  const paths3 = (over: Record<string, unknown>) => ({
+    id: "migrations",
+    kind: "file_paths",
+    repo: "app",
+    include: ["db/migrations/*.sql"],
+    unit: "files",
+    ...over,
+  });
+
+  beforeEach(async () => {
+    await repo(
+      "app",
+      {
+        "db/migrations/20260101_init.sql": "",
+        "db/migrations/20260301_users.sql": "",
+        "db/migrations/schema.sql": "",
+        "db/migrations/README.md": "",
+        "db/other/20261231_late.sql": "",
+      },
+      { "db/migrations/20260401_new.sql": "" },
+    );
+  });
+
+  it("picks the first or the last name in byte order, narrowed by the pattern before it picks", async () => {
+    const m = await measure(
+      declare3([
+        names({ id: "last" }),
+        names({ id: "first", pick: "first" }),
+        names({ id: "last_date", pattern: "^(\\d{8})_" }),
+        names({ id: "first_date", pick: "first", pattern: "^(\\d{8})_" }),
+        names({ id: "whole", pattern: "^\\d{8}_", group: 0 }),
+        names({ id: "month", pattern: "^(\\d{4})(\\d{2})", group: 2 }),
+        names({ id: "last_main", pattern: "^(\\d{8})_", at: "main" }),
+        names({ id: "no_schema", exclude: ["**/schema.sql"] }),
+      ]),
+      NOW,
+      ["app"],
+    );
+    // schema.sql comes after every name that starts with a digit.
+    expect(measured(m, "last")).toBe("schema.sql");
+    expect(measured(m, "first")).toBe("20260101_init.sql");
+    // Narrowed first: schema.sql, last in the order, has no date and is not picked.
+    expect(measured(m, "last_date")).toBe("20260401");
+    expect(measured(m, "first_date")).toBe("20260101");
+    expect(measured(m, "whole")).toBe("20260401_");
+    expect(measured(m, "month")).toBe("04");
+    // The untracked one is not at main.
+    expect(measured(m, "last_main")).toBe("20260301");
+    expect(measured(m, "no_schema")).toBe("20260401_new.sql");
+    expect(m.not_found).toEqual([]);
+    expect(m.measures.last).toEqual({ value: "schema.sql", unit: "name" });
+  });
+
+  it("orders by the whole path in bytes, not by the name or the locale", async () => {
+    await repo("names", {
+      "a/zzz.txt": "",
+      "b/aaa.txt": "",
+      "c/B.txt": "",
+      "c/a.txt": "",
+      "d/z.txt": "",
+      "d/\u00e9.txt": "",
+    });
+    const m = await measure(
+      declare(
+        [
+          names({ id: "across", repo: "names", include: ["a/*", "b/*"] }),
+          names({ id: "upper_first", repo: "names", include: ["c/*"], pick: "first" }),
+          names({ id: "accent_last", repo: "names", include: ["d/*"] }),
+          paths3({ id: "all", repo: "names", include: ["**/*.txt"] }),
+        ],
+        { board_version: 3 },
+        ["names"],
+      ),
+      NOW,
+      ["names"],
+    );
+    // b/aaa.txt is after a/zzz.txt as a path, though its name is before.
+    expect(measured(m, "across")).toBe("aaa.txt");
+    // 'B' (0x42) is before 'a' (0x61); the locale would put 'a' first.
+    expect(measured(m, "upper_first")).toBe("B.txt");
+    // The first byte of '\u00e9' (0xc3) is after 'z'.
+    expect(measured(m, "accent_last")).toBe("\u00e9.txt");
+    expect(measured(m, "all")).toEqual([
+      "a/zzz.txt",
+      "b/aaa.txt",
+      "c/B.txt",
+      "c/a.txt",
+      "d/z.txt",
+      "d/\u00e9.txt",
+    ]);
+  });
+
+  it("takes the paths matched in byte order, an empty list when none is, and keeps the lane", async () => {
+    const m = await measure(
+      declare3([
+        paths3({ lane: "core" }),
+        paths3({ id: "at_main", at: "main" }),
+        paths3({ id: "dated", include: ["db/**/2026*.sql"], exclude: ["db/other/**"] }),
+        paths3({ id: "none", include: ["db/migrations/*.rb"] }),
+      ]),
+      NOW,
+      ["app"],
+    );
+    expect(m.measures.migrations).toEqual({
+      value: [
+        "db/migrations/20260101_init.sql",
+        "db/migrations/20260301_users.sql",
+        "db/migrations/20260401_new.sql",
+        "db/migrations/schema.sql",
+      ],
+      unit: "files",
+      lane: "core",
+    });
+    expect(measured(m, "at_main")).toEqual([
+      "db/migrations/20260101_init.sql",
+      "db/migrations/20260301_users.sql",
+      "db/migrations/schema.sql",
+    ]);
+    expect(measured(m, "dated")).toEqual([
+      "db/migrations/20260101_init.sql",
+      "db/migrations/20260301_users.sql",
+      "db/migrations/20260401_new.sql",
+    ]);
+    // Nothing matched under a directory that is there: a list, not a gap.
+    expect(measured(m, "none")).toEqual([]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("is not measured with no file to pick, a group that took no part, or a directory with nothing under it", async () => {
+    const m = await measure(
+      declare(
+        [
+          names({ id: "no_file", include: ["db/migrations/*.rb"] }),
+          names({ id: "no_name", pattern: "^v(\\d+)_" }),
+          names({ id: "no_group", pattern: "^(?:(\\d{8})_)?schema", pick: "last" }),
+          names({ id: "no_dir", include: ["db/nope/*.sql"] }),
+          names({ id: "no_dir_main", include: ["db/nope/*.sql"], at: "main" }),
+          paths3({ id: "paths_no_dir", include: ["db/nope/*.sql"] }),
+          names({ id: "no_repo", repo: "gone" }),
+        ],
+        { board_version: 3 },
+        ["app", "gone"],
+      ),
+      NOW,
+      ["app"],
+    );
+    for (const id of [
+      "no_file",
+      "no_name",
+      "no_group",
+      "no_dir",
+      "no_dir_main",
+      "paths_no_dir",
+      "no_repo",
+    ]) {
+      expect(measured(m, id)).toBeNull();
+    }
+    expect(m.complete).toBe(false);
+    expect(m.not_found.filter((n) => n.at.startsWith("measures."))).toEqual([
+      { at: "measures.no_file", reason: "no file is matched in the working tree" },
+      {
+        at: "measures.no_name",
+        reason: "no file matched has a name the pattern matches in the working tree",
+      },
+      { at: "measures.no_group", reason: "group 1 took no part in the match of 'schema.sql'" },
+      { at: "measures.no_dir", reason: "nothing is under 'db/nope' in the working tree" },
+      { at: "measures.no_dir_main", reason: "nothing is under 'db/nope' at 'main'" },
+      { at: "measures.paths_no_dir", reason: "nothing is under 'db/nope' in the working tree" },
+      {
+        at: "measures.no_repo",
+        reason: expect.stringMatching(/^the repo 'gone' /) as unknown as string,
+      },
+    ]);
+  });
+
+  it("keeps once two paths that read as the same text, as two that are not UTF-8 do", async () => {
+    const dir = await repo("bytes", { "keep.txt": "" });
+    const blob = git(dir, "hash-object", "-w", "keep.txt").trim();
+    // x, a byte that is not UTF-8, then .txt: each reads as x\ufffd.txt.
+    const entry = (byte: number) =>
+      Buffer.concat([
+        Buffer.from(`100644 ${blob}\t`),
+        Buffer.from([0x78, byte]),
+        Buffer.from(".txt\0"),
+      ]);
+    execFileSync("git", ["update-index", "-z", "--index-info"], {
+      cwd: dir,
+      env: GIT_ENV,
+      input: Buffer.concat([entry(0xfe), entry(0xff)]),
+    });
+    git(dir, "commit", "-q", "-m", "bytes");
+    const m = await measure(
+      declare(
+        [paths3({ id: "all", repo: "bytes", include: ["*.txt"], at: "main" })],
+        { board_version: 3 },
+        ["bytes"],
+      ),
+      NOW,
+      ["bytes"],
+    );
+    expect(measured(m, "all")).toEqual(["keep.txt", "x\ufffd.txt"]);
+  });
+
+  it("holds at most 1000 paths, and is not measured with more", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 1001 }, (_, i) => [`many/f${String(i).padStart(4, "0")}.txt`, ""]),
+    );
+    await repo("big", files);
+    const m = await measure(
+      declare(
+        [
+          paths3({
+            id: "at_most",
+            repo: "big",
+            include: ["many/*.txt"],
+            exclude: ["many/f1000.txt"],
+          }),
+          paths3({ id: "too_many", repo: "big", include: ["many/*.txt"] }),
+        ],
+        { board_version: 3 },
+        ["big"],
+      ),
+      NOW,
+      ["big"],
+    );
+    const atMost = measured(m, "at_most") as string[];
+    expect(atMost).toHaveLength(1000);
+    expect(atMost[0]).toBe("many/f0000.txt");
+    expect(atMost.at(-1)).toBe("many/f0999.txt");
+    expect(measured(m, "too_many")).toBeNull();
+    expect(m.not_found).toEqual([
+      {
+        at: "measures.too_many",
+        reason: "1001 files match, more than the 1000 a file_paths measure holds",
+      },
+    ]);
+  });
+});
+
+describe.skipIf(process.platform === "win32")(
+  "measureBoard: the name and the paths of files, and a symlink that leaves the repository",
+  () => {
+    it("is not measured when a file matched is a symlink to outside the repository", async () => {
+      const dir = await repo("app", { "docs/a.md": "a\n" });
+      await writeFile(join(root, "secret.md"), "s\n");
+      await symlink("../../secret.md", join(dir, "docs/z.md"));
+      const m = await measure(
+        declare(
+          [
+            {
+              id: "name",
+              kind: "file_name",
+              repo: "app",
+              include: ["docs/*.md"],
+              pick: "first",
+              unit: "name",
+            },
+            { id: "paths", kind: "file_paths", repo: "app", include: ["docs/*.md"], unit: "files" },
+          ],
+          { board_version: 3 },
+        ),
+        NOW,
+        ["app"],
+      );
+      expect(measured(m, "name")).toBeNull();
+      expect(measured(m, "paths")).toBeNull();
+      expect(m.not_found.filter((n) => n.at.startsWith("measures."))).toEqual([
+        { at: "measures.name", reason: "'docs/z.md' is a symlink to outside the repository" },
+        { at: "measures.paths", reason: "'docs/z.md' is a symlink to outside the repository" },
+      ]);
+    });
+  },
+);

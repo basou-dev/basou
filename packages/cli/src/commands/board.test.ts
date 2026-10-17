@@ -264,6 +264,44 @@ describe("basou board measure", () => {
     expect(text).toMatch(/Digest: sha256:[0-9a-f]{64}/);
   });
 
+  it("prints the paths of a file_paths measure as a count, and gives them in --json", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const board = JSON.parse(
+      boardYaml([
+        {
+          id: "paths",
+          kind: "file_paths",
+          repo: ".",
+          include: ["*.md"],
+          unit: "files",
+          lane: "core",
+        },
+        {
+          id: "latest",
+          kind: "file_name",
+          repo: ".",
+          include: ["*.md"],
+          pick: "last",
+          unit: "name",
+        },
+      ]),
+    );
+    board.board_version = 3;
+    await placeBoard(repo, JSON.stringify(board));
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("\n  paths   2 files (paths in --json)  [core]\n");
+    expect(text).toContain("\n  latest  README.md name\n");
+    out.length = 0;
+    await runBoardMeasure({ json: true }, ctx(repo));
+    expect(JSON.parse(out.join("\n")).measures.paths).toEqual({
+      value: ["NOTES.md", "README.md"],
+      unit: "files",
+      lane: "core",
+    });
+  });
+
   it("prints each repo in the summary, saying what a null means", async () => {
     const repo = await workspace([{ path: ".", visibility: "private" }, { path: "../gone" }]);
     await placeBoard(repo, boardYaml([]));

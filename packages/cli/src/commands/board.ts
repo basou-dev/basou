@@ -1089,9 +1089,12 @@ function diffLines(diff: Omit<BoardDiff, "against">, more: boolean): string[] {
   return lines;
 }
 
-function shownValue(value: number | string | null): string {
+// A value as a line shows it: the paths of a file_paths measure by how many
+// there are (--json lists them).
+function shownValue(value: number | string | string[] | null): string {
   if (value === null) return "not measured";
   if (typeof value === "number") return String(Math.round(value * 10000) / 10000);
+  if (Array.isArray(value)) return String(value.length);
   return displayPath(value);
 }
 
@@ -1269,8 +1272,9 @@ function printMeasurementText(m: BoardMeasurement, hasRecords: boolean): void {
     lines.push("", "Measures:");
     for (const [id, measure] of measures) {
       const unit = measure.value === null ? "" : ` ${displayPath(measure.unit)}`;
+      const listed = Array.isArray(measure.value) ? " (paths in --json)" : "";
       const lane = measure.lane === undefined ? "" : `  [${measure.lane}]`;
-      lines.push(`  ${id.padEnd(width)}  ${shownValue(measure.value)}${unit}${lane}`);
+      lines.push(`  ${id.padEnd(width)}  ${shownValue(measure.value)}${unit}${listed}${lane}`);
     }
   }
   const ratios = Object.entries(m.ratios);

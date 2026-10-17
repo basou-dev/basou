@@ -44,7 +44,7 @@ const pageRecordSchema = z.looseObject({
     not_found: z.array(z.looseObject({ at: text, reason: text })),
     measures: z.record(
       text,
-      z.looseObject({ value: z.union([z.number(), text]).nullable(), unit: text }),
+      z.looseObject({ value: z.union([z.number(), text, z.array(text)]).nullable(), unit: text }),
     ),
     ratios: z.record(text, z.looseObject({ value: z.number().nullable() })),
     trail: z.looseObject({
@@ -160,7 +160,8 @@ export type BoardPageLane = {
   now: { stage: string; meaning: string; state: string } | null;
   attention: { stage: string; state: string; reason?: string }[];
   prose: string | null;
-  measures: { id: string; value: number | string | null; unit: string }[];
+  /** Each measure drawn in the lane: a number, a string, or the paths of a `file_paths`. */
+  measures: { id: string; value: number | string | string[] | null; unit: string }[];
   flags: { live: boolean; blocked: boolean; unverified: boolean };
 };
 
@@ -235,8 +236,8 @@ export type BoardPageBody = {
     id: string;
     label: string;
     value: number | null;
-    numerator: { id: string; value: number | string | null; unit: string | null };
-    denominator: { id: string; value: number | string | null; unit: string | null };
+    numerator: { id: string; value: number | string | string[] | null; unit: string | null };
+    denominator: { id: string; value: number | string | string[] | null; unit: string | null };
   }[];
   turns: { text: string; source: string }[];
   footnotes: {

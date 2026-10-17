@@ -1807,3 +1807,141 @@ describe("parseBoardDeclaration: board_version 3, github_check and an observatio
     }
   });
 });
+
+// A version 3 board whose only measure is `measure`.
+function withMeasureV3(measure: Record<string, unknown>): Record<string, unknown> {
+  return { ...withMeasure(measure), board_version: 3 };
+}
+
+const LATEST = {
+  id: "latest_migration",
+  kind: "file_name",
+  repo: "../basou",
+  include: ["db/migrations/*.sql"],
+  pick: "last",
+  unit: "name",
+};
+
+const MIGRATIONS = {
+  id: "migrations",
+  kind: "file_paths",
+  repo: "../basou",
+  include: ["db/migrations/*.sql"],
+  unit: "files",
+};
+
+describe("parseBoardDeclaration: board_version 3, file_name and file_paths", () => {
+  it("accepts a file_name, with no group without a pattern and group 1 by default with one", () => {
+    const bare = parse(withMeasureV3(LATEST));
+    if (!bare.ok) throw new Error(bare.errors.join("\n"));
+    expect(bare.declaration.measures).toEqual([{ ...LATEST, at: "worktree" }]);
+    expect(Object.hasOwn(bare.declaration.measures[0] as object, "group")).toBe(false);
+
+    const dated = parse(
+      withMeasureV3({ ...LATEST, pick: "first", pattern: "^(\\d{8})_", exclude: ["**/x.sql"] }),
+    );
+    if (!dated.ok) throw new Error(dated.errors.join("\n"));
+    expect(dated.declaration.measures[0]).toEqual({
+      ...LATEST,
+      pick: "first",
+      pattern: "^(\\d{8})_",
+      exclude: ["**/x.sql"],
+      at: "worktree",
+      group: 1,
+    });
+
+    for (const group of [0, 2]) {
+      const named = parse(
+        withMeasureV3({ ...LATEST, pattern: "^(\\d{4})(\\d{4})_", group, at: "main" }),
+      );
+      if (!named.ok) throw new Error(named.errors.join("\n"));
+      expect(named.declaration.measures[0]).toMatchObject({ group, at: "main" });
+    }
+  });
+
+  it("accepts a file_paths, with a lane", () => {
+    const result = parse(withMeasureV3({ ...MIGRATIONS, lane: "cockpit", at: "v1.0" }));
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.measures).toEqual([{ ...MIGRATIONS, lane: "cockpit", at: "v1.0" }]);
+  });
+
+  it("refuses a file_name with no pick or another, a group with no pattern or past its groups, and what it does not take", () => {
+    const at = (over: Record<string, unknown>) =>
+      errorsOf(parse(withMeasureV3({ ...LATEST, ...over })));
+    expect(at({ pick: undefined })).toEqual(["measures[0].pick: must be first or last"]);
+    expect(at({ pick: "middle" })).toEqual(["measures[0].pick: must be first or last"]);
+    expect(at({ group: 1 })).toEqual([
+      "measures[0].group: a file_name takes a group only with a pattern",
+    ]);
+    expect(at({ pattern: "^(\\d{8})_", group: 2 })).toEqual([
+      "measures[0].group: the pattern has 1 capturing group, so group 2 does not exist",
+    ]);
+    expect(at({ pattern: "^\\d{8}_" })).toEqual([
+      "measures[0].group: the pattern has 0 capturing groups, so group 1 does not exist",
+    ]);
+    expect(at({ pattern: "(" })[0]).toMatch(
+      /^measures\[0\]\.pattern: is not a valid regular expression with the 'u' flag/,
+    );
+    expect(at({ group: -1, pattern: "(a)" })[0]).toMatch(/^measures\[0\]\.group: /);
+    expect(at({ include: undefined })).toEqual([
+      "measures[0].include: Invalid input: expected array, received undefined",
+    ]);
+    expect(at({ file: "a.sql" })).toEqual(["measures[0]: unknown key 'file'"]);
+    expect(at({ repo: "../elsewhere" })).toEqual([
+      "measures[0].repo: '../elsewhere' is not a repo path in the manifest (the manifest declares '.', '../basou')",
+    ]);
+  });
+
+  it("refuses what a file_paths does not take, and a repo the manifest does not declare", () => {
+    const at = (over: Record<string, unknown>) =>
+      errorsOf(parse(withMeasureV3({ ...MIGRATIONS, ...over })));
+    expect(at({ pick: "last" })).toEqual(["measures[0]: unknown key 'pick'"]);
+    expect(at({ pattern: "x" })).toEqual(["measures[0]: unknown key 'pattern'"]);
+    expect(at({ include: [] })).toEqual(["measures[0].include: must list at least one path"]);
+    expect(at({ repo: "../elsewhere" })).toEqual([
+      "measures[0].repo: '../elsewhere' is not a repo path in the manifest (the manifest declares '.', '../basou')",
+    ]);
+  });
+
+  it("refuses a ratio of a file_name or a file_paths, as of a regex_capture", () => {
+    const doc = withMeasureV3(LATEST);
+    doc.measures = [
+      LATEST,
+      MIGRATIONS,
+      {
+        id: "src_lines",
+        kind: "line_count",
+        repo: "../basou",
+        include: ["**/*.ts"],
+        unit: "lines",
+      },
+    ];
+    doc.ratios = [
+      { id: "a", label: "a", numerator: "latest_migration", denominator: "src_lines" },
+      { id: "b", label: "b", numerator: "src_lines", denominator: "migrations" },
+    ];
+    expect(errorsOf(parse(doc))).toEqual([
+      "ratios[0].numerator: 'latest_migration' is a file_name, which is not a number",
+      "ratios[1].denominator: 'migrations' is a file_paths, which is not a number",
+    ]);
+  });
+
+  it("names file_name and file_paths among the kinds of measure a version 3 board reads", () => {
+    expect(errorsOf(parse(withMeasureV3({ ...MIGRATIONS, kind: "file_names" })))).toEqual([
+      "measures[0].kind: Invalid discriminator value. Expected 'file_count' | 'dir_count' | 'line_count' | 'match_count' | 'regex_capture' | 'json_length' | 'file_name' | 'file_paths' | 'trail_count'",
+    ]);
+  });
+
+  it("says that version 3 reads file_name and file_paths when version 2 or 1 has them", () => {
+    for (const version of [1, 2]) {
+      const doc = version === 1 ? board() : boardV2();
+      doc.measures = [LATEST, MIGRATIONS, { ...LATEST, id: "c", pick: "middle" }];
+      doc.ratios = [];
+      expect(errorsOf(parse(doc))).toEqual([
+        `measures[0].kind: 'file_name' is read from board_version 3 on; this file is board_version ${version}`,
+        `measures[1].kind: 'file_paths' is read from board_version 3 on; this file is board_version ${version}`,
+        `measures[2].kind: 'file_name' is read from board_version 3 on; this file is board_version ${version}`,
+      ]);
+    }
+  });
+});

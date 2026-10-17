@@ -1508,6 +1508,39 @@ describe("basou view: the board page", () => {
     expect(none.map((o) => [o.attrs.value, o.disabled])).toEqual([["", true]]);
   });
 
+  it("draws the paths of a file_paths measure as a count, with the paths folded under it", () => {
+    const { call } = drawing(["lanes"]);
+    const drawn = call("lanes", {
+      lanes: [
+        {
+          id: "core",
+          name: "Core",
+          now: null,
+          attention: [],
+          prose: null,
+          measures: [
+            { id: "latest", value: "20260401", unit: "name" },
+            { id: "migrations", value: ["db/a.sql", "db/<b>.sql"], unit: "files" },
+            { id: "gone", value: null, unit: "files" },
+          ],
+          flags: { live: false, blocked: false, unverified: false },
+        },
+      ],
+    });
+    const items = drawn.find((n) => n.tag === "li" && n.find((c) => c.tag === "li").length === 1);
+    expect(items.map((n) => n.text())).toEqual([
+      "latest: 20260401 name",
+      "db/a.sql",
+      "db/<b>.sql",
+      "gone: not measured",
+    ]);
+    const [details] = drawn.find((n) => n.tag === "details");
+    expect(details?.attrs.open).toBeUndefined();
+    expect(details?.find((n) => n.tag === "summary").map((n) => n.text())).toEqual([
+      "migrations: 2 files",
+    ]);
+  });
+
   it("marks a lane's marks as reported, and leaves out of the period what was not measured", () => {
     const { call } = drawing(["lanes", "effort", "footnotes"]);
     const lane = (flags: Record<string, boolean>) => ({
