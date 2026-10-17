@@ -17,7 +17,8 @@ import { TaskStatusSchema } from "../schemas/task.schema.js";
  * Every version ever written is read: 1; 2, which adds what to observe
  * outside basou (`observe`) and what to look at when judging a stage
  * (`stages.<id>.look` and `.notes`); and 3, which adds the response to an
- * HTTP GET as an observation (`http`).
+ * HTTP GET (`http`) and a check run by its name (`github_check`) as
+ * observations, and what to mind when making any observation (`notes`).
  */
 export const BOARD_VERSION = 3;
 
@@ -266,13 +267,17 @@ export const BOARD_OBSERVE_KINDS = [
   "github_open_issues",
   "github_open_prs",
   "github_ci",
+  "github_check",
   "page_version",
   "http",
   "manual",
 ] as const;
 
-/** The branch a `github_ci` observation looks at when it names none. */
+/** The branch a `github_ci` or `github_check` observation looks at when it names none. */
 export const BOARD_DEFAULT_CI_BRANCH = "main";
+
+/** How many characters a `github_check` observation's check name may have. */
+export const BOARD_CHECK_NAME_MAX = 255;
 
 /** How many redirects an `http` observation follows; one that needs more is not made. */
 export const BOARD_HTTP_MAX_REDIRECTS = 10;
@@ -313,7 +318,9 @@ const workflowFile = z
     error: "must be the file name of a workflow, such as quality.yml",
   });
 
-// A branch name without what a shell or git would read as something else.
+// A branch name without what a shell or git would read as something else. No
+// part of it starts with '.': git takes no such branch, and GitHub reads
+// `a/./b` in a path as `a/b`, another branch.
 const branchName = z
   .string()
   .refine(
@@ -321,6 +328,7 @@ const branchName = z
       /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(s) &&
       !s.includes("..") &&
       !s.includes("//") &&
+      !s.includes("/.") &&
       !/[/.]$/.test(s),
     {
       error: "must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",
@@ -404,22 +412,59 @@ const capturePattern = httpPattern(BOARD_HTTP_CAPTURE_FLAGS, (s) =>
     : undefined,
 );
 
-const observeKinds = [
-  z.strictObject({ key: idText, kind: z.literal("npm_version"), package: npmPackage }),
-  z.strictObject({ key: idText, kind: z.literal("github_release"), repo: githubRepo }),
-  z.strictObject({ key: idText, kind: z.literal("github_open_issues"), repo: githubRepo }),
-  z.strictObject({ key: idText, kind: z.literal("github_open_prs"), repo: githubRepo }),
-  z.strictObject({
-    key: idText,
-    kind: z.literal("github_ci"),
-    repo: githubRepo,
-    workflow: workflowFile,
-    branch: branchName.default(BOARD_DEFAULT_CI_BRANCH),
-  }),
-  z.strictObject({ key: idText, kind: z.literal("page_version"), url: httpsUrl }),
-] as const;
+// The name of a check run, as the API takes it: it may hold spaces and ':'.
+const checkName = z.string().superRefine((s, ctx) => {
+  const problem =
+    argumentProblem(s) ??
+    ([...s].length > BOARD_CHECK_NAME_MAX
+      ? `must be at most ${BOARD_CHECK_NAME_MAX} characters`
+      : undefined);
+  if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
+});
+
+const npmVersionObserve = z.strictObject({
+  key: idText,
+  kind: z.literal("npm_version"),
+  package: npmPackage,
+});
+const githubReleaseObserve = z.strictObject({
+  key: idText,
+  kind: z.literal("github_release"),
+  repo: githubRepo,
+});
+const githubOpenIssuesObserve = z.strictObject({
+  key: idText,
+  kind: z.literal("github_open_issues"),
+  repo: githubRepo,
+});
+const githubOpenPrsObserve = z.strictObject({
+  key: idText,
+  kind: z.literal("github_open_prs"),
+  repo: githubRepo,
+});
+const githubCiObserve = z.strictObject({
+  key: idText,
+  kind: z.literal("github_ci"),
+  repo: githubRepo,
+  workflow: workflowFile,
+  branch: branchName.default(BOARD_DEFAULT_CI_BRANCH),
+});
+const pageVersionObserve = z.strictObject({
+  key: idText,
+  kind: z.literal("page_version"),
+  url: httpsUrl,
+});
 
 const manualObserve = z.strictObject({ key: idText, kind: z.literal("manual"), how: nonEmptyText });
+
+// The latest check run of that name on the head commit of the branch.
+const githubCheckObserve = z.strictObject({
+  key: idText,
+  kind: z.literal("github_check"),
+  repo: githubRepo,
+  check: checkName,
+  branch: branchName.default(BOARD_DEFAULT_CI_BRANCH),
+});
 
 // GET only: a HEAD is answered differently by many servers, and is another command.
 const httpObserve = z.strictObject({
@@ -431,9 +476,31 @@ const httpObserve = z.strictObject({
   capture_pattern: capturePattern.optional(),
 });
 
-const observeSchemaV2 = z.discriminatedUnion("kind", [...observeKinds, manualObserve]);
+const observeSchemaV2 = z.discriminatedUnion("kind", [
+  npmVersionObserve,
+  githubReleaseObserve,
+  githubOpenIssuesObserve,
+  githubOpenPrsObserve,
+  githubCiObserve,
+  pageVersionObserve,
+  manualObserve,
+]);
 
-const observeSchemaV3 = z.discriminatedUnion("kind", [...observeKinds, httpObserve, manualObserve]);
+// From version 3, every observation may say what to mind when making it, in
+// the shape of a stage's or a lane's `notes`.
+const observeNotes = { notes: z.array(nonEmptyText).optional() };
+
+const observeSchemaV3 = z.discriminatedUnion("kind", [
+  npmVersionObserve.extend(observeNotes),
+  githubReleaseObserve.extend(observeNotes),
+  githubOpenIssuesObserve.extend(observeNotes),
+  githubOpenPrsObserve.extend(observeNotes),
+  githubCiObserve.extend(observeNotes),
+  githubCheckObserve.extend(observeNotes),
+  pageVersionObserve.extend(observeNotes),
+  httpObserve.extend(observeNotes),
+  manualObserve.extend(observeNotes),
+]);
 
 const stageSchemaV1 = z.strictObject({ meaning: nonEmptyText });
 
@@ -534,8 +601,8 @@ const boardSchemaV3 = z.strictObject({
 
 /**
  * A declaration as read, whatever its version: one of version 1 has no
- * observations and no stage has `look` or `notes`, and one of version 2
- * observes nothing over `http`.
+ * observations and no stage has `look` or `notes`, and one of version 2 has
+ * no `http` or `github_check` observation and no observation has `notes`.
  */
 export type BoardDeclaration = z.output<typeof boardSchemaV3>;
 export type BoardMeasure = BoardDeclaration["measures"][number];

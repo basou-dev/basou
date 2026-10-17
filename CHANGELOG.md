@@ -32,6 +32,29 @@ All notable changes to **basou** are recorded here. The project follows
   empty match the declaration could not see. The keys of the value are
   basou's words, so `basou board record`'s check for the names of other
   workspaces looks at what they hold, not at them.
+- **A board can observe a check run by its name (`github_check`, from
+  `board_version: 3`, experimental).** A `github_check` observation names a
+  GitHub repository, the name of a check run (`check`: one a GitHub App
+  reports, such as a deploy, as well as a job of a workflow) and a `branch`
+  (`main` when it names none). Its value is the conclusion of the newest
+  check run of that name on the head commit of the branch, or its status
+  while it has not finished; `github_ci`, which takes the file name of a
+  workflow, looks at the latest run of the workflow on the branch instead.
+  basou does not make it and sends nothing: `basou board guide` gives a
+  `gh api` command that asks for the check runs of `heads/<branch>` and
+  takes the one with the highest id (the API lists one for each check suite
+  that ran the check, in an order it does not document), and prints a second
+  line when there are more than the 100 it reads, which the guide says to
+  put in a footnote. No check run of that name on the head commit, as when
+  a path filter, `[skip ci]` or the app's own rules kept the check from
+  starting, is a null with that as the error; a job a workflow skipped with
+  `if:` is a check run concluded `skipped`. A check name that is empty,
+  longer than 255 characters, holds a control character or a `'`, or starts
+  with `-` is refused.
+- **Every observation can say what to mind when making it (`notes`, from
+  `board_version: 3`, experimental),** in the shape of a stage's or a lane's
+  `notes`. `basou board guide` prints them under the observation's commands,
+  and a record keeps them with the declaration it holds.
 
 ### Changed
 
@@ -44,6 +67,10 @@ All notable changes to **basou** are recorded here. The project follows
   version reads is told so on a line of its own (`observe[0].kind: 'http'
   is read from board_version 3 on; this file is board_version 2`) for a
   kind or a value as for a key: until now only a key was told so.
+- **A branch a `github_ci` or `github_check` observation names may not have
+  a part that starts with `.`** (in a board of any version). git takes no
+  such branch, and GitHub reads `a/./b` in the path of a request as `a/b`,
+  another branch.
 
 ## 0.70.1 — 2026-10-17
 

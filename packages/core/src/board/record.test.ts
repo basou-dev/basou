@@ -454,6 +454,55 @@ describe("buildRecord: a board of version 3 that observes over http", () => {
   });
 });
 
+describe("buildRecord: a board of version 3 that observes a check run, with notes", () => {
+  it("keeps the check run and each observation's notes as declared, and the value as given", () => {
+    const observe = [
+      {
+        key: "deploy",
+        kind: "github_check",
+        repo: "owner/name",
+        check: "Workers Builds: app",
+        branch: "main",
+        notes: ["a commit that changes only docs starts no build"],
+      },
+      { key: "users", kind: "manual", how: "ask", notes: ["ask on Mondays"] },
+    ];
+    const result = parseBoardDeclaration(
+      stringify({
+        board_version: 3,
+        title: "Test board",
+        stages: Object.fromEntries(STAGES.map((id) => [id, { meaning: `stage ${id}` }])),
+        lanes: [
+          { id: "core", name: "Core" },
+          { id: "docs", name: "Docs" },
+        ],
+        observe,
+        axis: { version: 1, review_due_days: 60 },
+        effort: { start: "2026-04-28", time_zone: "UTC" },
+      }),
+      { manifestRepoPaths: [] },
+    );
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    const at = "2026-10-17T00:00:00Z";
+    const observed = {
+      deploy: { value: "success", observed_at: at, source: "gh api" },
+      users: { value: 12, observed_at: at, source: "the operator" },
+    };
+    const parsed = parseRecordInput(input({ observed }), result.declaration);
+    if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+    const r = buildRecord({
+      declaration: result.declaration,
+      measurement: { digest: DIGEST } as BoardMeasurement,
+      recordInput: parsed.input,
+      recordedAt: new Date("2026-10-17T00:00:00.000Z"),
+      recordedWith: { basou: "0.0.0-test", build: null },
+    });
+    expect(r.record_version).toBe(3);
+    expect(r.declaration.observe).toEqual(observe);
+    expect(r.observed).toEqual(observed);
+  });
+});
+
 describe("orderAnomalies", () => {
   it("finds a stage not started, blocked or shelved before one done or begun, not counting unverified", () => {
     const parsed = parseRecordInput(

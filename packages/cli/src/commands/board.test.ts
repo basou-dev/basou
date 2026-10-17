@@ -1021,6 +1021,51 @@ describe("basou board record", () => {
     });
   });
 
+  const check = {
+    key: "deploy",
+    kind: "github_check",
+    repo: "owner/name",
+    check: "Workers Builds: app",
+    notes: ["a commit that changes only docs starts no build"],
+  };
+
+  it("tells a version 2 board that observes a check run, or has notes, which version reads it", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 2;
+    board.observe = [check];
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, JSON.stringify(board));
+    const { err } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(err.join("\n")).toContain(
+      "observe[0].kind: 'github_check' is read from board_version 3 on; this file is board_version 2",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("records a version 3 board that observes a check run, keeping its notes", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 3;
+    board.observe = [check];
+    const { repo, input } = await judged(undefined, JSON.stringify(board));
+    const observed = {
+      deploy: {
+        value: "success",
+        observed_at: "2026-10-17T00:00:00Z",
+        source:
+          "gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app",
+      },
+    };
+    const result = await doRunBoardRecord({}, fed(repo, { ...input, observed }));
+    const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
+    expect(written).toMatchObject({
+      record_version: 3,
+      measure: { board_version: 3 },
+      observed,
+      declaration: { observe: [{ ...check, branch: "main" }] },
+    });
+  });
+
   it("checks and measures but writes nothing with --dry-run, and reports as JSON", async () => {
     const { repo, input } = await judged();
     const { out } = capture();
