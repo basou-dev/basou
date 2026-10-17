@@ -1450,7 +1450,7 @@ const BOARD_INIT_EN: BoardInitStrings = {
     measures:
       "What to count in the repos (file_count, dir_count, line_count, match_count, regex_capture, json_length, trail_count). One with a lane is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
     observe:
-      "What to observe outside basou (npm_version, github_release, github_open_issues, github_open_prs, github_ci, page_version, http, manual). basou never makes these; the guide says how.",
+      "What to observe outside basou (npm_version, github_release, github_open_issues, github_open_prs, github_ci, github_check, page_version, http, manual), each with notes on what to mind when making it if need be. basou never makes these; the guide says how.",
     components:
       "Left empty: the first measure names every component it finds, and the axis review registers each with its lanes or '-' and a note.",
     axis: "Raise version when a lane is added or removed or a stage's meaning changes.",
@@ -1487,7 +1487,7 @@ const BOARD_INIT_JA: BoardInitStrings = {
     measures:
       "repo の中で数えるもの（file_count・dir_count・line_count・match_count・regex_capture・json_length・trail_count）。lane を付けたものは盤のページのそのレーンの節に描かれ、付けないものは記録と差分（と、それを使う ratio）にだけ残る。",
     observe:
-      "basou の外で観測するもの（npm_version・github_release・github_open_issues・github_open_prs・github_ci・page_version・http・manual）。basou は取りに行かない。取り方は guide が出す。",
+      "basou の外で観測するもの（npm_version・github_release・github_open_issues・github_open_prs・github_ci・github_check・page_version・http・manual）。取るときの注意があれば notes に書く。basou は取りに行かない。取り方は guide が出す。",
     components:
       "空のままでよい。最初の measure が見つけた構成要素を全部名指しし、軸の見直しで各要素をレーンに（数えないなら '-' と note で）登録する。",
     axis: "レーンの増減や段の意味を変えたら version を上げる。",

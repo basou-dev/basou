@@ -32,6 +32,26 @@ All notable changes to **basou** are recorded here. The project follows
   empty match the declaration could not see. The keys of the value are
   basou's words, so `basou board record`'s check for the names of other
   workspaces looks at what they hold, not at them.
+- **A board can observe a check run by its name (`github_check`, from
+  `board_version: 3`, experimental).** A `github_check` observation names a
+  GitHub repository, the name of a check run (`check`: one a GitHub App
+  reports, such as a deploy, as well as a job of a workflow) and a `branch`
+  (`main` when it names none). Its value is the conclusion of the newest
+  check run of that name on the head commit of the branch, or its status
+  while it has not finished; `github_ci`, which takes the file name of a
+  workflow, looks at the latest run of the workflow on the branch instead.
+  basou does not make it and sends nothing: `basou board guide` gives a
+  `gh api` command that asks for the check runs of `heads/<branch>` and
+  takes the one with the highest id (the API lists one for each check suite
+  that ran the check, in an order it does not document). No check run of
+  that name on the head commit, as when a path filter or a skip did not
+  start it, is a null with that as the error. A check name that is empty,
+  longer than 255 characters, holds a control character or a `'`, or starts
+  with `-` is refused.
+- **Every observation can say what to mind when making it (`notes`, from
+  `board_version: 3`, experimental),** in the shape of a stage's or a lane's
+  `notes`. `basou board guide` prints them under the observation's commands,
+  and a record keeps them with the declaration it holds.
 
 ### Changed
 

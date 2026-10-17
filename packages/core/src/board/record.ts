@@ -24,9 +24,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * included. Raised whenever that shape changes: 2 added the observations the
  * declaration names (`declaration.observe`) and what each stage is judged by
  * (`look` and `notes` of `declaration.stages`); 3 may hold a declaration of
- * board_version 3, which may observe an HTTP response (`http`). Every record
- * is written in the newest version, whatever the version of the board it
- * records, and every version is read.
+ * board_version 3, which may observe an HTTP response (`http`) or a check run
+ * (`github_check`) and say what to mind when making an observation (`notes`).
+ * Every record is written in the newest version, whatever the version of the
+ * board it records, and every version is read.
  */
 export const BOARD_RECORD_VERSION = 3;
 

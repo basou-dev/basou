@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
-import { type BoardDeclarationResult, parseBoardDeclaration } from "./declaration.js";
+import {
+  BOARD_OBSERVE_KINDS,
+  type BoardDeclarationResult,
+  parseBoardDeclaration,
+} from "./declaration.js";
 
 const REPOS = [".", "../basou"];
 
@@ -1658,5 +1662,140 @@ describe("parseBoardDeclaration: board_version 3 and http", () => {
       "stages.02: 'look' is read from board_version 2 on; this file is board_version 1",
       "(top level): 'observe' is read from board_version 2 on; this file is board_version 1",
     ]);
+  });
+});
+
+// A version 3 board whose only observation is a github_check with `over`.
+function withCheck(over: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...boardV2(),
+    board_version: 3,
+    observe: [{ key: "deploy", kind: "github_check", repo: "owner/name", ...over }],
+  };
+}
+
+describe("parseBoardDeclaration: board_version 3, github_check and an observation's notes", () => {
+  it("accepts a check run by its name, filling the default branch, and a branch of its own", () => {
+    const names = [
+      "Workers Builds: my-app",
+      "Quality checks (typecheck / build / test / lint)",
+      'a`b $(c) "d" ; e',
+      "\u30c7\u30d7\u30ed\u30a4",
+      "c".repeat(255),
+      // Characters, not UTF-16 code units: each of these is two.
+      "\u{1F680}".repeat(255),
+    ];
+    for (const check of names) {
+      const result = parse(withCheck({ check }));
+      if (!result.ok) throw new Error(result.errors.join("\n"));
+      expect(result.declaration.observe).toEqual([
+        { key: "deploy", kind: "github_check", repo: "owner/name", check, branch: "main" },
+      ]);
+    }
+    const result = parse(withCheck({ check: "deploy", branch: "release/1.x" }));
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.observe[0]).toMatchObject({ branch: "release/1.x" });
+  });
+
+  it("refuses a check name a command could misread, too long, or missing", () => {
+    const at = (check: unknown) => errorsOf(parse(withCheck({ check })));
+    expect(at("")).toEqual(["observe[0].check: must be a non-empty string"]);
+    expect(at("-deploy")).toEqual(["observe[0].check: must not start with '-'"]);
+    expect(at("it's")).toEqual([`observe[0].check: must not contain "'"`]);
+    expect(at("a\tb")).toEqual(["observe[0].check: must not contain control characters"]);
+    expect(at("a\u009bb")).toEqual(["observe[0].check: must not contain control characters"]);
+    expect(at("c".repeat(256))).toEqual(["observe[0].check: must be at most 255 characters"]);
+    expect(at("\u{1F680}".repeat(256))).toEqual([
+      "observe[0].check: must be at most 255 characters",
+    ]);
+    expect(at(1)).toEqual(["observe[0].check: Invalid input: expected string, received number"]);
+    expect(errorsOf(parse(withCheck({})))).toEqual([
+      "observe[0].check: Invalid input: expected string, received undefined",
+    ]);
+  });
+
+  it("holds the repo and the branch to github_ci's shapes, and takes no workflow", () => {
+    expect(errorsOf(parse(withCheck({ check: "x", repo: "name" })))).toEqual([
+      "observe[0].repo: must be a GitHub repository written as owner/name",
+    ]);
+    expect(errorsOf(parse(withCheck({ check: "x", branch: "-x" })))).toEqual([
+      "observe[0].branch: must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",
+    ]);
+    expect(errorsOf(parse(withCheck({ check: "x", workflow: "q.yml" })))).toEqual([
+      "observe[0]: unknown key 'workflow'",
+    ]);
+    const ci = withCheck({});
+    ci.observe = [{ key: "ci", kind: "github_ci", repo: "o/n", workflow: "q.yml", check: "x" }];
+    expect(errorsOf(parse(ci))).toEqual(["observe[0]: unknown key 'check'"]);
+  });
+
+  it("takes notes on every kind of observation, kept as written", () => {
+    const notes = ["404 is right while it is sold out", "`ask` first"];
+    const doc: Record<string, unknown> = {
+      ...boardV2(),
+      board_version: 3,
+      observe: [
+        ...(boardV2().observe as Record<string, unknown>[]),
+        { key: "deploy", kind: "github_check", repo: "owner/name", check: "deploy" },
+        { key: "shop", kind: "http", url: "https://example.com/" },
+      ].map((o) => ({ ...o, notes })),
+    };
+    const result = parse(doc);
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.observe.map((o) => o.kind).sort()).toEqual(
+      [...BOARD_OBSERVE_KINDS].sort(),
+    );
+    for (const o of result.declaration.observe) expect(o.notes).toEqual(notes);
+    // An observation without notes has none.
+    const bare = parse(withCheck({ check: "x" }));
+    if (!bare.ok) throw new Error(bare.errors.join("\n"));
+    expect(bare.declaration.observe[0]).not.toHaveProperty("notes");
+  });
+
+  it("refuses notes that are not a list of non-empty strings", () => {
+    expect(errorsOf(parse(withCheck({ check: "x", notes: "mind" })))).toEqual([
+      "observe[0].notes: Invalid input: expected array, received string",
+    ]);
+    expect(errorsOf(parse(withCheck({ check: "x", notes: ["", " ", 1] })))).toEqual([
+      "observe[0].notes[0]: must be a non-empty string",
+      "observe[0].notes[1]: must be a non-empty string",
+      "observe[0].notes[2]: Invalid input: expected string, received number",
+    ]);
+  });
+
+  it("names github_check among the kinds a version 3 board reads", () => {
+    expect(errorsOf(parse(withCheck({ kind: "rss_feed" })))).toEqual([
+      "observe[0].kind: Invalid discriminator value. Expected 'npm_version' | 'github_release' | 'github_open_issues' | 'github_open_prs' | 'github_ci' | 'github_check' | 'page_version' | 'http' | 'manual'",
+    ]);
+  });
+
+  it("says that version 3 reads github_check and notes when version 2 or 1 has them", () => {
+    const doc = boardV2();
+    doc.observe = [
+      { key: "a", kind: "github_check", repo: "owner/name", check: "deploy" },
+      { key: "b", kind: "npm_version", package: "x", notes: ["mind"] },
+      { key: "c", kind: "manual", how: "ask", notes: [""] },
+      { key: "d", kind: "github_check", repo: "owner/name", check: "-x" },
+      { key: "e", kind: "manual", how: "ask", notes: ["mind"], colour: "red" },
+    ];
+    expect(errorsOf(parse(doc))).toEqual([
+      "observe[0].kind: 'github_check' is read from board_version 3 on; this file is board_version 2",
+      "observe[1]: 'notes' is read from board_version 3 on; this file is board_version 2",
+      "observe[2]: 'notes' is read from board_version 3 on; this file is board_version 2",
+      "observe[3].kind: 'github_check' is read from board_version 3 on; this file is board_version 2",
+      "observe[4]: unknown key 'colour'",
+      "observe[4]: 'notes' is read from board_version 3 on; this file is board_version 2",
+    ]);
+    const v1 = board();
+    for (const observe of [
+      [{ key: "a", kind: "github_check", repo: "owner/name", check: "deploy" }],
+      [{ key: "a", kind: "manual", how: "ask", notes: ["mind"] }],
+      [{ key: "a", kind: "manual", how: "ask", notes: [""] }],
+    ]) {
+      v1.observe = observe;
+      expect(errorsOf(parse(v1))).toEqual([
+        "(top level): 'observe' is read from board_version 3 on; this file is board_version 1",
+      ]);
+    }
   });
 });

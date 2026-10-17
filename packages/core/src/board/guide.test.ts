@@ -345,7 +345,9 @@ describe("boardGuide: a board declared", () => {
       }),
     );
     expect(guide).toContain("This board declares nothing to observe outside basou.");
-    expect(guide).toContain("declare it under `observe` (board_version 2 on, and 3 for `http`)");
+    expect(guide).toContain(
+      "declare it under `observe` (board_version 2 on, and 3 for `http`, `github_check` and an observation's `notes`)",
+    );
     expect(templateIn(guide).observed).toEqual({});
   });
 
@@ -1064,5 +1066,147 @@ describe("boardGuide: an http observation, run", () => {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+});
+
+const ODD_CHECK = 'Workers Builds: a`b $(touch x) "c"; \u30c7\u30d7\u30ed\u30a4';
+const CHECK_STATE =
+  '.check_runs | max_by(.id) | if .status == "completed" then .conclusion else .status end';
+
+describe("boardGuide: a github_check observation and an observation's notes", () => {
+  it("asks for the newest check run of that name on the head of the branch, quoted, with its value and source", () => {
+    const guide = boardGuide(
+      guideInput({
+        board: declared(
+          httpDeclaration([
+            {
+              key: "deploy",
+              kind: "github_check",
+              repo: "owner/name",
+              check: "Workers Builds: app",
+            },
+            {
+              key: "odd",
+              kind: "github_check",
+              repo: "owner/name.js",
+              check: ODD_CHECK,
+              branch: "release/1.x",
+            },
+          ]),
+        ),
+      }),
+    );
+    const blocks = blocksIn(guide);
+    expect(blocks).toContain(
+      `gh api -X GET 'repos/owner/name/commits/heads/main/check-runs' -f check_name='Workers Builds: app' -f per_page=100 -q '${CHECK_STATE}'; echo "exit=$?"`,
+    );
+    expect(blocks).toContain(
+      `gh api -X GET 'repos/owner/name.js/commits/heads/release/1.x/check-runs' -f check_name='${ODD_CHECK}' -f per_page=100 -q '${CHECK_STATE}'; echo "exit=$?"`,
+    );
+    const deploy = guide.slice(
+      guide.indexOf("#### `deploy` (github_check)"),
+      guide.indexOf("#### `odd`"),
+    );
+    expect(deploy).toContain(
+      "How the latest check run named `Workers Builds: app` on the head commit of main of owner/name ended",
+    );
+    expect(deploy).toContain(
+      "An empty line is no check run of that name on the head commit: a null, with the error saying that the head commit of main has no check run named `Workers Builds: app`.",
+    );
+    expect(deploy).toContain("even when what the check looks after is fine");
+    expect(deploy).toContain("A branch that does not exist exits 1 (HTTP 422)");
+    expect(deploy).toContain(
+      "Source: `gh api repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app`.",
+    );
+    // A name with a backquote is still Markdown code as it is.
+    expect(guide).toContain(
+      `Source: \`\`gh api repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name=${ODD_CHECK}\`\`.`,
+    );
+    const observed = templateIn(guide).observed as Record<string, { source: string }>;
+    expect(observed.deploy?.source).toBe(
+      "gh api repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app",
+    );
+    expect(observed.odd?.source).toBe(
+      `gh api repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name=${ODD_CHECK}`,
+    );
+  });
+
+  it("gives the check name to gh as one argument, whatever it holds", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "basou-board-check-"));
+    try {
+      const bin = join(dir, "bin");
+      await mkdir(bin);
+      // A gh that prints each argument it is given on a line of its own.
+      await writeFile(
+        join(bin, "gh"),
+        '#!/bin/sh\nfor a in "$@"; do printf \'[%s]\\n\' "$a"; done\n',
+        {
+          mode: 0o755,
+        },
+      );
+      const guide = boardGuide(
+        guideInput({
+          anchor: dir,
+          board: declared(
+            httpDeclaration([
+              { key: "odd", kind: "github_check", repo: "o/n", check: ODD_CHECK, branch: "a/b" },
+            ]),
+          ),
+        }),
+      );
+      const ask = blocksIn(guide).find((b) => b.startsWith("gh api ")) as string;
+      const out = execFileSync("sh", ["-c", ask], {
+        cwd: dir,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        encoding: "utf8",
+      });
+      expect(out).toBe(
+        [
+          "[api]",
+          "[-X]",
+          "[GET]",
+          "[repos/o/n/commits/heads/a/b/check-runs]",
+          "[-f]",
+          `[check_name=${ODD_CHECK}]`,
+          "[-f]",
+          "[per_page=100]",
+          "[-q]",
+          `[${CHECK_STATE}]`,
+          "exit=0",
+          "",
+        ].join("\n"),
+      );
+      await expect(readdir(dir)).resolves.toEqual(["bin"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints each observation's notes under how it is made, and nothing for one without", () => {
+    const guide = boardGuide(
+      guideInput({
+        board: declared(
+          httpDeclaration([
+            {
+              key: "shop",
+              kind: "http",
+              url: SHOP,
+              notes: ["404 is right while it is sold out", `a${String.fromCodePoint(0x202e)}b`],
+            },
+            { key: "users", kind: "manual", how: "ask", notes: ["ask on Mondays"] },
+            { key: "deploy", kind: "github_check", repo: "o/n", check: "deploy" },
+          ]),
+        ),
+      }),
+    );
+    const shop = guide.slice(guide.indexOf("#### `shop` (http)"), guide.indexOf("#### `users`"));
+    expect(shop).toMatch(
+      /Source: `https:\/\/example\.com\/shop\/item-1`\.\n\n- mind: 404 is right while it is sold out\n- mind: a\\u202eb\n\n$/,
+    );
+    const users = guide.slice(guide.indexOf("#### `users`"), guide.indexOf("#### `deploy`"));
+    expect(users).toMatch(/as the operator asked`\.\n\n- mind: ask on Mondays\n\n$/);
+    const deploy = guide.slice(guide.indexOf("#### `deploy`"), guide.indexOf("### 4."));
+    expect(deploy).not.toContain("mind:");
+    expect([...guide].some((c) => c.codePointAt(0) === 0x202e)).toBe(false);
   });
 });

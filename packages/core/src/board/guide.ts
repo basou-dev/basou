@@ -448,7 +448,7 @@ function observeSteps(
 ): void {
   if (observe.length === 0) {
     line(
-      "This board declares nothing to observe outside basou. If a lane reaches its users through something outside the repos (a package registry, a release, a site, a production database), declare it under `observe` (board_version 2 on, and 3 for `http`) through an axis review (step 2b).",
+      "This board declares nothing to observe outside basou. If a lane reaches its users through something outside the repos (a package registry, a release, a site, a production database), declare it under `observe` (board_version 2 on, and 3 for `http`, `github_check` and an observation's `notes`) through an axis review (step 2b).",
       "",
     );
     return;
@@ -501,6 +501,9 @@ function observeSteps(
           "",
         );
         break;
+      case "github_check":
+        githubCheckSteps(o, line, block);
+        break;
       case "page_version":
         line(
           `The version ${o.url} shows: the first \`v<major>.<minor>.<patch>\` (with what follows a \`-\`) not right after a letter, digit, underscore or dot, once the page's generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's).`,
@@ -526,6 +529,8 @@ function observeSteps(
         );
         break;
     }
+    for (const note of o.notes ?? []) line(`- mind: ${displayPath(note)}`);
+    line("");
   }
 }
 
@@ -590,6 +595,8 @@ function sourceOf(o: BoardObserve): string {
       return `gh pr list --repo ${o.repo} --state open`;
     case "github_ci":
       return `gh run list --repo ${o.repo} --workflow ${o.workflow} --branch ${o.branch}`;
+    case "github_check":
+      return `gh api ${githubCheckPath(o)} -f check_name=${o.check}`;
     case "page_version":
     case "http":
       return o.url;
@@ -625,6 +632,38 @@ function codeSpan(text: string): string {
   const fence = "`".repeat(longest + 1);
   const pad = /^[` ]|[` ]$/.test(shown) ? " " : "";
   return `${fence}${pad}${shown}${pad}${fence}`;
+}
+
+// The API path of the check runs on the head commit of a github_check
+// observation's branch. `heads/` names the branch, as the API documents it,
+// so a tag or a commit of the same name is never read instead.
+function githubCheckPath(o: Extract<BoardObserve, { kind: "github_check" }>): string {
+  return `repos/${o.repo}/commits/heads/${o.branch}/check-runs`;
+}
+
+// What prints the state of the newest check run listed, as its conclusion
+// once it is completed and its status before. The API lists one run for each
+// check suite that ran the check, in an order it does not document; with no
+// run it prints an empty line.
+const CHECK_RUN_STATE =
+  '.check_runs | max_by(.id) | if .status == "completed" then .conclusion else .status end';
+
+// How a github_check observation is made.
+function githubCheckSteps(
+  o: Extract<BoardObserve, { kind: "github_check" }>,
+  line: (...lines: string[]) => void,
+  block: (...lines: string[]) => void,
+): void {
+  line(
+    `How the latest check run named ${codeSpan(o.check)} on the head commit of ${o.branch} of ${o.repo} ended (a check run of a GitHub App, such as a deploy, as well as a job of a workflow):`,
+  );
+  block(
+    `gh api -X GET ${shellWord(githubCheckPath(o))} -f check_name=${shellWord(o.check)} -f per_page=100 -q ${shellWord(CHECK_RUN_STATE)}; echo "exit=$?"`,
+  );
+  line(
+    `Value: what it prints, as a string (\`success\`, \`failure\`, \`cancelled\`, \`skipped\`, or the status of a run not finished, such as \`queued\` or \`in_progress\`). An empty line is no check run of that name on the head commit: a null, with the error saying that the head commit of ${o.branch} has no check run named ${codeSpan(o.check)}. A head commit that did not start the check (a path filter, a skip) gives this too, even when what the check looks after is fine. A branch that does not exist exits 1 (HTTP 422): a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
+    "",
+  );
 }
 
 // How an http observation is made: a GET, then its body read when the
