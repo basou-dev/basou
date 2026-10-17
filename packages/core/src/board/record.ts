@@ -23,7 +23,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * The version of a record's shape, the shape of the measurement it holds
  * included. Raised whenever that shape changes: 2 added the observations the
  * declaration names (`declaration.observe`) and what each stage is judged by
- * (`look` and `notes` of `declaration.stages`); 3 holds a declaration of
+ * (`look` and `notes` of `declaration.stages`); 3 may hold a declaration of
  * board_version 3, which may observe an HTTP response (`http`). Every record
  * is written in the newest version, whatever the version of the board it
  * records, and every version is read.

@@ -1516,13 +1516,28 @@ describe("parseBoardDeclaration: board_version 3 and http", () => {
       errorsOf(parse(withHttp({ url, words: ["", "  ", "a\tb", "a\u0085b", "-p", "it's", 1] }))),
     ).toEqual([
       "observe[0].words[0]: must be a non-empty string",
-      "observe[0].words[1]: must be a non-empty string",
       "observe[0].words[2]: must not contain control characters",
       "observe[0].words[3]: must not contain control characters",
       "observe[0].words[4]: must not start with '-'",
       'observe[0].words[5]: must not contain "\'"',
       "observe[0].words[6]: Invalid input: expected string, received number",
     ]);
+    // Only the empty text is empty, and a '-' after a space starts no option.
+    expect(parse(withHttp({ url, words: [" ", " -p", "In Stock"] })).ok).toBe(true);
+  });
+
+  it("refuses an http key that is not an id: the guide names a working file by it", () => {
+    for (const key of ["Shop", "a/b", "a:b", "-a", "a b"]) {
+      expect(errorsOf(parse(withHttp({ key, url })))).toEqual([
+        "observe[0].key: must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
+      ]);
+    }
+  });
+
+  it("looks for a word given twice only in an http observation", () => {
+    const doc = withHttp({ url });
+    doc.observe = [{ key: "m", kind: "manual", how: "ask", words: ["a", "a"] }];
+    expect(errorsOf(parse(doc))).toEqual(["observe[0]: unknown key 'words'"]);
   });
 
   it("refuses a word given twice, saying where it was first", () => {
@@ -1537,9 +1552,12 @@ describe("parseBoardDeclaration: board_version 3 and http", () => {
     const at = (count_pattern: unknown) => errorsOf(parse(withHttp({ url, count_pattern })));
     const empty =
       "observe[0].count_pattern: must not match the empty string: each match is counted";
-    for (const pattern of ["a*", "x?", "^", "$", "(?:)", "a|", "[a-z]{0,3}"]) {
+    // \p{L}* matches the empty string only under the u flag, ^$ only in the empty text.
+    for (const pattern of ["a*", "x?", "^", "$", "(?:)", "a|", "[a-z]{0,3}", "\\p{L}*", "^$"]) {
       expect(at(pattern)).toEqual([empty]);
     }
+    // Only the empty text is empty: a pattern of a space counts spaces.
+    expect(parse(withHttp({ url, count_pattern: " " })).ok).toBe(true);
     expect(at("")).toEqual(["observe[0].count_pattern: must be a non-empty string"]);
     expect(at("-x")).toEqual(["observe[0].count_pattern: must not start with '-'"]);
     expect(at("a\nb")).toEqual(["observe[0].count_pattern: must not contain control characters"]);
@@ -1596,6 +1614,13 @@ describe("parseBoardDeclaration: board_version 3 and http", () => {
     ]);
   });
 
+  it("holds a file with no version, or one that is not a number, to the newest shape", () => {
+    const reads = "board_version: must be a board version this basou reads (1, 2 or 3)";
+    for (const version of [undefined, "2", "3"]) {
+      expect(errorsOf(parse({ ...withHttp({ url }), board_version: version }))).toEqual([reads]);
+    }
+  });
+
   it("does not put a problem down to a later version that refuses the same part", () => {
     const doc = boardV2();
     doc.observe = [{ key: "a", kind: "http" }];
@@ -1604,9 +1629,21 @@ describe("parseBoardDeclaration: board_version 3 and http", () => {
       "observe[0].kind: 'http' is read from board_version 3 on; this file is board_version 2",
     ]);
     const v1 = board();
-    v1.observe = [{ key: "a", kind: "http" }];
-    // No version reads the key as written (3 refuses the entry inside it):
-    // it is put down to the first version that takes the key.
+    // No version reads the key as written (3 refuses the entry inside it), but
+    // what version 2 refuses inside it is a kind version 3 reads: from 3 on.
+    for (const http of [
+      { key: "a", kind: "http" },
+      { key: "a", kind: "http", url: "http://example.com/" },
+      { key: "a", kind: "http", url, words: ["-p"] },
+      { key: "a", kind: "http", url, method: "GET" },
+    ]) {
+      v1.observe = [http];
+      expect(errorsOf(parse(v1))).toEqual([
+        "(top level): 'observe' is read from board_version 3 on; this file is board_version 1",
+      ]);
+    }
+    // What every version refuses inside it: put down to the first version that takes the key.
+    v1.observe = [{ key: "a", kind: "manual" }];
     expect(errorsOf(parse(v1))).toEqual([
       "(top level): 'observe' is read from board_version 2 on; this file is board_version 1",
     ]);

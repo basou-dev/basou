@@ -29,7 +29,9 @@ All notable changes to **basou** are recorded here. The project follows
   `'`, or starts with `-` is refused, as is a word given twice, a
   `count_pattern` that matches the empty string and a `capture_pattern`
   with no capturing group; the guide's line stops, rather than count, at an
-  empty match the declaration could not see.
+  empty match the declaration could not see. The keys of the value are
+  basou's words, so `basou board record`'s check for the names of other
+  workspaces looks at what they hold, not at them.
 
 ### Changed
 

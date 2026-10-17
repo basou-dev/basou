@@ -612,8 +612,9 @@ async function checkAndRecord(
 }
 
 // The keys of a record's input, which a location may name: the words of its
-// shape. Any other key is a name someone chose (an observation's, a lane's,
-// or one the input should not have), which may be the very name found.
+// shape, and those of an http observation's value, which the guide fixes.
+// Any other key is a name someone chose (an observation's, a lane's, or one
+// the input should not have), which may be the very name found.
 const INPUT_KEYS = new Set([
   "measure_digest",
   "observed",
@@ -637,6 +638,12 @@ const INPUT_KEYS = new Set([
   "model",
   "self_reported",
   "triggers",
+  "status",
+  "redirects",
+  "final_url",
+  "words",
+  "count",
+  "capture",
 ]);
 
 // The places whose values are held to a shape a refusal does not quote (a

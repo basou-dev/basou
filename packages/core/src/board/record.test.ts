@@ -434,7 +434,7 @@ describe("buildRecord: a board of version 3 that observes over http", () => {
       },
       // Not 2xx: the status is the value, and what the body would give is null.
       gone: {
-        value: { status: 404, redirects: 0, final_url: url, words: [null] },
+        value: { status: 404, redirects: 0, final_url: url, words: null },
         observed_at: at,
         source: url,
       },

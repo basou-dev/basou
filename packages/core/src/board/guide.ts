@@ -616,6 +616,17 @@ const HTTP_BODY_SCRIPT = [
   "console.log(JSON.stringify(v));",
 ].join(" ");
 
+// A text as Markdown code, as it is: fenced by more backquotes than it
+// holds in a row, and padded with a space when it starts or ends with a
+// backquote or a space, which the fence would otherwise eat.
+function codeSpan(text: string): string {
+  const shown = displayPath(text);
+  const longest = Math.max(0, ...(shown.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longest + 1);
+  const pad = /^[` ]|[` ]$/.test(shown) ? " " : "";
+  return `${fence}${pad}${shown}${pad}${fence}`;
+}
+
 // How an http observation is made: a GET, then its body read when the
 // observation declares what to read off it.
 function httpSteps(
@@ -629,17 +640,17 @@ function httpSteps(
     ...(o.words === undefined
       ? []
       : [
-          `\`words\`: whether the body holds each word, as true or false in the order the command gives them (${o.words.map((w) => `\`${displayPath(w)}\``).join(", ")})`,
+          `\`words\`: whether the body holds each word, as true or false in the order the command gives them (${o.words.map(codeSpan).join(", ")})`,
         ]),
     ...(o.count_pattern === undefined
       ? []
       : [
-          `\`count\`: how many times \`${displayPath(o.count_pattern)}\` matches the body (0 when it does not)`,
+          `\`count\`: how many times ${codeSpan(o.count_pattern)} matches the body (0 when it does not)`,
         ]),
     ...(o.capture_pattern === undefined
       ? []
       : [
-          `\`capture\`: what the first group of the first match of \`${displayPath(o.capture_pattern)}\` holds, as a string (null when nothing matches)`,
+          `\`capture\`: what the first group of the first match of ${codeSpan(o.capture_pattern)} holds, as a string (null when nothing matches, or when the first group takes no part in the match)`,
         ]),
   ];
   line(
@@ -658,8 +669,17 @@ function httpSteps(
     );
     line("It prints, as JSON:", "", ...reads.map((r) => `- ${r}`), "");
   }
+  // What the body would give, as the value holds it when the status is not 2xx.
+  const nulls = (["words", "count", "capture"] as const)
+    .filter((k) => (k === "words" ? o.words : k === "count" ? o.count_pattern : o.capture_pattern))
+    .map((k) => `"${k}": null`)
+    .join(", ");
+  const notRead =
+    nulls === ""
+      ? ""
+      : ` When the status is not 2xx, do not read the body: give \`${nulls}\`, each a null and not a list of nulls (an error page's text is not the page's).`;
   line(
-    `Value: \`{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string>${reads.length > 0 ? ", <what the body gave>" : ""} }\`, the numbers as numbers. A 4xx or 5xx is a value, not an observation not made: the status is what was observed.${reads.length > 0 ? " When the status is not 2xx, do not read the body: give each of `words`, `count` and `capture` it declares as null (an error page's text is not the page's)." : ""} When curl exits other than 0 (the name does not resolve, TLS fails, the time runs out, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47)${reads.length > 0 ? ", or reading the body exits 1," : ""} the observation is not made: a null with that as the error. Source: \`${sourceOf(o)}\`.`,
+    `Value: \`{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string>${reads.length > 0 ? ", <what the body gave>" : ""} }\`, the numbers as numbers. A 4xx or 5xx is a value, not an observation not made: the status is what was observed.${notRead} When curl exits other than 0 (the name does not resolve, TLS fails, the time runs out, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47)${reads.length > 0 ? ", or reading the body exits 1," : ""} the observation is not made: a null with that as the error. Source: \`${sourceOf(o)}\`.`,
     "",
   );
 }

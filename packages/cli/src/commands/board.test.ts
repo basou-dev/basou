@@ -1285,6 +1285,41 @@ describe("basou board record", () => {
       expect(process.exitCode).toBe(1);
     });
 
+    it("takes the keys of an http observation's value as words of the input's shape, and still looks at what they hold", async () => {
+      const { repo, input } = await judged();
+      const url = "https://example.com/item";
+      const at = { observed_at: "2026-10-17T00:00:00Z", source: url };
+      const value = {
+        status: 200,
+        redirects: 0,
+        final_url: url,
+        words: [true],
+        count: 3,
+        capture: "2.3",
+      };
+      capture();
+      for (const name of ["status", "redirects", "final_url", "words", "count", "capture"]) {
+        await registered(repo, name);
+        const http = {
+          ...input,
+          measure_digest: await measuredAgain(repo),
+          observed: { shop: { value, ...at } },
+        };
+        capture();
+        expect((await doRunBoardRecord({ dryRun: true }, fed(repo, http))).dry_run).toBe(true);
+      }
+      const name = await registered(repo);
+      const named = {
+        ...input,
+        measure_digest: await measuredAgain(repo),
+        observed: { shop: { value: { ...value, capture: `${name} 2.3` }, ...at } },
+      };
+      const { err } = capture();
+      await runBoardRecord({ dryRun: true }, fed(repo, named));
+      expect(err.join("\n")).toContain("  - observed (a named entry).value.capture");
+      expect(process.exitCode).toBe(1);
+    });
+
     it("reads a number in a value as the text it is written as", async () => {
       const { repo, input } = await judged();
       const name = await registered(repo, "424242");

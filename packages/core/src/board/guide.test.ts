@@ -345,6 +345,7 @@ describe("boardGuide: a board declared", () => {
       }),
     );
     expect(guide).toContain("This board declares nothing to observe outside basou.");
+    expect(guide).toContain("declare it under `observe` (board_version 2 on, and 3 for `http`)");
     expect(templateIn(guide).observed).toEqual({});
   });
 
@@ -877,10 +878,10 @@ describe("boardGuide: an http observation", () => {
       "- `count`: how many times `<loc>` matches the body (0 when it does not)",
     );
     expect(guide).toContain(
-      "- `capture`: what the first group of the first match of `Version ([0-9.]+)` holds, as a string (null when nothing matches)",
+      "- `capture`: what the first group of the first match of `Version ([0-9.]+)` holds, as a string (null when nothing matches, or when the first group takes no part in the match)",
     );
     expect(guide).toContain(
-      "When the status is not 2xx, do not read the body: give each of `words`, `count` and `capture` it declares as null",
+      'When the status is not 2xx, do not read the body: give `"words": null, "count": null, "capture": null`, each a null and not a list of nulls',
     );
     expect(guide).toContain("A 4xx or 5xx is a value, not an observation not made");
     expect(guide).toContain("more than 10 redirects: exit 47), or reading the body exits 1,");
@@ -910,6 +911,29 @@ describe("boardGuide: an http observation", () => {
       'Value: `{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string> }`',
     );
     expect(bare.slice(0, bare.indexOf("### 4."))).not.toContain("2xx");
+    expect(guide).toContain('give `"words": null`, each a null and not a list of nulls');
+  });
+
+  it("writes a word or a pattern as Markdown code that shows it as it is, backquotes and spaces too", () => {
+    const guide = boardGuide(
+      guideInput({
+        board: declared(
+          httpDeclaration([
+            {
+              key: "odd",
+              kind: "http",
+              url: SHOP,
+              words: ["a`b", " in stock ", "``x"],
+              count_pattern: "<loc>|`",
+            },
+          ]),
+        ),
+      }),
+    );
+    expect(guide).toContain(
+      "in the order the command gives them (``a`b``, `  in stock  `, ``` ``x ```)",
+    );
+    expect(guide).toContain("- `count`: how many times `` <loc>|` `` matches the body");
   });
 });
 
@@ -946,11 +970,16 @@ describe("boardGuide: an http observation, run", () => {
               key: "shop",
               kind: "http",
               url: SHOP,
-              words: [IN_STOCK, "sold out", "AT&T"],
+              // Found as written: not ignoring case, and at the body's start too.
+              words: [IN_STOCK, "sold out", "AT&T", "<urlset>", "VERSION 2.3"],
               count_pattern: "^<urlset>|<loc>",
               capture_pattern: "Version ([0-9.]+)",
             },
             { key: "opt", kind: "http", url: SHOP, capture_pattern: "x(y)?" },
+            // Under the u flag . is one character, not one half of a surrogate pair.
+            { key: "flags", kind: "http", url: SHOP, count_pattern: ".", capture_pattern: "(.)" },
+            // Only a BOM at the start is taken off.
+            { key: "bom", kind: "http", url: SHOP, count_pattern: "\\uFEFF" },
           ]),
         ),
       }),
@@ -963,16 +992,22 @@ describe("boardGuide: an http observation, run", () => {
     const body = `\ufeff<urlset>${"a".repeat(65535 - 3 - 8)}${IN_STOCK} AT&amp;T <loc>1</loc><loc>2</loc> Version 2.3 and Version 9.9`;
     await writeFile(join(work, "http-shop.body"), body, "utf8");
     expect(await run(read)).toEqual({
-      out: '{"words":[true,false,false],"count":3,"capture":"2.3"}\nexit=0\n',
+      out: '{"words":[true,false,false,true,false],"count":3,"capture":"2.3"}\nexit=0\n',
       err: "",
     });
     await writeFile(join(work, "http-shop.body"), "nothing here", "utf8");
     expect((await run(read)).out).toBe(
-      '{"words":[false,false,false],"count":0,"capture":null}\nexit=0\n',
+      '{"words":[false,false,false,false,false],"count":0,"capture":null}\nexit=0\n',
     );
     // A group that took no part in the match gives null, as no match does.
     await writeFile(join(work, "http-opt.body"), "x", "utf8");
     expect((await run(blockOf(guide, "opt", "node -e"))).out).toBe('{"capture":null}\nexit=0\n');
+    await writeFile(join(work, "http-flags.body"), "\u{1F600}", "utf8");
+    expect((await run(blockOf(guide, "flags", "node -e"))).out).toBe(
+      '{"count":1,"capture":"\u{1F600}"}\nexit=0\n',
+    );
+    await writeFile(join(work, "http-bom.body"), "\ufeffa\ufeffb", "utf8");
+    expect((await run(blockOf(guide, "bom", "node -e"))).out).toBe('{"count":1}\nexit=0\n');
   });
 
   it("stops rather than count an empty match the declaration could not see", async () => {

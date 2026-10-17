@@ -214,7 +214,7 @@ describe("boardPage", () => {
       record_version: 3,
       observed: {
         shop: {
-          value: { status: 404, redirects: 0, final_url: "https://example.com/x", words: [null] },
+          value: { status: 404, redirects: 0, final_url: "https://example.com/x", words: null },
           observed_at: "2026-10-07T00:00:00Z",
           source: "https://example.com/x",
         },
@@ -231,7 +231,7 @@ describe("boardPage", () => {
     expect(page.board.summary.observed).toEqual([
       {
         name: "shop",
-        value: { status: 404, redirects: 0, final_url: "https://example.com/x", words: [null] },
+        value: { status: 404, redirects: 0, final_url: "https://example.com/x", words: null },
         observed_at: "2026-10-07T00:00:00Z",
         source: "https://example.com/x",
       },

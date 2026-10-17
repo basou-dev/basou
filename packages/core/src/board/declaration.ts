@@ -354,7 +354,7 @@ const httpsUrl = z.string().superRefine((s, ctx) => {
 // reaches the command after `--`, so it is never read as an option; a
 // leading '-' is refused all the same, as for every value a command takes.
 function argumentProblem(s: string, quoteHint = ""): string | undefined {
-  if (s.trim().length === 0) return "must be a non-empty string";
+  if (s.length === 0) return "must be a non-empty string";
   if (hasControlCharacter(s)) return "must not contain control characters";
   if (s.startsWith("-")) return "must not start with '-'";
   if (s.includes("'")) return `must not contain "'"${quoteHint}`;
@@ -689,19 +689,25 @@ function parseAs(
 // what is written told apart from what no version reads: a key, a kind, a
 // value of a form a later version takes. Each is put down to the first
 // version that reads that part of the file as it is written, with no problem
-// at it, inside it or around it; a key, when no version reads it so, to the
-// first version that takes the key, whatever is wrong inside it.
+// at it, inside it or around it. A key no version reads so is put down to
+// the first version that takes the key, whatever is wrong inside it, or to a
+// later one when what is wrong inside it is what a later version reads (a
+// kind of version 3 under a key of version 2).
 function formatOlderIssues(raw: unknown, version: number, issues: readonly Issue[]): string[] {
   const later = BOARD_VERSIONS.filter((v) => v > version).map((v) => ({
     version: v,
     issues: schemaOf(v).safeParse(raw).error?.issues ?? [],
   }));
-  const readsAsWritten = (path: readonly PropertyKey[]): number | undefined =>
-    later.find((l) => !l.issues.some((issue) => issuePaths(issue).some((p) => related(p, path))))
-      ?.version;
-  const takesKey = (path: readonly PropertyKey[]): number | undefined =>
+  const readsAsWritten = (path: readonly PropertyKey[], after = version): number | undefined =>
     later.find(
       (l) =>
+        l.version > after &&
+        !l.issues.some((issue) => issuePaths(issue).some((p) => related(p, path))),
+    )?.version;
+  const takesKey = (path: readonly PropertyKey[], after = version): number | undefined =>
+    later.find(
+      (l) =>
+        l.version > after &&
         !l.issues.some((issue) =>
           issuePaths(issue).some(
             (p) =>
@@ -711,8 +717,23 @@ function formatOlderIssues(raw: unknown, version: number, issues: readonly Issue
           ),
         ),
     )?.version;
+  const keyFrom = (path: readonly PropertyKey[]): number | undefined => {
+    const taken = takesKey(path);
+    if (taken === undefined) return undefined;
+    let from = taken;
+    for (const issue of later.find((l) => l.version === taken)?.issues ?? []) {
+      for (const p of issuePaths(issue)) {
+        if (p.length <= path.length || !related(p, path)) continue;
+        const inside =
+          readsAsWritten(p, taken) ??
+          (issue.code === "unrecognized_keys" ? takesKey(p, taken) : undefined);
+        if (inside !== undefined && inside > from) from = inside;
+      }
+    }
+    return from;
+  };
   const readFrom = (path: readonly PropertyKey[], isKey: boolean): number | undefined =>
-    readsAsWritten(path) ?? (isKey ? takesKey(path) : undefined);
+    readsAsWritten(path) ?? (isKey ? keyFrom(path) : undefined);
   const readFromLine = (path: readonly PropertyKey[], what: string, from: number) =>
     `${formatPath(path)}: ${what} read from board_version ${from} on; this file is board_version ${version}`;
   const out: string[] = [];
