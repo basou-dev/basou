@@ -375,13 +375,82 @@ describe("parseRecordInput: a board that declares what to observe", () => {
       recordedAt: new Date("2026-10-08T00:00:00.000Z"),
       recordedWith: { basou: "0.0.0-test", build: null },
     });
-    expect(r.record_version).toBe(2);
+    expect(r.record_version).toBe(3);
     expect(r.declaration.observe).toEqual([
       { key: "npm_cli", kind: "npm_version", package: "@scope/cli" },
       { key: "users", kind: "manual", how: "ask the operator" },
     ]);
     expect(r.declaration.stages["04"]).toEqual({ meaning: "stage 04", look: ["what 04 needs"] });
     expect(r.observed).toEqual({ npm_cli: made, users: notMade });
+  });
+});
+
+describe("buildRecord: a board of version 3 that observes over http", () => {
+  const url = "https://example.com/shop/item-1";
+  const httpDeclaration = (): BoardDeclaration => {
+    const result = parseBoardDeclaration(
+      stringify({
+        board_version: 3,
+        title: "Test board",
+        stages: Object.fromEntries(STAGES.map((id) => [id, { meaning: `stage ${id}` }])),
+        lanes: [
+          { id: "core", name: "Core" },
+          { id: "docs", name: "Docs" },
+        ],
+        observe: [
+          {
+            key: "shop",
+            kind: "http",
+            url,
+            words: ["in stock", "sold out"],
+            count_pattern: "<loc>",
+            capture_pattern: "Version ([0-9.]+)",
+          },
+          { key: "gone", kind: "http", url, words: ["x"] },
+        ],
+        axis: { version: 1, review_due_days: 60 },
+        effort: { start: "2026-04-28", time_zone: "UTC" },
+      }),
+      { manifestRepoPaths: [] },
+    );
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    return result.declaration;
+  };
+
+  it("takes the value of a GET as given, and keeps the observation as declared in a record of version 3", () => {
+    const at = "2026-10-17T00:00:00Z";
+    const observed = {
+      shop: {
+        value: {
+          status: 200,
+          redirects: 1,
+          final_url: `${url}/`,
+          words: [true, false],
+          count: 42,
+          capture: "2.3",
+        },
+        observed_at: at,
+        source: url,
+      },
+      // Not 2xx: the status is the value, and what the body would give is null.
+      gone: {
+        value: { status: 404, redirects: 0, final_url: url, words: null },
+        observed_at: at,
+        source: url,
+      },
+    };
+    const parsed = parseRecordInput(input({ observed }), httpDeclaration());
+    if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+    const r = buildRecord({
+      declaration: httpDeclaration(),
+      measurement: { digest: DIGEST } as BoardMeasurement,
+      recordInput: parsed.input,
+      recordedAt: new Date("2026-10-17T00:00:00.000Z"),
+      recordedWith: { basou: "0.0.0-test", build: null },
+    });
+    expect(r.record_version).toBe(3);
+    expect(r.declaration.observe).toEqual(httpDeclaration().observe);
+    expect(r.observed).toEqual(observed);
   });
 });
 
@@ -458,7 +527,7 @@ describe("buildRecord and writeRecord", () => {
       effort: { start: "2026-04-28", time_zone: "UTC" },
       observe: [],
     });
-    expect(r.record_version).toBe(2);
+    expect(r.record_version).toBe(3);
     expect(r.recorded_at).toBe("2026-10-07T00:00:00.000Z");
     const records = join(dir, "records");
     const name = await writeRecord(records, r);

@@ -934,7 +934,7 @@ describe("basou board record", () => {
     expect(await readdir(join(repo, "board", "records"))).toEqual([name]);
     const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
     expect(written).toMatchObject({
-      record_version: 2,
+      record_version: 3,
       measure: { digest: input.measure_digest },
       judged_by: { model: "Claude Opus 5.5", self_reported: true },
       order_anomalies: [],
@@ -967,13 +967,57 @@ describe("basou board record", () => {
     const result = await doRunBoardRecord({}, fed(repo, { ...input, observed }));
     const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
     expect(written).toMatchObject({
-      record_version: 2,
+      record_version: 3,
       measure: { board_version: 2 },
       observed,
       declaration: {
         observe: [{ key: "npm_cli", kind: "npm_version", package: "@scope/cli" }],
         stages: { "05": { meaning: "stage 05", look: ["the published version"] } },
       },
+    });
+  });
+
+  const http = {
+    key: "shop",
+    kind: "http",
+    url: "https://example.com/item",
+    words: ["in stock"],
+    count_pattern: "<loc>",
+  };
+
+  it("tells a version 2 board that observes over http which version reads it", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 2;
+    board.observe = [http];
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, JSON.stringify(board));
+    const { err } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(err.join("\n")).toContain(
+      "observe[0].kind: 'http' is read from board_version 3 on; this file is board_version 2",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("records a version 3 board that observes over http", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 3;
+    board.observe = [http];
+    const { repo, input } = await judged(undefined, JSON.stringify(board));
+    const observed = {
+      shop: {
+        value: { status: 200, redirects: 0, final_url: http.url, words: [true], count: 3 },
+        observed_at: "2026-10-17T00:00:00Z",
+        source: http.url,
+      },
+    };
+    const result = await doRunBoardRecord({}, fed(repo, { ...input, observed }));
+    const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
+    expect(written).toMatchObject({
+      record_version: 3,
+      measure: { board_version: 3 },
+      observed,
+      declaration: { observe: [http] },
     });
   });
 
@@ -1022,7 +1066,7 @@ describe("basou board record", () => {
     );
     expect(out.join("\n")).toBe(`Recorded ${result.record}\nNot compared with a previous record.`);
     await expect(readFile(join(deeper, result.record ?? ""), "utf8")).resolves.toContain(
-      '"record_version": 2',
+      '"record_version": 3',
     );
   });
 
@@ -1238,6 +1282,41 @@ describe("basou board record", () => {
         "  - observed (a named entry).value.observed_at",
         "  - observed (a named entry).value.measure_digest",
       ]);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("takes the keys of an http observation's value as words of the input's shape, and still looks at what they hold", async () => {
+      const { repo, input } = await judged();
+      const url = "https://example.com/item";
+      const at = { observed_at: "2026-10-17T00:00:00Z", source: url };
+      const value = {
+        status: 200,
+        redirects: 0,
+        final_url: url,
+        words: [true],
+        count: 3,
+        capture: "2.3",
+      };
+      capture();
+      for (const name of ["status", "redirects", "final_url", "words", "count", "capture"]) {
+        await registered(repo, name);
+        const http = {
+          ...input,
+          measure_digest: await measuredAgain(repo),
+          observed: { shop: { value, ...at } },
+        };
+        capture();
+        expect((await doRunBoardRecord({ dryRun: true }, fed(repo, http))).dry_run).toBe(true);
+      }
+      const name = await registered(repo);
+      const named = {
+        ...input,
+        measure_digest: await measuredAgain(repo),
+        observed: { shop: { value: { ...value, capture: `${name} 2.3` }, ...at } },
+      };
+      const { err } = capture();
+      await runBoardRecord({ dryRun: true }, fed(repo, named));
+      expect(err.join("\n")).toContain("  - observed (a named entry).value.capture");
       expect(process.exitCode).toBe(1);
     });
 
@@ -1712,7 +1791,7 @@ describe("basou board init", () => {
     const parsed = parseBoardDeclaration(text, { manifestRepoPaths: [".", "../elsewhere"] });
     if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
     expect(parsed.declaration.title).toBe("board-ws progress board");
-    expect(parsed.declaration.board_version).toBe(2);
+    expect(parsed.declaration.board_version).toBe(3);
     // No session yet: the effort starts today.
     expect(parsed.declaration.effort.start).toBe(
       new Intl.DateTimeFormat("en-CA", {

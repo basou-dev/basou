@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { boardInitStrings } from "../lib/view-strings.js";
-import { parseBoardDeclaration } from "./declaration.js";
+import { BOARD_OBSERVE_KINDS, parseBoardDeclaration } from "./declaration.js";
 import { BOARD_INIT_LANE_ID, boardInitText } from "./init.js";
 
 const en = boardInitStrings("en");
@@ -19,7 +19,7 @@ describe("boardInitText", () => {
     const result = read(text);
     if (!result.ok) throw new Error(result.errors.join("\n"));
     const d = result.declaration;
-    expect(d.board_version).toBe(2);
+    expect(d.board_version).toBe(3);
     expect(d.title).toBe("shop progress board");
     expect(Object.keys(d.stages)).toEqual(["01", "02", "03", "04", "05", "06"]);
     expect(d.stages["04"].meaning).toBe(en.stages["04"]);
@@ -48,6 +48,11 @@ describe("boardInitText", () => {
       expect(text).toContain(`# ${words.comments.measures}\nmeasures: []\n`);
     }
     expect(en.comments.measures).toContain("One with a lane is drawn in that lane's section");
+    // The comment on observe names every kind a board can declare, http among them.
+    for (const kind of BOARD_OBSERVE_KINDS) {
+      expect(en.comments.observe).toContain(kind);
+      expect(ja.comments.observe).toContain(kind);
+    }
     expect(ja.comments.measures).toContain("lane を付けたものは盤のページのそのレーンの節に描かれ");
   });
 

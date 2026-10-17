@@ -14,14 +14,15 @@ import { TaskStatusSchema } from "../schemas/task.schema.js";
  * an error, so a typo is refused instead of silently ignored, and every
  * problem the reader can see is reported at once.
  *
- * Every version ever written is read: 1, and 2, which adds what to observe
+ * Every version ever written is read: 1; 2, which adds what to observe
  * outside basou (`observe`) and what to look at when judging a stage
- * (`stages.<id>.look` and `.notes`).
+ * (`stages.<id>.look` and `.notes`); and 3, which adds the response to an
+ * HTTP GET as an observation (`http`).
  */
-export const BOARD_VERSION = 2;
+export const BOARD_VERSION = 3;
 
 /** The board versions this basou reads. A version is added here, never removed. */
-export const BOARD_VERSIONS = [1, 2] as const;
+export const BOARD_VERSIONS = [1, 2, 3] as const;
 
 /** The stage ids of every board. Their order is fixed; a board sets only their meanings. */
 export const BOARD_STAGE_IDS = ["01", "02", "03", "04", "05", "06"] as const;
@@ -266,11 +267,25 @@ export const BOARD_OBSERVE_KINDS = [
   "github_open_prs",
   "github_ci",
   "page_version",
+  "http",
   "manual",
 ] as const;
 
 /** The branch a `github_ci` observation looks at when it names none. */
 export const BOARD_DEFAULT_CI_BRANCH = "main";
+
+/** How many redirects an `http` observation follows; one that needs more is not made. */
+export const BOARD_HTTP_MAX_REDIRECTS = 10;
+
+/**
+ * The flags an `http` observation's `count_pattern` is matched with: every
+ * match in the whole body, with no `m`, so `^` and `$` are the body's start
+ * and end. A measure's `pattern` is matched line by line instead.
+ */
+export const BOARD_HTTP_COUNT_FLAGS = "gu";
+
+/** The flags an `http` observation's `capture_pattern` is matched with: the first match in the whole body. */
+export const BOARD_HTTP_CAPTURE_FLAGS = "u";
 
 // The values of an observation are put into the commands a judge runs, each
 // as one single-quoted shell word. Each is held to a shape that, quoted so,
@@ -335,7 +350,61 @@ const httpsUrl = z.string().superRefine((s, ctx) => {
   if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
 });
 
-const observeSchema = z.discriminatedUnion("kind", [
+// Why a text cannot be given to a command as one argument, or undefined. It
+// reaches the command after `--`, so it is never read as an option; a
+// leading '-' is refused all the same, as for every value a command takes.
+function argumentProblem(s: string, quoteHint = ""): string | undefined {
+  if (s.length === 0) return "must be a non-empty string";
+  if (hasControlCharacter(s)) return "must not contain control characters";
+  if (s.startsWith("-")) return "must not start with '-'";
+  if (s.includes("'")) return `must not contain "'"${quoteHint}`;
+  return undefined;
+}
+
+// A word an `http` observation looks for in the body, as it is written.
+const httpWord = z.string().superRefine((s, ctx) => {
+  const problem = argumentProblem(s);
+  if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
+});
+
+// Whether a pattern matches the empty string.
+function matchesEmpty(pattern: string): boolean {
+  try {
+    return new RegExp(pattern, BOARD_HTTP_COUNT_FLAGS).test("");
+  } catch {
+    return false;
+  }
+}
+
+// A pattern an `http` observation matches against the whole body, with the
+// flags given. "'" is refused as in every value of a command; a pattern can
+// match one as \x27.
+const httpPattern = (flags: string, check: (s: string) => string | undefined) =>
+  z.string().superRefine((s, ctx) => {
+    let problem = argumentProblem(s, " (match one as \\x27)");
+    if (problem === undefined) {
+      try {
+        new RegExp(s, flags);
+        problem = check(s);
+      } catch (error: unknown) {
+        const reason = error instanceof Error ? error.message : "invalid";
+        problem = `is not a valid regular expression with the '${flags}' flags (${reason})`;
+      }
+    }
+    if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
+  });
+
+const countPattern = httpPattern(BOARD_HTTP_COUNT_FLAGS, (s) =>
+  matchesEmpty(s) ? "must not match the empty string: each match is counted" : undefined,
+);
+
+const capturePattern = httpPattern(BOARD_HTTP_CAPTURE_FLAGS, (s) =>
+  (captureGroups(s) ?? 0) === 0
+    ? "must have a capturing group: the value is what the first one holds"
+    : undefined,
+);
+
+const observeKinds = [
   z.strictObject({ key: idText, kind: z.literal("npm_version"), package: npmPackage }),
   z.strictObject({ key: idText, kind: z.literal("github_release"), repo: githubRepo }),
   z.strictObject({ key: idText, kind: z.literal("github_open_issues"), repo: githubRepo }),
@@ -348,8 +417,23 @@ const observeSchema = z.discriminatedUnion("kind", [
     branch: branchName.default(BOARD_DEFAULT_CI_BRANCH),
   }),
   z.strictObject({ key: idText, kind: z.literal("page_version"), url: httpsUrl }),
-  z.strictObject({ key: idText, kind: z.literal("manual"), how: nonEmptyText }),
-]);
+] as const;
+
+const manualObserve = z.strictObject({ key: idText, kind: z.literal("manual"), how: nonEmptyText });
+
+// GET only: a HEAD is answered differently by many servers, and is another command.
+const httpObserve = z.strictObject({
+  key: idText,
+  kind: z.literal("http"),
+  url: httpsUrl,
+  words: z.array(httpWord).min(1, { error: "must list at least one word" }).optional(),
+  count_pattern: countPattern.optional(),
+  capture_pattern: capturePattern.optional(),
+});
+
+const observeSchemaV2 = z.discriminatedUnion("kind", [...observeKinds, manualObserve]);
+
+const observeSchemaV3 = z.discriminatedUnion("kind", [...observeKinds, httpObserve, manualObserve]);
 
 const stageSchemaV1 = z.strictObject({ meaning: nonEmptyText });
 
@@ -362,8 +446,11 @@ const stageSchemaV2 = z.strictObject({
 const stagesOf = <S extends z.ZodType>(stage: S) =>
   z.strictObject({ "01": stage, "02": stage, "03": stage, "04": stage, "05": stage, "06": stage });
 
+// The versions this basou reads, as a sentence says them: "1, 2 or 3".
+const READ_VERSIONS = `${BOARD_VERSIONS.slice(0, -1).join(", ")} or ${BOARD_VERSIONS.at(-1)}`;
+
 const boardVersionText = z.literal(BOARD_VERSIONS, {
-  error: `must be a board version this basou reads (${BOARD_VERSIONS.join(" or ")})`,
+  error: `must be a board version this basou reads (${READ_VERSIONS})`,
 });
 
 // The keys every version has after its stages, in the order a problem with
@@ -434,14 +521,23 @@ const boardSchemaV2 = z.strictObject({
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV2),
   ...boardFields,
-  observe: z.array(observeSchema).default([]),
+  observe: z.array(observeSchemaV2).default([]),
+});
+
+const boardSchemaV3 = z.strictObject({
+  board_version: boardVersionText,
+  title: nonEmptyText,
+  stages: stagesOf(stageSchemaV2),
+  ...boardFields,
+  observe: z.array(observeSchemaV3).default([]),
 });
 
 /**
  * A declaration as read, whatever its version: one of version 1 has no
- * observations and no stage has `look` or `notes`.
+ * observations and no stage has `look` or `notes`, and one of version 2
+ * observes nothing over `http`.
  */
-export type BoardDeclaration = z.output<typeof boardSchemaV2>;
+export type BoardDeclaration = z.output<typeof boardSchemaV3>;
 export type BoardMeasure = BoardDeclaration["measures"][number];
 export type BoardMeasureKind = BoardMeasure["kind"];
 /** One entry of `observe`: what to observe outside basou, and the key it is recorded under. */
@@ -543,9 +639,7 @@ export function parseBoardDeclaration(
   if (typeof version === "number" && !(BOARD_VERSIONS as readonly number[]).includes(version)) {
     return {
       ok: false,
-      errors: [
-        `board_version: this basou reads board_version ${BOARD_VERSIONS.join(" or ")}, not ${version}`,
-      ],
+      errors: [`board_version: this basou reads board_version ${READ_VERSIONS}, not ${version}`],
     };
   }
   const yamlErrors = [
@@ -557,43 +651,149 @@ export function parseBoardDeclaration(
   const errors: string[] = [];
   // A file with no version, or one that is not a number, is held to the
   // newest shape.
-  if (version === 1) {
-    const parsed = boardSchemaV1.safeParse(raw);
-    if (!parsed.success) {
-      for (const issue of parsed.error.issues) errors.push(...formatVersion1Issue(issue));
-    }
-    errors.push(...crossCheck(raw, context));
-    if (errors.length > 0 || !parsed.success) return { ok: false, errors };
-    return { ok: true, declaration: { ...parsed.data, observe: [] } };
-  }
-  const parsed = boardSchemaV2.safeParse(raw);
-  if (!parsed.success) {
-    for (const issue of parsed.error.issues) errors.push(formatIssue(issue));
+  const parsed = parseAs(version, raw);
+  if (!parsed.ok) {
+    errors.push(
+      ...(version === BOARD_VERSION || typeof version !== "number"
+        ? parsed.issues.map(formatIssue)
+        : formatOlderIssues(raw, version, parsed.issues)),
+    );
   }
   errors.push(...crossCheck(raw, context));
-  if (errors.length > 0 || !parsed.success) return { ok: false, errors };
-  return { ok: true, declaration: parsed.data };
+  if (errors.length > 0 || !parsed.ok) return { ok: false, errors };
+  return { ok: true, declaration: parsed.declaration };
 }
 
-// The keys version 2 added, where it added them: a file of version 1 that
-// has one is told so apart from the keys no version reads.
-function formatVersion1Issue(issue: Issue): string[] {
-  if (issue.code !== "unrecognized_keys") return [formatIssue(issue)];
-  const added =
-    issue.path.length === 0
-      ? ["observe"]
-      : issue.path.length === 2 && issue.path[0] === "stages"
-        ? ["look", "notes"]
-        : [];
-  const later = issue.keys.filter((k) => added.includes(k));
-  if (later.length === 0) return [formatIssue(issue)];
-  const others = issue.keys.filter((k) => !added.includes(k));
-  const out = others.length === 0 ? [] : [formatIssue({ ...issue, keys: others })];
-  const named = later.map((k) => `'${k}'`).join(", ");
-  out.push(
-    `${formatPath(issue.path)}: ${named} ${later.length === 1 ? "is" : "are"} read from board_version 2 on; this file is board_version 1`,
-  );
+// The schema of each version this basou reads.
+function schemaOf(version: number) {
+  return version === 1 ? boardSchemaV1 : version === 2 ? boardSchemaV2 : boardSchemaV3;
+}
+
+function parseAs(
+  version: unknown,
+  raw: unknown,
+): { ok: true; declaration: BoardDeclaration } | { ok: false; issues: Issue[] } {
+  if (version === 1) {
+    const parsed = boardSchemaV1.safeParse(raw);
+    return parsed.success
+      ? { ok: true, declaration: { ...parsed.data, observe: [] } }
+      : { ok: false, issues: parsed.error.issues };
+  }
+  const parsed = (version === 2 ? boardSchemaV2 : boardSchemaV3).safeParse(raw);
+  return parsed.success
+    ? { ok: true, declaration: parsed.data }
+    : { ok: false, issues: parsed.error.issues };
+}
+
+// The problems of a file of an older version, where a later version reads
+// what is written told apart from what no version reads: a key, a kind, a
+// value of a form a later version takes. Each is put down to the first
+// version that reads that part of the file as it is written, with no problem
+// at it, inside it or around it. A key no version reads so is put down to
+// the first version that takes the key, whatever is wrong inside it, or to a
+// later one when what is wrong inside it is what a later version reads (a
+// kind of version 3 under a key of version 2).
+function formatOlderIssues(raw: unknown, version: number, issues: readonly Issue[]): string[] {
+  const later = BOARD_VERSIONS.filter((v) => v > version).map((v) => ({
+    version: v,
+    issues: schemaOf(v).safeParse(raw).error?.issues ?? [],
+  }));
+  const readsAsWritten = (path: readonly PropertyKey[], after = version): number | undefined =>
+    later.find(
+      (l) =>
+        l.version > after &&
+        !l.issues.some((issue) => issuePaths(issue).some((p) => related(p, path))),
+    )?.version;
+  const takesKey = (path: readonly PropertyKey[], after = version): number | undefined =>
+    later.find(
+      (l) =>
+        l.version > after &&
+        !l.issues.some((issue) =>
+          issuePaths(issue).some(
+            (p) =>
+              (p.length < path.length ||
+                (p.length === path.length && issue.code === "unrecognized_keys")) &&
+              related(p, path),
+          ),
+        ),
+    )?.version;
+  const keyFrom = (path: readonly PropertyKey[]): number | undefined => {
+    const taken = takesKey(path);
+    if (taken === undefined) return undefined;
+    let from = taken;
+    for (const issue of later.find((l) => l.version === taken)?.issues ?? []) {
+      for (const p of issuePaths(issue)) {
+        if (p.length <= path.length || !related(p, path)) continue;
+        const inside =
+          readsAsWritten(p, taken) ??
+          (issue.code === "unrecognized_keys" ? takesKey(p, taken) : undefined);
+        if (inside !== undefined && inside > from) from = inside;
+      }
+    }
+    return from;
+  };
+  const readFrom = (path: readonly PropertyKey[], isKey: boolean): number | undefined =>
+    readsAsWritten(path) ?? (isKey ? keyFrom(path) : undefined);
+  const readFromLine = (path: readonly PropertyKey[], what: string, from: number) =>
+    `${formatPath(path)}: ${what} read from board_version ${from} on; this file is board_version ${version}`;
+  const out: string[] = [];
+  for (const issue of issues) {
+    if (issue.code !== "unrecognized_keys") {
+      const from = readFrom(issue.path, false);
+      out.push(
+        from === undefined
+          ? formatIssue(issue)
+          : readFromLine(issue.path, `${writtenValue(valueAt(raw, issue.path))} is`, from),
+      );
+      continue;
+    }
+    const others: string[] = [];
+    const byVersion = new Map<number, string[]>();
+    for (const key of issue.keys) {
+      const from = readFrom([...issue.path, key], true);
+      if (from === undefined) others.push(key);
+      else byVersion.set(from, [...(byVersion.get(from) ?? []), key]);
+    }
+    if (others.length > 0) out.push(formatIssue({ ...issue, keys: others }));
+    for (const [from, keys] of [...byVersion].sort(([a], [b]) => a - b)) {
+      const named = keys.map((k) => `'${k}'`).join(", ");
+      out.push(readFromLine(issue.path, `${named} ${keys.length === 1 ? "is" : "are"}`, from));
+    }
+  }
   return out;
+}
+
+// The parts of the file an issue is about: the key itself, for a key no
+// shape takes.
+function issuePaths(issue: Issue): (readonly PropertyKey[])[] {
+  return issue.code === "unrecognized_keys"
+    ? issue.keys.map((k) => [...issue.path, k])
+    : [issue.path];
+}
+
+// Whether one path is the other or holds it.
+function related(a: readonly PropertyKey[], b: readonly PropertyKey[]): boolean {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function valueAt(raw: unknown, path: readonly PropertyKey[]): unknown {
+  let value = raw;
+  for (const key of path) {
+    if (typeof value !== "object" || value === null || !Object.hasOwn(value, key)) {
+      return undefined;
+    }
+    value = (value as Record<PropertyKey, unknown>)[key];
+  }
+  return value;
+}
+
+// A value as a problem names it: a short plain one as it is written.
+function writtenValue(value: unknown): string {
+  return typeof value === "string" && /^[\x21-\x26\x28-\x7e]{1,40}$/.test(value)
+    ? `'${value}'`
+    : "what is written here";
 }
 
 // The first line of a parser message, without the ':' that introduces the
@@ -734,7 +934,20 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
   const measureIds = idsOf("measures", "measure");
   idsOf("ratios", "ratio");
   // A version 1 file has no observations: its `observe` is refused as a key.
-  if (raw.board_version !== 1) idsOf("observe", "observation", "key");
+  if (raw.board_version !== 1) {
+    idsOf("observe", "observation", "key");
+    // The value holds one answer for each word, in the order declared.
+    for (const [i, o] of entries(raw, "observe") ?? []) {
+      if (o.kind !== "http" || !Array.isArray(o.words)) continue;
+      const seen = new Map<string, number>();
+      o.words.forEach((word: unknown, j) => {
+        if (typeof word !== "string") return;
+        const first = seen.get(word);
+        if (first === undefined) seen.set(word, j);
+        else errors.push(`observe[${i}].words[${j}]: duplicate word (first at words[${first}])`);
+      });
+    }
+  }
 
   const repoPaths = new Set(context.manifestRepoPaths);
   const declared =
