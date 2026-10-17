@@ -32,6 +32,65 @@ function measurement(over: Record<string, unknown> = {}) {
   };
 }
 
+describe("diffMeasurements: the paths of a file_paths measure", () => {
+  const withPaths = (value: unknown, unit = "files") =>
+    measurement({ measures: { md: { value: 2, unit: "files" }, mig: { value, unit } } });
+
+  it("lists each path that came in and went out when both hold a list, and nothing for the same set", () => {
+    const paths = ["db/a.sql", "db/b.sql", 'db/"q".sql'];
+    const before = withPaths(paths);
+    const after = withPaths(["db/b.sql", "db/c.sql", 'db/"q".sql']);
+    expect(diffMeasurements(before, after, "01M4")).toEqual({
+      against: "01M4",
+      values: [],
+      methods: [],
+      added: [{ at: 'measures.mig.value["db/c.sql"]', value: true }],
+      removed: [{ at: 'measures.mig.value["db/a.sql"]', value: true }],
+    });
+    expect(diffMeasurements(before, withPaths([...paths].reverse()), "01M4")).toEqual({
+      against: "01M4",
+      values: [],
+      methods: [],
+      added: [],
+      removed: [],
+    });
+    // The rest of the measure is compared as before.
+    expect(diffMeasurements(withPaths([]), withPaths(["db/a.sql"], "paths"), "01M4")).toMatchObject(
+      {
+        values: [{ at: "measures.mig.unit", before: "files", after: "paths" }],
+        added: [{ at: 'measures.mig.value["db/a.sql"]', value: true }],
+        removed: [],
+      },
+    );
+  });
+
+  it("compares the value whole when one of the two is not a list", () => {
+    expect(diffMeasurements(withPaths(null), withPaths(["db/a.sql"]), "01M4").values).toEqual([
+      { at: "measures.mig.value", before: null, after: ["db/a.sql"] },
+    ]);
+    expect(diffMeasurements(withPaths(["db/a.sql"]), withPaths(null), "01M4").values).toEqual([
+      { at: "measures.mig.value", before: ["db/a.sql"], after: null },
+    ]);
+    expect(diffMeasurements(withPaths("a.sql"), withPaths(["db/a.sql"]), "01M4").values).toEqual([
+      { at: "measures.mig.value", before: "a.sql", after: ["db/a.sql"] },
+    ]);
+    const only = diffMeasurements(measurement(), withPaths(["db/a.sql"]), "01M4");
+    expect(only.added).toEqual([
+      { at: "measures.mig.value", value: ["db/a.sql"] },
+      { at: "measures.mig.unit", value: "files" },
+    ]);
+  });
+
+  it("names a measure whose id is not a plain word with its id quoted", () => {
+    const at = (value: unknown) =>
+      measurement({ measures: { "site.pages": { value, unit: "files" } } });
+    expect(diffMeasurements(at(["a"]), at(["b"]), "01M4")).toMatchObject({
+      added: [{ at: 'measures["site.pages"].value["b"]', value: true }],
+      removed: [{ at: 'measures["site.pages"].value["a"]', value: true }],
+    });
+  });
+});
+
 describe("diffMeasurements", () => {
   it("finds nothing moved between two measurements of the same values, whenever and however measured", () => {
     const after = measurement({

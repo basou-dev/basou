@@ -639,6 +639,13 @@ export const BOARD_HTML = `<!doctype html>
       if (lane.measures.length > 0) {
         body.push(el('div', { class: 'muted', text: S.lane.measures }));
         body.push(el('ul', null, lane.measures.map(function (m) {
+          // The paths of a file_paths measure: how many, with the list folded.
+          if (Array.isArray(m.value)) {
+            return el('li', null, [el('details', null, [
+              el('summary', { text: m.id + ': ' + num(m.value.length) + ' ' + m.unit }),
+              el('ul', null, m.value.map(function (p) { return el('li', { text: p }); }))
+            ])]);
+          }
           return el('li', { text: m.id + ': ' + num(m.value) + (m.value === null ? '' : ' ' + m.unit) });
         })));
       }

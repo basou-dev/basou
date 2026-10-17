@@ -239,6 +239,41 @@ describe("boardPage", () => {
     expect((await boardPage(records, A)).status).toBe("ok");
   });
 
+  it("draws a record of version 3 whose measures hold a name and the paths of files, in their lanes", async () => {
+    await mkdir(records);
+    const v3 = record({ record_version: 3 });
+    v3.declaration = {
+      ...v3.declaration,
+      measures: [
+        { id: "latest", kind: "file_name", unit: "name", lane: "core" },
+        { id: "migrations", kind: "file_paths", unit: "files", lane: "core" },
+      ],
+      ratios: [],
+    } as typeof v3.declaration;
+    v3.measure = {
+      ...v3.measure,
+      measures: {
+        latest: { value: "20260401", unit: "name", lane: "core" },
+        migrations: { value: ["db/a.sql", "db/b.sql"], unit: "files", lane: "core" },
+      },
+      ratios: {},
+    } as unknown as typeof v3.measure;
+    await place(A, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.board.lanes[0]?.measures).toEqual([
+      { id: "latest", value: "20260401", unit: "name" },
+      { id: "migrations", value: ["db/a.sql", "db/b.sql"], unit: "files" },
+    ]);
+    // A list of anything but strings is not a measure's value.
+    v3.measure = {
+      ...v3.measure,
+      measures: { migrations: { value: [1, 2], unit: "files" } },
+    } as unknown as typeof v3.measure;
+    await place(A, v3);
+    expect(await boardPage(records)).toMatchObject({ why: "not_a_record" });
+  });
+
   it("draws the heading, the tiles and the observations from the record", async () => {
     await mkdir(records);
     await place(A, record());
