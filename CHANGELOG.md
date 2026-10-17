@@ -69,9 +69,9 @@ All notable changes to **basou** are recorded here. The project follows
   value is the list of the paths matched, in byte order, up to 1000; more
   is a null with that as the reason. A ratio takes neither. The difference
   from the previous record lists each path that came in or went out when
-  both records hold a list. `basou board measure` gives the list as a
-  count, and the board page draws it as a count with the paths folded
-  under it.
+  both records hold a list, and the list whole when only one does. The
+  `Measures:` section of `basou board measure` gives the list as a count,
+  and the board page draws it as a count with the paths folded under it.
 
 ### Changed
 

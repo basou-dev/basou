@@ -36,7 +36,10 @@ export const BOARD_REGEX_FLAGS = "u";
 /** What `at` means when a measure omits it: the working tree, untracked files included. */
 export const BOARD_DEFAULT_AT = "worktree";
 
-/** The capture group a `regex_capture` measure takes when it omits `group`. */
+/**
+ * The capture group a `regex_capture` measure, or a `file_name` measure with
+ * a `pattern`, takes when it omits `group`.
+ */
 export const BOARD_DEFAULT_CAPTURE_GROUP = 1;
 
 const ID_PATTERN = /^[a-z][a-z0-9_-]*$/;

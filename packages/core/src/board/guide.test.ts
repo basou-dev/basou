@@ -310,7 +310,7 @@ describe("boardGuide: a board declared", () => {
 
   it("says where to read the paths of a file_paths measure, and how the diff gives them", () => {
     expect(boardGuide(guideInput())).toContain(
-      "- A `file_paths` measure's value is the list of paths it found, which measure.txt gives as a count: read them in the JSON. `diff` lists each path that came in (`added`) or went out (`removed`) when both records hold a list.",
+      "- A `file_paths` measure's value is the list of paths it found. `Measures:` in measure.txt gives it as a count: read the paths in the JSON. `diff` lists each path that came in (`added`) or went out (`removed`) when both records hold a list, and the list whole when only one does.",
     );
   });
 
