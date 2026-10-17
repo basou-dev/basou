@@ -1071,7 +1071,7 @@ describe("boardGuide: an http observation, run", () => {
 
 const ODD_CHECK = 'Workers Builds: a`b $(touch x) "c"; \u30c7\u30d7\u30ed\u30a4';
 const CHECK_STATE =
-  '.check_runs | max_by(.id) | if .status == "completed" then .conclusion else .status end';
+  '(.check_runs | max_by(.id) | if .status == "completed" then .conclusion else .status end), (if .total_count > 100 then "more than 100 runs: \\(.total_count)" else empty end)';
 
 describe("boardGuide: a github_check observation and an observation's notes", () => {
   it("asks for the newest check run of that name on the head of the branch, quoted, with its value and source", () => {
@@ -1108,26 +1108,38 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
       guide.indexOf("#### `odd`"),
     );
     expect(deploy).toContain(
-      "How the latest check run named `Workers Builds: app` on the head commit of main of owner/name ended",
+      "How the latest check run named `Workers Builds: app` on the head commit of `main` of `owner/name` ended",
     );
     expect(deploy).toContain(
-      "An empty line is no check run of that name on the head commit: a null, with the error saying that the head commit of main has no check run named `Workers Builds: app`.",
+      "Value: the first line it prints, as a string (`success`, `failure`, `cancelled`, `skipped`, or the status of a run not finished, such as `queued` or `in_progress`). A second line, `more than 100 runs: <n>`, says the newest run may be on a page not read: keep the first line as the value, and say so in a footnote.",
     );
-    expect(deploy).toContain("even when what the check looks after is fine");
+    expect(deploy).toContain(
+      "An empty line is no check run of that name on the head commit: a null, with the error saying that the head commit of `main` has no check run named `Workers Builds: app`.",
+    );
+    expect(deploy).toContain(
+      "A head commit that never started the check (a path filter, `[skip ci]` in its commit message, or the app's own rules) gives this too, even when what the check looks after is fine; a job a workflow skipped with `if:` is a check run, concluded `skipped`.",
+    );
     expect(deploy).toContain("A branch that does not exist exits 1 (HTTP 422)");
     expect(deploy).toContain(
-      "Source: `gh api repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app`.",
+      "Source: `gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app`.",
     );
-    // A name with a backquote is still Markdown code as it is.
-    expect(guide).toContain(
-      `Source: \`\`gh api repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name=${ODD_CHECK}\`\`.`,
+    // A name with a backquote is still Markdown code as it is, in the prose as in the source.
+    const odd = guide.slice(guide.indexOf("#### `odd` (github_check)"), guide.indexOf("### 4."));
+    expect(odd).toContain(
+      `How the latest check run named \`\`${ODD_CHECK}\`\` on the head commit of \`release/1.x\` of \`owner/name.js\` ended`,
+    );
+    expect(odd).toContain(
+      `the head commit of \`release/1.x\` has no check run named \`\`${ODD_CHECK}\`\`.`,
+    );
+    expect(odd).toContain(
+      `Source: \`\`gh api -X GET repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name=${ODD_CHECK}\`\`.`,
     );
     const observed = templateIn(guide).observed as Record<string, { source: string }>;
     expect(observed.deploy?.source).toBe(
-      "gh api repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app",
+      "gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app",
     );
     expect(observed.odd?.source).toBe(
-      `gh api repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name=${ODD_CHECK}`,
+      `gh api -X GET repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name=${ODD_CHECK}`,
     );
   });
 

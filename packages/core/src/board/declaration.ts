@@ -318,7 +318,9 @@ const workflowFile = z
     error: "must be the file name of a workflow, such as quality.yml",
   });
 
-// A branch name without what a shell or git would read as something else.
+// A branch name without what a shell or git would read as something else. No
+// part of it starts with '.': git takes no such branch, and GitHub reads
+// `a/./b` in a path as `a/b`, another branch.
 const branchName = z
   .string()
   .refine(
@@ -326,6 +328,7 @@ const branchName = z
       /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(s) &&
       !s.includes("..") &&
       !s.includes("//") &&
+      !s.includes("/.") &&
       !/[/.]$/.test(s),
     {
       error: "must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",

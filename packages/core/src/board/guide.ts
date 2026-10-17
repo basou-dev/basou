@@ -596,7 +596,7 @@ function sourceOf(o: BoardObserve): string {
     case "github_ci":
       return `gh run list --repo ${o.repo} --workflow ${o.workflow} --branch ${o.branch}`;
     case "github_check":
-      return `gh api ${githubCheckPath(o)} -f check_name=${o.check}`;
+      return `gh api -X GET ${githubCheckPath(o)} -f check_name=${o.check}`;
     case "page_version":
     case "http":
       return o.url;
@@ -641,12 +641,15 @@ function githubCheckPath(o: Extract<BoardObserve, { kind: "github_check" }>): st
   return `repos/${o.repo}/commits/heads/${o.branch}/check-runs`;
 }
 
+// How many check runs a github_check observation reads, as one page.
+const CHECK_RUNS_PER_PAGE = 100;
+
 // What prints the state of the newest check run listed, as its conclusion
 // once it is completed and its status before. The API lists one run for each
 // check suite that ran the check, in an order it does not document; with no
-// run it prints an empty line.
-const CHECK_RUN_STATE =
-  '.check_runs | max_by(.id) | if .status == "completed" then .conclusion else .status end';
+// run it prints an empty line. When there are more runs of the name than a
+// page holds, a second line says so: the newest may be on a page not read.
+const CHECK_RUN_STATE = `(.check_runs | max_by(.id) | if .status == "completed" then .conclusion else .status end), (if .total_count > ${CHECK_RUNS_PER_PAGE} then "more than ${CHECK_RUNS_PER_PAGE} runs: \\(.total_count)" else empty end)`;
 
 // How a github_check observation is made.
 function githubCheckSteps(
@@ -655,13 +658,13 @@ function githubCheckSteps(
   block: (...lines: string[]) => void,
 ): void {
   line(
-    `How the latest check run named ${codeSpan(o.check)} on the head commit of ${o.branch} of ${o.repo} ended (a check run of a GitHub App, such as a deploy, as well as a job of a workflow):`,
+    `How the latest check run named ${codeSpan(o.check)} on the head commit of ${codeSpan(o.branch)} of ${codeSpan(o.repo)} ended (a check run of a GitHub App, such as a deploy, as well as a job of a workflow):`,
   );
   block(
-    `gh api -X GET ${shellWord(githubCheckPath(o))} -f check_name=${shellWord(o.check)} -f per_page=100 -q ${shellWord(CHECK_RUN_STATE)}; echo "exit=$?"`,
+    `gh api -X GET ${shellWord(githubCheckPath(o))} -f check_name=${shellWord(o.check)} -f per_page=${CHECK_RUNS_PER_PAGE} -q ${shellWord(CHECK_RUN_STATE)}; echo "exit=$?"`,
   );
   line(
-    `Value: what it prints, as a string (\`success\`, \`failure\`, \`cancelled\`, \`skipped\`, or the status of a run not finished, such as \`queued\` or \`in_progress\`). An empty line is no check run of that name on the head commit: a null, with the error saying that the head commit of ${o.branch} has no check run named ${codeSpan(o.check)}. A head commit that did not start the check (a path filter, a skip) gives this too, even when what the check looks after is fine. A branch that does not exist exits 1 (HTTP 422): a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
+    `Value: the first line it prints, as a string (\`success\`, \`failure\`, \`cancelled\`, \`skipped\`, or the status of a run not finished, such as \`queued\` or \`in_progress\`). A second line, \`more than ${CHECK_RUNS_PER_PAGE} runs: <n>\`, says the newest run may be on a page not read: keep the first line as the value, and say so in a footnote. An empty line is no check run of that name on the head commit: a null, with the error saying that the head commit of ${codeSpan(o.branch)} has no check run named ${codeSpan(o.check)}. A head commit that never started the check (a path filter, \`[skip ci]\` in its commit message, or the app's own rules) gives this too, even when what the check looks after is fine; a job a workflow skipped with \`if:\` is a check run, concluded \`skipped\`. A branch that does not exist exits 1 (HTTP 422): a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
     "",
   );
 }

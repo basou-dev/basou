@@ -1395,6 +1395,9 @@ describe("parseBoardDeclaration: board_version 2", () => {
       { key: "j", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "v1." },
       { key: "k", kind: "github_ci", repo: "o/n", workflow: "Q.YML" },
       { key: "l", kind: "github_ci", repo: "o/n", workflow: `${"w".repeat(252)}.yml` },
+      { key: "m", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "a/./b" },
+      { key: "n", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "release/.x" },
+      { key: "o", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "a.b/c.d" },
     ];
     const workflow = "must be the file name of a workflow, such as quality.yml";
     const branch =
@@ -1411,6 +1414,8 @@ describe("parseBoardDeclaration: board_version 2", () => {
       `observe[9].branch: ${branch}`,
       `observe[10].workflow: ${workflow}`,
       `observe[11].workflow: ${workflow}`,
+      `observe[12].branch: ${branch}`,
+      `observe[13].branch: ${branch}`,
     ]);
   });
 
@@ -1718,9 +1723,12 @@ describe("parseBoardDeclaration: board_version 3, github_check and an observatio
     expect(errorsOf(parse(withCheck({ check: "x", repo: "name" })))).toEqual([
       "observe[0].repo: must be a GitHub repository written as owner/name",
     ]);
-    expect(errorsOf(parse(withCheck({ check: "x", branch: "-x" })))).toEqual([
-      "observe[0].branch: must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",
-    ]);
+    for (const branch of ["-x", "a/./b", "release/.x"]) {
+      expect(errorsOf(parse(withCheck({ check: "x", branch })))).toEqual([
+        "observe[0].branch: must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",
+      ]);
+    }
+    expect(parse(withCheck({ check: "x", branch: "a.b/c.d" })).ok).toBe(true);
     expect(errorsOf(parse(withCheck({ check: "x", workflow: "q.yml" })))).toEqual([
       "observe[0]: unknown key 'workflow'",
     ]);

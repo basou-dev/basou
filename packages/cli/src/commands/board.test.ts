@@ -1052,7 +1052,8 @@ describe("basou board record", () => {
       deploy: {
         value: "success",
         observed_at: "2026-10-17T00:00:00Z",
-        source: "gh api repos/owner/name/commits/heads/main/check-runs",
+        source:
+          "gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app",
       },
     };
     const result = await doRunBoardRecord({}, fed(repo, { ...input, observed }));
