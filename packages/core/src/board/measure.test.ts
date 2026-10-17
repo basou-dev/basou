@@ -4451,6 +4451,8 @@ describe("measureBoard: the name of a file and the paths of files", () => {
       "c/a.txt": "",
       "d/z.txt": "",
       "d/\u00e9.txt": "",
+      "e/\uff5e.txt": "",
+      "e/\u{1f600}.txt": "",
     });
     const m = await measure(
       declare(
@@ -4458,6 +4460,7 @@ describe("measureBoard: the name of a file and the paths of files", () => {
           names({ id: "across", repo: "names", include: ["a/*", "b/*"] }),
           names({ id: "upper_first", repo: "names", include: ["c/*"], pick: "first" }),
           names({ id: "accent_last", repo: "names", include: ["d/*"] }),
+          names({ id: "astral_last", repo: "names", include: ["e/*"] }),
           paths3({ id: "all", repo: "names", include: ["**/*.txt"] }),
         ],
         { board_version: 3 },
@@ -4472,6 +4475,9 @@ describe("measureBoard: the name of a file and the paths of files", () => {
     expect(measured(m, "upper_first")).toBe("B.txt");
     // The first byte of '\u00e9' (0xc3) is after 'z'.
     expect(measured(m, "accent_last")).toBe("\u00e9.txt");
+    // U+1F600 is four bytes from 0xf0, after U+FF5E (0xef ...), though as
+    // UTF-16 its first unit (0xd83d) is before 0xff5e.
+    expect(measured(m, "astral_last")).toBe("\u{1f600}.txt");
     expect(measured(m, "all")).toEqual([
       "a/zzz.txt",
       "b/aaa.txt",
@@ -4479,6 +4485,8 @@ describe("measureBoard: the name of a file and the paths of files", () => {
       "c/a.txt",
       "d/z.txt",
       "d/\u00e9.txt",
+      "e/\uff5e.txt",
+      "e/\u{1f600}.txt",
     ]);
   });
 
