@@ -213,7 +213,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "",
     "1. Each lane: does it still stand as who uses what? Do its stages' conditions fit what is built now? Merge, split, retire or keep, with one sentence why even for keep.",
     "2. Each unacknowledged component: does it change a lane's conditions, make a new lane, or count in no lane (and why)? For the first two, what to measure or observe for it.",
-    "3. Each gone component: done with, or a repo in another state? If done with, take it off the registry and fix the lane's conditions.",
+    "3. Each gone component: done with, or a repo in another state? If done with, take it off the registry and fix the lane's conditions. If it is still there and no built-in marker finds it (a directory of content or of scripts), give it a `marker` (board_version 3 on): a glob from its directory, written as an `include` is, of the files that mark it (`**` for any file under it, `*.py` for a Python file right in it). It is then found, with the kind `marker`, while such a file is there; a repo itself takes none.",
     "4. Do the decisions recorded hold anything that should move the axis (a new surface, a new base, something decided not to build)?",
     "5. If the last review was by another model: does anything in how the lanes are cut or worded need fixing now? Change nothing only to make it look new; change only what is worth losing the comparison with past records.",
     "",
@@ -352,7 +352,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- Argue priorities: the board lists facts, and the operator's turns list what waits for a ruling.",
     "- Write an estimate as a measurement, or let a number you could not get pass as blank or 0.",
     "- Put money on the board, or read effort as progress: reach is shown by the matrix alone.",
-    "- Change the axis silently, or register a component only to silence (a).",
+    "- Change the axis silently, or register a component, or give one a marker, only to silence (a).",
     "- Write the board's HTML: basou draws it.",
     "- Touch another project's repos.",
     "",
@@ -798,7 +798,7 @@ function undeclared(
   );
   block(`${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`);
   line(
-    '5. Register the components: at first every component the markers find is unacknowledged, and the axis review (a) fires. Give each the lanes it counts in, or `"-"` with a note saying why it counts in none.',
+    '5. Register the components: at first every component the markers find is unacknowledged, and the axis review (a) fires. Give each the lanes it counts in, or `"-"` with a note saying why it counts in none. A directory no built-in marker finds (content, scripts) is registered with a `marker` of its own: a glob, from it, of the files that mark it.',
     "6. Run `basou board guide` again: with a board declared, it prints the steps that judge and record it. The first record is the first review of the axis: give it an `axis_review`.",
     "",
   );

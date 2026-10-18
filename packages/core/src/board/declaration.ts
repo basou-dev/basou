@@ -21,8 +21,9 @@ import { TaskStatusSchema } from "../schemas/task.schema.js";
  * observations, what to mind when making any observation (`notes`), the
  * name of a file (`file_name`), the paths of files (`file_paths`) and a sum
  * of integers and other measures (`total`) as measures, a measure drawn in
- * more than one lane (`lane` as a list), and a measure id and an observation
- * key of words joined by '.'.
+ * more than one lane (`lane` as a list), a measure id and an observation key
+ * of words joined by '.', and the files that mark a registered component
+ * (`components.<key>.marker`).
  */
 export const BOARD_VERSION = 3;
 
@@ -110,13 +111,14 @@ const timeZoneText = z.string().refine(isBoardTimeZone, {
 // A path or glob inside a repository. It may not leave the repository, so an
 // absolute path and a `..` segment are refused; a leading ':' would be read
 // as git pathspec magic, which the measures do not take from the declaration.
-// Why a path or glob would leave the repository, or undefined.
-function repoPathProblem(s: string): string | undefined {
+// Why a path or glob would leave the repository, or undefined. `from` names
+// what it is relative to.
+function repoPathProblem(s: string, from = "the repository"): string | undefined {
   if (s.length === 0) return "must be a non-empty path";
   if (hasControlCharacter(s)) return "must not contain control characters";
-  if (s.startsWith("/") || s.startsWith("\\")) return "must be relative to the repository";
+  if (s.startsWith("/") || s.startsWith("\\")) return `must be relative to ${from}`;
   if (/^[A-Za-z]:/.test(s)) {
-    return "must be relative to the repository (a leading 'x:' reads as a Windows drive)";
+    return `must be relative to ${from} (a leading 'x:' reads as a Windows drive)`;
   }
   if (s.split(/[/\\]/).includes("..")) return "must not contain a '..' segment";
   if (s.startsWith(":")) return "must not start with ':' (pathspec magic)";
@@ -125,6 +127,13 @@ function repoPathProblem(s: string): string | undefined {
 
 const repoPath = z.string().superRefine((s, ctx) => {
   const problem = repoPathProblem(s);
+  if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
+});
+
+// A component's marker: a glob from the component's directory, held to what
+// an `include` is, so it cannot reach outside that directory either.
+const markerPath = z.string().superRefine((s, ctx) => {
+  const problem = repoPathProblem(s, "the component's directory");
   if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
 });
 
@@ -629,10 +638,34 @@ const boardVersionText = z.literal(BOARD_VERSIONS, {
   error: `must be a board version this basou reads (${READ_VERSIONS})`,
 });
 
+// A component of the registry: the lanes it counts in, or '-' with a note.
+const componentFields = {
+  lane: z.union(
+    [
+      z.literal("-"),
+      z.array(idText).min(1, { error: "must list at least one lane id, or be '-'" }),
+    ],
+    {
+      error: "must be '-' or a non-empty list of lane ids",
+    },
+  ),
+  note: nonEmptyText.optional(),
+};
+
+const componentSchema = z.strictObject(componentFields);
+
+// From version 3, a component may name the files that mark it, for a
+// directory no built-in marker finds.
+const componentSchemaV3 = z.strictObject({ ...componentFields, marker: markerPath.optional() });
+
 // The keys every version has after its stages, in the order a problem with
-// them is reported, with the measures the version reads and the id a ratio
-// names a measure by.
-const boardFieldsOf = <M extends z.ZodType>(measure: M, measureRef: z.ZodString) => ({
+// them is reported, with the measures the version reads, the id a ratio
+// names a measure by and the components it registers.
+const boardFieldsOf = <M extends z.ZodType, C extends z.ZodType>(
+  measure: M,
+  measureRef: z.ZodString,
+  component: C,
+) => ({
   lanes: z
     .array(
       z.strictObject({
@@ -658,18 +691,7 @@ const boardFieldsOf = <M extends z.ZodType>(measure: M, measureRef: z.ZodString)
     .record(
       // An empty key is reported by the cross-check, which can say what it is.
       z.string(),
-      z.strictObject({
-        lane: z.union(
-          [
-            z.literal("-"),
-            z.array(idText).min(1, { error: "must list at least one lane id, or be '-'" }),
-          ],
-          {
-            error: "must be '-' or a non-empty list of lane ids",
-          },
-        ),
-        note: nonEmptyText.optional(),
-      }),
+      component,
     )
     .default({}),
   axis: z.strictObject({
@@ -690,14 +712,14 @@ const boardSchemaV1 = z.strictObject({
   board_version: boardVersionText,
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV1),
-  ...boardFieldsOf(measureSchemaV1, idText),
+  ...boardFieldsOf(measureSchemaV1, idText, componentSchema),
 });
 
 const boardSchemaV2 = z.strictObject({
   board_version: boardVersionText,
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV2),
-  ...boardFieldsOf(measureSchemaV1, idText),
+  ...boardFieldsOf(measureSchemaV1, idText, componentSchema),
   observe: z.array(observeSchemaV2).default([]),
 });
 
@@ -705,7 +727,7 @@ const boardSchemaV3 = z.strictObject({
   board_version: boardVersionText,
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV2),
-  ...boardFieldsOf(measureSchemaV3, dottedIdText),
+  ...boardFieldsOf(measureSchemaV3, dottedIdText, componentSchemaV3),
   observe: z.array(observeSchemaV3).default([]),
 });
 
@@ -714,8 +736,8 @@ const boardSchemaV3 = z.strictObject({
  * observations and no stage has `look` or `notes`, and one of version 1 or 2
  * has no `http` or `github_check` observation, no observation with `notes`,
  * no `file_name`, `file_paths` or `total` measure, no measure of more than
- * one lane, and no measure id or observation key with '.'. A measure's
- * `lane` is a list whatever the version.
+ * one lane, no measure id or observation key with '.', and no component with
+ * a `marker`. A measure's `lane` is a list whatever the version.
  */
 export type BoardDeclaration = z.output<typeof boardSchemaV3>;
 export type BoardMeasure = BoardDeclaration["measures"][number];
@@ -1114,9 +1136,9 @@ function captureGroups(pattern: string): number | undefined {
 // shape check already refuses is skipped here: a list that is not a list, a
 // key the kind does not take, a value of the wrong type or form. What a later
 // version reads is not skipped in a board of version 1 or 2 (a measure's list
-// of lanes, a total's terms, a measure id with '.'): it is held against the
-// rest of the board as the later version holds it, beside the line saying
-// which version reads it.
+// of lanes, a total's terms, a measure id with '.', a component's marker): it
+// is held against the rest of the board as the later version holds it,
+// beside the line saying which version reads it.
 function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationContext): string[] {
   const errors: string[] = [];
 
@@ -1269,6 +1291,19 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
       if (!isRecord(component)) continue;
       if (component.lane === "-" && component.note === undefined) {
         errors.push(`${at}.note: a component with lane '-' needs a note saying why`);
+      }
+      // A key with nothing after the repo's name is the repo itself, which
+      // the built-in markers already look for in the whole of it. An empty
+      // key is no repo, and is reported above.
+      const slash = key.indexOf("/");
+      if (
+        component.marker !== undefined &&
+        key.trim() !== "" &&
+        (slash === -1 || slash === key.length - 1)
+      ) {
+        errors.push(
+          `${at}.marker: only a directory inside a repo takes a marker, keyed '<repo>/<path in it>'; this key is a repo itself`,
+        );
       }
       if (laneIds !== undefined && Array.isArray(component.lane)) {
         const seen = new Set<string>();

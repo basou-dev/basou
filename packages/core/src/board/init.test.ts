@@ -76,6 +76,28 @@ describe("boardInitText", () => {
     );
   });
 
+  it("says, above an empty components, that a directory no built-in marker finds takes a marker", () => {
+    for (const [language, words] of [
+      ["en", en],
+      ["ja", ja],
+    ] as const) {
+      const text = boardInitText({
+        name: "shop",
+        language,
+        start: "2026-09-21",
+        startIsFirstSession: true,
+        timeZone: "UTC",
+      });
+      expect(text).toContain(`# ${words.comments.components}\ncomponents: {}\n`);
+    }
+    expect(en.comments.components).toContain(
+      "A directory no built-in marker finds (content, scripts) is registered with a marker: a glob, from it, of the files that mark it.",
+    );
+    expect(ja.comments.components).toContain(
+      "marker\uff08\u305d\u306e\u30c7\u30a3\u30ec\u30af\u30c8\u30ea\u304b\u3089\u898b\u305f\u3001\u5370\u306b\u3059\u308b\u30d5\u30a1\u30a4\u30eb\u306e glob\uff09\u3092\u4ed8\u3051\u3066\u767b\u9332\u3059\u308b",
+    );
+  });
+
   it("writes the words in Japanese for a Japanese anchor", () => {
     const result = read(
       boardInitText({

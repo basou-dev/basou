@@ -97,6 +97,22 @@ All notable changes to **basou** are recorded here. The project follows
   a measure is not measured, `not_found` names it as
   `measures["site.pages"]`, as the difference from the previous record
   already did, so it is not read as a measure `pages` inside `site`.
+- **A registered component can name the files that mark it (`marker`, from
+  `board_version: 3`, experimental).** A directory no built-in marker finds,
+  such as one of content or of scripts, was gone at every measure and fired
+  the axis review's (a) each time. `components.<key>.marker` is a glob from
+  the component's directory, written and checked as an `include` is (`*`
+  does not cross `/`; an absolute path, a `..` segment, a leading `:` and a
+  control character are refused). When a file the working tree lists under
+  that directory matches it, the component is found, with `marker` among its
+  kinds; when none does, it is gone, as before. `**` takes any file under
+  it, `*.py` a Python file right in it. The directories the built-in markers
+  skip (such as `node_modules`) are not skipped for it. A key that is a repo
+  itself, with nothing after the repo's name, takes no marker, and a key
+  that names a file finds nothing. The `components` method stays 2: a
+  registry without a marker measures as before. A component the built-in
+  markers already found has `marker` added to its kinds when it is given
+  one, which the next measure reports as a change of kinds.
 
 ### Changed
 

@@ -4576,6 +4576,64 @@ describe("measureBoard: the axis section", () => {
     expect(later.axis.reasons.map((r) => r.trigger)).toEqual(["a", "b"]);
   });
 
+  it("finds a registered directory by its own marker, in the working tree, so (a) does not fire", async () => {
+    const dir = await repo(
+      "app",
+      { ".gitignore": "ignored/\n", "package.json": "{}\n", "tools/run.py": "\n" },
+      { "content/a.md": "\n", "ignored/b.md": "\n" },
+    );
+    const components = {
+      app: { lane: "-", note: "root" },
+      "app/tools": { lane: "-", note: "scripts", marker: "*.py" },
+      "app/content": { lane: "-", note: "data", marker: "**" },
+      "app/ignored": { lane: "-", note: "ignored", marker: "**" },
+    };
+    const declaration = declare([], { ...SEEDED, board_version: 3, components }, ["app"]);
+    const judged = (m: BoardMeasurement) => ({
+      found: m.components.found,
+      gone: m.components.gone,
+      reasons: m.axis.reasons,
+    });
+    const m = await measure(declaration, NOW, ["app"]);
+    expect(judged(m)).toEqual({
+      found: {
+        app: { kinds: ["manifest"], status: "known" },
+        // Untracked, but not ignored.
+        "app/content": { kinds: ["marker"], status: "known" },
+        "app/tools": { kinds: ["marker"], status: "known" },
+      },
+      // An ignored file is not one the working tree lists.
+      gone: ["app/ignored"],
+      reasons: [{ trigger: "a", detail: "components: 0 unacknowledged, 1 gone" }],
+    });
+    // Without the ignored one, nothing fires.
+    const { "app/ignored": _ignored, ...kept } = components;
+    const quiet = await measure(
+      declare([], { ...SEEDED, board_version: 3, components: kept }, ["app"]),
+      NOW,
+      ["app"],
+    );
+    expect(judged(quiet)).toMatchObject({ gone: [], reasons: [] });
+    expect(quiet.axis.review_needed).toBe(false);
+    // The marker is in the declaration the digest covers.
+    const other = declare(
+      [],
+      {
+        ...SEEDED,
+        board_version: 3,
+        components: { ...kept, "app/tools": { lane: "-", note: "scripts", marker: "**" } },
+      },
+      ["app"],
+    );
+    expect((await measure(other, NOW, ["app"])).digest).not.toBe(quiet.digest);
+    // Once the files are gone, so is the component.
+    await rm(join(dir, "content"), { recursive: true });
+    expect((await measure(declaration, NOW, ["app"])).components.gone).toEqual([
+      "app/content",
+      "app/ignored",
+    ]);
+  });
+
   it("counts the days to today in the effort's time zone", async () => {
     // 2026-11-26T16:00Z is 11-27 in Tokyo, 60 days after the review; 59 in UTC.
     const at = new Date("2026-11-26T16:00:00.000Z");

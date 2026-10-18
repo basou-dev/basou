@@ -1461,7 +1461,7 @@ const BOARD_INIT_EN: BoardInitStrings = {
     observe:
       "What to observe outside basou (npm_version, github_release, github_open_issues, github_open_prs, github_ci, github_check, page_version, http, manual), each with notes on what to mind when making it if need be. basou never makes these; the guide says how.",
     components:
-      "Left empty: the first measure names every component it finds, and the axis review registers each with its lanes or '-' and a note.",
+      "Left empty: the first measure names every component it finds, and the axis review registers each with its lanes or '-' and a note. A directory no built-in marker finds (content, scripts) is registered with a marker: a glob, from it, of the files that mark it.",
     axis: "Raise version when a lane is added or removed or a stage's meaning changes.",
     effort: "start is the day of the first session (today when there is none).",
     effortToday:
@@ -1498,7 +1498,7 @@ const BOARD_INIT_JA: BoardInitStrings = {
     observe:
       "basou の外で観測するもの（npm_version・github_release・github_open_issues・github_open_prs・github_ci・github_check・page_version・http・manual）。取るときの注意があれば notes に書く。basou は取りに行かない。取り方は guide が出す。",
     components:
-      "空のままでよい。最初の measure が見つけた構成要素を全部名指しし、軸の見直しで各要素をレーンに（数えないなら '-' と note で）登録する。",
+      "空のままでよい。最初の measure が見つけた構成要素を全部名指しし、軸の見直しで各要素をレーンに（数えないなら '-' と note で）登録する。組み込みの印で見つからないディレクトリ（データ・スクリプト）は marker（そのディレクトリから見た、印にするファイルの glob）を付けて登録する。",
     axis: "レーンの増減や段の意味を変えたら version を上げる。",
     effort: "start は最初の session の日（session が無ければ今日）。",
     effortToday:
