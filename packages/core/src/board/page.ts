@@ -17,6 +17,13 @@ const count = z.number().nullable();
 
 // What the page draws from a record, kept loose: a key it does not draw is
 // let through.
+// An observation of a record's declaration, as the page reads its words.
+const declaredObservationSchema = z.looseObject({
+  key: text,
+  kind: text,
+  words: z.array(text).optional(),
+});
+
 const pageRecordSchema = z.looseObject({
   record_version: z.number(),
   recorded_at: text,
@@ -40,12 +47,10 @@ const pageRecordSchema = z.looseObject({
     effort: z.looseObject({
       milestones: z.array(z.looseObject({ date: text, label: text, ref: text })).optional(),
     }),
-    // None in a record of version 1. Observations not in this shape are
-    // drawn without their words, not taken for a record that cannot be drawn.
-    observe: z
-      .array(z.looseObject({ key: text, kind: text, words: z.array(text).optional() }))
-      .optional()
-      .catch(undefined),
+    // None in a record of version 1. Each observation is checked on its own
+    // (declaredObservationSchema): one not in that shape is drawn without
+    // its words, and the others with theirs.
+    observe: z.array(z.unknown()).optional().catch(undefined),
   }),
   measure: z.looseObject({
     measured_with: z.looseObject({ basou: text, build: text.nullable() }),
@@ -420,9 +425,10 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
   const d = r.declaration;
   const m = r.measure;
   const declaredWords = new Map(
-    (d.observe ?? []).flatMap((o) =>
-      o.kind === "http" && o.words !== undefined ? [[o.key, o.words] as const] : [],
-    ),
+    (d.observe ?? []).flatMap((raw) => {
+      const o = declaredObservationSchema.safeParse(raw).data;
+      return o?.kind === "http" && o.words !== undefined ? [[o.key, o.words] as const] : [];
+    }),
   );
   const stages = Object.entries(d.stages)
     .map(([id, stage]) => ({ id, meaning: stage.meaning }))

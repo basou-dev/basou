@@ -165,12 +165,12 @@ All notable changes to **basou** are recorded here. The project follows
   character it may not use, a start with `-`, `.` or `/`, a `..`, a `//`, a
   part that starts with `.`, or an end with `.` or `/`.
 - **`basou board guide` writes what a board declares as code in its prose**
-  (a repo, a branch, a workflow, a package, a URL, and each observation's
-  source), as it already did for a `github_check`, so a name such as
-  `_x_` is not read as emphasis. In its prose and sources it now escapes
-  what its template of the record already escaped (the Arabic letter mark,
-  the zero-width and direction marks, the word joiner and the invisible
-  operators, and the byte order mark), so a value reads the same in both.
+  (a repo, a branch, a workflow, a package and a URL), as it already did
+  for a `github_check`, so a name such as `_x_` is not read as emphasis.
+  In its prose and sources it now escapes what its template of the record
+  already escaped (the Arabic letter mark, the zero-width and direction
+  marks, the word joiner and the invisible operators, the byte order mark,
+  and a surrogate not in a pair), so a value reads the same in both.
 
 ## 0.70.1 — 2026-10-17
 

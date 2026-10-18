@@ -254,6 +254,8 @@ describe("boardPage", () => {
       observed: {
         shop: made(value([true, false])),
         short: made(value([true])),
+        long: made(value([true, false, true])),
+        one: made(value([false])),
         page: made({ words: [true] }),
         list: made([true]),
         gone: { ...made(null), error: "timeout" },
@@ -270,6 +272,8 @@ describe("boardPage", () => {
       observe: [
         http("shop", ["in stock", "42"]),
         http("short", ["a", "b"]),
+        http("long", ["a", "b"]),
+        http("one", ["solo"]),
         // Words on another kind, which basou does not write, are not paired.
         { key: "page", kind: "page_version", url: "https://example.com/", words: ["a"] },
         http("list", ["a"]),
@@ -280,32 +284,76 @@ describe("boardPage", () => {
     const page = await boardPage(records);
     if (page.status !== "ok") throw new Error(page.why);
     const observed = page.board.summary.observed;
-    expect(observed.map((o) => o.name)).toEqual(["shop", "short", "page", "list", "gone"]);
+    expect(observed.map((o) => o.name)).toEqual([
+      "shop",
+      "short",
+      "long",
+      "one",
+      "page",
+      "list",
+      "gone",
+    ]);
     expect(observed[0]?.words).toEqual([
       { word: "in stock", found: true },
       { word: "42", found: false },
     ]);
     // The value is kept as the record holds it.
     expect(observed[0]?.value).toEqual(value([true, false]));
-    for (const o of observed.slice(1)) expect(Object.hasOwn(o, "words"), o.name).toBe(false);
+    expect(observed[3]?.words).toEqual([{ word: "solo", found: false }]);
+    for (const o of [observed[1], observed[2], ...observed.slice(4)]) {
+      expect(Object.hasOwn(o as object, "words"), o?.name).toBe(false);
+    }
+  });
+
+  it("does not pair the previous record's value of an observation this record did not make", async () => {
+    await mkdir(records);
+    const http = { key: "shop", kind: "http", url: "https://example.com/x", words: ["a"] };
+    const at = (v: unknown) => {
+      const r = record({
+        record_version: 3,
+        observed: { shop: { value: v, observed_at: "2026-10-07T00:00:00Z", source: "s" } },
+      });
+      r.declaration = { ...r.declaration, observe: [http] } as typeof r.declaration;
+      return r;
+    };
+    await place(A, at({ status: 200, words: [true] }));
+    await place(B, at(null));
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    const [shop] = page.board.summary.observed;
+    expect(shop?.previous).toEqual({ status: "value", value: { status: 200, words: [true] } });
+    expect(Object.hasOwn(shop as object, "words")).toBe(false);
   });
 
   it("draws a record whose declared observations are not in their shape, without their words", async () => {
     await mkdir(records);
-    const v3 = record({
-      record_version: 3,
-      observed: {
-        shop: { value: { words: [true] }, observed_at: "2026-10-07T00:00:00Z", source: "s" },
-      },
-    });
+    const words = { value: { words: [true] }, observed_at: "2026-10-07T00:00:00Z", source: "s" };
+    const v3 = record({ record_version: 3, observed: { shop: words, good: words } });
     v3.declaration = {
       ...v3.declaration,
-      observe: [{ key: "shop", words: ["a"] }],
+      // No kind: that one is drawn without its words, and the other with its.
+      observe: [
+        { key: "shop", words: ["a"] },
+        { key: "good", kind: "http", url: "https://example.com/", words: ["b"] },
+      ],
     } as typeof v3.declaration;
     await place(A, v3);
     const page = await boardPage(records);
     if (page.status !== "ok") throw new Error(page.why);
-    expect(Object.hasOwn(page.board.summary.observed[0] as object, "words")).toBe(false);
+    const [shop, good] = page.board.summary.observed;
+    expect(Object.hasOwn(shop as object, "words")).toBe(false);
+    expect(good?.words).toEqual([{ word: "b", found: true }]);
+    // Observations that are not a list: the record is still drawn, with no words.
+    const listless = record({ record_version: 3, observed: { good: words } });
+    listless.declaration = {
+      ...listless.declaration,
+      observe: "not a list",
+    } as unknown as typeof listless.declaration;
+    await place(B, listless);
+    const later = await boardPage(records);
+    if (later.status !== "ok") throw new Error(later.why);
+    expect(later.id).toBe(B);
+    expect(Object.hasOwn(later.board.summary.observed[0] as object, "words")).toBe(false);
   });
 
   it("draws a record of version 3 whose measures hold a name and the paths of files, in their lanes", async () => {

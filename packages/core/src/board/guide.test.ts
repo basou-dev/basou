@@ -1328,3 +1328,86 @@ describe("boardGuide: what a board declares, as code and escaped as the template
     );
   });
 });
+
+describe("boardGuide: every text a board or its records give, escaped as the template is", () => {
+  const hid = (code: number) => String.fromCharCode(code);
+  // What the guide escapes beyond displayPath, a surrogate not in a pair among it.
+  const ESCAPED = [
+    0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2060, 0x2062, 0x2069, 0xfeff, 0xdc00,
+  ];
+  const [ALM, ZWSP, ZWNJ, ZWJ, LRM, RLM, WJ, IT, , BOM, LONE] = ESCAPED.map(hid);
+  // Just outside what it escapes: shown as it is.
+  const NEXT = [0x061b, 0x200a, 0x2010, 0x206a, 0xfefe, 0xff08].map(hid).join("");
+
+  it("escapes it in every field outside the commands, and leaves what is next to it as it is", () => {
+    const d = declaration({
+      board_version: 3,
+      title: `t${ZWJ}`,
+      stages: Object.fromEntries(
+        STAGES.map((id) => [
+          id,
+          id === "01"
+            ? { meaning: `m${ZWSP}`, look: [`l${ZWSP}`], notes: [`n${ZWSP}`] }
+            : { meaning: id === "02" ? `s${LONE}` : `stage ${id}` },
+        ]),
+      ),
+      lanes: [
+        { id: "core", name: `C${ZWJ}`, about: `a${IT}`, notes: [`ln${ALM}`] },
+        { id: "docs", name: "Docs", about: `x${NEXT}y` },
+      ],
+      observe: [
+        { key: "deploy", kind: "github_check", repo: "o/n", check: `c${IT}`, notes: [`on${BOM}`] },
+        { key: "users", kind: "manual", how: `count${ALM}` },
+      ],
+      axis: {
+        version: 1,
+        review_due_days: 60,
+        seed_review: { date: "2026-09-28", model: `m${LRM}` },
+      },
+    });
+    const guide = boardGuide(
+      guideInput({
+        anchor: `/work${RLM}`,
+        basouCommand: `basou${WJ}`,
+        language: "en",
+        board: {
+          status: "declared",
+          declaration: d,
+          recordCount: 1,
+          previous: {
+            last: { status: "unreadable", reason: `bad${ZWNJ}` },
+            lastReview: { status: "none" },
+          },
+        },
+      }),
+    );
+    for (const line of [
+      "- Workspace (its own repo): /work\\u200f",
+      '- Declaration: board/board.yaml, "t\\u200d", board_version 3',
+      "- Records: board/records/, 1 record; the last cannot be read (bad\\u200c)",
+      "last reviewed 2026-09-28 by m\\u200e (seed_review in board.yaml)",
+      "The previous record cannot be read (bad\\u200c).",
+      "basou: `basou\\u2060` printed this.",
+      "- 01: m\\u200b",
+      "  - look at: l\\u200b",
+      "  - mind: n\\u200b",
+      "- 02: s\\udc00",
+      "- `core` C\\u200d: a\\u2062",
+      "  - mind: ln\\u061c",
+      "How the latest check run named `c\\u2062` on the head commit",
+      "check_name=c\\u2062`.",
+      "- mind: on\\ufeff",
+      "Only the operator can make this one: count\\u061c",
+      "- Observing `users`: count\\u061c",
+    ]) {
+      expect(guide, line).toContain(line);
+    }
+    const outsideCommands = guide.replace(/```sh\n[\s\S]*?\n```/g, "");
+    for (const c of ESCAPED.map(hid)) {
+      expect(outsideCommands.includes(c), c.charCodeAt(0).toString(16)).toBe(false);
+    }
+    // The command takes the name as it is.
+    expect(guide).toContain(`-f check_name='c${IT}'`);
+    expect(guide).toContain(`- \`docs\` Docs: x${NEXT}y`);
+  });
+});

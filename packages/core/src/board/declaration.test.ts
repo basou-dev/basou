@@ -2434,6 +2434,7 @@ describe("parseBoardDeclaration: what is wrong with a branch", () => {
       ["a/..", "must not hold '..'"],
       ["a//b", "must not hold '//'"],
       ["a//", "must not hold '//'"],
+      ["a//.b", "must not hold '//'"],
       ["a/.b", "must not have a part that starts with '.' (after a '/')"],
       ["a/.", "must not have a part that starts with '.' (after a '/')"],
       ["x.", "must not end with '.' or '/'"],

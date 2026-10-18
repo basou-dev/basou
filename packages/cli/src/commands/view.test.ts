@@ -1533,6 +1533,24 @@ describe("basou view: the board page", () => {
             ...made,
           },
           { name: "page", value: { status: 200, words: [true] }, ...made },
+          {
+            name: "odd",
+            value: { words: [true] },
+            words: [{ word: 'a"b\\c', found: true }],
+            ...made,
+          },
+          {
+            name: "one",
+            value: { words: [false] },
+            words: [{ word: "solo", found: false }],
+            ...made,
+          },
+          {
+            name: "gone",
+            value: null,
+            previous: { status: "value", value: { words: [true] } },
+            ...made,
+          },
         ],
       },
     });
@@ -1541,6 +1559,10 @@ describe("basou view: the board page", () => {
       '{"status":200,"redirects":1,"final_url":"https://example.com/x/","words":{"in stock":true,"42":false},"count":2}',
     );
     expect(values).toContain('{"status":200,"words":[true]}');
+    expect(values).toContain('{"words":{"a\\"b\\\\c":true}}');
+    expect(values).toContain('{"words":{"solo":false}}');
+    // The previous value, under another declaration, is drawn as it was.
+    expect(values).toContain('not observed (previous: {"words":[true]})');
   });
 
   it("draws the paths of a file_paths measure as a count, with the paths folded under it", () => {

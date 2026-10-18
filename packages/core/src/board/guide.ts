@@ -88,11 +88,14 @@ function jsonText(value: unknown, indent?: number): string {
   return JSON.stringify(value, null, indent).replace(HIDDEN, escapeHidden);
 }
 
+// A surrogate not in a pair, which JSON.stringify writes as an escape.
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
 // A text as the guide shows it: as displayPath shows it, with what jsonText
-// escapes escaped too, so that the prose, a source and the template show a
-// value alike.
+// escapes escaped too (a surrogate not in a pair among it), so that the
+// prose, a source and the template show a value alike.
 function shown(text: string): string {
-  return displayPath(text).replace(HIDDEN, escapeHidden);
+  return displayPath(text).replace(HIDDEN, escapeHidden).replace(LONE_SURROGATE, escapeHidden);
 }
 
 const LANGUAGE_NAMES = { en: "English (en)", ja: "Japanese (ja)" } as const;
