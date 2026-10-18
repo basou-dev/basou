@@ -320,9 +320,15 @@ describe("boardGuide: a board declared", () => {
     );
   });
 
-  it("says which branch behind_main counts against", () => {
+  it("says which branch a repo is compared with, and that a null or old fetched_at makes the counts old", () => {
     expect(boardGuide(guideInput())).toContain(
-      "- `repos[].behind_main` counts the commits on origin's default branch (the branch of origin that origin/HEAD names, or origin/main when origin/HEAD names none) as of the last fetch; measure does not fetch.",
+      "- `repos[].base` is the branch of origin a repo is compared with (`origin/<branch>`: the one origin/HEAD names, or origin/main when origin/HEAD names none), `behind` counts the commits on it HEAD does not have, and `ahead` those HEAD has that it does not, as of the last fetch; measure does not fetch. `fetched_at` is when this checkout last fetched that branch from origin, null when FETCH_HEAD does not show it at the commit it is at now (no fetch since the clone, a failed fetch, a fetch of something else since, or a push since). When it is null or old, `behind` and `ahead` may be old too.",
+    );
+  });
+
+  it("says that ahead above 0 is not only commits not pushed, when judging 04", () => {
+    expect(boardGuide(guideInput())).toContain(
+      "2. What is not committed is not 04. Work left in a working tree stops at 03: written is not merged. A repo's `ahead` above 0 is commits not in its `base`, which are not only commits not pushed: a branch pushed and not merged has them, and so has one merged as other commits (a squash or a rebase). Read it with `branch` before judging 04; when `fetched_at` is null or old, it may be old too.",
     );
   });
 

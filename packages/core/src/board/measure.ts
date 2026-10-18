@@ -82,11 +82,12 @@ export type BoardRatioValue = {
  * measured, and then `not_found` says why and `complete` is false: a missing
  * repository, revision or file is never counted as zero. The exceptions are
  * the nulls that mean something of their own, which have no entry and leave
- * `complete` as it is: three in the repos section (a detached HEAD, no commit
- * yet, no default branch of origin; see {@link BoardRepo}), the portfolio's when there is
- * no portfolio config (see {@link BoardPortfolio}), the newest session's when
- * there is no session that is not archived (see {@link BoardFreshness}), the
- * Codex time when there is no Codex session (see {@link BoardEffort}), the
+ * `complete` as it is: those in the repos section (a detached HEAD, no commit
+ * yet, no default branch of origin, no fetch of it on record; see
+ * {@link BoardRepo}), the portfolio's when there is no portfolio config (see
+ * {@link BoardPortfolio}), the newest session's when there is no session that
+ * is not archived (see {@link BoardFreshness}), the Codex time when there is
+ * no Codex session (see {@link BoardEffort}), the
  * components' kind changes when there is no previous record (see
  * {@link BoardComponents}), the axis's last review when there is none on
  * record (see {@link BoardAxis}), and the diff when there is no previous
@@ -102,16 +103,17 @@ export type BoardMeasurement = {
   /**
    * `sha256:` and the hex digest of the measurement without `measured_at`,
    * `digest`, `freshness`, `axis` and its not_found entries, `diff`,
-   * `effort.elapsed_days` and today's row of `effort.daily`, with the
-   * declaration it was measured by (see {@link boardDigest}), serialized with
-   * its keys sorted. Two measurements with the same values by the same
-   * declaration have the same digest whenever they were taken. The freshness
-   * moves as work goes on, the measuring session's own included, the axis
-   * rests on the day, the model and the records, the diff is derived from the
-   * previous record, and the others move with the clock, so they are left
-   * out. The declaration is in it because a record keeps the declaration it
-   * was measured by: one changed after the judgement would be kept as if the
-   * judgement had seen it.
+   * `effort.elapsed_days`, today's row of `effort.daily` and each repo's
+   * `fetched_at`, with the declaration it was measured by (see
+   * {@link boardDigest}), serialized with its keys sorted. Two measurements
+   * with the same values by the same declaration have the same digest
+   * whenever they were taken. The freshness moves as work goes on, the
+   * measuring session's own included, the axis rests on the day, the model
+   * and the records, the diff is derived from the previous record, a fetch
+   * that brings nothing still moves `fetched_at`, and the others move with
+   * the clock, so they are left out. The declaration is in it because a
+   * record keeps the declaration it was measured by: one changed after the
+   * judgement would be kept as if the judgement had seen it.
    */
   digest: string;
   /**
@@ -373,17 +375,18 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
   };
 }
 
-// What the digest leaves out: when it was measured, the digest itself, the
-// freshness, which moves as work goes on, the axis, which rests on the day,
-// the model and the records rather than on what was measured, and the diff,
-// derived from the previous record.
+// What the digest leaves out at the top: when it was measured, the digest
+// itself, the freshness, which moves as work goes on, the axis, which rests
+// on the day, the model and the records rather than on what was measured,
+// and the diff, derived from the previous record.
 const UNDIGESTED = new Set(["measured_at", "digest", "freshness", "axis", "diff"]);
 
 /**
  * The digest of a measurement: sha256 over the measurement without
  * `measured_at`, `digest`, `freshness`, `axis` and its not_found entries,
- * `diff`, `effort.elapsed_days` and the last row of `effort.daily` (today's),
- * with the snapshot of the declaration it was measured by under
+ * `diff`, `effort.elapsed_days`, the last row of `effort.daily` (today's)
+ * and each repo's `fetched_at`, with the snapshot of the declaration it was
+ * measured by under
  * `declaration`, every object's keys sorted. A record keeps both, so its
  * digest is `boardDigest(record.measure, record.declaration)`, except in a
  * record written before the digest covered the declaration.
@@ -394,7 +397,13 @@ export function boardDigest(measurement: object, declaration: BoardDeclarationSn
       .filter(([key]) => !UNDIGESTED.has(key))
       .map(([key, value]) => [
         key,
-        key === "effort" ? withoutClock(value) : key === "not_found" ? notOfAxis(value) : value,
+        key === "effort"
+          ? withoutClock(value)
+          : key === "not_found"
+            ? notOfAxis(value)
+            : key === "repos"
+              ? withoutFetchTimes(value)
+              : value,
       ]),
   );
   hashed.declaration = declaration;
@@ -410,6 +419,18 @@ function notOfAxis(notFound: unknown): unknown {
   return notFound.filter((entry) => {
     const at = (entry as { at?: unknown } | null)?.at;
     return !(typeof at === "string" && (at === "axis" || at.startsWith("axis.")));
+  });
+}
+
+// The repos without when each was last fetched, which a fetch that brings
+// nothing moves too. Its not_found entries stay: they follow a ref or a file
+// that cannot be read, not a fetch.
+function withoutFetchTimes(repos: unknown): unknown {
+  if (!Array.isArray(repos)) return repos;
+  return repos.map((repo) => {
+    if (repo === null || typeof repo !== "object") return repo;
+    const { fetched_at: _fetched, ...rest } = repo as Record<string, unknown>;
+    return rest;
   });
 }
 

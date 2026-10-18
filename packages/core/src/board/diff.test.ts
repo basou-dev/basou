@@ -137,6 +137,47 @@ describe("diffMeasurements", () => {
     ]);
   });
 
+  it("does not compare when a repo was last fetched, as the digest does not hold it", () => {
+    const repo = { path: ".", base: "origin/main", behind: 0, ahead: 1 };
+    const before = measurement({
+      repos: [{ ...repo, fetched_at: "2026-10-05T00:00:00.000Z" }],
+    });
+    const after = measurement({
+      repos: [{ ...repo, behind: 2, fetched_at: "2026-10-06T00:00:00.000Z" }],
+    });
+    expect(diffMeasurements(before, after, "01M4")).toMatchObject({
+      values: [{ at: 'repos["."].behind', before: 0, after: 2, delta: 2 }],
+      added: [],
+      removed: [],
+    });
+    const unfetched = measurement({ repos: [{ ...repo, fetched_at: null }] });
+    expect(diffMeasurements(before, unfetched, "01M4").values).toEqual([]);
+  });
+
+  it("shows behind_main gone and the base, behind and ahead come, once, against a record of version 1 or 2", () => {
+    const before = measurement({ repos: [{ path: ".", behind_main: 2 }] });
+    const after = measurement({
+      repos: [
+        {
+          path: ".",
+          base: "origin/main",
+          behind: 2,
+          ahead: 0,
+          fetched_at: "2026-10-06T00:00:00.000Z",
+        },
+      ],
+    });
+    expect(diffMeasurements(before, after, "01M4")).toMatchObject({
+      values: [],
+      added: [
+        { at: 'repos["."].base', value: "origin/main" },
+        { at: 'repos["."].behind', value: 2 },
+        { at: 'repos["."].ahead', value: 0 },
+      ],
+      removed: [{ at: 'repos["."].behind_main', value: 2 }],
+    });
+  });
+
   it("tells entries apart by what names them, and compares lists of names as sets", () => {
     const after = measurement({
       not_found: [{ at: "measures.md", reason: "gone" }],

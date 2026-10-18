@@ -1,8 +1,11 @@
-import { basename, resolve } from "node:path";
+import { type FileHandle, open } from "node:fs/promises";
+import { basename, isAbsolute, resolve, sep } from "node:path";
 import {
   blockedAmong,
+  codeReason,
   type GitResult,
   gitCanRefuseLazyFetch,
+  isAbsent,
   isPartialClone,
   locateRepoRoot,
   type RepoScopeResult,
@@ -24,11 +27,13 @@ export const BOARD_REPOS_METHOD = 2;
  *
  * A `null` means the value could not be measured, and then `not_found` has an
  * entry at `repos[<path>].<field>`, or at `repos[<path>]` when nothing of the
- * repository could be measured. Three values are `null` with a meaning of
+ * repository could be measured. Some values are `null` with a meaning of
  * their own and no entry: `branch` when HEAD is detached; `head` and
  * `last_commit` when the repository has no commit yet (`commits` is then 0);
- * `behind_main` when `refs/remotes/origin/HEAD` names no branch and there is
- * no `refs/remotes/origin/main`.
+ * `base`, `behind` and `ahead` when `refs/remotes/origin/HEAD` names no
+ * branch and there is no `refs/remotes/origin/main`; `fetched_at` when
+ * FETCH_HEAD does not show the base fetched from origin at the commit it is
+ * at now.
  */
 export type BoardRepo = {
   /** The path as the manifest writes it. */
@@ -55,13 +60,31 @@ export type BoardRepo = {
    */
   uncommitted: number | null;
   /**
-   * The commits on origin's default branch HEAD does not have, as of the last
-   * fetch: the branch of origin `refs/remotes/origin/HEAD` names (set by a
-   * clone, or by `git remote set-head origin --auto`), or
-   * `refs/remotes/origin/main` when it names none (it is not set, or is not a
-   * symbolic ref).
+   * The branch of origin HEAD is compared with, as `origin/<branch>`: the one
+   * `refs/remotes/origin/HEAD` names (set by a clone, or by
+   * `git remote set-head origin --auto`), or `origin/main` when it names none
+   * (it is not set, or is not a symbolic ref).
    */
-  behind_main: number | null;
+  base: string | null;
+  /** The commits on `base` HEAD does not have, as of the last fetch. */
+  behind: number | null;
+  /**
+   * The commits HEAD has that `base` does not, as of the last fetch. Not only
+   * those not pushed: those of a branch pushed and not merged into `base`,
+   * and those that came into it as other commits (by a squash or a rebase).
+   */
+  ahead: number | null;
+  /**
+   * When FETCH_HEAD (this worktree's) was last written, in UTC, if it holds
+   * the line of `base`'s branch fetched from origin's URL at the commit
+   * `base` is at now: when this checkout last fetched it. Null otherwise: no
+   * fetch since the clone, a fetch that failed (it empties FETCH_HEAD), a
+   * fetch since of another remote or of other branches only, or `base`
+   * moved since without a fetch here (a push, or a fetch in another
+   * worktree). Neither in the digest nor compared with the previous record,
+   * as a fetch that brings nothing moves it too.
+   */
+  fetched_at: string | null;
 };
 
 /**
@@ -169,6 +192,22 @@ async function defaultBranchOf(
   return { kind: "error", reason: failure(named, `${ORIGIN_HEAD} could not be read`) };
 }
 
+type Base =
+  | { kind: "none" }
+  | { kind: "branch"; name: string; ref: Ref }
+  | { kind: "error"; reason: string };
+
+// The branch of origin HEAD is compared with, by its full name, and the ref
+// as it was read; `none` when origin/HEAD names no branch and there is no
+// origin/main, which is what a null base means.
+async function baseOf(cwd: string): Promise<Base> {
+  const target = await defaultBranchOf(cwd);
+  if (target.kind === "error") return target;
+  const ref = await readRef(cwd, target.name);
+  if (ref.kind === "missing" && !target.named) return { kind: "none" };
+  return { kind: "branch", name: target.name, ref };
+}
+
 // HEAD's commit; or that there is none yet, when HEAD names a branch that
 // does not exist (a new repository, or an orphan branch).
 async function headOf(cwd: string, symbolic: GitResult): Promise<Head> {
@@ -217,7 +256,10 @@ export async function measureRepos(
       commits: null,
       files: null,
       uncommitted: null,
-      behind_main: null,
+      base: null,
+      behind: null,
+      ahead: null,
+      fetched_at: null,
     };
     result.repos.push(repo);
     const located = await locateRepoRoot(resolve(root, path));
@@ -361,47 +403,167 @@ export async function measureRepos(
       }
     }
 
-    if (history !== undefined) fail("behind_main", history);
-    else if (head.kind === "error") fail("behind_main", head.reason);
-    else {
-      const behind = await behindDefault(cwd, head, partial);
-      if (behind.ok) repo.behind_main = behind.count;
-      else fail("behind_main", behind.reason);
+    const base = await baseOf(cwd);
+    if (base.kind === "error") fail("base", base.reason);
+    else if (base.kind === "branch") repo.base = base.name.slice(REMOTES.length);
+
+    const compared =
+      history !== undefined
+        ? both({ ok: false, reason: history })
+        : head.kind === "error"
+          ? both({ ok: false, reason: head.reason })
+          : await againstBase(cwd, head, partial, base);
+    for (const field of ["behind", "ahead"] as const) {
+      const counted = compared[field];
+      if (counted.ok) repo[field] = counted.count;
+      else fail(field, counted.reason);
+    }
+
+    if (base.kind === "error") fail("fetched_at", base.reason);
+    else if (base.kind === "branch") {
+      const fetched = await fetchedAt(cwd, located.root, base.name, base.ref);
+      if (fetched.ok) repo.fetched_at = fetched.at;
+      else fail("fetched_at", fetched.reason);
     }
   }
   return result;
 }
 
-// The commits on origin's default branch HEAD does not have: null when
-// origin/HEAD names no branch and there is no origin/main, which is what the
-// null means; or why they could not be counted.
-async function behindDefault(
+const REMOTES = "refs/remotes/";
+
+type Counted = { ok: true; count: number | null } | { ok: false; reason: string };
+
+const both = (counted: Counted): { behind: Counted; ahead: Counted } => ({
+  behind: counted,
+  ahead: counted,
+});
+
+// The commits on the base HEAD does not have, and those HEAD has that the
+// base does not: null when there is no base, which is what the null means;
+// or why they could not be counted.
+async function againstBase(
   cwd: string,
   head: Exclude<Head, { kind: "error" }>,
   partial: boolean,
-): Promise<{ ok: true; count: number | null } | { ok: false; reason: string }> {
-  const target = await defaultBranchOf(cwd);
-  if (target.kind === "error") return { ok: false, reason: target.reason };
-  const ref = await readRef(cwd, target.name);
-  if (ref.kind === "error") return { ok: false, reason: ref.reason };
+  base: Base,
+): Promise<{ behind: Counted; ahead: Counted }> {
+  if (base.kind === "error") return both({ ok: false, reason: base.reason });
+  if (base.kind === "none") return both({ ok: true, count: null });
+  const { name, ref } = base;
+  if (ref.kind === "error") return both({ ok: false, reason: ref.reason });
+  // Missing only when origin/HEAD names it: then there is no origin/main to fall back to.
   if (ref.kind === "missing") {
-    return target.named
-      ? { ok: false, reason: `${ORIGIN_HEAD} names ${target.name}, which is not there` }
-      : { ok: true, count: null };
+    return both({ ok: false, reason: `${ORIGIN_HEAD} names ${name}, which is not there` });
   }
   const commit = await runGit(cwd, ["rev-parse", "--verify", "--quiet", `${ref.oid}^{commit}`]);
   if (commit.code !== 0) {
-    return { ok: false, reason: await notACommit(cwd, target.name, ref.oid, partial) };
+    return both({ ok: false, reason: await notACommit(cwd, name, ref.oid, partial) });
   }
-  const range = head.kind === "unborn" ? line(commit) : `${head.oid}..${line(commit)}`;
-  const behind = await runGit(cwd, ["rev-list", "--count", range, "--"]);
-  const n = count(behind);
-  return n === undefined
-    ? {
-        ok: false,
-        reason: failure(behind, `the commits behind ${target.name} could not be counted`),
+  const tip = line(commit);
+  if (head.kind === "unborn") {
+    return {
+      behind: await countCommits(cwd, tip, `the commits behind ${name} could not be counted`),
+      ahead: { ok: true, count: 0 },
+    };
+  }
+  return {
+    behind: await countCommits(
+      cwd,
+      `${head.oid}..${tip}`,
+      `the commits behind ${name} could not be counted`,
+    ),
+    ahead: await countCommits(
+      cwd,
+      `${tip}..${head.oid}`,
+      `the commits ahead of ${name} could not be counted`,
+    ),
+  };
+}
+
+async function countCommits(cwd: string, range: string, reason: string): Promise<Counted> {
+  const listed = await runGit(cwd, ["rev-list", "--count", range, "--"]);
+  const n = count(listed);
+  return n === undefined ? { ok: false, reason: failure(listed, reason) } : { ok: true, count: n };
+}
+
+// When this checkout last fetched the base `name`, at `ref`, from origin: the
+// time FETCH_HEAD was last written, when it holds the line git writes for
+// that branch of origin's URL at the commit the base is at now. Null when it
+// does not (a failed fetch leaves it empty but still moves its time), or
+// when there is no such commit or no URL of origin to look for; or why it
+// could not be told.
+async function fetchedAt(
+  cwd: string,
+  root: Buffer,
+  name: string,
+  ref: Ref,
+): Promise<{ ok: true; at: string | null } | { ok: false; reason: string }> {
+  if (ref.kind === "error") return { ok: false, reason: ref.reason };
+  if (ref.kind === "missing") return { ok: true, at: null };
+  const { oid } = ref;
+  const where = await runGit(cwd, ["rev-parse", "--git-path", "FETCH_HEAD"]);
+  if (where.code !== 0) {
+    return { ok: false, reason: failure(where, "where FETCH_HEAD is could not be read") };
+  }
+  const url = await runGit(cwd, ["remote", "get-url", "origin"]);
+  if (url.spawnError !== undefined) return { ok: false, reason: url.spawnError };
+  // origin has no URL (it is not a remote): no line can be from it. git reads
+  // its config first, so one it cannot read has stopped the commands before.
+  if (url.code !== 0) return { ok: true, at: null };
+  // Relative to the root, except in a linked worktree.
+  const given = lineBytes(where);
+  const path = isAbsolute(given.toString("latin1"))
+    ? given
+    : Buffer.concat([root, Buffer.from(sep), given]);
+  let handle: FileHandle;
+  try {
+    handle = await open(path, "r");
+  } catch (error: unknown) {
+    return isAbsent(error)
+      ? { ok: true, at: null }
+      : { ok: false, reason: `FETCH_HEAD ${codeReason(error)}` };
+  }
+  try {
+    const written = (await handle.stat()).mtime;
+    const lines = (await handle.readFile()).toString("latin1").split("\n");
+    // As bytes, one character each: a branch name is UTF-8.
+    const branch = Buffer.from(name.slice(ORIGIN_BRANCHES.length), "utf8").toString("latin1");
+    const note = `branch '${branch}' of ${fetchHeadUrl(lineBytes(url).toString("latin1"))}`;
+    const found = lines.some(
+      (l) => l === `${oid}\t\t${note}` || l === `${oid}\tnot-for-merge\t${note}`,
+    );
+    return { ok: true, at: found ? written.toISOString() : null };
+  } catch (error: unknown) {
+    return { ok: false, reason: `FETCH_HEAD ${codeReason(error)}` };
+  } finally {
+    await handle.close();
+  }
+}
+
+// A URL as git writes it in FETCH_HEAD: without the user (and password) a
+// URL with a scheme or one of the form `user@host:path` names, then without
+// the slashes at its end, then without one `.git` at its end.
+function fetchHeadUrl(url: string): string {
+  let shown = url;
+  const at = url.indexOf("@");
+  const colon = url.indexOf(":");
+  const slash = url.indexOf("/");
+  // A local path has no ':', or a '/' before its first one.
+  if (at !== -1 && colon !== -1 && (slash === -1 || colon < slash)) {
+    const rest = url.slice(at + 1);
+    const scheme = url.indexOf("://");
+    if (scheme === -1) {
+      if (rest.includes(":")) shown = rest;
+    } else {
+      const path = url.indexOf("/", scheme + 3);
+      // A scheme of letters, digits, '+', '.' and '-', and the '@' before the path.
+      if (/^[A-Za-z0-9+.-]*$/.test(url.slice(0, scheme)) && (path === -1 || at < path)) {
+        shown = url.slice(0, scheme + 3) + rest;
       }
-    : { ok: true, count: n };
+    }
+  }
+  const trimmed = shown.replace(/\/+$/, "");
+  return trimmed.length > 5 && trimmed.endsWith(".git") ? trimmed.slice(0, -4) : trimmed;
 }
 
 // Why the default branch `name`, which names `oid`, gives no commit. Whether

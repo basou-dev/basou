@@ -768,12 +768,14 @@ export const BOARD_HTML = `<!doctype html>
   }
   function liveRepos(l) {
     var missing = missingIn(l);
-    var labels = [S.live.repo, S.live.branch, S.live.head, S.live.lastCommit, S.live.commits, S.live.uncommitted, S.live.behindMain];
-    var head = el('tr', null, labels.map(function (label, i) { return el('th', { class: i >= 4 ? 'n' : '', text: label }); }));
+    var labels = [S.live.repo, S.live.branch, S.live.head, S.live.lastCommit, S.live.commits, S.live.uncommitted, S.live.base, S.live.behind, S.live.ahead, S.live.fetchedAt];
+    var numeric = [4, 5, 7, 8];
+    var head = el('tr', null, labels.map(function (label, i) { return el('th', { class: numeric.indexOf(i) !== -1 ? 'n' : '', text: label }); }));
     var rows = l.repos.map(function (r) {
       var at = 'repos[' + r.path + ']';
       // A null the measurement says it could not measure, or one that means
-      // so (a detached HEAD, no commit yet, no default branch), drawn as '-'.
+      // so (a detached HEAD, no commit yet, no base, no fetch of it on
+      // record), drawn as '-'.
       var value = function (field, v, show) {
         if (v !== null) return show(v);
         return missing(at) || missing(at + '.' + field) ? S.tiles.notMeasured : '-';
@@ -785,7 +787,10 @@ export const BOARD_HTML = `<!doctype html>
         el('td', { text: value('last_commit', r.last_commit, when) }),
         el('td', { class: 'n', text: num(r.commits) }),
         el('td', { class: 'n', text: num(r.uncommitted) }),
-        el('td', { class: 'n', text: value('behind_main', r.behind_main, num) })
+        el('td', { text: value('base', r.base, String) }),
+        el('td', { class: 'n', text: value('behind', r.behind, num) }),
+        el('td', { class: 'n', text: value('ahead', r.ahead, num) }),
+        el('td', { text: value('fetched_at', r.fetched_at, when) })
       ]);
     });
     return section(S.live.repos, false, [el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [head].concat(rows))])]);

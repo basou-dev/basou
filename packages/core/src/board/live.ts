@@ -156,7 +156,10 @@ export type BoardLivePage = {
     last_commit: string | null;
     commits: number | null;
     uncommitted: number | null;
-    behind_main: number | null;
+    base: string | null;
+    behind: number | null;
+    ahead: number | null;
+    fetched_at: string | null;
   }[];
   trail: BoardTrail;
   integrity: BoardIntegrity & {
@@ -192,7 +195,10 @@ export function boardLivePage(title: string, m: BoardLiveMeasurement): BoardLive
       last_commit: r.last_commit,
       commits: r.commits,
       uncommitted: r.uncommitted,
-      behind_main: r.behind_main,
+      base: r.base,
+      behind: r.behind,
+      ahead: r.ahead,
+      fetched_at: r.fetched_at,
     })),
     trail: m.trail,
     integrity: {
