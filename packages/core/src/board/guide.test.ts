@@ -316,7 +316,7 @@ describe("boardGuide: a board declared", () => {
 
   it("says what a total's value is, that it may be below 0, and when it is null", () => {
     expect(boardGuide(guideInput())).toContain(
-      "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured.",
+      "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured, and when it is out of the range a number holds exactly (-9007199254740991 to 9007199254740991).",
     );
   });
 
@@ -374,7 +374,7 @@ describe("boardGuide: a board declared", () => {
     );
     expect(guide).toContain("This board declares nothing to observe outside basou.");
     expect(guide).toContain(
-      "declare it under `observe` (board_version 2 on, and 3 for `http`, `github_check` and an observation's `notes`)",
+      "declare it under `observe` (board_version 2 on, and 3 for `http`, `github_check`, an observation's `notes` and a key with `.`)",
     );
     expect(templateIn(guide).observed).toEqual({});
   });
@@ -1254,5 +1254,77 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
     const deploy = guide.slice(guide.indexOf("#### `deploy`"), guide.indexOf("### 4."));
     expect(deploy).not.toContain("mind:");
     expect([...guide].some((c) => c.codePointAt(0) === 0x202e)).toBe(false);
+  });
+});
+
+describe("boardGuide: what a board declares, as code and escaped as the template is", () => {
+  it("writes each observation's package, repo, workflow, branch and URL as code, and its source", () => {
+    const guide = boardGuide(
+      guideInput({
+        board: declared(
+          httpDeclaration([
+            { key: "npm", kind: "npm_version", package: "@scope/a_x_" },
+            { key: "rel", kind: "github_release", repo: "o/_x_" },
+            { key: "iss", kind: "github_open_issues", repo: "o/_x_" },
+            { key: "prs", kind: "github_open_prs", repo: "o/_x_" },
+            { key: "ci", kind: "github_ci", repo: "o/_x_", workflow: "_w_.yml", branch: "_b_" },
+            { key: "site", kind: "page_version", url: "https://example.com/_x_" },
+            { key: "shop", kind: "http", url: "https://example.com/_y_" },
+          ]),
+        ),
+      }),
+    );
+    for (const line of [
+      "The version of `@scope/a_x_` published on npm (its `latest` tag):",
+      "The latest release of `o/_x_` on GitHub:",
+      "How many issues of `o/_x_` are open:",
+      "How many pull requests of `o/_x_` are open:",
+      "How the latest run of the workflow `_w_.yml` on `_b_` of `o/_x_` ended:",
+      "The version `https://example.com/_x_` shows:",
+      "A GET of `https://example.com/_y_`, following",
+      "Source: `npm view @scope/a_x_ version`.",
+      "Source: `gh release view --repo o/_x_`.",
+      "Source: `gh issue list --repo o/_x_ --state open`.",
+      "Source: `gh pr list --repo o/_x_ --state open`.",
+      "Source: `gh run list --repo o/_x_ --workflow _w_.yml --branch _b_`.",
+      "Source: `https://example.com/_x_`.",
+      "Source: `https://example.com/_y_`.",
+    ]) {
+      expect(guide, line).toContain(line);
+    }
+  });
+
+  it("escapes in its prose and sources what its template escapes, and gives the command the name as it is", () => {
+    const check = `a${String.fromCharCode(0x200f)}b${String.fromCharCode(0xfeff)}c${String.fromCharCode(0x200b)}d${String.fromCharCode(0x061c)}e${String.fromCharCode(0x2060)}f${String.fromCharCode(0x200e)}g`;
+    const shownCheck = "a\\u200fb\\ufeffc\\u200bd\\u061ce\\u2060f\\u200eg";
+    const guide = boardGuide(
+      guideInput({
+        board: declared(
+          httpDeclaration([
+            { key: "deploy", kind: "github_check", repo: "o/n", check },
+            { key: "users", kind: "manual", how: `count${String.fromCharCode(0x200f)}them` },
+          ]),
+        ),
+      }),
+    );
+    expect(guide).toContain(`How the latest check run named \`${shownCheck}\` on the head commit`);
+    expect(guide).toContain(
+      `Source: \`gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name=${shownCheck}\`.`,
+    );
+    expect(guide).toContain("Only the operator can make this one: count\\u200fthem");
+    // The template says the same, and holds the name itself once read.
+    const source = `gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name=${check}`;
+    expect(guide).toContain(
+      `"source":"gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name=${shownCheck}"`,
+    );
+    expect((templateIn(guide).observed as Record<string, { source: string }>).deploy?.source).toBe(
+      source,
+    );
+    // Only the command takes the name as it is.
+    const raw = guide.split("\n").filter((l) => l.includes(check));
+    expect(raw).toHaveLength(1);
+    expect(raw[0]).toContain(
+      "gh api -X GET 'repos/o/n/commits/heads/main/check-runs' -f check_name=",
+    );
   });
 });

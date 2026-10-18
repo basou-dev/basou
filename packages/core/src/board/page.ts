@@ -40,6 +40,12 @@ const pageRecordSchema = z.looseObject({
     effort: z.looseObject({
       milestones: z.array(z.looseObject({ date: text, label: text, ref: text })).optional(),
     }),
+    // None in a record of version 1. Observations not in this shape are
+    // drawn without their words, not taken for a record that cannot be drawn.
+    observe: z
+      .array(z.looseObject({ key: text, kind: text, words: z.array(text).optional() }))
+      .optional()
+      .catch(undefined),
   }),
   measure: z.looseObject({
     measured_with: z.looseObject({ basou: text, build: text.nullable() }),
@@ -138,6 +144,12 @@ export type BoardPageObservation = {
   error?: string;
   /** Present when the value is null: the previous record's value of the same name. */
   previous?: BoardPagePrevious;
+  /**
+   * An http observation's words, as the record's declaration lists them, each
+   * with what the value says of it. Present when the value holds one answer
+   * for each word.
+   */
+  words?: { word: string; found: unknown }[];
 };
 
 /** The previous record's value of an observation: there, none, or not known. */
@@ -407,6 +419,11 @@ const ATTENTION = new Set(["blocked", "shelved", "unverified"]);
 function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
   const d = r.declaration;
   const m = r.measure;
+  const declaredWords = new Map(
+    (d.observe ?? []).flatMap((o) =>
+      o.kind === "http" && o.words !== undefined ? [[o.key, o.words] as const] : [],
+    ),
+  );
   const stages = Object.entries(d.stages)
     .map(([id, stage]) => ({ id, meaning: stage.meaning }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -459,14 +476,18 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
         },
         { key: "turns", value: r.prose.operator_turns.length, reported: true },
       ],
-      observed: Object.entries(r.observed).map(([name, o]) => ({
-        name,
-        value: o.value,
-        observed_at: o.observed_at,
-        source: o.source,
-        ...(o.error === undefined ? {} : { error: o.error }),
-        ...(o.value === null ? { previous: previousValue(previous, name) } : {}),
-      })),
+      observed: Object.entries(r.observed).map(([name, o]) => {
+        const words = wordsOf(declaredWords.get(name), o.value);
+        return {
+          name,
+          value: o.value,
+          observed_at: o.observed_at,
+          source: o.source,
+          ...(o.error === undefined ? {} : { error: o.error }),
+          ...(o.value === null ? { previous: previousValue(previous, name) } : {}),
+          ...(words === undefined ? {} : { words }),
+        };
+      }),
     },
     effort: effortOf(m.effort, d.effort.milestones ?? []),
     matrix: {
@@ -572,6 +593,19 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
       measured_with: { basou: m.measured_with.basou, build: m.measured_with.build },
     },
   };
+}
+
+// An http observation's words beside what its value says of each, when the
+// value holds one answer for each word: a previous value, under another
+// declaration, is not paired with this one's words.
+function wordsOf(
+  words: readonly string[] | undefined,
+  value: unknown,
+): { word: string; found: unknown }[] | undefined {
+  if (words === undefined || typeof value !== "object" || value === null) return undefined;
+  const found = (value as { words?: unknown }).words;
+  if (!Array.isArray(found) || found.length !== words.length) return undefined;
+  return words.map((word, i) => ({ word, found: found[i] }));
 }
 
 // The previous record's value of an observation this record could not make.

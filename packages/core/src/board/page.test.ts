@@ -239,6 +239,75 @@ describe("boardPage", () => {
     expect((await boardPage(records, A)).status).toBe("ok");
   });
 
+  it("pairs an http observation's words with those its record declares, when the value holds one for each", async () => {
+    await mkdir(records);
+    const value = (words: unknown) => ({
+      status: 200,
+      redirects: 1,
+      final_url: "https://example.com/x/",
+      words,
+      count: 2,
+    });
+    const made = (v: unknown) => ({ value: v, observed_at: "2026-10-07T00:00:00Z", source: "s" });
+    const v3 = record({
+      record_version: 3,
+      observed: {
+        shop: made(value([true, false])),
+        short: made(value([true])),
+        page: made({ words: [true] }),
+        list: made([true]),
+        gone: { ...made(null), error: "timeout" },
+      },
+    });
+    const http = (key: string, words: string[]) => ({
+      key,
+      kind: "http",
+      url: "https://example.com/x",
+      words,
+    });
+    v3.declaration = {
+      ...v3.declaration,
+      observe: [
+        http("shop", ["in stock", "42"]),
+        http("short", ["a", "b"]),
+        // Words on another kind, which basou does not write, are not paired.
+        { key: "page", kind: "page_version", url: "https://example.com/", words: ["a"] },
+        http("list", ["a"]),
+        http("gone", ["a"]),
+      ],
+    } as typeof v3.declaration;
+    await place(A, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    const observed = page.board.summary.observed;
+    expect(observed.map((o) => o.name)).toEqual(["shop", "short", "page", "list", "gone"]);
+    expect(observed[0]?.words).toEqual([
+      { word: "in stock", found: true },
+      { word: "42", found: false },
+    ]);
+    // The value is kept as the record holds it.
+    expect(observed[0]?.value).toEqual(value([true, false]));
+    for (const o of observed.slice(1)) expect(Object.hasOwn(o, "words"), o.name).toBe(false);
+  });
+
+  it("draws a record whose declared observations are not in their shape, without their words", async () => {
+    await mkdir(records);
+    const v3 = record({
+      record_version: 3,
+      observed: {
+        shop: { value: { words: [true] }, observed_at: "2026-10-07T00:00:00Z", source: "s" },
+      },
+    });
+    v3.declaration = {
+      ...v3.declaration,
+      observe: [{ key: "shop", words: ["a"] }],
+    } as typeof v3.declaration;
+    await place(A, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(Object.hasOwn(page.board.summary.observed[0] as object, "words")).toBe(false);
+  });
+
   it("draws a record of version 3 whose measures hold a name and the paths of files, in their lanes", async () => {
     await mkdir(records);
     const v3 = record({ record_version: 3 });
