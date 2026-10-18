@@ -1536,9 +1536,9 @@ describe("parseBoardDeclaration: board_version 3 and http", () => {
   });
 
   it("refuses an http key that is not an id: the guide names a working file by it", () => {
-    for (const key of ["Shop", "a/b", "a:b", "-a", "a b"]) {
+    for (const key of ["Shop", "a/b", "a:b", "-a", "a b", "a.", "a..b", ".a", "a.B"]) {
       expect(errorsOf(parse(withHttp({ key, url })))).toEqual([
-        "observe[0].key: must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
+        "observe[0].key: must start with a lowercase letter and use only a-z, 0-9, '_', '-' and '.', with a lowercase letter after each '.'",
       ]);
     }
   });
@@ -1862,7 +1862,7 @@ describe("parseBoardDeclaration: board_version 3, file_name and file_paths", () 
   it("accepts a file_paths, with a lane", () => {
     const result = parse(withMeasureV3({ ...MIGRATIONS, lane: "cockpit", at: "v1.0" }));
     if (!result.ok) throw new Error(result.errors.join("\n"));
-    expect(result.declaration.measures).toEqual([{ ...MIGRATIONS, lane: "cockpit", at: "v1.0" }]);
+    expect(result.declaration.measures).toEqual([{ ...MIGRATIONS, lane: ["cockpit"], at: "v1.0" }]);
   });
 
   it("refuses a file_name with no pick or another, a group with no pattern or past its groups, and what it does not take", () => {
@@ -1928,7 +1928,7 @@ describe("parseBoardDeclaration: board_version 3, file_name and file_paths", () 
 
   it("names file_name and file_paths among the kinds of measure a version 3 board reads", () => {
     expect(errorsOf(parse(withMeasureV3({ ...MIGRATIONS, kind: "file_names" })))).toEqual([
-      "measures[0].kind: Invalid discriminator value. Expected 'file_count' | 'dir_count' | 'line_count' | 'match_count' | 'regex_capture' | 'json_length' | 'file_name' | 'file_paths' | 'trail_count'",
+      "measures[0].kind: Invalid discriminator value. Expected 'file_count' | 'dir_count' | 'line_count' | 'match_count' | 'regex_capture' | 'json_length' | 'file_name' | 'file_paths' | 'trail_count' | 'total'",
     ]);
   });
 
@@ -1941,6 +1941,260 @@ describe("parseBoardDeclaration: board_version 3, file_name and file_paths", () 
         `measures[0].kind: 'file_name' is read from board_version 3 on; this file is board_version ${version}`,
         `measures[1].kind: 'file_paths' is read from board_version 3 on; this file is board_version ${version}`,
         `measures[2].kind: 'file_name' is read from board_version 3 on; this file is board_version ${version}`,
+      ]);
+    }
+  });
+});
+
+const SRC_LINES = {
+  id: "src_lines",
+  kind: "line_count",
+  repo: "../basou",
+  include: ["**/*.ts"],
+  unit: "lines",
+};
+
+const LEFT = { id: "left", kind: "total", plus: [100], minus: ["src_lines"], unit: "lines" };
+
+// A version 3 board whose measures are src_lines and `measures`.
+function withTotals(...measures: Record<string, unknown>[]): Record<string, unknown> {
+  return { ...board(), board_version: 3, measures: [SRC_LINES, ...measures], ratios: [] };
+}
+
+const DOTTED_ID =
+  "must start with a lowercase letter and use only a-z, 0-9, '_', '-' and '.', with a lowercase letter after each '.'";
+
+describe("parseBoardDeclaration: board_version 3, total", () => {
+  it("accepts a total of integers and measures, with or without what it takes away", () => {
+    const all = { id: "all", kind: "total", plus: ["src_lines", -2, 0], unit: "lines" };
+    const result = parse(withTotals(LEFT, { ...all, lane: "cockpit" }));
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.measures.slice(1)).toEqual([LEFT, { ...all, lane: ["cockpit"] }]);
+  });
+
+  it("refuses a total with no plus, an empty plus or minus, a term that is not an integer or an id, and what it does not take", () => {
+    const at = (over: Record<string, unknown>) => errorsOf(parse(withTotals({ ...LEFT, ...over })));
+    expect(at({ plus: undefined })).toEqual([
+      "measures[1].plus: Invalid input: expected array, received undefined",
+    ]);
+    expect(at({ plus: [] })).toEqual([
+      "measures[1].plus: must list at least one integer or measure id",
+    ]);
+    expect(at({ minus: [] })).toEqual([
+      "measures[1].minus: must list at least one integer or measure id",
+    ]);
+    expect(at({ plus: "src_lines" })).toEqual([
+      "measures[1].plus: Invalid input: expected array, received string",
+    ]);
+    const id =
+      "must be an integer or the id of a measure, which starts with a lowercase letter and uses only a-z, 0-9, '_', '-' and '.', with a lowercase letter after each '.'";
+    expect(at({ plus: [1.5, "Src", true, null, "src.", 2 ** 53, "100"] })).toEqual([
+      "measures[1].plus[0]: must be an integer",
+      `measures[1].plus[1]: ${id}`,
+      "measures[1].plus[2]: must be an integer or the id of a measure",
+      "measures[1].plus[3]: must be an integer or the id of a measure",
+      `measures[1].plus[4]: ${id}`,
+      "measures[1].plus[5]: must be an integer",
+      `measures[1].plus[6]: ${id}`,
+    ]);
+    expect(at({ repo: "../basou", at: "main" })).toEqual([
+      "measures[1]: unknown keys 'repo', 'at'",
+    ]);
+  });
+
+  it("refuses a term that names no measure, a total, itself included, or a measure that is not a number", () => {
+    const doc = withTotals(
+      LATEST,
+      {
+        id: "cap",
+        kind: "regex_capture",
+        repo: "../basou",
+        file: "a.md",
+        pattern: "(x)",
+        unit: "x",
+      },
+      MIGRATIONS,
+      {
+        id: "t",
+        kind: "total",
+        plus: ["t", "nope", 1, "no.such"],
+        minus: ["src_lines"],
+        unit: "x",
+      },
+      {
+        id: "u",
+        kind: "total",
+        plus: [1],
+        minus: ["latest_migration", "cap", "migrations", "u", "t"],
+        unit: "x",
+      },
+    );
+    expect(errorsOf(parse(doc))).toEqual([
+      "measures[4].plus[0]: 't' is a total, which no total takes",
+      "measures[4].plus[1]: no measure has the id 'nope'",
+      "measures[4].plus[3]: no measure has the id 'no.such'",
+      "measures[5].minus[0]: 'latest_migration' is a file_name, which is not a number",
+      "measures[5].minus[1]: 'cap' is a regex_capture, which is not a number",
+      "measures[5].minus[2]: 'migrations' is a file_paths, which is not a number",
+      "measures[5].minus[3]: 'u' is a total, which no total takes",
+      "measures[5].minus[4]: 't' is a total, which no total takes",
+    ]);
+  });
+
+  it("takes a total in a ratio", () => {
+    const doc = withTotals(LEFT);
+    doc.ratios = [{ id: "r", label: "r", numerator: "left", denominator: "src_lines" }];
+    expect(parse(doc).ok).toBe(true);
+  });
+});
+
+describe("parseBoardDeclaration: board_version 3, a measure's lanes", () => {
+  const withLane = (lane: unknown) => withMeasureV3({ ...MIGRATIONS, lane });
+
+  it("reads one lane id, or a list of them, as a list", () => {
+    for (const [lane, read] of [
+      ["cockpit", ["cockpit"]],
+      [["cockpit"], ["cockpit"]],
+      [
+        ["cockpit", "saddle"],
+        ["cockpit", "saddle"],
+      ],
+    ] as const) {
+      const result = parse(withLane(lane));
+      if (!result.ok) throw new Error(result.errors.join("\n"));
+      expect(result.declaration.measures[0]?.lane).toEqual(read);
+    }
+    const bare = parse(withMeasureV3(MIGRATIONS));
+    if (!bare.ok) throw new Error(bare.errors.join("\n"));
+    expect(Object.hasOwn(bare.declaration.measures[0] as object, "lane")).toBe(false);
+    // The one lane id of a version 1 or 2 board is read as a list of one.
+    for (const doc of [board(), boardV2()]) {
+      const result = parse(doc);
+      if (!result.ok) throw new Error(result.errors.join("\n"));
+      expect(result.declaration.measures[0]?.lane).toEqual(["cockpit"]);
+    }
+  });
+
+  it("refuses an empty list, a lane listed twice or not on the board, and what is not a lane id", () => {
+    expect(errorsOf(parse(withLane([])))).toEqual([
+      "measures[0].lane: must list at least one lane id",
+    ]);
+    expect(errorsOf(parse(withLane(["cockpit", "nope", "cockpit", "saddle"])))).toEqual([
+      "measures[0].lane[1]: no lane has the id 'nope'",
+      "measures[0].lane[2]: 'cockpit' is listed twice",
+    ]);
+    expect(errorsOf(parse(withLane("nope")))).toEqual([
+      "measures[0].lane: no lane has the id 'nope'",
+    ]);
+    const laneId = "must start with a lowercase letter and use only a-z, 0-9, '_' and '-'";
+    expect(errorsOf(parse(withLane(["Cockpit", "saddle"])))).toEqual([
+      `measures[0].lane[0]: ${laneId}`,
+    ]);
+    // A lane id holds no '.', as a measure id may.
+    expect(errorsOf(parse(withLane("cockpit.a")))).toEqual([`measures[0].lane: ${laneId}`]);
+    expect(errorsOf(parse(withLane(5)))).toEqual([
+      "measures[0].lane: must be a lane id or a non-empty list of lane ids",
+    ]);
+    expect(errorsOf(parse(withLane(["cockpit", 5])))).toEqual([
+      "measures[0].lane: must be a lane id or a non-empty list of lane ids",
+    ]);
+  });
+});
+
+describe("parseBoardDeclaration: board_version 3, a measure id and an observation key with '.'", () => {
+  it("accepts words joined by '.', and a ratio and a total that name such a measure", () => {
+    const pages = (id: string) => ({
+      id,
+      kind: "file_count",
+      repo: "../basou",
+      include: [`${id}/*.md`],
+      unit: "pages",
+    });
+    const doc: Record<string, unknown> & {
+      measures: Record<string, unknown>[];
+      observe: Record<string, unknown>[];
+    } = {
+      ...board(),
+      board_version: 3,
+      measures: [
+        pages("site.pages"),
+        pages("site.pages.en"),
+        pages("site"),
+        { id: "all.pages", kind: "total", plus: ["site.pages", "site.pages.en"], unit: "pages" },
+      ],
+      ratios: [{ id: "en", label: "en", numerator: "site.pages.en", denominator: "all.pages" }],
+      observe: [
+        { key: "site.en.version", kind: "page_version", url: "https://example.com/" },
+        { key: "shop.item-1", kind: "http", url: "https://example.com/i" },
+      ],
+    };
+    const result = parse(doc);
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    expect(result.declaration.measures.map((m) => m.id)).toEqual([
+      "site.pages",
+      "site.pages.en",
+      "site",
+      "all.pages",
+    ]);
+    expect(result.declaration.observe.map((o) => o.key)).toEqual([
+      "site.en.version",
+      "shop.item-1",
+    ]);
+    doc.measures = [...doc.measures, pages("site.pages")];
+    doc.observe = [...doc.observe, { key: "shop.item-1", kind: "manual", how: "ask" }];
+    expect(errorsOf(parse(doc))).toEqual([
+      "measures[4].id: duplicate measure id 'site.pages' (first at measures[0])",
+      "observe[2].key: duplicate observation key 'shop.item-1' (first at observe[1])",
+    ]);
+  });
+
+  it("refuses a '.' at an end or after another, a word that starts with no lowercase letter, ':' and '/'", () => {
+    for (const id of ["a.", ".a", "a..b", "a.B", "a.1", "a._", "a:b", "a/b", "a. b"]) {
+      expect(errorsOf(parse(withMeasureV3({ ...MIGRATIONS, id }))), id).toEqual([
+        `measures[0].id: ${DOTTED_ID}`,
+      ]);
+      expect(errorsOf(parse(withHttp({ key: id, url: "https://example.com/" }))), id).toEqual([
+        `observe[0].key: ${DOTTED_ID}`,
+      ]);
+    }
+    const doc = withTotals(LEFT);
+    doc.ratios = [{ id: "r", label: "r", numerator: "src.", denominator: "no.such" }];
+    expect(errorsOf(parse(doc))).toEqual([
+      `ratios[0].numerator: ${DOTTED_ID}`,
+      "ratios[0].denominator: no measure has the id 'no.such'",
+    ]);
+  });
+
+  it("keeps '.' out of a lane id and a ratio id", () => {
+    const laneId = "must start with a lowercase letter and use only a-z, 0-9, '_' and '-'";
+    const doc = withTotals(LEFT);
+    doc.lanes = [...(doc.lanes as unknown[]), { id: "a.b", name: "A" }];
+    doc.ratios = [{ id: "r.s", label: "r", numerator: "left", denominator: "src_lines" }];
+    expect(errorsOf(parse(doc))).toEqual([`lanes[2].id: ${laneId}`, `ratios[0].id: ${laneId}`]);
+  });
+});
+
+describe("parseBoardDeclaration: what version 3 reads, in a board of version 1 or 2", () => {
+  it("says that version 3 reads a total, a list of lanes, and an id or a key with '.'", () => {
+    for (const version of [1, 2]) {
+      const doc = version === 1 ? board() : boardV2();
+      doc.measures = [
+        { ...SRC_LINES, lane: ["saddle", "cockpit"] },
+        { id: "site.pages", kind: "file_count", repo: "../basou", include: ["s/*"], unit: "p" },
+        LEFT,
+      ];
+      doc.ratios = [{ id: "r", label: "r", numerator: "site.pages", denominator: "src_lines" }];
+      doc.observe = [{ key: "site.en", kind: "page_version", url: "https://example.com/" }];
+      const told = (where: string, what: string) =>
+        `${where}: ${what} read from board_version 3 on; this file is board_version ${version}`;
+      expect(errorsOf(parse(doc))).toEqual([
+        told("measures[0].lane", "what is written here is"),
+        told("measures[1].id", "'site.pages' is"),
+        told("measures[2].kind", "'total' is"),
+        told("ratios[0].numerator", "'site.pages' is"),
+        version === 1
+          ? told("(top level)", "'observe' is")
+          : told("observe[0].key", "'site.en' is"),
       ]);
     }
   });

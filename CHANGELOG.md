@@ -72,6 +72,29 @@ All notable changes to **basou** are recorded here. The project follows
   both records hold a list, and the list whole when only one does. The
   `Measures:` section of `basou board measure` gives the list as a count,
   and the board page draws it as a count with the paths folded under it.
+- **A board can add up measures and integers, and take some away (`total`,
+  from `board_version: 3`, experimental).** A `total` measure lists what it
+  adds (`plus`, at least one) and what it takes away (`minus`, which it may
+  leave out), each an integer written in the declaration or the id of a
+  measure whose value is one, so measures of several repos can be added up.
+  Its value is the difference, and may be below 0. When a measure it takes
+  was not measured, the total is null and says which (`'hand_count' is not
+  measured`); one out of the range a number holds exactly is null too. A
+  total takes no total, itself included, and no measure whose value is not a
+  number (`regex_capture`, `file_name`, `file_paths`); a ratio may take a
+  total.
+- **A measure can be drawn in more than one lane (`lane` as a list, from
+  `board_version: 3`, experimental).** `lane` is one lane id, as before, or
+  a non-empty list of them, each a lane of the board and none twice. The
+  board page draws the measure in each of its lanes' sections, and
+  `basou board measure` lists its lanes (`[cockpit, distribution]`).
+- **A measure's id and an observation's key may be words joined by `.`
+  (from `board_version: 3`, experimental),** each word written as an id is
+  (`site.pages`), and a ratio and a total name such a measure so. `:` and
+  `/` are still refused: the guide names working files by a key. Where such
+  a measure is not measured, `not_found` names it as
+  `measures["site.pages"]`, as the difference from the previous record
+  already did, so it is not read as a measure `pages` inside `site`.
 
 ### Changed
 
@@ -84,6 +107,12 @@ All notable changes to **basou** are recorded here. The project follows
   version reads is told so on a line of its own (`observe[0].kind: 'http'
   is read from board_version 3 on; this file is board_version 2`) for a
   kind or a value as for a key: until now only a key was told so.
+- **A record holds a measure's `lane` as a list (`record_version: 3`,
+  experimental),** in its measurement and in the declaration it keeps,
+  whatever the version of its board; a measure with no lane has none, as
+  before. A record of version 1 or 2 holds one lane id, which the board page
+  and the difference from the previous record read as a list of that one,
+  so a lane written either way is not a change.
 - **A branch a `github_ci` or `github_check` observation names may not have
   a part that starts with `.`** (in a board of any version). git takes no
   such branch, and GitHub reads `a/./b` in the path of a request as `a/b`,

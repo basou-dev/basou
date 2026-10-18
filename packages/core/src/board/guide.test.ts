@@ -314,6 +314,12 @@ describe("boardGuide: a board declared", () => {
     );
   });
 
+  it("says what a total's value is, that it may be below 0, and when it is null", () => {
+    expect(boardGuide(guideInput())).toContain(
+      "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured.",
+    );
+  });
+
   it("says which branch behind_main counts against", () => {
     expect(boardGuide(guideInput())).toContain(
       "- `repos[].behind_main` counts the commits on origin's default branch (the branch of origin that origin/HEAD names, or origin/main when origin/HEAD names none) as of the last fetch; measure does not fetch.",
@@ -514,7 +520,7 @@ describe("boardGuide: the gate on readers, the Stop hook and where a measure is 
   it("says, before a board is declared, which measures the page draws and who may read the repo", () => {
     const guide = boardGuide(guideInput({ board: { status: "undeclared" } }));
     expect(guide).toContain(
-      "A measure with `lane:` is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
+      "A measure with `lane:` (a lane id, or a list of them) is drawn in each of those lanes' sections of the board page; one without is kept only in the records and their differences (and in a ratio or a total that uses it).",
     );
     expect(guide).toContain(
       "no collaborator but the owner and you (the account gh is signed in as), and no invitation",

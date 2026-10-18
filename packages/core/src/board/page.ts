@@ -31,7 +31,10 @@ const pageRecordSchema = z.looseObject({
         notes: z.array(text).optional(),
       }),
     ),
-    measures: z.array(z.looseObject({ id: text, unit: text, lane: text.optional() })),
+    // A list in a record of version 3, one id in one of version 1 or 2.
+    measures: z.array(
+      z.looseObject({ id: text, unit: text, lane: z.union([text, z.array(text)]).optional() }),
+    ),
     ratios: z.array(z.looseObject({ id: text, label: text, numerator: text, denominator: text })),
     axis: z.looseObject({ version: z.number() }),
     effort: z.looseObject({
@@ -160,7 +163,10 @@ export type BoardPageLane = {
   now: { stage: string; meaning: string; state: string } | null;
   attention: { stage: string; state: string; reason?: string }[];
   prose: string | null;
-  /** Each measure drawn in the lane: a number, a string, or the paths of a `file_paths`. */
+  /**
+   * Each measure drawn in the lane, one of more than one lane in each: a
+   * number, a string, or the paths of a `file_paths`.
+   */
   measures: { id: string; value: number | string | string[] | null; unit: string }[];
   flags: { live: boolean; blocked: boolean; unverified: boolean };
 };
@@ -514,7 +520,11 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
         ),
         prose: Object.hasOwn(r.prose.lanes, lane.id) ? (r.prose.lanes[lane.id] as string) : null,
         measures: d.measures
-          .filter((measure) => measure.lane === lane.id)
+          .filter((measure) =>
+            typeof measure.lane === "string"
+              ? measure.lane === lane.id
+              : (measure.lane ?? []).includes(lane.id),
+          )
           .map((measure) => ({
             id: measure.id,
             value: m.measures[measure.id]?.value ?? null,

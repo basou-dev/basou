@@ -47,13 +47,15 @@ describe("boardInitText", () => {
       });
       expect(text).toContain(`# ${words.comments.measures}\nmeasures: []\n`);
     }
-    expect(en.comments.measures).toContain("One with a lane is drawn in that lane's section");
+    expect(en.comments.measures).toContain(
+      "One with a lane, or a list of lanes, is drawn in each one's section",
+    );
     // The comment on observe names every kind a board can declare, http among them.
     for (const kind of BOARD_OBSERVE_KINDS) {
       expect(en.comments.observe).toContain(kind);
       expect(ja.comments.observe).toContain(kind);
     }
-    // The comment on measures names every kind a board can declare, file_name and file_paths among them.
+    // The comment on measures names every kind a board can declare, file_name, file_paths and total among them.
     for (const kind of [
       "file_count",
       "dir_count",
@@ -64,11 +66,14 @@ describe("boardInitText", () => {
       "file_name",
       "file_paths",
       "trail_count",
+      "total",
     ]) {
       expect(en.comments.measures).toContain(kind);
       expect(ja.comments.measures).toContain(kind);
     }
-    expect(ja.comments.measures).toContain("lane を付けたものは盤のページのそのレーンの節に描かれ");
+    expect(ja.comments.measures).toContain(
+      "lane\uff081 \u3064\u306e\u30ec\u30fc\u30f3\u304b\u3001\u30ec\u30fc\u30f3\u306e\u4e26\u3073\uff09\u3092\u4ed8\u3051\u305f\u3082\u306e\u306f\u76e4\u306e\u30da\u30fc\u30b8\u306e\u305d\u308c\u305e\u308c\u306e\u30ec\u30fc\u30f3\u306e\u7bc0\u306b\u63cf\u304b\u308c",
+    );
   });
 
   it("writes the words in Japanese for a Japanese anchor", () => {

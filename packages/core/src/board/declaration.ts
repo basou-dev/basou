@@ -18,9 +18,11 @@ import { TaskStatusSchema } from "../schemas/task.schema.js";
  * outside basou (`observe`) and what to look at when judging a stage
  * (`stages.<id>.look` and `.notes`); and 3, which adds the response to an
  * HTTP GET (`http`) and a check run by its name (`github_check`) as
- * observations, what to mind when making any observation (`notes`), and the
- * name of a file (`file_name`) and the paths of files (`file_paths`) as
- * measures.
+ * observations, what to mind when making any observation (`notes`), the
+ * name of a file (`file_name`), the paths of files (`file_paths`) and a sum
+ * of integers and other measures (`total`) as measures, a measure drawn in
+ * more than one lane (`lane` as a list), and a measure id and an observation
+ * key of words joined by '.'.
  */
 export const BOARD_VERSION = 3;
 
@@ -43,6 +45,10 @@ export const BOARD_DEFAULT_AT = "worktree";
 export const BOARD_DEFAULT_CAPTURE_GROUP = 1;
 
 const ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
+// From version 3, a measure's id, and an observation's key, may be words of
+// that shape joined by '.'. Not ':' or '/': the guide names working files by
+// a key.
+const DOTTED_ID_PATTERN = /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 // The C0 controls, DEL and the C1 controls.
@@ -61,6 +67,11 @@ const nonEmptyText = z
 const idText = z.string().regex(ID_PATTERN, {
   error: "must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
 });
+
+const DOTTED_ID_ERROR =
+  "must start with a lowercase letter and use only a-z, 0-9, '_', '-' and '.', with a lowercase letter after each '.'";
+
+const dottedIdText = z.string().regex(DOTTED_ID_PATTERN, { error: DOTTED_ID_ERROR });
 
 /** Whether a text is a date of the calendar written as YYYY-MM-DD. */
 export function isCalendarDate(s: string): boolean {
@@ -160,10 +171,25 @@ const captureSectionSchema = z.strictObject({
   on_missing: z.null({ error: "must be null for regex_capture (a string has no zero)" }),
 });
 
+// A measure's lane is read as a list, of one in a board of version 1 or 2,
+// so a record holds the lanes of a measure in one shape whatever the version.
 const measureCommon = {
   id: idText,
   unit: nonEmptyText,
-  lane: idText.optional(),
+  lane: idText.transform((lane) => [lane]).optional(),
+};
+
+// From version 3, a measure's id may hold '.', and it may be drawn in more
+// than one lane: `lane` is one lane id or a list of them.
+const measureCommonV3 = {
+  id: dottedIdText,
+  unit: nonEmptyText,
+  lane: z
+    .union([idText, z.array(idText).min(1, { error: "must list at least one lane id" })], {
+      error: "must be a lane id or a non-empty list of lane ids",
+    })
+    .transform((lane) => (typeof lane === "string" ? [lane] : lane))
+    .optional(),
 };
 
 const fileScope = {
@@ -270,6 +296,35 @@ const filePathsSchema = z.strictObject({
   exclude: globs.optional(),
 });
 
+// A term of a total: an integer written in the declaration, or the id of a
+// measure whose value is one.
+const totalTerm = z
+  .union([z.number(), z.string()], { error: "must be an integer or the id of a measure" })
+  .superRefine((term, ctx) => {
+    const problem =
+      typeof term === "number"
+        ? Number.isSafeInteger(term)
+          ? undefined
+          : "must be an integer"
+        : DOTTED_ID_PATTERN.test(term)
+          ? undefined
+          : "must be an integer or the id of a measure, which starts with a lowercase letter and uses only a-z, 0-9, '_', '-' and '.', with a lowercase letter after each '.'";
+    if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
+  });
+
+const totalTerms = z.array(totalTerm).min(1, {
+  error: "must list at least one integer or measure id",
+});
+
+// What `plus` adds up less what `minus` adds up. A term may not be a total
+// (see crossCheck), so totals are never chained and have no order to find.
+const totalSchema = z.strictObject({
+  kind: z.literal("total"),
+  ...measureCommonV3,
+  plus: totalTerms,
+  minus: totalTerms.optional(),
+});
+
 /** What a `trail_count` measure counts in the workspace's own trail. */
 export const BOARD_TRAIL_COUNTS = [
   "decisions_all",
@@ -295,17 +350,19 @@ const measureSchemaV1 = z.discriminatedUnion("kind", [
   trailCountSchema,
 ]);
 
-// From version 3, a measure may take the name of a file or the paths of files.
+// From version 3, a measure may take the name of a file, the paths of files
+// or a total, and every measure takes the id and the lanes of version 3.
 const measureSchemaV3 = z.discriminatedUnion("kind", [
-  fileCountSchema,
-  dirCountSchema,
-  lineCountSchema,
-  matchCountSchema,
-  regexCaptureSchema,
-  jsonLengthSchema,
-  fileNameSchema,
-  filePathsSchema,
-  trailCountSchema,
+  fileCountSchema.extend(measureCommonV3),
+  dirCountSchema.extend(measureCommonV3),
+  lineCountSchema.extend(measureCommonV3),
+  matchCountSchema.extend(measureCommonV3),
+  regexCaptureSchema.extend(measureCommonV3),
+  jsonLengthSchema.extend(measureCommonV3),
+  fileNameSchema.extend(measureCommonV3),
+  filePathsSchema.extend(measureCommonV3),
+  trailCountSchema.extend(measureCommonV3),
+  totalSchema,
 ]);
 
 /**
@@ -539,19 +596,19 @@ const observeSchemaV2 = z.discriminatedUnion("kind", [
 ]);
 
 // From version 3, every observation may say what to mind when making it, in
-// the shape of a stage's or a lane's `notes`.
-const observeNotes = { notes: z.array(nonEmptyText).optional() };
+// the shape of a stage's or a lane's `notes`, and its key may hold '.'.
+const observeV3 = { key: dottedIdText, notes: z.array(nonEmptyText).optional() };
 
 const observeSchemaV3 = z.discriminatedUnion("kind", [
-  npmVersionObserve.extend(observeNotes),
-  githubReleaseObserve.extend(observeNotes),
-  githubOpenIssuesObserve.extend(observeNotes),
-  githubOpenPrsObserve.extend(observeNotes),
-  githubCiObserve.extend(observeNotes),
-  githubCheckObserve.extend(observeNotes),
-  pageVersionObserve.extend(observeNotes),
-  httpObserve.extend(observeNotes),
-  manualObserve.extend(observeNotes),
+  npmVersionObserve.extend(observeV3),
+  githubReleaseObserve.extend(observeV3),
+  githubOpenIssuesObserve.extend(observeV3),
+  githubOpenPrsObserve.extend(observeV3),
+  githubCiObserve.extend(observeV3),
+  githubCheckObserve.extend(observeV3),
+  pageVersionObserve.extend(observeV3),
+  httpObserve.extend(observeV3),
+  manualObserve.extend(observeV3),
 ]);
 
 const stageSchemaV1 = z.strictObject({ meaning: nonEmptyText });
@@ -573,8 +630,9 @@ const boardVersionText = z.literal(BOARD_VERSIONS, {
 });
 
 // The keys every version has after its stages, in the order a problem with
-// them is reported, with the measures the version reads.
-const boardFieldsOf = <M extends z.ZodType>(measure: M) => ({
+// them is reported, with the measures the version reads and the id a ratio
+// names a measure by.
+const boardFieldsOf = <M extends z.ZodType>(measure: M, measureRef: z.ZodString) => ({
   lanes: z
     .array(
       z.strictObject({
@@ -591,8 +649,8 @@ const boardFieldsOf = <M extends z.ZodType>(measure: M) => ({
       z.strictObject({
         id: idText,
         label: nonEmptyText,
-        numerator: idText,
-        denominator: idText,
+        numerator: measureRef,
+        denominator: measureRef,
       }),
     )
     .default([]),
@@ -632,14 +690,14 @@ const boardSchemaV1 = z.strictObject({
   board_version: boardVersionText,
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV1),
-  ...boardFieldsOf(measureSchemaV1),
+  ...boardFieldsOf(measureSchemaV1, idText),
 });
 
 const boardSchemaV2 = z.strictObject({
   board_version: boardVersionText,
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV2),
-  ...boardFieldsOf(measureSchemaV1),
+  ...boardFieldsOf(measureSchemaV1, idText),
   observe: z.array(observeSchemaV2).default([]),
 });
 
@@ -647,15 +705,17 @@ const boardSchemaV3 = z.strictObject({
   board_version: boardVersionText,
   title: nonEmptyText,
   stages: stagesOf(stageSchemaV2),
-  ...boardFieldsOf(measureSchemaV3),
+  ...boardFieldsOf(measureSchemaV3, dottedIdText),
   observe: z.array(observeSchemaV3).default([]),
 });
 
 /**
  * A declaration as read, whatever its version: one of version 1 has no
  * observations and no stage has `look` or `notes`, and one of version 1 or 2
- * has no `http` or `github_check` observation, no observation with `notes`
- * and no `file_name` or `file_paths` measure.
+ * has no `http` or `github_check` observation, no observation with `notes`,
+ * no `file_name`, `file_paths` or `total` measure, no measure of more than
+ * one lane, and no measure id or observation key with '.'. A measure's
+ * `lane` is a list whatever the version.
  */
 export type BoardDeclaration = z.output<typeof boardSchemaV3>;
 export type BoardMeasure = BoardDeclaration["measures"][number];
@@ -1016,6 +1076,13 @@ function isId(value: string | undefined): value is string {
   return value !== undefined && ID_PATTERN.test(value);
 }
 
+// A measure's id as a version 3 board accepts it. In a board of version 1 or
+// 2, one with '.' is reported by the shape check as read from version 3 on,
+// and is looked up all the same.
+function isMeasureId(value: string | undefined): value is string {
+  return value !== undefined && DOTTED_ID_PATTERN.test(value);
+}
+
 // The kinds of measure that read a repository.
 const REPO_KINDS = new Set([
   "file_count",
@@ -1028,7 +1095,8 @@ const REPO_KINDS = new Set([
   "file_paths",
 ]);
 
-// The kinds of measure whose value is not a number, so no ratio takes them.
+// The kinds of measure whose value is not a number, so neither a ratio nor a
+// total takes them.
 const NOT_NUMBER_KINDS = new Set(["regex_capture", "file_name", "file_paths"]);
 
 // How many capturing groups a pattern has, or undefined when it does not compile.
@@ -1108,6 +1176,15 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
     if (laneIds !== undefined && isId(lane) && !laneIds.has(lane)) {
       errors.push(`${at}.lane: no lane has the id '${lane}'`);
     }
+    if (laneIds !== undefined && Array.isArray(measure.lane)) {
+      const seen = new Set<string>();
+      measure.lane.forEach((id: unknown, j) => {
+        if (typeof id !== "string" || !isId(id)) return;
+        if (seen.has(id)) errors.push(`${at}.lane[${j}]: '${id}' is listed twice`);
+        else if (!laneIds.has(id)) errors.push(`${at}.lane[${j}]: no lane has the id '${id}'`);
+        seen.add(id);
+      });
+    }
     if (
       measure.kind === "file_name" &&
       measure.pattern === undefined &&
@@ -1144,18 +1221,33 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
   }
 
   if (measureIds !== undefined) {
+    // Why a ratio or a total cannot take the measure `ref` names, or undefined.
+    const notTaken = (ref: string, inTotal: boolean): string | undefined => {
+      if (!measureIds.has(ref)) return `no measure has the id '${ref}'`;
+      const kind = measureKinds.get(ref);
+      if (typeof kind !== "string") return undefined;
+      if (NOT_NUMBER_KINDS.has(kind)) return `'${ref}' is a ${kind}, which is not a number`;
+      if (inTotal && kind === "total") return `'${ref}' is a total, which no total takes`;
+      return undefined;
+    };
     for (const [i, ratio] of entries(raw, "ratios") ?? []) {
       for (const side of ["numerator", "denominator"] as const) {
         const ref = stringAt(ratio, side);
-        if (!isId(ref)) continue;
-        if (!measureIds.has(ref)) {
-          errors.push(`ratios[${i}].${side}: no measure has the id '${ref}'`);
-        } else {
-          const kind = measureKinds.get(ref);
-          if (typeof kind === "string" && NOT_NUMBER_KINDS.has(kind)) {
-            errors.push(`ratios[${i}].${side}: '${ref}' is a ${kind}, which is not a number`);
-          }
-        }
+        if (!isMeasureId(ref)) continue;
+        const problem = notTaken(ref, false);
+        if (problem !== undefined) errors.push(`ratios[${i}].${side}: ${problem}`);
+      }
+    }
+    for (const [i, measure] of entries(raw, "measures") ?? []) {
+      if (measure.kind !== "total") continue;
+      for (const side of ["plus", "minus"] as const) {
+        const terms = measure[side];
+        if (!Array.isArray(terms)) continue;
+        terms.forEach((term: unknown, j) => {
+          if (typeof term !== "string" || !isMeasureId(term)) return;
+          const problem = notTaken(term, true);
+          if (problem !== undefined) errors.push(`measures[${i}].${side}[${j}]: ${problem}`);
+        });
       }
     }
   }

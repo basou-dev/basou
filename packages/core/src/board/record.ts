@@ -25,9 +25,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * declaration names (`declaration.observe`) and what each stage is judged by
  * (`look` and `notes` of `declaration.stages`); 3 may hold a declaration of
  * board_version 3, which may observe an HTTP response (`http`) or a check run
- * (`github_check`), say what to mind when making an observation (`notes`) and
- * measure the name of a file (`file_name`) or the paths of files
- * (`file_paths`), whose value in the measurement is a list of strings.
+ * (`github_check`), say what to mind when making an observation (`notes`),
+ * measure the name of a file (`file_name`), the paths of files
+ * (`file_paths`), whose value in the measurement is a list of strings, or a
+ * total of other measures and integers (`total`), draw a measure in more
+ * than one lane and name a measure or an observation with '.'; and in 3 a
+ * measure's `lane`, in the measurement and in the declaration, is always a
+ * list of lane ids, where 1 and 2 hold one id.
  * Every record is written in the newest version, whatever the version of the
  * board it records, and every version is read.
  */

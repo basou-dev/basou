@@ -14,6 +14,7 @@ import {
   type BoardDeclarationSnapshot,
   type BoardMeasure,
   boardDeclarationSnapshot,
+  formatPath,
 } from "./declaration.js";
 import { type BoardDiff, diffMeasurements } from "./diff.js";
 import { BOARD_EFFORT_METHOD, type BoardEffort, measureEffort, todayIn } from "./effort.js";
@@ -66,7 +67,8 @@ export type BoardMeasureValue = {
   /** A number, a string, or the paths a `file_paths` measure found. */
   value: number | string | string[] | null;
   unit: string;
-  lane?: string;
+  /** The lanes it is drawn in, always a list (absent when it has none). */
+  lane?: string[];
 };
 
 export type BoardRatioValue = {
@@ -215,16 +217,26 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
   );
   notFound.push(...repos.notFound);
 
+  // A total takes no total, so the totals follow every other measure.
+  const outcomes = new Map<string, Outcome>();
+  for (const measure of declaration.measures) {
+    if (measure.kind === "total") continue;
+    outcomes.set(measure.id, await measureOne(measure, scopeOf, decisionsOf, tasksOf));
+  }
+  for (const measure of declaration.measures) {
+    if (measure.kind === "total") outcomes.set(measure.id, totalOf(measure, outcomes));
+  }
   const measures: Record<string, BoardMeasureValue> = {};
   for (const measure of declaration.measures) {
-    const outcome = await measureOne(measure, scopeOf, decisionsOf, tasksOf);
+    // Every measure has its outcome: the ids are not repeated.
+    const outcome = outcomes.get(measure.id) as Outcome;
     if (outcome.reason !== undefined) {
-      notFound.push({ at: `measures.${measure.id}`, reason: outcome.reason });
+      notFound.push({ at: formatPath(["measures", measure.id]), reason: outcome.reason });
     }
     measures[measure.id] = {
       value: outcome.value,
       unit: measure.unit,
-      ...(measure.lane === undefined ? {} : { lane: measure.lane }),
+      ...(measure.lane === undefined ? {} : { lane: [...measure.lane] }),
     };
   }
 
@@ -510,8 +522,42 @@ function pointAt(document: unknown, pointer: string): unknown {
   return current;
 }
 
+// The largest integer a number holds exactly: a total above it, or below
+// its negative, would not be exact.
+const TOTAL_MAX = BigInt(Number.MAX_SAFE_INTEGER);
+
+// What `plus` adds up less what `minus` adds up, exactly. Null, naming them,
+// when a measure it takes was not measured: a part is not the whole.
+function totalOf(
+  measure: Extract<BoardMeasure, { kind: "total" }>,
+  outcomes: ReadonlyMap<string, Outcome>,
+): Outcome {
+  const missing: string[] = [];
+  const sum = (terms: readonly (number | string)[]): bigint => {
+    let out = 0n;
+    for (const term of terms) {
+      const value = typeof term === "number" ? term : outcomes.get(term)?.value;
+      // Every measure that counts gives a safe integer, as a term written is.
+      if (typeof value === "number" && Number.isSafeInteger(value)) out += BigInt(value);
+      else if (typeof term === "string" && !missing.includes(term)) missing.push(term);
+    }
+    return out;
+  };
+  const value = sum(measure.plus) - sum(measure.minus ?? []);
+  if (missing.length > 0) {
+    const named = missing.map((id) => `'${id}'`).join(", ");
+    return fail(`${named} ${missing.length === 1 ? "is" : "are"} not measured`);
+  }
+  if (value > TOTAL_MAX || value < -TOTAL_MAX) {
+    return fail(
+      `the total is out of the range a number holds exactly (-${TOTAL_MAX} to ${TOTAL_MAX})`,
+    );
+  }
+  return { value: Number(value) };
+}
+
 async function measureOne(
-  measure: BoardMeasure,
+  measure: Exclude<BoardMeasure, { kind: "total" }>,
   scopeOf: (repo: string, at: string) => Promise<RepoScopeResult>,
   decisionsOf: () => Promise<TrailDecisions>,
   tasksOf: () => Promise<TrailTasks>,

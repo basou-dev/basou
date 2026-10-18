@@ -894,7 +894,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       measured_at: "2026-10-05T03:00:00.000Z",
       measured_with: WITH,
       measures: {
-        src: { value: 4, unit: "lines", lane: "core" },
+        src: { value: 4, unit: "lines", lane: ["core"] },
         test: { value: 2, unit: "lines" },
       },
     });
@@ -4509,7 +4509,7 @@ describe("measureBoard: the name of a file and the paths of files", () => {
         "db/migrations/schema.sql",
       ],
       unit: "files",
-      lane: "core",
+      lane: ["core"],
     });
     expect(measured(m, "at_main")).toEqual([
       "db/migrations/20260101_init.sql",
@@ -4671,3 +4671,156 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+describe("measureBoard: totals, a measure's lanes and ids with '.'", () => {
+  // A version 3 declaration over the repos "app" and "web", with two lanes.
+  const declare3 = (measures: Record<string, unknown>[], extra: Record<string, unknown> = {}) =>
+    declare(
+      measures,
+      {
+        board_version: 3,
+        lanes: [
+          { id: "core", name: "Core" },
+          { id: "site", name: "Site" },
+        ],
+        ...extra,
+      },
+      ["app", "web"],
+    );
+  const files = (
+    id: string,
+    repoPath: string,
+    include: string[],
+    over: Record<string, unknown> = {},
+  ) => ({ id, kind: "file_count", repo: repoPath, include, unit: "files", ...over });
+  const ofMeasures = (m: BoardMeasurement) =>
+    m.not_found.filter((n) => n.at.startsWith("measures"));
+
+  beforeEach(async () => {
+    await repo("app", { "src/a.ts": "", "src/b.ts": "", "src/c.ts": "" });
+    await repo("web", { "pages/x.md": "", "pages/y.md": "" });
+  });
+
+  it("adds up plus and takes away minus, over measures of two repos and integers, below 0 too", async () => {
+    const m = await measure(
+      declare3([
+        { id: "left", kind: "total", plus: [4], minus: ["app.src", "web.pages"], unit: "slots" },
+        files("app.src", "app", ["src/*.ts"]),
+        files("web.pages", "web", ["pages/*.md"]),
+        { id: "all", kind: "total", plus: ["app.src", "web.pages", 10], unit: "files" },
+        { id: "twice", kind: "total", plus: ["app.src", "app.src"], minus: [-1], unit: "files" },
+        { id: "none", kind: "total", plus: [0], unit: "files" },
+      ]),
+      NOW,
+      ["app", "web"],
+    );
+    expect(measured(m, "left")).toBe(-1);
+    expect(measured(m, "all")).toBe(15);
+    expect(measured(m, "twice")).toBe(7);
+    expect(measured(m, "none")).toBe(0);
+    expect(ofMeasures(m)).toEqual([]);
+    // In the order declared, a total ahead of what it takes as well.
+    expect(Object.keys(m.measures)).toEqual([
+      "left",
+      "app.src",
+      "web.pages",
+      "all",
+      "twice",
+      "none",
+    ]);
+    expect(m.measures.left).toEqual({ value: -1, unit: "slots" });
+  });
+
+  it("is null when a measure it takes was not measured, naming each once in order", async () => {
+    const m = await measure(
+      declare3([
+        files("gone", "app", ["missing/*.ts"]),
+        files("app.src", "app", ["src/*.ts"]),
+        files("web.none", "web", ["none/*.md"]),
+        {
+          id: "sum",
+          kind: "total",
+          plus: ["gone", "app.src", "gone"],
+          minus: ["web.none"],
+          unit: "files",
+        },
+        { id: "one", kind: "total", plus: [1], minus: ["gone"], unit: "files" },
+        { id: "fine", kind: "total", plus: ["app.src"], unit: "files" },
+      ]),
+      NOW,
+      ["app", "web"],
+    );
+    expect(measured(m, "sum")).toBeNull();
+    expect(measured(m, "one")).toBeNull();
+    expect(measured(m, "fine")).toBe(3);
+    // An id with '.' is named as a key, not as a path into a measure.
+    expect(ofMeasures(m)).toEqual([
+      { at: "measures.gone", reason: "nothing is under 'missing' in the working tree" },
+      { at: 'measures["web.none"]', reason: "nothing is under 'none' in the working tree" },
+      { at: "measures.sum", reason: "'gone', 'web.none' are not measured" },
+      { at: "measures.one", reason: "'gone' is not measured" },
+    ]);
+    expect(m.complete).toBe(false);
+  });
+
+  it("is exact up to the integers a number holds exactly, and null past them", async () => {
+    const max = Number.MAX_SAFE_INTEGER;
+    const m = await measure(
+      declare3([
+        { id: "top", kind: "total", plus: [max], unit: "n" },
+        { id: "bottom", kind: "total", plus: [0], minus: [max], unit: "n" },
+        // max + 2 is not held exactly, but what the total comes to is.
+        { id: "back", kind: "total", plus: [max, 2], minus: [3], unit: "n" },
+        { id: "over", kind: "total", plus: [max, 1], unit: "n" },
+        { id: "under", kind: "total", plus: [-1], minus: [max], unit: "n" },
+      ]),
+    );
+    expect(measured(m, "top")).toBe(max);
+    expect(measured(m, "bottom")).toBe(-max);
+    expect(measured(m, "back")).toBe(max - 1);
+    const past = `the total is out of the range a number holds exactly (-${max} to ${max})`;
+    expect(ofMeasures(m)).toEqual([
+      { at: "measures.over", reason: past },
+      { at: "measures.under", reason: past },
+    ]);
+  });
+
+  it("keeps a measure's lanes as a list, of one or more, and none when it has none", async () => {
+    const m = await measure(
+      declare3([
+        files("one", "app", ["src/*.ts"], { lane: "core" }),
+        files("two", "app", ["src/*.ts"], { lane: ["site", "core"] }),
+        files("bare", "app", ["src/*.ts"]),
+        { id: "sum", kind: "total", plus: ["one"], unit: "files", lane: ["site"] },
+      ]),
+      NOW,
+      ["app"],
+    );
+    expect(m.measures.one).toEqual({ value: 3, unit: "files", lane: ["core"] });
+    expect(m.measures.two).toEqual({ value: 3, unit: "files", lane: ["site", "core"] });
+    expect(m.measures.bare).toEqual({ value: 3, unit: "files" });
+    expect(m.measures.sum).toEqual({ value: 3, unit: "files", lane: ["site"] });
+  });
+
+  it("reads the lane of a version 1 board as a list of one, in the measurement and the snapshot", async () => {
+    const d = declare([files("one", "app", ["src/*.ts"], { lane: "core" })], {}, ["app", "web"]);
+    const m = await measure(d, NOW, ["app"]);
+    expect(m.measures.one?.lane).toEqual(["core"]);
+    expect(boardDeclarationSnapshot(d).measures[0]?.lane).toEqual(["core"]);
+  });
+
+  it("takes a total, and a measure whose id holds '.', in a ratio", async () => {
+    const m = await measure(
+      declare3(
+        [
+          files("app.src", "app", ["src/*.ts"]),
+          { id: "all", kind: "total", plus: ["app.src", 3], unit: "files" },
+        ],
+        { ratios: [{ id: "share", label: "share", numerator: "app.src", denominator: "all" }] },
+      ),
+      NOW,
+      ["app"],
+    );
+    expect(m.ratios.share).toEqual({ value: 0.5, numerator: "app.src", denominator: "all" });
+  });
+});
