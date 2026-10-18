@@ -274,6 +274,59 @@ describe("boardPage", () => {
     expect(await boardPage(records)).toMatchObject({ why: "not_a_record" });
   });
 
+  it("draws a measure of more than one lane in each of them, and one lane id of an older record in its lane", async () => {
+    await mkdir(records);
+    const v3 = record({ record_version: 3 });
+    v3.declaration = {
+      ...v3.declaration,
+      measures: [
+        { id: "site.pages", kind: "file_count", unit: "pages", lane: ["docs", "core"] },
+        { id: "src", kind: "line_count", unit: "lines", lane: ["core"] },
+        { id: "left", kind: "total", unit: "slots" },
+      ],
+      ratios: [],
+    } as typeof v3.declaration;
+    v3.measure = {
+      ...v3.measure,
+      measures: {
+        "site.pages": { value: 12, unit: "pages", lane: ["docs", "core"] },
+        src: { value: 100, unit: "lines", lane: ["core"] },
+        left: { value: -3, unit: "slots" },
+      },
+      ratios: {},
+    } as unknown as typeof v3.measure;
+    await place(A, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.board.lanes.map((lane) => [lane.id, lane.measures])).toEqual([
+      [
+        "core",
+        [
+          { id: "site.pages", value: 12, unit: "pages" },
+          { id: "src", value: 100, unit: "lines" },
+        ],
+      ],
+      ["docs", [{ id: "site.pages", value: 12, unit: "pages" }]],
+    ]);
+    // A record of version 1 holds one lane id: it is the lane of that id,
+    // not of every id it holds.
+    const v1 = record();
+    v1.declaration = {
+      ...v1.declaration,
+      lanes: [
+        { id: "co", name: "Co" },
+        { id: "core", name: "Core" },
+      ],
+    } as typeof v1.declaration;
+    await place(B, v1);
+    const older = await boardPage(records);
+    if (older.status !== "ok") throw new Error(older.why);
+    expect(older.board.lanes.map((lane) => [lane.id, lane.measures])).toEqual([
+      ["co", []],
+      ["core", [{ id: "src", value: 100, unit: "lines" }]],
+    ]);
+  });
+
   it("draws the heading, the tiles and the observations from the record", async () => {
     await mkdir(records);
     await place(A, record());

@@ -25,7 +25,9 @@ export type BoardMethodChange = { section: string; before: number | null; after:
  * either, nor the declaration, which the digest also covers) but
  * `measured_with`, the methods (compared on their own), `effort.daily`, whose
  * rows only grow, and `components.kind_changed`, already a change since the
- * previous record. Values are equal when their JSON is, keys sorted. A list whose entries name
+ * previous record. Values are equal when their JSON is, keys sorted, except
+ * that a measure's lane held as one id, as a record of version 1 or 2 holds
+ * it, is the list of that one a record of version 3 holds. A list whose entries name
  * themselves is compared entry by entry (`repos` by path, open tracks by id,
  * `not_found` by where), the unacknowledged and gone components as sets, the
  * paths of a `file_paths` measure as a set when both records hold a list (a
@@ -74,6 +76,14 @@ function shownKey(shown: string, key: string): string {
 
 type Leaf = { value: unknown; section: string };
 
+// A measure as a record of version 3 holds it: a record of version 1 or 2
+// holds its lane as one id, which is the same lane as a list of that one.
+function withLaneList(entry: unknown): unknown {
+  return isRecord(entry) && typeof entry.lane === "string"
+    ? { ...entry, lane: [entry.lane] }
+    : entry;
+}
+
 // The measures whose value is a list in both measurements, by id: their
 // paths are compared as a set. When one of them is not a list (not measured,
 // or no such measure), the value is compared whole.
@@ -97,7 +107,12 @@ function leaves(measurement: unknown, sets: ReadonlySet<string>): Map<string, Le
     if (SKIPPED.has(rule)) return;
     if (rule === "measures" && isRecord(value)) {
       for (const [id, entry] of Object.entries(value)) {
-        walk(entry, sets.has(id) ? "measures[set]" : "measures[]", shownKey(shown, id), section);
+        walk(
+          withLaneList(entry),
+          sets.has(id) ? "measures[set]" : "measures[]",
+          shownKey(shown, id),
+          section,
+        );
       }
       return;
     }

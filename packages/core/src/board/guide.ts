@@ -192,6 +192,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- An empty file means it did not run, not that it passed: check that measure.json reads as JSON.",
     '- Never read a null as 0. Write "not confirmed" for it and do not judge by it.',
     "- What moved is the point: the top of measure.txt (`Since the previous record <ULID>:`) and `diff` in the JSON. A value marked `method_changed` may have moved because basou measures it another way now.",
+    "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured.",
     "- A `file_paths` measure's value is the list of paths it found. `Measures:` in measure.txt gives it as a count: read the paths in the JSON. `diff` lists each path that came in (`added`) or went out (`removed`) when both records hold a list, and the list whole when only one does.",
     "- `repos[].behind_main` counts the commits on origin's default branch (the branch of origin that origin/HEAD names, or origin/main when origin/HEAD names none) as of the last fetch; measure does not fetch.",
     "",
@@ -792,7 +793,7 @@ function undeclared(
   );
   block(`${go} && ${BOARD_INIT_SAVE}; echo "exit=$?"`);
   line(
-    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only what was reached, each with a `ref` saying where it can be checked; a board moved from another keeps its milestones there. Measures, ratios and components may stay empty at first. A measure with `lane:` is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
+    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only what was reached, each with a `ref` saying where it can be checked; a board moved from another keeps its milestones there. Measures, ratios and components may stay empty at first. A measure with `lane:` (a lane id, or a list of them) is drawn in each of those lanes' sections of the board page; one without is kept only in the records and their differences (and in a ratio or a total that uses it).",
     "4. Check it until it reads (every problem with it is listed at once):",
   );
   block(`${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`);

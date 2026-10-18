@@ -214,6 +214,32 @@ describe("diffMeasurements", () => {
   });
 });
 
+describe("diffMeasurements: a measure's lanes", () => {
+  const withLane = (lane?: unknown) =>
+    measurement({
+      measures: { md: { value: 2, unit: "files", ...(lane === undefined ? {} : { lane }) } },
+    });
+
+  it("reads one lane id, as a record of version 1 or 2 holds it, as a list of that one", () => {
+    expect(diffMeasurements(withLane("core"), withLane(["core"]), "01M4")).toEqual({
+      against: "01M4",
+      values: [],
+      methods: [],
+      added: [],
+      removed: [],
+    });
+    expect(diffMeasurements(withLane("core"), withLane(["core", "docs"]), "01M4").values).toEqual([
+      { at: "measures.md.lane", before: ["core"], after: ["core", "docs"] },
+    ]);
+    expect(diffMeasurements(withLane(), withLane(["core"]), "01M4").added).toEqual([
+      { at: "measures.md.lane", value: ["core"] },
+    ]);
+    expect(diffMeasurements(withLane("core"), withLane(), "01M4").removed).toEqual([
+      { at: "measures.md.lane", value: ["core"] },
+    ]);
+  });
+});
+
 describe("diffMeasurements: what the digest leaves out", () => {
   it("does not compare the axis's not_found entries, nor the order an object's keys were written in", () => {
     const before = measurement({

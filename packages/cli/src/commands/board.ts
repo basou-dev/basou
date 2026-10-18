@@ -1273,7 +1273,7 @@ function printMeasurementText(m: BoardMeasurement, hasRecords: boolean): void {
     for (const [id, measure] of measures) {
       const unit = measure.value === null ? "" : ` ${displayPath(measure.unit)}`;
       const listed = Array.isArray(measure.value) ? " (paths in --json)" : "";
-      const lane = measure.lane === undefined ? "" : `  [${measure.lane}]`;
+      const lane = measure.lane === undefined ? "" : `  [${measure.lane.join(", ")}]`;
       lines.push(`  ${id.padEnd(width)}  ${shownValue(measure.value)}${unit}${listed}${lane}`);
     }
   }

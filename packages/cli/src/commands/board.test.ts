@@ -298,7 +298,39 @@ describe("basou board measure", () => {
     expect(JSON.parse(out.join("\n")).measures.paths).toEqual({
       value: ["NOTES.md", "README.md"],
       unit: "files",
-      lane: "core",
+      lane: ["core"],
+    });
+  });
+
+  it("prints a total, each lane of a measure, and an id with '.', and says what a total lacks", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const board = JSON.parse(
+      boardYaml([
+        { ...MD, id: "docs.md", lane: ["site", "core"] },
+        { id: "left", kind: "total", plus: [1], minus: ["docs.md"], unit: "files", lane: "core" },
+        { id: "gone", kind: "line_count", repo: ".", include: ["GONE.md"], unit: "lines" },
+        { id: "short", kind: "total", plus: ["gone"], unit: "lines" },
+      ]),
+    );
+    board.board_version = 3;
+    board.lanes = [
+      { id: "core", name: "Core" },
+      { id: "site", name: "Site" },
+    ];
+    await placeBoard(repo, JSON.stringify(board));
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("\n  docs.md  2 files  [site, core]\n");
+    expect(text).toContain("\n  left     -1 files  [core]\n");
+    expect(text).toContain("\n  short    not measured\n");
+    expect(text).toContain("\n  measures.short: 'gone' is not measured\n");
+    out.length = 0;
+    await runBoardMeasure({ json: true }, ctx(repo));
+    expect(JSON.parse(out.join("\n")).measures["docs.md"]).toEqual({
+      value: 2,
+      unit: "files",
+      lane: ["site", "core"],
     });
   });
 
