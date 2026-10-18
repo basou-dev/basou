@@ -2248,3 +2248,105 @@ describe("parseBoardDeclaration: what version 3 reads, in a board of version 1 o
     }
   });
 });
+
+describe("parseBoardDeclaration: board_version 3, a component's marker", () => {
+  const withComponents = (components: Record<string, unknown>, version = 3) => ({
+    ...board(),
+    board_version: version,
+    components,
+  });
+  const markerOf = (marker: unknown) =>
+    parse(withComponents({ "basou/tools": { lane: "-", note: "scripts", marker } }));
+
+  it("reads a marker of a directory inside a repo, and none where none is written", () => {
+    const result = parse(
+      withComponents({
+        "basou/content": { lane: ["saddle"], note: "data", marker: "**" },
+        "basou/tools": { lane: "-", note: "scripts", marker: "*.py" },
+        "basou/packages/sdk": { lane: ["saddle"] },
+        // A key whose repo the manifest does not declare is not refused.
+        "elsewhere/x": { lane: ["saddle"], marker: "." },
+      }),
+    );
+    if (!result.ok) throw new Error(result.errors.join("\n"));
+    const { components } = result.declaration;
+    expect(components["basou/content"]?.marker).toBe("**");
+    expect(components["basou/tools"]?.marker).toBe("*.py");
+    expect(components["elsewhere/x"]?.marker).toBe(".");
+    expect(Object.hasOwn(components["basou/packages/sdk"] as object, "marker")).toBe(false);
+  });
+
+  it("refuses a marker that would leave the component's directory, as an include is refused", () => {
+    const relative = "must be relative to the component's directory";
+    for (const [marker, message] of [
+      ["", "must be a non-empty path"],
+      ["/x", relative],
+      ["\\\\server\\share", relative],
+      ["C:/x", `${relative} (a leading 'x:' reads as a Windows drive)`],
+      ["x:y.md", `${relative} (a leading 'x:' reads as a Windows drive)`],
+      ["../x", "must not contain a '..' segment"],
+      ["a/../../x", "must not contain a '..' segment"],
+      ["a\\..\\x", "must not contain a '..' segment"],
+      ["..", "must not contain a '..' segment"],
+      [":(top)*.md", "must not start with ':' (pathspec magic)"],
+      ["a\u0007b", "must not contain control characters"],
+      ["a\u0085b", "must not contain control characters"],
+    ] as const) {
+      expect(errorsOf(markerOf(marker)), marker).toEqual([
+        `components["basou/tools"].marker: ${message}`,
+      ]);
+    }
+    expect(errorsOf(markerOf(1))).toEqual([
+      'components["basou/tools"].marker: Invalid input: expected string, received number',
+    ]);
+    // As in an include: '..' inside a name, and '.' as a directory.
+    for (const marker of ["a..b/*.md", "./*.md", "."]) {
+      expect(markerOf(marker).ok, marker).toBe(true);
+    }
+  });
+
+  it("refuses a marker on a key that is a repo itself", () => {
+    const itself =
+      "only a directory inside a repo takes a marker, keyed '<repo>/<path in it>'; this key is a repo itself";
+    expect(
+      errorsOf(
+        parse(
+          withComponents({
+            basou: { lane: ["saddle"], marker: "**" },
+            "basou/": { lane: ["saddle"], marker: "**" },
+            "basou/x": { lane: ["saddle"], marker: "**" },
+            other: { lane: ["saddle"] },
+          }),
+        ),
+      ),
+    ).toEqual([`components.basou.marker: ${itself}`, `components["basou/"].marker: ${itself}`]);
+    // Said even when the marker is itself refused.
+    expect(
+      errorsOf(parse(withComponents({ basou: { lane: ["saddle"], marker: "../x" } }))),
+    ).toEqual([
+      "components.basou.marker: must not contain a '..' segment",
+      `components.basou.marker: ${itself}`,
+    ]);
+  });
+
+  it("says that version 3 reads a marker, in a board of version 1 or 2, and holds it against the key", () => {
+    for (const version of [1, 2]) {
+      const doc = version === 1 ? board() : boardV2();
+      doc.components = {
+        "basou/tools": { lane: "-", note: "scripts", marker: "*.py" },
+        basou: { lane: "-", note: "the root", marker: "**" },
+        "basou/packages/sdk": { lane: ["saddle"] },
+      };
+      const told = (where: string) =>
+        `${where}: 'marker' is read from board_version 3 on; this file is board_version ${version}`;
+      expect(errorsOf(parse(doc))).toEqual([
+        told('components["basou/tools"]'),
+        told("components.basou"),
+        "components.basou.marker: only a directory inside a repo takes a marker, keyed '<repo>/<path in it>'; this key is a repo itself",
+      ]);
+      // A key no version reads is still unknown.
+      doc.components = { "basou/tools": { lane: "-", note: "scripts", markers: "*.py" } };
+      expect(errorsOf(parse(doc))).toEqual([`components["basou/tools"]: unknown key 'markers'`]);
+    }
+  });
+});

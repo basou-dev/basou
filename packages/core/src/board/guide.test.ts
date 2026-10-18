@@ -332,6 +332,16 @@ describe("boardGuide: a board declared", () => {
     );
   });
 
+  it("says a gone directory no built-in marker finds may take a marker, and not only to silence (a)", () => {
+    const guide = boardGuide(guideInput());
+    expect(guide).toContain(
+      "If it is still there and no built-in marker finds it (a directory of content or of scripts), give it a `marker` (board_version 3 on): a glob from its directory, written as an `include` is, of the files that mark it (`**` for any file under it, `*.py` for a Python file right in it). It is then found, with the kind `marker`, while such a file is there; a repo itself takes none.",
+    );
+    expect(guide).toContain(
+      "- Change the axis silently, or register a component, or give one a marker, only to silence (a).",
+    );
+  });
+
   it("leaves the model to be named, in the commands and the template, so neither runs as printed", () => {
     const guide = boardGuide(guideInput());
     const blocks = blocksIn(guide).join("\n");
@@ -637,6 +647,12 @@ describe("boardGuide: no board declared", () => {
     expect(guide).toContain("Run `basou board guide` again");
     expect(guide).not.toContain("## Steps");
     expect(guide).not.toContain("```json");
+  });
+
+  it("says a directory no built-in marker finds is registered with a marker of its own", () => {
+    expect(boardGuide(guideInput({ board: { status: "undeclared" } }))).toContain(
+      "A directory no built-in marker finds (content, scripts) is registered with a `marker` of its own: a glob, from it, of the files that mark it.",
+    );
   });
 });
 

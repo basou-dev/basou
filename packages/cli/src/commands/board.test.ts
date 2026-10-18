@@ -837,6 +837,30 @@ describe("basou board measure", () => {
     );
   });
 
+  it("prints a component its own marker found with the kind marker", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await mkdir(join(repo, "content"));
+    await writeFile(join(repo, "content", "a.md"), "\n");
+    const name = basename(repo);
+    const declared = JSON.parse(boardYaml([])) as Record<string, unknown>;
+    await placeBoard(
+      repo,
+      JSON.stringify({
+        ...declared,
+        board_version: 3,
+        components: {
+          [`${name}/content`]: { lane: ["core"], marker: "*.md" },
+          [`${name}/tools`]: { lane: ["core"], marker: "*.py" },
+        },
+      }),
+    );
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      `\nComponents:\n  1 found, 0 unacknowledged, 1 gone\n    ${name}/content  marker\n    ${name}/tools  (gone)\n`,
+    );
+  });
+
   it("lists the components by code point, whatever order JSON gives their keys", async () => {
     const repo = await workspace([
       { path: ".", visibility: "private" },
