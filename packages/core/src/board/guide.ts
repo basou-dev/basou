@@ -74,14 +74,28 @@ export function shellWord(text: string): string {
   return `'${text.replaceAll("'", `'\\''`)}'`;
 }
 
-// JSON with what a terminal would act on escaped as well: JSON.stringify
-// leaves the C1 controls, the line and paragraph separators and the
-// bidirectional controls as they are.
+// What a terminal would act on, or hides: the C1 controls, the Arabic letter
+// mark, the zero-width and direction marks, the line and paragraph
+// separators, the bidirectional controls, the word joiner and the invisible
+// operators, and the byte order mark.
+const HIDDEN = /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g;
+
+const escapeHidden = (c: string) => `\\u${(c.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`;
+
+// JSON with what a terminal would act on, or hides, escaped as well:
+// JSON.stringify leaves those as they are.
 function jsonText(value: unknown, indent?: number): string {
-  return JSON.stringify(value, null, indent).replace(
-    /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g,
-    (c) => `\\u${(c.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`,
-  );
+  return JSON.stringify(value, null, indent).replace(HIDDEN, escapeHidden);
+}
+
+// A surrogate not in a pair, which JSON.stringify writes as an escape.
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+// A text as the guide shows it: as displayPath shows it, with what jsonText
+// escapes escaped too (a surrogate not in a pair among it), so that the
+// prose, a source and the template show a value alike.
+function shown(text: string): string {
+  return displayPath(text).replace(HIDDEN, escapeHidden).replace(LONE_SURROGATE, escapeHidden);
 }
 
 const LANGUAGE_NAMES = { en: "English (en)", ja: "Japanese (ja)" } as const;
@@ -119,9 +133,9 @@ export function boardGuide(input: BoardGuideInput): string {
   const lastId = previous.last.status === "found" ? previous.last.id : null;
 
   line("## This board", "");
-  line(`- Workspace (its own repo): ${displayPath(input.anchor)}`);
+  line(`- Workspace (its own repo): ${shown(input.anchor)}`);
   line(
-    `- Declaration: board/board.yaml, "${displayPath(d.title)}", board_version ${d.board_version}, ${count(d.lanes.length, "lane")}, ${count(d.observe.length, "observation")} outside basou`,
+    `- Declaration: board/board.yaml, "${shown(d.title)}", board_version ${d.board_version}, ${count(d.lanes.length, "lane")}, ${count(d.observe.length, "observation")} outside basou`,
   );
   line(`- Records: board/records/, ${recordsLine(input, recordCount)}`);
   line(`- Axis: ${axisLine(input)}`);
@@ -192,7 +206,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- An empty file means it did not run, not that it passed: check that measure.json reads as JSON.",
     '- Never read a null as 0. Write "not confirmed" for it and do not judge by it.',
     "- What moved is the point: the top of measure.txt (`Since the previous record <ULID>:`) and `diff` in the JSON. A value marked `method_changed` may have moved because basou measures it another way now.",
-    "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured.",
+    "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured, and when it is out of the range a number holds exactly (-9007199254740991 to 9007199254740991).",
     "- A `file_paths` measure's value is the list of paths it found. `Measures:` in measure.txt gives it as a count: read the paths in the JSON. `diff` lists each path that came in (`added`) or went out (`removed`) when both records hold a list, and the list whole when only one does.",
     "- `repos[].base` is the branch of origin a repo is compared with (`origin/<branch>`: the one origin/HEAD names, or origin/main when origin/HEAD names none), `behind` counts the commits on it HEAD does not have, and `ahead` those HEAD has that it does not, as of the last fetch; measure does not fetch. `fetched_at` is when FETCH_HEAD was last written, given that it holds that branch fetched from origin at the commit it is at now (a later `git fetch --append` moves it too), and null when it does not (no fetch since the clone, a failed fetch, a fetch of something else since, or a push since). When it is null or old, `behind` and `ahead` may be old too.",
     "",
@@ -231,7 +245,7 @@ export function boardGuide(input: BoardGuideInput): string {
   if (lastId === null) {
     line(
       previous.last.status === "unreadable"
-        ? `The previous record cannot be read (${displayPath(previous.last.reason)}). Judge with no record to compare with, and say so in a footnote.`
+        ? `The previous record cannot be read (${shown(previous.last.reason)}). Judge with no record to compare with, and say so in a footnote.`
         : "There is no record yet: this is the first. Nothing is compared, and an observation not made is drawn as not confirmed, with no previous value.",
       "",
     );
@@ -363,7 +377,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- Approving a milestone before it is added to board.yaml.",
   );
   for (const o of d.observe) {
-    if (o.kind === "manual") line(`- Observing \`${o.key}\`: ${displayPath(o.how)}`);
+    if (o.kind === "manual") line(`- Observing \`${o.key}\`: ${shown(o.how)}`);
   }
   line("- A gate of step 9 that does not pass.", "");
   return `${out.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
@@ -374,7 +388,7 @@ function basouLine(input: BoardGuideInput): string {
     input.basouBuild === null
       ? `version ${input.basouVersion} (source)`
       : `version ${input.basouVersion}, build ${input.basouBuild}`;
-  return `basou: \`${displayPath(input.basouCommand)}\` printed this. Where \`basou --version\` prints ${self}, as this one is, call \`basou\` as the commands below do (an alias of your shell is as good). Otherwise (another version or build, or no \`basou\`), write that command in place of \`basou\` in every block. Use the same one at every step: a measurement records which basou measured it.`;
+  return `basou: \`${shown(input.basouCommand)}\` printed this. Where \`basou --version\` prints ${self}, as this one is, call \`basou\` as the commands below do (an alias of your shell is as good). Otherwise (another version or build, or no \`basou\`), write that command in place of \`basou\` in every block. Use the same one at every step: a measurement records which basou measured it.`;
 }
 
 function count(n: number, noun: string): string {
@@ -408,7 +422,7 @@ function recordsLine(input: BoardGuideInput, recordCount: number): string {
     return `${count(recordCount, "record")}; the last is ${last.id}, recorded ${at.toISOString()}${when}`;
   }
   if (last.status === "unreadable") {
-    return `${count(recordCount, "record")}; the last cannot be read (${displayPath(last.reason)})`;
+    return `${count(recordCount, "record")}; the last cannot be read (${shown(last.reason)})`;
   }
   return count(recordCount, "record");
 }
@@ -427,14 +441,14 @@ function axisLine(input: BoardGuideInput): string {
     const day =
       todayIn(d.effort.time_zone, new Date(lastReview.record.recorded_at)) ??
       new Date(lastReview.record.recorded_at).toISOString().slice(0, 10);
-    return `${head}; last reviewed ${day} by ${displayPath(lastReview.record.judged_by.model)} (record ${lastReview.id})`;
+    return `${head}; last reviewed ${day} by ${shown(lastReview.record.judged_by.model)} (record ${lastReview.id})`;
   }
   if (lastReview.status === "unreadable") {
     return `${head}; the last review is not known (a record cannot be read)`;
   }
   const seed = d.axis.seed_review;
   if (seed !== undefined && isCalendarDate(seed.date)) {
-    return `${head}; last reviewed ${seed.date} by ${displayPath(seed.model)} (seed_review in board.yaml)`;
+    return `${head}; last reviewed ${seed.date} by ${shown(seed.model)} (seed_review in board.yaml)`;
   }
   return input.board.recordCount === 0 && previous.last.status === "none"
     ? `${head}; no review on record (the first record is the first review: give it an axis_review, step 2b)`
@@ -450,7 +464,7 @@ function observeSteps(
 ): void {
   if (observe.length === 0) {
     line(
-      "This board declares nothing to observe outside basou. If a lane reaches its users through something outside the repos (a package registry, a release, a site, a production database), declare it under `observe` (board_version 2 on, and 3 for `http`, `github_check` and an observation's `notes`) through an axis review (step 2b).",
+      "This board declares nothing to observe outside basou. If a lane reaches its users through something outside the repos (a package registry, a release, a site, a production database), declare it under `observe` (board_version 2 on, and 3 for `http`, `github_check`, an observation's `notes` and a key with `.`) through an axis review (step 2b).",
       "",
     );
     return;
@@ -463,43 +477,47 @@ function observeSteps(
     line(`#### \`${o.key}\` (${o.kind})`, "");
     switch (o.kind) {
       case "npm_version":
-        line(`The version of ${o.package} published on npm (its \`latest\` tag):`);
+        line(`The version of ${codeSpan(o.package)} published on npm (its \`latest\` tag):`);
         block(`npm view ${shellWord(o.package)} version; echo "exit=$?"`);
         line(
-          `Value: the last line of the output, as a string (such as "1.2.3"). Source: \`${sourceOf(o)}\`.`,
+          `Value: the last line of the output, as a string (such as "1.2.3"). Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
       case "github_release":
-        line(`The latest release of ${o.repo} on GitHub:`);
+        line(`The latest release of ${codeSpan(o.repo)} on GitHub:`);
         block(
           `gh release view --repo ${shellWord(o.repo)} --json tagName -q .tagName; echo "exit=$?"`,
         );
         line(
-          `Value: the tag, as a string. No release yet is a null with that as the error. Source: \`${sourceOf(o)}\`.`,
+          `Value: the tag, as a string. No release yet is a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
       case "github_open_issues":
       case "github_open_prs": {
         const what = o.kind === "github_open_issues" ? "issue" : "pr";
-        line(`How many ${what === "issue" ? "issues" : "pull requests"} of ${o.repo} are open:`);
+        line(
+          `How many ${what === "issue" ? "issues" : "pull requests"} of ${codeSpan(o.repo)} are open:`,
+        );
         block(
           `gh ${what} list --repo ${shellWord(o.repo)} --state open --limit 1000 --json number -q length; echo "exit=$?"`,
         );
         line(
-          `Value: the number, as a number. At 1000 there may be more: say so in a footnote. Source: \`${sourceOf(o)}\`.`,
+          `Value: the number, as a number. At 1000 there may be more: say so in a footnote. Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
       }
       case "github_ci":
-        line(`How the latest run of the workflow ${o.workflow} on ${o.branch} of ${o.repo} ended:`);
+        line(
+          `How the latest run of the workflow ${codeSpan(o.workflow)} on ${codeSpan(o.branch)} of ${codeSpan(o.repo)} ended:`,
+        );
         block(
           `gh run list --repo ${shellWord(o.repo)} --workflow ${shellWord(o.workflow)} --branch ${shellWord(o.branch)} --limit 1 --json status,conclusion -q '.[0] | if .status == "completed" then .conclusion else .status end'; echo "exit=$?"`,
         );
         line(
-          `Value: what it prints, as a string (\`success\`, \`failure\`, or the status of a run not finished, such as \`in_progress\`). Nothing printed (no run) is a null with that as the error. Source: \`${sourceOf(o)}\`.`,
+          `Value: what it prints, as a string (\`success\`, \`failure\`, or the status of a run not finished, such as \`in_progress\`). Nothing printed (no run) is a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
@@ -508,14 +526,14 @@ function observeSteps(
         break;
       case "page_version":
         line(
-          `The version ${o.url} shows: the first \`v<major>.<minor>.<patch>\` (with what follows a \`-\`) not right after a letter, digit, underscore or dot, once the page's generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's).`,
+          `The version ${codeSpan(o.url)} shows: the first \`v<major>.<minor>.<patch>\` (with what follows a \`-\`) not right after a letter, digit, underscore or dot, once the page's generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's).`,
         );
         block(
           `${go} && curl -fsS --max-time 20 ${shellWord(o.url)} > "$W/page-${o.key}.html"; echo "curl exit=$?"`,
           `${go} && node -e 'let t="";process.stdin.on("data",(d)=>{t+=d}).on("end",()=>{const m=t.replace(/<meta\\b[^>]*\\bname\\s*=\\s*["\\x27]?generator\\b[^>]*>/gi,"").match(/(?<![\\w.])v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?/);if(m===null){process.exitCode=1}else{console.log(m[0])}})' < "$W/page-${o.key}.html"; echo "exit=$?"`,
         );
         line(
-          `Value: the version it prints, as a string (such as "v1.2.3"). A failed fetch, or no version on the page (exit 1), is a null with that as the error. Source: \`${sourceOf(o)}\`.`,
+          `Value: the version it prints, as a string (such as "v1.2.3"). A failed fetch, or no version on the page (exit 1), is a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
@@ -524,14 +542,14 @@ function observeSteps(
         break;
       case "manual":
         line(
-          `Only the operator can make this one: ${displayPath(o.how)}`,
+          `Only the operator can make this one: ${shown(o.how)}`,
           "",
           "Ask the operator, and do not make it yourself. Ask for one thing they can do as it is written: the line to run and where to run it, or the page to open, and what to send back. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`. When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.",
           "",
         );
         break;
     }
-    for (const note of o.notes ?? []) line(`- mind: ${displayPath(note)}`);
+    for (const note of o.notes ?? []) line(`- mind: ${shown(note)}`);
     line("");
   }
 }
@@ -544,9 +562,9 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
   );
   for (const id of BOARD_STAGE_IDS) {
     const stage = d.stages[id];
-    line(`- ${id}: ${displayPath(stage.meaning)}`);
-    for (const look of stage.look ?? []) line(`  - look at: ${displayPath(look)}`);
-    for (const note of stage.notes ?? []) line(`  - mind: ${displayPath(note)}`);
+    line(`- ${id}: ${shown(stage.meaning)}`);
+    for (const look of stage.look ?? []) line(`  - look at: ${shown(look)}`);
+    for (const note of stage.notes ?? []) line(`  - mind: ${shown(note)}`);
   }
   line(
     "",
@@ -577,9 +595,9 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
     "",
   );
   for (const lane of d.lanes) {
-    const about = lane.about === undefined ? "" : `: ${displayPath(lane.about)}`;
-    line(`- \`${lane.id}\` ${displayPath(lane.name)}${about}`);
-    for (const note of lane.notes ?? []) line(`  - mind: ${displayPath(note)}`);
+    const about = lane.about === undefined ? "" : `: ${shown(lane.about)}`;
+    line(`- \`${lane.id}\` ${shown(lane.name)}${about}`);
+    for (const note of lane.notes ?? []) line(`  - mind: ${shown(note)}`);
   }
   line("");
 }
@@ -629,11 +647,11 @@ const HTTP_BODY_SCRIPT = [
 // holds in a row, and padded with a space when it starts or ends with a
 // backquote or a space, which the fence would otherwise eat.
 function codeSpan(text: string): string {
-  const shown = displayPath(text);
-  const longest = Math.max(0, ...(shown.match(/`+/g) ?? []).map((run) => run.length));
+  const visible = shown(text);
+  const longest = Math.max(0, ...(visible.match(/`+/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(longest + 1);
-  const pad = /^[` ]|[` ]$/.test(shown) ? " " : "";
-  return `${fence}${pad}${shown}${pad}${fence}`;
+  const pad = /^[` ]|[` ]$/.test(visible) ? " " : "";
+  return `${fence}${pad}${visible}${pad}${fence}`;
 }
 
 // The API path of the check runs on the head commit of a github_check
@@ -698,7 +716,7 @@ function httpSteps(
         ]),
   ];
   line(
-    `A GET of ${o.url}, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects. It prints the status of the last response, how many redirects led to it and the URL it ended at (no \`-f\`: a 4xx or 5xx is printed and exits 0):`,
+    `A GET of ${codeSpan(o.url)}, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects. It prints the status of the last response, how many redirects led to it and the URL it ended at (no \`-f\`: a 4xx or 5xx is printed and exits 0):`,
   );
   block(
     `${go} && curl -sS -L --max-redirs ${BOARD_HTTP_MAX_REDIRECTS} --max-time 20 -o ${body} -w '%{http_code} %{num_redirects} %{url_effective}\\n' ${shellWord(o.url)}; echo "curl exit=$?"`,
@@ -723,7 +741,7 @@ function httpSteps(
       ? ""
       : ` When the status is not 2xx, do not read the body: give \`${nulls}\`, each a null and not a list of nulls (an error page's text is not the page's).`;
   line(
-    `Value: \`{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string>${reads.length > 0 ? ", <what the body gave>" : ""} }\`, the numbers as numbers. A 4xx or 5xx is a value, not an observation not made: the status is what was observed.${notRead} When curl exits other than 0 (the name does not resolve, TLS fails, the time runs out, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47)${reads.length > 0 ? ", or reading the body exits 1," : ""} the observation is not made: a null with that as the error. Source: \`${sourceOf(o)}\`.`,
+    `Value: \`{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string>${reads.length > 0 ? ", <what the body gave>" : ""} }\`, the numbers as numbers. A 4xx or 5xx is a value, not an observation not made: the status is what was observed.${notRead} When curl exits other than 0 (the name does not resolve, TLS fails, the time runs out, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47)${reads.length > 0 ? ", or reading the body exits 1," : ""} the observation is not made: a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
     "",
   );
 }
@@ -786,7 +804,7 @@ function undeclared(
   line(
     "## No board is declared yet",
     "",
-    `This workspace (${displayPath(input.anchor)}) declares no board at board/board.yaml. \`basou view\`'s /board page already draws what can be measured without one (the period and effort, the repos, the trail, the components). A judged board (the reach matrix, the lanes, the operator's turns) needs a declaration first.`,
+    `This workspace (${shown(input.anchor)}) declares no board at board/board.yaml. \`basou view\`'s /board page already draws what can be measured without one (the period and effort, the repos, the trail, the components). A judged board (the reach matrix, the lanes, the operator's turns) needs a declaration first.`,
     "",
     "1. Check that no one outside can read this repo: records hold what the trail holds (open tracks, time worked, model names). Step 9 (f) of this guide, once a board is declared, says how; on GitHub it is visibility PRIVATE, no collaborator but the owner and you (the account gh is signed in as), and no invitation. Never keep a board in a repo shared with a client.",
     "2. Print a board to start from, and save it only where no board is. Never print it straight into board/board.yaml: the shell empties that file before init runs.",

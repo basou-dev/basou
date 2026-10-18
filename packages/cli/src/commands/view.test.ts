@@ -1365,6 +1365,7 @@ describe("basou view: the board page", () => {
       "hm",
       "when",
       "shown",
+      "withWords",
       "stateName",
       "section",
       "svg",
@@ -1506,6 +1507,62 @@ describe("basou view: the board page", () => {
     });
     const none = nav.find((n) => n.tag === "option" && n.selected);
     expect(none.map((o) => [o.attrs.value, o.disabled])).toEqual([["", true]]);
+  });
+
+  it("draws an http observation's words beside what it found of each, in the order declared", () => {
+    const { call } = drawing(["summary"]);
+    const made = { observed_at: "2026-10-07T00:00:00Z", source: "s" };
+    const drawn = call("summary", {
+      summary: {
+        text: "",
+        tiles: [],
+        observed: [
+          {
+            name: "shop",
+            value: {
+              status: 200,
+              redirects: 1,
+              final_url: "https://example.com/x/",
+              words: [true, false],
+              count: 2,
+            },
+            words: [
+              { word: "in stock", found: true },
+              { word: "42", found: false },
+            ],
+            ...made,
+          },
+          { name: "page", value: { status: 200, words: [true] }, ...made },
+          {
+            name: "odd",
+            value: { words: [true] },
+            words: [{ word: 'a"b\\c', found: true }],
+            ...made,
+          },
+          {
+            name: "one",
+            value: { words: [false] },
+            words: [{ word: "solo", found: false }],
+            ...made,
+          },
+          {
+            name: "gone",
+            value: null,
+            previous: { status: "value", value: { words: [true] } },
+            ...made,
+          },
+        ],
+      },
+    });
+    const values = drawn.find((n) => n.tag === "td").map((n) => n.text());
+    expect(values).toContain(
+      '{"status":200,"redirects":1,"final_url":"https://example.com/x/","words":{"in stock":true,"42":false},"count":2}',
+    );
+    expect(values).toContain('{"status":200,"words":[true]}');
+    expect(values).toContain('{"words":{"a\\"b\\\\c":true}}');
+    expect(values).toContain('{"words":{"solo":false}}');
+    // The previous value, under another declaration, is drawn as it was.
+    expect(values).toContain('not observed (previous: {"words":[true]})');
   });
 
   it("draws the paths of a file_paths measure as a count, with the paths folded under it", () => {

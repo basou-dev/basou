@@ -1400,22 +1400,21 @@ describe("parseBoardDeclaration: board_version 2", () => {
       { key: "o", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch: "a.b/c.d" },
     ];
     const workflow = "must be the file name of a workflow, such as quality.yml";
-    const branch =
-      "must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'";
+    // Each says what is wrong with it.
     expect(errorsOf(parse(doc))).toEqual([
       `observe[0].workflow: ${workflow}`,
       `observe[1].workflow: ${workflow}`,
       `observe[2].workflow: ${workflow}`,
-      `observe[3].branch: ${branch}`,
-      `observe[4].branch: ${branch}`,
-      `observe[5].branch: ${branch}`,
-      `observe[6].branch: ${branch}`,
-      `observe[8].branch: ${branch}`,
-      `observe[9].branch: ${branch}`,
+      "observe[3].branch: must not start with '-', '.' or '/'",
+      "observe[4].branch: must not hold '..'",
+      "observe[5].branch: must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",
+      "observe[6].branch: must not end with '.' or '/'",
+      "observe[8].branch: must not hold '//'",
+      "observe[9].branch: must not end with '.' or '/'",
       `observe[10].workflow: ${workflow}`,
       `observe[11].workflow: ${workflow}`,
-      `observe[12].branch: ${branch}`,
-      `observe[13].branch: ${branch}`,
+      "observe[12].branch: must not have a part that starts with '.' (after a '/')",
+      "observe[13].branch: must not have a part that starts with '.' (after a '/')",
     ]);
   });
 
@@ -1723,9 +1722,17 @@ describe("parseBoardDeclaration: board_version 3, github_check and an observatio
     expect(errorsOf(parse(withCheck({ check: "x", repo: "name" })))).toEqual([
       "observe[0].repo: must be a GitHub repository written as owner/name",
     ]);
-    for (const branch of ["-x", "a/./b", "release/.x"]) {
-      expect(errorsOf(parse(withCheck({ check: "x", branch })))).toEqual([
-        "observe[0].branch: must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",
+    for (const [branch, problem] of [
+      ["-x", "must not start with '-', '.' or '/'"],
+      ["a/./b", "must not have a part that starts with '.' (after a '/')"],
+      ["release/.x", "must not have a part that starts with '.' (after a '/')"],
+      [
+        "a b",
+        "must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",
+      ],
+    ]) {
+      expect(errorsOf(parse(withCheck({ check: "x", branch }))), branch).toEqual([
+        `observe[0].branch: ${problem}`,
       ]);
     }
     expect(parse(withCheck({ check: "x", branch: "a.b/c.d" })).ok).toBe(true);
@@ -2397,5 +2404,43 @@ describe("parseBoardDeclaration: board_version 3, a component's marker", () => {
       `components["basou/"].lane[0]: no lane has the id 'nope'`,
       `components["basou/"].lane[2]: 'saddle' is listed twice`,
     ]);
+  });
+});
+
+describe("parseBoardDeclaration: what is wrong with a branch", () => {
+  const branchOf = (branch: string) =>
+    parse(withObserve({ key: "ci", kind: "github_ci", repo: "o/n", workflow: "q.yml", branch }));
+  const chars =
+    "must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'";
+
+  it("takes a name of those characters that starts with a letter, a digit or '_'", () => {
+    for (const branch of ["main", "_x", "a.b/c.d", "release/1.x", "a-b_c", "a/b/c"]) {
+      expect(branchOf(branch).ok, branch).toBe(true);
+    }
+  });
+
+  it("says the first thing wrong with a branch", () => {
+    for (const [branch, problem] of [
+      ["", chars],
+      ["a b", chars],
+      ["a~b", chars],
+      ["a@{1}", chars],
+      [`a${String.fromCharCode(0xe9)}`, chars],
+      ["-x", "must not start with '-', '.' or '/'"],
+      [".x", "must not start with '-', '.' or '/'"],
+      ["/x", "must not start with '-', '.' or '/'"],
+      ["..", "must not start with '-', '.' or '/'"],
+      ["a..b", "must not hold '..'"],
+      ["a/..", "must not hold '..'"],
+      ["a//b", "must not hold '//'"],
+      ["a//", "must not hold '//'"],
+      ["a//.b", "must not hold '//'"],
+      ["a/.b", "must not have a part that starts with '.' (after a '/')"],
+      ["a/.", "must not have a part that starts with '.' (after a '/')"],
+      ["x.", "must not end with '.' or '/'"],
+      ["x/", "must not end with '.' or '/'"],
+    ] as const) {
+      expect(errorsOf(branchOf(branch)), branch).toEqual([`observe[0].branch: ${problem}`]);
+    }
   });
 });

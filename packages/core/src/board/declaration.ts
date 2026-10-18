@@ -436,22 +436,26 @@ const workflowFile = z
     error: "must be the file name of a workflow, such as quality.yml",
   });
 
-// A branch name without what a shell or git would read as something else. No
-// part of it starts with '.': git takes no such branch, and GitHub reads
-// `a/./b` in a path as `a/b`, another branch.
-const branchName = z
-  .string()
-  .refine(
-    (s) =>
-      /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(s) &&
-      !s.includes("..") &&
-      !s.includes("//") &&
-      !s.includes("/.") &&
-      !/[/.]$/.test(s),
-    {
-      error: "must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'",
-    },
-  );
+// Why a text is not a branch name without what a shell or git would read as
+// something else, or undefined: the first thing wrong with it. No part of it
+// starts with '.': git takes no such branch, and GitHub reads `a/./b` in a
+// path as `a/b`, another branch.
+function branchProblem(s: string): string | undefined {
+  if (!/^[A-Za-z0-9._/-]+$/.test(s)) {
+    return "must be a branch name such as main, using only A-Z, a-z, 0-9, '.', '_', '-' and '/'";
+  }
+  if (/^[-./]/.test(s)) return "must not start with '-', '.' or '/'";
+  if (s.includes("..")) return "must not hold '..'";
+  if (s.includes("//")) return "must not hold '//'";
+  if (s.includes("/.")) return "must not have a part that starts with '.' (after a '/')";
+  if (/[/.]$/.test(s)) return "must not end with '.' or '/'";
+  return undefined;
+}
+
+const branchName = z.string().superRefine((s, ctx) => {
+  const problem = branchProblem(s);
+  if (problem !== undefined) ctx.addIssue({ code: "custom", message: problem });
+});
 
 // Why a text is not an https:// URL a command can be given as it is, or undefined.
 function httpsUrlProblem(s: string): string | undefined {

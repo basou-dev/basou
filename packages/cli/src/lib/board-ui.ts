@@ -206,6 +206,17 @@ export const BOARD_HTML = `<!doctype html>
     if (typeof value === 'string') return value;
     return JSON.stringify(value);
   }
+  // An http value with each of its words beside what it says of it, in the
+  // order declared. Written out, not built as an object: an object would put a
+  // word that reads as a number first.
+  function withWords(value, words) {
+    return '{' + Object.keys(value).map(function (k) {
+      var v = k === 'words'
+        ? '{' + words.map(function (w) { return JSON.stringify(w.word) + ':' + JSON.stringify(w.found); }).join(',') + '}'
+        : JSON.stringify(value[k]);
+      return JSON.stringify(k) + ':' + v;
+    }).join(',') + '}';
+  }
   function stateName(state) { return S.states[state] || state; }
   function setStatus(message, isErr) {
     var s = $('status');
@@ -292,7 +303,7 @@ export const BOARD_HTML = `<!doctype html>
     } else {
       var rows = s.observed.map(function (o) {
         var value;
-        if (o.value !== null) value = shown(o.value);
+        if (o.value !== null) value = o.words ? withWords(o.value, o.words) : shown(o.value);
         else if (o.previous && o.previous.status === 'value') value = fill(S.observed.missing, { value: shown(o.previous.value) });
         else if (o.previous && o.previous.status === 'unreadable') value = S.observed.missingPreviousUnreadable;
         else value = S.observed.missingNoPrevious;
