@@ -23,12 +23,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * The version of a record's shape, the shape of the measurement it holds
  * included. Raised whenever that shape changes: 2 added the observations the
  * declaration names (`declaration.observe`) and what each stage is judged by
- * (`look` and `notes` of `declaration.stages`). Every version is read.
+ * (`look` and `notes` of `declaration.stages`); 3 may hold a declaration of
+ * board_version 3, which may observe an HTTP response (`http`) or a check run
+ * (`github_check`), say what to mind when making an observation (`notes`),
+ * measure the name of a file (`file_name`), the paths of files
+ * (`file_paths`), whose value in the measurement is a list of strings, or a
+ * total of other measures and integers (`total`), draw a measure in more
+ * than one lane, name a measure or an observation with '.' and register a
+ * component with the files that mark it (`marker`), found then with the
+ * kind `marker` in the measurement; and in 3 a measure's `lane`, in the
+ * measurement and in the declaration, is always a list of lane ids, where 1
+ * and 2 hold one id, and each repo of the measurement names the branch it is
+ * compared with (`base`), counts what is behind it as `behind`, where 1 and 2
+ * have `behind_main`, and what is ahead of it (`ahead`), and says when it was
+ * last fetched (`fetched_at`).
+ * Every record is written in the newest version, whatever the version of the
+ * board it records, and every version is read.
  */
-export const BOARD_RECORD_VERSION = 2;
+export const BOARD_RECORD_VERSION = 3;
 
 /** The record versions this basou reads. A version is added here, never removed. */
-export const BOARD_RECORD_VERSIONS = [1, 2] as const;
+export const BOARD_RECORD_VERSIONS = [1, 2, 3] as const;
 
 /** The states a cell of the board can be in. */
 export const BOARD_CELL_STATES = [

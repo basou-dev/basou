@@ -206,6 +206,17 @@ export const BOARD_HTML = `<!doctype html>
     if (typeof value === 'string') return value;
     return JSON.stringify(value);
   }
+  // An http value with each of its words beside what it says of it, in the
+  // order declared. Written out, not built as an object: an object would put a
+  // word that reads as a number first.
+  function withWords(value, words) {
+    return '{' + Object.keys(value).map(function (k) {
+      var v = k === 'words'
+        ? '{' + words.map(function (w) { return JSON.stringify(w.word) + ':' + JSON.stringify(w.found); }).join(',') + '}'
+        : JSON.stringify(value[k]);
+      return JSON.stringify(k) + ':' + v;
+    }).join(',') + '}';
+  }
   function stateName(state) { return S.states[state] || state; }
   function setStatus(message, isErr) {
     var s = $('status');
@@ -292,7 +303,7 @@ export const BOARD_HTML = `<!doctype html>
     } else {
       var rows = s.observed.map(function (o) {
         var value;
-        if (o.value !== null) value = shown(o.value);
+        if (o.value !== null) value = o.words ? withWords(o.value, o.words) : shown(o.value);
         else if (o.previous && o.previous.status === 'value') value = fill(S.observed.missing, { value: shown(o.previous.value) });
         else if (o.previous && o.previous.status === 'unreadable') value = S.observed.missingPreviousUnreadable;
         else value = S.observed.missingNoPrevious;
@@ -639,6 +650,13 @@ export const BOARD_HTML = `<!doctype html>
       if (lane.measures.length > 0) {
         body.push(el('div', { class: 'muted', text: S.lane.measures }));
         body.push(el('ul', null, lane.measures.map(function (m) {
+          // The paths of a file_paths measure: how many, with the list folded.
+          if (Array.isArray(m.value)) {
+            return el('li', null, [el('details', null, [
+              el('summary', { text: m.id + ': ' + num(m.value.length) + ' ' + m.unit }),
+              el('ul', null, m.value.map(function (p) { return el('li', { text: p }); }))
+            ])]);
+          }
           return el('li', { text: m.id + ': ' + num(m.value) + (m.value === null ? '' : ' ' + m.unit) });
         })));
       }
@@ -761,12 +779,14 @@ export const BOARD_HTML = `<!doctype html>
   }
   function liveRepos(l) {
     var missing = missingIn(l);
-    var labels = [S.live.repo, S.live.branch, S.live.head, S.live.lastCommit, S.live.commits, S.live.uncommitted, S.live.behindMain];
-    var head = el('tr', null, labels.map(function (label, i) { return el('th', { class: i >= 4 ? 'n' : '', text: label }); }));
+    var labels = [S.live.repo, S.live.branch, S.live.head, S.live.lastCommit, S.live.commits, S.live.uncommitted, S.live.base, S.live.behind, S.live.ahead, S.live.fetchedAt];
+    var numeric = [4, 5, 7, 8];
+    var head = el('tr', null, labels.map(function (label, i) { return el('th', { class: numeric.indexOf(i) !== -1 ? 'n' : '', text: label }); }));
     var rows = l.repos.map(function (r) {
       var at = 'repos[' + r.path + ']';
       // A null the measurement says it could not measure, or one that means
-      // so (a detached HEAD, no commit yet, no default branch), drawn as '-'.
+      // so (a detached HEAD, no commit yet, no base, no fetch of it on
+      // record), drawn as '-'.
       var value = function (field, v, show) {
         if (v !== null) return show(v);
         return missing(at) || missing(at + '.' + field) ? S.tiles.notMeasured : '-';
@@ -778,7 +798,10 @@ export const BOARD_HTML = `<!doctype html>
         el('td', { text: value('last_commit', r.last_commit, when) }),
         el('td', { class: 'n', text: num(r.commits) }),
         el('td', { class: 'n', text: num(r.uncommitted) }),
-        el('td', { class: 'n', text: value('behind_main', r.behind_main, num) })
+        el('td', { text: value('base', r.base, String) }),
+        el('td', { class: 'n', text: value('behind', r.behind, num) }),
+        el('td', { class: 'n', text: value('ahead', r.ahead, num) }),
+        el('td', { text: value('fetched_at', r.fetched_at, when) })
       ]);
     });
     return section(S.live.repos, false, [el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [head].concat(rows))])]);

@@ -207,6 +207,243 @@ describe("boardPage", () => {
     expect(older.status).toBe("ok");
   });
 
+  it("draws a record of version 3, which holds an http observation, its value as it is", async () => {
+    await mkdir(records);
+    await place(A, record({ record_version: 2 }));
+    const v3 = record({
+      record_version: 3,
+      observed: {
+        shop: {
+          value: { status: 404, redirects: 0, final_url: "https://example.com/x", words: null },
+          observed_at: "2026-10-07T00:00:00Z",
+          source: "https://example.com/x",
+        },
+      },
+    });
+    v3.declaration = {
+      ...v3.declaration,
+      observe: [{ key: "shop", kind: "http", url: "https://example.com/x", words: ["in stock"] }],
+    } as typeof v3.declaration;
+    await place(B, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.id).toBe(B);
+    expect(page.board.summary.observed).toEqual([
+      {
+        name: "shop",
+        value: { status: 404, redirects: 0, final_url: "https://example.com/x", words: null },
+        observed_at: "2026-10-07T00:00:00Z",
+        source: "https://example.com/x",
+      },
+    ]);
+    expect((await boardPage(records, A)).status).toBe("ok");
+  });
+
+  it("pairs an http observation's words with those its record declares, when the value holds one for each", async () => {
+    await mkdir(records);
+    const value = (words: unknown) => ({
+      status: 200,
+      redirects: 1,
+      final_url: "https://example.com/x/",
+      words,
+      count: 2,
+    });
+    const made = (v: unknown) => ({ value: v, observed_at: "2026-10-07T00:00:00Z", source: "s" });
+    const v3 = record({
+      record_version: 3,
+      observed: {
+        shop: made(value([true, false])),
+        short: made(value([true])),
+        long: made(value([true, false, true])),
+        one: made(value([false])),
+        page: made({ words: [true] }),
+        list: made([true]),
+        gone: { ...made(null), error: "timeout" },
+      },
+    });
+    const http = (key: string, words: string[]) => ({
+      key,
+      kind: "http",
+      url: "https://example.com/x",
+      words,
+    });
+    v3.declaration = {
+      ...v3.declaration,
+      observe: [
+        http("shop", ["in stock", "42"]),
+        http("short", ["a", "b"]),
+        http("long", ["a", "b"]),
+        http("one", ["solo"]),
+        // Words on another kind, which basou does not write, are not paired.
+        { key: "page", kind: "page_version", url: "https://example.com/", words: ["a"] },
+        http("list", ["a"]),
+        http("gone", ["a"]),
+      ],
+    } as typeof v3.declaration;
+    await place(A, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    const observed = page.board.summary.observed;
+    expect(observed.map((o) => o.name)).toEqual([
+      "shop",
+      "short",
+      "long",
+      "one",
+      "page",
+      "list",
+      "gone",
+    ]);
+    expect(observed[0]?.words).toEqual([
+      { word: "in stock", found: true },
+      { word: "42", found: false },
+    ]);
+    // The value is kept as the record holds it.
+    expect(observed[0]?.value).toEqual(value([true, false]));
+    expect(observed[3]?.words).toEqual([{ word: "solo", found: false }]);
+    for (const o of [observed[1], observed[2], ...observed.slice(4)]) {
+      expect(Object.hasOwn(o as object, "words"), o?.name).toBe(false);
+    }
+  });
+
+  it("does not pair the previous record's value of an observation this record did not make", async () => {
+    await mkdir(records);
+    const http = { key: "shop", kind: "http", url: "https://example.com/x", words: ["a"] };
+    const at = (v: unknown) => {
+      const r = record({
+        record_version: 3,
+        observed: { shop: { value: v, observed_at: "2026-10-07T00:00:00Z", source: "s" } },
+      });
+      r.declaration = { ...r.declaration, observe: [http] } as typeof r.declaration;
+      return r;
+    };
+    await place(A, at({ status: 200, words: [true] }));
+    await place(B, at(null));
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    const [shop] = page.board.summary.observed;
+    expect(shop?.previous).toEqual({ status: "value", value: { status: 200, words: [true] } });
+    expect(Object.hasOwn(shop as object, "words")).toBe(false);
+  });
+
+  it("draws a record whose declared observations are not in their shape, without their words", async () => {
+    await mkdir(records);
+    const words = { value: { words: [true] }, observed_at: "2026-10-07T00:00:00Z", source: "s" };
+    const v3 = record({ record_version: 3, observed: { shop: words, good: words } });
+    v3.declaration = {
+      ...v3.declaration,
+      // No kind: that one is drawn without its words, and the other with its.
+      observe: [
+        { key: "shop", words: ["a"] },
+        { key: "good", kind: "http", url: "https://example.com/", words: ["b"] },
+      ],
+    } as typeof v3.declaration;
+    await place(A, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    const [shop, good] = page.board.summary.observed;
+    expect(Object.hasOwn(shop as object, "words")).toBe(false);
+    expect(good?.words).toEqual([{ word: "b", found: true }]);
+    // Observations that are not a list: the record is still drawn, with no words.
+    const listless = record({ record_version: 3, observed: { good: words } });
+    listless.declaration = {
+      ...listless.declaration,
+      observe: "not a list",
+    } as unknown as typeof listless.declaration;
+    await place(B, listless);
+    const later = await boardPage(records);
+    if (later.status !== "ok") throw new Error(later.why);
+    expect(later.id).toBe(B);
+    expect(Object.hasOwn(later.board.summary.observed[0] as object, "words")).toBe(false);
+  });
+
+  it("draws a record of version 3 whose measures hold a name and the paths of files, in their lanes", async () => {
+    await mkdir(records);
+    const v3 = record({ record_version: 3 });
+    v3.declaration = {
+      ...v3.declaration,
+      measures: [
+        { id: "latest", kind: "file_name", unit: "name", lane: "core" },
+        { id: "migrations", kind: "file_paths", unit: "files", lane: "core" },
+      ],
+      ratios: [],
+    } as typeof v3.declaration;
+    v3.measure = {
+      ...v3.measure,
+      measures: {
+        latest: { value: "20260401", unit: "name", lane: "core" },
+        migrations: { value: ["db/a.sql", "db/b.sql"], unit: "files", lane: "core" },
+      },
+      ratios: {},
+    } as unknown as typeof v3.measure;
+    await place(A, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.board.lanes[0]?.measures).toEqual([
+      { id: "latest", value: "20260401", unit: "name" },
+      { id: "migrations", value: ["db/a.sql", "db/b.sql"], unit: "files" },
+    ]);
+    // A list of anything but strings is not a measure's value.
+    v3.measure = {
+      ...v3.measure,
+      measures: { migrations: { value: [1, 2], unit: "files" } },
+    } as unknown as typeof v3.measure;
+    await place(A, v3);
+    expect(await boardPage(records)).toMatchObject({ why: "not_a_record" });
+  });
+
+  it("draws a measure of more than one lane in each of them, and one lane id of an older record in its lane", async () => {
+    await mkdir(records);
+    const v3 = record({ record_version: 3 });
+    v3.declaration = {
+      ...v3.declaration,
+      measures: [
+        { id: "site.pages", kind: "file_count", unit: "pages", lane: ["docs", "core"] },
+        { id: "src", kind: "line_count", unit: "lines", lane: ["core"] },
+        { id: "left", kind: "total", unit: "slots" },
+      ],
+      ratios: [],
+    } as typeof v3.declaration;
+    v3.measure = {
+      ...v3.measure,
+      measures: {
+        "site.pages": { value: 12, unit: "pages", lane: ["docs", "core"] },
+        src: { value: 100, unit: "lines", lane: ["core"] },
+        left: { value: -3, unit: "slots" },
+      },
+      ratios: {},
+    } as unknown as typeof v3.measure;
+    await place(A, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.board.lanes.map((lane) => [lane.id, lane.measures])).toEqual([
+      [
+        "core",
+        [
+          { id: "site.pages", value: 12, unit: "pages" },
+          { id: "src", value: 100, unit: "lines" },
+        ],
+      ],
+      ["docs", [{ id: "site.pages", value: 12, unit: "pages" }]],
+    ]);
+    // A record of version 1 holds one lane id: it is the lane of that id,
+    // not of every id it holds.
+    const v1 = record();
+    v1.declaration = {
+      ...v1.declaration,
+      lanes: [
+        { id: "co", name: "Co" },
+        { id: "core", name: "Core" },
+      ],
+    } as typeof v1.declaration;
+    await place(B, v1);
+    const older = await boardPage(records);
+    if (older.status !== "ok") throw new Error(older.why);
+    expect(older.board.lanes.map((lane) => [lane.id, lane.measures])).toEqual([
+      ["co", []],
+      ["core", [{ id: "src", value: 100, unit: "lines" }]],
+    ]);
+  });
+
   it("draws the heading, the tiles and the observations from the record", async () => {
     await mkdir(records);
     await place(A, record());
@@ -554,11 +791,11 @@ describe("boardPage", () => {
       older: null,
       newer: B,
     });
-    await place(A, record({ record_version: 3 }));
+    await place(A, record({ record_version: 4 }));
     expect(await boardPage(records, A)).toMatchObject({
       why: "unknown_version",
       id: A,
-      version: 3,
+      version: 4,
     });
     await place(A, record({ prose: { summary: 1 } }));
     expect(await boardPage(records, A)).toMatchObject({ why: "not_a_record", id: A });

@@ -1,6 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -177,6 +187,15 @@ describe("measureBoardLive", () => {
 describe("boardLivePage", () => {
   it("lays the measurement out for the page, under the workspace's name", async () => {
     await placeStarted(SES("S01"), "2026-10-01T00:00:00Z");
+    // An origin/main one commit behind HEAD, as the last fetch of origin left it.
+    git("remote", "add", "origin", "https://example.com/x/ws.git");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    const tip = git("rev-parse", "HEAD").trim();
+    const fetched = new Date("2026-10-04T12:00:00.000Z");
+    const fetchHead = join(root, ".git", "FETCH_HEAD");
+    await writeFile(fetchHead, `${tip}\t\tbranch 'main' of https://example.com/x/ws\n`);
+    await utimes(fetchHead, fetched, fetched);
+    git("commit", "-q", "--allow-empty", "-m", "second");
     const m = await measure();
     const page = boardLivePage("ws", m);
     const name = basename(root);
@@ -194,6 +213,25 @@ describe("boardLivePage", () => {
       { key: `${name}/web`, kinds: ["manifest"] },
     ]);
     expect(page.repos[0]).not.toHaveProperty("files");
+    expect(page.repos[0]).toMatchObject({
+      base: "origin/main",
+      behind: 0,
+      ahead: 1,
+      fetched_at: fetched.toISOString(),
+    });
+    expect(Object.keys(page.repos[0] ?? {})).toEqual([
+      "path",
+      "name",
+      "head",
+      "branch",
+      "last_commit",
+      "commits",
+      "uncommitted",
+      "base",
+      "behind",
+      "ahead",
+      "fetched_at",
+    ]);
     expect(page.footnotes).toEqual({ not_found: [], measured_with: WITH });
   });
 });

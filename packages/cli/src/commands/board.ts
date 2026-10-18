@@ -612,8 +612,9 @@ async function checkAndRecord(
 }
 
 // The keys of a record's input, which a location may name: the words of its
-// shape. Any other key is a name someone chose (an observation's, a lane's,
-// or one the input should not have), which may be the very name found.
+// shape, and those of an http observation's value, which the guide fixes.
+// Any other key is a name someone chose (an observation's, a lane's, or one
+// the input should not have), which may be the very name found.
 const INPUT_KEYS = new Set([
   "measure_digest",
   "observed",
@@ -637,6 +638,12 @@ const INPUT_KEYS = new Set([
   "model",
   "self_reported",
   "triggers",
+  "status",
+  "redirects",
+  "final_url",
+  "words",
+  "count",
+  "capture",
 ]);
 
 // The places whose values are held to a shape a refusal does not quote (a
@@ -1082,15 +1089,19 @@ function diffLines(diff: Omit<BoardDiff, "against">, more: boolean): string[] {
   return lines;
 }
 
-function shownValue(value: number | string | null): string {
+// A value as a line shows it: the paths of a file_paths measure by how many
+// there are (--json lists them).
+function shownValue(value: number | string | string[] | null): string {
   if (value === null) return "not measured";
   if (typeof value === "number") return String(Math.round(value * 10000) / 10000);
+  if (Array.isArray(value)) return String(value.length);
   return displayPath(value);
 }
 
 // One line per repository. A null the not_found entries do not explain has
 // the meaning the measurement gives it (a detached HEAD, no commit yet, no
-// default branch: origin/HEAD names none and there is no origin/main).
+// base: origin/HEAD names no branch and there is no origin/main, no fetch of
+// the base on record).
 function repoLines(m: BoardMeasurement): string[] {
   const missing = new Set(m.not_found.map((n) => n.at));
   return m.repos.map((repo) => {
@@ -1110,8 +1121,18 @@ function repoLines(m: BoardMeasurement): string[] {
       `commits ${measured("commits", String) ?? "not measured"}`,
       `files ${measured("files", String) ?? "not measured"}`,
       `uncommitted ${measured("uncommitted", String) ?? "not measured"}`,
-      `behind origin's default branch ${measured("behind_main", String) ?? "(origin/HEAD names no branch, and there is no origin/main)"}`,
     ];
+    const base = measured("base", (b) => displayPath(String(b)));
+    if (base === undefined) {
+      parts.push("no base (origin/HEAD names no branch, and there is no origin/main)");
+    } else {
+      parts.push(
+        `base ${base}`,
+        `behind ${measured("behind", String) ?? "not measured"}`,
+        `ahead ${measured("ahead", String) ?? "not measured"}`,
+        `fetched ${measured("fetched_at", String) ?? "not known"}`,
+      );
+    }
     return `  ${displayPath(repo.path)}${name}  ${parts.join(", ")}`;
   });
 }
@@ -1262,8 +1283,9 @@ function printMeasurementText(m: BoardMeasurement, hasRecords: boolean): void {
     lines.push("", "Measures:");
     for (const [id, measure] of measures) {
       const unit = measure.value === null ? "" : ` ${displayPath(measure.unit)}`;
-      const lane = measure.lane === undefined ? "" : `  [${measure.lane}]`;
-      lines.push(`  ${id.padEnd(width)}  ${shownValue(measure.value)}${unit}${lane}`);
+      const listed = Array.isArray(measure.value) ? " (paths in --json)" : "";
+      const lane = measure.lane === undefined ? "" : `  [${measure.lane.join(", ")}]`;
+      lines.push(`  ${id.padEnd(width)}  ${shownValue(measure.value)}${unit}${listed}${lane}`);
     }
   }
   const ratios = Object.entries(m.ratios);

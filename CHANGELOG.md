@@ -3,6 +3,175 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **A board can observe the response to an HTTP GET (`http`, from
+  `board_version: 3`, experimental).** An `http` observation names an
+  `https://` URL, held to the same shape as a `page_version`'s, and may
+  declare what to read off the body: `words` (whether the body holds each,
+  as written), a `count_pattern` (how many times it matches) and a
+  `capture_pattern` (what its first group holds in the first match). It is
+  a GET only, with no method to declare. basou does not make it and sends
+  nothing: `basou board guide` gives the commands, a `curl` without `-f`
+  that prints the status of the last response, how many redirects led to
+  it and the URL it ended at, and, when the board reads the body, a `node`
+  line that reads it whole as UTF-8 (without a leading BOM, decoding
+  nothing else) and is given the patterns and words after `--`. The value
+  is `{ status, redirects, final_url }`, with `words` (true or false in the
+  order declared), `count` and `capture` as declared; a 4xx or 5xx is a
+  value, not an observation not made, and when the status is not 2xx what
+  the body would give is null. Both patterns are matched against the whole
+  body (`^` and `$` are its start and end), not line by line as a measure's
+  `pattern` is: `count_pattern` with the flags `gu`, `capture_pattern` with
+  `u`. A word or a pattern that is empty, holds a control character or a
+  `'`, or starts with `-` is refused, as is a word given twice, a
+  `count_pattern` that matches the empty string and a `capture_pattern`
+  with no capturing group; the guide's line stops, rather than count, at an
+  empty match the declaration could not see. The keys of the value are
+  basou's words, so `basou board record`'s check for the names of other
+  workspaces looks at what they hold, not at them. The board page draws
+  `words` with each word the record's declaration lists beside its answer
+  (`"words":{"in stock":true}`); the record holds the list as it was.
+- **A board can observe a check run by its name (`github_check`, from
+  `board_version: 3`, experimental).** A `github_check` observation names a
+  GitHub repository, the name of a check run (`check`: one a GitHub App
+  reports, such as a deploy, as well as a job of a workflow) and a `branch`
+  (`main` when it names none). Its value is the conclusion of the newest
+  check run of that name on the head commit of the branch, or its status
+  while it has not finished; `github_ci`, which takes the file name of a
+  workflow, looks at the latest run of the workflow on the branch instead.
+  basou does not make it and sends nothing: `basou board guide` gives a
+  `gh api` command that asks for the check runs of `heads/<branch>` and
+  takes the one with the highest id (the API lists one for each check suite
+  that ran the check, in an order it does not document), and prints a second
+  line when there are more than the 100 it reads, which the guide says to
+  put in a footnote. No check run of that name on the head commit, as when
+  a path filter, `[skip ci]` or the app's own rules kept the check from
+  starting, is a null with that as the error; a job a workflow skipped with
+  `if:` is a check run concluded `skipped`. A check name that is empty,
+  longer than 255 characters, holds a control character or a `'`, or starts
+  with `-` is refused.
+- **Every observation can say what to mind when making it (`notes`, from
+  `board_version: 3`, experimental),** in the shape of a stage's or a lane's
+  `notes`. `basou board guide` prints them under the observation's commands,
+  and a record keeps them with the declaration it holds.
+- **A board can measure the name of a file and the paths of files
+  (`file_name` and `file_paths`, from `board_version: 3`, experimental).**
+  Both take a `repo`, `include`, `exclude` and `at` as a `file_count` does,
+  and are not measured where it is not (a fixed directory with nothing under
+  it, a symlink that leaves the repository). A `file_name` picks the first or
+  the last of the files matched (`pick`), in the byte order of their paths in
+  the repository, as git orders them, and its value is that file's name.
+  With a `pattern`, it picks only among the files whose name the pattern
+  matches, and the value is what the pattern's `group` holds (1 when it
+  names none; a `group` without a `pattern` is refused). No file to pick is
+  a null with that as the reason: a string has no zero. A `file_paths`
+  value is the list of the paths matched, in byte order, up to 1000; more
+  is a null with that as the reason. A ratio takes neither. The difference
+  from the previous record lists each path that came in or went out when
+  both records hold a list, and the list whole when only one does. The
+  `Measures:` section of `basou board measure` gives the list as a count,
+  and the board page draws it as a count with the paths folded under it.
+- **A board can add up measures and integers, and take some away (`total`,
+  from `board_version: 3`, experimental).** A `total` measure lists what it
+  adds (`plus`, at least one) and what it takes away (`minus`, which it may
+  leave out), each an integer written in the declaration (from
+  -9007199254740991 to 9007199254740991, the integers a number holds
+  exactly) or the id of a measure whose value is one, so measures of
+  several repos can be added up.
+  Its value is the difference, and may be below 0. When a measure it takes
+  was not measured, the total is null and says which (`'hand_count' is not
+  measured`); one out of the range a number holds exactly is null too. A
+  total takes no total, itself included, and no measure whose value is not a
+  number (`regex_capture`, `file_name`, `file_paths`); a ratio may take a
+  total.
+- **A measure can be drawn in more than one lane (`lane` as a list, from
+  `board_version: 3`, experimental).** `lane` is one lane id, as before, or
+  a non-empty list of them, each a lane of the board and none twice. The
+  board page draws the measure in each of its lanes' sections, and
+  `basou board measure` lists its lanes (`[cockpit, distribution]`).
+- **A measure's id and an observation's key may be words joined by `.`
+  (from `board_version: 3`, experimental),** each word written as an id is
+  (`site.pages`), and a ratio and a total name such a measure so. `:` and
+  `/` are still refused: the guide names working files by a key. Where such
+  a measure is not measured, `not_found` names it as
+  `measures["site.pages"]`, as the difference from the previous record
+  already did, so it is not read as a measure `pages` inside `site`.
+- **A registered component can name the files that mark it (`marker`, from
+  `board_version: 3`, experimental).** A directory no built-in marker finds,
+  such as one of content or of scripts, was gone at every measure and fired
+  the axis review's (a) each time. `components.<key>.marker` is a glob from
+  the component's directory, written and checked as an `include` is (`*`
+  does not cross `/`; an absolute path, a `..` segment, a leading `:` and a
+  control character are refused). When a file the working tree lists under
+  that directory matches it, the component is found, with `marker` among its
+  kinds; when none does, it is gone, as before. `**` takes any file under
+  it, `*.py` a Python file right in it. The directories the built-in markers
+  skip (such as `node_modules`) are not skipped for it. A key that is a repo
+  itself, with nothing after the repo's name, takes no marker, and a key
+  that names a file finds nothing. The `components` method stays 2: a
+  registry without a marker measures as before. A component the built-in
+  markers already found has `marker` added to its kinds when it is given
+  one, which the next measure reports as a change of kinds.
+
+### Changed
+
+- **Boards are declared in version 3 and records written in version 3
+  (`board_version: 3`, `record_version: 3`, experimental).**
+  `basou board init` prints version 3. A board of version 1 or 2 is read as
+  before, and every record is now written as version 3, whatever the
+  version of its board; records of version 1 and 2 are still read,
+  compared with and drawn. A board of version 1 or 2 that uses what a later
+  version reads is told so on a line of its own (`observe[0].kind: 'http'
+  is read from board_version 3 on; this file is board_version 2`) for a
+  kind or a value as for a key: until now only a key was told so.
+- **A record holds a measure's `lane` as a list (`record_version: 3`,
+  experimental),** in its measurement and in the declaration it keeps,
+  whatever the version of its board; a measure with no lane has none, as
+  before. A record of version 1 or 2 holds one lane id, which the board page
+  and the difference from the previous record read as a list of that one,
+  so a lane written either way is not a change.
+- **A record's repos name the branch they are compared with, count the
+  commits ahead of it, and say when it was last fetched
+  (`record_version: 3`, experimental).** `behind_main` is now `behind`,
+  counted as before, and `base` names the branch of origin it counts against
+  (`origin/<branch>`: the one `origin/HEAD` names, or `origin/main` when it
+  names none; null when there is neither). `ahead` counts the commits HEAD
+  has that the base does not: not only commits not pushed, but those of a
+  branch pushed and not merged, and those that came into the base as other
+  commits (by a squash or a rebase). `fetched_at` is when FETCH_HEAD was
+  last written, in UTC, when it holds the line of the base's branch fetched
+  from origin's URL (as git writes it there, without a user or a password)
+  at the commit the base is at now; it is null when it does not, as after a
+  fetch that failed, which empties FETCH_HEAD but still moves its time, a
+  fetch since from another URL or of other branches only, or a push or a
+  fetch in another worktree that moved the base since. A later fetch with
+  `--append` moves the time and leaves the line, and a remote whose URL is
+  origin's writes the same line as origin. `fetched_at` is not in the digest
+  and not compared with the previous record: a fetch that brings nothing
+  moves it too. basou still does not fetch. The `repos` method stays 2. A
+  record of version 1 or 2 keeps `behind_main`, so the first difference from
+  one shows `behind_main` gone and `base`, `behind` and `ahead` come.
+  `basou board measure` prints them on each repo's line (or that there is no
+  base), the board page measured on the spot draws them as columns, and
+  `basou board guide` says how to read them: `ahead` with `branch` before
+  judging 04, and both counts as maybe old when `fetched_at` is null or old.
+- **A branch a `github_ci` or `github_check` observation names may not have
+  a part that starts with `.`** (in a board of any version). git takes no
+  such branch, and GitHub reads `a/./b` in the path of a request as `a/b`,
+  another branch. A branch refused now says what is wrong with it: a
+  character it may not use, a start with `-`, `.` or `/`, a `..`, a `//`, a
+  part that starts with `.`, or an end with `.` or `/`.
+- **`basou board guide` writes what a board declares as code in its prose**
+  (a repo, a branch, a workflow, a package and a URL), as it already did
+  for a `github_check`, so a name such as `_x_` is not read as emphasis.
+  In its prose and sources it now escapes what its template of the record
+  already escaped (the Arabic letter mark, the zero-width and direction
+  marks, the word joiner and the invisible operators, the byte order mark,
+  and a surrogate not in a pair), so a value reads the same in both.
+
 ## 0.70.1 — 2026-10-17
 
 ### Fixed

@@ -25,10 +25,14 @@ export type BoardMethodChange = { section: string; before: number | null; after:
  * either, nor the declaration, which the digest also covers) but
  * `measured_with`, the methods (compared on their own), `effort.daily`, whose
  * rows only grow, and `components.kind_changed`, already a change since the
- * previous record. Values are equal when their JSON is, keys sorted. A list whose entries name
+ * previous record. Values are equal when their JSON is, keys sorted, except
+ * that a measure's lane held as one id, as a record of version 1 or 2 holds
+ * it, is the list of that one a record of version 3 holds. A list whose entries name
  * themselves is compared entry by entry (`repos` by path, open tracks by id,
- * `not_found` by where), the unacknowledged and gone components as sets, and
- * any other list whole.
+ * `not_found` by where), the unacknowledged and gone components as sets, the
+ * paths of a `file_paths` measure as a set when both records hold a list (a
+ * path that came in is added, one that went out removed), and any other list
+ * whole.
  */
 export type BoardDiff = {
   /** The previous record's name, its ULID. */
@@ -51,7 +55,12 @@ const UNCOMPARED = new Set([
   "diff",
 ]);
 // Left out further down.
-const SKIPPED = new Set(["effort.elapsed_days", "effort.daily", "components.kind_changed"]);
+const SKIPPED = new Set([
+  "effort.elapsed_days",
+  "effort.daily",
+  "repos[].fetched_at",
+  "components.kind_changed",
+]);
 // Lists whose entries are told apart by a field of theirs.
 const KEYED: Readonly<Record<string, string>> = {
   repos: "path",
@@ -72,11 +81,46 @@ function shownKey(shown: string, key: string): string {
 
 type Leaf = { value: unknown; section: string };
 
+// A measure as a record of version 3 holds it: a record of version 1 or 2
+// holds its lane as one id, which is the same lane as a list of that one.
+function withLaneList(entry: unknown): unknown {
+  return isRecord(entry) && typeof entry.lane === "string"
+    ? { ...entry, lane: [entry.lane] }
+    : entry;
+}
+
+// The measures whose value is a list in both measurements, by id: their
+// paths are compared as a set. When one of them is not a list (not measured,
+// or no such measure), the value is compared whole.
+function setMeasures(before: unknown, after: unknown): Set<string> {
+  const lists = (m: unknown): Set<string> => {
+    const measures = isRecord(m) && isRecord(m.measures) ? m.measures : {};
+    return new Set(
+      Object.entries(measures)
+        .filter(([, v]) => isRecord(v) && Array.isArray(v.value))
+        .map(([id]) => id),
+    );
+  };
+  const was = lists(before);
+  return new Set([...lists(after)].filter((id) => was.has(id)));
+}
+
 // Each value of a measurement by where it is, with the section it is in.
-function leaves(measurement: unknown): Map<string, Leaf> {
+function leaves(measurement: unknown, sets: ReadonlySet<string>): Map<string, Leaf> {
   const out = new Map<string, Leaf>();
   const walk = (value: unknown, rule: string, shown: string, section: string): void => {
     if (SKIPPED.has(rule)) return;
+    if (rule === "measures" && isRecord(value)) {
+      for (const [id, entry] of Object.entries(value)) {
+        walk(
+          withLaneList(entry),
+          sets.has(id) ? "measures[set]" : "measures[]",
+          shownKey(shown, id),
+          section,
+        );
+      }
+      return;
+    }
     if (Array.isArray(value)) {
       const field = KEYED[rule];
       if (field !== undefined) {
@@ -87,7 +131,7 @@ function leaves(measurement: unknown): Map<string, Leaf> {
           if (rule === "not_found" && /^axis(\.|$)/.test(String(name))) continue;
           walk(rest, `${rule}[]`, `${shown}[${JSON.stringify(String(name))}]`, section);
         }
-      } else if (SETS.has(rule)) {
+      } else if (SETS.has(rule) || rule === "measures[set].value") {
         for (const name of value) {
           out.set(`${shown}[${JSON.stringify(String(name))}]`, { value: true, section });
         }
@@ -146,7 +190,8 @@ export function diffMeasurements(before: unknown, after: unknown, against: strin
   const changed = new Set(methods.map((m) => m.section));
   const flag = (section: string) => (changed.has(section) ? { method_changed: true as const } : {});
 
-  const [was, is] = [leaves(before), leaves(after)];
+  const sets = setMeasures(before, after);
+  const [was, is] = [leaves(before, sets), leaves(after, sets)];
   const values: BoardValueChange[] = [];
   const added: BoardValueOnly[] = [];
   for (const [at, leaf] of is) {

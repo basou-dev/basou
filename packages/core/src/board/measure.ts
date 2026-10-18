@@ -7,11 +7,14 @@ import { BOARD_AXIS_METHOD, type BoardAxis, judgeAxis } from "./axis.js";
 import { BOARD_COMPONENTS_METHOD, type BoardComponents, measureComponents } from "./components.js";
 import {
   BOARD_DEFAULT_AT,
+  BOARD_DEFAULT_CAPTURE_GROUP,
+  BOARD_FILE_PATHS_MAX,
   BOARD_REGEX_FLAGS,
   type BoardDeclaration,
   type BoardDeclarationSnapshot,
   type BoardMeasure,
   boardDeclarationSnapshot,
+  formatPath,
 } from "./declaration.js";
 import { type BoardDiff, diffMeasurements } from "./diff.js";
 import { BOARD_EFFORT_METHOD, type BoardEffort, measureEffort, todayIn } from "./effort.js";
@@ -61,9 +64,11 @@ import {
 export type BoardNotFound = { at: string; reason: string };
 
 export type BoardMeasureValue = {
-  value: number | string | null;
+  /** A number, a string, or the paths a `file_paths` measure found. */
+  value: number | string | string[] | null;
   unit: string;
-  lane?: string;
+  /** The lanes it is drawn in, always a list (absent when it has none). */
+  lane?: string[];
 };
 
 export type BoardRatioValue = {
@@ -77,11 +82,12 @@ export type BoardRatioValue = {
  * measured, and then `not_found` says why and `complete` is false: a missing
  * repository, revision or file is never counted as zero. The exceptions are
  * the nulls that mean something of their own, which have no entry and leave
- * `complete` as it is: three in the repos section (a detached HEAD, no commit
- * yet, no default branch of origin; see {@link BoardRepo}), the portfolio's when there is
- * no portfolio config (see {@link BoardPortfolio}), the newest session's when
- * there is no session that is not archived (see {@link BoardFreshness}), the
- * Codex time when there is no Codex session (see {@link BoardEffort}), the
+ * `complete` as it is: those in the repos section (a detached HEAD, no commit
+ * yet, no default branch of origin, no fetch of it on record; see
+ * {@link BoardRepo}), the portfolio's when there is no portfolio config (see
+ * {@link BoardPortfolio}), the newest session's when there is no session that
+ * is not archived (see {@link BoardFreshness}), the Codex time when there is
+ * no Codex session (see {@link BoardEffort}), the
  * components' kind changes when there is no previous record (see
  * {@link BoardComponents}), the axis's last review when there is none on
  * record (see {@link BoardAxis}), and the diff when there is no previous
@@ -97,16 +103,17 @@ export type BoardMeasurement = {
   /**
    * `sha256:` and the hex digest of the measurement without `measured_at`,
    * `digest`, `freshness`, `axis` and its not_found entries, `diff`,
-   * `effort.elapsed_days` and today's row of `effort.daily`, with the
-   * declaration it was measured by (see {@link boardDigest}), serialized with
-   * its keys sorted. Two measurements with the same values by the same
-   * declaration have the same digest whenever they were taken. The freshness
-   * moves as work goes on, the measuring session's own included, the axis
-   * rests on the day, the model and the records, the diff is derived from the
-   * previous record, and the others move with the clock, so they are left
-   * out. The declaration is in it because a record keeps the declaration it
-   * was measured by: one changed after the judgement would be kept as if the
-   * judgement had seen it.
+   * `effort.elapsed_days`, today's row of `effort.daily` and each repo's
+   * `fetched_at`, with the declaration it was measured by (see
+   * {@link boardDigest}), serialized with its keys sorted. Two measurements
+   * with the same values by the same declaration have the same digest
+   * whenever they were taken. The freshness moves as work goes on, the
+   * measuring session's own included, the axis rests on the day, the model
+   * and the records, the diff is derived from the previous record, a fetch
+   * that brings nothing still moves `fetched_at`, and the others move with
+   * the clock, so they are left out. The declaration is in it because a
+   * record keeps the declaration it was measured by: one changed after the
+   * judgement would be kept as if the judgement had seen it.
    */
   digest: string;
   /**
@@ -178,7 +185,7 @@ export type MeasureBoardInput = {
   previous?: BoardPreviousRecords;
 };
 
-type Outcome = { value: number | string | null; reason?: string };
+type Outcome = { value: number | string | string[] | null; reason?: string };
 
 const fail = (reason: string): Outcome => ({ value: null, reason });
 
@@ -212,16 +219,26 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
   );
   notFound.push(...repos.notFound);
 
+  // A total takes no total, so the totals follow every other measure.
+  const outcomes = new Map<string, Outcome>();
+  for (const measure of declaration.measures) {
+    if (measure.kind === "total") continue;
+    outcomes.set(measure.id, await measureOne(measure, scopeOf, decisionsOf, tasksOf));
+  }
+  for (const measure of declaration.measures) {
+    if (measure.kind === "total") outcomes.set(measure.id, totalOf(measure, outcomes));
+  }
   const measures: Record<string, BoardMeasureValue> = {};
   for (const measure of declaration.measures) {
-    const outcome = await measureOne(measure, scopeOf, decisionsOf, tasksOf);
+    // Every measure has its outcome: the ids are not repeated.
+    const outcome = outcomes.get(measure.id) as Outcome;
     if (outcome.reason !== undefined) {
-      notFound.push({ at: `measures.${measure.id}`, reason: outcome.reason });
+      notFound.push({ at: formatPath(["measures", measure.id]), reason: outcome.reason });
     }
     measures[measure.id] = {
       value: outcome.value,
       unit: measure.unit,
-      ...(measure.lane === undefined ? {} : { lane: measure.lane }),
+      ...(measure.lane === undefined ? {} : { lane: [...measure.lane] }),
     };
   }
 
@@ -358,17 +375,18 @@ export async function measureBoard(input: MeasureBoardInput): Promise<BoardMeasu
   };
 }
 
-// What the digest leaves out: when it was measured, the digest itself, the
-// freshness, which moves as work goes on, the axis, which rests on the day,
-// the model and the records rather than on what was measured, and the diff,
-// derived from the previous record.
+// What the digest leaves out at the top: when it was measured, the digest
+// itself, the freshness, which moves as work goes on, the axis, which rests
+// on the day, the model and the records rather than on what was measured,
+// and the diff, derived from the previous record.
 const UNDIGESTED = new Set(["measured_at", "digest", "freshness", "axis", "diff"]);
 
 /**
  * The digest of a measurement: sha256 over the measurement without
  * `measured_at`, `digest`, `freshness`, `axis` and its not_found entries,
- * `diff`, `effort.elapsed_days` and the last row of `effort.daily` (today's),
- * with the snapshot of the declaration it was measured by under
+ * `diff`, `effort.elapsed_days`, the last row of `effort.daily` (today's)
+ * and each repo's `fetched_at`, with the snapshot of the declaration it was
+ * measured by under
  * `declaration`, every object's keys sorted. A record keeps both, so its
  * digest is `boardDigest(record.measure, record.declaration)`, except in a
  * record written before the digest covered the declaration.
@@ -379,7 +397,13 @@ export function boardDigest(measurement: object, declaration: BoardDeclarationSn
       .filter(([key]) => !UNDIGESTED.has(key))
       .map(([key, value]) => [
         key,
-        key === "effort" ? withoutClock(value) : key === "not_found" ? notOfAxis(value) : value,
+        key === "effort"
+          ? withoutClock(value)
+          : key === "not_found"
+            ? notOfAxis(value)
+            : key === "repos"
+              ? withoutFetchTimes(value)
+              : value,
       ]),
   );
   hashed.declaration = declaration;
@@ -395,6 +419,18 @@ function notOfAxis(notFound: unknown): unknown {
   return notFound.filter((entry) => {
     const at = (entry as { at?: unknown } | null)?.at;
     return !(typeof at === "string" && (at === "axis" || at.startsWith("axis.")));
+  });
+}
+
+// The repos without when each was last fetched, which a fetch that brings
+// nothing moves too. Its not_found entries stay: they follow a ref or a file
+// that cannot be read, not a fetch.
+function withoutFetchTimes(repos: unknown): unknown {
+  if (!Array.isArray(repos)) return repos;
+  return repos.map((repo) => {
+    if (repo === null || typeof repo !== "object") return repo;
+    const { fetched_at: _fetched, ...rest } = repo as Record<string, unknown>;
+    return rest;
   });
 }
 
@@ -507,8 +543,42 @@ function pointAt(document: unknown, pointer: string): unknown {
   return current;
 }
 
+// The largest integer a number holds exactly: a total above it, or below
+// its negative, would not be exact.
+const TOTAL_MAX = BigInt(Number.MAX_SAFE_INTEGER);
+
+// What `plus` adds up less what `minus` adds up, exactly. Null, naming them,
+// when a measure it takes was not measured: a part is not the whole.
+function totalOf(
+  measure: Extract<BoardMeasure, { kind: "total" }>,
+  outcomes: ReadonlyMap<string, Outcome>,
+): Outcome {
+  const missing: string[] = [];
+  const sum = (terms: readonly (number | string)[]): bigint => {
+    let out = 0n;
+    for (const term of terms) {
+      const value = typeof term === "number" ? term : outcomes.get(term)?.value;
+      // Every measure that counts gives a safe integer, as a term written is.
+      if (typeof value === "number" && Number.isSafeInteger(value)) out += BigInt(value);
+      else if (typeof term === "string" && !missing.includes(term)) missing.push(term);
+    }
+    return out;
+  };
+  const value = sum(measure.plus) - sum(measure.minus ?? []);
+  if (missing.length > 0) {
+    const named = missing.map((id) => `'${id}'`).join(", ");
+    return fail(`${named} ${missing.length === 1 ? "is" : "are"} not measured`);
+  }
+  if (value > TOTAL_MAX || value < -TOTAL_MAX) {
+    return fail(
+      `the total is out of the range a number holds exactly (-${TOTAL_MAX} to ${TOTAL_MAX})`,
+    );
+  }
+  return { value: Number(value) };
+}
+
 async function measureOne(
-  measure: BoardMeasure,
+  measure: Exclude<BoardMeasure, { kind: "total" }>,
   scopeOf: (repo: string, at: string) => Promise<RepoScopeResult>,
   decisionsOf: () => Promise<TrailDecisions>,
   tasksOf: () => Promise<TrailTasks>,
@@ -627,6 +697,8 @@ async function measureOne(
   if (blocked !== undefined) return fail(blocked);
   if (unread !== undefined) return fail(unread);
   if (measure.kind === "file_count") return { value: matched.length };
+  if (measure.kind === "file_paths") return filePaths(matched);
+  if (measure.kind === "file_name") return fileName(measure, matched, scope);
 
   const read = await scope.read(matched);
   const [unreadable] = read.unreadable;
@@ -650,4 +722,51 @@ async function measureOne(
     total += lines.filter((line) => pattern.test(line)).length;
   }
   return { value: total };
+}
+
+// Byte strings in byte order: each character is one byte, so comparing them
+// compares their bytes, as git orders paths.
+function byteOrder(paths: readonly string[]): string[] {
+  return [...paths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+// The paths matched, in byte order, as text.
+function filePaths(matched: readonly string[]): Outcome {
+  // Two paths that are not UTF-8 may read as the same text: it is kept once.
+  const paths = [...new Set(byteOrder(matched).map(shownPath))];
+  if (paths.length > BOARD_FILE_PATHS_MAX) {
+    return fail(
+      `${paths.length} files match, more than the ${BOARD_FILE_PATHS_MAX} a file_paths measure holds`,
+    );
+  }
+  return { value: paths };
+}
+
+// The name of the first or last path matched, in byte order, of those whose
+// name the pattern matches when there is one, or what its group holds. The
+// names are narrowed before one is picked, so a name with no match at the end
+// of the order does not hide the one before it.
+function fileName(
+  measure: Extract<BoardMeasure, { kind: "file_name" }>,
+  matched: readonly string[],
+  scope: RepoScope,
+): Outcome {
+  const pattern =
+    measure.pattern === undefined ? undefined : new RegExp(measure.pattern, BOARD_REGEX_FLAGS);
+  const names = byteOrder(matched).map((p) => shownPath(p.slice(p.lastIndexOf("/") + 1)));
+  const candidates = pattern === undefined ? names : names.filter((name) => pattern.test(name));
+  const name = measure.pick === "first" ? candidates[0] : candidates.at(-1);
+  if (name === undefined) {
+    return fail(
+      pattern === undefined
+        ? `no file is matched ${where(scope)}`
+        : `no file matched has a name the pattern matches ${where(scope)}`,
+    );
+  }
+  if (pattern === undefined) return { value: name };
+  const group = measure.group ?? BOARD_DEFAULT_CAPTURE_GROUP;
+  const captured = pattern.exec(name)?.[group];
+  return typeof captured === "string"
+    ? { value: captured }
+    : fail(`group ${group} took no part in the match of '${name}'`);
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { boardInitStrings } from "../lib/view-strings.js";
-import { parseBoardDeclaration } from "./declaration.js";
+import { BOARD_OBSERVE_KINDS, parseBoardDeclaration } from "./declaration.js";
 import { BOARD_INIT_LANE_ID, boardInitText } from "./init.js";
 
 const en = boardInitStrings("en");
@@ -19,7 +19,7 @@ describe("boardInitText", () => {
     const result = read(text);
     if (!result.ok) throw new Error(result.errors.join("\n"));
     const d = result.declaration;
-    expect(d.board_version).toBe(2);
+    expect(d.board_version).toBe(3);
     expect(d.title).toBe("shop progress board");
     expect(Object.keys(d.stages)).toEqual(["01", "02", "03", "04", "05", "06"]);
     expect(d.stages["04"].meaning).toBe(en.stages["04"]);
@@ -47,8 +47,55 @@ describe("boardInitText", () => {
       });
       expect(text).toContain(`# ${words.comments.measures}\nmeasures: []\n`);
     }
-    expect(en.comments.measures).toContain("One with a lane is drawn in that lane's section");
-    expect(ja.comments.measures).toContain("lane を付けたものは盤のページのそのレーンの節に描かれ");
+    expect(en.comments.measures).toContain(
+      "One with a lane, or a list of lanes, is drawn in each one's section",
+    );
+    // The comment on observe names every kind a board can declare, http among them.
+    for (const kind of BOARD_OBSERVE_KINDS) {
+      expect(en.comments.observe).toContain(kind);
+      expect(ja.comments.observe).toContain(kind);
+    }
+    // The comment on measures names every kind a board can declare, file_name, file_paths and total among them.
+    for (const kind of [
+      "file_count",
+      "dir_count",
+      "line_count",
+      "match_count",
+      "regex_capture",
+      "json_length",
+      "file_name",
+      "file_paths",
+      "trail_count",
+      "total",
+    ]) {
+      expect(en.comments.measures).toContain(kind);
+      expect(ja.comments.measures).toContain(kind);
+    }
+    expect(ja.comments.measures).toContain(
+      "lane\uff081 \u3064\u306e\u30ec\u30fc\u30f3\u304b\u3001\u30ec\u30fc\u30f3\u306e\u4e26\u3073\uff09\u3092\u4ed8\u3051\u305f\u3082\u306e\u306f\u76e4\u306e\u30da\u30fc\u30b8\u306e\u305d\u308c\u305e\u308c\u306e\u30ec\u30fc\u30f3\u306e\u7bc0\u306b\u63cf\u304b\u308c",
+    );
+  });
+
+  it("says, above an empty components, that a directory no built-in marker finds takes a marker", () => {
+    for (const [language, words] of [
+      ["en", en],
+      ["ja", ja],
+    ] as const) {
+      const text = boardInitText({
+        name: "shop",
+        language,
+        start: "2026-09-21",
+        startIsFirstSession: true,
+        timeZone: "UTC",
+      });
+      expect(text).toContain(`# ${words.comments.components}\ncomponents: {}\n`);
+    }
+    expect(en.comments.components).toContain(
+      "A directory no built-in marker finds (content, scripts) is registered with a marker: a glob, from it, of the files that mark it.",
+    );
+    expect(ja.comments.components).toContain(
+      "marker\uff08\u305d\u306e\u30c7\u30a3\u30ec\u30af\u30c8\u30ea\u304b\u3089\u898b\u305f\u3001\u5370\u306b\u3059\u308b\u30d5\u30a1\u30a4\u30eb\u306e glob\uff09\u3092\u4ed8\u3051\u3066\u767b\u9332\u3059\u308b",
+    );
   });
 
   it("writes the words in Japanese for a Japanese anchor", () => {

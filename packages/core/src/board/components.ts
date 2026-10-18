@@ -1,13 +1,17 @@
-import { fromBytes } from "./glob.js";
+import { compileGlob, fromBytes, toBytes } from "./glob.js";
 import type { PreviousOutcome } from "./previous.js";
 import type { RepoScopeResult } from "./scope.js";
 
 /**
  * The version of how the `components` section measures. Raised whenever a
  * value of the section would change for the same repositories, declaration
- * and previous record, as when a rule for a marker changes.
+ * and previous record, as when a rule for a marker changes. A component's
+ * own `marker` did not raise it: a registry without one measures as before.
  */
 export const BOARD_COMPONENTS_METHOD = 2;
+
+// The kind a component is found as when its own marker finds a file.
+const MARKER_KIND = "marker";
 
 // A file under one of these directories is not a marker.
 const SKIP = new Set([
@@ -62,6 +66,13 @@ export type BoardComponentChange = { key: string; before: string[]; after: strin
  * `components`. A key is the name of the directory the repository is in,
  * then the directory of the component inside it.
  *
+ * A registered component with a `marker` is also found, with the kind
+ * `marker`, when a file the working tree lists under its directory matches
+ * the marker from there, as an `include` matches from the repository's root;
+ * the built-in markers' skipped directories (such as `node_modules`) are not
+ * skipped for it. A key that names a file, or no directory of a repository,
+ * finds nothing.
+ *
  * Every value is null, with one entry at `components`, when a repository
  * cannot be opened, git could not list all of its working tree, two
  * repositories are in directories of the same name, or a component's
@@ -102,7 +113,7 @@ export type ComponentsInput = {
   /** The working tree of a repository, by its path. */
   worktreeOf: (repo: string) => Promise<RepoScopeResult>;
   /** The declaration's components, by key. */
-  registered: Readonly<Record<string, unknown>>;
+  registered: Readonly<Record<string, { readonly marker?: string | undefined }>>;
   /** The components of the previous record (default: there is none). */
   previous?: PreviousComponents;
 };
@@ -133,6 +144,13 @@ export async function measureComponents(input: ComponentsInput): Promise<{
   }
 
   const kinds = new Map<string, Set<string>>();
+  const mark = (key: string, kind: string) => {
+    const found = kinds.get(key) ?? new Set<string>();
+    found.add(kind);
+    kinds.set(key, found);
+  };
+  // The files of each repository's working tree, by the name of its directory.
+  const listed = new Map<string, ReadonlyMap<string, unknown>>();
   let undecodable: string | undefined;
   for (const [name, path] of byName) {
     const opened = await input.worktreeOf(path);
@@ -145,14 +163,32 @@ export async function measureComponents(input: ComponentsInput): Promise<{
         undecodable ??= `in the repo '${path}', the directory '${fromBytes(dir)}' is not a valid UTF-8 name, so its component cannot be told apart from others`;
         return;
       }
-      const key = text === "" ? name : `${name}/${text}`;
-      const found = kinds.get(key) ?? new Set<string>();
-      found.add(kind);
-      kinds.set(key, found);
+      mark(text === "" ? name : `${name}/${text}`, kind);
     };
     for (const file of opened.scope.entries.keys()) classify(file, add);
+    listed.set(name, opened.scope.entries);
   }
   if (undecodable !== undefined) return unmeasured(undecodable);
+
+  // A registered component's own marker, matched from its directory.
+  for (const [key, component] of Object.entries(input.registered)) {
+    const slash = key.indexOf("/");
+    if (component.marker === undefined || slash === -1) continue;
+    const files = listed.get(key.slice(0, slash));
+    if (files === undefined) continue;
+    const dir = key.slice(slash + 1);
+    // A path that is not well-formed text (a lone surrogate) names no
+    // directory: its bytes would be those of U+FFFD.
+    if (fromBytes(toBytes(dir)) !== dir) continue;
+    const under = `${toBytes(dir)}/`;
+    const matches = compileGlob(component.marker);
+    for (const file of files.keys()) {
+      if (file.startsWith(under) && matches(file.slice(under.length))) {
+        mark(key, MARKER_KIND);
+        break;
+      }
+    }
+  }
 
   const registered = new Set(Object.keys(input.registered));
   const previous = input.previous ?? { status: "none" };

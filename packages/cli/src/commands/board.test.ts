@@ -10,6 +10,7 @@ import {
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
@@ -264,6 +265,76 @@ describe("basou board measure", () => {
     expect(text).toMatch(/Digest: sha256:[0-9a-f]{64}/);
   });
 
+  it("prints the paths of a file_paths measure as a count, and gives them in --json", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const board = JSON.parse(
+      boardYaml([
+        {
+          id: "paths",
+          kind: "file_paths",
+          repo: ".",
+          include: ["*.md"],
+          unit: "files",
+          lane: "core",
+        },
+        {
+          id: "latest",
+          kind: "file_name",
+          repo: ".",
+          include: ["*.md"],
+          pick: "last",
+          unit: "name",
+        },
+      ]),
+    );
+    board.board_version = 3;
+    await placeBoard(repo, JSON.stringify(board));
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("\n  paths   2 files (paths in --json)  [core]\n");
+    expect(text).toContain("\n  latest  README.md name\n");
+    out.length = 0;
+    await runBoardMeasure({ json: true }, ctx(repo));
+    expect(JSON.parse(out.join("\n")).measures.paths).toEqual({
+      value: ["NOTES.md", "README.md"],
+      unit: "files",
+      lane: ["core"],
+    });
+  });
+
+  it("prints a total, each lane of a measure, and an id with '.', and says what a total lacks", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    const board = JSON.parse(
+      boardYaml([
+        { ...MD, id: "docs.md", lane: ["site", "core"] },
+        { id: "left", kind: "total", plus: [1], minus: ["docs.md"], unit: "files", lane: "core" },
+        { id: "gone", kind: "line_count", repo: ".", include: ["GONE.md"], unit: "lines" },
+        { id: "short", kind: "total", plus: ["gone"], unit: "lines" },
+      ]),
+    );
+    board.board_version = 3;
+    board.lanes = [
+      { id: "core", name: "Core" },
+      { id: "site", name: "Site" },
+    ];
+    await placeBoard(repo, JSON.stringify(board));
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain("\n  docs.md  2 files  [site, core]\n");
+    expect(text).toContain("\n  left     -1 files  [core]\n");
+    expect(text).toContain("\n  short    not measured\n");
+    expect(text).toContain("\n  measures.short: 'gone' is not measured\n");
+    out.length = 0;
+    await runBoardMeasure({ json: true }, ctx(repo));
+    expect(JSON.parse(out.join("\n")).measures["docs.md"]).toEqual({
+      value: 2,
+      unit: "files",
+      lane: ["site", "core"],
+    });
+  });
+
   it("prints each repo in the summary, saying what a null means", async () => {
     const repo = await workspace([{ path: ".", visibility: "private" }, { path: "../gone" }]);
     await placeBoard(repo, boardYaml([]));
@@ -273,7 +344,7 @@ describe("basou board measure", () => {
     const unborn = out.join("\n");
     expect(unborn).toMatch(
       new RegExp(
-        `Repos:\\n  \\. \\(${name}\\)  main at no commit yet, last commit none, commits 0, files \\d+, uncommitted \\d+, behind origin's default branch \\(origin/HEAD names no branch, and there is no origin/main\\)\\n  \\.\\./gone  not measured\\n`,
+        `Repos:\\n  \\. \\(${name}\\)  main at no commit yet, last commit none, commits 0, files \\d+, uncommitted \\d+, no base \\(origin/HEAD names no branch, and there is no origin/main\\)\\n  \\.\\./gone  not measured\\n`,
       ),
     );
     expect(unborn).toContain("repos[../gone]: the repo '../gone' is not on disk");
@@ -294,6 +365,45 @@ describe("basou board measure", () => {
     await runBoardMeasure({}, ctx(repo));
     expect(out.join("\n")).toContain(
       `  . (${name})  detached HEAD at ${stdout.slice(0, 7)}, last commit 2026-10-04T23:30:00+09:00, commits 1, files `,
+    );
+
+    const git = (...args: string[]) => execFileAsync("git", args, { cwd: repo, env: ENV });
+    // An origin/main one commit past HEAD.
+    const tip = (
+      await git(
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        "HEAD",
+        "-m",
+        "upstream",
+      )
+    ).stdout.trim();
+    await git("update-ref", "refs/remotes/origin/main", tip);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      ", base origin/main, behind 1, ahead 0, fetched not known\n  ../gone  not measured\n",
+    );
+    await git("remote", "add", "origin", "https://example.com/x/app");
+    const fetchHead = join(repo, ".git", "FETCH_HEAD");
+    await writeFile(fetchHead, `${tip}\t\tbranch 'main' of https://example.com/x/app\n`);
+    const fetched = new Date("2026-10-04T12:00:00.000Z");
+    await utimes(fetchHead, fetched, fetched);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      ", base origin/main, behind 1, ahead 0, fetched 2026-10-04T12:00:00.000Z\n",
+    );
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/elsewhere");
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      ", base not measured, behind not measured, ahead not measured, fetched not measured\n",
     );
   });
 
@@ -727,6 +837,30 @@ describe("basou board measure", () => {
     );
   });
 
+  it("prints a component its own marker found with the kind marker", async () => {
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await mkdir(join(repo, "content"));
+    await writeFile(join(repo, "content", "a.md"), "\n");
+    const name = basename(repo);
+    const declared = JSON.parse(boardYaml([])) as Record<string, unknown>;
+    await placeBoard(
+      repo,
+      JSON.stringify({
+        ...declared,
+        board_version: 3,
+        components: {
+          [`${name}/content`]: { lane: ["core"], marker: "*.md" },
+          [`${name}/tools`]: { lane: ["core"], marker: "*.py" },
+        },
+      }),
+    );
+    const { out } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      `\nComponents:\n  1 found, 0 unacknowledged, 1 gone\n    ${name}/content  marker\n    ${name}/tools  (gone)\n`,
+    );
+  });
+
   it("lists the components by code point, whatever order JSON gives their keys", async () => {
     const repo = await workspace([
       { path: ".", visibility: "private" },
@@ -934,7 +1068,7 @@ describe("basou board record", () => {
     expect(await readdir(join(repo, "board", "records"))).toEqual([name]);
     const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
     expect(written).toMatchObject({
-      record_version: 2,
+      record_version: 3,
       measure: { digest: input.measure_digest },
       judged_by: { model: "Claude Opus 5.5", self_reported: true },
       order_anomalies: [],
@@ -967,13 +1101,102 @@ describe("basou board record", () => {
     const result = await doRunBoardRecord({}, fed(repo, { ...input, observed }));
     const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
     expect(written).toMatchObject({
-      record_version: 2,
+      record_version: 3,
       measure: { board_version: 2 },
       observed,
       declaration: {
         observe: [{ key: "npm_cli", kind: "npm_version", package: "@scope/cli" }],
         stages: { "05": { meaning: "stage 05", look: ["the published version"] } },
       },
+    });
+  });
+
+  const http = {
+    key: "shop",
+    kind: "http",
+    url: "https://example.com/item",
+    words: ["in stock"],
+    count_pattern: "<loc>",
+  };
+
+  it("tells a version 2 board that observes over http which version reads it", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 2;
+    board.observe = [http];
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, JSON.stringify(board));
+    const { err } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(err.join("\n")).toContain(
+      "observe[0].kind: 'http' is read from board_version 3 on; this file is board_version 2",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("records a version 3 board that observes over http", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 3;
+    board.observe = [http];
+    const { repo, input } = await judged(undefined, JSON.stringify(board));
+    const observed = {
+      shop: {
+        value: { status: 200, redirects: 0, final_url: http.url, words: [true], count: 3 },
+        observed_at: "2026-10-17T00:00:00Z",
+        source: http.url,
+      },
+    };
+    const result = await doRunBoardRecord({}, fed(repo, { ...input, observed }));
+    const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
+    expect(written).toMatchObject({
+      record_version: 3,
+      measure: { board_version: 3 },
+      observed,
+      declaration: { observe: [http] },
+    });
+  });
+
+  const check = {
+    key: "deploy",
+    kind: "github_check",
+    repo: "owner/name",
+    check: "Workers Builds: app",
+    notes: ["a commit that changes only docs starts no build"],
+  };
+
+  it("tells a version 2 board that observes a check run, or has notes, which version reads it", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 2;
+    board.observe = [check];
+    const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await placeBoard(repo, JSON.stringify(board));
+    const { err } = capture();
+    await runBoardMeasure({}, ctx(repo));
+    expect(err.join("\n")).toContain(
+      "observe[0].kind: 'github_check' is read from board_version 3 on; this file is board_version 2",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("records a version 3 board that observes a check run, keeping its notes", async () => {
+    const board = JSON.parse(boardYaml([MD]));
+    board.board_version = 3;
+    board.observe = [check];
+    const { repo, input } = await judged(undefined, JSON.stringify(board));
+    const observed = {
+      deploy: {
+        value: "success",
+        observed_at: "2026-10-17T00:00:00Z",
+        source:
+          "gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app",
+      },
+    };
+    const result = await doRunBoardRecord({}, fed(repo, { ...input, observed }));
+    const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
+    expect(written).toMatchObject({
+      record_version: 3,
+      measure: { board_version: 3 },
+      observed,
+      declaration: { observe: [{ ...check, branch: "main" }] },
     });
   });
 
@@ -1022,7 +1245,7 @@ describe("basou board record", () => {
     );
     expect(out.join("\n")).toBe(`Recorded ${result.record}\nNot compared with a previous record.`);
     await expect(readFile(join(deeper, result.record ?? ""), "utf8")).resolves.toContain(
-      '"record_version": 2',
+      '"record_version": 3',
     );
   });
 
@@ -1238,6 +1461,41 @@ describe("basou board record", () => {
         "  - observed (a named entry).value.observed_at",
         "  - observed (a named entry).value.measure_digest",
       ]);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("takes the keys of an http observation's value as words of the input's shape, and still looks at what they hold", async () => {
+      const { repo, input } = await judged();
+      const url = "https://example.com/item";
+      const at = { observed_at: "2026-10-17T00:00:00Z", source: url };
+      const value = {
+        status: 200,
+        redirects: 0,
+        final_url: url,
+        words: [true],
+        count: 3,
+        capture: "2.3",
+      };
+      capture();
+      for (const name of ["status", "redirects", "final_url", "words", "count", "capture"]) {
+        await registered(repo, name);
+        const http = {
+          ...input,
+          measure_digest: await measuredAgain(repo),
+          observed: { shop: { value, ...at } },
+        };
+        capture();
+        expect((await doRunBoardRecord({ dryRun: true }, fed(repo, http))).dry_run).toBe(true);
+      }
+      const name = await registered(repo);
+      const named = {
+        ...input,
+        measure_digest: await measuredAgain(repo),
+        observed: { shop: { value: { ...value, capture: `${name} 2.3` }, ...at } },
+      };
+      const { err } = capture();
+      await runBoardRecord({ dryRun: true }, fed(repo, named));
+      expect(err.join("\n")).toContain("  - observed (a named entry).value.capture");
       expect(process.exitCode).toBe(1);
     });
 
@@ -1712,7 +1970,7 @@ describe("basou board init", () => {
     const parsed = parseBoardDeclaration(text, { manifestRepoPaths: [".", "../elsewhere"] });
     if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
     expect(parsed.declaration.title).toBe("board-ws progress board");
-    expect(parsed.declaration.board_version).toBe(2);
+    expect(parsed.declaration.board_version).toBe(3);
     // No session yet: the effort starts today.
     expect(parsed.declaration.effort.start).toBe(
       new Intl.DateTimeFormat("en-CA", {

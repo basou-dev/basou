@@ -13,7 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { chainEvents } from "../events/chain.js";
@@ -894,7 +894,7 @@ describe("measureBoard: ratios, the digest and the result's shape", () => {
       measured_at: "2026-10-05T03:00:00.000Z",
       measured_with: WITH,
       measures: {
-        src: { value: 4, unit: "lines", lane: "core" },
+        src: { value: 4, unit: "lines", lane: ["core"] },
         test: { value: 2, unit: "lines" },
       },
     });
@@ -1410,7 +1410,10 @@ describe("measureBoard: the repos section", () => {
     commits: null,
     files: null,
     uncommitted: null,
-    behind_main: null,
+    base: null,
+    behind: null,
+    ahead: null,
+    fetched_at: null,
   };
 
   // Measure a declaration with no measures, for a manifest that declares `repos`.
@@ -1457,6 +1460,8 @@ describe("measureBoard: the repos section", () => {
     await commit(upstream, { "b.txt": "1\n" }, "upstream moves on");
     await commit(upstream, { "b.txt": "2\n" }, "and on");
     git(app, "fetch", "-q");
+    const fetched = new Date("2026-10-04T12:00:00.000Z");
+    await utimes(join(app, ".git", "FETCH_HEAD"), fetched, fetched);
     await commit(app, { "c.txt": "1\n" }, "local", {
       GIT_AUTHOR_DATE: "2026-09-01T00:00:00+00:00",
       GIT_COMMITTER_DATE: "2026-10-04T23:30:00+09:00",
@@ -1480,7 +1485,11 @@ describe("measureBoard: the repos section", () => {
         commits: 1,
         files: 1,
         uncommitted: 0,
-        behind_main: null, // no origin/main
+        // No origin/HEAD and no origin/main.
+        base: null,
+        behind: null,
+        ahead: null,
+        fetched_at: null,
       },
       {
         path: "app",
@@ -1494,8 +1503,13 @@ describe("measureBoard: the repos section", () => {
         files: 5,
         // a.txt and the two notes.
         uncommitted: 3,
-        // The two upstream commits, fetched but not merged (HEAD is one ahead).
-        behind_main: 2,
+        base: "origin/main",
+        // The two upstream commits, fetched but not merged.
+        behind: 2,
+        // The local commit.
+        ahead: 1,
+        // When the fetch that brought origin/main where it is wrote FETCH_HEAD.
+        fetched_at: "2026-10-04T12:00:00.000Z",
       },
     ]);
     expect(Object.keys(m.repos[0] ?? {})).toEqual([
@@ -1507,7 +1521,10 @@ describe("measureBoard: the repos section", () => {
       "commits",
       "files",
       "uncommitted",
-      "behind_main",
+      "base",
+      "behind",
+      "ahead",
+      "fetched_at",
     ]);
     expect(m.repos[0]?.head).toMatch(/^[0-9a-f]{40}$/);
     expect(m.not_found).toEqual([]);
@@ -1630,7 +1647,10 @@ describe("measureBoard: the repos section", () => {
         commits: 1,
         files: 1,
         uncommitted: 0,
-        behind_main: null,
+        base: null,
+        behind: null,
+        ahead: null,
+        fetched_at: null,
       },
       {
         path: "empty",
@@ -1641,7 +1661,10 @@ describe("measureBoard: the repos section", () => {
         commits: 0,
         files: 2,
         uncommitted: 2,
-        behind_main: null,
+        base: null,
+        behind: null,
+        ahead: null,
+        fetched_at: null,
       },
       {
         path: "orphan",
@@ -1652,7 +1675,10 @@ describe("measureBoard: the repos section", () => {
         commits: 0,
         files: 1,
         uncommitted: 1,
-        behind_main: null,
+        base: null,
+        behind: null,
+        ahead: null,
+        fetched_at: null,
       },
     ]);
     expect(m.not_found).toEqual([]);
@@ -1667,7 +1693,15 @@ describe("measureBoard: the repos section", () => {
     git(empty, "init", "-q", "-b", "main");
     git(empty, "fetch", "-q", upstream, "main:refs/remotes/origin/main");
     const m = await measureRepos("empty");
-    expect(m.repos[0]).toMatchObject({ head: null, commits: 0, behind_main: 2 });
+    // Fetched by its URL, not from a remote origin: no fetch of origin to tell.
+    expect(m.repos[0]).toMatchObject({
+      head: null,
+      commits: 0,
+      base: "origin/main",
+      behind: 2,
+      ahead: 0,
+      fetched_at: null,
+    });
     expect(m.complete).toBe(true);
   });
 
@@ -1675,7 +1709,7 @@ describe("measureBoard: the repos section", () => {
     const dir = await repo("app", { "a.txt": "1\n" });
     git(dir, "branch", "origin/main");
     const m = await measureRepos("app");
-    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.repos[0]).toMatchObject({ base: null, behind: null, ahead: null });
     expect(m.not_found).toEqual([]);
   });
 
@@ -1693,7 +1727,13 @@ describe("measureBoard: the repos section", () => {
       "refs/remotes/origin/master",
     );
     const m = await measureRepos("app");
-    expect(m.repos[0]).toMatchObject({ branch: "master", behind_main: 2 });
+    expect(m.repos[0]).toMatchObject({
+      branch: "master",
+      base: "origin/master",
+      behind: 2,
+      ahead: 0,
+      fetched_at: expect.any(String),
+    });
     expect(m.not_found).toEqual([]);
     expect(m.complete).toBe(true);
   });
@@ -1704,7 +1744,7 @@ describe("measureBoard: the repos section", () => {
     const app = await repo("app", { "a.txt": "1\n" });
     git(app, "fetch", "-q", upstream, "master:refs/remotes/origin/master");
     const m = await measureRepos("app");
-    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.repos[0]).toMatchObject({ base: null, behind: null, ahead: null, fetched_at: null });
     expect(m.not_found).toEqual([]);
     expect(m.complete).toBe(true);
   });
@@ -1715,12 +1755,17 @@ describe("measureBoard: the repos section", () => {
     const app = join(root, "app");
     git(app, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone");
     const m = await measureRepos("app");
-    expect(m.repos[0]?.behind_main).toBeNull();
+    // The base is the branch origin/HEAD names; with no commit, no fetch of it is told.
+    expect(m.repos[0]).toMatchObject({
+      base: "origin/gone",
+      behind: null,
+      ahead: null,
+      fetched_at: null,
+    });
+    const reason = "refs/remotes/origin/HEAD names refs/remotes/origin/gone, which is not there";
     expect(m.not_found).toEqual([
-      {
-        at: "repos[app].behind_main",
-        reason: "refs/remotes/origin/HEAD names refs/remotes/origin/gone, which is not there",
-      },
+      { at: "repos[app].behind", reason },
+      { at: "repos[app].ahead", reason },
     ]);
     expect(m.complete).toBe(false);
   });
@@ -1736,12 +1781,16 @@ describe("measureBoard: the repos section", () => {
       "refs/remotes/origin/main",
     );
     const m = await measureRepos("app");
-    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.repos[0]).toMatchObject({
+      base: "origin/main",
+      behind: null,
+      ahead: null,
+      fetched_at: null,
+    });
+    const reason = "refs/remotes/origin/HEAD names refs/remotes/origin/main, which is not there";
     expect(m.not_found).toEqual([
-      {
-        at: "repos[app].behind_main",
-        reason: "refs/remotes/origin/HEAD names refs/remotes/origin/main, which is not there",
-      },
+      { at: "repos[app].behind", reason },
+      { at: "repos[app].ahead", reason },
     ]);
     expect(m.complete).toBe(false);
   });
@@ -1755,7 +1804,10 @@ describe("measureBoard: the repos section", () => {
     git(withMain, "reset", "-q", "--hard", "HEAD~1");
     git(withMain, "update-ref", "--no-deref", "refs/remotes/origin/HEAD", "HEAD");
     const m = await measureRepos("plain", "with-main");
-    expect(m.repos.map((r) => r.behind_main)).toEqual([null, 1]);
+    expect(m.repos.map((r) => [r.base, r.behind, r.ahead])).toEqual([
+      [null, null, null],
+      ["origin/main", 1, 0],
+    ]);
     expect(m.not_found).toEqual([]);
     expect(m.complete).toBe(true);
   });
@@ -1766,16 +1818,17 @@ describe("measureBoard: the repos section", () => {
     git(dir, "update-ref", "refs/remotes/origin/main", "HEAD");
     git(dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/old");
     const m = await measureRepos("app");
-    expect(m.repos[0]?.behind_main).toBeNull();
-    expect(m.not_found).toEqual([
-      {
-        at: "repos[app].behind_main",
-        reason: "refs/remotes/origin/HEAD names refs/heads/old, which is not a branch of origin",
-      },
-    ]);
+    expect(m.repos[0]).toMatchObject({ base: null, behind: null, ahead: null, fetched_at: null });
+    const reason = "refs/remotes/origin/HEAD names refs/heads/old, which is not a branch of origin";
+    expect(m.not_found).toEqual(
+      ["base", "behind", "ahead", "fetched_at"].map((field) => ({
+        at: `repos[app].${field}`,
+        reason,
+      })),
+    );
   });
 
-  it("does not measure behind_main past an origin/HEAD git cannot read, even with an origin/main", async () => {
+  it("does not measure the base past an origin/HEAD git cannot read, even with an origin/main", async () => {
     const looped = await repo("looped", { "a.txt": "1\n" });
     const odd = await repo("odd", { "a.txt": "1\n" });
     for (const dir of [looped, odd]) {
@@ -1794,13 +1847,20 @@ describe("measureBoard: the repos section", () => {
       ]),
     );
     const m = await measureRepos("looped", "odd");
-    expect(m.repos.map((r) => r.behind_main)).toEqual([null, null]);
+    expect(m.repos.map((r) => [r.base, r.behind, r.ahead, r.fetched_at])).toEqual([
+      [null, null, null, null],
+      [null, null, null, null],
+    ]);
+    const fields = ["base", "behind", "ahead", "fetched_at"];
     expect(m.not_found).toEqual([
-      { at: "repos[looped].behind_main", reason: "refs/remotes/origin/HEAD could not be read" },
-      {
-        at: "repos[odd].behind_main",
+      ...fields.map((field) => ({
+        at: `repos[looped].${field}`,
+        reason: "refs/remotes/origin/HEAD could not be read",
+      })),
+      ...fields.map((field) => ({
+        at: `repos[odd].${field}`,
         reason: "the branch refs/remotes/origin/HEAD names is not valid UTF-8",
-      },
+      })),
     ]);
     expect(m.complete).toBe(false);
   });
@@ -1847,12 +1907,17 @@ describe("measureBoard: the repos section", () => {
       commits: null,
       files: 3,
       uncommitted: 0,
-      behind_main: null,
+      // The base is told in a shallow clone; a clone writes no FETCH_HEAD.
+      base: "origin/main",
+      behind: null,
+      ahead: null,
+      fetched_at: null,
     });
     const cut = "the repo is a shallow clone, so its history is cut short";
     expect(m.not_found).toEqual([
       { at: "repos[app].commits", reason: cut },
-      { at: "repos[app].behind_main", reason: cut },
+      { at: "repos[app].behind", reason: cut },
+      { at: "repos[app].ahead", reason: cut },
       { at: "effort.commits[app]", reason: cut },
     ]);
   });
@@ -1863,11 +1928,18 @@ describe("measureBoard: the repos section", () => {
     const broken = await repo("broken", { "a.txt": "1\n" });
     await writeFile(join(broken, ".git", "HEAD"), `${"1234567890".repeat(4)}\n`);
     const m = await measureRepos("odd", "broken");
-    expect(m.repos[0]).toMatchObject({ commits: 1, behind_main: null });
+    expect(m.repos[0]).toMatchObject({
+      commits: 1,
+      base: "origin/main",
+      behind: null,
+      ahead: null,
+      fetched_at: null,
+    });
     expect(m.repos[1]).toEqual({ path: "broken", ...NOTHING, name: "broken", files: 1 });
     const noCommit = "HEAD does not name a commit";
     expect(m.not_found).toEqual([
-      { at: "repos[odd].behind_main", reason: "refs/remotes/origin/main is not a commit" },
+      { at: "repos[odd].behind", reason: "refs/remotes/origin/main is not a commit" },
+      { at: "repos[odd].ahead", reason: "refs/remotes/origin/main is not a commit" },
       { at: "repos[broken].head", reason: noCommit },
       { at: "repos[broken].last_commit", reason: noCommit },
       { at: "repos[broken].commits", reason: noCommit },
@@ -1875,7 +1947,8 @@ describe("measureBoard: the repos section", () => {
         at: "repos[broken].uncommitted",
         reason: "the working tree could not be compared by git",
       },
-      { at: "repos[broken].behind_main", reason: noCommit },
+      { at: "repos[broken].behind", reason: noCommit },
+      { at: "repos[broken].ahead", reason: noCommit },
       { at: "effort.commits[broken]", reason: noCommit },
     ]);
   });
@@ -1920,7 +1993,13 @@ describe("measureBoard: the repos section", () => {
     await writeFile(join(app, "src/f.txt"), "changed\n");
     const m = await measureRepos("app");
     expect(hasObject(app, old)).toBe(false);
-    expect(m.repos[0]).toMatchObject({ commits: 2, files: 1, behind_main: 0 });
+    expect(m.repos[0]).toMatchObject({
+      commits: 2,
+      files: 1,
+      base: "origin/main",
+      behind: 0,
+      ahead: 0,
+    });
     if (REFUSES_LAZY_FETCH) {
       expect(m.repos[0]?.uncommitted).toBe(1);
       expect(m.not_found).toEqual([]);
@@ -1955,10 +2034,12 @@ describe("measureBoard: the repos section", () => {
           git(app, "rev-parse", "HEAD^{tree}").trim(),
         );
         const odd = await measureRepos("app");
-        expect(odd.not_found).toContainEqual({
-          at: "repos[app].behind_main",
-          reason: "refs/remotes/origin/main is not a commit, or is not in the repository",
-        });
+        for (const field of ["behind", "ahead"]) {
+          expect(odd.not_found).toContainEqual({
+            at: `repos[app].${field}`,
+            reason: "refs/remotes/origin/main is not a commit, or is not in the repository",
+          });
+        }
       });
     },
   );
@@ -2111,7 +2192,7 @@ describe("measureBoard: the repos section", () => {
     const dir = await repo("app", { "a.txt": "1\n" });
     git(dir, "update-ref", "refs/remotes/origin/main/x", "HEAD");
     const m = await measureRepos("app");
-    expect(m.repos[0]?.behind_main).toBeNull();
+    expect(m.repos[0]).toMatchObject({ base: null, behind: null, ahead: null });
     expect(m.not_found).toEqual([]);
   });
 
@@ -2121,7 +2202,10 @@ describe("measureBoard: the repos section", () => {
     const branched = await repo("branched", { "a.txt": "1\n" });
     git(branched, "branch", "refs/remotes/origin/main");
     const m = await measureRepos("tagged", "branched");
-    expect(m.repos.map((r) => r.behind_main)).toEqual([null, null]);
+    expect(m.repos.map((r) => [r.base, r.behind, r.ahead])).toEqual([
+      [null, null, null],
+      [null, null, null],
+    ]);
     expect(m.not_found).toEqual([]);
   });
 
@@ -2145,13 +2229,19 @@ describe("measureBoard: the repos section", () => {
       `${"1234567890".repeat(4)}\n`,
     );
     const m = await measureRepos("broken", "lost");
-    expect(m.repos.map((r) => r.behind_main)).toEqual([null, null]);
+    expect(m.repos.map((r) => [r.base, r.behind, r.ahead, r.fetched_at])).toEqual([
+      ["origin/main", null, null, null],
+      ["origin/main", null, null, null],
+    ]);
+    const isBroken = "refs/remotes/origin/main is a broken ref";
+    const lostAt = "refs/remotes/origin/main points at an object that is not in the repository";
     expect(m.not_found).toEqual([
-      { at: "repos[broken].behind_main", reason: "refs/remotes/origin/main is a broken ref" },
-      {
-        at: "repos[lost].behind_main",
-        reason: "refs/remotes/origin/main points at an object that is not in the repository",
-      },
+      { at: "repos[broken].behind", reason: isBroken },
+      { at: "repos[broken].ahead", reason: isBroken },
+      // Which commit the base is at is not known: whether it was fetched cannot be told.
+      { at: "repos[broken].fetched_at", reason: isBroken },
+      { at: "repos[lost].behind", reason: lostAt },
+      { at: "repos[lost].ahead", reason: lostAt },
     ]);
   });
 
@@ -2239,8 +2329,11 @@ describe("measureBoard: the repos section", () => {
       "main:refs/remotes/origin/main",
     );
     const m = await measureRepos("empty");
-    expect(m.repos[0]).toMatchObject({ head: null, commits: 0, behind_main: null });
-    expect(m.not_found).toEqual([{ at: "repos[empty].behind_main", reason: SHALLOW }]);
+    expect(m.repos[0]).toMatchObject({ head: null, commits: 0, behind: null, ahead: null });
+    expect(m.not_found).toEqual([
+      { at: "repos[empty].behind", reason: SHALLOW },
+      { at: "repos[empty].ahead", reason: SHALLOW },
+    ]);
   });
 
   it.skipIf(!POSIX)(
@@ -2273,11 +2366,12 @@ describe("measureBoard: the repos section", () => {
       await repo("app", { "a.txt": "1\n" });
       await withWrappedGit(NO_SHALLOW_OPTION, async () => {
         const m = await measureRepos("app");
-        expect(m.repos[0]).toMatchObject({ commits: null, behind_main: null, files: 1 });
+        expect(m.repos[0]).toMatchObject({ commits: null, behind: null, ahead: null, files: 1 });
         const unknown = "could not tell whether the history of the repo is complete";
         expect(m.not_found).toEqual([
           { at: "repos[app].commits", reason: unknown },
-          { at: "repos[app].behind_main", reason: unknown },
+          { at: "repos[app].behind", reason: unknown },
+          { at: "repos[app].ahead", reason: unknown },
           { at: "effort.commits[app]", reason: unknown },
         ]);
       });
@@ -2317,7 +2411,367 @@ describe("measureBoard: the repos section", () => {
     git(upstream, "merge", "-q", "--no-ff", "-m", "merge", "side");
     git(join(root, "app"), "fetch", "-q");
     const m = await measureRepos("app");
-    expect(m.repos[0]?.behind_main).toBe(3);
+    expect(m.repos[0]).toMatchObject({ behind: 3, ahead: 0 });
+  });
+
+  it("counts the commits HEAD has that its base does not, merges and all", async () => {
+    const upstream = await repo("upstream", { "a.txt": "1\n" });
+    git(root, "clone", "-q", upstream, "app");
+    const app = join(root, "app");
+    git(app, "config", "user.email", "test@example.com");
+    git(app, "config", "user.name", "test");
+    git(app, "checkout", "-q", "-b", "side");
+    await commit(app, { "s.txt": "1\n" }, "side");
+    git(app, "checkout", "-q", "main");
+    await commit(app, { "m.txt": "1\n" }, "main");
+    git(app, "merge", "-q", "--no-ff", "-m", "merge", "side");
+    const m = await measureRepos("app");
+    expect(m.repos[0]).toMatchObject({ base: "origin/main", behind: 0, ahead: 3 });
+  });
+
+  describe("when the base was last fetched", () => {
+    const AT = new Date("2026-10-04T12:00:00.000Z");
+    const LATER = new Date("2026-10-04T13:00:00.000Z");
+
+    // A clone of a new upstream at `name`, with the upstream: origin/HEAD names main.
+    async function cloned(name: string): Promise<{ upstream: string; dir: string }> {
+      const upstream = await repo(`${name}-upstream`, { "a.txt": "1\n" });
+      git(upstream, "branch", "feature");
+      git(root, "clone", "-q", upstream, name);
+      return { upstream, dir: join(root, name) };
+    }
+
+    function fetchHeadOf(dir: string): string {
+      return join(dir, git(dir, "rev-parse", "--git-path", "FETCH_HEAD").trim());
+    }
+
+    it("is when FETCH_HEAD was written by a fetch of the base from origin, merged into HEAD's branch or not", async () => {
+      const { upstream, dir } = await cloned("app");
+      await commit(upstream, { "b.txt": "1\n" }, "upstream moves on");
+      // A branch with no upstream: main is fetched as not for merge.
+      git(dir, "checkout", "-q", "-b", "topic");
+      git(dir, "fetch", "-q");
+      expect(await readFile(fetchHeadOf(dir), "utf8")).toContain(
+        "\tnot-for-merge\tbranch 'main' of ",
+      );
+      await utimes(fetchHeadOf(dir), AT, AT);
+      const m = await measureRepos("app");
+      expect(m.repos[0]).toMatchObject({
+        branch: "topic",
+        base: "origin/main",
+        behind: 1,
+        ahead: 0,
+        fetched_at: AT.toISOString(),
+      });
+      expect(m.complete).toBe(true);
+    });
+
+    it("is null, with no entry, when FETCH_HEAD does not show the base fetched from origin at its commit", async () => {
+      // Never fetched since the clone, which writes no FETCH_HEAD.
+      const never = await cloned("never");
+      await expect(stat(join(never.dir, ".git", "FETCH_HEAD"))).rejects.toThrow();
+      // The last fetch failed: it emptied FETCH_HEAD and moved its time.
+      const failed = await cloned("failed");
+      git(failed.dir, "fetch", "-q");
+      expect(() =>
+        execFileSync("git", ["fetch", "-q", "origin", "nosuch"], {
+          cwd: failed.dir,
+          env: GIT_ENV,
+          stdio: "ignore",
+        }),
+      ).toThrow();
+      expect((await stat(fetchHeadOf(failed.dir))).size).toBe(0);
+      // Only another branch was fetched since.
+      const branch = await cloned("branch");
+      git(branch.dir, "fetch", "-q");
+      git(branch.dir, "fetch", "-q", "origin", "feature");
+      expect(await readFile(fetchHeadOf(branch.dir), "utf8")).not.toContain("branch 'main'");
+      // Another remote, at another URL, whose main is at the same commit was fetched since.
+      const other = await cloned("other");
+      git(other.dir, "fetch", "-q");
+      git(other.dir, "remote", "add", "copy", join(root, "copy"));
+      git(root, "clone", "-q", "--bare", other.upstream, "copy");
+      git(other.dir, "fetch", "-q", "copy");
+      const tip = git(other.dir, "rev-parse", "refs/remotes/origin/main").trim();
+      expect(await readFile(fetchHeadOf(other.dir), "utf8")).toContain(
+        `${tip}\tnot-for-merge\tbranch 'main' of `,
+      );
+      // A push moved origin/main since the last fetch.
+      const bare = join(root, "pushed.git");
+      git(root, "clone", "-q", "--bare", other.upstream, bare);
+      git(root, "clone", "-q", bare, "pushed");
+      const pushed = join(root, "pushed");
+      git(pushed, "fetch", "-q");
+      git(pushed, "config", "user.email", "test@example.com");
+      git(pushed, "config", "user.name", "test");
+      await commit(pushed, { "p.txt": "1\n" }, "pushed");
+      git(pushed, "push", "-q", "origin", "main");
+      for (const dir of [failed.dir, branch.dir, other.dir, pushed]) {
+        await utimes(fetchHeadOf(dir), AT, AT);
+      }
+      const m = await measureRepos("never", "failed", "branch", "other", "pushed");
+      expect(m.repos.map((r) => [r.base, r.behind, r.fetched_at])).toEqual([
+        ["origin/main", 0, null],
+        ["origin/main", 0, null],
+        ["origin/main", 0, null],
+        ["origin/main", 0, null],
+        ["origin/main", 0, null],
+      ]);
+      expect(m.not_found).toEqual([]);
+      expect(m.complete).toBe(true);
+    });
+
+    it("reads the FETCH_HEAD of the worktree measured, not a fetch in another worktree", async () => {
+      const { upstream, dir } = await cloned("app");
+      git(dir, "fetch", "-q");
+      git(dir, "worktree", "add", "-q", "-b", "side", join(root, "wt"));
+      await commit(upstream, { "b.txt": "1\n" }, "upstream moves on");
+      const wt = join(root, "wt");
+      git(wt, "fetch", "-q");
+      // Where a linked worktree's FETCH_HEAD is, git gives as an absolute path.
+      const own = git(wt, "rev-parse", "--git-path", "FETCH_HEAD").trim();
+      expect(isAbsolute(own)).toBe(true);
+      await utimes(own, AT, AT);
+      await utimes(fetchHeadOf(dir), LATER, LATER);
+      const m = await measureRepos("app", "wt");
+      // The fetch in wt moved origin/main past the commit app's FETCH_HEAD holds.
+      expect(m.repos.map((r) => [r.base, r.behind, r.fetched_at])).toEqual([
+        ["origin/main", 1, null],
+        ["origin/main", 1, AT.toISOString()],
+      ]);
+      expect(m.not_found).toEqual([]);
+    });
+
+    it.skipIf(!POSIX)(
+      "takes origin's URL as git writes it in FETCH_HEAD: without a user, slashes or .git at its end",
+      async () => {
+        const upstream = await repo("upstream", { "a.txt": "1\n" });
+        // A directory with '@' in its name, under one without.
+        const at = join(root, "a@b");
+        await mkdir(at);
+        git(at, "clone", "-q", "--bare", upstream, "up.git");
+        const bare = join(at, "up.git");
+        // An ssh that runs the command it is given here, so nothing is sent.
+        const ssh = join(root, "fake-ssh");
+        await writeFile(
+          ssh,
+          '#!/bin/sh\nfor last; do :; done\nPATH="$(git --exec-path):$PATH" exec sh -c "$last"\n',
+        );
+        await chmod(ssh, 0o755);
+        const env = { ...GIT_ENV, GIT_SSH_COMMAND: ssh, GIT_SSH_VARIANT: "simple" };
+        const urls: Record<string, string> = {
+          scp: `me@fakehost:${bare}/`,
+          password: `ssh://me:secret@fakehost${bare}`,
+          scheme: `git+ssh://me@fakehost${bare}`,
+          // '@' in the path, after the first '/': kept as it is.
+          path: `ssh://fakehost${bare}`,
+          // '@' with no ':' after it: kept as it is.
+          scpPath: `fakehost:${bare}`,
+          local: `${bare}/`,
+        };
+        for (const [name, url] of Object.entries(urls)) {
+          const dir = join(root, name);
+          await mkdir(dir);
+          git(dir, "init", "-q", "-b", "main");
+          git(dir, "remote", "add", "origin", url);
+          execFileSync("git", ["fetch", "-q", "origin"], { cwd: dir, env, stdio: "ignore" });
+          await utimes(fetchHeadOf(dir), AT, AT);
+        }
+        const written = await readFile(fetchHeadOf(join(root, "password")), "utf8");
+        expect(written).toContain(`branch 'main' of ssh://fakehost${join(at, "up")}\n`);
+        const m = await measureRepos(...Object.keys(urls));
+        expect(m.repos.map((r) => [r.path, r.base, r.fetched_at])).toEqual(
+          Object.keys(urls).map((name) => [name, "origin/main", AT.toISOString()]),
+        );
+        expect(m.not_found).toEqual([]);
+      },
+    );
+
+    it("does not take a FETCH_HEAD line of another URL, or of a tag, for the base's", async () => {
+      const dir = await repo("app", { "a.txt": "1\n" });
+      const tip = git(dir, "rev-parse", "HEAD").trim();
+      git(dir, "update-ref", "refs/remotes/origin/main", tip);
+      git(dir, "remote", "add", "origin", "https://user:token@example.com/x/app.git/");
+      const fetchHead = join(dir, ".git", "FETCH_HEAD");
+      const measured = async (lines: string[]) => {
+        await writeFile(fetchHead, lines.map((l) => `${l}\n`).join(""));
+        await utimes(fetchHead, AT, AT);
+        return (await measureRepos("app")).repos[0]?.fetched_at;
+      };
+      // As git writes it: the user and the token, the slash and .git left out.
+      expect(await measured([`${tip}\t\tbranch 'main' of https://example.com/x/app`])).toBe(
+        AT.toISOString(),
+      );
+      expect(
+        await measured([`${tip}\t\tbranch 'main' of https://example.com/x/app.git`]),
+      ).toBeNull();
+      expect(await measured([`${tip}\t\ttag 'main' of https://example.com/x/app`])).toBeNull();
+      expect(
+        await measured([`${tip}\tnot-for-merge\tbranch 'main' of https://example.com/x/apps`]),
+      ).toBeNull();
+      // A scheme git would not take as one keeps the user.
+      git(dir, "remote", "set-url", "origin", "my_scheme://user@example.com/x/app");
+      expect(
+        await measured([`${tip}\t\tbranch 'main' of my_scheme://example.com/x/app`]),
+      ).toBeNull();
+      expect(
+        await measured([`${tip}\t\tbranch 'main' of my_scheme://user@example.com/x/app`]),
+      ).toBe(AT.toISOString());
+      // Every slash at the end goes before the .git.
+      git(dir, "remote", "set-url", "origin", "https://example.com/x/app.git//");
+      expect(await measured([`${tip}\t\tbranch 'main' of https://example.com/x/app`])).toBe(
+        AT.toISOString(),
+      );
+      // A local path, with a '/' before its first ':', keeps what has an '@'.
+      git(dir, "remote", "set-url", "origin", "/srv/a@b:c/app.git");
+      expect(await measured([`${tip}\t\tbranch 'main' of /srv/a@b:c/app`])).toBe(AT.toISOString());
+      // Only one .git goes.
+      git(dir, "remote", "set-url", "origin", "https://example.com/x/app.git.git");
+      expect(await measured([`${tip}\t\tbranch 'main' of https://example.com/x/app`])).toBeNull();
+      expect(await measured([`${tip}\t\tbranch 'main' of https://example.com/x/app.git`])).toBe(
+        AT.toISOString(),
+      );
+      // A name of five characters keeps its .git.
+      git(dir, "remote", "set-url", "origin", "a.git");
+      expect(await measured([`${tip}\t\tbranch 'main' of a`])).toBeNull();
+      expect(await measured([`${tip}\t\tbranch 'main' of a.git`])).toBe(AT.toISOString());
+    });
+
+    it.skipIf(!POSIX || ROOT_USER)("says why when FETCH_HEAD cannot be read", async () => {
+      const locked = await cloned("locked");
+      git(locked.dir, "fetch", "-q");
+      await chmod(fetchHeadOf(locked.dir), 0o000);
+      const folder = await cloned("folder");
+      await mkdir(join(folder.dir, ".git", "FETCH_HEAD"));
+      try {
+        const m = await measureRepos("locked", "folder");
+        expect(m.repos.map((r) => [r.base, r.behind, r.fetched_at])).toEqual([
+          ["origin/main", 0, null],
+          ["origin/main", 0, null],
+        ]);
+        expect(m.not_found).toEqual([
+          { at: "repos[locked].fetched_at", reason: "FETCH_HEAD could not be read (EACCES)" },
+          { at: "repos[folder].fetched_at", reason: "FETCH_HEAD could not be read (EISDIR)" },
+        ]);
+        expect(m.complete).toBe(false);
+      } finally {
+        await chmod(fetchHeadOf(locked.dir), 0o644);
+      }
+    });
+
+    it("matches a branch and a URL of origin that are not ASCII, as git writes them", async () => {
+      // An upstream under a directory not named in ASCII, whose default branch is not ASCII either.
+      await mkdir(join(root, "\u4e0a\u6d41"));
+      const upstream = await repo(join("\u4e0a\u6d41", "up"), { "a.txt": "1\n" });
+      git(upstream, "branch", "-m", "main", "d\u00e9v'x");
+      git(root, "clone", "-q", upstream, "app");
+      const dir = join(root, "app");
+      git(dir, "fetch", "-q");
+      await utimes(fetchHeadOf(dir), AT, AT);
+      const m = await measureRepos("app");
+      expect(m.repos[0]).toMatchObject({
+        base: "origin/d\u00e9v'x",
+        behind: 0,
+        ahead: 0,
+        fetched_at: AT.toISOString(),
+      });
+      expect(m.not_found).toEqual([]);
+    });
+
+    it("takes a later fetch with --append, which leaves origin's line, for the last fetch", async () => {
+      const { dir } = await cloned("app");
+      git(dir, "fetch", "-q");
+      await utimes(fetchHeadOf(dir), AT, AT);
+      git(dir, "remote", "add", "copy", join(root, "copy"));
+      git(root, "clone", "-q", "--bare", join(root, "app-upstream"), "copy");
+      git(dir, "fetch", "-q", "--append", "copy");
+      await utimes(fetchHeadOf(dir), LATER, LATER);
+      const m = await measureRepos("app");
+      expect(m.repos[0]?.fetched_at).toBe(LATER.toISOString());
+    });
+
+    it("takes a fetch from another remote at origin's URL for one from origin", async () => {
+      const { upstream, dir } = await cloned("app");
+      git(dir, "remote", "add", "mirror", upstream);
+      git(dir, "fetch", "-q", "mirror");
+      await utimes(fetchHeadOf(dir), AT, AT);
+      const m = await measureRepos("app");
+      expect(m.repos[0]?.fetched_at).toBe(AT.toISOString());
+    });
+
+    it.skipIf(!POSIX || ROOT_USER)(
+      "keeps why fetched_at was not measured in the digest",
+      async () => {
+        const { dir } = await cloned("app");
+        const fetchHead = join(dir, ".git", "FETCH_HEAD");
+        const declaration = declare([], {}, ["app"]);
+        await mkdir(fetchHead);
+        const folder = await measure(declaration, NOW, ["app"]);
+        await rm(fetchHead, { recursive: true });
+        await writeFile(fetchHead, "");
+        await chmod(fetchHead, 0o000);
+        try {
+          const locked = await measure(declaration, NOW, ["app"]);
+          expect(folder.not_found).toEqual([
+            { at: "repos[app].fetched_at", reason: "FETCH_HEAD could not be read (EISDIR)" },
+          ]);
+          expect(locked.not_found).toEqual([
+            { at: "repos[app].fetched_at", reason: "FETCH_HEAD could not be read (EACCES)" },
+          ]);
+          expect(locked.repos).toEqual(folder.repos);
+          expect(locked.digest).not.toBe(folder.digest);
+        } finally {
+          await chmod(fetchHead, 0o644);
+        }
+      },
+    );
+
+    it.skipIf(!POSIX)("says why when git stops before telling the URL of origin", async () => {
+      const { dir } = await cloned("app");
+      git(dir, "fetch", "-q");
+      await withWrappedGit('for a in "$@"; do [ "$a" = get-url ] && kill -9 $$; done', async () => {
+        const m = await measureRepos("app");
+        expect(m.repos[0]).toMatchObject({ base: "origin/main", behind: 0, fetched_at: null });
+        expect(m.not_found).toEqual([
+          { at: "repos[app].fetched_at", reason: "the URL of origin could not be read" },
+        ]);
+      });
+    });
+
+    it.skipIf(!POSIX)("says why when git cannot say where FETCH_HEAD is", async () => {
+      const { dir } = await cloned("app");
+      git(dir, "fetch", "-q");
+      await withWrappedGit('for a in "$@"; do [ "$a" = --git-path ] && exit 1; done', async () => {
+        const m = await measureRepos("app");
+        expect(m.repos[0]).toMatchObject({ base: "origin/main", behind: 0, fetched_at: null });
+        expect(m.not_found).toEqual([
+          { at: "repos[app].fetched_at", reason: "where FETCH_HEAD is could not be read" },
+        ]);
+      });
+    });
+
+    it("is left out of the digest: a fetch that brings nothing, or fails, does not move it", async () => {
+      const { dir } = await cloned("app");
+      git(dir, "fetch", "-q");
+      await utimes(fetchHeadOf(dir), AT, AT);
+      const declaration = declare([], {}, ["app"]);
+      const first = await measure(declaration, NOW, ["app"]);
+      expect(first.repos[0]?.fetched_at).toBe(AT.toISOString());
+      await utimes(fetchHeadOf(dir), LATER, LATER);
+      const later = await measure(declaration, NOW, ["app"]);
+      expect(later.repos[0]?.fetched_at).toBe(LATER.toISOString());
+      expect(later.digest).toBe(first.digest);
+      expect(() =>
+        execFileSync("git", ["fetch", "-q", "origin", "nosuch"], {
+          cwd: dir,
+          env: GIT_ENV,
+          stdio: "ignore",
+        }),
+      ).toThrow();
+      const failed = await measure(declaration, NOW, ["app"]);
+      expect(failed.repos[0]?.fetched_at).toBeNull();
+      expect(failed.digest).toBe(first.digest);
+    });
   });
 
   it("ignores a GIT_DIR in the environment", async () => {
@@ -4122,6 +4576,64 @@ describe("measureBoard: the axis section", () => {
     expect(later.axis.reasons.map((r) => r.trigger)).toEqual(["a", "b"]);
   });
 
+  it("finds a registered directory by its own marker, in the working tree, so (a) does not fire", async () => {
+    const dir = await repo(
+      "app",
+      { ".gitignore": "ignored/\n", "package.json": "{}\n", "tools/run.py": "\n" },
+      { "content/a.md": "\n", "ignored/b.md": "\n" },
+    );
+    const components = {
+      app: { lane: "-", note: "root" },
+      "app/tools": { lane: "-", note: "scripts", marker: "*.py" },
+      "app/content": { lane: "-", note: "data", marker: "**" },
+      "app/ignored": { lane: "-", note: "ignored", marker: "**" },
+    };
+    const declaration = declare([], { ...SEEDED, board_version: 3, components }, ["app"]);
+    const judged = (m: BoardMeasurement) => ({
+      found: m.components.found,
+      gone: m.components.gone,
+      reasons: m.axis.reasons,
+    });
+    const m = await measure(declaration, NOW, ["app"]);
+    expect(judged(m)).toEqual({
+      found: {
+        app: { kinds: ["manifest"], status: "known" },
+        // Untracked, but not ignored.
+        "app/content": { kinds: ["marker"], status: "known" },
+        "app/tools": { kinds: ["marker"], status: "known" },
+      },
+      // An ignored file is not one the working tree lists.
+      gone: ["app/ignored"],
+      reasons: [{ trigger: "a", detail: "components: 0 unacknowledged, 1 gone" }],
+    });
+    // Without the ignored one, nothing fires.
+    const { "app/ignored": _ignored, ...kept } = components;
+    const quiet = await measure(
+      declare([], { ...SEEDED, board_version: 3, components: kept }, ["app"]),
+      NOW,
+      ["app"],
+    );
+    expect(judged(quiet)).toMatchObject({ gone: [], reasons: [] });
+    expect(quiet.axis.review_needed).toBe(false);
+    // The marker is in the declaration the digest covers.
+    const other = declare(
+      [],
+      {
+        ...SEEDED,
+        board_version: 3,
+        components: { ...kept, "app/tools": { lane: "-", note: "scripts", marker: "**" } },
+      },
+      ["app"],
+    );
+    expect((await measure(other, NOW, ["app"])).digest).not.toBe(quiet.digest);
+    // Once the files are gone, so is the component.
+    await rm(join(dir, "content"), { recursive: true });
+    expect((await measure(declaration, NOW, ["app"])).components.gone).toEqual([
+      "app/content",
+      "app/ignored",
+    ]);
+  });
+
   it("counts the days to today in the effort's time zone", async () => {
     // 2026-11-26T16:00Z is 11-27 in Tokyo, 60 days after the review; 59 in UTC.
     const at = new Date("2026-11-26T16:00:00.000Z");
@@ -4375,5 +4887,457 @@ describe("measureBoard: against the previous record", () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+});
+
+describe("measureBoard: the name of a file and the paths of files", () => {
+  // A version 3 declaration of `measures` over the repo "app".
+  const declare3 = (measures: Record<string, unknown>[]) => declare(measures, { board_version: 3 });
+  const names = (over: Record<string, unknown>) => ({
+    id: "latest",
+    kind: "file_name",
+    repo: "app",
+    include: ["db/migrations/*.sql"],
+    pick: "last",
+    unit: "name",
+    ...over,
+  });
+  const paths3 = (over: Record<string, unknown>) => ({
+    id: "migrations",
+    kind: "file_paths",
+    repo: "app",
+    include: ["db/migrations/*.sql"],
+    unit: "files",
+    ...over,
+  });
+
+  beforeEach(async () => {
+    await repo(
+      "app",
+      {
+        "db/migrations/20260101_init.sql": "",
+        "db/migrations/20260301_users.sql": "",
+        "db/migrations/schema.sql": "",
+        "db/migrations/README.md": "",
+        "db/other/20261231_late.sql": "",
+      },
+      { "db/migrations/20260401_new.sql": "" },
+    );
+  });
+
+  it("picks the first or the last name in byte order, narrowed by the pattern before it picks", async () => {
+    const m = await measure(
+      declare3([
+        names({ id: "last" }),
+        names({ id: "first", pick: "first" }),
+        names({ id: "last_date", pattern: "^(\\d{8})_" }),
+        names({ id: "first_date", pick: "first", pattern: "^(\\d{8})_" }),
+        names({ id: "whole", pattern: "^\\d{8}_", group: 0 }),
+        names({ id: "month", pattern: "^(\\d{4})(\\d{2})", group: 2 }),
+        names({ id: "last_main", pattern: "^(\\d{8})_", at: "main" }),
+        names({ id: "no_schema", exclude: ["**/schema.sql"] }),
+      ]),
+      NOW,
+      ["app"],
+    );
+    // schema.sql comes after every name that starts with a digit.
+    expect(measured(m, "last")).toBe("schema.sql");
+    expect(measured(m, "first")).toBe("20260101_init.sql");
+    // Narrowed first: schema.sql, last in the order, has no date and is not picked.
+    expect(measured(m, "last_date")).toBe("20260401");
+    expect(measured(m, "first_date")).toBe("20260101");
+    expect(measured(m, "whole")).toBe("20260401_");
+    expect(measured(m, "month")).toBe("04");
+    // The untracked one is not at main.
+    expect(measured(m, "last_main")).toBe("20260301");
+    expect(measured(m, "no_schema")).toBe("20260401_new.sql");
+    expect(m.not_found).toEqual([]);
+    expect(m.measures.last).toEqual({ value: "schema.sql", unit: "name" });
+  });
+
+  it("orders by the whole path in bytes, not by the name or the locale", async () => {
+    await repo("names", {
+      "a/zzz.txt": "",
+      "b/aaa.txt": "",
+      "c/B.txt": "",
+      "c/a.txt": "",
+      "d/z.txt": "",
+      "d/\u00e9.txt": "",
+      "e/\uff5e.txt": "",
+      "e/\u{1f600}.txt": "",
+    });
+    const m = await measure(
+      declare(
+        [
+          names({ id: "across", repo: "names", include: ["a/*", "b/*"] }),
+          names({ id: "upper_first", repo: "names", include: ["c/*"], pick: "first" }),
+          names({ id: "accent_last", repo: "names", include: ["d/*"] }),
+          names({ id: "astral_last", repo: "names", include: ["e/*"] }),
+          paths3({ id: "all", repo: "names", include: ["**/*.txt"] }),
+        ],
+        { board_version: 3 },
+        ["names"],
+      ),
+      NOW,
+      ["names"],
+    );
+    // b/aaa.txt is after a/zzz.txt as a path, though its name is before.
+    expect(measured(m, "across")).toBe("aaa.txt");
+    // 'B' (0x42) is before 'a' (0x61); the locale would put 'a' first.
+    expect(measured(m, "upper_first")).toBe("B.txt");
+    // The first byte of '\u00e9' (0xc3) is after 'z'.
+    expect(measured(m, "accent_last")).toBe("\u00e9.txt");
+    // U+1F600 is four bytes from 0xf0, after U+FF5E (0xef ...), though as
+    // UTF-16 its first unit (0xd83d) is before 0xff5e.
+    expect(measured(m, "astral_last")).toBe("\u{1f600}.txt");
+    expect(measured(m, "all")).toEqual([
+      "a/zzz.txt",
+      "b/aaa.txt",
+      "c/B.txt",
+      "c/a.txt",
+      "d/z.txt",
+      "d/\u00e9.txt",
+      "e/\uff5e.txt",
+      "e/\u{1f600}.txt",
+    ]);
+  });
+
+  it("takes the paths matched in byte order, an empty list when none is, and keeps the lane", async () => {
+    const m = await measure(
+      declare3([
+        paths3({ lane: "core" }),
+        paths3({ id: "at_main", at: "main" }),
+        paths3({ id: "dated", include: ["db/**/2026*.sql"], exclude: ["db/other/**"] }),
+        paths3({ id: "none", include: ["db/migrations/*.rb"] }),
+      ]),
+      NOW,
+      ["app"],
+    );
+    expect(m.measures.migrations).toEqual({
+      value: [
+        "db/migrations/20260101_init.sql",
+        "db/migrations/20260301_users.sql",
+        "db/migrations/20260401_new.sql",
+        "db/migrations/schema.sql",
+      ],
+      unit: "files",
+      lane: ["core"],
+    });
+    expect(measured(m, "at_main")).toEqual([
+      "db/migrations/20260101_init.sql",
+      "db/migrations/20260301_users.sql",
+      "db/migrations/schema.sql",
+    ]);
+    expect(measured(m, "dated")).toEqual([
+      "db/migrations/20260101_init.sql",
+      "db/migrations/20260301_users.sql",
+      "db/migrations/20260401_new.sql",
+    ]);
+    // Nothing matched under a directory that is there: a list, not a gap.
+    expect(measured(m, "none")).toEqual([]);
+    expect(m.complete).toBe(true);
+  });
+
+  it("is not measured with no file to pick, a group that took no part, or a directory with nothing under it", async () => {
+    const m = await measure(
+      declare(
+        [
+          names({ id: "no_file", include: ["db/migrations/*.rb"] }),
+          names({ id: "no_name", pattern: "^v(\\d+)_" }),
+          names({ id: "no_group", pattern: "^(?:(\\d{8})_)?schema", pick: "last" }),
+          names({ id: "no_dir", include: ["db/nope/*.sql"] }),
+          names({ id: "no_dir_main", include: ["db/nope/*.sql"], at: "main" }),
+          paths3({ id: "paths_no_dir", include: ["db/nope/*.sql"] }),
+          names({ id: "no_repo", repo: "gone" }),
+        ],
+        { board_version: 3 },
+        ["app", "gone"],
+      ),
+      NOW,
+      ["app"],
+    );
+    for (const id of [
+      "no_file",
+      "no_name",
+      "no_group",
+      "no_dir",
+      "no_dir_main",
+      "paths_no_dir",
+      "no_repo",
+    ]) {
+      expect(measured(m, id)).toBeNull();
+    }
+    expect(m.complete).toBe(false);
+    expect(m.not_found.filter((n) => n.at.startsWith("measures."))).toEqual([
+      { at: "measures.no_file", reason: "no file is matched in the working tree" },
+      {
+        at: "measures.no_name",
+        reason: "no file matched has a name the pattern matches in the working tree",
+      },
+      { at: "measures.no_group", reason: "group 1 took no part in the match of 'schema.sql'" },
+      { at: "measures.no_dir", reason: "nothing is under 'db/nope' in the working tree" },
+      { at: "measures.no_dir_main", reason: "nothing is under 'db/nope' at 'main'" },
+      { at: "measures.paths_no_dir", reason: "nothing is under 'db/nope' in the working tree" },
+      {
+        at: "measures.no_repo",
+        reason: expect.stringMatching(/^the repo 'gone' /) as unknown as string,
+      },
+    ]);
+  });
+
+  it("keeps once two paths that read as the same text, as two that are not UTF-8 do", async () => {
+    const dir = await repo("bytes", { "keep.txt": "" });
+    const blob = git(dir, "hash-object", "-w", "keep.txt").trim();
+    // x, a byte that is not UTF-8, then .txt: each reads as x\ufffd.txt.
+    const entry = (byte: number) =>
+      Buffer.concat([
+        Buffer.from(`100644 ${blob}\t`),
+        Buffer.from([0x78, byte]),
+        Buffer.from(".txt\0"),
+      ]);
+    execFileSync("git", ["update-index", "-z", "--index-info"], {
+      cwd: dir,
+      env: GIT_ENV,
+      input: Buffer.concat([entry(0xfe), entry(0xff)]),
+    });
+    git(dir, "commit", "-q", "-m", "bytes");
+    const m = await measure(
+      declare(
+        [paths3({ id: "all", repo: "bytes", include: ["*.txt"], at: "main" })],
+        { board_version: 3 },
+        ["bytes"],
+      ),
+      NOW,
+      ["bytes"],
+    );
+    expect(measured(m, "all")).toEqual(["keep.txt", "x\ufffd.txt"]);
+  });
+
+  it("holds at most 1000 paths, and is not measured with more", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 1001 }, (_, i) => [`many/f${String(i).padStart(4, "0")}.txt`, ""]),
+    );
+    await repo("big", files);
+    const m = await measure(
+      declare(
+        [
+          paths3({
+            id: "at_most",
+            repo: "big",
+            include: ["many/*.txt"],
+            exclude: ["many/f1000.txt"],
+          }),
+          paths3({ id: "too_many", repo: "big", include: ["many/*.txt"] }),
+        ],
+        { board_version: 3 },
+        ["big"],
+      ),
+      NOW,
+      ["big"],
+    );
+    const atMost = measured(m, "at_most") as string[];
+    expect(atMost).toHaveLength(1000);
+    expect(atMost[0]).toBe("many/f0000.txt");
+    expect(atMost.at(-1)).toBe("many/f0999.txt");
+    expect(measured(m, "too_many")).toBeNull();
+    expect(m.not_found).toEqual([
+      {
+        at: "measures.too_many",
+        reason: "1001 files match, more than the 1000 a file_paths measure holds",
+      },
+    ]);
+  });
+});
+
+describe.skipIf(process.platform === "win32")(
+  "measureBoard: the name and the paths of files, and a symlink that leaves the repository",
+  () => {
+    it("is not measured when a file matched is a symlink to outside the repository", async () => {
+      const dir = await repo("app", { "docs/a.md": "a\n" });
+      await writeFile(join(root, "secret.md"), "s\n");
+      await symlink("../../secret.md", join(dir, "docs/z.md"));
+      const m = await measure(
+        declare(
+          [
+            {
+              id: "name",
+              kind: "file_name",
+              repo: "app",
+              include: ["docs/*.md"],
+              pick: "first",
+              unit: "name",
+            },
+            { id: "paths", kind: "file_paths", repo: "app", include: ["docs/*.md"], unit: "files" },
+          ],
+          { board_version: 3 },
+        ),
+        NOW,
+        ["app"],
+      );
+      expect(measured(m, "name")).toBeNull();
+      expect(measured(m, "paths")).toBeNull();
+      expect(m.not_found.filter((n) => n.at.startsWith("measures."))).toEqual([
+        { at: "measures.name", reason: "'docs/z.md' is a symlink to outside the repository" },
+        { at: "measures.paths", reason: "'docs/z.md' is a symlink to outside the repository" },
+      ]);
+    });
+  },
+);
+
+describe("measureBoard: totals, a measure's lanes and ids with '.'", () => {
+  // A version 3 declaration over the repos "app" and "web", with two lanes.
+  const declare3 = (measures: Record<string, unknown>[], extra: Record<string, unknown> = {}) =>
+    declare(
+      measures,
+      {
+        board_version: 3,
+        lanes: [
+          { id: "core", name: "Core" },
+          { id: "site", name: "Site" },
+        ],
+        ...extra,
+      },
+      ["app", "web"],
+    );
+  const files = (
+    id: string,
+    repoPath: string,
+    include: string[],
+    over: Record<string, unknown> = {},
+  ) => ({ id, kind: "file_count", repo: repoPath, include, unit: "files", ...over });
+  const ofMeasures = (m: BoardMeasurement) =>
+    m.not_found.filter((n) => n.at.startsWith("measures"));
+
+  beforeEach(async () => {
+    await repo("app", { "src/a.ts": "", "src/b.ts": "", "src/c.ts": "" });
+    await repo("web", { "pages/x.md": "", "pages/y.md": "" });
+  });
+
+  it("adds up plus and takes away minus, over measures of two repos and integers, below 0 too", async () => {
+    const m = await measure(
+      declare3([
+        { id: "left", kind: "total", plus: [4], minus: ["app.src", "web.pages"], unit: "slots" },
+        files("app.src", "app", ["src/*.ts"]),
+        files("web.pages", "web", ["pages/*.md"]),
+        { id: "all", kind: "total", plus: ["app.src", "web.pages", 10], unit: "files" },
+        { id: "twice", kind: "total", plus: ["app.src", "app.src"], minus: [-1], unit: "files" },
+        { id: "none", kind: "total", plus: [0], unit: "files" },
+      ]),
+      NOW,
+      ["app", "web"],
+    );
+    expect(measured(m, "left")).toBe(-1);
+    expect(measured(m, "all")).toBe(15);
+    expect(measured(m, "twice")).toBe(7);
+    expect(measured(m, "none")).toBe(0);
+    expect(ofMeasures(m)).toEqual([]);
+    // In the order declared, a total ahead of what it takes as well.
+    expect(Object.keys(m.measures)).toEqual([
+      "left",
+      "app.src",
+      "web.pages",
+      "all",
+      "twice",
+      "none",
+    ]);
+    expect(m.measures.left).toEqual({ value: -1, unit: "slots" });
+  });
+
+  it("is null when a measure it takes was not measured, naming each once in order", async () => {
+    const m = await measure(
+      declare3([
+        files("gone", "app", ["missing/*.ts"]),
+        files("app.src", "app", ["src/*.ts"]),
+        files("web.none", "web", ["none/*.md"]),
+        {
+          id: "sum",
+          kind: "total",
+          plus: ["gone", "app.src", "gone"],
+          minus: ["web.none"],
+          unit: "files",
+        },
+        { id: "one", kind: "total", plus: [1], minus: ["gone"], unit: "files" },
+        { id: "fine", kind: "total", plus: ["app.src"], unit: "files" },
+      ]),
+      NOW,
+      ["app", "web"],
+    );
+    expect(measured(m, "sum")).toBeNull();
+    expect(measured(m, "one")).toBeNull();
+    expect(measured(m, "fine")).toBe(3);
+    // An id with '.' is named as a key, not as a path into a measure.
+    expect(ofMeasures(m)).toEqual([
+      { at: "measures.gone", reason: "nothing is under 'missing' in the working tree" },
+      { at: 'measures["web.none"]', reason: "nothing is under 'none' in the working tree" },
+      { at: "measures.sum", reason: "'gone', 'web.none' are not measured" },
+      { at: "measures.one", reason: "'gone' is not measured" },
+    ]);
+    expect(m.complete).toBe(false);
+  });
+
+  it("is exact up to the integers a number holds exactly, and null past them", async () => {
+    const max = Number.MAX_SAFE_INTEGER;
+    const m = await measure(
+      declare3([
+        { id: "top", kind: "total", plus: [max], unit: "n" },
+        { id: "bottom", kind: "total", plus: [0], minus: [max], unit: "n" },
+        // max + 2 is not held exactly, but what the total comes to is.
+        { id: "back", kind: "total", plus: [max, 2], minus: [3], unit: "n" },
+        { id: "over", kind: "total", plus: [max, 1], unit: "n" },
+        { id: "under", kind: "total", plus: [-1], minus: [max], unit: "n" },
+        files("gone", "app", ["missing/*.ts"]),
+        // What it lacks is said before what it would come to.
+        { id: "lacking", kind: "total", plus: [max, 1, "gone"], unit: "n" },
+      ]),
+    );
+    expect(measured(m, "top")).toBe(max);
+    expect(measured(m, "bottom")).toBe(-max);
+    expect(measured(m, "back")).toBe(max - 1);
+    const past = `the total is out of the range a number holds exactly (-${max} to ${max})`;
+    expect(ofMeasures(m)).toEqual([
+      { at: "measures.over", reason: past },
+      { at: "measures.under", reason: past },
+      { at: "measures.gone", reason: "nothing is under 'missing' in the working tree" },
+      { at: "measures.lacking", reason: "'gone' is not measured" },
+    ]);
+  });
+
+  it("keeps a measure's lanes as a list, of one or more, and none when it has none", async () => {
+    const m = await measure(
+      declare3([
+        files("one", "app", ["src/*.ts"], { lane: "core" }),
+        files("two", "app", ["src/*.ts"], { lane: ["site", "core"] }),
+        files("bare", "app", ["src/*.ts"]),
+        { id: "sum", kind: "total", plus: ["one"], unit: "files", lane: ["site"] },
+      ]),
+      NOW,
+      ["app"],
+    );
+    expect(m.measures.one).toEqual({ value: 3, unit: "files", lane: ["core"] });
+    expect(m.measures.two).toEqual({ value: 3, unit: "files", lane: ["site", "core"] });
+    expect(m.measures.bare).toEqual({ value: 3, unit: "files" });
+    expect(m.measures.sum).toEqual({ value: 3, unit: "files", lane: ["site"] });
+  });
+
+  it("reads the lane of a version 1 board as a list of one, in the measurement and the snapshot", async () => {
+    const d = declare([files("one", "app", ["src/*.ts"], { lane: "core" })], {}, ["app", "web"]);
+    const m = await measure(d, NOW, ["app"]);
+    expect(m.measures.one?.lane).toEqual(["core"]);
+    expect(boardDeclarationSnapshot(d).measures[0]?.lane).toEqual(["core"]);
+  });
+
+  it("takes a total, and a measure whose id holds '.', in a ratio", async () => {
+    const m = await measure(
+      declare3(
+        [
+          files("app.src", "app", ["src/*.ts"]),
+          { id: "all", kind: "total", plus: ["app.src", 3], unit: "files" },
+        ],
+        { ratios: [{ id: "share", label: "share", numerator: "app.src", denominator: "all" }] },
+      ),
+      NOW,
+      ["app"],
+    );
+    expect(m.ratios.share).toEqual({ value: 0.5, numerator: "app.src", denominator: "all" });
   });
 });

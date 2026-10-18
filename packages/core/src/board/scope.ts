@@ -180,14 +180,14 @@ function splitNul(buf: Buffer): string[] {
     .filter((s) => s.length > 0);
 }
 
-function codeReason(error: unknown): string {
+export function codeReason(error: unknown): string {
   const code = ["EACCES", "EPERM", "EIO", "ELOOP", "EISDIR", "EMFILE"].find((c) =>
     findErrorCode(error, c),
   );
   return code === undefined ? "could not be read" : `could not be read (${code})`;
 }
 
-function isAbsent(error: unknown): boolean {
+export function isAbsent(error: unknown): boolean {
   return findErrorCode(error, "ENOENT") || findErrorCode(error, "ENOTDIR");
 }
 

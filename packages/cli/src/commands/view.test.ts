@@ -1365,6 +1365,7 @@ describe("basou view: the board page", () => {
       "hm",
       "when",
       "shown",
+      "withWords",
       "stateName",
       "section",
       "svg",
@@ -1506,6 +1507,95 @@ describe("basou view: the board page", () => {
     });
     const none = nav.find((n) => n.tag === "option" && n.selected);
     expect(none.map((o) => [o.attrs.value, o.disabled])).toEqual([["", true]]);
+  });
+
+  it("draws an http observation's words beside what it found of each, in the order declared", () => {
+    const { call } = drawing(["summary"]);
+    const made = { observed_at: "2026-10-07T00:00:00Z", source: "s" };
+    const drawn = call("summary", {
+      summary: {
+        text: "",
+        tiles: [],
+        observed: [
+          {
+            name: "shop",
+            value: {
+              status: 200,
+              redirects: 1,
+              final_url: "https://example.com/x/",
+              words: [true, false],
+              count: 2,
+            },
+            words: [
+              { word: "in stock", found: true },
+              { word: "42", found: false },
+            ],
+            ...made,
+          },
+          { name: "page", value: { status: 200, words: [true] }, ...made },
+          {
+            name: "odd",
+            value: { words: [true] },
+            words: [{ word: 'a"b\\c', found: true }],
+            ...made,
+          },
+          {
+            name: "one",
+            value: { words: [false] },
+            words: [{ word: "solo", found: false }],
+            ...made,
+          },
+          {
+            name: "gone",
+            value: null,
+            previous: { status: "value", value: { words: [true] } },
+            ...made,
+          },
+        ],
+      },
+    });
+    const values = drawn.find((n) => n.tag === "td").map((n) => n.text());
+    expect(values).toContain(
+      '{"status":200,"redirects":1,"final_url":"https://example.com/x/","words":{"in stock":true,"42":false},"count":2}',
+    );
+    expect(values).toContain('{"status":200,"words":[true]}');
+    expect(values).toContain('{"words":{"a\\"b\\\\c":true}}');
+    expect(values).toContain('{"words":{"solo":false}}');
+    // The previous value, under another declaration, is drawn as it was.
+    expect(values).toContain('not observed (previous: {"words":[true]})');
+  });
+
+  it("draws the paths of a file_paths measure as a count, with the paths folded under it", () => {
+    const { call } = drawing(["lanes"]);
+    const drawn = call("lanes", {
+      lanes: [
+        {
+          id: "core",
+          name: "Core",
+          now: null,
+          attention: [],
+          prose: null,
+          measures: [
+            { id: "latest", value: "20260401", unit: "name" },
+            { id: "migrations", value: ["db/a.sql", "db/<b>.sql"], unit: "files" },
+            { id: "gone", value: null, unit: "files" },
+          ],
+          flags: { live: false, blocked: false, unverified: false },
+        },
+      ],
+    });
+    const items = drawn.find((n) => n.tag === "li" && n.find((c) => c.tag === "li").length === 1);
+    expect(items.map((n) => n.text())).toEqual([
+      "latest: 20260401 name",
+      "db/a.sql",
+      "db/<b>.sql",
+      "gone: not measured",
+    ]);
+    const [details] = drawn.find((n) => n.tag === "details");
+    expect(details?.attrs.open).toBeUndefined();
+    expect(details?.find((n) => n.tag === "summary").map((n) => n.text())).toEqual([
+      "migrations: 2 files",
+    ]);
   });
 
   it("marks a lane's marks as reported, and leaves out of the period what was not measured", () => {
@@ -1867,7 +1957,10 @@ describe("basou view: the board page", () => {
         last_commit: null,
         commits: 2,
         uncommitted: 1,
-        behind_main: null,
+        base: null,
+        behind: null,
+        ahead: null,
+        fetched_at: null,
       },
     ],
     trail: {
@@ -1910,8 +2003,49 @@ describe("basou view: the board page", () => {
 
     const repos = call("liveRepos", LIVE);
     const cells = repos.find((n) => n.tag === "td").map((c) => c.textContent);
-    // Nulls that mean so: a detached HEAD, no default branch, a last commit unread.
-    expect(cells).toEqual(["app", "-", "0123456", "-", "2", "1", "-"]);
+    // Nulls that mean so: a detached HEAD, no base, a last commit unread.
+    expect(cells).toEqual(["app", "-", "0123456", "-", "2", "1", "-", "-", "-", "-"]);
+    expect(repos.find((n) => n.tag === "th").map((c) => [c.textContent, c.className])).toEqual([
+      [S.live.repo, ""],
+      [S.live.branch, ""],
+      [S.live.head, ""],
+      [S.live.lastCommit, ""],
+      [S.live.commits, "n"],
+      [S.live.uncommitted, "n"],
+      [S.live.base, ""],
+      [S.live.behind, "n"],
+      [S.live.ahead, "n"],
+      [S.live.fetchedAt, ""],
+    ]);
+    // A base, the counts against it and when it was fetched.
+    const compared = {
+      ...LIVE,
+      repos: [
+        {
+          ...LIVE.repos[0],
+          base: "origin/master",
+          behind: 3,
+          ahead: 1,
+          fetched_at: "2026-10-04T12:00:00.000Z",
+        },
+      ],
+    };
+    const comparedTds = call("liveRepos", compared).find((n) => n.tag === "td");
+    const comparedCells = comparedTds.map((c) => c.textContent);
+    expect(comparedCells.slice(6, 9)).toEqual(["origin/master", "3", "1"]);
+    expect(comparedCells[9]).toBe(new Date("2026-10-04T12:00:00.000Z").toLocaleString("en-US"));
+    expect(comparedTds.map((c) => c.className)).toEqual([
+      "",
+      "",
+      "",
+      "",
+      "n",
+      "n",
+      "",
+      "n",
+      "n",
+      "",
+    ]);
     // Nulls the measurement could not measure are said to be.
     const unmeasured = {
       ...LIVE,
@@ -1940,7 +2074,7 @@ describe("basou view: the board page", () => {
       .slice(1)
       .map((row) => row.find((n) => n.tag === "td").map((c) => c.textContent));
     expect(rows).toEqual([
-      ["app", "not measured", "0123456", "-", "2", "1", "-"],
+      ["app", "not measured", "0123456", "-", "2", "1", "-", "-", "-", "-"],
       [
         "../gone",
         "not measured",
@@ -1949,8 +2083,26 @@ describe("basou view: the board page", () => {
         "not measured",
         "not measured",
         "not measured",
+        "not measured",
+        "not measured",
+        "not measured",
       ],
     ]);
+    // Each of the four the measurement could not measure is said to be.
+    const fields = ["base", "behind", "ahead", "fetched_at"];
+    const unmeasuredBase = {
+      ...LIVE,
+      footnotes: {
+        ...LIVE.footnotes,
+        not_found: fields.map((field) => ({ at: `repos[.].${field}`, reason: "x" })),
+      },
+    };
+    expect(
+      call("liveRepos", unmeasuredBase)
+        .find((n) => n.tag === "td")
+        .map((c) => c.textContent)
+        .slice(6),
+    ).toEqual(fields.map(() => S.tiles.notMeasured));
 
     const trail = call("liveTrail", LIVE);
     // The newest session was not measured: not "no session".

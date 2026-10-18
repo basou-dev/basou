@@ -1034,7 +1034,10 @@ export type BoardPageStrings = {
     lastCommit: string;
     commits: string;
     uncommitted: string;
-    behindMain: string;
+    base: string;
+    behind: string;
+    ahead: string;
+    fetchedAt: string;
     trail: string;
     decisions: string;
     decisionsAll: string;
@@ -1205,7 +1208,10 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     lastCommit: "Last commit",
     commits: "Commits",
     uncommitted: "Uncommitted",
-    behindMain: "Behind origin's default branch",
+    base: "Base branch",
+    behind: "Behind",
+    ahead: "Ahead",
+    fetchedAt: "Last fetch",
     trail: "Trail",
     decisions: "Decisions",
     decisionsAll: "{n} in all, voided ones included",
@@ -1374,7 +1380,10 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     lastCommit: "最終 commit",
     commits: "commit 数",
     uncommitted: "未 commit",
-    behindMain: "origin の既定 branch からの遅れ",
+    base: "比べる branch",
+    behind: "遅れ",
+    ahead: "進み",
+    fetchedAt: "最後の fetch",
     trail: "証跡",
     decisions: "判断",
     decisionsAll: "取り消したものを含めて {n}",
@@ -1448,11 +1457,11 @@ const BOARD_INIT_EN: BoardInitStrings = {
       "The six stages are fixed; only what each means is the board's. Keep 04 (merged) apart from 05 (in users' hands). `look` and `notes` say what to look at and mind when judging a stage.",
     lanes: "At least one lane. Its id is lowercase ASCII and stays: records join on it.",
     measures:
-      "What to count in the repos (file_count, dir_count, line_count, match_count, regex_capture, json_length, trail_count). One with a lane is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
+      "What to measure in the repos (file_count, dir_count, line_count, match_count, regex_capture, json_length, file_name, file_paths, trail_count), and their sums and differences (total). One with a lane, or a list of lanes, is drawn in each one's section of the board page; one without is kept only in the records and their differences (and in a ratio or a total that uses it).",
     observe:
-      "What to observe outside basou (npm_version, github_release, github_open_issues, github_open_prs, github_ci, page_version, manual). basou never makes these; the guide says how.",
+      "What to observe outside basou (npm_version, github_release, github_open_issues, github_open_prs, github_ci, github_check, page_version, http, manual), each with notes on what to mind when making it if need be. basou never makes these; the guide says how.",
     components:
-      "Left empty: the first measure names every component it finds, and the axis review registers each with its lanes or '-' and a note.",
+      "Left empty: the first measure names every component it finds, and the axis review registers each with its lanes or '-' and a note. A directory no built-in marker finds (content, scripts) is registered with a marker: a glob, from it, of the files that mark it.",
     axis: "Raise version when a lane is added or removed or a stage's meaning changes.",
     effort: "start is the day of the first session (today when there is none).",
     effortToday:
@@ -1485,11 +1494,11 @@ const BOARD_INIT_JA: BoardInitStrings = {
       "6 段の id は固定で、盤が決めるのは意味だけ。04 本番（main に入った）と 05 開通（利用者が手に取れる）を分ける。look と notes は、その段を判定するときに見るものと注意。",
     lanes: "レーンは 1 本以上。id は小文字の ASCII で、記録の照合に使うので変えない。",
     measures:
-      "repo の中で数えるもの（file_count・dir_count・line_count・match_count・regex_capture・json_length・trail_count）。lane を付けたものは盤のページのそのレーンの節に描かれ、付けないものは記録と差分（と、それを使う ratio）にだけ残る。",
+      "repo の中で測るもの（file_count・dir_count・line_count・match_count・regex_capture・json_length・file_name・file_paths・trail_count）と、それらの和と差（total）。lane（1 つのレーンか、レーンの並び）を付けたものは盤のページのそれぞれのレーンの節に描かれ、付けないものは記録と差分（と、それを使う ratio や total）にだけ残る。",
     observe:
-      "basou の外で観測するもの（npm_version・github_release・github_open_issues・github_open_prs・github_ci・page_version・manual）。basou は取りに行かない。取り方は guide が出す。",
+      "basou の外で観測するもの（npm_version・github_release・github_open_issues・github_open_prs・github_ci・github_check・page_version・http・manual）。取るときの注意があれば notes に書く。basou は取りに行かない。取り方は guide が出す。",
     components:
-      "空のままでよい。最初の measure が見つけた構成要素を全部名指しし、軸の見直しで各要素をレーンに（数えないなら '-' と note で）登録する。",
+      "空のままでよい。最初の measure が見つけた構成要素を全部名指しし、軸の見直しで各要素をレーンに（数えないなら '-' と note で）登録する。組み込みの印で見つからないディレクトリ（データ・スクリプト）は marker（そのディレクトリから見た、印にするファイルの glob）を付けて登録する。",
     axis: "レーンの増減や段の意味を変えたら version を上げる。",
     effort: "start は最初の session の日（session が無ければ今日）。",
     effortToday:

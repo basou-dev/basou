@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { decodeTime } from "ulid";
 import { displayPath } from "../lib/display-path.js";
 import {
+  BOARD_HTTP_CAPTURE_FLAGS,
+  BOARD_HTTP_COUNT_FLAGS,
+  BOARD_HTTP_MAX_REDIRECTS,
   BOARD_STAGE_IDS,
   type BoardDeclaration,
   type BoardObserve,
@@ -71,14 +74,28 @@ export function shellWord(text: string): string {
   return `'${text.replaceAll("'", `'\\''`)}'`;
 }
 
-// JSON with what a terminal would act on escaped as well: JSON.stringify
-// leaves the C1 controls, the line and paragraph separators and the
-// bidirectional controls as they are.
+// What a terminal would act on, or hides: the C1 controls, the Arabic letter
+// mark, the zero-width and direction marks, the line and paragraph
+// separators, the bidirectional controls, the word joiner and the invisible
+// operators, and the byte order mark.
+const HIDDEN = /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g;
+
+const escapeHidden = (c: string) => `\\u${(c.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`;
+
+// JSON with what a terminal would act on, or hides, escaped as well:
+// JSON.stringify leaves those as they are.
 function jsonText(value: unknown, indent?: number): string {
-  return JSON.stringify(value, null, indent).replace(
-    /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g,
-    (c) => `\\u${(c.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`,
-  );
+  return JSON.stringify(value, null, indent).replace(HIDDEN, escapeHidden);
+}
+
+// A surrogate not in a pair, which JSON.stringify writes as an escape.
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+// A text as the guide shows it: as displayPath shows it, with what jsonText
+// escapes escaped too (a surrogate not in a pair among it), so that the
+// prose, a source and the template show a value alike.
+function shown(text: string): string {
+  return displayPath(text).replace(HIDDEN, escapeHidden).replace(LONE_SURROGATE, escapeHidden);
 }
 
 const LANGUAGE_NAMES = { en: "English (en)", ja: "Japanese (ja)" } as const;
@@ -116,9 +133,9 @@ export function boardGuide(input: BoardGuideInput): string {
   const lastId = previous.last.status === "found" ? previous.last.id : null;
 
   line("## This board", "");
-  line(`- Workspace (its own repo): ${displayPath(input.anchor)}`);
+  line(`- Workspace (its own repo): ${shown(input.anchor)}`);
   line(
-    `- Declaration: board/board.yaml, "${displayPath(d.title)}", board_version ${d.board_version}, ${count(d.lanes.length, "lane")}, ${count(d.observe.length, "observation")} outside basou`,
+    `- Declaration: board/board.yaml, "${shown(d.title)}", board_version ${d.board_version}, ${count(d.lanes.length, "lane")}, ${count(d.observe.length, "observation")} outside basou`,
   );
   line(`- Records: board/records/, ${recordsLine(input, recordCount)}`);
   line(`- Axis: ${axisLine(input)}`);
@@ -189,7 +206,9 @@ export function boardGuide(input: BoardGuideInput): string {
     "- An empty file means it did not run, not that it passed: check that measure.json reads as JSON.",
     '- Never read a null as 0. Write "not confirmed" for it and do not judge by it.',
     "- What moved is the point: the top of measure.txt (`Since the previous record <ULID>:`) and `diff` in the JSON. A value marked `method_changed` may have moved because basou measures it another way now.",
-    "- `repos[].behind_main` counts the commits on origin's default branch (the branch of origin that origin/HEAD names, or origin/main when origin/HEAD names none) as of the last fetch; measure does not fetch.",
+    "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured, and when it is out of the range a number holds exactly (-9007199254740991 to 9007199254740991).",
+    "- A `file_paths` measure's value is the list of paths it found. `Measures:` in measure.txt gives it as a count: read the paths in the JSON. `diff` lists each path that came in (`added`) or went out (`removed`) when both records hold a list, and the list whole when only one does.",
+    "- `repos[].base` is the branch of origin a repo is compared with (`origin/<branch>`: the one origin/HEAD names, or origin/main when origin/HEAD names none), `behind` counts the commits on it HEAD does not have, and `ahead` those HEAD has that it does not, as of the last fetch; measure does not fetch. `fetched_at` is when FETCH_HEAD was last written, given that it holds that branch fetched from origin at the commit it is at now (a later `git fetch --append` moves it too), and null when it does not (no fetch since the clone, a failed fetch, a fetch of something else since, or a push since). When it is null or old, `behind` and `ahead` may be old too.",
     "",
   );
 
@@ -208,7 +227,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "",
     "1. Each lane: does it still stand as who uses what? Do its stages' conditions fit what is built now? Merge, split, retire or keep, with one sentence why even for keep.",
     "2. Each unacknowledged component: does it change a lane's conditions, make a new lane, or count in no lane (and why)? For the first two, what to measure or observe for it.",
-    "3. Each gone component: done with, or a repo in another state? If done with, take it off the registry and fix the lane's conditions.",
+    "3. Each gone component: done with, or a repo in another state? If done with, take it off the registry and fix the lane's conditions. If it is still there and no built-in marker finds it (a directory of content or of scripts), give it a `marker` (board_version 3 on): a glob from its directory, written as an `include` is, of the files that mark it (`**` for any file under it, `*.py` for a Python file right in it). It is then found, with the kind `marker`, while such a file is there; a repo itself takes none.",
     "4. Do the decisions recorded hold anything that should move the axis (a new surface, a new base, something decided not to build)?",
     "5. If the last review was by another model: does anything in how the lanes are cut or worded need fixing now? Change nothing only to make it look new; change only what is worth losing the comparison with past records.",
     "",
@@ -226,7 +245,7 @@ export function boardGuide(input: BoardGuideInput): string {
   if (lastId === null) {
     line(
       previous.last.status === "unreadable"
-        ? `The previous record cannot be read (${displayPath(previous.last.reason)}). Judge with no record to compare with, and say so in a footnote.`
+        ? `The previous record cannot be read (${shown(previous.last.reason)}). Judge with no record to compare with, and say so in a footnote.`
         : "There is no record yet: this is the first. Nothing is compared, and an observation not made is drawn as not confirmed, with no previous value.",
       "",
     );
@@ -347,7 +366,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- Argue priorities: the board lists facts, and the operator's turns list what waits for a ruling.",
     "- Write an estimate as a measurement, or let a number you could not get pass as blank or 0.",
     "- Put money on the board, or read effort as progress: reach is shown by the matrix alone.",
-    "- Change the axis silently, or register a component only to silence (a).",
+    "- Change the axis silently, or register a component, or give one a marker, only to silence (a).",
     "- Write the board's HTML: basou draws it.",
     "- Touch another project's repos.",
     "",
@@ -358,7 +377,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- Approving a milestone before it is added to board.yaml.",
   );
   for (const o of d.observe) {
-    if (o.kind === "manual") line(`- Observing \`${o.key}\`: ${displayPath(o.how)}`);
+    if (o.kind === "manual") line(`- Observing \`${o.key}\`: ${shown(o.how)}`);
   }
   line("- A gate of step 9 that does not pass.", "");
   return `${out.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
@@ -369,7 +388,7 @@ function basouLine(input: BoardGuideInput): string {
     input.basouBuild === null
       ? `version ${input.basouVersion} (source)`
       : `version ${input.basouVersion}, build ${input.basouBuild}`;
-  return `basou: \`${displayPath(input.basouCommand)}\` printed this. Where \`basou --version\` prints ${self}, as this one is, call \`basou\` as the commands below do (an alias of your shell is as good). Otherwise (another version or build, or no \`basou\`), write that command in place of \`basou\` in every block. Use the same one at every step: a measurement records which basou measured it.`;
+  return `basou: \`${shown(input.basouCommand)}\` printed this. Where \`basou --version\` prints ${self}, as this one is, call \`basou\` as the commands below do (an alias of your shell is as good). Otherwise (another version or build, or no \`basou\`), write that command in place of \`basou\` in every block. Use the same one at every step: a measurement records which basou measured it.`;
 }
 
 function count(n: number, noun: string): string {
@@ -403,7 +422,7 @@ function recordsLine(input: BoardGuideInput, recordCount: number): string {
     return `${count(recordCount, "record")}; the last is ${last.id}, recorded ${at.toISOString()}${when}`;
   }
   if (last.status === "unreadable") {
-    return `${count(recordCount, "record")}; the last cannot be read (${displayPath(last.reason)})`;
+    return `${count(recordCount, "record")}; the last cannot be read (${shown(last.reason)})`;
   }
   return count(recordCount, "record");
 }
@@ -422,14 +441,14 @@ function axisLine(input: BoardGuideInput): string {
     const day =
       todayIn(d.effort.time_zone, new Date(lastReview.record.recorded_at)) ??
       new Date(lastReview.record.recorded_at).toISOString().slice(0, 10);
-    return `${head}; last reviewed ${day} by ${displayPath(lastReview.record.judged_by.model)} (record ${lastReview.id})`;
+    return `${head}; last reviewed ${day} by ${shown(lastReview.record.judged_by.model)} (record ${lastReview.id})`;
   }
   if (lastReview.status === "unreadable") {
     return `${head}; the last review is not known (a record cannot be read)`;
   }
   const seed = d.axis.seed_review;
   if (seed !== undefined && isCalendarDate(seed.date)) {
-    return `${head}; last reviewed ${seed.date} by ${displayPath(seed.model)} (seed_review in board.yaml)`;
+    return `${head}; last reviewed ${seed.date} by ${shown(seed.model)} (seed_review in board.yaml)`;
   }
   return input.board.recordCount === 0 && previous.last.status === "none"
     ? `${head}; no review on record (the first record is the first review: give it an axis_review, step 2b)`
@@ -445,7 +464,7 @@ function observeSteps(
 ): void {
   if (observe.length === 0) {
     line(
-      "This board declares nothing to observe outside basou. If a lane reaches its users through something outside the repos (a package registry, a release, a site, a production database), declare it under `observe` (board_version 2) through an axis review (step 2b).",
+      "This board declares nothing to observe outside basou. If a lane reaches its users through something outside the repos (a package registry, a release, a site, a production database), declare it under `observe` (board_version 2 on, and 3 for `http`, `github_check`, an observation's `notes` and a key with `.`) through an axis review (step 2b).",
       "",
     );
     return;
@@ -458,68 +477,80 @@ function observeSteps(
     line(`#### \`${o.key}\` (${o.kind})`, "");
     switch (o.kind) {
       case "npm_version":
-        line(`The version of ${o.package} published on npm (its \`latest\` tag):`);
+        line(`The version of ${codeSpan(o.package)} published on npm (its \`latest\` tag):`);
         block(`npm view ${shellWord(o.package)} version; echo "exit=$?"`);
         line(
-          `Value: the last line of the output, as a string (such as "1.2.3"). Source: \`${sourceOf(o)}\`.`,
+          `Value: the last line of the output, as a string (such as "1.2.3"). Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
       case "github_release":
-        line(`The latest release of ${o.repo} on GitHub:`);
+        line(`The latest release of ${codeSpan(o.repo)} on GitHub:`);
         block(
           `gh release view --repo ${shellWord(o.repo)} --json tagName -q .tagName; echo "exit=$?"`,
         );
         line(
-          `Value: the tag, as a string. No release yet is a null with that as the error. Source: \`${sourceOf(o)}\`.`,
+          `Value: the tag, as a string. No release yet is a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
       case "github_open_issues":
       case "github_open_prs": {
         const what = o.kind === "github_open_issues" ? "issue" : "pr";
-        line(`How many ${what === "issue" ? "issues" : "pull requests"} of ${o.repo} are open:`);
+        line(
+          `How many ${what === "issue" ? "issues" : "pull requests"} of ${codeSpan(o.repo)} are open:`,
+        );
         block(
           `gh ${what} list --repo ${shellWord(o.repo)} --state open --limit 1000 --json number -q length; echo "exit=$?"`,
         );
         line(
-          `Value: the number, as a number. At 1000 there may be more: say so in a footnote. Source: \`${sourceOf(o)}\`.`,
+          `Value: the number, as a number. At 1000 there may be more: say so in a footnote. Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
       }
       case "github_ci":
-        line(`How the latest run of the workflow ${o.workflow} on ${o.branch} of ${o.repo} ended:`);
+        line(
+          `How the latest run of the workflow ${codeSpan(o.workflow)} on ${codeSpan(o.branch)} of ${codeSpan(o.repo)} ended:`,
+        );
         block(
           `gh run list --repo ${shellWord(o.repo)} --workflow ${shellWord(o.workflow)} --branch ${shellWord(o.branch)} --limit 1 --json status,conclusion -q '.[0] | if .status == "completed" then .conclusion else .status end'; echo "exit=$?"`,
         );
         line(
-          `Value: what it prints, as a string (\`success\`, \`failure\`, or the status of a run not finished, such as \`in_progress\`). Nothing printed (no run) is a null with that as the error. Source: \`${sourceOf(o)}\`.`,
+          `Value: what it prints, as a string (\`success\`, \`failure\`, or the status of a run not finished, such as \`in_progress\`). Nothing printed (no run) is a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
+      case "github_check":
+        githubCheckSteps(o, line, block);
+        break;
       case "page_version":
         line(
-          `The version ${o.url} shows: the first \`v<major>.<minor>.<patch>\` (with what follows a \`-\`) not right after a letter, digit, underscore or dot, once the page's generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's).`,
+          `The version ${codeSpan(o.url)} shows: the first \`v<major>.<minor>.<patch>\` (with what follows a \`-\`) not right after a letter, digit, underscore or dot, once the page's generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's).`,
         );
         block(
           `${go} && curl -fsS --max-time 20 ${shellWord(o.url)} > "$W/page-${o.key}.html"; echo "curl exit=$?"`,
           `${go} && node -e 'let t="";process.stdin.on("data",(d)=>{t+=d}).on("end",()=>{const m=t.replace(/<meta\\b[^>]*\\bname\\s*=\\s*["\\x27]?generator\\b[^>]*>/gi,"").match(/(?<![\\w.])v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?/);if(m===null){process.exitCode=1}else{console.log(m[0])}})' < "$W/page-${o.key}.html"; echo "exit=$?"`,
         );
         line(
-          `Value: the version it prints, as a string (such as "v1.2.3"). A failed fetch, or no version on the page (exit 1), is a null with that as the error. Source: \`${sourceOf(o)}\`.`,
+          `Value: the version it prints, as a string (such as "v1.2.3"). A failed fetch, or no version on the page (exit 1), is a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
+      case "http":
+        httpSteps(o, go, line, block);
+        break;
       case "manual":
         line(
-          `Only the operator can make this one: ${displayPath(o.how)}`,
+          `Only the operator can make this one: ${shown(o.how)}`,
           "",
           "Ask the operator, and do not make it yourself. Ask for one thing they can do as it is written: the line to run and where to run it, or the page to open, and what to send back. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`. When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.",
           "",
         );
         break;
     }
+    for (const note of o.notes ?? []) line(`- mind: ${shown(note)}`);
+    line("");
   }
 }
 
@@ -531,9 +562,9 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
   );
   for (const id of BOARD_STAGE_IDS) {
     const stage = d.stages[id];
-    line(`- ${id}: ${displayPath(stage.meaning)}`);
-    for (const look of stage.look ?? []) line(`  - look at: ${displayPath(look)}`);
-    for (const note of stage.notes ?? []) line(`  - mind: ${displayPath(note)}`);
+    line(`- ${id}: ${shown(stage.meaning)}`);
+    for (const look of stage.look ?? []) line(`  - look at: ${shown(look)}`);
+    for (const note of stage.notes ?? []) line(`  - mind: ${shown(note)}`);
   }
   line(
     "",
@@ -551,7 +582,7 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
     "Principles:",
     "",
     '1. Do not judge a stage generously. "Mostly works" is `part`, not `done`: the board is worth what it says about what has not arrived.',
-    "2. What is not committed is not 04. Work left in a working tree stops at 03: written is not merged.",
+    "2. What is not committed is not 04. Work left in a working tree stops at 03: written is not merged. A repo's `ahead` above 0 is commits not in its `base`, which are not only commits not pushed: a branch pushed and not merged has them, and so has one merged as other commits (a squash or a rebase). Read it with `branch` before judging 04; when `fetched_at` is null or old, it may be old too.",
     "3. Give a stuck cell its reason in one sentence. A reason you cannot write means the judgement is early.",
     "4. Do not paint a shelved cell red. Shelving is a decision; blaming it makes stopping harder and bends judgement.",
     "5. Do not mix estimates and measurements. Plans and estimates are not results: name them in a footnote.",
@@ -564,9 +595,9 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
     "",
   );
   for (const lane of d.lanes) {
-    const about = lane.about === undefined ? "" : `: ${displayPath(lane.about)}`;
-    line(`- \`${lane.id}\` ${displayPath(lane.name)}${about}`);
-    for (const note of lane.notes ?? []) line(`  - mind: ${displayPath(note)}`);
+    const about = lane.about === undefined ? "" : `: ${shown(lane.about)}`;
+    line(`- \`${lane.id}\` ${shown(lane.name)}${about}`);
+    for (const note of lane.notes ?? []) line(`  - mind: ${shown(note)}`);
   }
   line("");
 }
@@ -584,11 +615,135 @@ function sourceOf(o: BoardObserve): string {
       return `gh pr list --repo ${o.repo} --state open`;
     case "github_ci":
       return `gh run list --repo ${o.repo} --workflow ${o.workflow} --branch ${o.branch}`;
+    case "github_check":
+      return `gh api -X GET ${githubCheckPath(o)} -f check_name=${o.check}`;
     case "page_version":
+    case "http":
       return o.url;
     case "manual":
       return "the operator";
   }
+}
+
+// What reads the values of an http observation off its body, on stdin. The
+// patterns and the words come after `--`, so none is read as an option of
+// node's: the count_pattern, the capture_pattern (each '' when not declared)
+// and the words. The body is decoded only once all of it is read, so a
+// character is never cut where a chunk ends, and a leading BOM is taken
+// off; nothing else of it is decoded. An empty match would count positions,
+// not matches: it stops instead. It prints the values as JSON.
+const HTTP_BODY_SCRIPT = [
+  "const [count, capture, ...words] = process.argv.slice(1);",
+  'let t = require("fs").readFileSync(0, "utf8");',
+  "if (t.charCodeAt(0) === 0xfeff) t = t.slice(1);",
+  "const v = {};",
+  "if (words.length > 0) v.words = words.map((w) => t.includes(w));",
+  `if (count !== "") { let n = 0; for (const m of t.matchAll(new RegExp(count, "${BOARD_HTTP_COUNT_FLAGS}"))) { if (m[0] === "") { console.error("count_pattern matched an empty string at " + m.index); process.exit(1); } n++; } v.count = n; }`,
+  `if (capture !== "") { const m = new RegExp(capture, "${BOARD_HTTP_CAPTURE_FLAGS}").exec(t); v.capture = m === null || m[1] === undefined ? null : m[1]; }`,
+  "console.log(JSON.stringify(v));",
+].join(" ");
+
+// A text as Markdown code, as it is: fenced by more backquotes than it
+// holds in a row, and padded with a space when it starts or ends with a
+// backquote or a space, which the fence would otherwise eat.
+function codeSpan(text: string): string {
+  const visible = shown(text);
+  const longest = Math.max(0, ...(visible.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longest + 1);
+  const pad = /^[` ]|[` ]$/.test(visible) ? " " : "";
+  return `${fence}${pad}${visible}${pad}${fence}`;
+}
+
+// The API path of the check runs on the head commit of a github_check
+// observation's branch. `heads/` names the branch, as the API documents it,
+// so a tag or a commit of the same name is never read instead.
+function githubCheckPath(o: Extract<BoardObserve, { kind: "github_check" }>): string {
+  return `repos/${o.repo}/commits/heads/${o.branch}/check-runs`;
+}
+
+// How many check runs a github_check observation reads, as one page.
+const CHECK_RUNS_PER_PAGE = 100;
+
+// What prints the state of the newest check run listed, as its conclusion
+// once it is completed and its status before. The API lists one run for each
+// check suite that ran the check, in an order it does not document; with no
+// run it prints an empty line. When there are more runs of the name than a
+// page holds, a second line says so: the newest may be on a page not read.
+const CHECK_RUN_STATE = `(.check_runs | max_by(.id) | if .status == "completed" then .conclusion else .status end), (if .total_count > ${CHECK_RUNS_PER_PAGE} then "more than ${CHECK_RUNS_PER_PAGE} runs: \\(.total_count)" else empty end)`;
+
+// How a github_check observation is made.
+function githubCheckSteps(
+  o: Extract<BoardObserve, { kind: "github_check" }>,
+  line: (...lines: string[]) => void,
+  block: (...lines: string[]) => void,
+): void {
+  line(
+    `How the latest check run named ${codeSpan(o.check)} on the head commit of ${codeSpan(o.branch)} of ${codeSpan(o.repo)} ended (a check run of a GitHub App, such as a deploy, as well as a job of a workflow):`,
+  );
+  block(
+    `gh api -X GET ${shellWord(githubCheckPath(o))} -f check_name=${shellWord(o.check)} -f per_page=${CHECK_RUNS_PER_PAGE} -q ${shellWord(CHECK_RUN_STATE)}; echo "exit=$?"`,
+  );
+  line(
+    `Value: the first line it prints, as a string (\`success\`, \`failure\`, \`cancelled\`, \`skipped\`, or the status of a run not finished, such as \`queued\` or \`in_progress\`). A second line, \`more than ${CHECK_RUNS_PER_PAGE} runs: <n>\`, says the newest run may be on a page not read: keep the first line as the value, and say so in a footnote. An empty line is no check run of that name on the head commit: a null, with the error saying that the head commit of ${codeSpan(o.branch)} has no check run named ${codeSpan(o.check)}. A head commit that never started the check (a path filter, \`[skip ci]\` in its commit message, or the app's own rules) gives this too, even when what the check looks after is fine; a job a workflow skipped with \`if:\` is a check run, concluded \`skipped\`. A branch that does not exist exits 1 (HTTP 422): a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
+    "",
+  );
+}
+
+// How an http observation is made: a GET, then its body read when the
+// observation declares what to read off it.
+function httpSteps(
+  o: Extract<BoardObserve, { kind: "http" }>,
+  go: string,
+  line: (...lines: string[]) => void,
+  block: (...lines: string[]) => void,
+): void {
+  const body = `"$W/http-${o.key}.body"`;
+  const reads = [
+    ...(o.words === undefined
+      ? []
+      : [
+          `\`words\`: whether the body holds each word, as true or false in the order the command gives them (${o.words.map(codeSpan).join(", ")})`,
+        ]),
+    ...(o.count_pattern === undefined
+      ? []
+      : [
+          `\`count\`: how many times ${codeSpan(o.count_pattern)} matches the body (0 when it does not)`,
+        ]),
+    ...(o.capture_pattern === undefined
+      ? []
+      : [
+          `\`capture\`: what the first group of the first match of ${codeSpan(o.capture_pattern)} holds, as a string (null when nothing matches, or when the first group takes no part in the match)`,
+        ]),
+  ];
+  line(
+    `A GET of ${codeSpan(o.url)}, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects. It prints the status of the last response, how many redirects led to it and the URL it ended at (no \`-f\`: a 4xx or 5xx is printed and exits 0):`,
+  );
+  block(
+    `${go} && curl -sS -L --max-redirs ${BOARD_HTTP_MAX_REDIRECTS} --max-time 20 -o ${body} -w '%{http_code} %{num_redirects} %{url_effective}\\n' ${shellWord(o.url)}; echo "curl exit=$?"`,
+  );
+  if (reads.length > 0) {
+    line(
+      "When the status is 2xx, read the body. The words are found as written, character for character, and HTML entities are not decoded; the patterns are matched against the whole body at once, not line by line as a measure's `pattern` is, so `^` and `$` are the body's start and end:",
+    );
+    const args = [o.count_pattern ?? "", o.capture_pattern ?? "", ...(o.words ?? [])];
+    block(
+      `${go} && node -e ${shellWord(HTTP_BODY_SCRIPT)} -- ${args.map(shellWord).join(" ")} < ${body}; echo "exit=$?"`,
+    );
+    line("It prints, as JSON:", "", ...reads.map((r) => `- ${r}`), "");
+  }
+  // What the body would give, as the value holds it when the status is not 2xx.
+  const nulls = (["words", "count", "capture"] as const)
+    .filter((k) => (k === "words" ? o.words : k === "count" ? o.count_pattern : o.capture_pattern))
+    .map((k) => `"${k}": null`)
+    .join(", ");
+  const notRead =
+    nulls === ""
+      ? ""
+      : ` When the status is not 2xx, do not read the body: give \`${nulls}\`, each a null and not a list of nulls (an error page's text is not the page's).`;
+  line(
+    `Value: \`{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string>${reads.length > 0 ? ", <what the body gave>" : ""} }\`, the numbers as numbers. A 4xx or 5xx is a value, not an observation not made: the status is what was observed.${notRead} When curl exits other than 0 (the name does not resolve, TLS fails, the time runs out, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47)${reads.length > 0 ? ", or reading the body exits 1," : ""} the observation is not made: a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
+    "",
+  );
 }
 
 // The record's input to fill in: the previous record's cells beside each
@@ -649,19 +804,19 @@ function undeclared(
   line(
     "## No board is declared yet",
     "",
-    `This workspace (${displayPath(input.anchor)}) declares no board at board/board.yaml. \`basou view\`'s /board page already draws what can be measured without one (the period and effort, the repos, the trail, the components). A judged board (the reach matrix, the lanes, the operator's turns) needs a declaration first.`,
+    `This workspace (${shown(input.anchor)}) declares no board at board/board.yaml. \`basou view\`'s /board page already draws what can be measured without one (the period and effort, the repos, the trail, the components). A judged board (the reach matrix, the lanes, the operator's turns) needs a declaration first.`,
     "",
     "1. Check that no one outside can read this repo: records hold what the trail holds (open tracks, time worked, model names). Step 9 (f) of this guide, once a board is declared, says how; on GitHub it is visibility PRIVATE, no collaborator but the owner and you (the account gh is signed in as), and no invitation. Never keep a board in a repo shared with a client.",
     "2. Print a board to start from, and save it only where no board is. Never print it straight into board/board.yaml: the shell empties that file before init runs.",
   );
   block(`${go} && ${BOARD_INIT_SAVE}; echo "exit=$?"`);
   line(
-    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only what was reached, each with a `ref` saying where it can be checked; a board moved from another keeps its milestones there. Measures, ratios and components may stay empty at first. A measure with `lane:` is drawn in that lane's section of the board page; one without is kept only in the records and their differences (and in a ratio that uses it).",
+    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only what was reached, each with a `ref` saying where it can be checked; a board moved from another keeps its milestones there. Measures, ratios and components may stay empty at first. A measure with `lane:` (a lane id, or a list of them) is drawn in each of those lanes' sections of the board page; one without is kept only in the records and their differences (and in a ratio or a total that uses it).",
     "4. Check it until it reads (every problem with it is listed at once):",
   );
   block(`${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`);
   line(
-    '5. Register the components: at first every component the markers find is unacknowledged, and the axis review (a) fires. Give each the lanes it counts in, or `"-"` with a note saying why it counts in none.',
+    '5. Register the components: at first every component the markers find is unacknowledged, and the axis review (a) fires. Give each the lanes it counts in, or `"-"` with a note saying why it counts in none. A directory no built-in marker finds (content, scripts) is registered with a `marker` of its own: a glob, from it, of the files that mark it.',
     "6. Run `basou board guide` again: with a board declared, it prints the steps that judge and record it. The first record is the first review of the axis: give it an `axis_review`.",
     "",
   );

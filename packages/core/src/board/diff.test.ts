@@ -32,6 +32,65 @@ function measurement(over: Record<string, unknown> = {}) {
   };
 }
 
+describe("diffMeasurements: the paths of a file_paths measure", () => {
+  const withPaths = (value: unknown, unit = "files") =>
+    measurement({ measures: { md: { value: 2, unit: "files" }, mig: { value, unit } } });
+
+  it("lists each path that came in and went out when both hold a list, and nothing for the same set", () => {
+    const paths = ["db/a.sql", "db/b.sql", 'db/"q".sql'];
+    const before = withPaths(paths);
+    const after = withPaths(["db/b.sql", "db/c.sql", 'db/"q".sql']);
+    expect(diffMeasurements(before, after, "01M4")).toEqual({
+      against: "01M4",
+      values: [],
+      methods: [],
+      added: [{ at: 'measures.mig.value["db/c.sql"]', value: true }],
+      removed: [{ at: 'measures.mig.value["db/a.sql"]', value: true }],
+    });
+    expect(diffMeasurements(before, withPaths([...paths].reverse()), "01M4")).toEqual({
+      against: "01M4",
+      values: [],
+      methods: [],
+      added: [],
+      removed: [],
+    });
+    // The rest of the measure is compared as before.
+    expect(diffMeasurements(withPaths([]), withPaths(["db/a.sql"], "paths"), "01M4")).toMatchObject(
+      {
+        values: [{ at: "measures.mig.unit", before: "files", after: "paths" }],
+        added: [{ at: 'measures.mig.value["db/a.sql"]', value: true }],
+        removed: [],
+      },
+    );
+  });
+
+  it("compares the value whole when one of the two is not a list", () => {
+    expect(diffMeasurements(withPaths(null), withPaths(["db/a.sql"]), "01M4").values).toEqual([
+      { at: "measures.mig.value", before: null, after: ["db/a.sql"] },
+    ]);
+    expect(diffMeasurements(withPaths(["db/a.sql"]), withPaths(null), "01M4").values).toEqual([
+      { at: "measures.mig.value", before: ["db/a.sql"], after: null },
+    ]);
+    expect(diffMeasurements(withPaths("a.sql"), withPaths(["db/a.sql"]), "01M4").values).toEqual([
+      { at: "measures.mig.value", before: "a.sql", after: ["db/a.sql"] },
+    ]);
+    const only = diffMeasurements(measurement(), withPaths(["db/a.sql"]), "01M4");
+    expect(only.added).toEqual([
+      { at: "measures.mig.value", value: ["db/a.sql"] },
+      { at: "measures.mig.unit", value: "files" },
+    ]);
+  });
+
+  it("names a measure whose id is not a plain word with its id quoted", () => {
+    const at = (value: unknown) =>
+      measurement({ measures: { "site.pages": { value, unit: "files" } } });
+    expect(diffMeasurements(at(["a"]), at(["b"]), "01M4")).toMatchObject({
+      added: [{ at: 'measures["site.pages"].value["b"]', value: true }],
+      removed: [{ at: 'measures["site.pages"].value["a"]', value: true }],
+    });
+  });
+});
+
 describe("diffMeasurements", () => {
   it("finds nothing moved between two measurements of the same values, whenever and however measured", () => {
     const after = measurement({
@@ -76,6 +135,47 @@ describe("diffMeasurements", () => {
       { at: "measures.md.value", before: 2, after: 3, delta: 1 },
       { at: "ratios.r.value", before: 0.5, after: 0.25, delta: -0.25 },
     ]);
+  });
+
+  it("does not compare when a repo was last fetched, as the digest does not hold it", () => {
+    const repo = { path: ".", base: "origin/main", behind: 0, ahead: 1 };
+    const before = measurement({
+      repos: [{ ...repo, fetched_at: "2026-10-05T00:00:00.000Z" }],
+    });
+    const after = measurement({
+      repos: [{ ...repo, behind: 2, fetched_at: "2026-10-06T00:00:00.000Z" }],
+    });
+    expect(diffMeasurements(before, after, "01M4")).toMatchObject({
+      values: [{ at: 'repos["."].behind', before: 0, after: 2, delta: 2 }],
+      added: [],
+      removed: [],
+    });
+    const unfetched = measurement({ repos: [{ ...repo, fetched_at: null }] });
+    expect(diffMeasurements(before, unfetched, "01M4").values).toEqual([]);
+  });
+
+  it("shows behind_main gone and the base, behind and ahead come, once, against a record of version 1 or 2", () => {
+    const before = measurement({ repos: [{ path: ".", behind_main: 2 }] });
+    const after = measurement({
+      repos: [
+        {
+          path: ".",
+          base: "origin/main",
+          behind: 2,
+          ahead: 0,
+          fetched_at: "2026-10-06T00:00:00.000Z",
+        },
+      ],
+    });
+    expect(diffMeasurements(before, after, "01M4")).toMatchObject({
+      values: [],
+      added: [
+        { at: 'repos["."].base', value: "origin/main" },
+        { at: 'repos["."].behind', value: 2 },
+        { at: 'repos["."].ahead', value: 0 },
+      ],
+      removed: [{ at: 'repos["."].behind_main', value: 2 }],
+    });
   });
 
   it("tells entries apart by what names them, and compares lists of names as sets", () => {
@@ -151,6 +251,32 @@ describe("diffMeasurements", () => {
       { at: 'components.found["ws/z"].kinds', value: ["ci"], method_changed: true },
       { at: 'components.found["ws/z"].status', value: "unacknowledged", method_changed: true },
       { at: 'components.unacknowledged["ws/z"]', value: true, method_changed: true },
+    ]);
+  });
+});
+
+describe("diffMeasurements: a measure's lanes", () => {
+  const withLane = (lane?: unknown) =>
+    measurement({
+      measures: { md: { value: 2, unit: "files", ...(lane === undefined ? {} : { lane }) } },
+    });
+
+  it("reads one lane id, as a record of version 1 or 2 holds it, as a list of that one", () => {
+    expect(diffMeasurements(withLane("core"), withLane(["core"]), "01M4")).toEqual({
+      against: "01M4",
+      values: [],
+      methods: [],
+      added: [],
+      removed: [],
+    });
+    expect(diffMeasurements(withLane("core"), withLane(["core", "docs"]), "01M4").values).toEqual([
+      { at: "measures.md.lane", before: ["core"], after: ["core", "docs"] },
+    ]);
+    expect(diffMeasurements(withLane(), withLane(["core"]), "01M4").added).toEqual([
+      { at: "measures.md.lane", value: ["core"] },
+    ]);
+    expect(diffMeasurements(withLane("core"), withLane(), "01M4").removed).toEqual([
+      { at: "measures.md.lane", value: ["core"] },
     ]);
   });
 });
