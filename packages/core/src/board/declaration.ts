@@ -1293,9 +1293,14 @@ function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationConte
         errors.push(`${at}.note: a component with lane '-' needs a note saying why`);
       }
       // A key with nothing after the repo's name is the repo itself, which
-      // the built-in markers already look for in the whole of it.
+      // the built-in markers already look for in the whole of it. An empty
+      // key is no repo, and is reported above.
       const slash = key.indexOf("/");
-      if (component.marker !== undefined && (slash === -1 || slash === key.length - 1)) {
+      if (
+        component.marker !== undefined &&
+        key.trim() !== "" &&
+        (slash === -1 || slash === key.length - 1)
+      ) {
         errors.push(
           `${at}.marker: only a directory inside a repo takes a marker, keyed '<repo>/<path in it>'; this key is a repo itself`,
         );

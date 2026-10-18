@@ -2349,4 +2349,53 @@ describe("parseBoardDeclaration: board_version 3, a component's marker", () => {
       expect(errorsOf(parse(doc))).toEqual([`components["basou/tools"]: unknown key 'markers'`]);
     }
   });
+
+  it("says only that an empty key is empty, with a marker or without", () => {
+    expect(
+      errorsOf(
+        parse(
+          withComponents({
+            "": { lane: ["saddle"], marker: "**" },
+            "  ": { lane: ["saddle"], marker: "**" },
+          }),
+        ),
+      ),
+    ).toEqual([
+      'components[""]: a component key must be a non-empty path',
+      'components["  "]: a component key must be a non-empty path',
+    ]);
+  });
+
+  it("takes a marker on any key with a path after the repo's name, as git would write it or not", () => {
+    for (const key of ["basou/x/", "basou//x", "basou/./x", "/x"]) {
+      expect(parse(withComponents({ [key]: { lane: ["saddle"], marker: "**" } })).ok, key).toBe(
+        true,
+      );
+    }
+  });
+
+  it("says a repo itself takes no marker whatever the marker is, after the note and before the lanes", () => {
+    const itself =
+      "only a directory inside a repo takes a marker, keyed '<repo>/<path in it>'; this key is a repo itself";
+    expect(errorsOf(parse(withComponents({ basou: { lane: ["saddle"], marker: 1 } })))).toEqual([
+      "components.basou.marker: Invalid input: expected string, received number",
+      `components.basou.marker: ${itself}`,
+    ]);
+    expect(
+      errorsOf(
+        parse(
+          withComponents({
+            basou: { lane: "-", marker: "**" },
+            "basou/": { lane: ["nope", "saddle", "saddle"], marker: "**" },
+          }),
+        ),
+      ),
+    ).toEqual([
+      "components.basou.note: a component with lane '-' needs a note saying why",
+      `components.basou.marker: ${itself}`,
+      `components["basou/"].marker: ${itself}`,
+      `components["basou/"].lane[0]: no lane has the id 'nope'`,
+      `components["basou/"].lane[2]: 'saddle' is listed twice`,
+    ]);
+  });
 });

@@ -176,7 +176,11 @@ export async function measureComponents(input: ComponentsInput): Promise<{
     if (component.marker === undefined || slash === -1) continue;
     const files = listed.get(key.slice(0, slash));
     if (files === undefined) continue;
-    const under = `${toBytes(key.slice(slash + 1))}/`;
+    const dir = key.slice(slash + 1);
+    // A path that is not well-formed text (a lone surrogate) names no
+    // directory: its bytes would be those of U+FFFD.
+    if (fromBytes(toBytes(dir)) !== dir) continue;
+    const under = `${toBytes(dir)}/`;
     const matches = compileGlob(component.marker);
     for (const file of files.keys()) {
       if (file.startsWith(under) && matches(file.slice(under.length))) {

@@ -288,4 +288,42 @@ describe("measureComponents: a registered component's own marker", () => {
     // Its marker taken off, a directory no built-in marker finds is gone.
     expect(components.gone).toEqual(["app/tools"]);
   });
+
+  it("matches a name that is not valid UTF-8 as its bytes are", async () => {
+    const { components } = await marked(["g/\xff.csv", "h/\xff.csv"], {
+      "app/g": { marker: "?.csv" },
+      "app/h": { marker: "??.csv" },
+    });
+    expect(Object.keys(components.found ?? {})).toEqual(["app/g"]);
+    expect(components.gone).toEqual(["app/h"]);
+  });
+
+  it("reads the path of a key as written, not as a glob", async () => {
+    const { components } = await marked(["[slug]/a.md", "x/a.md", "s/a.md"], {
+      "app/[slug]": { marker: "*.md" },
+      "app/*": { marker: "*.md" },
+      "app/[s]": { marker: "*.md" },
+    });
+    expect(Object.keys(components.found ?? {})).toEqual(["app/[slug]"]);
+    expect(components.gone).toEqual(["app/*", "app/[s]"]);
+  });
+
+  it("finds nothing for a key whose path git would not write, which is not normalized", async () => {
+    const { components } = await marked(["content/a.md"], {
+      "app/content/": { marker: "**" },
+      "app//content": { marker: "**" },
+      "app/./content": { marker: "**" },
+    });
+    expect(components.found).toEqual({});
+    expect(components.gone).toEqual(["app/./content", "app//content", "app/content/"]);
+  });
+
+  it("finds nothing for a key whose path is not well-formed text", async () => {
+    const { components } = await marked([bytes("\ufffd/a.md")], {
+      "app/\ud800": { marker: "**" },
+      "app/\ufffd": { marker: "**" },
+    });
+    expect(Object.keys(components.found ?? {})).toEqual(["app/\ufffd"]);
+    expect(components.gone).toEqual(["app/\ud800"]);
+  });
 });
