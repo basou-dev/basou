@@ -1986,16 +1986,25 @@ describe("parseBoardDeclaration: board_version 3, total", () => {
     expect(at({ plus: "src_lines" })).toEqual([
       "measures[1].plus: Invalid input: expected array, received string",
     ]);
+    const integer = "must be an integer from -9007199254740991 to 9007199254740991";
     const id =
       "must be an integer or the id of a measure, which starts with a lowercase letter and uses only a-z, 0-9, '_', '-' and '.', with a lowercase letter after each '.'";
     expect(at({ plus: [1.5, "Src", true, null, "src.", 2 ** 53, "100"] })).toEqual([
-      "measures[1].plus[0]: must be an integer",
+      `measures[1].plus[0]: ${integer}`,
       `measures[1].plus[1]: ${id}`,
       "measures[1].plus[2]: must be an integer or the id of a measure",
       "measures[1].plus[3]: must be an integer or the id of a measure",
       `measures[1].plus[4]: ${id}`,
-      "measures[1].plus[5]: must be an integer",
+      `measures[1].plus[5]: ${integer}`,
       `measures[1].plus[6]: ${id}`,
+    ]);
+    // Integers, but not ones a number holds exactly.
+    expect(
+      at({ plus: [2 ** 53, -(2 ** 53), 1e300], minus: [2 ** 53 - 1, -(2 ** 53 - 1)] }),
+    ).toEqual([
+      `measures[1].plus[0]: ${integer}`,
+      `measures[1].plus[1]: ${integer}`,
+      `measures[1].plus[2]: ${integer}`,
     ]);
     expect(at({ repo: "../basou", at: "main" })).toEqual([
       "measures[1]: unknown keys 'repo', 'at'",
@@ -2083,6 +2092,11 @@ describe("parseBoardDeclaration: board_version 3, a measure's lanes", () => {
       "measures[0].lane[1]: no lane has the id 'nope'",
       "measures[0].lane[2]: 'cockpit' is listed twice",
     ]);
+    // A lane not on the board is still listed twice.
+    expect(errorsOf(parse(withLane(["nope", "nope"])))).toEqual([
+      "measures[0].lane[0]: no lane has the id 'nope'",
+      "measures[0].lane[1]: 'nope' is listed twice",
+    ]);
     expect(errorsOf(parse(withLane("nope")))).toEqual([
       "measures[0].lane: no lane has the id 'nope'",
     ]);
@@ -2149,7 +2163,22 @@ describe("parseBoardDeclaration: board_version 3, a measure id and an observatio
   });
 
   it("refuses a '.' at an end or after another, a word that starts with no lowercase letter, ':' and '/'", () => {
-    for (const id of ["a.", ".a", "a..b", "a.B", "a.1", "a._", "a:b", "a/b", "a. b"]) {
+    for (const id of [
+      "a.",
+      ".a",
+      "a..b",
+      "a.B",
+      "a.1",
+      "a._",
+      "a:b",
+      "a/b",
+      "a. b",
+      "site.pages.",
+      "a.b..c",
+      "a.b._x",
+      "a.b.C",
+      "a.b.c:d",
+    ]) {
       expect(errorsOf(parse(withMeasureV3({ ...MIGRATIONS, id }))), id).toEqual([
         `measures[0].id: ${DOTTED_ID}`,
       ]);
@@ -2195,6 +2224,26 @@ describe("parseBoardDeclaration: what version 3 reads, in a board of version 1 o
         version === 1
           ? told("(top level)", "'observe' is")
           : told("observe[0].key", "'site.en' is"),
+      ]);
+    }
+  });
+
+  it("holds what version 3 reads against the rest of the board, beside the line saying so", () => {
+    for (const version of [1, 2]) {
+      const doc = version === 1 ? board() : boardV2();
+      doc.measures = [
+        { ...SRC_LINES, lane: ["nope", "nope"] },
+        { ...LEFT, plus: ["gone"], minus: ["src_lines"] },
+      ];
+      doc.ratios = [];
+      const told = (where: string, what: string) =>
+        `${where}: ${what} read from board_version 3 on; this file is board_version ${version}`;
+      expect(errorsOf(parse(doc))).toEqual([
+        told("measures[0].lane", "what is written here is"),
+        told("measures[1].kind", "'total' is"),
+        "measures[0].lane[0]: no lane has the id 'nope'",
+        "measures[0].lane[1]: 'nope' is listed twice",
+        "measures[1].plus[0]: no measure has the id 'gone'",
       ]);
     }
   });

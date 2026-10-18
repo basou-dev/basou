@@ -75,8 +75,10 @@ All notable changes to **basou** are recorded here. The project follows
 - **A board can add up measures and integers, and take some away (`total`,
   from `board_version: 3`, experimental).** A `total` measure lists what it
   adds (`plus`, at least one) and what it takes away (`minus`, which it may
-  leave out), each an integer written in the declaration or the id of a
-  measure whose value is one, so measures of several repos can be added up.
+  leave out), each an integer written in the declaration (from
+  -9007199254740991 to 9007199254740991, the integers a number holds
+  exactly) or the id of a measure whose value is one, so measures of
+  several repos can be added up.
   Its value is the difference, and may be below 0. When a measure it takes
   was not measured, the total is null and says which (`'hand_count' is not
   measured`); one out of the range a number holds exactly is null too. A

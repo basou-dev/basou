@@ -25,7 +25,9 @@ export type BoardMethodChange = { section: string; before: number | null; after:
  * either, nor the declaration, which the digest also covers) but
  * `measured_with`, the methods (compared on their own), `effort.daily`, whose
  * rows only grow, and `components.kind_changed`, already a change since the
- * previous record. Values are equal when their JSON is, keys sorted. A list whose entries name
+ * previous record. Values are equal when their JSON is, keys sorted, except
+ * that a measure's lane held as one id, as a record of version 1 or 2 holds
+ * it, is the list of that one a record of version 3 holds. A list whose entries name
  * themselves is compared entry by entry (`repos` by path, open tracks by id,
  * `not_found` by where), the unacknowledged and gone components as sets, the
  * paths of a `file_paths` measure as a set when both records hold a list (a

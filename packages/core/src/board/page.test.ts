@@ -308,13 +308,22 @@ describe("boardPage", () => {
       ],
       ["docs", [{ id: "site.pages", value: 12, unit: "pages" }]],
     ]);
-    // A record of version 1 holds one lane id.
-    await place(B, record());
+    // A record of version 1 holds one lane id: it is the lane of that id,
+    // not of every id it holds.
+    const v1 = record();
+    v1.declaration = {
+      ...v1.declaration,
+      lanes: [
+        { id: "co", name: "Co" },
+        { id: "core", name: "Core" },
+      ],
+    } as typeof v1.declaration;
+    await place(B, v1);
     const older = await boardPage(records);
     if (older.status !== "ok") throw new Error(older.why);
     expect(older.board.lanes.map((lane) => [lane.id, lane.measures])).toEqual([
+      ["co", []],
       ["core", [{ id: "src", value: 100, unit: "lines" }]],
-      ["docs", []],
     ]);
   });
 

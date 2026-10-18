@@ -296,8 +296,8 @@ const filePathsSchema = z.strictObject({
   exclude: globs.optional(),
 });
 
-// A term of a total: an integer written in the declaration, or the id of a
-// measure whose value is one.
+// A term of a total: an integer written in the declaration, one a number
+// holds exactly, or the id of a measure whose value is one.
 const totalTerm = z
   .union([z.number(), z.string()], { error: "must be an integer or the id of a measure" })
   .superRefine((term, ctx) => {
@@ -305,7 +305,7 @@ const totalTerm = z
       typeof term === "number"
         ? Number.isSafeInteger(term)
           ? undefined
-          : "must be an integer"
+          : `must be an integer from -${Number.MAX_SAFE_INTEGER} to ${Number.MAX_SAFE_INTEGER}`
         : DOTTED_ID_PATTERN.test(term)
           ? undefined
           : "must be an integer or the id of a measure, which starts with a lowercase letter and uses only a-z, 0-9, '_', '-' and '.', with a lowercase letter after each '.'";
@@ -1112,7 +1112,11 @@ function captureGroups(pattern: string): number | undefined {
 // What one key says about another. Run on the raw document, so these are
 // reported even when the shape check found problems elsewhere. Anything the
 // shape check already refuses is skipped here: a list that is not a list, a
-// key the kind does not take, a value of the wrong type or form.
+// key the kind does not take, a value of the wrong type or form. What a later
+// version reads is not skipped in a board of version 1 or 2 (a measure's list
+// of lanes, a total's terms, a measure id with '.'): it is held against the
+// rest of the board as the later version holds it, beside the line saying
+// which version reads it.
 function crossCheck(raw: Record<string, unknown>, context: BoardDeclarationContext): string[] {
   const errors: string[] = [];
 

@@ -4773,6 +4773,9 @@ describe("measureBoard: totals, a measure's lanes and ids with '.'", () => {
         { id: "back", kind: "total", plus: [max, 2], minus: [3], unit: "n" },
         { id: "over", kind: "total", plus: [max, 1], unit: "n" },
         { id: "under", kind: "total", plus: [-1], minus: [max], unit: "n" },
+        files("gone", "app", ["missing/*.ts"]),
+        // What it lacks is said before what it would come to.
+        { id: "lacking", kind: "total", plus: [max, 1, "gone"], unit: "n" },
       ]),
     );
     expect(measured(m, "top")).toBe(max);
@@ -4782,6 +4785,8 @@ describe("measureBoard: totals, a measure's lanes and ids with '.'", () => {
     expect(ofMeasures(m)).toEqual([
       { at: "measures.over", reason: past },
       { at: "measures.under", reason: past },
+      { at: "measures.gone", reason: "nothing is under 'missing' in the working tree" },
+      { at: "measures.lacking", reason: "'gone' is not measured" },
     ]);
   });
 
