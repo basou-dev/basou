@@ -10,6 +10,7 @@ import {
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
@@ -343,7 +344,7 @@ describe("basou board measure", () => {
     const unborn = out.join("\n");
     expect(unborn).toMatch(
       new RegExp(
-        `Repos:\\n  \\. \\(${name}\\)  main at no commit yet, last commit none, commits 0, files \\d+, uncommitted \\d+, behind origin's default branch \\(origin/HEAD names no branch, and there is no origin/main\\)\\n  \\.\\./gone  not measured\\n`,
+        `Repos:\\n  \\. \\(${name}\\)  main at no commit yet, last commit none, commits 0, files \\d+, uncommitted \\d+, no base \\(origin/HEAD names no branch, and there is no origin/main\\)\\n  \\.\\./gone  not measured\\n`,
       ),
     );
     expect(unborn).toContain("repos[../gone]: the repo '../gone' is not on disk");
@@ -364,6 +365,45 @@ describe("basou board measure", () => {
     await runBoardMeasure({}, ctx(repo));
     expect(out.join("\n")).toContain(
       `  . (${name})  detached HEAD at ${stdout.slice(0, 7)}, last commit 2026-10-04T23:30:00+09:00, commits 1, files `,
+    );
+
+    const git = (...args: string[]) => execFileAsync("git", args, { cwd: repo, env: ENV });
+    // An origin/main one commit past HEAD.
+    const tip = (
+      await git(
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        "HEAD",
+        "-m",
+        "upstream",
+      )
+    ).stdout.trim();
+    await git("update-ref", "refs/remotes/origin/main", tip);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      ", base origin/main, behind 1, ahead 0, fetched not known\n  ../gone  not measured\n",
+    );
+    await git("remote", "add", "origin", "https://example.com/x/app");
+    const fetchHead = join(repo, ".git", "FETCH_HEAD");
+    await writeFile(fetchHead, `${tip}\t\tbranch 'main' of https://example.com/x/app\n`);
+    const fetched = new Date("2026-10-04T12:00:00.000Z");
+    await utimes(fetchHead, fetched, fetched);
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      ", base origin/main, behind 1, ahead 0, fetched 2026-10-04T12:00:00.000Z\n",
+    );
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/elsewhere");
+    out.length = 0;
+    await runBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      ", base not measured, behind not measured, ahead not measured, fetched not measured\n",
     );
   });
 

@@ -55,7 +55,12 @@ const UNCOMPARED = new Set([
   "diff",
 ]);
 // Left out further down.
-const SKIPPED = new Set(["effort.elapsed_days", "effort.daily", "components.kind_changed"]);
+const SKIPPED = new Set([
+  "effort.elapsed_days",
+  "effort.daily",
+  "repos[].fetched_at",
+  "components.kind_changed",
+]);
 // Lists whose entries are told apart by a field of theirs.
 const KEYED: Readonly<Record<string, string>> = {
   repos: "path",

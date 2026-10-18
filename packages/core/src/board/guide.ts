@@ -194,7 +194,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- What moved is the point: the top of measure.txt (`Since the previous record <ULID>:`) and `diff` in the JSON. A value marked `method_changed` may have moved because basou measures it another way now.",
     "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured.",
     "- A `file_paths` measure's value is the list of paths it found. `Measures:` in measure.txt gives it as a count: read the paths in the JSON. `diff` lists each path that came in (`added`) or went out (`removed`) when both records hold a list, and the list whole when only one does.",
-    "- `repos[].behind_main` counts the commits on origin's default branch (the branch of origin that origin/HEAD names, or origin/main when origin/HEAD names none) as of the last fetch; measure does not fetch.",
+    "- `repos[].base` is the branch of origin a repo is compared with (`origin/<branch>`: the one origin/HEAD names, or origin/main when origin/HEAD names none), `behind` counts the commits on it HEAD does not have, and `ahead` those HEAD has that it does not, as of the last fetch; measure does not fetch. `fetched_at` is when FETCH_HEAD was last written, given that it holds that branch fetched from origin at the commit it is at now (a later `git fetch --append` moves it too), and null when it does not (no fetch since the clone, a failed fetch, a fetch of something else since, or a push since). When it is null or old, `behind` and `ahead` may be old too.",
     "",
   );
 
@@ -564,7 +564,7 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
     "Principles:",
     "",
     '1. Do not judge a stage generously. "Mostly works" is `part`, not `done`: the board is worth what it says about what has not arrived.',
-    "2. What is not committed is not 04. Work left in a working tree stops at 03: written is not merged.",
+    "2. What is not committed is not 04. Work left in a working tree stops at 03: written is not merged. A repo's `ahead` above 0 is commits not in its `base`, which are not only commits not pushed: a branch pushed and not merged has them, and so has one merged as other commits (a squash or a rebase). Read it with `branch` before judging 04; when `fetched_at` is null or old, it may be old too.",
     "3. Give a stuck cell its reason in one sentence. A reason you cannot write means the judgement is early.",
     "4. Do not paint a shelved cell red. Shelving is a decision; blaming it makes stopping harder and bends judgement.",
     "5. Do not mix estimates and measurements. Plans and estimates are not results: name them in a footnote.",

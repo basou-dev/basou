@@ -1900,7 +1900,10 @@ describe("basou view: the board page", () => {
         last_commit: null,
         commits: 2,
         uncommitted: 1,
-        behind_main: null,
+        base: null,
+        behind: null,
+        ahead: null,
+        fetched_at: null,
       },
     ],
     trail: {
@@ -1943,8 +1946,49 @@ describe("basou view: the board page", () => {
 
     const repos = call("liveRepos", LIVE);
     const cells = repos.find((n) => n.tag === "td").map((c) => c.textContent);
-    // Nulls that mean so: a detached HEAD, no default branch, a last commit unread.
-    expect(cells).toEqual(["app", "-", "0123456", "-", "2", "1", "-"]);
+    // Nulls that mean so: a detached HEAD, no base, a last commit unread.
+    expect(cells).toEqual(["app", "-", "0123456", "-", "2", "1", "-", "-", "-", "-"]);
+    expect(repos.find((n) => n.tag === "th").map((c) => [c.textContent, c.className])).toEqual([
+      [S.live.repo, ""],
+      [S.live.branch, ""],
+      [S.live.head, ""],
+      [S.live.lastCommit, ""],
+      [S.live.commits, "n"],
+      [S.live.uncommitted, "n"],
+      [S.live.base, ""],
+      [S.live.behind, "n"],
+      [S.live.ahead, "n"],
+      [S.live.fetchedAt, ""],
+    ]);
+    // A base, the counts against it and when it was fetched.
+    const compared = {
+      ...LIVE,
+      repos: [
+        {
+          ...LIVE.repos[0],
+          base: "origin/master",
+          behind: 3,
+          ahead: 1,
+          fetched_at: "2026-10-04T12:00:00.000Z",
+        },
+      ],
+    };
+    const comparedTds = call("liveRepos", compared).find((n) => n.tag === "td");
+    const comparedCells = comparedTds.map((c) => c.textContent);
+    expect(comparedCells.slice(6, 9)).toEqual(["origin/master", "3", "1"]);
+    expect(comparedCells[9]).toBe(new Date("2026-10-04T12:00:00.000Z").toLocaleString("en-US"));
+    expect(comparedTds.map((c) => c.className)).toEqual([
+      "",
+      "",
+      "",
+      "",
+      "n",
+      "n",
+      "",
+      "n",
+      "n",
+      "",
+    ]);
     // Nulls the measurement could not measure are said to be.
     const unmeasured = {
       ...LIVE,
@@ -1973,7 +2017,7 @@ describe("basou view: the board page", () => {
       .slice(1)
       .map((row) => row.find((n) => n.tag === "td").map((c) => c.textContent));
     expect(rows).toEqual([
-      ["app", "not measured", "0123456", "-", "2", "1", "-"],
+      ["app", "not measured", "0123456", "-", "2", "1", "-", "-", "-", "-"],
       [
         "../gone",
         "not measured",
@@ -1982,8 +2026,26 @@ describe("basou view: the board page", () => {
         "not measured",
         "not measured",
         "not measured",
+        "not measured",
+        "not measured",
+        "not measured",
       ],
     ]);
+    // Each of the four the measurement could not measure is said to be.
+    const fields = ["base", "behind", "ahead", "fetched_at"];
+    const unmeasuredBase = {
+      ...LIVE,
+      footnotes: {
+        ...LIVE.footnotes,
+        not_found: fields.map((field) => ({ at: `repos[.].${field}`, reason: "x" })),
+      },
+    };
+    expect(
+      call("liveRepos", unmeasuredBase)
+        .find((n) => n.tag === "td")
+        .map((c) => c.textContent)
+        .slice(6),
+    ).toEqual(fields.map(() => S.tiles.notMeasured));
 
     const trail = call("liveTrail", LIVE);
     // The newest session was not measured: not "no session".

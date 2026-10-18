@@ -1100,7 +1100,8 @@ function shownValue(value: number | string | string[] | null): string {
 
 // One line per repository. A null the not_found entries do not explain has
 // the meaning the measurement gives it (a detached HEAD, no commit yet, no
-// default branch: origin/HEAD names none and there is no origin/main).
+// base: origin/HEAD names no branch and there is no origin/main, no fetch of
+// the base on record).
 function repoLines(m: BoardMeasurement): string[] {
   const missing = new Set(m.not_found.map((n) => n.at));
   return m.repos.map((repo) => {
@@ -1120,8 +1121,18 @@ function repoLines(m: BoardMeasurement): string[] {
       `commits ${measured("commits", String) ?? "not measured"}`,
       `files ${measured("files", String) ?? "not measured"}`,
       `uncommitted ${measured("uncommitted", String) ?? "not measured"}`,
-      `behind origin's default branch ${measured("behind_main", String) ?? "(origin/HEAD names no branch, and there is no origin/main)"}`,
     ];
+    const base = measured("base", (b) => displayPath(String(b)));
+    if (base === undefined) {
+      parts.push("no base (origin/HEAD names no branch, and there is no origin/main)");
+    } else {
+      parts.push(
+        `base ${base}`,
+        `behind ${measured("behind", String) ?? "not measured"}`,
+        `ahead ${measured("ahead", String) ?? "not measured"}`,
+        `fetched ${measured("fetched_at", String) ?? "not known"}`,
+      );
+    }
     return `  ${displayPath(repo.path)}${name}  ${parts.join(", ")}`;
   });
 }

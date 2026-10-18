@@ -1034,7 +1034,10 @@ export type BoardPageStrings = {
     lastCommit: string;
     commits: string;
     uncommitted: string;
-    behindMain: string;
+    base: string;
+    behind: string;
+    ahead: string;
+    fetchedAt: string;
     trail: string;
     decisions: string;
     decisionsAll: string;
@@ -1205,7 +1208,10 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     lastCommit: "Last commit",
     commits: "Commits",
     uncommitted: "Uncommitted",
-    behindMain: "Behind origin's default branch",
+    base: "Base branch",
+    behind: "Behind",
+    ahead: "Ahead",
+    fetchedAt: "Last fetch",
     trail: "Trail",
     decisions: "Decisions",
     decisionsAll: "{n} in all, voided ones included",
@@ -1374,7 +1380,10 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     lastCommit: "最終 commit",
     commits: "commit 数",
     uncommitted: "未 commit",
-    behindMain: "origin の既定 branch からの遅れ",
+    base: "比べる branch",
+    behind: "遅れ",
+    ahead: "進み",
+    fetchedAt: "最後の fetch",
     trail: "証跡",
     decisions: "判断",
     decisionsAll: "取り消したものを含めて {n}",

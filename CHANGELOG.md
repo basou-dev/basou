@@ -115,6 +115,31 @@ All notable changes to **basou** are recorded here. The project follows
   before. A record of version 1 or 2 holds one lane id, which the board page
   and the difference from the previous record read as a list of that one,
   so a lane written either way is not a change.
+- **A record's repos name the branch they are compared with, count the
+  commits ahead of it, and say when it was last fetched
+  (`record_version: 3`, experimental).** `behind_main` is now `behind`,
+  counted as before, and `base` names the branch of origin it counts against
+  (`origin/<branch>`: the one `origin/HEAD` names, or `origin/main` when it
+  names none; null when there is neither). `ahead` counts the commits HEAD
+  has that the base does not: not only commits not pushed, but those of a
+  branch pushed and not merged, and those that came into the base as other
+  commits (by a squash or a rebase). `fetched_at` is when FETCH_HEAD was
+  last written, in UTC, when it holds the line of the base's branch fetched
+  from origin's URL (as git writes it there, without a user or a password)
+  at the commit the base is at now; it is null when it does not, as after a
+  fetch that failed, which empties FETCH_HEAD but still moves its time, a
+  fetch since from another URL or of other branches only, or a push or a
+  fetch in another worktree that moved the base since. A later fetch with
+  `--append` moves the time and leaves the line, and a remote whose URL is
+  origin's writes the same line as origin. `fetched_at` is not in the digest
+  and not compared with the previous record: a fetch that brings nothing
+  moves it too. basou still does not fetch. The `repos` method stays 2. A
+  record of version 1 or 2 keeps `behind_main`, so the first difference from
+  one shows `behind_main` gone and `base`, `behind` and `ahead` come.
+  `basou board measure` prints them on each repo's line (or that there is no
+  base), the board page measured on the spot draws them as columns, and
+  `basou board guide` says how to read them: `ahead` with `branch` before
+  judging 04, and both counts as maybe old when `fetched_at` is null or old.
 - **A branch a `github_ci` or `github_check` observation names may not have
   a part that starts with `.`** (in a board of any version). git takes no
   such branch, and GitHub reads `a/./b` in the path of a request as `a/b`,
