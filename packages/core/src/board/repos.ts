@@ -77,12 +77,14 @@ export type BoardRepo = {
   /**
    * When FETCH_HEAD (this worktree's) was last written, in UTC, if it holds
    * the line of `base`'s branch fetched from origin's URL at the commit
-   * `base` is at now: when this checkout last fetched it. Null otherwise: no
+   * `base` is at now: as a rule, when this checkout last fetched it. A later
+   * fetch with `--append` moves the time and leaves the line, and a remote
+   * whose URL is origin's writes the same line as origin. Null otherwise: no
    * fetch since the clone, a fetch that failed (it empties FETCH_HEAD), a
-   * fetch since of another remote or of other branches only, or `base`
-   * moved since without a fetch here (a push, or a fetch in another
-   * worktree). Neither in the digest nor compared with the previous record,
-   * as a fetch that brings nothing moves it too.
+   * fetch since from another URL or of other branches only, or `base` moved
+   * since without a fetch here (a push, or a fetch in another worktree).
+   * Neither in the digest nor compared with the previous record, as a fetch
+   * that brings nothing moves it too.
    */
   fetched_at: string | null;
 };
@@ -506,7 +508,10 @@ async function fetchedAt(
     return { ok: false, reason: failure(where, "where FETCH_HEAD is could not be read") };
   }
   const url = await runGit(cwd, ["remote", "get-url", "origin"]);
-  if (url.spawnError !== undefined) return { ok: false, reason: url.spawnError };
+  // No exit code: git could not be started, or a signal stopped it.
+  if (url.code === null) {
+    return { ok: false, reason: failure(url, "the URL of origin could not be read") };
+  }
   // origin has no URL (it is not a remote): no line can be from it. git reads
   // its config first, so one it cannot read has stopped the commands before.
   if (url.code !== 0) return { ok: true, at: null };

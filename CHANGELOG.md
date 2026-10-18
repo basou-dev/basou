@@ -128,16 +128,18 @@ All notable changes to **basou** are recorded here. The project follows
   from origin's URL (as git writes it there, without a user or a password)
   at the commit the base is at now; it is null when it does not, as after a
   fetch that failed, which empties FETCH_HEAD but still moves its time, a
-  fetch since of another remote or of other branches only, or a push or a
-  fetch in another worktree that moved the base since. `fetched_at` is not in the digest and not compared with the
-  previous record: a fetch that brings nothing moves it too. basou still
-  does not fetch. The `repos` method stays 2. A record of version 1 or 2
-  keeps `behind_main`, so the first difference from one shows `behind_main`
-  gone and `base`, `behind` and `ahead` come. `basou board measure` prints
-  the four on each repo's line, the board page measured on the spot draws
-  them as columns, and `basou board guide` says how to read them: `ahead`
-  with `branch` before judging 04, and both counts as maybe old when
-  `fetched_at` is null or old.
+  fetch since from another URL or of other branches only, or a push or a
+  fetch in another worktree that moved the base since. A later fetch with
+  `--append` moves the time and leaves the line, and a remote whose URL is
+  origin's writes the same line as origin. `fetched_at` is not in the digest
+  and not compared with the previous record: a fetch that brings nothing
+  moves it too. basou still does not fetch. The `repos` method stays 2. A
+  record of version 1 or 2 keeps `behind_main`, so the first difference from
+  one shows `behind_main` gone and `base`, `behind` and `ahead` come.
+  `basou board measure` prints them on each repo's line (or that there is no
+  base), the board page measured on the spot draws them as columns, and
+  `basou board guide` says how to read them: `ahead` with `branch` before
+  judging 04, and both counts as maybe old when `fetched_at` is null or old.
 - **A branch a `github_ci` or `github_check` observation names may not have
   a part that starts with `.`** (in a board of any version). git takes no
   such branch, and GitHub reads `a/./b` in the path of a request as `a/b`,

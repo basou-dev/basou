@@ -2486,7 +2486,7 @@ describe("measureBoard: the repos section", () => {
       git(branch.dir, "fetch", "-q");
       git(branch.dir, "fetch", "-q", "origin", "feature");
       expect(await readFile(fetchHeadOf(branch.dir), "utf8")).not.toContain("branch 'main'");
-      // Another remote whose main is at the same commit was fetched since.
+      // Another remote, at another URL, whose main is at the same commit was fetched since.
       const other = await cloned("other");
       git(other.dir, "fetch", "-q");
       git(other.dir, "remote", "add", "copy", join(root, "copy"));
@@ -2625,6 +2625,12 @@ describe("measureBoard: the repos section", () => {
       // A local path, with a '/' before its first ':', keeps what has an '@'.
       git(dir, "remote", "set-url", "origin", "/srv/a@b:c/app.git");
       expect(await measured([`${tip}\t\tbranch 'main' of /srv/a@b:c/app`])).toBe(AT.toISOString());
+      // Only one .git goes.
+      git(dir, "remote", "set-url", "origin", "https://example.com/x/app.git.git");
+      expect(await measured([`${tip}\t\tbranch 'main' of https://example.com/x/app`])).toBeNull();
+      expect(await measured([`${tip}\t\tbranch 'main' of https://example.com/x/app.git`])).toBe(
+        AT.toISOString(),
+      );
       // A name of five characters keeps its .git.
       git(dir, "remote", "set-url", "origin", "a.git");
       expect(await measured([`${tip}\t\tbranch 'main' of a`])).toBeNull();
@@ -2651,6 +2657,85 @@ describe("measureBoard: the repos section", () => {
       } finally {
         await chmod(fetchHeadOf(locked.dir), 0o644);
       }
+    });
+
+    it("matches a branch and a URL of origin that are not ASCII, as git writes them", async () => {
+      // An upstream under a directory not named in ASCII, whose default branch is not ASCII either.
+      await mkdir(join(root, "\u4e0a\u6d41"));
+      const upstream = await repo(join("\u4e0a\u6d41", "up"), { "a.txt": "1\n" });
+      git(upstream, "branch", "-m", "main", "d\u00e9v'x");
+      git(root, "clone", "-q", upstream, "app");
+      const dir = join(root, "app");
+      git(dir, "fetch", "-q");
+      await utimes(fetchHeadOf(dir), AT, AT);
+      const m = await measureRepos("app");
+      expect(m.repos[0]).toMatchObject({
+        base: "origin/d\u00e9v'x",
+        behind: 0,
+        ahead: 0,
+        fetched_at: AT.toISOString(),
+      });
+      expect(m.not_found).toEqual([]);
+    });
+
+    it("takes a later fetch with --append, which leaves origin's line, for the last fetch", async () => {
+      const { dir } = await cloned("app");
+      git(dir, "fetch", "-q");
+      await utimes(fetchHeadOf(dir), AT, AT);
+      git(dir, "remote", "add", "copy", join(root, "copy"));
+      git(root, "clone", "-q", "--bare", join(root, "app-upstream"), "copy");
+      git(dir, "fetch", "-q", "--append", "copy");
+      await utimes(fetchHeadOf(dir), LATER, LATER);
+      const m = await measureRepos("app");
+      expect(m.repos[0]?.fetched_at).toBe(LATER.toISOString());
+    });
+
+    it("takes a fetch from another remote at origin's URL for one from origin", async () => {
+      const { upstream, dir } = await cloned("app");
+      git(dir, "remote", "add", "mirror", upstream);
+      git(dir, "fetch", "-q", "mirror");
+      await utimes(fetchHeadOf(dir), AT, AT);
+      const m = await measureRepos("app");
+      expect(m.repos[0]?.fetched_at).toBe(AT.toISOString());
+    });
+
+    it.skipIf(!POSIX || ROOT_USER)(
+      "keeps why fetched_at was not measured in the digest",
+      async () => {
+        const { dir } = await cloned("app");
+        const fetchHead = join(dir, ".git", "FETCH_HEAD");
+        const declaration = declare([], {}, ["app"]);
+        await mkdir(fetchHead);
+        const folder = await measure(declaration, NOW, ["app"]);
+        await rm(fetchHead, { recursive: true });
+        await writeFile(fetchHead, "");
+        await chmod(fetchHead, 0o000);
+        try {
+          const locked = await measure(declaration, NOW, ["app"]);
+          expect(folder.not_found).toEqual([
+            { at: "repos[app].fetched_at", reason: "FETCH_HEAD could not be read (EISDIR)" },
+          ]);
+          expect(locked.not_found).toEqual([
+            { at: "repos[app].fetched_at", reason: "FETCH_HEAD could not be read (EACCES)" },
+          ]);
+          expect(locked.repos).toEqual(folder.repos);
+          expect(locked.digest).not.toBe(folder.digest);
+        } finally {
+          await chmod(fetchHead, 0o644);
+        }
+      },
+    );
+
+    it.skipIf(!POSIX)("says why when git stops before telling the URL of origin", async () => {
+      const { dir } = await cloned("app");
+      git(dir, "fetch", "-q");
+      await withWrappedGit('for a in "$@"; do [ "$a" = get-url ] && kill -9 $$; done', async () => {
+        const m = await measureRepos("app");
+        expect(m.repos[0]).toMatchObject({ base: "origin/main", behind: 0, fetched_at: null });
+        expect(m.not_found).toEqual([
+          { at: "repos[app].fetched_at", reason: "the URL of origin could not be read" },
+        ]);
+      });
     });
 
     it.skipIf(!POSIX)("says why when git cannot say where FETCH_HEAD is", async () => {
