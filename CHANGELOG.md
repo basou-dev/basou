@@ -55,6 +55,23 @@ All notable changes to **basou** are recorded here. The project follows
   `board_version: 3`, experimental),** in the shape of a stage's or a lane's
   `notes`. `basou board guide` prints them under the observation's commands,
   and a record keeps them with the declaration it holds.
+- **A board can measure the name of a file and the paths of files
+  (`file_name` and `file_paths`, from `board_version: 3`, experimental).**
+  Both take a `repo`, `include`, `exclude` and `at` as a `file_count` does,
+  and are not measured where it is not (a fixed directory with nothing under
+  it, a symlink that leaves the repository). A `file_name` picks the first or
+  the last of the files matched (`pick`), in the byte order of their paths in
+  the repository, as git orders them, and its value is that file's name.
+  With a `pattern`, it picks only among the files whose name the pattern
+  matches, and the value is what the pattern's `group` holds (1 when it
+  names none; a `group` without a `pattern` is refused). No file to pick is
+  a null with that as the reason: a string has no zero. A `file_paths`
+  value is the list of the paths matched, in byte order, up to 1000; more
+  is a null with that as the reason. A ratio takes neither. The difference
+  from the previous record lists each path that came in or went out when
+  both records hold a list, and the list whole when only one does. The
+  `Measures:` section of `basou board measure` gives the list as a count,
+  and the board page draws it as a count with the paths folded under it.
 
 ### Changed
 

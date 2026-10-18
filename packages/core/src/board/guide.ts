@@ -192,6 +192,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "- An empty file means it did not run, not that it passed: check that measure.json reads as JSON.",
     '- Never read a null as 0. Write "not confirmed" for it and do not judge by it.',
     "- What moved is the point: the top of measure.txt (`Since the previous record <ULID>:`) and `diff` in the JSON. A value marked `method_changed` may have moved because basou measures it another way now.",
+    "- A `file_paths` measure's value is the list of paths it found. `Measures:` in measure.txt gives it as a count: read the paths in the JSON. `diff` lists each path that came in (`added`) or went out (`removed`) when both records hold a list, and the list whole when only one does.",
     "- `repos[].behind_main` counts the commits on origin's default branch (the branch of origin that origin/HEAD names, or origin/main when origin/HEAD names none) as of the last fetch; measure does not fetch.",
     "",
   );
