@@ -3,6 +3,23 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **`docs/spec/board.md` describes the shapes of `basou board`
+  (experimental), as of `board_version` 3 and `record_version` 3.** It says
+  what each key of `board.yaml`, of the input `basou board record` reads, of
+  a record and of the measurement `basou board measure --json` prints holds,
+  which keys are required and what their defaults are, the rules each kind of
+  measure and observation follows, what each `null` means, what the digest
+  covers and what the difference from the previous record compares, and how a
+  record of version 1 or 2 differs. Until now these shapes were described only
+  in this changelog, in `--help`, and in what `basou board guide` and
+  `basou board init` print. They stay outside every guarantee, as the
+  command does, and the page says so; `docs/spec/compatibility.md` and
+  `docs/spec/cli-commands.md` point to it.
+
 ## 0.71.0 — 2026-10-18
 
 ### Added

@@ -52,7 +52,8 @@ basou hook status [claude|codex]     # is it registered (codex: and has Codex tr
 basou hook uninstall [claude|codex]
 basou hook stop | session-start      # the handlers themselves — the tool invokes them, not you
 
-# Progress board (experimental: outside every guarantee, see compatibility.md)
+# Progress board (experimental: outside every guarantee, see compatibility.md;
+#   the shapes it reads and writes are in board.md)
 basou board measure        # measure what a board.yaml declares (writes nothing, sends nothing)
 basou board record         # measure again and record a judgement of the board, beside its board.yaml
 basou board guide          # print the steps an agent follows to judge and record the board (writes nothing)
