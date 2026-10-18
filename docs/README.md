@@ -16,6 +16,7 @@ docs/
     ├── generated-markdown.md       handoff.md / decisions.md rules
     ├── terminal-and-import.md      session lifecycle, terminal recording, import
     ├── cli-commands.md             CLI command catalog
+    ├── board.md                    progress board shapes (experimental)
     └── compatibility.md            semver guarantees, format versioning, deprecation
 ```
 

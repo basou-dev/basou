@@ -479,6 +479,11 @@ it does not know and for a subclass of one it does.
   |---|---|
   | `basou board` | 0.65.0 |
 
+  The shapes `basou board` reads and writes (its `board.yaml`, the input of
+  `basou board record`, its records and the measurement it prints) are
+  described in [board.md](board.md), outside every guarantee as the command
+  is.
+
 - **`basou view`'s HTTP routes and pages are a local UI, not an API.** Read the
   trail through `@basou/sdk` or the `--json` output of a command that is not
   experimental instead.
