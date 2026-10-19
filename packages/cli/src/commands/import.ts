@@ -15,6 +15,8 @@ import {
   CODEX_IMPORT_SOURCE,
   type CodexRolloutRecord,
   classifyFilesBySourceRoot,
+  claudeTranscriptOwnRecords,
+  claudeTranscriptRecordUuid,
   claudeTranscriptToImportPayload,
   codexRolloutToImportPayload,
   displayPath,
@@ -80,6 +82,13 @@ export type ImportContext = {
    * Defaults to `~/.codex/sessions`. Injectable for tests.
    */
   codexSessionsDir?: string;
+  /**
+   * When a Claude transcript's file was created, in milliseconds since the
+   * epoch, which decides which of two transcripts of one conversation forked
+   * the other. Defaults to the file's birth time. Injectable for tests: a file
+   * system offers no way to set a birth time.
+   */
+  transcriptCreatedAtMs?: (file: string) => Promise<number>;
 };
 
 /**
@@ -96,7 +105,30 @@ type ImportCandidate = {
    * changed, before paying to read + derive it.
    */
   sourcePath: string;
-  toPayload: () => Promise<SessionImportPayload | null>;
+  /**
+   * Read and derive the source. `notBefore` is the start of the session an
+   * earlier import made from it: an adapter whose sources can copy records from
+   * one another leaves out what is older (Claude Code); the others ignore it.
+   */
+  toPayload: (notBefore?: string) => Promise<DerivedSource>;
+  /**
+   * Whether the session an earlier import made from this source still holds
+   * records the source copied from an older one, so it is re-derived even
+   * though the source did not change. Absent for an adapter whose sources copy
+   * nothing.
+   */
+  holdsCopies?: (prior: PriorImport) => boolean;
+};
+
+/** What {@link ImportCandidate.toPayload} derived. */
+type DerivedSource = {
+  payload: SessionImportPayload | null;
+  /**
+   * Records the source copied from an older one were left out of the
+   * derivation, so a re-import may drop what an earlier import derived from
+   * them (see `dropDerivedBefore` on `reimportPreservingId`).
+   */
+  leftOutCopies: boolean;
 };
 
 /**
@@ -242,6 +274,13 @@ export async function doRunImportClaudeCode(
   const projectsRoot = ctx.claudeProjectsDir ?? join(homedir(), ".claude", "projects");
 
   const files = await selectTranscriptFiles(projectsRoot, projectPaths, options);
+  // Every transcript of the source roots, not only the selected ones: a
+  // transcript forked from another opens with copies of its records, and which
+  // records are copies is known only beside the older transcript.
+  const conversations = await indexConversations(
+    await listTranscriptFiles(projectsRoot, projectPaths),
+    ctx.transcriptCreatedAtMs ?? birthTimeMs,
+  );
   // Claude Code's per-project directory name is lossy (every non-alphanumeric
   // char -> "-"), so distinct project paths can collide into one directory.
   // Attribute each transcript by its OWN recorded cwd and skip any that does not
@@ -254,25 +293,43 @@ export async function doRunImportClaudeCode(
     // The transcript filename is the Claude session id; it is both the dedup
     // key and the source external_id.
     const externalId = basename(file, ".jsonl");
+    const { root, older } = conversations.place(file);
     return {
       externalId,
       sourcePath: file,
-      toPayload: async () => {
+      // An earlier import that took the copies too began the session at the
+      // conversation's first record or before it; one without them begins after
+      // the last copy.
+      holdsCopies: (prior) =>
+        older.length > 0 &&
+        root?.timestamp !== undefined &&
+        Date.parse(prior.startedAt) <= Date.parse(root.timestamp),
+      toPayload: async (notBefore) => {
         const { records, sizeBytes } = await readJsonlRecords(file);
         const cwd = firstTranscriptCwd(records);
-        if (cwd === undefined || !projectSet.has(cwd)) return null;
+        if (cwd === undefined || !projectSet.has(cwd))
+          return { payload: null, leftOutCopies: false };
         // What the hooks observed through git while this session ran. Absent
         // for any session that started before the hook was installed, or
         // outside a registered workspace — the import then carries only what
         // the transcript itself could show, exactly as before.
         const observation = await readSessionObservation(paths.observations, externalId);
         const observedFiles = observation === null ? [] : observedFilesOf(observation);
-        return claudeTranscriptToImportPayload(records, {
-          workspaceId: manifest.workspace.id,
-          externalId,
-          sourceSizeBytes: sizeBytes,
-          ...(observedFiles.length > 0 ? { observedFiles } : {}),
+        // The records an older transcript of this conversation holds are its
+        // session's; this one keeps what it added after it forked.
+        const own = claudeTranscriptOwnRecords(records, {
+          copiedUuids: await conversations.uuidsOf(older),
+          ...(notBefore !== undefined ? { notBefore } : {}),
         });
+        return {
+          payload: claudeTranscriptToImportPayload(own, {
+            workspaceId: manifest.workspace.id,
+            externalId,
+            sourceSizeBytes: sizeBytes,
+            ...(observedFiles.length > 0 ? { observedFiles } : {}),
+          }),
+          leftOutCopies: own.length < records.length,
+        };
       },
     };
   });
@@ -309,11 +366,14 @@ export async function doRunImportCodex(
     sourcePath: file,
     toPayload: async () => {
       const { records, sizeBytes } = await readJsonlRecords(file);
-      return codexRolloutToImportPayload(records as CodexRolloutRecord[], {
-        workspaceId: manifest.workspace.id,
-        externalId,
-        sourceSizeBytes: sizeBytes,
-      });
+      return {
+        payload: codexRolloutToImportPayload(records as CodexRolloutRecord[], {
+          workspaceId: manifest.workspace.id,
+          externalId,
+          sourceSizeBytes: sizeBytes,
+        }),
+        leftOutCopies: false,
+      };
     },
   }));
 
@@ -433,6 +493,7 @@ async function importDerivedSessions(
     skippedDecreased: 0,
     skippedDuplicate: 0,
     skippedUnverifiable: 0,
+    droppedCopies: 0,
   };
   let sanitizedPaths = 0;
 
@@ -456,7 +517,7 @@ async function importDerivedSessions(
     return parsed.data;
   };
 
-  for (const { externalId, sourcePath, toPayload } of candidates) {
+  for (const { externalId, sourcePath, toPayload, holdsCopies } of candidates) {
     if (seenThisRun.has(externalId)) {
       counts.skippedExisting++;
       continue;
@@ -464,33 +525,50 @@ async function importDerivedSessions(
     const priors = existingByExternalId.get(externalId) ?? [];
 
     // Already imported in a prior run. Default is to skip (idempotent), but a
-    // source whose native log GREW is re-imported in place, and --force
+    // source whose native log GREW is re-imported in place, as is one whose
+    // session still holds records it copied from an older source, and --force
     // deletes + replaces regardless.
     if (priors.length > 0 && options.force !== true) {
-      const prior = await classifyReimport(priors, sourcePath, externalId, counts);
-      if (prior === null) continue; // skip recorded by classifyReimport
-      const payload = validate(await toPayload());
+      const decision = await classifyReimport(priors, sourcePath, externalId, counts, holdsCopies);
+      if (decision === null) continue; // skip recorded by classifyReimport
+      const { prior, reason } = decision;
+      const derived = await toPayload(prior.startedAt);
+      const payload = validate(derived.payload);
       if (payload === null) {
+        if (reason === "holds_copies") {
+          console.error(
+            `Import: ${externalId} added no action of its own after the records it copied from an older transcript; its session, imported with those records, is left as it is`,
+          );
+        }
         counts.skippedNoAction++;
         continue;
       }
-      // Re-confirm growth against the size ACTUALLY read (the decision above used
-      // a cheap pre-read stat): if the source was truncated / rotated between the
-      // stat and the read, the smaller buffer must not be re-imported as a grow.
+      if (reason === "holds_copies" && !derived.leftOutCopies) {
+        // The older transcript was not there to read after all: nothing to drop.
+        counts.skippedExisting++;
+        continue;
+      }
+      // Re-confirm against the size ACTUALLY read (the decision above used a
+      // cheap pre-read stat): if the source was truncated / rotated between the
+      // stat and the read, the smaller buffer must not be re-imported as a grow,
+      // nor, for a session re-derived to drop its copies, as the same source.
       const readSize = payload.session.source.source_size_bytes;
       if (
         prior.sourceSizeBytes !== undefined &&
         readSize !== undefined &&
-        readSize <= prior.sourceSizeBytes
+        (reason === "grew" ? readSize <= prior.sourceSizeBytes : readSize < prior.sourceSizeBytes)
       ) {
         console.error(
-          `Import: ${externalId} source changed during read (now ${readSize} <= ${prior.sourceSizeBytes} bytes); re-import skipped`,
+          `Import: ${externalId} source changed during read (now ${readSize} bytes, was ${prior.sourceSizeBytes}); re-import skipped`,
         );
         counts.skippedDecreased++;
         continue;
       }
       const outcome = await reimportPreservingId(paths, manifest, prior.sessionId, payload, {
         dryRun: options.dryRun === true,
+        // What an earlier import derived from the copies predates the session's
+        // fresh start; anything later that is not reproduced still refuses.
+        ...(derived.leftOutCopies ? { dropDerivedBefore: payload.session.started_at } : {}),
       });
       if (outcome.status === "skipped") {
         const detail =
@@ -510,12 +588,17 @@ async function importDerivedSessions(
         continue;
       }
       counts.reimported++;
+      // The prior session held the copies, and this re-derivation left them out:
+      // whether or not they had derived any event, they are gone from it now.
+      if (holdsCopies?.(prior) === true) counts.droppedCopies++;
       seenThisRun.add(externalId);
       await noteCrossProject(externalId, payload);
       continue;
     }
 
-    const payload = validate(await toPayload());
+    // Under --force the prior session is replaced, but where it began still
+    // bounds what the source may bring back (see `notBefore`).
+    const payload = validate((await toPayload(earliestStart(priors))).payload);
     if (payload === null) {
       counts.skippedNoAction++;
       continue;
@@ -594,7 +677,10 @@ type ImportCounts = {
   skippedExisting: number;
   /** Deleted + replaced under --force. */
   replaced: number;
-  /** Re-imported in place because the source grew. */
+  /**
+   * Re-imported in place: the source grew, or its session still held records
+   * the source copied from an older one.
+   */
   reimported: number;
   /** Already imported but with no recorded size (pre-size-tracking import); not re-imported. */
   skippedLegacy: number;
@@ -609,21 +695,29 @@ type ImportCounts = {
    * `--force` re-import. Distinct from {@link skippedNoAction} (nothing to derive).
    */
   skippedUnverifiable: number;
+  /**
+   * Of {@link reimported}, the sessions that held records their source copied
+   * from an older one, and no longer do.
+   */
+  droppedCopies: number;
 };
 
 /**
- * Decide whether an already-imported external id should be re-imported in place
- * because its source grew. Returns the single prior import to re-import into, or
- * `null` (recording the right skip count) when it must be left alone:
- * unchanged / shrank / legacy (no recorded size) / anomalously duplicated. The
- * size probe is a parse-free `stat`, so unchanged sources are dismissed cheaply.
+ * Decide whether an already-imported external id should be re-imported in place:
+ * because its source grew, or because the session an earlier import made from it
+ * still holds records the source copied from an older one (`holdsCopies`).
+ * Returns the single prior import to re-import into and why, or `null`
+ * (recording the right skip count) when it must be left alone: unchanged /
+ * shrank / legacy (no recorded size) / anomalously duplicated. The size probe is
+ * a parse-free `stat`, so unchanged sources are dismissed cheaply.
  */
 async function classifyReimport(
   priors: PriorImport[],
   sourcePath: string,
   externalId: string,
   counts: ImportCounts,
-): Promise<PriorImport | null> {
+  holdsCopies?: (prior: PriorImport) => boolean,
+): Promise<{ prior: PriorImport; reason: "grew" | "holds_copies" } | null> {
   if (priors.length > 1) {
     // Anomalous: a scoped re-import cannot pick which id to preserve, and
     // delete+recreate would orphan any linked_events. Leave it to --force.
@@ -651,6 +745,7 @@ async function classifyReimport(
     return null;
   }
   if (currentSize === prior.sourceSizeBytes) {
+    if (holdsCopies?.(prior) === true) return { prior, reason: "holds_copies" };
     counts.skippedExisting++; // unchanged
     return null;
   }
@@ -662,7 +757,17 @@ async function classifyReimport(
     counts.skippedDecreased++;
     return null;
   }
-  return prior; // grew => re-import preserving id
+  return { prior, reason: "grew" }; // re-import preserving id
+}
+
+/** The earliest start among the prior imports of one source, if any. */
+function earliestStart(priors: ReadonlyArray<PriorImport>): string | undefined {
+  let earliest: string | undefined;
+  for (const { startedAt } of priors) {
+    if (earliest === undefined || Date.parse(startedAt) < Date.parse(earliest))
+      earliest = startedAt;
+  }
+  return earliest;
 }
 
 /**
@@ -713,10 +818,11 @@ function firstTranscriptCwd(records: ReadonlyArray<ClaudeTranscriptRecord>): str
  */
 /**
  * A prior Basou session for an external id, with the source byte size recorded
- * at its last import (absent for legacy imports made before the field existed).
- * The size lets a re-import detect that an append-only source GREW.
+ * at its last import (absent for legacy imports made before the field existed)
+ * and when the session began. The size lets a re-import detect that an
+ * append-only source GREW.
  */
-type PriorImport = { sessionId: string; sourceSizeBytes?: number };
+type PriorImport = { sessionId: string; startedAt: string; sourceSizeBytes?: number };
 
 async function loadExistingByExternalId(
   paths: BasouPaths,
@@ -750,10 +856,13 @@ async function loadExistingByExternalId(
     }
     if (session.session.source.kind !== sourceKind) continue;
     const sourceSizeBytes = session.session.source.source_size_bytes;
+    const startedAt = session.session.started_at;
     // Build once; omit the size key entirely when absent (legacy import) so the
     // optional property stays absent rather than explicitly undefined.
     const prior: PriorImport =
-      sourceSizeBytes !== undefined ? { sessionId, sourceSizeBytes } : { sessionId };
+      sourceSizeBytes !== undefined
+        ? { sessionId, startedAt, sourceSizeBytes }
+        : { sessionId, startedAt };
     const ext = session.session.source.external_id;
     if (typeof ext === "string" && ext.length > 0) {
       add(ext, prior);
@@ -812,6 +921,161 @@ async function selectTranscriptFiles(
     throw new Error("Claude transcript directory not found for project");
   }
   return [...new Set(files)].sort();
+}
+
+/**
+ * Every `.jsonl` transcript in the per-project directories of the source roots,
+ * whatever `--session` / `--all` selected. A root without a directory adds
+ * nothing and raises nothing: {@link selectTranscriptFiles} raises the error
+ * refresh classifies.
+ */
+async function listTranscriptFiles(
+  projectsRoot: string,
+  projectPaths: string[],
+): Promise<string[]> {
+  const files: string[] = [];
+  for (const projectPath of projectPaths) {
+    const transcriptDir = join(projectsRoot, encodeProjectDir(projectPath));
+    let entries: string[];
+    try {
+      entries = await readdir(transcriptDir);
+    } catch (error: unknown) {
+      if (findErrorCode(error, "ENOENT")) continue;
+      throw new Error("Failed to read Claude transcript directory", { cause: error });
+    }
+    for (const name of entries) {
+      if (name.endsWith(".jsonl")) files.push(join(transcriptDir, name));
+    }
+  }
+  return [...new Set(files)].sort();
+}
+
+/** The first record of a transcript that carries a uuid: its conversation's root. */
+type ConversationRoot = { uuid: string; timestamp?: string };
+
+/** The transcripts of the source roots, grouped by the conversation they hold. */
+type Conversations = {
+  /**
+   * The root of `file`'s conversation, and the other transcripts of that
+   * conversation created before it, oldest first. A transcript with older ones
+   * forked from them and opens with copies of their records.
+   */
+  place(file: string): { root: ConversationRoot | undefined; older: string[] };
+  /** Every uuid the records of `files` carry. Each file is read once per run. */
+  uuidsOf(files: ReadonlyArray<string>): Promise<Set<string>>;
+};
+
+/**
+ * Group transcripts by conversation. A transcript forked from another (a session
+ * resumed into a new session id, or one started from another's conversation)
+ * opens with copies of that one's records under their original uuids, so every
+ * transcript of a conversation opens with the same root record, and reading
+ * each transcript up to its first uuid is enough to group them.
+ *
+ * Within a conversation the transcript whose file was created first comes first
+ * (`createdAtMs`, the file's birth time). Where a file system records no birth
+ * time, or two are equal, the session id decides: an arbitrary order, but one
+ * every run agrees on.
+ */
+async function indexConversations(
+  files: ReadonlyArray<string>,
+  createdAtMs: (file: string) => Promise<number>,
+): Promise<Conversations> {
+  type Entry = { file: string; externalId: string; createdAtMs: number };
+  const rootOf = new Map<string, ConversationRoot>();
+  const byRoot = new Map<string, Entry[]>();
+  for (const file of files) {
+    const root = await readConversationRoot(file);
+    if (root === undefined) continue;
+    rootOf.set(file, root);
+    const entry: Entry = { file, externalId: basename(file, ".jsonl"), createdAtMs: Number.NaN };
+    const list = byRoot.get(root.uuid);
+    if (list === undefined) byRoot.set(root.uuid, [entry]);
+    else list.push(entry);
+  }
+  for (const list of byRoot.values()) {
+    if (list.length < 2) continue;
+    for (const entry of list) entry.createdAtMs = await createdAtMs(entry.file);
+    list.sort((a, b) => {
+      const knownA = Number.isFinite(a.createdAtMs) && a.createdAtMs > 0;
+      const knownB = Number.isFinite(b.createdAtMs) && b.createdAtMs > 0;
+      if (knownA && knownB && a.createdAtMs !== b.createdAtMs) return a.createdAtMs - b.createdAtMs;
+      if (knownA !== knownB) return knownA ? -1 : 1;
+      return a.externalId < b.externalId ? -1 : a.externalId > b.externalId ? 1 : 0;
+    });
+  }
+  const uuidsByFile = new Map<string, Set<string>>();
+  return {
+    place(file) {
+      const root = rootOf.get(file);
+      if (root === undefined) return { root: undefined, older: [] };
+      const list = byRoot.get(root.uuid) ?? [];
+      const at = list.findIndex((entry) => entry.file === file);
+      return { root, older: list.slice(0, Math.max(at, 0)).map((entry) => entry.file) };
+    },
+    async uuidsOf(older) {
+      const uuids = new Set<string>();
+      for (const file of older) {
+        let held = uuidsByFile.get(file);
+        if (held === undefined) {
+          held = new Set();
+          try {
+            const { records } = await readJsonlRecords(file);
+            for (const record of records) {
+              const uuid = claudeTranscriptRecordUuid(record);
+              if (uuid !== undefined) held.add(uuid);
+            }
+          } catch {
+            // Gone since it was listed: nothing it held can be named as a copy.
+          }
+          uuidsByFile.set(file, held);
+        }
+        for (const uuid of held) uuids.add(uuid);
+      }
+      return uuids;
+    },
+  };
+}
+
+/**
+ * Read a transcript up to its first record that carries a uuid. `undefined` for
+ * a transcript with none, or one that cannot be read.
+ */
+async function readConversationRoot(file: string): Promise<ConversationRoot | undefined> {
+  const stream = createReadStream(file, { encoding: "utf8" });
+  const rl = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      if (!isObject(parsed)) continue;
+      const uuid = claudeTranscriptRecordUuid(parsed);
+      if (uuid === undefined) continue;
+      const timestamp = parsed.timestamp;
+      return typeof timestamp === "string" && timestamp.length > 0 ? { uuid, timestamp } : { uuid };
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+}
+
+/** A file's birth time, or NaN when it cannot be read. */
+async function birthTimeMs(file: string): Promise<number> {
+  try {
+    return (await stat(file)).birthtimeMs;
+  } catch {
+    return Number.NaN;
+  }
 }
 
 /** Whether `file` exists (ENOENT => false; any other error propagates). */
@@ -1010,6 +1274,7 @@ function printImportResult(
     skippedDecreased,
     skippedDuplicate,
     skippedUnverifiable,
+    droppedCopies,
   } = counts;
 
   if (options.json === true) {
@@ -1024,6 +1289,7 @@ function printImportResult(
         imported_count: results.length,
         replaced_count: replaced,
         reimported_count: reimported,
+        dropped_copies_count: droppedCopies,
         skipped_no_action: skippedNoAction,
         skipped_already_imported: skippedExisting,
         skipped_legacy_untracked: skippedLegacy,
@@ -1048,11 +1314,15 @@ function printImportResult(
   const skipSuffix = skipParts.length > 0 ? `; skipped ${skipParts.join(", ")}` : "";
   const eventsPart =
     replaced > 0 ? `${eventTotal} events, ${replaced} replaced` : `${eventTotal} events`;
+  const copiesPart =
+    droppedCopies > 0
+      ? ` (${droppedCopies} without the records ${droppedCopies === 1 ? "its transcript" : "their transcripts"} copied from an older one)`
+      : "";
 
   if (isDry) {
     const parts: string[] = [];
     if (results.length > 0) parts.push(`import ${results.length} session(s) (${eventsPart})`);
-    if (reimported > 0) parts.push(`re-import ${reimported} changed session(s)`);
+    if (reimported > 0) parts.push(`re-import ${reimported} changed session(s)${copiesPart}`);
     const head = parts.length > 0 ? `Dry run: would ${parts.join(", ")}` : "Dry run: no changes";
     console.log(`${head}${skipSuffix}`);
     return;
@@ -1075,7 +1345,7 @@ function printImportResult(
   }
   if (reimported > 0) {
     segments.push(
-      `${results.length > 0 ? "re-imported" : "Re-imported"} ${reimported} changed session(s)`,
+      `${results.length > 0 ? "re-imported" : "Re-imported"} ${reimported} changed session(s)${copiesPart}`,
     );
   }
   console.log(`${segments.join(", ")}${skipSuffix}`);

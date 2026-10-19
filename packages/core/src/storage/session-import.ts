@@ -341,6 +341,19 @@ export function isImportDerivedSource(source: string): boolean {
 export type ReimportOptions = {
   /** Compute the re-import and return its preview without writing to disk. */
   dryRun?: boolean;
+  /**
+   * A prior derived event that occurred before this instant may be dropped when
+   * the fresh derivation does not reproduce it, instead of refusing the
+   * re-import. `session_started` and `session_ended` are always kept (their ids,
+   * with the fresh content).
+   *
+   * For a source whose fresh derivation left out records the source copied from
+   * an older one (a forked Claude Code transcript): the caller passes the fresh
+   * session's start, so the events an earlier import derived from those copies
+   * go, and a prior derived event from the session's own time that is not
+   * reproduced still refuses the re-import, as without this option.
+   */
+  dropDerivedBefore?: string;
 };
 
 /** Result of {@link reimportPreservingId}. */
@@ -354,6 +367,8 @@ export type ReimportResult =
       preservedCount: number;
       /** Derived events whose prior id (and decision_id) was reused. */
       reusedIdCount: number;
+      /** Prior derived events dropped under {@link ReimportOptions.dropDerivedBefore}. */
+      droppedCount: number;
     }
   | {
       status: "skipped";
@@ -439,13 +454,21 @@ function derivedEventContentKey(event: Event): string {
  * `droppedPriorDerived` is true when a prior derived event was NOT reproduced by
  * the fresh derivation — its id would be dropped. That cannot happen for an
  * append-only growth (the prior derivations all recur); it signals a non-append
- * source change, which the caller treats as out of scope and skips.
+ * source change, which the caller treats as out of scope and skips. A middle
+ * event that occurred before `dropBeforeMs` is the exception: it is counted in
+ * `droppedCount` and does not set the flag (see `dropDerivedBefore`).
  */
 function reuseDerivedIds(
   priorDerived: ReadonlyArray<Event>,
   freshDerived: ReadonlyArray<Event>,
   sessionId: PrefixedId<"ses">,
-): { events: Event[]; reusedIdCount: number; droppedPriorDerived: boolean } {
+  dropBeforeMs?: number,
+): {
+  events: Event[];
+  reusedIdCount: number;
+  droppedPriorDerived: boolean;
+  droppedCount: number;
+} {
   const priorStarted = priorDerived.find((e) => e.type === "session_started");
   const priorEnded = priorDerived.find((e) => e.type === "session_ended");
   let startedUsed = false;
@@ -490,11 +513,20 @@ function reuseDerivedIds(
     return { ...fresh, id: prefixedUlid("evt"), session_id: sessionId };
   });
   // A prior derived event not consumed above would be DROPPED on the rewrite.
+  // One from before `dropBeforeMs` may go; it is counted, not refused.
+  let droppedCount = 0;
+  let droppedUnallowed = false;
+  for (const queue of middleByKey.values()) {
+    for (const e of queue) {
+      if (dropBeforeMs !== undefined && Date.parse(e.occurred_at) < dropBeforeMs) droppedCount++;
+      else droppedUnallowed = true;
+    }
+  }
   const droppedPriorDerived =
     (priorStarted !== undefined && !startedUsed) ||
     (priorEnded !== undefined && !endedUsed) ||
-    [...middleByKey.values()].some((q) => q.length > 0);
-  return { events, reusedIdCount, droppedPriorDerived };
+    droppedUnallowed;
+  return { events, reusedIdCount, droppedPriorDerived, droppedCount };
 }
 
 /**
@@ -561,11 +593,19 @@ export async function reimportPreservingId(
     const priorDerived = priorEvents.filter((e) => e.source === importSource);
     const preserved = priorEvents.filter((e) => e.source !== importSource);
 
+    const dropBeforeMs =
+      options.dropDerivedBefore === undefined ? undefined : Date.parse(options.dropDerivedBefore);
     const {
       events: rederived,
       reusedIdCount,
       droppedPriorDerived,
-    } = reuseDerivedIds(priorDerived, freshPayload.events, sessionId);
+      droppedCount,
+    } = reuseDerivedIds(
+      priorDerived,
+      freshPayload.events,
+      sessionId,
+      dropBeforeMs === undefined || Number.isNaN(dropBeforeMs) ? undefined : dropBeforeMs,
+    );
     if (droppedPriorDerived) {
       // The grown source no longer reproduces some prior derived event, so its
       // id would vanish (only happens on a non-append-only change). Abort rather
@@ -636,6 +676,7 @@ export async function reimportPreservingId(
       eventCount: mergedEvents.length,
       preservedCount: preserved.length,
       reusedIdCount,
+      droppedCount,
     };
   } finally {
     await lock?.release();
