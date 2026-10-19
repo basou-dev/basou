@@ -36,8 +36,16 @@ export type ImportOutcome =
       status: "ran";
       importedCount: number;
       replacedCount: number;
-      /** Sessions re-imported in place because their source grew. */
+      /**
+       * Sessions re-imported in place: their source grew, or the session still
+       * held records its source copied from an older one.
+       */
       reimportedCount: number;
+      /**
+       * Of `reimportedCount`, the sessions that held records their source copied
+       * from an older one, and no longer do.
+       */
+      droppedCopiesCount: number;
       /** Discovered but derived nothing importable (e.g. a source shape the adapter cannot read). */
       skippedNoAction: number;
       skippedAlreadyImported: number;
@@ -179,6 +187,7 @@ async function runImport(adapter: ImportAdapter, fn: () => Promise<void>): Promi
       importedCount: readCount(json.imported_count),
       replacedCount: readCount(json.replaced_count),
       reimportedCount: readCount(json.reimported_count),
+      droppedCopiesCount: readCount(json.dropped_copies_count),
       skippedNoAction: readCount(json.skipped_no_action),
       skippedAlreadyImported: readCount(json.skipped_already_imported),
       skippedLegacyUntracked: readCount(json.skipped_legacy_untracked),

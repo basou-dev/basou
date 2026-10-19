@@ -375,3 +375,160 @@ describe("reimportPreservingId — the content key survives a change in how a fi
     expect(outcome.eventCount).toBe(5);
   });
 });
+
+describe("reimportPreservingId: dropDerivedBefore", () => {
+  // A session imported with records its source copied from an older one (a
+  // forked transcript): the copy at 09:01 precedes the session's own start.
+  const WITH_COPY: PayloadEvent[] = [
+    makeEvent("W1", "session_started", "2026-05-04T09:00:00+09:00"),
+    makeEvent("W2", "note_added", "2026-05-04T09:01:00+09:00", "copied"),
+    makeEvent("W3", "note_added", "2026-05-04T09:05:00+09:00", "own"),
+    makeEvent("W4", "session_ended", "2026-05-04T09:06:00+09:00"),
+  ];
+  // The same source derived without the copy: it begins at its own first record.
+  const WITHOUT_COPY: PayloadEvent[] = [
+    makeEvent("W5", "session_started", "2026-05-04T09:04:00+09:00"),
+    makeEvent("W6", "note_added", "2026-05-04T09:05:00+09:00", "own"),
+    makeEvent("W7", "session_ended", "2026-05-04T09:06:00+09:00"),
+  ];
+  const OWN_START = "2026-05-04T09:04:00+09:00";
+
+  async function importWithCopy(paths: BasouPaths): Promise<string> {
+    const result = await importSessionFromJson(paths, makeManifest(), makePayload(WITH_COPY), {});
+    return result.sessionId;
+  }
+
+  async function readNotes(paths: BasouPaths, sessionId: string): Promise<string[]> {
+    const raw = await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8");
+    return raw
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { type: string; body?: string })
+      .filter((e) => e.type === "note_added")
+      .map((e) => e.body ?? "");
+  }
+
+  it("refuses to drop the copy without the option, as before", async () => {
+    const paths = await setupPaths();
+    const sessionId = await importWithCopy(paths);
+    const outcome = await reimportPreservingId(
+      paths,
+      makeManifest(),
+      sessionId,
+      makePayload(WITHOUT_COPY),
+    );
+    expect(outcome).toEqual({ status: "skipped", reason: "prior_derived_dropped" });
+    expect(await readNotes(paths, sessionId)).toEqual(["copied", "own"]);
+  });
+
+  it("drops a prior derived event from before the bound, keeps the ids of the rest and the chain", async () => {
+    const paths = await setupPaths();
+    const sessionId = await importWithCopy(paths);
+    const before = (await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { id: string; type: string; body?: string });
+    const ownId = before.find((e) => e.body === "own")?.id;
+    const startedId = before.find((e) => e.type === "session_started")?.id;
+
+    const outcome = await reimportPreservingId(
+      paths,
+      makeManifest(),
+      sessionId,
+      makePayload(WITHOUT_COPY),
+      { dropDerivedBefore: OWN_START },
+    );
+    expect(outcome.status).toBe("reimported");
+    if (outcome.status !== "reimported") throw new Error("unreachable");
+    expect(outcome.droppedCount).toBe(1);
+    expect(outcome.eventCount).toBe(3);
+
+    const after = (await readFile(join(paths.sessions, sessionId, "events.jsonl"), "utf8"))
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map(
+        (line) =>
+          JSON.parse(line) as { id: string; type: string; body?: string; occurred_at: string },
+      );
+    expect(after.filter((e) => e.type === "note_added").map((e) => e.body)).toEqual(["own"]);
+    expect(after.find((e) => e.body === "own")?.id).toBe(ownId);
+    // The start keeps its id and takes the fresh time.
+    const started = after.find((e) => e.type === "session_started");
+    expect(started?.id).toBe(startedId);
+    expect(Date.parse(started?.occurred_at ?? "")).toBe(Date.parse(OWN_START));
+    expect(await verifyEventsChain(paths, sessionId)).toEqual({
+      status: "verified",
+      eventCount: 3,
+    });
+  });
+
+  it("still refuses when a prior derived event at or after the bound is not reproduced", async () => {
+    const paths = await setupPaths();
+    const sessionId = await importWithCopy(paths);
+    // The own note at 09:05 is gone from the fresh derivation: that is not a
+    // copy, so the bound does not cover it.
+    const outcome = await reimportPreservingId(
+      paths,
+      makeManifest(),
+      sessionId,
+      makePayload([
+        makeEvent("W8", "session_started", "2026-05-04T09:04:00+09:00"),
+        makeEvent("W9", "session_ended", "2026-05-04T09:06:00+09:00"),
+      ]),
+      { dropDerivedBefore: OWN_START },
+    );
+    expect(outcome).toEqual({ status: "skipped", reason: "prior_derived_dropped" });
+    expect(await readNotes(paths, sessionId)).toEqual(["copied", "own"]);
+  });
+
+  it("does not drop a prior derived event at exactly the bound", async () => {
+    const paths = await setupPaths();
+    const sessionId = await importWithCopy(paths);
+    // The bound is the 09:05 own note itself, and the fresh derivation lost it.
+    const outcome = await reimportPreservingId(
+      paths,
+      makeManifest(),
+      sessionId,
+      makePayload([
+        makeEvent("WA", "session_started", "2026-05-04T09:05:00+09:00"),
+        makeEvent("WB", "session_ended", "2026-05-04T09:06:00+09:00"),
+      ]),
+      { dropDerivedBefore: "2026-05-04T09:05:00+09:00" },
+    );
+    expect(outcome).toEqual({ status: "skipped", reason: "prior_derived_dropped" });
+  });
+
+  it("drops nothing and counts nothing when every prior derived event recurs", async () => {
+    const paths = await setupPaths();
+    const sessionId = await importPrior(paths);
+    const outcome = await reimportPreservingId(
+      paths,
+      makeManifest(),
+      sessionId,
+      makePayload(GROWN_EVENTS),
+      { dropDerivedBefore: "2026-05-04T09:00:00+09:00" },
+    );
+    expect(outcome.status).toBe("reimported");
+    if (outcome.status !== "reimported") throw new Error("unreachable");
+    expect(outcome.droppedCount).toBe(0);
+    expect(outcome.eventCount).toBe(4);
+  });
+
+  it("dry-run reports the drop and writes nothing", async () => {
+    const paths = await setupPaths();
+    const sessionId = await importWithCopy(paths);
+    const eventsPath = join(paths.sessions, sessionId, "events.jsonl");
+    const bytes = await readFile(eventsPath, "utf8");
+    const outcome = await reimportPreservingId(
+      paths,
+      makeManifest(),
+      sessionId,
+      makePayload(WITHOUT_COPY),
+      { dryRun: true, dropDerivedBefore: OWN_START },
+    );
+    expect(outcome.status).toBe("reimported");
+    if (outcome.status !== "reimported") throw new Error("unreachable");
+    expect(outcome.droppedCount).toBe(1);
+    expect(await readFile(eventsPath, "utf8")).toBe(bytes);
+  });
+});

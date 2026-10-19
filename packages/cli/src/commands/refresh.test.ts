@@ -641,6 +641,7 @@ describe("printRefreshSummary", () => {
           importedCount: 0,
           replacedCount: 0,
           reimportedCount: 0,
+          droppedCopiesCount: 0,
           skippedNoAction: 2,
           skippedAlreadyImported: 4,
           skippedLegacyUntracked: 0,
@@ -657,6 +658,30 @@ describe("printRefreshSummary", () => {
     expect(out).toContain("2 with no actions");
     expect(out).toContain("1 unverifiable (run 'basou verify')");
     expect(out).toContain("4 already imported");
+  });
+
+  it("says how many re-imported sessions dropped records copied from an older transcript", () => {
+    const out = capture(
+      baseResult({
+        claudeCode: {
+          adapter: "claude-code",
+          status: "ran",
+          importedCount: 0,
+          replacedCount: 0,
+          reimportedCount: 3,
+          droppedCopiesCount: 2,
+          skippedNoAction: 0,
+          skippedAlreadyImported: 0,
+          skippedLegacyUntracked: 0,
+          skippedDecreased: 0,
+          skippedDuplicate: 0,
+          skippedUnverifiable: 0,
+          eventTotal: 0,
+          dryRun: false,
+        },
+      }),
+    );
+    expect(out).toContain("3 re-imported (2 without records copied from an older transcript)");
   });
 
   it("0 decisions WITH captured sessions: states the count and nudges the runnable command (not 'regenerated (0)')", () => {

@@ -3,6 +3,41 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **`basou import claude-code` (and `basou refresh`) no longer counts a
+  forked Claude Code session's copied history again.** A transcript that
+  forks another (a session resumed into a new session id, or one started
+  from another session's conversation) opens with copies of the records it
+  took over, under their original uuids and timestamps, and each transcript
+  was imported as a session of its own. The shared history was therefore
+  counted once per transcript: its commands, decisions, file changes, output
+  tokens and per-session active time, with every fork's session starting at
+  the original's first record. The import now groups the transcripts of the
+  source roots by the conversation they hold (every transcript of one
+  conversation opens with the same first record). The transcript whose file
+  was created first keeps the shared records, and each later one is imported
+  with only what it added: its session begins at its own first record. A
+  fork that added no command, file change or decision is not imported.
+  A session imported with the copies before is re-derived in place on the
+  next import, though its transcript did not change: the events from before
+  its new start go, and its id and the ids of its other events are kept. A
+  fork that added no action of its own, and a session imported before basou
+  recorded source sizes (which waits for `--force`), keep their copies.
+  `basou import claude-code` counts these sessions among the re-imported
+  ones and says how many of them dropped copies, and so does
+  `basou refresh`. A re-import, with `--force`
+  too, does not take back records from before the start of the session an
+  earlier import made, so the copies stay out after the original transcript
+  is deleted. The active time `basou stats` bills and the board's active
+  time are unions of time, which the copies overlapped, so they hardly
+  change; the per-session sums of active time and the output tokens do. The
+  order is read from the files' birth times on every import, so if they
+  change after an import (restored from a backup, or copied to another disk)
+  and the order flips, the shared records end up counted in neither session.
+
 ## 0.71.1 — 2026-10-19
 
 ### Added
