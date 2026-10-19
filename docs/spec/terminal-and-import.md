@@ -155,12 +155,33 @@ transcript, so a fork's copies stay out after the older transcript is deleted.
 A fork imported with its copies whose older transcript was deleted before it
 could be re-derived cannot be told apart from an original, and keeps them.
 
-The order within a conversation is read from the files on every import. If the
-birth times change after an import (the transcripts are restored from a backup,
-or copied to another disk) so that the order flips, the transcript now taken as
-the later one is re-derived without the shared records, while the one now taken
-as the earlier keeps the session it has, so the shared records are then counted
-in neither session.
+The birth times are read from the files on every import, and they can change
+after one (the transcripts are restored from a backup, or copied to another
+disk). The transcripts already imported therefore keep the order in which
+their sessions begin: the session that took the shared records begins at or
+before the conversation's first record, and a fork imported without them
+begins after the last of them, so a later change of their birth times moves no
+record from one session to another, between an original and its fork or
+between two forks. A transcript not imported yet takes its place among them by
+its birth time, except that one holding a copy of a record an imported fork's
+session counts comes after that fork: it forked from that fork, or from a fork
+of it.
+
+Three cases are left that the order cannot recover from the files:
+
+- Two sessions that begin together, as an earlier basou left a fork imported
+  with the shared records beside its original, are ordered by birth time. If
+  those flip, the original is re-derived without the shared records and the
+  fork keeps them; they are counted once either way.
+- A fork not imported yet whose birth time becomes earlier than its imported
+  original's takes the shared records: the original's session is re-derived
+  without them, and the fork's session holds them. A `--session` import that
+  names only the fork counts them in both sessions until an import covers the
+  original again.
+- An original that was never imported (for example, a `--session` import took
+  only its fork) and whose birth time becomes later than the fork's is
+  imported without the shared records, which the fork's session does not hold
+  either, so they are counted in neither session.
 
 ## §14.3 Multi-root source roots
 

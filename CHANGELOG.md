@@ -34,9 +34,17 @@ All notable changes to **basou** are recorded here. The project follows
   is deleted. The active time `basou stats` bills and the board's active
   time are unions of time, which the copies overlapped, so they hardly
   change; the per-session sums of active time and the output tokens do. The
-  order is read from the files' birth times on every import, so if they
-  change after an import (restored from a backup, or copied to another disk)
-  and the order flips, the shared records end up counted in neither session.
+  birth times are read from the files on every import and can change after
+  one (restored from a backup, or copied to another disk), so the
+  transcripts already imported keep the order in which their sessions begin,
+  and a transcript not imported yet that holds a copy of what an imported
+  fork's session counts comes after that fork. Three cases are left, which
+  `docs/spec/terminal-and-import.md` describes: two sessions an earlier
+  basou imported with the shared records are still ordered by birth time
+  (counted once either way); a fork not imported yet whose birth time
+  becomes earlier than its imported original's takes the shared records from
+  it; and an original never imported whose birth time becomes later than its
+  fork's is imported without them, so they count in neither session.
 - **A key no version of its kind takes, in a measure or an observation of
   a board, is refused with the keys the kind takes**, in the version the
   board is read by:

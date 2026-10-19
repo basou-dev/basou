@@ -85,8 +85,9 @@ export type ImportContext = {
   /**
    * When a Claude transcript's file was created, in milliseconds since the
    * epoch, which decides which of two transcripts of one conversation forked
-   * the other. Defaults to the file's birth time. Injectable for tests: a file
-   * system offers no way to set a birth time.
+   * the other, unless both were imported before and their sessions begin at
+   * different times. Defaults to the file's birth time. Injectable for tests: a
+   * file system offers no way to set a birth time.
    */
   transcriptCreatedAtMs?: (file: string) => Promise<number>;
 };
@@ -274,12 +275,14 @@ export async function doRunImportClaudeCode(
   const projectsRoot = ctx.claudeProjectsDir ?? join(homedir(), ".claude", "projects");
 
   const files = await selectTranscriptFiles(projectsRoot, projectPaths, options);
+  const store = await loadImportStore(paths, options, CLAUDE_IMPORT_SOURCE);
   // Every transcript of the source roots, not only the selected ones: a
   // transcript forked from another opens with copies of its records, and which
   // records are copies is known only beside the older transcript.
   const conversations = await indexConversations(
     await listTranscriptFiles(projectsRoot, projectPaths),
     ctx.transcriptCreatedAtMs ?? birthTimeMs,
+    (externalId) => earliestStart(store.byExternalId.get(externalId) ?? []),
   );
   // Claude Code's per-project directory name is lossy (every non-alphanumeric
   // char -> "-"), so distinct project paths can collide into one directory.
@@ -338,7 +341,7 @@ export async function doRunImportClaudeCode(
     paths,
     manifest,
     options,
-    CLAUDE_IMPORT_SOURCE,
+    store,
     candidates,
     projectPaths,
     hasDeclaredBoundary(options, manifest),
@@ -381,7 +384,7 @@ export async function doRunImportCodex(
     paths,
     manifest,
     options,
-    CODEX_IMPORT_SOURCE,
+    await loadImportStore(paths, options, CODEX_IMPORT_SOURCE),
     candidates,
     projectPaths,
     hasDeclaredBoundary(options, manifest),
@@ -422,30 +425,21 @@ async function resolveImportTarget(
  * The vendor-neutral import core: dedup, derive, validate, and write each
  * candidate, then report. Every `basou import <adapter>` funnels its
  * discovered candidates through here, so dedup / `--force` / `--dry-run`
- * semantics stay identical across adapters. Dedup is scoped to `sourceKind`
- * so one adapter never matches (or, under `--force`, deletes) another
- * adapter's session that happens to share an id string.
+ * semantics stay identical across adapters. Dedup is scoped to the
+ * `sourceKind` the store was loaded for, so one adapter never matches (or,
+ * under `--force`, deletes) another adapter's session that happens to share an
+ * id string.
  */
 async function importDerivedSessions(
   paths: BasouPaths,
   manifest: Manifest,
   options: ImportOptions,
-  sourceKind: SessionSourceKind,
+  store: ImportStore,
   candidates: ReadonlyArray<ImportCandidate>,
   projectPaths: ReadonlyArray<string>,
   boundaryDeclared: boolean,
 ): Promise<void> {
-  // A `.basou/sessions` that is a symlink stops the import before anything is
-  // read from it, `--dry-run` included. A re-import takes a session lock, so a
-  // `.basou/locks` that is one stops it too, before any session is imported
-  // (a dry run takes no lock and is not stopped).
-  await assertSessionStoreSafe(paths);
-  if (options.dryRun !== true) await assertLockStoreSafe(paths);
-  const {
-    byExternalId: existingByExternalId,
-    notDirectories,
-    yamlNotFiles,
-  } = await loadExistingByExternalId(paths, sourceKind);
+  const { byExternalId: existingByExternalId, notDirectories, yamlNotFiles } = store;
   // An entry named as a session that is not a directory is not followed, nor
   // is a session.yaml that is not a regular file, so an earlier import either
   // holds is not seen. Said once, when a session is about to be imported as
@@ -824,14 +818,35 @@ function firstTranscriptCwd(records: ReadonlyArray<ClaudeTranscriptRecord>): str
  */
 type PriorImport = { sessionId: string; startedAt: string; sourceSizeBytes?: number };
 
-async function loadExistingByExternalId(
-  paths: BasouPaths,
-  sourceKind: SessionSourceKind,
-): Promise<{
+/** What {@link loadExistingByExternalId} found in the session store. */
+type ImportStore = {
   byExternalId: Map<string, PriorImport[]>;
   notDirectories: string[];
   yamlNotFiles: string[];
-}> {
+};
+
+/**
+ * Check the stores an import reads and writes, then load the sessions earlier
+ * imports made from `sourceKind`. A `.basou/sessions` that is a symlink stops
+ * the import before anything is read from it, `--dry-run` included. A
+ * re-import takes a session lock, so a `.basou/locks` that is one stops it
+ * too, before any session is imported (a dry run takes no lock and is not
+ * stopped).
+ */
+async function loadImportStore(
+  paths: BasouPaths,
+  options: ImportOptions,
+  sourceKind: SessionSourceKind,
+): Promise<ImportStore> {
+  await assertSessionStoreSafe(paths);
+  if (options.dryRun !== true) await assertLockStoreSafe(paths);
+  return loadExistingByExternalId(paths, sourceKind);
+}
+
+async function loadExistingByExternalId(
+  paths: BasouPaths,
+  sourceKind: SessionSourceKind,
+): Promise<ImportStore> {
   const byExternalId = new Map<string, PriorImport[]>();
   const add = (externalId: string, prior: PriorImport): void => {
     const list = byExternalId.get(externalId);
@@ -957,8 +972,9 @@ type ConversationRoot = { uuid: string; timestamp?: string };
 type Conversations = {
   /**
    * The root of `file`'s conversation, and the other transcripts of that
-   * conversation created before it, oldest first. A transcript with older ones
-   * forked from them and opens with copies of their records.
+   * conversation taken as older than it, oldest first (see
+   * {@link indexConversations}). A transcript with older ones forked from them
+   * and opens with copies of their records.
    */
   place(file: string): { root: ConversationRoot | undefined; older: string[] };
   /** Every uuid the records of `files` carry. Each file is read once per run. */
@@ -976,12 +992,37 @@ type Conversations = {
  * (`createdAtMs`, the file's birth time). Where a file system records no birth
  * time, or two are equal, the session id decides: an arbitrary order, but one
  * every run agrees on.
+ *
+ * Birth times can change after an import (the transcripts restored from a
+ * backup, or copied to another disk), and the sessions earlier imports made do
+ * not. So the transcripts imported before are put in the order their sessions
+ * begin (`importedStartedAt`), in the places they hold by birth time: the one
+ * that took the shared records begins at or before the conversation's first
+ * record, and a fork imported without them begins after the last of them, so a
+ * flip of their birth times moves no record from one session to another. Two
+ * sessions that begin together, as an earlier basou left a fork imported with
+ * the shared records beside its original, keep their birth order.
+ *
+ * A transcript not imported yet keeps its place by birth time, unless it holds
+ * a copy of a record an imported fork's session counts: then it forked from
+ * that fork, or from a fork of it, and goes after it.
  */
 async function indexConversations(
   files: ReadonlyArray<string>,
   createdAtMs: (file: string) => Promise<number>,
+  importedStartedAt: (externalId: string) => string | undefined,
 ): Promise<Conversations> {
   type Entry = { file: string; externalId: string; createdAtMs: number };
+  const uuidsByFile = new Map<string, Set<string>>();
+  /** Every uuid the records of `file` carry, read once per run. */
+  const uuidsIn = async (file: string): Promise<Set<string>> => {
+    let held = uuidsByFile.get(file);
+    if (held === undefined) {
+      held = await readTranscriptUuids(file);
+      uuidsByFile.set(file, held);
+    }
+    return held;
+  };
   const rootOf = new Map<string, ConversationRoot>();
   const byRoot = new Map<string, Entry[]>();
   for (const file of files) {
@@ -1003,8 +1044,48 @@ async function indexConversations(
       if (knownA !== knownB) return knownA ? -1 : 1;
       return a.externalId < b.externalId ? -1 : a.externalId > b.externalId ? 1 : 0;
     });
+    const startedAtMs = new Map<Entry, number>();
+    for (const entry of list) {
+      const ms = Date.parse(importedStartedAt(entry.externalId) ?? "");
+      if (!Number.isNaN(ms)) startedAtMs.set(entry, ms);
+    }
+    // A stable sort: two sessions that begin together keep their birth order.
+    const imported = [...startedAtMs.keys()].sort(
+      (a, b) => (startedAtMs.get(a) ?? 0) - (startedAtMs.get(b) ?? 0),
+    );
+    list.forEach((entry, index) => {
+      if (startedAtMs.has(entry)) list[index] = imported.shift() ?? entry;
+    });
+
+    // What a fork's session counts begins after the copies the fork opens
+    // with, so no transcript older than the fork holds any of it: one not
+    // imported yet that holds a copy of it forked from that fork, or from a
+    // fork of it, and goes after it. Read only for a transcript placed before
+    // such a fork.
+    const rootMs = Date.parse(rootOf.get(list[0]?.file ?? "")?.timestamp ?? "");
+    const forks = list.filter((entry) => (startedAtMs.get(entry) ?? Number.NaN) > rootMs);
+    if (forks.length === 0) continue;
+    const rank = new Map(list.map((entry, index) => [entry, index] as const));
+    const countedBy = new Map<Entry, Set<string>>();
+    for (const [index, entry] of list.entries()) {
+      if (startedAtMs.has(entry)) continue;
+      for (const fork of forks) {
+        const forkRank = rank.get(fork) ?? index;
+        if (forkRank < index) continue;
+        let counted = countedBy.get(fork);
+        if (counted === undefined) {
+          counted = await readTranscriptUuids(fork.file, importedStartedAt(fork.externalId));
+          countedBy.set(fork, counted);
+        }
+        if (counted.size === 0) continue;
+        const held = await uuidsIn(entry.file);
+        if ([...counted].some((uuid) => held.has(uuid))) {
+          rank.set(entry, Math.max(rank.get(entry) ?? index, forkRank + 0.5));
+        }
+      }
+    }
+    list.sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0));
   }
-  const uuidsByFile = new Map<string, Set<string>>();
   return {
     place(file) {
       const root = rootOf.get(file);
@@ -1016,25 +1097,33 @@ async function indexConversations(
     async uuidsOf(older) {
       const uuids = new Set<string>();
       for (const file of older) {
-        let held = uuidsByFile.get(file);
-        if (held === undefined) {
-          held = new Set();
-          try {
-            const { records } = await readJsonlRecords(file);
-            for (const record of records) {
-              const uuid = claudeTranscriptRecordUuid(record);
-              if (uuid !== undefined) held.add(uuid);
-            }
-          } catch {
-            // Gone since it was listed: nothing it held can be named as a copy.
-          }
-          uuidsByFile.set(file, held);
-        }
-        for (const uuid of held) uuids.add(uuid);
+        for (const uuid of await uuidsIn(file)) uuids.add(uuid);
       }
       return uuids;
     },
   };
+}
+
+/**
+ * The uuids the records of a transcript carry; with `notBefore`, only those of
+ * the records {@link claudeTranscriptOwnRecords} keeps from that instant on,
+ * which are what a session that began then counts. Empty for a transcript gone
+ * since it was listed: nothing it held can be named as a copy.
+ */
+async function readTranscriptUuids(file: string, notBefore?: string): Promise<Set<string>> {
+  const uuids = new Set<string>();
+  try {
+    const { records } = await readJsonlRecords(file);
+    const kept =
+      notBefore === undefined ? records : claudeTranscriptOwnRecords(records, { notBefore });
+    for (const record of kept) {
+      const uuid = claudeTranscriptRecordUuid(record);
+      if (uuid !== undefined) uuids.add(uuid);
+    }
+  } catch {
+    // Gone since it was listed.
+  }
+  return uuids;
 }
 
 /**
