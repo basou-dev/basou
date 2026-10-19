@@ -42,6 +42,8 @@ export {
   evaluateStopHook,
   transcriptStartedAt,
 } from "./stop-hook.js";
+export type { ClaudeTranscriptOwnRecordsOptions } from "./transcript-fork.js";
+export { claudeTranscriptOwnRecords, claudeTranscriptRecordUuid } from "./transcript-fork.js";
 export type {
   ClaudeTranscriptRecord,
   ClaudeTranscriptToPayloadOptions,

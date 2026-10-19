@@ -357,7 +357,13 @@ function describeImport(outcome: ImportOutcome): string {
   }
   const verb = outcome.dryRun ? "would import" : "imported";
   const parts = [`${outcome.importedCount} session(s)`, `${outcome.eventTotal} events`];
-  if (outcome.reimportedCount > 0) parts.push(`${outcome.reimportedCount} re-imported`);
+  if (outcome.reimportedCount > 0) {
+    const copies =
+      outcome.droppedCopiesCount > 0
+        ? ` (${outcome.droppedCopiesCount} without records copied from an older transcript)`
+        : "";
+    parts.push(`${outcome.reimportedCount} re-imported${copies}`);
+  }
   if (outcome.replacedCount > 0) parts.push(`${outcome.replacedCount} replaced`);
   if (outcome.skippedAlreadyImported > 0)
     parts.push(`${outcome.skippedAlreadyImported} already imported`);

@@ -125,6 +125,43 @@ source that **shrank** (truncated / rotated) is not auto-replaced — that needs
 `--force` — and a rewrite that leaves the byte size unchanged is not detected.
 `--force` still deletes and re-creates the session under a fresh id.
 
+A Claude Code transcript can **fork** another: a session resumed into a new
+session id, or one started from another session's conversation, opens with
+copies of the records it took over, each under its original `uuid` and
+timestamp. Every transcript of one conversation therefore opens with the same
+first record, and `basou import claude-code` groups the transcripts of its
+source roots by it. Within a conversation the transcript whose file was
+created first keeps the shared records (its birth time; where the file system
+records none, or two are equal, the session id decides), and each later one is
+imported with only the records it added: its session begins at its own first
+record, and its commands, decisions, file changes, tokens and active time are
+its own. A fork that added no command, file change or decision is not
+imported.
+
+A session imported with those copies (by an earlier basou, or while the older
+transcript was not there yet) is re-derived in place on the next import even
+though its transcript did not change. Two such sessions are left as they are,
+copies included: one whose transcript added no command, file change or
+decision of its own, and one imported before basou recorded the source's byte
+size, which waits for `--force` as above. This is the one case in which an
+in-place re-import drops events it derived before: the events from before the
+session's new start go, the session id and the ids of its other events are
+kept, and an event from the session's own time that the re-derivation does not
+reproduce still refuses the re-import. The import counts these sessions among
+the re-imported ones and says how many of them dropped copies, and so does
+`basou refresh`. A re-import, with `--force` too, does not take back records
+from before the start of the session an earlier import made from the same
+transcript, so a fork's copies stay out after the older transcript is deleted.
+A fork imported with its copies whose older transcript was deleted before it
+could be re-derived cannot be told apart from an original, and keeps them.
+
+The order within a conversation is read from the files on every import. If the
+birth times change after an import (the transcripts are restored from a backup,
+or copied to another disk) so that the order flips, the transcript now taken as
+the later one is re-derived without the shared records, while the one now taken
+as the earlier keeps the session it has, so the shared records are then counted
+in neither session.
+
 ## §14.3 Multi-root source roots
 
 A single logical project can span several sibling repositories — for

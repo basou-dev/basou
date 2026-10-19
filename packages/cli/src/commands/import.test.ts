@@ -11,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   basouPaths,
@@ -20,6 +20,7 @@ import {
   readYamlFile,
   SESSION_OBSERVATION_SCHEMA_VERSION,
   SessionSchema,
+  verifyEventsChain,
   writeManifest,
   writeSessionObservation,
   writeYamlFile,
@@ -1248,6 +1249,540 @@ describe("basou import claude-code — scoped re-import of a grown source", () =
     const after = await readEvents(repo, sid);
     expect(after.map((e) => e.id)).toEqual(before.map((e) => e.id));
     expect(after.find((e) => commandLine(e) === "npm test")).toBeDefined();
+  });
+});
+
+// --- forked transcripts -------------------------------------------------
+
+// A transcript forked from another opens with copies of its records under the
+// same uuids. The fork's file name sorts BEFORE the original's, so only the
+// creation time can tell which copied which.
+const ORIGINAL_ID = "zzzzzzzz-original";
+const FORK_ID = "aaaaaaaa-fork";
+const CREATED_AT_MS: Record<string, number> = { [ORIGINAL_ID]: 1_000, [FORK_ID]: 2_000 };
+
+function uuid(n: number): string {
+  return `4a1f0c2e-0000-4000-8000-${String(n).padStart(12, "0")}`;
+}
+
+/** What the conversation holds before the fork: a prompt, a command, a confirmed question. */
+function conversationStart(repo: string, sessionId: string): Array<Record<string, unknown>> {
+  return [
+    {
+      type: "queue-operation",
+      operation: "enqueue",
+      timestamp: "2026-05-10T00:00:00.050Z",
+      sessionId,
+    },
+    {
+      type: "user",
+      uuid: uuid(1),
+      timestamp: "2026-05-10T00:00:00.000Z",
+      cwd: repo,
+      sessionId,
+      message: { role: "user", content: [{ type: "text", text: "go" }] },
+    },
+    {
+      type: "assistant",
+      uuid: uuid(2),
+      timestamp: "2026-05-10T00:00:01.000Z",
+      cwd: repo,
+      sessionId,
+      message: {
+        id: "msg_1",
+        usage: { output_tokens: 100 },
+        content: [{ type: "tool_use", name: "Bash", input: { command: "git status" } }],
+      },
+    },
+    {
+      type: "assistant",
+      uuid: uuid(3),
+      timestamp: "2026-05-10T00:00:02.000Z",
+      cwd: repo,
+      sessionId,
+      message: {
+        id: "msg_2",
+        usage: { output_tokens: 50 },
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_ask1",
+            name: "AskUserQuestion",
+            input: {
+              questions: [
+                { question: "Which DB?", header: "DB", options: [{ label: "Postgres" }] },
+              ],
+            },
+          },
+        ],
+      },
+    },
+    {
+      type: "user",
+      uuid: uuid(4),
+      timestamp: "2026-05-10T00:00:03.000Z",
+      cwd: repo,
+      sessionId,
+      toolUseResult: { questions: [], answers: { "Which DB?": "Postgres" } },
+      message: { content: [{ type: "tool_result", tool_use_id: "toolu_ask1", content: "ok" }] },
+    },
+  ];
+}
+
+function originalTranscript(repo: string): Array<Record<string, unknown>> {
+  return [
+    ...conversationStart(repo, ORIGINAL_ID),
+    {
+      type: "assistant",
+      uuid: uuid(5),
+      timestamp: "2026-05-10T02:00:00.000Z",
+      cwd: repo,
+      sessionId: ORIGINAL_ID,
+      message: {
+        id: "msg_5",
+        usage: { output_tokens: 70 },
+        content: [{ type: "tool_use", name: "Bash", input: { command: "git log" } }],
+      },
+    },
+  ];
+}
+
+/** The fork: metadata, the copies (sessionId rewritten), then what it added. */
+function forkTranscript(repo: string, extra: Array<Record<string, unknown>> = []) {
+  return [
+    { type: "custom-title", customTitle: "fixture", sessionId: FORK_ID },
+    ...conversationStart(repo, FORK_ID),
+    {
+      type: "user",
+      uuid: uuid(11),
+      timestamp: "2026-05-10T01:00:00.000Z",
+      cwd: repo,
+      sessionId: FORK_ID,
+      message: { role: "user", content: [{ type: "text", text: "forked task" }] },
+    },
+    {
+      type: "assistant",
+      uuid: uuid(12),
+      timestamp: "2026-05-10T01:00:01.000Z",
+      cwd: repo,
+      sessionId: FORK_ID,
+      message: {
+        id: "msg_12",
+        usage: { output_tokens: 300 },
+        content: [{ type: "tool_use", name: "Bash", input: { command: "pnpm build" } }],
+      },
+    },
+    ...extra,
+  ];
+}
+
+function forkCtx(repo: string, createdAtMs: Record<string, number> = CREATED_AT_MS) {
+  return {
+    cwd: repo,
+    claudeProjectsDir: getProjectsRoot(),
+    transcriptCreatedAtMs: async (file: string) => createdAtMs[basename(file, ".jsonl")] ?? 0,
+  };
+}
+
+async function transcriptPath(repo: string, sessionId: string): Promise<string> {
+  return join(getProjectsRoot(), repo.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
+}
+
+async function sessionIdOf(repo: string, externalId: string): Promise<string> {
+  for (const sid of await listSessionDirs(repo)) {
+    const session = await readSession(repo, sid);
+    if (session.session.source.external_id === externalId) return sid;
+  }
+  throw new Error(`no session for ${externalId}`);
+}
+
+async function commandsOf(repo: string, sid: string): Promise<string[]> {
+  return (await readEvents(repo, sid))
+    .filter((e) => e.type === "command_executed")
+    .map((e) => commandLine(e) ?? "");
+}
+
+async function importJson(
+  repo: string,
+  options: Parameters<typeof doRunImportClaudeCode>[0],
+  ctx = forkCtx(repo),
+): Promise<Record<string, unknown> | undefined> {
+  const lines: string[] = [];
+  const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map((a) => String(a)).join(" "));
+  });
+  try {
+    await doRunImportClaudeCode({ ...options, json: true }, ctx);
+  } finally {
+    spy.mockRestore();
+  }
+  return lines
+    .map((l) => {
+      try {
+        return JSON.parse(l) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .find((r): r is Record<string, unknown> => r !== null && "imported_count" in r);
+}
+
+/** Import the fork while the original is not there, so it takes the copies (as before the fix). */
+async function importForkWithCopies(repo: string): Promise<string> {
+  await writeTranscript(repo, FORK_ID, forkTranscript(repo));
+  await doRunImportClaudeCode({ all: true }, forkCtx(repo));
+  const sid = await sessionIdOf(repo, FORK_ID);
+  expect(await commandsOf(repo, sid)).toEqual(["git status", "pnpm build"]);
+  return sid;
+}
+
+describe("basou import claude-code: forked transcripts", () => {
+  it("imports a fork beside its original with only what the fork added", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    await writeTranscript(repo, FORK_ID, forkTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, forkCtx(repo));
+
+    const original = await sessionIdOf(repo, ORIGINAL_ID);
+    const fork = await sessionIdOf(repo, FORK_ID);
+    expect(await commandsOf(repo, original)).toEqual(["git status", "git log"]);
+    expect(await commandsOf(repo, fork)).toEqual(["pnpm build"]);
+    const forkEvents = await readEvents(repo, fork);
+    expect(forkEvents.filter((e) => e.type === "decision_recorded")).toHaveLength(0);
+    const forkSession = await readSession(repo, fork);
+    expect(forkSession.session.started_at).toBe("2026-05-10T01:00:00.000Z");
+    expect(forkSession.session.metrics?.output_tokens).toBe(300);
+    const originalSession = await readSession(repo, original);
+    expect(originalSession.session.started_at).toBe("2026-05-10T00:00:00.000Z");
+    expect(originalSession.session.metrics?.output_tokens).toBe(220);
+    expect(
+      (await readEvents(repo, original)).filter((e) => e.type === "decision_recorded"),
+    ).toHaveLength(1);
+  });
+
+  it("decides which transcript is older by when its file was created, not by its name", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    await writeTranscript(repo, FORK_ID, forkTranscript(repo));
+    // Reversed: the transcript holding the fork's records is now the older one,
+    // so the other keeps only what it holds beyond the shared start.
+    await doRunImportClaudeCode(
+      { all: true },
+      forkCtx(repo, { [ORIGINAL_ID]: 2_000, [FORK_ID]: 1_000 }),
+    );
+    expect(await commandsOf(repo, await sessionIdOf(repo, FORK_ID))).toEqual([
+      "git status",
+      "pnpm build",
+    ]);
+    expect(await commandsOf(repo, await sessionIdOf(repo, ORIGINAL_ID))).toEqual(["git log"]);
+  });
+
+  it("lets the session id decide when no birth time is recorded", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    await writeTranscript(repo, FORK_ID, forkTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, forkCtx(repo, {}));
+    // "aaaaaaaa-fork" sorts first, so it is taken as the older one.
+    expect(await commandsOf(repo, await sessionIdOf(repo, FORK_ID))).toEqual([
+      "git status",
+      "pnpm build",
+    ]);
+    expect(await commandsOf(repo, await sessionIdOf(repo, ORIGINAL_ID))).toEqual(["git log"]);
+  });
+
+  it("takes a transcript with a recorded birth time as older than one without", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    await writeTranscript(repo, FORK_ID, forkTranscript(repo));
+    // The fork has no birth time (0), though its id sorts first.
+    await doRunImportClaudeCode({ all: true }, forkCtx(repo, { [ORIGINAL_ID]: 1_000 }));
+    expect(await commandsOf(repo, await sessionIdOf(repo, FORK_ID))).toEqual(["pnpm build"]);
+    expect(await commandsOf(repo, await sessionIdOf(repo, ORIGINAL_ID))).toEqual([
+      "git status",
+      "git log",
+    ]);
+  });
+
+  it("leaves a session alone when the older transcript is gone before it is read", async () => {
+    const repo = await setupInitedRepo();
+    const fork = await importForkWithCopies(repo);
+    const eventsPath = join(basouPaths(repo).sessions, fork, "events.jsonl");
+    const bytes = await readFile(eventsPath, "utf8");
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    const originalPath = await transcriptPath(repo, ORIGINAL_ID);
+    // Listed and grouped, then deleted before its records are read.
+    const ctx = {
+      ...forkCtx(repo),
+      transcriptCreatedAtMs: async (file: string) => {
+        if (file === originalPath) await rm(originalPath);
+        return CREATED_AT_MS[basename(file, ".jsonl")] ?? 0;
+      },
+    };
+    const result = await importJson(repo, { session: FORK_ID }, ctx);
+    expect(result?.reimported_count).toBe(0);
+    expect(result?.skipped_already_imported).toBe(1);
+    expect(await readFile(eventsPath, "utf8")).toBe(bytes);
+  });
+
+  it("--session imports a fork without the copies, reading its original beside it", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    await writeTranscript(repo, FORK_ID, forkTranscript(repo));
+    await doRunImportClaudeCode({ session: FORK_ID }, forkCtx(repo));
+    expect(await listSessionDirs(repo)).toHaveLength(1);
+    expect(await commandsOf(repo, await sessionIdOf(repo, FORK_ID))).toEqual(["pnpm build"]);
+  });
+
+  it("does not import a fork that added nothing of its own", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    await writeTranscript(repo, FORK_ID, [
+      { type: "custom-title", customTitle: "fixture", sessionId: FORK_ID },
+      ...conversationStart(repo, FORK_ID),
+    ]);
+    const result = await importJson(repo, { all: true });
+    expect(result?.imported_count).toBe(1);
+    expect(result?.skipped_no_action).toBe(1);
+    expect(await commandsOf(repo, await sessionIdOf(repo, ORIGINAL_ID))).toEqual([
+      "git status",
+      "git log",
+    ]);
+  });
+
+  it("re-derives a session imported with the copies, in place, though its transcript did not change", async () => {
+    const repo = await setupInitedRepo();
+    const fork = await importForkWithCopies(repo);
+    const before = await readEvents(repo, fork);
+    const buildBefore = before.find((e) => commandLine(e) === "pnpm build");
+    const startedBefore = before.find((e) => e.type === "session_started");
+    const forkSize = (await readFile(await transcriptPath(repo, FORK_ID))).length;
+
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    const result = await importJson(repo, { all: true });
+    expect(result?.imported_count).toBe(1);
+    expect(result?.reimported_count).toBe(1);
+    expect(result?.dropped_copies_count).toBe(1);
+
+    expect(await sessionIdOf(repo, FORK_ID)).toBe(fork);
+    const after = await readEvents(repo, fork);
+    expect(after.filter((e) => e.type === "command_executed").map(commandLine)).toEqual([
+      "pnpm build",
+    ]);
+    expect(after.filter((e) => e.type === "decision_recorded")).toHaveLength(0);
+    expect(after.find((e) => commandLine(e) === "pnpm build")?.id).toBe(buildBefore?.id);
+    expect(after.find((e) => e.type === "session_started")?.id).toBe(startedBefore?.id);
+    const session = await readSession(repo, fork);
+    expect(session.session.started_at).toBe("2026-05-10T01:00:00.000Z");
+    expect(session.session.metrics?.output_tokens).toBe(300);
+    expect(session.session.source.source_size_bytes).toBe(forkSize);
+    expect(session.session.label).toContain("1 command,");
+    expect((await verifyEventsChain(basouPaths(repo), fork)).status).toBe("verified");
+
+    // Done once: the next import leaves both alone.
+    const again = await importJson(repo, { all: true });
+    expect(again?.reimported_count).toBe(0);
+    expect(again?.dropped_copies_count).toBe(0);
+    expect(again?.skipped_already_imported).toBe(2);
+  });
+
+  it("counts a re-derived session as dropping copies even when the copies derived no event", async () => {
+    const repo = await setupInitedRepo();
+    // The copied stretch is talk only: a prompt and a reply with tokens.
+    const talk = (sessionId: string): Array<Record<string, unknown>> => [
+      {
+        type: "user",
+        uuid: uuid(1),
+        timestamp: "2026-05-10T00:00:00.000Z",
+        cwd: repo,
+        sessionId,
+        message: { role: "user", content: [{ type: "text", text: "go" }] },
+      },
+      {
+        type: "assistant",
+        uuid: uuid(2),
+        timestamp: "2026-05-10T00:00:01.000Z",
+        cwd: repo,
+        sessionId,
+        message: {
+          id: "msg_1",
+          usage: { output_tokens: 999 },
+          content: [{ type: "text", text: "ok" }],
+        },
+      },
+    ];
+    const forkOwn = forkTranscript(repo).slice(-2);
+    await writeTranscript(repo, FORK_ID, [...talk(FORK_ID), ...forkOwn]);
+    await doRunImportClaudeCode({ all: true }, forkCtx(repo));
+    const fork = await sessionIdOf(repo, FORK_ID);
+    expect((await readSession(repo, fork)).session.metrics?.output_tokens).toBe(1299);
+
+    await writeTranscript(repo, ORIGINAL_ID, talk(ORIGINAL_ID));
+    const result = await importJson(repo, { all: true });
+    expect(result?.reimported_count).toBe(1);
+    expect(result?.dropped_copies_count).toBe(1);
+    const session = await readSession(repo, fork);
+    expect(session.session.started_at).toBe("2026-05-10T01:00:00.000Z");
+    expect(session.session.metrics?.output_tokens).toBe(300);
+  });
+
+  it("leaves a fork imported with its copies as it is when it added no action of its own", async () => {
+    const repo = await setupInitedRepo();
+    const talkOnly = {
+      type: "user",
+      uuid: uuid(11),
+      timestamp: "2026-05-10T01:00:00.000Z",
+      cwd: repo,
+      sessionId: FORK_ID,
+      message: { role: "user", content: [{ type: "text", text: "just a question" }] },
+    };
+    await writeTranscript(repo, FORK_ID, [...conversationStart(repo, FORK_ID), talkOnly]);
+    await doRunImportClaudeCode({ all: true }, forkCtx(repo));
+    const fork = await sessionIdOf(repo, FORK_ID);
+    const eventsPath = join(basouPaths(repo).sessions, fork, "events.jsonl");
+    const bytes = await readFile(eventsPath, "utf8");
+
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    const errors: string[] = [];
+    const errSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map((a) => String(a)).join(" "));
+    });
+    let result: Record<string, unknown> | undefined;
+    try {
+      result = await importJson(repo, { all: true });
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(result?.reimported_count).toBe(0);
+    expect(result?.skipped_no_action).toBe(1);
+    expect(await readFile(eventsPath, "utf8")).toBe(bytes);
+    expect(errors.join("\n")).toContain(
+      `Import: ${FORK_ID} added no action of its own after the records it copied from an older transcript`,
+    );
+  });
+
+  it("says so in the summary line", async () => {
+    const repo = await setupInitedRepo();
+    await importForkWithCopies(repo);
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((a) => String(a)).join(" "));
+    });
+    try {
+      await doRunImportClaudeCode({ all: true }, forkCtx(repo));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.join("\n")).toContain(
+      "re-imported 1 changed session(s) (1 without the records its transcript copied from an older one)",
+    );
+  });
+
+  it("--dry-run previews the re-derivation and writes nothing", async () => {
+    const repo = await setupInitedRepo();
+    const fork = await importForkWithCopies(repo);
+    const eventsPath = join(basouPaths(repo).sessions, fork, "events.jsonl");
+    const bytes = await readFile(eventsPath, "utf8");
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    const result = await importJson(repo, { all: true, dryRun: true });
+    expect(result?.reimported_count).toBe(1);
+    expect(result?.dropped_copies_count).toBe(1);
+    expect(await readFile(eventsPath, "utf8")).toBe(bytes);
+    expect(await listSessionDirs(repo)).toEqual([fork]);
+  });
+
+  it("keeps the copies out once the original is gone and the fork grows", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    await writeTranscript(repo, FORK_ID, forkTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, forkCtx(repo));
+    const fork = await sessionIdOf(repo, FORK_ID);
+
+    await rm(await transcriptPath(repo, ORIGINAL_ID));
+    await writeTranscript(
+      repo,
+      FORK_ID,
+      forkTranscript(repo, [
+        {
+          type: "assistant",
+          uuid: uuid(13),
+          timestamp: "2026-05-10T01:30:00.000Z",
+          cwd: repo,
+          sessionId: FORK_ID,
+          message: {
+            id: "msg_13",
+            usage: { output_tokens: 40 },
+            content: [{ type: "tool_use", name: "Bash", input: { command: "pnpm test" } }],
+          },
+        },
+      ]),
+    );
+    const result = await importJson(repo, { all: true });
+    expect(result?.reimported_count).toBe(1);
+    // A growth that drops nothing is not counted as dropping copies.
+    expect(result?.dropped_copies_count).toBe(0);
+    expect(await commandsOf(repo, fork)).toEqual(["pnpm build", "pnpm test"]);
+    expect((await readSession(repo, fork)).session.started_at).toBe("2026-05-10T01:00:00.000Z");
+  });
+
+  it("--force re-creates a fork without the copies once the original is gone", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    await writeTranscript(repo, FORK_ID, forkTranscript(repo));
+    await doRunImportClaudeCode({ all: true }, forkCtx(repo));
+    const fork = await sessionIdOf(repo, FORK_ID);
+
+    await rm(await transcriptPath(repo, ORIGINAL_ID));
+    await doRunImportClaudeCode({ all: true, force: true }, forkCtx(repo));
+    const recreated = await sessionIdOf(repo, FORK_ID);
+    expect(recreated).not.toBe(fork);
+    expect(await commandsOf(repo, recreated)).toEqual(["pnpm build"]);
+  });
+
+  it("still refuses a re-import that would drop an event from the fork's own time", async () => {
+    const repo = await setupInitedRepo();
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    await writeTranscript(
+      repo,
+      FORK_ID,
+      forkTranscript(repo, [
+        {
+          type: "assistant",
+          uuid: uuid(13),
+          timestamp: "2026-05-10T01:30:00.000Z",
+          cwd: repo,
+          sessionId: FORK_ID,
+          message: {
+            id: "msg_13",
+            content: [{ type: "tool_use", name: "Bash", input: { command: "pnpm test" } }],
+          },
+        },
+      ]),
+    );
+    await doRunImportClaudeCode({ all: true }, forkCtx(repo));
+    const fork = await sessionIdOf(repo, FORK_ID);
+
+    // A non-append rewrite that loses the fork's own 01:30 command but grows.
+    await writeTranscript(
+      repo,
+      FORK_ID,
+      forkTranscript(repo, [
+        {
+          type: "user",
+          uuid: uuid(14),
+          timestamp: "2026-05-10T01:40:00.000Z",
+          cwd: repo,
+          sessionId: FORK_ID,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "a longer prompt ".repeat(40) }],
+          },
+        },
+      ]),
+    );
+    const result = await importJson(repo, { all: true });
+    expect(result?.skipped_unverifiable).toBe(1);
+    expect(await commandsOf(repo, fork)).toEqual(["pnpm build", "pnpm test"]);
   });
 });
 
