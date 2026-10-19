@@ -561,9 +561,10 @@ async function checkAndRecord(
         .join("\n")}`,
     );
   }
-  const recordedAt = ctx.nowProvider?.() ?? new Date();
   const previous = await previousOf(loaded);
   const measurement = await measureLoaded(loaded, ctx, parsed.input.judged_by.model, previous);
+  // After the measurement it holds: a record is not recorded before it is measured.
+  const recordedAt = ctx.nowProvider?.() ?? new Date();
   if (measurement.digest !== parsed.input.measure_digest) {
     throw new RecordRefusal(
       `measure_digest is ${parsed.input.measure_digest}, but the board measures ${measurement.digest} now: something it measures or board.yaml changed since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.`,
@@ -1282,7 +1283,9 @@ function printMeasurementText(m: BoardMeasurement, hasRecords: boolean): void {
     const width = Math.max(...measures.map(([id]) => id.length));
     lines.push("", "Measures:");
     for (const [id, measure] of measures) {
-      const unit = measure.value === null ? "" : ` ${displayPath(measure.unit)}`;
+      // A string (a file's name, a capture) is no amount: it takes no unit.
+      const counted = typeof measure.value === "number" || Array.isArray(measure.value);
+      const unit = counted ? ` ${displayPath(measure.unit)}` : "";
       const listed = Array.isArray(measure.value) ? " (paths in --json)" : "";
       const lane = measure.lane === undefined ? "" : `  [${measure.lane.join(", ")}]`;
       lines.push(`  ${id.padEnd(width)}  ${shownValue(measure.value)}${unit}${listed}${lane}`);

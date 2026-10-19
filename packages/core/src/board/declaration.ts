@@ -861,7 +861,7 @@ export function parseBoardDeclaration(
   if (!parsed.ok) {
     errors.push(
       ...(version === BOARD_VERSION || typeof version !== "number"
-        ? parsed.issues.map(formatIssue)
+        ? parsed.issues.map((issue) => formatIssueOf(issue, version, raw))
         : formatOlderIssues(raw, version, parsed.issues)),
     );
   }
@@ -970,7 +970,7 @@ function formatOlderIssues(raw: unknown, version: number, issues: readonly Issue
       if (from === undefined) others.push(key);
       else byVersion.set(from, [...(byVersion.get(from) ?? []), key]);
     }
-    if (others.length > 0) out.push(formatIssue({ ...issue, keys: others }));
+    if (others.length > 0) out.push(formatIssueOf({ ...issue, keys: others }, version, raw));
     for (const [from, keys] of [...byVersion].sort(([a], [b]) => a - b)) {
       const named = keys.map((k) => `'${k}'`).join(", ");
       out.push(readFromLine(issue.path, `${named} ${keys.length === 1 ? "is" : "are"}`, from));
@@ -1074,6 +1074,40 @@ export function formatIssue(issue: Issue): string {
     return `${formatPath(issue.path)}: unknown key${issue.keys.length > 1 ? "s" : ""} ${keys}`;
   }
   return `${formatPath(issue.path)}: ${issue.message}`;
+}
+
+// A problem of a declaration. A key a measure or an observation does not
+// take is told with the keys its kind takes in that version, so the names
+// need not be guessed from the problems one at a time.
+function formatIssueOf(issue: Issue, version: unknown, raw: unknown): string {
+  const text = formatIssue(issue);
+  if (issue.code !== "unrecognized_keys") return text;
+  const taken = keysOfKind(version, raw, issue.path);
+  return taken === undefined
+    ? text
+    : `${text} (kind '${taken.kind}' takes: ${taken.keys.join(", ")})`;
+}
+
+// The keys of the kind of the measure or the observation at `path`, in the
+// shape `version` is read by (the newest, for no version or one that is not
+// a number); undefined for any other path or a kind no shape of it has.
+function keysOfKind(
+  version: unknown,
+  raw: unknown,
+  path: readonly PropertyKey[],
+): { kind: string; keys: string[] } | undefined {
+  if (path.length !== 2 || typeof path[1] !== "number") return undefined;
+  const newest = typeof version !== "number" || version >= 3;
+  const kinds =
+    path[0] === "measures"
+      ? (newest ? measureSchemaV3 : measureSchemaV1).options
+      : path[0] === "observe" && version !== 1
+        ? (newest ? observeSchemaV3 : observeSchemaV2).options
+        : undefined;
+  const kind = valueAt(raw, [...path, "kind"]);
+  if (kinds === undefined || typeof kind !== "string") return undefined;
+  const shape = kinds.find((o) => (o.shape.kind.values as ReadonlySet<unknown>).has(kind))?.shape;
+  return shape === undefined ? undefined : { kind, keys: Object.keys(shape) };
 }
 
 // The entries of a list in the raw document with their indexes, or undefined

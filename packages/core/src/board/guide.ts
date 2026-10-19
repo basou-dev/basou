@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { decodeTime } from "ulid";
 import { displayPath } from "../lib/display-path.js";
 import {
   BOARD_HTTP_CAPTURE_FLAGS,
@@ -231,6 +230,8 @@ export function boardGuide(input: BoardGuideInput): string {
     "4. Do the decisions recorded hold anything that should move the axis (a new surface, a new base, something decided not to build)?",
     "5. If the last review was by another model: does anything in how the lanes are cut or worded need fixing now? Change nothing only to make it look new; change only what is worth losing the comparison with past records.",
     "",
+    referenceLine(input),
+    "",
     'Apply nothing until the operator approves. Then edit board.yaml, measure again from step 2 (the digest moves with the declaration), and give the record an `axis_review`: `{ "triggers": [every letter that led to it], "summary": "what was reviewed and decided" }`. Raise `axis.version` when a lane is added or removed or a stage\'s condition changes, and name the commit `axis review v<version>`. Give `axis_review` even when nothing changed: the next (b) counts from it. Registering a component only to silence (a) is not a review.',
     "",
   );
@@ -383,6 +384,19 @@ export function boardGuide(input: BoardGuideInput): string {
   return `${out.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
 }
 
+/**
+ * Where the keys each kind of measure and observation takes, and the shapes
+ * of their values, are described for a version of basou: the reference in
+ * its source, which the package does not carry.
+ */
+export function boardReferenceUrl(version: string): string {
+  return `https://github.com/basou-dev/basou/blob/v${version}/docs/spec/board.md`;
+}
+
+function referenceLine(input: BoardGuideInput): string {
+  return `The keys each kind of measure and observation takes at each \`board_version\`, their defaults and the shapes of their values are described in the reference for basou ${input.basouVersion}: ${boardReferenceUrl(input.basouVersion)}. A key that no \`board_version\` of its kind takes is refused with the keys the kind takes; one a later version takes is told which version reads it.`;
+}
+
 function basouLine(input: BoardGuideInput): string {
   const self =
     input.basouBuild === null
@@ -416,7 +430,8 @@ function recordsLine(input: BoardGuideInput, recordCount: number): string {
   if (recordCount === 0 && last.status === "none") return "none yet; this will be the first";
   const today = todayIn(input.board.declaration.effort.time_zone, input.now);
   if (last.status === "found") {
-    const at = new Date(decodeTime(last.id));
+    // Its own time: a record written before 0.70.1 has a name of another.
+    const at = new Date(last.record.recorded_at);
     const day = todayIn(input.board.declaration.effort.time_zone, at);
     const when = day !== undefined && today !== undefined ? `, ${ago(day, today)}` : "";
     return `${count(recordCount, "record")}; the last is ${last.id}, recorded ${at.toISOString()}${when}`;
@@ -812,6 +827,7 @@ function undeclared(
   block(`${go} && ${BOARD_INIT_SAVE}; echo "exit=$?"`);
   line(
     "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only what was reached, each with a `ref` saying where it can be checked; a board moved from another keeps its milestones there. Measures, ratios and components may stay empty at first. A measure with `lane:` (a lane id, or a list of them) is drawn in each of those lanes' sections of the board page; one without is kept only in the records and their differences (and in a ratio or a total that uses it).",
+    `   ${referenceLine(input)}`,
     "4. Check it until it reads (every problem with it is listed at once):",
   );
   block(`${go} && basou board measure --model "$MODEL" > "$W/measure.txt"; echo "exit=$?"`);

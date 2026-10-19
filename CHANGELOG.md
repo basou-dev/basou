@@ -37,6 +37,29 @@ All notable changes to **basou** are recorded here. The project follows
   order is read from the files' birth times on every import, so if they
   change after an import (restored from a backup, or copied to another disk)
   and the order flips, the shared records end up counted in neither session.
+- **A key no version of its kind takes, in a measure or an observation of
+  a board, is refused with the keys the kind takes**, in the version the
+  board is read by:
+  `observe[0]: unknown keys 'count', 'capture' (kind 'http' takes: key, kind, url, words, count_pattern, capture_pattern, notes)`.
+  Until now only the key was named, and the names of a kind's keys were
+  found by guessing from one refusal after another.
+- **`basou board guide` says where the keys of each kind are described**:
+  the reference for its own version (`docs/spec/board.md` at that version's
+  tag), when the axis is cut before a board is declared and when it is
+  reviewed. Nothing basou printed named the keys of an `http`, a
+  `github_check`, a `file_name` or a `total`.
+- **A measure whose value is a string (`file_name`, `regex_capture`) is
+  printed and drawn without its unit** (`latest  README.md`, not
+  `latest  README.md name`): a name is no amount. A number keeps its unit,
+  and so does the count of a `file_paths`. A measure still declares `unit`.
+- **The board page's list of records and the last record in
+  `basou board guide` give each record's own `recorded_at`**, as the
+  heading of the page does. A record written before 0.70.1 has a name of
+  another time, a second or so apart, which they gave.
+- **`basou board record` takes `recorded_at` after it measures the board
+  again**, so a record is no longer recorded a few milliseconds before the
+  measurement it holds. Records written by 0.71.1 or earlier keep the time
+  taken before.
 
 ## 0.71.1 — 2026-10-19
 

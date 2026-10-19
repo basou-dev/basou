@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { lstat, open, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { decodeTime } from "ulid";
 import { z } from "zod";
@@ -339,16 +339,20 @@ export function boardPageUnavailable(
  */
 export async function boardPage(recordsDir: string, id?: string): Promise<BoardPage> {
   let names: string[];
+  // The names that are files: the list opens no other (a FIFO would never answer).
+  let files: Set<string>;
   try {
     const entry = await lstat(recordsDir);
     if (!entry.isDirectory()) return boardPageUnavailable("records_not_directory");
-    names = await readdir(recordsDir);
+    const entries = await readdir(recordsDir, { withFileTypes: true });
+    names = entries.map((e) => e.name);
+    files = new Set(entries.filter((e) => e.isFile()).map((e) => e.name));
   } catch (error: unknown) {
     if (findErrorCode(error, "ENOENT")) return boardPageUnavailable("no_records");
     return boardPageUnavailable("records_unreadable");
   }
   const ids = recordIds(names);
-  const records = ids.map((name) => ({ id: name, at: new Date(decodeTime(name)).toISOString() }));
+  const records = await recordTimes(recordsDir, ids, files);
   if (ids.length === 0) return boardPageUnavailable("no_records", { records });
   const shown = id ?? (ids[ids.length - 1] as string);
   const index = ids.indexOf(shown);
@@ -382,6 +386,49 @@ export async function boardPage(recordsDir: string, id?: string): Promise<BoardP
           : { status: "unreadable" },
     ),
   };
+}
+
+// When each record was recorded, for the list of records: its own
+// `recorded_at`, read off the head of the file basou wrote, so that the list
+// does not read every record whole. A record written before 0.70.1 has a name
+// of another time than its own, which is used only when the head does not
+// hold one, or the name is not a file.
+async function recordTimes(
+  recordsDir: string,
+  ids: readonly string[],
+  files: ReadonlySet<string>,
+): Promise<{ id: string; at: string }[]> {
+  const out: { id: string; at: string }[] = [];
+  for (const id of ids) {
+    const name = `${id}.json`;
+    const at = files.has(name) ? await recordedAtOf(join(recordsDir, name)) : undefined;
+    out.push({ id, at: at ?? new Date(decodeTime(id)).toISOString() });
+  }
+  return out;
+}
+
+// How a record basou wrote begins (JSON.stringify with an indent of 2), with
+// `recorded_at` as basou writes it: a time in UTC to the millisecond. Any
+// other form would be read in the host's time zone, or not at all.
+const RECORD_HEAD =
+  /^\{\s*"record_version":\s*\d+,\s*"recorded_at":\s*"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)"/;
+const RECORD_HEAD_BYTES = 256;
+
+async function recordedAtOf(path: string): Promise<string | undefined> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+    const head = Buffer.alloc(RECORD_HEAD_BYTES);
+    const { bytesRead } = await handle.read(head, 0, RECORD_HEAD_BYTES, 0);
+    const at = RECORD_HEAD.exec(head.subarray(0, bytesRead).toString("utf8"))?.[1];
+    return at === undefined || Number.isNaN(Date.parse(at))
+      ? undefined
+      : new Date(at).toISOString();
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close();
+  }
 }
 
 async function readPageRecord(

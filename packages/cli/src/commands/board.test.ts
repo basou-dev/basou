@@ -293,7 +293,8 @@ describe("basou board measure", () => {
     await runBoardMeasure({}, ctx(repo));
     const text = out.join("\n");
     expect(text).toContain("\n  paths   2 files (paths in --json)  [core]\n");
-    expect(text).toContain("\n  latest  README.md name\n");
+    // A name is no amount: it is printed without the unit, a count with it.
+    expect(text).toContain("\n  latest  README.md\n");
     out.length = 0;
     await runBoardMeasure({ json: true }, ctx(repo));
     expect(JSON.parse(out.join("\n")).measures.paths).toEqual({
@@ -1079,6 +1080,21 @@ describe("basou board record", () => {
       "c",
     ]);
     expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("is recorded after the measurement it holds: recorded_at is not before measured_at", async () => {
+    const { repo, input } = await judged();
+    capture();
+    // Each reading of the clock a second later than the one before.
+    let tick = 0;
+    const result = await doRunBoardRecord(
+      {},
+      { ...fed(repo, input), nowProvider: () => new Date(NOW.getTime() + 1000 * tick++) },
+    );
+    const written = JSON.parse(await readFile(join(repo, result.record ?? ""), "utf8"));
+    expect(Date.parse(written.recorded_at)).toBeGreaterThan(
+      Date.parse(written.measure.measured_at),
+    );
   });
 
   it("records a version 2 board with exactly the observations it declares", async () => {

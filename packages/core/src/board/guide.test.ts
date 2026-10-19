@@ -186,7 +186,9 @@ describe("boardGuide: a board declared", () => {
       '- Declaration: board/board.yaml, "Test board", board_version 2, 2 lanes, 7 observations outside basou',
     );
     expect(guide).toContain(
-      "- Records: board/records/, 2 records; the last is 01M4E6PAN7J2BJ5YK1NFPVAQAR, recorded 2026-10-08T16:49:07.751Z, 1 day ago",
+      // The record's own time, not its name's: a record written before
+      // 0.70.1 has a name of another time.
+      "- Records: board/records/, 2 records; the last is 01M4E6PAN7J2BJ5YK1NFPVAQAR, recorded 2026-10-07T00:00:00.000Z, 2 days ago",
     );
     expect(guide).toContain(
       "- Axis: version 3, due a review every 60 days; last reviewed 2026-09-30 by Old Model (record 01M4A00000000000000000000A)",
@@ -653,6 +655,17 @@ describe("boardGuide: no board declared", () => {
     expect(boardGuide(guideInput({ board: { status: "undeclared" } }))).toContain(
       "A directory no built-in marker finds (content, scripts) is registered with a `marker` of its own: a glob, from it, of the files that mark it.",
     );
+  });
+
+  it("says where the keys of each kind are described, for this basou's version, with a board or without", () => {
+    const reference =
+      "The keys each kind of measure and observation takes at each `board_version`, their defaults and the shapes of their values are described in the reference for basou 0.0.0-test: https://github.com/basou-dev/basou/blob/v0.0.0-test/docs/spec/board.md. A key that no `board_version` of its kind takes is refused with the keys the kind takes; one a later version takes is told which version reads it.";
+    // When the axis is cut, before a board is declared.
+    const undeclared = boardGuide(guideInput({ board: { status: "undeclared" } }));
+    expect(undeclared).toContain(`\n   ${reference}\n4. Check it until it reads`);
+    // When the axis is reviewed, before the proposal is applied.
+    const declared = boardGuide(guideInput());
+    expect(declared).toContain(`\n\n${reference}\n\nApply nothing until the operator approves.`);
   });
 });
 

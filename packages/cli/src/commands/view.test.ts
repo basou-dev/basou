@@ -1579,17 +1579,20 @@ describe("basou view: the board page", () => {
             { id: "latest", value: "20260401", unit: "name" },
             { id: "migrations", value: ["db/a.sql", "db/<b>.sql"], unit: "files" },
             { id: "gone", value: null, unit: "files" },
+            { id: "pages", value: 1200, unit: "pages" },
           ],
           flags: { live: false, blocked: false, unverified: false },
         },
       ],
     });
     const items = drawn.find((n) => n.tag === "li" && n.find((c) => c.tag === "li").length === 1);
+    // A string is no amount: it is drawn without the unit, a number with it.
     expect(items.map((n) => n.text())).toEqual([
-      "latest: 20260401 name",
+      "latest: 20260401",
       "db/a.sql",
       "db/<b>.sql",
       "gone: not measured",
+      "pages: 1,200 pages",
     ]);
     const [details] = drawn.find((n) => n.tag === "details");
     expect(details?.attrs.open).toBeUndefined();

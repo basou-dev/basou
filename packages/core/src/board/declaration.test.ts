@@ -306,12 +306,56 @@ describe("parseBoardDeclaration: the shape of each key", () => {
     ).toEqual(["measures[0].depth: Invalid input: expected number, received undefined"]);
   });
 
+  it("names what a kind takes in the version the file is read by", () => {
+    // Version 2: an observation takes no notes yet, and file_name is no kind.
+    const v2 = boardV2();
+    v2.observe = [{ key: "a", kind: "manual", how: "ask", colour: "red" }];
+    expect(errorsOf(parse(v2))).toEqual([
+      "observe[0]: unknown key 'colour' (kind 'manual' takes: key, kind, how)",
+    ]);
+    // Version 3: the same kind takes notes.
+    const v3 = boardV2();
+    v3.board_version = 3;
+    v3.observe = [{ key: "a", kind: "manual", how: "ask", colour: "red" }];
+    expect(errorsOf(parse(v3))).toEqual([
+      "observe[0]: unknown key 'colour' (kind 'manual' takes: key, kind, how, notes)",
+    ]);
+    // Not for a key outside a measure or an observation.
+    const lane = boardV2();
+    entry(lane.lanes, 0).colour = "red";
+    expect(errorsOf(parse(lane))).toEqual(["lanes[0]: unknown key 'colour'"]);
+  });
+
+  it("names the keys of the newest shape for a file with no version, or one that is not a number", () => {
+    for (const version of [undefined, "2"]) {
+      const doc = boardV2();
+      if (version === undefined) delete doc.board_version;
+      else doc.board_version = version;
+      doc.observe = [{ key: "a", kind: "manual", how: "ask", colour: "red" }];
+      expect(errorsOf(parse(doc)), String(version)).toContain(
+        "observe[0]: unknown key 'colour' (kind 'manual' takes: key, kind, how, notes)",
+      );
+    }
+  });
+
+  it("names no keys for a key called kind outside a measure or an observation", () => {
+    const doc = boardV2();
+    entry(entry(doc.measures, 1), "section").kind = "file_count";
+    entry(doc.lanes, 0).kind = "file_count";
+    expect(errorsOf(parse(doc))).toEqual([
+      "lanes[0]: unknown key 'kind'",
+      "measures[1].section: unknown key 'kind'",
+    ]);
+  });
+
   it("refuses keys that belong to another kind", () => {
     expect(
       errorsOf(
         parse(withMeasure({ id: "a", kind: "trail_count", of: "tasks", repo: ".", unit: "tasks" })),
       ),
-    ).toEqual(["measures[0]: unknown key 'repo'"]);
+    ).toEqual([
+      "measures[0]: unknown key 'repo' (kind 'trail_count' takes: kind, id, unit, lane, of, status)",
+    ]);
     expect(
       errorsOf(
         parse(
@@ -325,7 +369,9 @@ describe("parseBoardDeclaration: the shape of each key", () => {
           }),
         ),
       ),
-    ).toEqual(["measures[0]: unknown key 'pattern'"]);
+    ).toEqual([
+      "measures[0]: unknown key 'pattern' (kind 'file_count' takes: kind, id, unit, lane, repo, at, include, exclude)",
+    ]);
   });
 
   it.each(["src/*", "src/[ab]", "s?c", "a\\b"])(
@@ -776,10 +822,26 @@ describe("parseBoardDeclaration: strictness and required keys at every level", (
   const extra = (target: Record<string, unknown>) => {
     target.extra = 1;
   };
-  it.each<[string, (doc: Record<string, unknown>) => void, string]>([
-    ["a file_count", (d) => extra(entry(d.measures, 0)), "measures[0]"],
-    ["a line_count", (d) => extra(entry(d.measures, 2)), "measures[2]"],
-    ["a match_count", (d) => extra(entry(d.measures, 1)), "measures[1]"],
+  const fileKeys = "kind, id, unit, lane, repo, at, include, exclude";
+  it.each<[string, (doc: Record<string, unknown>) => void, string, string?]>([
+    [
+      "a file_count",
+      (d) => extra(entry(d.measures, 0)),
+      "measures[0]",
+      ` (kind 'file_count' takes: ${fileKeys})`,
+    ],
+    [
+      "a line_count",
+      (d) => extra(entry(d.measures, 2)),
+      "measures[2]",
+      ` (kind 'line_count' takes: ${fileKeys})`,
+    ],
+    [
+      "a match_count",
+      (d) => extra(entry(d.measures, 1)),
+      "measures[1]",
+      ` (kind 'match_count' takes: ${fileKeys}, pattern, section)`,
+    ],
     [
       "a match_count section",
       (d) => extra(entry(entry(d.measures, 1), "section")),
@@ -790,10 +852,10 @@ describe("parseBoardDeclaration: strictness and required keys at every level", (
     ["seed_review", (d) => extra(entry(d.axis, "seed_review")), "axis.seed_review"],
     ["effort", (d) => extra(entry(d, "effort")), "effort"],
     ["a milestone", (d) => extra(entry(entry(d.effort, "milestones"), 0)), "effort.milestones[0]"],
-  ])("refuses an unknown key in %s", (_what, change, at) => {
+  ])("refuses an unknown key in %s", (_what, change, at, takes = "") => {
     const doc = board();
     change(doc);
-    expect(errorsOf(parse(doc))).toEqual([`${at}: unknown key 'extra'`]);
+    expect(errorsOf(parse(doc))).toEqual([`${at}: unknown key 'extra'${takes}`]);
   });
 
   it.each<[string, Record<string, unknown>]>([
@@ -825,7 +887,15 @@ describe("parseBoardDeclaration: strictness and required keys at every level", (
       : measure;
     target.extra = 1;
     const at = what.endsWith("section") ? "measures[0].section" : "measures[0]";
-    expect(errorsOf(parse(withMeasure(measure)))).toEqual([`${at}: unknown key 'extra'`]);
+    // A measure's problem names what its kind takes; a section's does not.
+    const kindKeys: Record<string, string> = {
+      dir_count: "kind, id, unit, lane, repo, at, path, depth, include, exclude",
+      regex_capture: "kind, id, unit, lane, repo, at, file, pattern, group, section",
+      json_length: "kind, id, unit, lane, repo, at, file, pointer",
+      trail_count: "kind, id, unit, lane, of, status",
+    };
+    const takes = what.endsWith("section") ? "" : ` (kind '${what}' takes: ${kindKeys[what]})`;
+    expect(errorsOf(parse(withMeasure(measure)))).toEqual([`${at}: unknown key 'extra'${takes}`]);
   });
 
   it.each<[string, string, (doc: Record<string, unknown>) => Record<string, unknown>, string]>([
@@ -1326,7 +1396,7 @@ describe("parseBoardDeclaration: board_version 2", () => {
     expect(errorsOf(parse(doc))).toEqual([
       "observe[0].kind: Invalid discriminator value. Expected 'npm_version' | 'github_release' | 'github_open_issues' | 'github_open_prs' | 'github_ci' | 'page_version' | 'manual'",
       "observe[1].workflow: Invalid input: expected string, received undefined",
-      "observe[2]: unknown key 'repo'",
+      "observe[2]: unknown key 'repo' (kind 'npm_version' takes: key, kind, package)",
       "observe[3].how: Invalid input: expected string, received undefined",
       "observe[5].key: Invalid input: expected string, received undefined",
       "observe[6].key: must start with a lowercase letter and use only a-z, 0-9, '_' and '-'",
@@ -1503,7 +1573,7 @@ describe("parseBoardDeclaration: board_version 3 and http", () => {
 
   it("refuses a method and any key it does not take, and holds the url to the shape of a page's", () => {
     expect(errorsOf(parse(withHttp({ url, method: "HEAD", status: 200 })))).toEqual([
-      "observe[0]: unknown keys 'method', 'status'",
+      "observe[0]: unknown keys 'method', 'status' (kind 'http' takes: key, kind, url, words, count_pattern, capture_pattern, notes)",
     ]);
     expect(errorsOf(parse(withHttp({ url: "http://example.com/" })))).toEqual([
       "observe[0].url: must be an https:// URL",
@@ -1545,7 +1615,9 @@ describe("parseBoardDeclaration: board_version 3 and http", () => {
   it("looks for a word given twice only in an http observation", () => {
     const doc = withHttp({ url });
     doc.observe = [{ key: "m", kind: "manual", how: "ask", words: ["a", "a"] }];
-    expect(errorsOf(parse(doc))).toEqual(["observe[0]: unknown key 'words'"]);
+    expect(errorsOf(parse(doc))).toEqual([
+      "observe[0]: unknown key 'words' (kind 'manual' takes: key, kind, how, notes)",
+    ]);
   });
 
   it("refuses a word given twice, saying where it was first", () => {
@@ -1737,11 +1809,13 @@ describe("parseBoardDeclaration: board_version 3, github_check and an observatio
     }
     expect(parse(withCheck({ check: "x", branch: "a.b/c.d" })).ok).toBe(true);
     expect(errorsOf(parse(withCheck({ check: "x", workflow: "q.yml" })))).toEqual([
-      "observe[0]: unknown key 'workflow'",
+      "observe[0]: unknown key 'workflow' (kind 'github_check' takes: key, kind, repo, check, branch, notes)",
     ]);
     const ci = withCheck({});
     ci.observe = [{ key: "ci", kind: "github_ci", repo: "o/n", workflow: "q.yml", check: "x" }];
-    expect(errorsOf(parse(ci))).toEqual(["observe[0]: unknown key 'check'"]);
+    expect(errorsOf(parse(ci))).toEqual([
+      "observe[0]: unknown key 'check' (kind 'github_ci' takes: key, kind, repo, workflow, branch, notes)",
+    ]);
   });
 
   it("takes notes on every kind of observation, kept as written", () => {
@@ -1798,7 +1872,7 @@ describe("parseBoardDeclaration: board_version 3, github_check and an observatio
       "observe[1]: 'notes' is read from board_version 3 on; this file is board_version 2",
       "observe[2]: 'notes' is read from board_version 3 on; this file is board_version 2",
       "observe[3].kind: 'github_check' is read from board_version 3 on; this file is board_version 2",
-      "observe[4]: unknown key 'colour'",
+      "observe[4]: unknown key 'colour' (kind 'manual' takes: key, kind, how)",
       "observe[4]: 'notes' is read from board_version 3 on; this file is board_version 2",
     ]);
     const v1 = board();
@@ -1893,7 +1967,9 @@ describe("parseBoardDeclaration: board_version 3, file_name and file_paths", () 
     expect(at({ include: undefined })).toEqual([
       "measures[0].include: Invalid input: expected array, received undefined",
     ]);
-    expect(at({ file: "a.sql" })).toEqual(["measures[0]: unknown key 'file'"]);
+    expect(at({ file: "a.sql" })).toEqual([
+      "measures[0]: unknown key 'file' (kind 'file_name' takes: kind, id, unit, lane, repo, at, include, exclude, pick, pattern, group)",
+    ]);
     expect(at({ repo: "../elsewhere" })).toEqual([
       "measures[0].repo: '../elsewhere' is not a repo path in the manifest (the manifest declares '.', '../basou')",
     ]);
@@ -1902,8 +1978,12 @@ describe("parseBoardDeclaration: board_version 3, file_name and file_paths", () 
   it("refuses what a file_paths does not take, and a repo the manifest does not declare", () => {
     const at = (over: Record<string, unknown>) =>
       errorsOf(parse(withMeasureV3({ ...MIGRATIONS, ...over })));
-    expect(at({ pick: "last" })).toEqual(["measures[0]: unknown key 'pick'"]);
-    expect(at({ pattern: "x" })).toEqual(["measures[0]: unknown key 'pattern'"]);
+    expect(at({ pick: "last" })).toEqual([
+      "measures[0]: unknown key 'pick' (kind 'file_paths' takes: kind, id, unit, lane, repo, at, include, exclude)",
+    ]);
+    expect(at({ pattern: "x" })).toEqual([
+      "measures[0]: unknown key 'pattern' (kind 'file_paths' takes: kind, id, unit, lane, repo, at, include, exclude)",
+    ]);
     expect(at({ include: [] })).toEqual(["measures[0].include: must list at least one path"]);
     expect(at({ repo: "../elsewhere" })).toEqual([
       "measures[0].repo: '../elsewhere' is not a repo path in the manifest (the manifest declares '.', '../basou')",
@@ -2014,7 +2094,7 @@ describe("parseBoardDeclaration: board_version 3, total", () => {
       `measures[1].plus[2]: ${integer}`,
     ]);
     expect(at({ repo: "../basou", at: "main" })).toEqual([
-      "measures[1]: unknown keys 'repo', 'at'",
+      "measures[1]: unknown keys 'repo', 'at' (kind 'total' takes: kind, id, unit, lane, plus, minus)",
     ]);
   });
 
