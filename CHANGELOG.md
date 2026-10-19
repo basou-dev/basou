@@ -7,8 +7,9 @@ All notable changes to **basou** are recorded here. The project follows
 
 ### Fixed
 
-- **A key a measure or an observation of a board does not take is refused
-  with the keys its kind takes**, in the version the board is read by:
+- **A key no version of its kind takes, in a measure or an observation of
+  a board, is refused with the keys the kind takes**, in the version the
+  board is read by:
   `observe[0]: unknown keys 'count', 'capture' (kind 'http' takes: key, kind, url, words, count_pattern, capture_pattern, notes)`.
   Until now only the key was named, and the names of a kind's keys were
   found by guessing from one refusal after another.
@@ -27,7 +28,8 @@ All notable changes to **basou** are recorded here. The project follows
   another time, a second or so apart, which they gave.
 - **`basou board record` takes `recorded_at` after it measures the board
   again**, so a record is no longer recorded a few milliseconds before the
-  measurement it holds.
+  measurement it holds. Records written by 0.71.1 or earlier keep the time
+  taken before.
 
 ## 0.71.1 — 2026-10-19
 

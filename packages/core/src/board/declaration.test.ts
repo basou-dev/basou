@@ -326,6 +326,28 @@ describe("parseBoardDeclaration: the shape of each key", () => {
     expect(errorsOf(parse(lane))).toEqual(["lanes[0]: unknown key 'colour'"]);
   });
 
+  it("names the keys of the newest shape for a file with no version, or one that is not a number", () => {
+    for (const version of [undefined, "2"]) {
+      const doc = boardV2();
+      if (version === undefined) delete doc.board_version;
+      else doc.board_version = version;
+      doc.observe = [{ key: "a", kind: "manual", how: "ask", colour: "red" }];
+      expect(errorsOf(parse(doc)), String(version)).toContain(
+        "observe[0]: unknown key 'colour' (kind 'manual' takes: key, kind, how, notes)",
+      );
+    }
+  });
+
+  it("names no keys for a key called kind outside a measure or an observation", () => {
+    const doc = boardV2();
+    entry(entry(doc.measures, 1), "section").kind = "file_count";
+    entry(doc.lanes, 0).kind = "file_count";
+    expect(errorsOf(parse(doc))).toEqual([
+      "lanes[0]: unknown key 'kind'",
+      "measures[1].section: unknown key 'kind'",
+    ]);
+  });
+
   it("refuses keys that belong to another kind", () => {
     expect(
       errorsOf(

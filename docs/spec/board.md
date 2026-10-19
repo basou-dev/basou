@@ -91,9 +91,11 @@ last axis review) is not known; it is never taken as no record.
   (`the key 01 at line 4, column 3 is not a string; write it in quotes`), so
   the stage ids are written in quotes: `"01"`.
 - **An unknown key is refused at every level**, so a typo is reported, not
-  ignored. One in a measure or an observation is refused with the keys its
+  ignored. One in a measure or an observation itself (not in its
+  `section`) that no version of its kind takes is refused with the keys the
   kind takes in the version the file is read by
-  (`observe[0]: unknown keys 'count', 'capture' (kind 'http' takes: key, kind, url, words, count_pattern, capture_pattern, notes)`).
+  (`observe[0]: unknown keys 'count', 'capture' (kind 'http' takes: key, kind, url, words, count_pattern, capture_pattern, notes)`);
+  one a later version takes is told which version reads it.
 - **A problem in the YAML itself stops the reading**, and so does an unknown
   `board_version` (see [Files and versions](#1-files-and-versions)): a syntax
   error, a duplicate key, a `%YAML` directive or a key that is not a string
@@ -832,7 +834,7 @@ later one is added.
 | Key | Holds |
 |---|---|
 | `record_version` | `3` |
-| `recorded_at` | when it was recorded, after the measurement it holds: UTC, ISO 8601 with milliseconds |
+| `recorded_at` | when it was recorded: UTC, ISO 8601 with milliseconds. After the measurement it holds; a record written by basou 0.71.1 or earlier took it just before measuring again |
 | `recorded_with` | `{ basou, build }`: the version of the basou that recorded it, and the commit it was built from (null for a build from source) |
 | `declaration` | the declaration the board was measured and judged by ([4.2](#42-declaration)) |
 | `measure` | the measurement, as `basou board measure --json` prints it, without `diff` ([5](#5-the-measurement)) |

@@ -790,12 +790,25 @@ describe("boardPage", () => {
       { id: B, at: "1970-01-01T00:00:00.002Z" },
       { id: C, at: "1970-01-01T00:00:00.003Z" },
     ]);
-    // Only the record's own, not one a part of it holds.
-    await place(C, '{"record_version":3,"note":{"recorded_at":"2026-01-01T00:00:00.000Z"}}');
-    expect((await boardPage(records)).records.at(-1)).toEqual({
-      id: C,
-      at: "1970-01-01T00:00:00.003Z",
-    });
+    const last = async () => (await boardPage(records)).records.at(-1);
+    const byName = { id: C, at: "1970-01-01T00:00:00.003Z" };
+    // Only the record's own, not one a part of it holds before it.
+    await place(
+      C,
+      '{"x":{"record_version":1,"recorded_at":"2026-01-01T00:00:00.000Z"},"record_version":3,"recorded_at":"2026-02-02T00:00:00.000Z"}',
+    );
+    expect(await last()).toEqual(byName);
+    // Only a time as basou writes it, in UTC to the millisecond: another form
+    // would be read in the host's time zone.
+    for (const recorded_at of ["1", "Oct 7", "2026-10-07T12:00:00", "2026-10-07T12:00:00+09:00"]) {
+      await place(C, JSON.stringify(record({ recorded_at })));
+      expect(await last(), recorded_at).toEqual(byName);
+    }
+    // Only a file is opened: a name that is a link (or a FIFO, which would
+    // never answer) is listed by its name's time.
+    await rm(join(records, `${C}.json`));
+    await symlink(join(records, `${A}.json`), join(records, `${C}.json`));
+    expect(await last()).toEqual(byName);
   });
 
   it("does not draw a record it cannot read, of a version it does not know, or not in the shape of one", async () => {

@@ -394,7 +394,7 @@ export function boardReferenceUrl(version: string): string {
 }
 
 function referenceLine(input: BoardGuideInput): string {
-  return `The keys each kind of measure and observation takes at each \`board_version\`, their defaults and the shapes of their values are described in the reference for basou ${input.basouVersion}: ${boardReferenceUrl(input.basouVersion)}. A key a kind does not take is refused with the keys it takes.`;
+  return `The keys each kind of measure and observation takes at each \`board_version\`, their defaults and the shapes of their values are described in the reference for basou ${input.basouVersion}: ${boardReferenceUrl(input.basouVersion)}. A key that no \`board_version\` of its kind takes is refused with the keys the kind takes; one a later version takes is told which version reads it.`;
 }
 
 function basouLine(input: BoardGuideInput): string {
