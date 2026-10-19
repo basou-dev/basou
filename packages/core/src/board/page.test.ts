@@ -168,11 +168,12 @@ describe("boardPage", () => {
     await writeFile(join(records, ".record-1.tmp"), "{");
     expect((await boardPage(records)).status).toBe("unavailable");
     await place(A, record());
-    await place(B, record());
+    await place(B, record({ recorded_at: "2026-10-08T09:30:00.000Z" }));
     const page = await boardPage(records);
+    // Each by its own recorded_at, not by the time its name holds.
     expect(page.records).toEqual([
-      { id: A, at: "1970-01-01T00:00:00.001Z" },
-      { id: B, at: "1970-01-01T00:00:00.002Z" },
+      { id: A, at: "2026-10-07T00:00:00.000Z" },
+      { id: B, at: "2026-10-08T09:30:00.000Z" },
     ]);
     expect(page).toMatchObject({ status: "ok", id: B, older: A, newer: null });
     expect(await boardPage(records, A)).toMatchObject({
@@ -775,6 +776,28 @@ describe("boardPage", () => {
     }
   });
 
+  it("lists a record by the recorded_at its head holds, and by its name's time when the head does not hold one", async () => {
+    await mkdir(records);
+    // As basou writes it, with an indent of 2.
+    await place(A, JSON.stringify(record({ recorded_at: "2026-10-07T12:00:00.000Z" }), null, 2));
+    // recorded_at not where basou writes it.
+    const { recorded_at: _at, ...rest } = record();
+    await place(B, JSON.stringify({ ...rest, recorded_at: "2026-10-09T00:00:00.000Z" }));
+    // Not a time.
+    await place(C, JSON.stringify(record({ recorded_at: "yesterday" })));
+    expect((await boardPage(records)).records).toEqual([
+      { id: A, at: "2026-10-07T12:00:00.000Z" },
+      { id: B, at: "1970-01-01T00:00:00.002Z" },
+      { id: C, at: "1970-01-01T00:00:00.003Z" },
+    ]);
+    // Only the record's own, not one a part of it holds.
+    await place(C, '{"record_version":3,"note":{"recorded_at":"2026-01-01T00:00:00.000Z"}}');
+    expect((await boardPage(records)).records.at(-1)).toEqual({
+      id: C,
+      at: "1970-01-01T00:00:00.003Z",
+    });
+  });
+
   it("does not draw a record it cannot read, of a version it does not know, or not in the shape of one", async () => {
     await mkdir(records);
     await place(A, "{ not json");
@@ -783,9 +806,10 @@ describe("boardPage", () => {
     expect(await boardPage(records, A)).toEqual({
       status: "unavailable",
       why: "not_json",
+      // One that cannot be read is listed by the time its name holds.
       records: [
         { id: A, at: "1970-01-01T00:00:00.001Z" },
-        { id: B, at: "1970-01-01T00:00:00.002Z" },
+        { id: B, at: "2026-10-07T00:00:00.000Z" },
       ],
       id: A,
       older: null,

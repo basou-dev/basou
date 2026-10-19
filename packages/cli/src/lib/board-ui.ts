@@ -657,7 +657,8 @@ export const BOARD_HTML = `<!doctype html>
               el('ul', null, m.value.map(function (p) { return el('li', { text: p }); }))
             ])]);
           }
-          return el('li', { text: m.id + ': ' + num(m.value) + (m.value === null ? '' : ' ' + m.unit) });
+          // A string (a file's name, a capture) is no amount: it takes no unit.
+          return el('li', { text: m.id + ': ' + num(m.value) + (typeof m.value === 'number' ? ' ' + m.unit : '') });
         })));
       }
       return el('div', { class: 'lane', 'data-lane': lane.id }, body);

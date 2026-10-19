@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { lstat, open, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { decodeTime } from "ulid";
 import { z } from "zod";
@@ -348,7 +348,7 @@ export async function boardPage(recordsDir: string, id?: string): Promise<BoardP
     return boardPageUnavailable("records_unreadable");
   }
   const ids = recordIds(names);
-  const records = ids.map((name) => ({ id: name, at: new Date(decodeTime(name)).toISOString() }));
+  const records = await recordTimes(recordsDir, ids);
   if (ids.length === 0) return boardPageUnavailable("no_records", { records });
   const shown = id ?? (ids[ids.length - 1] as string);
   const index = ids.indexOf(shown);
@@ -382,6 +382,44 @@ export async function boardPage(recordsDir: string, id?: string): Promise<BoardP
           : { status: "unreadable" },
     ),
   };
+}
+
+// When each record was recorded, for the list of records: its own
+// `recorded_at`, read off the head of the file basou wrote, so that the list
+// does not read every record whole. A record written before 0.70.1 has a name
+// of another time than its own, which is used only when the head does not
+// hold one.
+async function recordTimes(
+  recordsDir: string,
+  ids: readonly string[],
+): Promise<{ id: string; at: string }[]> {
+  const out: { id: string; at: string }[] = [];
+  for (const id of ids) {
+    const at = await recordedAtOf(join(recordsDir, `${id}.json`));
+    out.push({ id, at: at ?? new Date(decodeTime(id)).toISOString() });
+  }
+  return out;
+}
+
+// How a record basou wrote begins (JSON.stringify with an indent of 2).
+const RECORD_HEAD = /^\{\s*"record_version":\s*\d+,\s*"recorded_at":\s*"([^"\\]+)"/;
+const RECORD_HEAD_BYTES = 256;
+
+async function recordedAtOf(path: string): Promise<string | undefined> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+    const head = Buffer.alloc(RECORD_HEAD_BYTES);
+    const { bytesRead } = await handle.read(head, 0, RECORD_HEAD_BYTES, 0);
+    const at = RECORD_HEAD.exec(head.subarray(0, bytesRead).toString("utf8"))?.[1];
+    return at === undefined || Number.isNaN(Date.parse(at))
+      ? undefined
+      : new Date(at).toISOString();
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close();
+  }
 }
 
 async function readPageRecord(

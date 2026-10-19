@@ -52,7 +52,9 @@ Conventions on this page:
   visibility.
 - A record's file name is a ULID whose time is the record's `recorded_at`,
   with `.json`. Any other file in `records/` is passed over. The previous
-  record is the last by name.
+  record is the last by name. A record written before basou 0.70.1 has a
+  name of another time, a second or so apart; the board page's list of
+  records and `basou board guide` give each record's own `recorded_at`.
 
 Both shapes carry a version, and every version ever written is read:
 
@@ -89,7 +91,9 @@ last axis review) is not known; it is never taken as no record.
   (`the key 01 at line 4, column 3 is not a string; write it in quotes`), so
   the stage ids are written in quotes: `"01"`.
 - **An unknown key is refused at every level**, so a typo is reported, not
-  ignored.
+  ignored. One in a measure or an observation is refused with the keys its
+  kind takes in the version the file is read by
+  (`observe[0]: unknown keys 'count', 'capture' (kind 'http' takes: key, kind, url, words, count_pattern, capture_pattern, notes)`).
 - **A problem in the YAML itself stops the reading**, and so does an unknown
   `board_version` (see [Files and versions](#1-files-and-versions)): a syntax
   error, a duplicate key, a `%YAML` directive or a key that is not a string
@@ -207,7 +211,7 @@ Every measure has:
 |---|---|---|
 | `id` | yes | an id, or from version 3 a dotted id |
 | `kind` | yes | one of the kinds below |
-| `unit` | yes | a non-empty string, shown with the value |
+| `unit` | yes | a non-empty string, shown with a value that is a number, and with the count of a `file_paths`; a string (`file_name`, `regex_capture`) is shown without it |
 | `lane` | no | the lanes whose section of the board page draws the measure: one lane id, or from version 3 a non-empty list of them, each a lane of the board and none twice |
 
 A `lane` is read as a list whatever the version, so a record holds a list
@@ -828,7 +832,7 @@ later one is added.
 | Key | Holds |
 |---|---|
 | `record_version` | `3` |
-| `recorded_at` | when it was recorded: UTC, ISO 8601 with milliseconds |
+| `recorded_at` | when it was recorded, after the measurement it holds: UTC, ISO 8601 with milliseconds |
 | `recorded_with` | `{ basou, build }`: the version of the basou that recorded it, and the commit it was built from (null for a build from source) |
 | `declaration` | the declaration the board was measured and judged by ([4.2](#42-declaration)) |
 | `measure` | the measurement, as `basou board measure --json` prints it, without `diff` ([5](#5-the-measurement)) |
