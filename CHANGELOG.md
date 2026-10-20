@@ -28,10 +28,13 @@ All notable changes to **basou** are recorded here. The project follows
   that the body was not read when the status is not 2xx. A value of another
   shape, as a record written before 0.72.0 may hold, is drawn as before.
   Under each name are its kind and what it looks at, and under each row its
-  notes, from the declaration the record holds. An observation whose value
-  or error moved since the previous record (as `basou board record` compares
-  them) is marked, with the previous record's value drawn by that record's
-  declaration; one whose type alone moved (`"12"` and `12`) is drawn as JSON.
+  notes, from the declaration the record holds. An observation made whose
+  value or error moved since the previous record (as `basou board record`
+  compares them) is marked, with the previous record's value drawn by that
+  record's declaration; one whose type alone moved (`"12"` and `12`) is drawn
+  as JSON. One not made is drawn as before, as not observed with the previous
+  record's value, unmarked. Nothing is marked when there is no previous
+  record, or it cannot be read (a line under the table says so) or compared.
 - **The board page draws every measure in a table of its own**, with its
   unit (none for a string, and the paths of a `file_paths` by how many), the
   lanes it is drawn in, and, for a number, how much it moved since the

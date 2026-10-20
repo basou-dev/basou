@@ -319,7 +319,7 @@ describe("boardGuide: a board declared", () => {
 
   it("says the text of measure lists where board.yaml changed, which the JSON does not hold", () => {
     expect(boardGuide(guideInput())).toContain(
-      "The top of measure.txt also lists each place where board.yaml changed since that record (`declaration <where>: added`, `removed` or `changed`), which the JSON does not hold: write an `axis_review`'s summary from these lines, not from memory.",
+      "The top of measure.txt also lists each place where board.yaml changed since that record (`declaration <where>: added`, `removed` or `changed`, and `declaration lanes: the order changed`), or says `declaration: not compared` when that record holds no declaration basou can compare with, which the JSON does not hold: write an `axis_review`'s summary from these lines, not from memory.",
     );
   });
 
