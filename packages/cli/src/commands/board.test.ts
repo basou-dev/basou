@@ -1760,12 +1760,117 @@ describe("basou board measure and record against the previous record", () => {
     );
   });
 
+  it("says in its text, not in its JSON, where the declaration changed since the previous record", async () => {
+    const { repo, first } = await recorded();
+    // The board of version 1 the record holds, read again as version 3 with
+    // what the measurement holds changed (the title, a unit, a lane) and
+    // what it does not (a stage's look, a lane's notes, the axis, an observation).
+    await placeBoard(
+      repo,
+      JSON.stringify({
+        board_version: 3,
+        title: "Board v3",
+        stages: { ...STAGES, "03": { meaning: "stage 03", look: ["the tests"] } },
+        lanes: [{ id: "core", name: "Core", notes: ["mind it"] }],
+        measures: [{ ...MD, unit: "docs", lane: ["core"] }],
+        axis: { version: 2, review_due_days: 60 },
+        effort: { start: "2026-04-28" },
+        observe: [{ key: "npm", kind: "npm_version", package: "basou" }],
+      }),
+    );
+    const { out } = capture();
+    const m = await doRunBoardMeasure({ json: true }, ctx(repo));
+    expect(Object.keys(m.diff ?? {})).toEqual(["against", "values", "methods", "added", "removed"]);
+    expect(JSON.stringify(m.diff)).not.toContain("look");
+    // What the measurement's diff shows of the declaration, which the text does not repeat.
+    expect(m.diff?.values.map((v) => v.at)).toEqual(
+      expect.arrayContaining(["board_version", "title", "measures.md.unit"]),
+    );
+    expect(m.diff?.added.map((v) => v.at)).toContain("measures.md.lane");
+    out.length = 0;
+    await doRunBoardMeasure({}, ctx(repo));
+    const declared = [
+      "  declaration stages.03.look: added",
+      '  declaration lanes["core"].notes: added',
+      "  declaration axis.version: changed",
+      '  declaration observe["npm"]: added',
+    ];
+    const text = out.join("\n");
+    expect(text).toContain(`Since the previous record ${first}:\n`);
+    expect(text).toContain(`  title: "Board" -> "Board v3"\n`);
+    expect(text).toContain(`${declared.join("\n")}\n\nRepos:`);
+    expect(text.match(/^ {2}declaration /gm)).toHaveLength(declared.length);
+    // The record says the same in its text, and nothing of it in its JSON.
+    out.length = 0;
+    const input = JSON.stringify(
+      judgement(m.digest, ["done", "part"], {
+        npm: { value: "1.0.0", observed_at: "2026-10-05", source: "registry" },
+      }),
+    );
+    const dry = await doRunBoardRecord(
+      { dryRun: true },
+      { ...ctx(repo), readInput: async () => input },
+    );
+    expect(Object.keys(dry.diff ?? {})).toEqual(["against", "measure", "cells", "observed"]);
+    expect(JSON.stringify(dry)).not.toContain("look");
+    // After what moved in the measurement, as the last of what moved.
+    expect(out.join("\n")).toContain(`  + measures.md.lane: ["core"]\n${declared.join("\n")}`);
+    out.length = 0;
+    await doRunBoardRecord(
+      { dryRun: true, json: true },
+      { ...ctx(repo), readInput: async () => input },
+    );
+    expect(out.join("\n")).not.toContain("declaration ");
+    // With nothing else moved, the declaration alone is said, not "nothing
+    // moved". The records are ignored, so a record written is no file more.
+    await writeFile(join(repo, ".gitignore"), "board/records/\n.gitignore\n");
+    const before = await doRunBoardMeasure({ json: true }, ctx(repo));
+    await doRunBoardRecord(
+      {},
+      {
+        ...ctx(repo),
+        readInput: async () =>
+          JSON.stringify(
+            judgement(before.digest, ["done", "part"], {
+              npm: { value: "1.0.0", observed_at: "2026-10-05", source: "registry" },
+            }),
+          ),
+      },
+    );
+    await placeBoard(
+      repo,
+      JSON.stringify({
+        board_version: 3,
+        title: "Board v3",
+        stages: { ...STAGES, "03": { meaning: "stage 03", look: ["the tests", "the docs"] } },
+        lanes: [{ id: "core", name: "Core", notes: ["mind it"] }],
+        measures: [{ ...MD, unit: "docs", lane: ["core"] }],
+        axis: { version: 2, review_due_days: 60 },
+        effort: { start: "2026-04-28" },
+        observe: [{ key: "npm", kind: "npm_version", package: "basou" }],
+      }),
+    );
+    const after = await doRunBoardMeasure({ json: true }, ctx(repo));
+    expect(after.diff).toMatchObject({ values: [], added: [], removed: [], methods: [] });
+    out.length = 0;
+    await doRunBoardMeasure({}, ctx(repo));
+    const only = out.join("\n");
+    expect(only).toMatch(
+      /Since the previous record [0-9A-Z]{26}:\n {2}declaration stages\.03\.look: changed\n\nRepos:/,
+    );
+    expect(only).not.toContain("nothing moved");
+  });
+
   it("shows what a previous record holds with its control characters escaped", async () => {
     const { repo, first } = await recorded();
     const file = join(repo, "board", "records", `${first}.json`);
     const written = JSON.parse(await readFile(file, "utf8"));
     written.cells[1].state = `part${ESC}[31m`;
     written.measure.methods[`evil${ESC}[2J`] = 1;
+    written.declaration.components[`app/evil${String.fromCodePoint(0x2028)}${ESC}[2J`] = {
+      lane: "-",
+      note: "n",
+    };
     await writeFile(file, JSON.stringify(written));
     const { out } = capture();
     const m = await doRunBoardMeasure({ json: true }, ctx(repo));
@@ -1782,6 +1887,16 @@ describe("basou board measure and record against the previous record", () => {
     expect(text).not.toContain(ESC);
     expect(text).toContain("  core 02: part\\x1b[31m -> done\n");
     expect(text).toContain("methods changed: evil\\x1b[2J 1 -> none");
+    expect(text).toContain('  declaration components["app/evil\\u2028\\u001b[2J"]: removed\n');
+    expect(text).not.toContain(String.fromCodePoint(0x2028));
+    // A declaration that is not an object is not compared, and says so.
+    written.declaration = "none";
+    await writeFile(file, JSON.stringify(written));
+    out.length = 0;
+    await doRunBoardMeasure({}, ctx(repo));
+    expect(out.join("\n")).toContain(
+      "\n  declaration: not compared (the previous record holds no declaration that can be read)\n",
+    );
   });
 
   it("takes a record it cannot read as a gap, not as no record", async () => {

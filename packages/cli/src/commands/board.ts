@@ -6,6 +6,7 @@ import {
   BOARD_INIT_SAVE,
   type BoardCellChange,
   type BoardDeclaration,
+  type BoardDeclarationChange,
   type BoardDiff,
   type BoardLiveMeasurement,
   type BoardMeasurement,
@@ -16,11 +17,13 @@ import {
   type BoardPreviousRecords,
   type BoardRepo,
   basouPaths,
+  boardDeclarationSnapshot,
   boardGuide,
   boardInitText,
   buildRecord,
   byCodePoint,
   diffCells,
+  diffDeclarations,
   diffObserved,
   displayPath,
   effortStartOf,
@@ -456,9 +459,10 @@ export async function doRunBoardMeasure(
     throw new Error("--model must name a model.");
   }
   const loaded = await loadBoard(options, ctx, "board measure");
-  const measurement = await measureLoaded(loaded, ctx, options.model, await previousOf(loaded));
+  const previous = await previousOf(loaded);
+  const measurement = await measureLoaded(loaded, ctx, options.model, previous);
   if (options.json === true) console.log(JSON.stringify(measurement, null, 2));
-  else printMeasurementText(measurement, hasRecords(loaded));
+  else printMeasurementText(measurement, hasRecords(loaded), declarationChanges(loaded, previous));
   if (!measurement.complete) process.exitCode = 1;
   return measurement;
 }
@@ -515,22 +519,23 @@ export async function doRunBoardRecord(
   options: BoardRecordOptions,
   ctx: BoardContext,
 ): Promise<BoardRecordResult> {
-  let result: BoardRecordResult;
+  let checked: Awaited<ReturnType<typeof checkAndRecord>>;
   try {
-    result = await checkAndRecord(options, ctx);
+    checked = await checkAndRecord(options, ctx);
   } catch (error: unknown) {
     if (error instanceof RecordRefusal || !(error instanceof Error)) throw error;
     throw new RecordRefusal(`${error.message}\nNothing was written.`, { cause: error.cause });
   }
+  const { result, declared } = checked;
   if (options.json === true) console.log(JSON.stringify(result, null, 2));
-  else printRecordText(result);
+  else printRecordText(result, declared);
   return result;
 }
 
 async function checkAndRecord(
   options: BoardRecordOptions,
   ctx: BoardContext,
-): Promise<BoardRecordResult> {
+): Promise<{ result: BoardRecordResult; declared: BoardDeclarationChange[] | null }> {
   const cwd = ctx.cwd ?? process.cwd();
   const loaded = await loadBoard(options, ctx, "board record");
   const beside = (...parts: string[]) =>
@@ -603,13 +608,28 @@ async function checkAndRecord(
     };
   }
   return {
-    record: written,
-    dry_run: options.dryRun === true,
-    complete: measurement.complete,
-    not_found: measurement.not_found,
-    order_anomalies: record.order_anomalies,
-    diff,
+    result: {
+      record: written,
+      dry_run: options.dryRun === true,
+      complete: measurement.complete,
+      not_found: measurement.not_found,
+      order_anomalies: record.order_anomalies,
+      diff,
+    },
+    declared: declarationChanges(loaded, previous),
   };
+}
+
+// Where the declaration changed since the previous record, for the text a
+// command prints (its JSON holds none of it): null when there is no previous
+// record to compare with, or it holds no declaration as an object.
+function declarationChanges(
+  loaded: LoadedBoard,
+  previous: BoardPreviousRecords,
+): BoardDeclarationChange[] | null {
+  const { last } = previous;
+  if (last.status !== "found") return null;
+  return diffDeclarations(last.record.declaration, boardDeclarationSnapshot(loaded.declaration));
 }
 
 // The keys of a record's input, which a location may name: the words of its
@@ -810,7 +830,10 @@ async function checkRecordsPlace(
   }
 }
 
-function printRecordText(result: BoardRecordResult): void {
+function printRecordText(
+  result: BoardRecordResult,
+  declared: BoardDeclarationChange[] | null,
+): void {
   const lines = [
     result.record === null
       ? "Dry run: the record checked out (nothing was written)."
@@ -836,7 +859,11 @@ function printRecordText(result: BoardRecordResult): void {
         `  observed ${displayPath(o.name)}: ${observation(o.before)} -> ${observation(o.after)}`,
       );
     }
-    lines.push(...diffLines(result.diff.measure, cells.length + observed.length > 0));
+    const declaration = declarationLines(declared);
+    lines.push(
+      ...diffLines(result.diff.measure, cells.length + observed.length + declaration.length > 0),
+      ...declaration,
+    );
   }
   if (!result.complete) {
     lines.push(`The measurement recorded is not complete (${result.not_found.length}):`);
@@ -1090,6 +1117,20 @@ function diffLines(diff: Omit<BoardDiff, "against">, more: boolean): string[] {
   return lines;
 }
 
+// The lines of where the declaration changed since the previous record. The
+// JSON holds none of them.
+function declarationLines(changes: BoardDeclarationChange[] | null): string[] {
+  if (changes === null) {
+    return [
+      "  declaration: not compared (the previous record holds no declaration that can be read)",
+    ];
+  }
+  return changes.map(
+    (c) =>
+      `  declaration ${displayPath(c.at)}: ${c.change === "reordered" ? "the order changed" : c.change}`,
+  );
+}
+
 // A value as a line shows it: the paths of a file_paths measure by how many
 // there are (--json lists them).
 function shownValue(value: number | string | string[] | null): string {
@@ -1260,13 +1301,23 @@ function axisLines(m: BoardMeasurement): string[] {
   return lines;
 }
 
-function printMeasurementText(m: BoardMeasurement, hasRecords: boolean): void {
+function printMeasurementText(
+  m: BoardMeasurement,
+  hasRecords: boolean,
+  declared: BoardDeclarationChange[] | null,
+): void {
   const lines: string[] = [displayPath(m.title)];
   const build = m.measured_with.build === null ? "" : ` (build ${m.measured_with.build})`;
   lines.push(`Measured ${m.measured_at} with basou ${m.measured_with.basou}${build}`);
   // What moved comes first: it is what a reader of the board looks for.
   if (m.diff !== null) {
-    lines.push("", `Since the previous record ${m.diff.against}:`, ...diffLines(m.diff, false));
+    const declaration = declarationLines(declared);
+    lines.push(
+      "",
+      `Since the previous record ${m.diff.against}:`,
+      ...diffLines(m.diff, declaration.length > 0),
+      ...declaration,
+    );
   } else if (m.not_found.some((n) => n.at === "diff")) {
     lines.push("", "The previous record could not be read (see Not measured).");
   } else {

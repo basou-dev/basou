@@ -317,6 +317,12 @@ describe("boardGuide: a board declared", () => {
     );
   });
 
+  it("says the text of measure lists where board.yaml changed, which the JSON does not hold", () => {
+    expect(boardGuide(guideInput())).toContain(
+      "The top of measure.txt also lists each place where board.yaml changed since that record (`declaration <where>: added`, `removed` or `changed`), which the JSON does not hold: write an `axis_review`'s summary from these lines, not from memory.",
+    );
+  });
+
   it("says what a total's value is, that it may be below 0, and when it is null", () => {
     expect(boardGuide(guideInput())).toContain(
       "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured, and when it is out of the range a number holds exactly (-9007199254740991 to 9007199254740991).",
