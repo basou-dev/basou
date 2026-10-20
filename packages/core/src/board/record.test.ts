@@ -530,13 +530,18 @@ describe("parseRecordInput: the value of each kind of observation", () => {
 
   it("takes a value of each kind in its shape, a null with its error of any kind, and any answer of a manual one", () => {
     expect(errorsOf({})).toEqual([]);
-    expect(
-      errorsOf(Object.fromEntries(Object.keys(good).map((key) => [key, null]))),
-    ).toEqual([]);
+    expect(errorsOf(Object.fromEntries(Object.keys(good).map((key) => [key, null])))).toEqual([]);
     // Not 2xx: the body is not read, and what it would give is null.
     expect(
       errorsOf({
-        "site.shop": { status: 503, redirects: 2, final_url: url, words: null, count: null, capture: null },
+        "site.shop": {
+          status: 503,
+          redirects: 2,
+          final_url: url,
+          words: null,
+          count: null,
+          capture: null,
+        },
       }),
     ).toEqual([]);
     // 2xx with nothing captured, a count of 0, a captured value with spaces kept.
@@ -546,13 +551,17 @@ describe("parseRecordInput: the value of each kind of observation", () => {
   });
 
   it("refuses a string of a kind that is a number, empty, or carries a line break or spaces at an end", () => {
-    expect(errorsOf({ npm: "1.2.3\n", release: "", ci: " success", check: 1, page: "v1\u0007" })).toEqual([
-      `observed.release.value: must be a non-empty string with no space or line break at either end and no control character (kind 'github_release'), received ""`,
-      `observed.ci.value: must be a non-empty string with no space or line break at either end and no control character (kind 'github_ci'), received " success"`,
-      "observed.check.value: must be a non-empty string with no space or line break at either end and no control character (kind 'github_check'), received 1",
-      `observed.page.value: must be a non-empty string with no space or line break at either end and no control character (kind 'page_version'), received "v1\\u0007"`,
-      `observed.npm.value: must be a non-empty string with no space or line break at either end and no control character (kind 'npm_version'), received "1.2.3\\n"`,
-    ].sort((a, b) => order(a) - order(b)));
+    expect(
+      errorsOf({ npm: "1.2.3\n", release: "", ci: " success", check: 1, page: "v1\u0007" }),
+    ).toEqual(
+      [
+        `observed.release.value: must be a non-empty string with no space or line break at either end and no control character (kind 'github_release'), received ""`,
+        `observed.ci.value: must be a non-empty string with no space or line break at either end and no control character (kind 'github_ci'), received " success"`,
+        "observed.check.value: must be a non-empty string with no space or line break at either end and no control character (kind 'github_check'), received 1",
+        `observed.page.value: must be a non-empty string with no space or line break at either end and no control character (kind 'page_version'), received "v1\\u0007"`,
+        `observed.npm.value: must be a non-empty string with no space or line break at either end and no control character (kind 'npm_version'), received "1.2.3\\n"`,
+      ].sort((a, b) => order(a) - order(b)),
+    );
   });
 
   it("refuses a count that is a string, negative, not whole, or past the integers a number holds exactly", () => {
@@ -564,9 +573,7 @@ describe("parseRecordInput: the value of each kind of observation", () => {
   });
 
   it("refuses an http status that is not a response's, a string, too many redirects and a URL that is not absolute", () => {
-    expect(
-      errorsOf({ bare: { status: "200", redirects: 11, final_url: "/item" } }),
-    ).toEqual([
+    expect(errorsOf({ bare: { status: "200", redirects: 11, final_url: "/item" } })).toEqual([
       'observed.bare.value.status: must be a whole number from 100 to 599, the status of a response, received "200"',
       "observed.bare.value.redirects: must be a whole number from 0 to 10, received 11",
       'observed.bare.value.final_url: must be an absolute http or https URL, received "/item"',
@@ -577,7 +584,9 @@ describe("parseRecordInput: the value of each kind of observation", () => {
       ]);
     }
     for (const finalUrl of ["ftp://example.com/", "https://", `${url} x`, "example.com/x"]) {
-      expect(errorsOf({ bare: { status: 200, redirects: 0, final_url: finalUrl } })).toHaveLength(1);
+      expect(errorsOf({ bare: { status: 200, redirects: 0, final_url: finalUrl } })).toHaveLength(
+        1,
+      );
     }
   });
 
@@ -587,15 +596,17 @@ describe("parseRecordInput: the value of each kind of observation", () => {
         bare: { status: 200, redirects: 0, final_url: url, words: [true], body: "x" },
         "site.shop": { status: 200, redirects: 0, final_url: url },
       }),
-    ).toEqual([
-      'observed["site.shop"].value.words: must be given: the observation declares words (null when the status is not 2xx)',
-      'observed["site.shop"].value.count: must be given: the observation declares a count_pattern (null when the status is not 2xx)',
-      'observed["site.shop"].value.capture: must be given: the observation declares a capture_pattern (null when the status is not 2xx)',
-      "observed.bare.value.words: is not a key of this observation's value (it takes status, redirects, final_url)",
-      "observed.bare.value.body: is not a key of this observation's value (it takes status, redirects, final_url)",
-    ].sort((a, b) => order(a) - order(b)));
+    ).toEqual(
+      [
+        'observed["site.shop"].value.words: must be given: the observation declares words (null when the status is not 2xx)',
+        'observed["site.shop"].value.count: must be given: the observation declares a count_pattern (null when the status is not 2xx)',
+        'observed["site.shop"].value.capture: must be given: the observation declares a capture_pattern (null when the status is not 2xx)',
+        "observed.bare.value.words: is not a key of this observation's value (it takes status, redirects, final_url)",
+        "observed.bare.value.body: is not a key of this observation's value (it takes status, redirects, final_url)",
+      ].sort((a, b) => order(a) - order(b)),
+    );
     expect(errorsOf({ bare: "200 0 https://example.com/" })).toEqual([
-      'observed.bare.value: must be an object of status, redirects, final_url (kind \'http\'), received "200 0 https://example.com/"',
+      "observed.bare.value: must be an object of status, redirects, final_url (kind 'http'), received \"200 0 https://example.com/\"",
     ]);
   });
 
@@ -608,7 +619,9 @@ describe("parseRecordInput: the value of each kind of observation", () => {
       'observed["site.shop"].value.capture: must be a string, or null when nothing matches, received 2.3',
     ]);
     expect(
-      errorsOf({ "site.shop": { ...shopRead, status: 404, words: [null, null], count: 0, capture: null } }),
+      errorsOf({
+        "site.shop": { ...shopRead, status: 404, words: [null, null], count: 0, capture: null },
+      }),
     ).toEqual([
       'observed["site.shop"].value.words: must be null: the status 404 is not 2xx, so the body is not read, received [null,null]',
       'observed["site.shop"].value.count: must be null: the status 404 is not 2xx, so the body is not read, received 0',
@@ -632,8 +645,21 @@ describe("parseRecordInput: the value of each kind of observation", () => {
 
 // The place of an error among the observations, in the order the board declares them.
 function order(error: string): number {
-  const keys = ["npm", "release", "issues", "prs", "ci", "check", "page", '"site.shop"', "bare", "users"];
-  return keys.findIndex((key) => error.startsWith(`observed.${key}.`) || error.startsWith(`observed[${key}]`));
+  const keys = [
+    "npm",
+    "release",
+    "issues",
+    "prs",
+    "ci",
+    "check",
+    "page",
+    '"site.shop"',
+    "bare",
+    "users",
+  ];
+  return keys.findIndex(
+    (key) => error.startsWith(`observed.${key}.`) || error.startsWith(`observed[${key}]`),
+  );
 }
 
 describe("buildRecord: a board of version 3 that observes a check run, with notes", () => {

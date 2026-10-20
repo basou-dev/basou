@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
-import { type BoardDeclaration, parseBoardDeclaration } from "./declaration.js";
+import { type BoardDeclaration, type BoardObserve, parseBoardDeclaration } from "./declaration.js";
 import {
   BOARD_GUIDE_PORTS,
   type BoardGuideInput,
@@ -31,6 +31,7 @@ import {
   NO_PREVIOUS_RECORDS,
   type ReadBoardRecord,
 } from "./previous.js";
+import { observedValueProblems } from "./observed-shape.js";
 import { parseRecordInput } from "./record.js";
 
 const STAGES = ["01", "02", "03", "04", "05", "06"];
@@ -903,64 +904,52 @@ describe("boardGuide: an http observation", () => {
     capture_pattern: "Version ([0-9.]+)",
   };
 
-  it("gives a GET without -f, then the body read with the patterns and words after --, quoted", () => {
-    const guide = boardGuide(guideInput({ board: declared(httpDeclaration([full])) }));
-    const blocks = blocksIn(guide);
-    const get = blocks.find((b) => b.includes("curl ")) as string;
-    expect(get).toContain(
-      `curl -sS -L --max-redirs 10 --max-time 20 -o "$W/http-shop.body" -w '%{http_code} %{num_redirects} %{url_effective}\\n' '${SHOP}'; echo "curl exit=$?"`,
-    );
-    expect(get).not.toMatch(/ -f|-fsS/);
-    const read = blocks.find((b) => b.includes("node -e")) as string;
-    expect(read).toMatch(/^cd .* && node -e '[^']+' -- /);
-    expect(read).toContain(
-      ` -- '<loc>' 'Version ([0-9.]+)' 'in stock' '${IN_STOCK}' 'AT&T' < "$W/http-shop.body"; echo "exit=$?"`,
-    );
-    expect(read).toContain('readFileSync(0, "utf8")');
-    expect(guide).toContain("#### `shop` (http)");
-    expect(guide).toContain("When the status is 2xx, read the body.");
-    expect(guide).toContain("not line by line as a measure's `pattern` is");
-    expect(guide).toContain(
-      `- \`words\`: whether the body holds each word, as true or false in the order the command gives them (\`in stock\`, \`${IN_STOCK}\`, \`AT&T\`)`,
-    );
-    expect(guide).toContain(
-      "- `count`: how many times `<loc>` matches the body (0 when it does not)",
-    );
-    expect(guide).toContain(
-      "- `capture`: what the first group of the first match of `Version ([0-9.]+)` holds, as a string (null when nothing matches, or when the first group takes no part in the match)",
-    );
-    expect(guide).toContain(
-      'When the status is not 2xx, do not read the body: give `"words": null, "count": null, "capture": null`, each a null and not a list of nulls',
-    );
-    expect(guide).toContain("A 4xx or 5xx is a value, not an observation not made");
-    expect(guide).toContain("more than 10 redirects: exit 47), or reading the body exits 1,");
-    expect(guide).toContain(`Source: \`${SHOP}\`.`);
-    const observed = templateIn(guide).observed as Record<string, { source: string }>;
-    expect(observed.shop?.source).toBe(SHOP);
-  });
-
-  it("gives '' for a pattern not declared, and no body read when nothing is read off the body", () => {
+  it("writes the script once, then gives each observation one block: the GET, its status line and exit code kept in W, and the script with what it reads after --, quoted", () => {
     const guide = boardGuide(
       guideInput({
-        board: declared(
-          httpDeclaration([
-            { key: "words_only", kind: "http", url: SHOP, words: ["x"] },
-            { key: "bare", kind: "http", url: SHOP },
-          ]),
-        ),
+        board: declared(httpDeclaration([full, { key: "bare", kind: "http", url: SHOP }])),
       }),
     );
     const blocks = blocksIn(guide);
-    expect(blocks.find((b) => b.includes('"$W/http-words_only.body"; echo'))).toContain(
-      ` -- '' '' 'x' < "$W/http-words_only.body"`,
+    const writes = blocks.filter((b) => b.includes("printf '%s\\n' '"));
+    expect(writes).toHaveLength(1);
+    const write = writes[0] as string;
+    const script = write.slice(write.indexOf("printf '%s\\n' '") + 15, write.indexOf("' > \"$W/"));
+    // One single-quoted word: nothing in it ends the quotation or escapes.
+    expect(script).not.toMatch(/['\\]/);
+    const file = /> "\$W\/(http-read-[0-9a-f]{12}\.cjs)"; echo "exit=\$\?"$/.exec(write)?.[1];
+    expect(file).toBeDefined();
+    expect(blocks.indexOf(write)).toBeLessThan(blocks.findIndex((b) => b.includes("curl -sS")));
+    const get = blocks.find((b) => b.includes('"$W/http-shop.body"')) as string;
+    expect(get).toMatch(/^cd .* && \{ rm -f "\$W\/http-shop\.body"; curl /);
+    expect(get).toContain(
+      `curl -sS -L --max-redirs 10 --max-time 20 -o "$W/http-shop.body" -w '%{http_code} %{num_redirects} %{url_effective}\\n' '${SHOP}' > "$W/http-shop.meta"; echo "$?" > "$W/http-shop.exit"; node "$W/${file}" -- "$W/http-shop" '${SHOP}' '<loc>' 'Version ([0-9.]+)' 'in stock' '${IN_STOCK}' 'AT&T'; }; echo "exit=$?"`,
     );
-    expect(blocks.some((b) => b.includes("http-bare.body") && b.includes("node -e"))).toBe(false);
-    const bare = guide.slice(guide.indexOf("#### `bare` (http)"));
-    expect(bare).toContain(
-      'Value: `{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string> }`',
+    // No -f: a 4xx or 5xx is a status, not a failure.
+    expect(get.slice(get.indexOf("curl "), get.indexOf(' > "$W/http-shop.meta"'))).not.toMatch(
+      / -f|-fsS/,
     );
-    expect(bare.slice(0, bare.indexOf("### 4."))).not.toContain("2xx");
-    expect(guide).toContain('give `"words": null`, each a null and not a list of nulls');
+    const bare = blocks.find((b) => b.includes('"$W/http-bare.body"')) as string;
+    expect(bare).toContain(` -- "$W/http-bare" '${SHOP}' '' ''; }; echo "exit=$?"`);
+    expect(guide).toContain("#### `shop` (http)");
+    expect(guide).toContain(
+      `A GET of \`${SHOP}\`, reading off a 2xx body \`words\` \`in stock\`, \`${IN_STOCK}\`, \`AT&T\`, \`count\` of \`<loc>\`, \`capture\` of \`Version ([0-9.]+)\`:`,
+    );
+    expect(guide).toContain(`A GET of \`${SHOP}\`:`);
+    expect(guide).toContain(`Put the line it prints under \`shop\` as it is. Source: \`${SHOP}\`.`);
+    // What the kind gives is said once, for both.
+    expect(guide.split("- `http`: ")).toHaveLength(2);
+    expect(guide).toContain("- `http`: a GET, following up to 10 redirects, with no `-f`");
+    expect(guide).toContain("not line by line as a measure's `pattern` is");
+    expect(guide).toContain(
+      "When the status is not 2xx the body is not read, and each read is a null, not a list of nulls",
+    );
+    expect(guide).toContain("more than 10 redirects: exit 47), or the body cannot be read");
+    expect(guide).toContain(
+      "record refuses another, such as a number given as a string, a string with a space or a line break at either end, or an `http` status that is not a response's (100 to 599)",
+    );
+    const observed = templateIn(guide).observed as Record<string, { source: string }>;
+    expect(observed.shop?.source).toBe(SHOP);
   });
 
   it("writes a word or a pattern as Markdown code that shows it as it is, backquotes and spaces too", () => {
@@ -980,18 +969,52 @@ describe("boardGuide: an http observation", () => {
       }),
     );
     expect(guide).toContain(
-      "in the order the command gives them (``a`b``, `  in stock  `, ``` ``x ```)",
+      "reading off a 2xx body `words` ``a`b``, `  in stock  `, ``` ``x ```, `count` of `` <loc>|` ``:",
     );
-    expect(guide).toContain("- `count`: how many times `` <loc>|` `` matches the body");
+  });
+
+  it("says what each kind gives once, whatever the number of its observations", () => {
+    const guide = boardGuide(
+      guideInput({
+        board: declared(
+          httpDeclaration([
+            { key: "a", kind: "github_check", repo: "o/n", check: "a" },
+            { key: "b", kind: "github_check", repo: "o/n", check: "b" },
+            { key: "c", kind: "manual", how: "ask" },
+          ]),
+        ),
+      }),
+    );
+    expect(guide.split("- `github_check`: ")).toHaveLength(2);
+    expect(guide.split("- `manual`: ")).toHaveLength(2);
+    expect(guide).not.toContain("- `http`: ");
+    expect(guide).not.toContain("printf '%s\\n'");
   });
 });
 
 describe("boardGuide: an http observation, run", () => {
   let dir: string;
+  let origin: string;
+  let server: ReturnType<typeof createServer>;
+  const bodies = new Map<string, string>();
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "basou-board-http-"));
+    bodies.clear();
+    server = createServer((req, res) => {
+      const url = req.url ?? "";
+      if (url === "/moved") res.writeHead(301, { location: "/body/item" }).end();
+      else if (url.startsWith("/loop")) {
+        res.writeHead(302, { location: `/loop${(url.length % 50) + 1}` }).end();
+      } else if (url === "/empty") res.writeHead(204).end();
+      else if (url.startsWith("/body/") && bodies.has(url.slice(6))) {
+        res.writeHead(200, { "content-type": "text/html" }).end(bodies.get(url.slice(6)));
+      } else res.writeHead(404).end("not here");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
   afterEach(async () => {
+    await new Promise((resolve) => server.close(resolve));
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -1006,113 +1029,150 @@ describe("boardGuide: an http observation, run", () => {
       );
     });
 
-  const blockOf = (guide: string, key: string, has: string) =>
-    blocksIn(guide).find((b) => b.includes(`"$W/http-${key}.body"`) && b.includes(has)) as string;
-
-  it("reads the words, the count and the capture off the whole body, decoded once and without its BOM", async () => {
+  // The guide for these observations, its script written to W; then each
+  // observation's block, run with its URL pointed at `path` of the server,
+  // gives the entry it prints.
+  const observe = async (observations: Record<string, unknown>[]) => {
     const guide = boardGuide(
-      guideInput({
-        anchor: dir,
-        board: declared(
-          httpDeclaration([
-            {
-              key: "shop",
-              kind: "http",
-              url: SHOP,
-              // Found as written: not ignoring case, and at the body's start too.
-              words: [IN_STOCK, "sold out", "AT&T", "<urlset>", "VERSION 2.3"],
-              count_pattern: "^<urlset>|<loc>",
-              capture_pattern: "Version ([0-9.]+)",
-            },
-            { key: "opt", kind: "http", url: SHOP, capture_pattern: "x(y)?" },
-            // Under the u flag . is one character, not one half of a surrogate pair.
-            { key: "flags", kind: "http", url: SHOP, count_pattern: ".", capture_pattern: "(.)" },
-            // Only a BOM at the start is taken off.
-            { key: "bom", kind: "http", url: SHOP, count_pattern: "\\uFEFF" },
-          ]),
-        ),
-      }),
+      guideInput({ anchor: dir, board: declared(httpDeclaration(observations)) }),
     );
-    const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
-    await mkdir(work, { recursive: true });
-    const read = blockOf(guide, "shop", "node -e");
+    const blocks = blocksIn(guide);
+    const write = blocks.find((b) => b.includes("printf '%s\\n' '")) as string;
+    expect(await run(write)).toEqual({ out: "exit=0\n", err: "" });
+    const declaration = httpDeclaration(observations);
+    return async (key: string, path: string) => {
+      const block = blocks.find((b) => b.includes(`"$W/http-${key}.body"`)) as string;
+      const { out } = await run(block.replaceAll(`'${SHOP}'`, `'${origin}${path}'`));
+      const [entry, exit] = out.split("\n");
+      expect(exit).toBe("exit=0");
+      const parsed = JSON.parse(entry as string) as {
+        value: unknown;
+        observed_at: string;
+        source: string;
+        error?: string;
+      };
+      expect(parsed.source).toBe(`${origin}${path}`);
+      expect(parsed.observed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      // What it prints is what record takes.
+      const o = declaration.observe.find((x) => x.key === key) as BoardObserve;
+      if (parsed.value !== null) expect(observedValueProblems(o, parsed.value)).toEqual([]);
+      return parsed;
+    };
+  };
+
+  it("reads the words, the count and the capture off the whole 2xx body, decoded once and without its BOM", async () => {
+    const get = await observe([
+      {
+        key: "shop",
+        kind: "http",
+        url: SHOP,
+        // Found as written: not ignoring case, and at the body's start too.
+        words: [IN_STOCK, "sold out", "AT&T", "<urlset>", "VERSION 2.3"],
+        count_pattern: "^<urlset>|<loc>",
+        capture_pattern: "Version ([0-9.]+)",
+      },
+      { key: "opt", kind: "http", url: SHOP, capture_pattern: "x(y)?" },
+      // Under the u flag . is one character, not one half of a surrogate pair.
+      { key: "flags", kind: "http", url: SHOP, count_pattern: ".", capture_pattern: "(.)" },
+      // Only a BOM at the start is taken off.
+      { key: "bom", kind: "http", url: SHOP, count_pattern: "\\uFEFF" },
+    ]);
     // The word starts one byte before 64 KiB (after the 3 bytes of the BOM
     // and the 8 of <urlset>), so a chunk of a stream would cut it.
-    const body = `\ufeff<urlset>${"a".repeat(65535 - 3 - 8)}${IN_STOCK} AT&amp;T <loc>1</loc><loc>2</loc> Version 2.3 and Version 9.9`;
-    await writeFile(join(work, "http-shop.body"), body, "utf8");
-    expect(await run(read)).toEqual({
-      out: '{"words":[true,false,false,true,false],"count":3,"capture":"2.3"}\nexit=0\n',
-      err: "",
+    bodies.set(
+      "item",
+      `\ufeff<urlset>${"a".repeat(65535 - 3 - 8)}${IN_STOCK} AT&amp;T <loc>1</loc><loc>2</loc> Version 2.3 and Version 9.9`,
+    );
+    expect((await get("shop", "/moved")).value).toEqual({
+      status: 200,
+      redirects: 1,
+      final_url: `${origin}/body/item`,
+      words: [true, false, false, true, false],
+      count: 3,
+      capture: "2.3",
     });
-    await writeFile(join(work, "http-shop.body"), "nothing here", "utf8");
-    expect((await run(read)).out).toBe(
-      '{"words":[false,false,false,false,false],"count":0,"capture":null}\nexit=0\n',
-    );
+    bodies.set("item", "nothing here");
+    expect((await get("shop", "/body/item")).value).toEqual({
+      status: 200,
+      redirects: 0,
+      final_url: `${origin}/body/item`,
+      words: [false, false, false, false, false],
+      count: 0,
+      capture: null,
+    });
     // A group that took no part in the match gives null, as no match does.
-    await writeFile(join(work, "http-opt.body"), "x", "utf8");
-    expect((await run(blockOf(guide, "opt", "node -e"))).out).toBe('{"capture":null}\nexit=0\n');
-    await writeFile(join(work, "http-flags.body"), "\u{1F600}", "utf8");
-    expect((await run(blockOf(guide, "flags", "node -e"))).out).toBe(
-      '{"count":1,"capture":"\u{1F600}"}\nexit=0\n',
-    );
-    await writeFile(join(work, "http-bom.body"), "\ufeffa\ufeffb", "utf8");
-    expect((await run(blockOf(guide, "bom", "node -e"))).out).toBe('{"count":1}\nexit=0\n');
+    bodies.set("x", "x");
+    expect((await get("opt", "/body/x")).value).toMatchObject({ capture: null });
+    bodies.set("emoji", "\u{1F600}");
+    expect((await get("flags", "/body/emoji")).value).toMatchObject({
+      count: 1,
+      capture: "\u{1F600}",
+    });
+    bodies.set("bom", "\ufeffa\ufeffb");
+    expect((await get("bom", "/body/bom")).value).toMatchObject({ count: 1 });
   });
 
-  it("stops rather than count an empty match the declaration could not see", async () => {
+  it("gives a status not 2xx as a value whose reads are null, and an empty body as empty", async () => {
+    const get = await observe([
+      {
+        key: "shop",
+        kind: "http",
+        url: SHOP,
+        words: ["x"],
+        count_pattern: "x",
+        capture_pattern: "(x)",
+      },
+    ]);
+    expect((await get("shop", "/gone")).value).toEqual({
+      status: 404,
+      redirects: 0,
+      final_url: `${origin}/gone`,
+      words: null,
+      count: null,
+      capture: null,
+    });
+    expect((await get("shop", "/empty")).value).toEqual({
+      status: 204,
+      redirects: 0,
+      final_url: `${origin}/empty`,
+      words: [false],
+      count: 0,
+      capture: null,
+    });
+  });
+
+  it("gives no value but the error when curl fails: past 10 redirects, or no connection", async () => {
+    const get = await observe([{ key: "shop", kind: "http", url: SHOP }]);
+    expect(await get("shop", "/loop")).toMatchObject({
+      value: null,
+      error: "curl exit 47: more than 10 redirects",
+    });
+    // A port nothing listens on: curl prints the status 000 and exits 7.
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
+    const port = (closed.address() as AddressInfo).port;
+    await new Promise((resolve) => closed.close(resolve));
     const guide = boardGuide(
       guideInput({
         anchor: dir,
-        board: declared(
-          httpDeclaration([{ key: "edge", kind: "http", url: SHOP, count_pattern: "\\b" }]),
-        ),
+        board: declared(httpDeclaration([{ key: "shop", kind: "http", url: SHOP }])),
       }),
     );
-    const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
-    await mkdir(work, { recursive: true });
-    await writeFile(join(work, "http-edge.body"), "a b", "utf8");
-    expect(await run(blockOf(guide, "edge", "node -e"))).toEqual({
-      out: "exit=1\n",
-      err: "count_pattern matched an empty string at 0\n",
+    const block = blocksIn(guide).find((b) => b.includes('"$W/http-shop.body"')) as string;
+    const { out } = await run(block.replaceAll(`'${SHOP}'`, `'http://127.0.0.1:${port}/x'`));
+    expect(JSON.parse(out.split("\n")[0] as string)).toMatchObject({
+      value: null,
+      error: "curl exit 7: no connection",
     });
   });
 
-  it("prints the status, the redirects and where it ended, a 404 with exit 0, and exit 47 past 10 redirects", async () => {
-    const server = createServer((req, res) => {
-      if (req.url === "/moved") {
-        res.writeHead(301, { location: "/item" }).end();
-      } else if (req.url === "/item") {
-        res.writeHead(200, { "content-type": "text/html" }).end(IN_STOCK);
-      } else if (req.url?.startsWith("/loop")) {
-        res.writeHead(302, { location: `/loop${(req.url.length % 50) + 1}` }).end();
-      } else {
-        res.writeHead(404).end("not here");
-      }
+  it("gives no value when the count_pattern matches an empty string the declaration could not see", async () => {
+    const get = await observe([{ key: "edge", kind: "http", url: SHOP, count_pattern: "\\b" }]);
+    bodies.set("ab", "a b");
+    expect(await get("edge", "/body/ab")).toMatchObject({
+      value: null,
+      error: "the count_pattern matched an empty string at 0",
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    try {
-      const guide = boardGuide(
-        guideInput({
-          anchor: dir,
-          board: declared(httpDeclaration([{ key: "shop", kind: "http", url: SHOP }])),
-        }),
-      );
-      const get = (path: string) =>
-        run(blockOf(guide, "shop", "curl ").replace(`'${SHOP}'`, `'${origin}${path}'`));
-      expect(await get("/moved")).toEqual({
-        out: `200 1 ${origin}/item\ncurl exit=0\n`,
-        err: "",
-      });
-      const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
-      expect(await readFile(join(work, "http-shop.body"), "utf8")).toBe(IN_STOCK);
-      expect((await get("/gone")).out).toBe(`404 0 ${origin}/gone\ncurl exit=0\n`);
-      expect(await readFile(join(work, "http-shop.body"), "utf8")).toBe("not here");
-      const loop = await get("/loop");
-      expect(loop.out).toMatch(/^302 10 .*\ncurl exit=47\n$/);
-    } finally {
-      await new Promise((resolve) => server.close(resolve));
-    }
   });
 });
 
@@ -1157,16 +1217,21 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
     expect(deploy).toContain(
       "How the latest check run named `Workers Builds: app` on the head commit of `main` of `owner/name` ended",
     );
-    expect(deploy).toContain(
+    // What the kind gives is said once, before the observations.
+    const kind = guide.slice(guide.indexOf("- `github_check`: "), guide.indexOf("#### `deploy`"));
+    expect(kind).toContain(
       "Value: the first line it prints, as a string (`success`, `failure`, `cancelled`, `skipped`, or the status of a run not finished, such as `queued` or `in_progress`). A second line, `more than 100 runs: <n>`, says the newest run may be on a page not read: keep the first line as the value, and say so in a footnote.",
     );
-    expect(deploy).toContain(
-      "An empty line is no check run of that name on the head commit: a null, with the error saying that the head commit of `main` has no check run named `Workers Builds: app`.",
+    expect(kind).toContain(
+      "An empty line is no check run of that name on the head commit: a null, with the error saying so.",
     );
-    expect(deploy).toContain(
+    expect(kind).toContain(
       "A head commit that never started the check (a path filter, `[skip ci]` in its commit message, or the app's own rules) gives this too, even when what the check looks after is fine; a job a workflow skipped with `if:` is a check run, concluded `skipped`.",
     );
-    expect(deploy).toContain("A branch that does not exist exits 1 (HTTP 422)");
+    expect(kind).toContain("A branch that does not exist exits 1 (HTTP 422)");
+    expect(deploy).toContain(
+      "An empty line: the head commit of `main` has no check run named `Workers Builds: app`.",
+    );
     expect(deploy).toContain(
       "Source: `gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app`.",
     );
@@ -1263,7 +1328,9 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
       /Source: `https:\/\/example\.com\/shop\/item-1`\.\n\n- mind: 404 is right while it is sold out\n- mind: a\\u202eb\n\n$/,
     );
     const users = guide.slice(guide.indexOf("#### `users`"), guide.indexOf("#### `deploy`"));
-    expect(users).toMatch(/as the operator asked`\.\n\n- mind: ask on Mondays\n\n$/);
+    expect(users).toMatch(
+      /Only the operator can make this one: ask\n\n- mind: ask on Mondays\n\n$/,
+    );
     const deploy = guide.slice(guide.indexOf("#### `deploy`"), guide.indexOf("### 4."));
     expect(deploy).not.toContain("mind:");
     expect([...guide].some((c) => c.codePointAt(0) === 0x202e)).toBe(false);
@@ -1294,7 +1361,7 @@ describe("boardGuide: what a board declares, as code and escaped as the template
       "How many pull requests of `o/_x_` are open:",
       "How the latest run of the workflow `_w_.yml` on `_b_` of `o/_x_` ended:",
       "The version `https://example.com/_x_` shows:",
-      "A GET of `https://example.com/_y_`, following",
+      "A GET of `https://example.com/_y_`:",
       "Source: `npm view @scope/a_x_ version`.",
       "Source: `gh release view --repo o/_x_`.",
       "Source: `gh issue list --repo o/_x_ --state open`.",
