@@ -49,6 +49,7 @@ const repoFields = {
   branch: text.nullable(),
   last_commit: text.nullable(),
   commits: count,
+  files: count,
   uncommitted: count,
 };
 const repoSchema = z.looseObject({
@@ -273,6 +274,7 @@ export type BoardPageRepo = {
   branch: string | null;
   last_commit: string | null;
   commits: number | null;
+  files: number | null;
   uncommitted: number | null;
   base: string | null;
   behind: number | null;
@@ -372,7 +374,11 @@ export type BoardPageBody = {
      * was not measured.
      */
     active_days: number | null;
-    /** The days from the start to today, the one the effort was measured on. */
+    /**
+     * The days from the start to today (the one the effort was measured on),
+     * both included: the rows of `daily`, one more than `elapsed_days`. The
+     * page's time per day is the active time over these.
+     */
     period_days: number | null;
     /**
      * Each day from the start, in milliseconds: the active time, Claude's, the
@@ -914,12 +920,15 @@ function httpWords(o: DeclaredObservation | undefined): string[] | undefined {
 }
 
 // An http value read as its parts, when it is in the shape the declared
-// observation gives it (the shape record holds a value to): a value of
-// another shape, as a record written before that check may hold, is drawn
-// as it is.
+// observation gives it (the shape record held a value to when it was
+// written, so a final_url with a query, which record took before it refused
+// one, is still drawn as a part): a value of another shape, as a record
+// written before that check may hold, is drawn as it is.
 function httpOf(o: DeclaredObservation | undefined, value: unknown): BoardPageHttp | undefined {
   if (o?.kind !== "http" || value === null || value === undefined) return undefined;
-  if (observedValueProblems(o as unknown as BoardObserve, value).length > 0) return undefined;
+  if (observedValueProblems(o as unknown as BoardObserve, value, { written: true }).length > 0) {
+    return undefined;
+  }
   const v = value as {
     status: number;
     redirects: number;
@@ -982,6 +991,7 @@ function reposOf(version: number, repos: unknown): BoardPageBody["repos"] {
         branch: r.branch,
         last_commit: r.last_commit,
         commits: r.commits,
+        files: r.files,
         uncommitted: r.uncommitted,
         base: r.base,
         behind: r.behind,
@@ -998,6 +1008,7 @@ function reposOf(version: number, repos: unknown): BoardPageBody["repos"] {
         branch: r.branch,
         last_commit: r.last_commit,
         commits: r.commits,
+        files: r.files,
         uncommitted: r.uncommitted,
         base: null,
         behind: r.behind_main,

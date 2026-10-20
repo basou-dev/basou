@@ -6,6 +6,7 @@ import type { Manifest } from "../schemas/manifest.schema.js";
 import { type BasouPaths, ensureBasouDirectory } from "../storage/basou-dir.js";
 import { createManifest, writeManifest } from "../storage/manifest.js";
 import {
+  boardPageStrings,
   isPositionBoardLine,
   presetStrings,
   resolveAnchorContentLanguage,
@@ -208,6 +209,17 @@ describe("resolveAnchorContentLanguage", () => {
     ).toBe("ja");
     expect(resolveAnchorContentLanguage([{ anchor: true }, { anchor: true, language: "ja" }])).toBe(
       "en",
+    );
+  });
+});
+
+describe("boardPageStrings", () => {
+  it("says under Claude's and Codex's time that each counts an overlap once, in both languages", () => {
+    expect(boardPageStrings("en").effort.toolUnion).toBe(
+      "overlaps counted once, not a sum of sessions",
+    );
+    expect(boardPageStrings("ja").effort.toolUnion).toBe(
+      "重なりは 1 回だけ数えた時間（session ごとの合計ではない）",
     );
   });
 });

@@ -978,8 +978,12 @@ export type BoardPageStrings = {
     daysWorked: string;
     claude: string;
     codex: string;
+    /** Under Claude's and Codex's time: each is a union of intervals, not a sum of sessions. */
+    toolUnion: string;
     noCodex: string;
     perDay: string;
+    /** What the time per day is divided by: the days from the start to today, both included. */
+    perDayOver: string;
     perDayWorked: string;
     outputTokens: string;
     withoutTokens: string;
@@ -1072,6 +1076,7 @@ export type BoardPageStrings = {
     head: string;
     lastCommit: string;
     commits: string;
+    files: string;
     uncommitted: string;
     base: string;
     behind: string;
@@ -1183,8 +1188,10 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     daysWorked: "{n} days worked",
     claude: "Claude",
     codex: "Codex",
+    toolUnion: "overlaps counted once, not a sum of sessions",
     noCodex: "no Codex session",
     perDay: "Per day",
+    perDayOver: "over {days} days, today included",
     perDayWorked: "{time} a day worked",
     outputTokens: "Output tokens",
     withoutTokens: "imports that recorded no tokens: {n}",
@@ -1280,6 +1287,7 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     head: "HEAD",
     lastCommit: "Last commit",
     commits: "Commits",
+    files: "Files",
     uncommitted: "Uncommitted",
     base: "Base branch",
     behind: "Behind",
@@ -1391,8 +1399,10 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     daysWorked: "{n} 日に分布",
     claude: "Claude",
     codex: "Codex",
+    toolUnion: "重なりは 1 回だけ数えた時間（session ごとの合計ではない）",
     noCodex: "Codex の session なし",
     perDay: "1 日あたり",
+    perDayOver: "今日を含む {days} 日で割った値",
     perDayWorked: "動いた日だけなら {time}",
     outputTokens: "出力トークン",
     withoutTokens: "トークンを記録しなかった取り込み {n}",
@@ -1485,6 +1495,7 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     head: "HEAD",
     lastCommit: "最終 commit",
     commits: "commit 数",
+    files: "ファイル数",
     uncommitted: "未 commit",
     base: "比べる branch",
     behind: "遅れ",
@@ -1575,7 +1586,7 @@ const BOARD_INIT_EN: BoardInitStrings = {
     timeZone:
       "This host's time zone has no name a board can declare: write effort.time_zone (such as Asia/Tokyo), or the days are counted in an unnamed zone or not at all.",
     milestones:
-      "Days marked on the period and effort chart, each { date: YYYY-MM-DD, label, ref }: only what was reached (a release, a launch), with ref saying where it can be checked (a tag and its commit, or a decision id in full). A board moved from another keeps its milestones here.",
+      "Days marked on the period and effort chart, each { date: YYYY-MM-DD, label, ref }: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, with ref saying where it can be checked (a tag and its commit, or a decision id in full). A board moved from another keeps here the milestones it had that happened, and leaves out those that were only planned.",
   },
 };
 
@@ -1612,7 +1623,7 @@ const BOARD_INIT_JA: BoardInitStrings = {
     timeZone:
       "このホストの time zone に、盤に書ける名前が無い。effort.time_zone（例 Asia/Tokyo）を書かないと、期間と労力は名前の無い zone で数えられるか、測られない。",
     milestones:
-      "期間と労力の図に印を付ける日。各 { date: YYYY-MM-DD, label, ref }。到達したもの（出荷・公開）だけを書き、ref に確かめられる出所（tag とその commit、または完全な decision の ID）を書く。他の盤から移すときは、その節目をここに移す。",
+      "期間と労力の図に印を付ける日。各 { date: YYYY-MM-DD, label, ref }。何かが起きた日（出荷・公開・作業の開始）だけを書き、予定や目標の日は書かない。ref に確かめられる出所（tag とその commit、または完全な decision の ID）を書く。他の盤から移すときは、起きた節目をここに移し、予定だけだったものは移さない。",
   },
 };
 

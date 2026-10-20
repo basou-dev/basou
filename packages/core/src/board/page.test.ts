@@ -366,6 +366,12 @@ describe("boardPage", () => {
         // As a record written before 0.72.0 may hold it.
         older: made({ status: 200, words: [true] }),
         asked: made({ status: 200, redirects: 0, final_url: "https://a.example/" }),
+        // As a record written before record refused a user, a query or a fragment may hold it.
+        signin: made({
+          status: 200,
+          redirects: 1,
+          final_url: "https://u@login.example/sso?token=a1b2c3#top",
+        }),
       },
     });
     const http = (key: string, more: Record<string, unknown> = {}) => ({
@@ -388,6 +394,7 @@ describe("boardPage", () => {
         http("last", { words: ["a"] }),
         http("older", { words: ["a"] }),
         { key: "asked", kind: "manual", how: "ask" },
+        http("signin"),
       ],
     } as typeof r.declaration;
     await place(A, r);
@@ -422,6 +429,12 @@ describe("boardPage", () => {
     });
     expect(byName.get("nomatch")?.http?.body).toEqual({ capture: null });
     expect(byName.get("last")?.http?.body).toEqual({ words: [{ word: "a", found: false }] });
+    // A record already written is not held to what record refuses now.
+    expect(byName.get("signin")?.http).toEqual({
+      status: 200,
+      redirects: 1,
+      final_url: "https://u@login.example/sso?token=a1b2c3#top",
+    });
     // Out of the shape its declaration gives it, or of a kind with no shape: as it is.
     expect(byName.get("older")?.http).toBeUndefined();
     expect(byName.get("older")?.words).toEqual([{ word: "a", found: true }]);
@@ -704,7 +717,8 @@ describe("boardPage", () => {
     await place(A, v3);
     const page = await boardPage(records);
     if (page.status !== "ok") throw new Error(page.why);
-    const { files: _files, ...drawn } = repo;
+    // Its files too, which a record of every version holds.
+    const drawn = repo;
     expect(page.board.repos).toEqual({
       record_version: 3,
       base_measured: true,
@@ -719,12 +733,15 @@ describe("boardPage", () => {
       ],
     });
     // A record of version 1 or 2 counted the commits behind as behind_main,
-    // and measured no base, ahead or fetch time.
+    // and measured no base, ahead or fetch time. Files not measured are null.
     for (const version of [1, 2]) {
       const older = record({ record_version: version });
       older.measure = {
         ...older.measure,
-        repos: [{ ...repo, behind_main: 4 }],
+        repos: [
+          { ...repo, behind_main: 4 },
+          { ...repo, path: "../lib", files: null, behind_main: null },
+        ],
       } as typeof older.measure;
       await place(A, older);
       const read = await boardPage(records);
@@ -732,7 +749,18 @@ describe("boardPage", () => {
       expect(read.board.repos).toEqual({
         record_version: version,
         base_measured: false,
-        list: [{ ...drawn, base: null, behind: 4, ahead: null, fetched_at: null }],
+        list: [
+          { ...drawn, base: null, behind: 4, ahead: null, fetched_at: null },
+          {
+            ...drawn,
+            path: "../lib",
+            files: null,
+            base: null,
+            behind: null,
+            ahead: null,
+            fetched_at: null,
+          },
+        ],
       });
     }
     // None, or not in the shape of its version: drawn as none, the rest of the record drawn.
@@ -741,6 +769,7 @@ describe("boardPage", () => {
       [3, undefined],
       [3, "x"],
       [3, [{ ...repo, behind_main: 4 }]],
+      [3, [{ ...v3Repo, files: "30" }]],
       [2, [v3Repo]],
       [
         1,

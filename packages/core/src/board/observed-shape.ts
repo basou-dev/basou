@@ -66,7 +66,9 @@ function isPlainText(value: unknown): value is string {
   );
 }
 
-function isAbsoluteHttpUrl(value: unknown): boolean {
+// An absolute http or https URL, as record took a final_url from basou
+// 0.72.0 on, and as a record written since may hold one.
+function isHttpUrl(value: unknown): value is string {
   if (typeof value !== "string" || hasControl(value) || /\s/u.test(value)) return false;
   if (!/^https?:\/\//i.test(value)) return false;
   try {
@@ -76,6 +78,28 @@ function isAbsoluteHttpUrl(value: unknown): boolean {
   }
 }
 
+// An absolute http or https URL with no user, query or fragment, and no
+// character a terminal hides: what a URL behind a sign-in carries there (a
+// token signed anew each time) would move the value at every record, and put
+// the token in a file kept in git. The guide's command prints no such
+// character (a host comes out in its ASCII form).
+function isPlainHttpUrl(value: unknown): boolean {
+  if (!isHttpUrl(value) || HIDDEN_CHAR.test(value) || /[?#]/.test(value)) return false;
+  const url = new URL(value);
+  return url.username === "" && url.password === "";
+}
+
+/** How a value is held: as record takes it now, or as a record already holds it. */
+export type ObservedValueCheck = {
+  /**
+   * The value is one a record already holds: its `final_url` is held only to
+   * the shape record took from basou 0.72.0 on, which let a user, a query, a
+   * fragment and a hidden character through. The page draws such a value as
+   * its parts; record never checks a written record again.
+   */
+  written?: boolean;
+};
+
 /**
  * What is wrong with the value of an observation, held against the shape its
  * kind gives it: every problem, for an `http` value its keys it does not take
@@ -84,7 +108,11 @@ function isAbsoluteHttpUrl(value: unknown): boolean {
  * here, nor is a `manual` one, which is what the operator answers. The value
  * is a JSON value no deeper than a record takes.
  */
-export function observedValueProblems(o: BoardObserve, value: unknown): ObservedValueProblem[] {
+export function observedValueProblems(
+  o: BoardObserve,
+  value: unknown,
+  check: ObservedValueCheck = {},
+): ObservedValueProblem[] {
   const kind = `(kind '${o.kind}')`;
   switch (o.kind) {
     case "manual":
@@ -113,7 +141,7 @@ export function observedValueProblems(o: BoardObserve, value: unknown): Observed
             },
           ];
     case "http":
-      return httpValueProblems(o, value);
+      return httpValueProblems(o, value, check.written === true);
   }
 }
 
@@ -133,6 +161,7 @@ function httpKeys(o: Extract<BoardObserve, { kind: "http" }>): string[] {
 function httpValueProblems(
   o: Extract<BoardObserve, { kind: "http" }>,
   value: unknown,
+  written: boolean,
 ): ObservedValueProblem[] {
   const keys = httpKeys(o);
   if (!isRecord(value)) {
@@ -177,10 +206,12 @@ function httpValueProblems(
       message: `must be a whole number from 0 to ${BOARD_HTTP_MAX_REDIRECTS}, ${received(redirects)}`,
     });
   }
-  if (Object.hasOwn(value, "final_url") && !isAbsoluteHttpUrl(finalUrl)) {
+  if (Object.hasOwn(value, "final_url") && !(written ? isHttpUrl : isPlainHttpUrl)(finalUrl)) {
     problems.push({
       path: ["final_url"],
-      message: `must be an absolute http or https URL, ${received(finalUrl)}`,
+      message: written
+        ? `must be an absolute http or https URL, ${received(finalUrl)}`
+        : `must be an absolute http or https URL with no user, query, fragment or hidden character, ${received(finalUrl)}`,
     });
   }
   // The body is read only when the status is 2xx. With a status that is not

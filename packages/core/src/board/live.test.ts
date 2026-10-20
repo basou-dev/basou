@@ -131,7 +131,7 @@ describe("measureBoardLive", () => {
       ].sort(),
     );
     expect(m.methods).toEqual({
-      repos: 2,
+      repos: 3,
       trail: 2,
       integrity: 2,
       review_gaps: 2,
@@ -212,7 +212,9 @@ describe("boardLivePage", () => {
       { key: name, kinds: ["manifest"] },
       { key: `${name}/web`, kinds: ["manifest"] },
     ]);
-    expect(page.repos[0]).not.toHaveProperty("files");
+    // The files the repos table draws, as measured.
+    expect(page.repos[0]?.files).toBe(m.repos[0]?.files);
+    expect(page.repos[0]?.files).toEqual(expect.any(Number));
     expect(page.repos[0]).toMatchObject({
       base: "origin/main",
       behind: 0,
@@ -226,6 +228,7 @@ describe("boardLivePage", () => {
       "branch",
       "last_commit",
       "commits",
+      "files",
       "uncommitted",
       "base",
       "behind",

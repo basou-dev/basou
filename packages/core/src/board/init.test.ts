@@ -148,10 +148,19 @@ describe("boardInitText", () => {
     }
     expect(en.comments.milestones).toContain("{ date: YYYY-MM-DD, label, ref }");
     expect(en.comments.milestones).toContain(
-      "A board moved from another keeps its milestones here.",
+      "only days on which something happened (a release, a launch, the start of the work), never a plan or a target date",
     );
+    expect(en.comments.milestones).toContain(
+      "A board moved from another keeps here the milestones it had that happened, and leaves out those that were only planned.",
+    );
+    expect(en.comments.milestones).not.toContain("only what was reached");
     expect(ja.comments.milestones).toContain("{ date: YYYY-MM-DD, label, ref }");
-    expect(ja.comments.milestones).toContain("他の盤から移すときは、その節目をここに移す。");
+    expect(ja.comments.milestones).toContain(
+      "何かが起きた日（出荷・公開・作業の開始）だけを書き、予定や目標の日は書かない。",
+    );
+    expect(ja.comments.milestones).toContain(
+      "他の盤から移すときは、起きた節目をここに移し、予定だけだったものは移さない。",
+    );
     expect(en.comments.milestones).toContain(
       "with ref saying where it can be checked (a tag and its commit, or a decision id in full)",
     );

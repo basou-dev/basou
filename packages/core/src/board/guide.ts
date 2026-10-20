@@ -122,7 +122,7 @@ export function boardGuide(input: BoardGuideInput): string {
   line(`- Records: board/records/, ${recordsLine(input, recordCount)}`);
   line(`- Axis: ${axisLine(input)}`);
   line(
-    `- Milestones: ${milestonesLine(d)} under effort.milestones, each \`{ date, label, ref }\`: only what was reached (a release, a launch), with \`ref\` saying where it can be checked (a tag and its commit, or a decision id in full). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.`,
+    `- Milestones: ${milestonesLine(d)} under effort.milestones, each \`{ date, label, ref }\`: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, each with \`ref\` saying where it can be checked (a tag and its commit, or a decision id in full). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.`,
   );
   line(
     `- Language: write every prose string and reason in ${LANGUAGE_NAMES[input.language]}, the language this board's page is drawn in (Japanese when the manifest declares ja for this repo, English otherwise)`,
@@ -360,8 +360,10 @@ export function boardGuide(input: BoardGuideInput): string {
     "- Approving an axis review (step 2b) before anything in board.yaml changes.",
     "- Approving a milestone before it is added to board.yaml.",
   );
-  for (const o of d.observe) {
-    if (o.kind === "manual") line(`- Observing \`${o.key}\`: ${shown(o.how)}`);
+  const manual = d.observe.filter((o) => o.kind === "manual");
+  if (manual.length > 0) {
+    line("- Making the manual observations, asked for together in one message:");
+    for (const o of manual) line(`  - \`${o.key}\`: ${shown(o.how)}`);
   }
   line("- A gate of step 9 that does not pass.", "");
   return `${out.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
@@ -570,9 +572,9 @@ function kindText(kind: BoardObserve["kind"]): string {
     case "page_version":
       return "the first `v<major>.<minor>.<patch>` (with what follows a `-`) a page shows, not right after a letter, digit, underscore or dot, once its generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's). Value: the version it prints, as a string (such as \"v1.2.3\"). A failed fetch, or no version on the page (exit 1), is a null with that as the error.";
     case "http":
-      return `a GET, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects, with no \`-f\`: a 4xx or 5xx is a value, not an observation not made (the status is what was observed). The block keeps curl's status line and its exit code in W beside the body, and the script reads them: it prints the whole entry on one line, to put under the key as it is. The value holds \`status\`, \`redirects\` and \`final_url\`, and what the observation reads off the body: \`words\`, whether the body holds each word, true or false in the order declared, found as written, character for character, with HTML entities not decoded; \`count\`, how many times the count_pattern matches (0 when it does not); \`capture\`, what the first group of the first match of the capture_pattern holds (null when nothing matches, or when the group takes no part). The patterns are matched against the whole body at once, not line by line as a measure's \`pattern\` is, so \`^\` and \`$\` are the body's start and end. When the status is not 2xx the body is not read, and each read is a null, not a list of nulls: an error page's text is not the page's. When curl exits other than 0 (the name does not resolve, TLS fails, 20 seconds pass, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47), its status is not one of an HTTP response (100 to 599, such as a server answering 600), or the body cannot be read, the value is null and the error says why. The line escapes what a terminal would act on or hide (a line separator, a direction mark), as JSON does a line break: the value read is the same.`;
+      return `a GET, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects, with no \`-f\`: a 4xx or 5xx is a value, not an observation not made (the status is what was observed). The block keeps curl's status line and its exit code in W beside the body, and the script reads them: it prints the whole entry on one line, to put under the key as it is. The value holds \`status\`, \`redirects\` and \`final_url\` (the URL it ended at, with no user, query or fragment: they can carry a token that changes each time, and record refuses a \`final_url\` that has one; a token in the path itself, such as \`;jsessionid=\`, is kept, so make an observation that ends at such a URL \`manual\` instead), and what the observation reads off the body: \`words\`, whether the body holds each word, true or false in the order declared, found as written, character for character, with HTML entities not decoded; \`count\`, how many times the count_pattern matches (0 when it does not); \`capture\`, what the first group of the first match of the capture_pattern holds (null when nothing matches, or when the group takes no part). The patterns are matched against the whole body at once, not line by line as a measure's \`pattern\` is, so \`^\` and \`$\` are the body's start and end. When the status is not 2xx the body is not read, and each read is a null, not a list of nulls: an error page's text is not the page's. When curl exits other than 0 (the name does not resolve, TLS fails, 20 seconds pass, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47), its status is not one of an HTTP response (100 to 599, such as a server answering 600), the URL it ended at is not an http or https one, or the body cannot be read, the value is null and the error says why. The line escapes what a terminal would act on or hide (a line separator, a direction mark), as JSON does a line break: the value read is the same.`;
     case "manual":
-      return "only the operator can make it. Ask the operator, and do not make it yourself. Ask for one thing they can do as it is written: the line to run and where to run it, or the page to open, and what to send back. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`. When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.";
+      return "only the operator can make it. Ask the operator, and do not make it yourself. Ask once, in one message, for all the manual observations of this record: for each key, what they can do as it is written (the line to run and where to run it, or the page to open) and what to send back; when one line answers several keys, give it once and say which keys it answers. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`. When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.";
   }
 }
 
@@ -624,21 +626,30 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
   line("");
 }
 
+// A word of a source as a shell reads it: as it is when it holds only what a
+// shell takes literally, so that a plain name reads as before, and quoted as
+// the command quotes it otherwise (a check named `Workers Builds: app`).
+function sourceWord(text: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(text) ? text : shellWord(text);
+}
+
 // What an observation's source says: the command, the page, or the operator.
+// A command's arguments are quoted where the command quotes them to ask the
+// same thing.
 function sourceOf(o: BoardObserve): string {
   switch (o.kind) {
     case "npm_version":
-      return `npm view ${o.package} version`;
+      return `npm view ${sourceWord(o.package)} version`;
     case "github_release":
-      return `gh release view --repo ${o.repo}`;
+      return `gh release view --repo ${sourceWord(o.repo)}`;
     case "github_open_issues":
-      return `gh issue list --repo ${o.repo} --state open`;
+      return `gh issue list --repo ${sourceWord(o.repo)} --state open`;
     case "github_open_prs":
-      return `gh pr list --repo ${o.repo} --state open`;
+      return `gh pr list --repo ${sourceWord(o.repo)} --state open`;
     case "github_ci":
-      return `gh run list --repo ${o.repo} --workflow ${o.workflow} --branch ${o.branch}`;
+      return `gh run list --repo ${sourceWord(o.repo)} --workflow ${sourceWord(o.workflow)} --branch ${sourceWord(o.branch)}`;
     case "github_check":
-      return `gh api -X GET ${githubCheckPath(o)} -f check_name=${o.check}`;
+      return `gh api -X GET ${sourceWord(githubCheckPath(o))} -f check_name=${sourceWord(o.check)}`;
     case "page_version":
     case "http":
       return o.url;
@@ -654,9 +665,13 @@ function sourceOf(o: BoardObserve): string {
 // node's: where the files are, the URL (the source), the count_pattern and the
 // capture_pattern (each '' when not declared), and the words. Curl's status
 // line is read from a file, never passed as an argument: the URL it ended at
-// is not a value of the declaration's. The body is read only when the status
-// is 2xx, decoded once all of it is read, so a character is never cut where a
-// chunk ends, and with a leading BOM taken off; nothing else of it is decoded.
+// is not a value of the declaration's. Of that URL only the scheme, the host
+// (with a port that is not the scheme's own) and the path are kept: a user, a
+// query or a fragment may carry a token made anew each time, as one behind a
+// sign-in does, which would move the value at every record and put the token
+// in the record. The body is read only when the status is 2xx, decoded once
+// all of it is read, so a character is never cut where a chunk ends, and with
+// a leading BOM taken off; nothing else of it is decoded.
 // An empty match would count positions, not matches: it is no observation,
 // and so is a status no response has (curl prints what a server answers, 600
 // too). The line escapes what a terminal would act on or hide, as jsonText
@@ -675,7 +690,9 @@ const HTTP_SCRIPT = [
   'if (m === null) return print(null, "curl printed no status line");',
   "const status = Number(m[1]);",
   'if (status < 100 || status > 599) return print(null, "the status " + m[1] + " is not one of an HTTP response (100 to 599)");',
-  "const v = { status, redirects: Number(m[2]), final_url: m[3] };",
+  "let u; try { u = new URL(m[3]); } catch { u = null; }",
+  'if (u === null || (u.protocol !== "http:" && u.protocol !== "https:") || u.host === "") return print(null, "the URL curl ended at is not an absolute http or https URL");',
+  'const v = { status, redirects: Number(m[2]), final_url: u.protocol + "//" + u.host + u.pathname };',
   "const ok = status >= 200 && status <= 299;",
   'let t = "";',
   'if (ok && (words.length > 0 || count !== "" || capture !== "")) { try { t = fs.readFileSync(at + ".body", "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; } if (t.charCodeAt(0) === 0xfeff) t = t.slice(1); }',
@@ -811,7 +828,7 @@ function undeclared(
   );
   block(`${go} && ${BOARD_INIT_SAVE}; echo "exit=$?"`);
   line(
-    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only what was reached, each with a `ref` saying where it can be checked; a board moved from another keeps its milestones there. Measures, ratios and components may stay empty at first. Every measure is drawn in the board page's table of measures, and one with `lane:` (a lane id, or a list of them) in each of those lanes' sections too.",
+    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only days on which something happened (a release, a launch, the start of the work), each with a `ref` saying where it can be checked, never a plan or a target date; a board moved from another keeps there the milestones it had that happened, and leaves out any that were only planned. Measures, ratios and components may stay empty at first. Every measure is drawn in the board page's table of measures, and one with `lane:` (a lane id, or a list of them) in each of those lanes' sections too.",
     `   ${referenceLine(input)}`,
     "4. Check it until it reads (every problem with it is listed at once):",
   );

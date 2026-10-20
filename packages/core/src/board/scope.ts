@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
-import { posix, sep } from "node:path";
+import { lstat, readFile, readlink, realpath, stat } from "node:fs/promises";
+import { isAbsolute, posix, sep } from "node:path";
 import { findErrorCode } from "../storage/status.js";
 import { BOARD_DEFAULT_AT } from "./declaration.js";
 import { fromBytes } from "./glob.js";
@@ -316,6 +316,10 @@ async function worktreeEntry(root: Buffer, path: string): Promise<ScopeEntry | u
     target = await realpath(abs, { encoding: "buffer" });
   } catch (error: unknown) {
     if (isAbsent(error) || findErrorCode(error, "ELOOP")) return undefined; // ends nowhere
+    // What it ends at could not be resolved (a directory on the way that may
+    // not be entered): it still leaves the repository when its text, or that
+    // of a link inside the repository it leads to, goes outside.
+    if (await leavesByText(root, path)) return { kind: "outside" };
     return { kind: "unreadable", reason: codeReason(error) };
   }
   if (!within(root, target)) return { kind: "outside" };
@@ -324,6 +328,32 @@ async function worktreeEntry(root: Buffer, path: string): Promise<ScopeEntry | u
   } catch (error: unknown) {
     return isAbsent(error) ? undefined : { kind: "unreadable", reason: codeReason(error) };
   }
+}
+
+// Whether the symlink at `path` leads outside the repository by the text of
+// its links alone: its own, then, while that names a path inside the
+// repository that is itself a symlink, that one's, as the revision's tree is
+// followed. Asked only when the path cannot be resolved on disk.
+async function leavesByText(root: Buffer, path: string): Promise<boolean> {
+  let at = path;
+  for (let hops = 0; hops <= 40; hops++) {
+    let text: Buffer;
+    try {
+      text = await readlink(joinBytes(root, at), { encoding: "buffer" });
+    } catch {
+      return false;
+    }
+    if (isAbsolute(text.toString("latin1"))) return !within(root, text);
+    const joined = posix.normalize(posix.join(posix.dirname(at), text.toString("latin1")));
+    if (joined === ".." || joined.startsWith("../")) return true;
+    try {
+      if (!(await lstat(joinBytes(root, joined))).isSymbolicLink()) return false;
+    } catch {
+      return false;
+    }
+    at = joined;
+  }
+  return false;
 }
 
 type TreeEntry = { mode: string; type: string; oid: string };
