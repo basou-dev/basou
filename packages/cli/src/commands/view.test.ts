@@ -1800,6 +1800,7 @@ describe("basou view: the board page", () => {
       branch: "main",
       last_commit: null,
       commits: 2,
+      files: 7,
       uncommitted: 0,
       base: "origin/main",
       behind: 3,
@@ -1819,12 +1820,19 @@ describe("basou view: the board page", () => {
       "0123456",
       "-",
       "2",
+      "7",
       "0",
       "origin/main",
       "3",
       "1",
       "-",
     ]);
+    // Files the record could not measure are said to be.
+    const noFiles = call("recordRepos", {
+      repos: { record_version: 3, base_measured: true, list: [{ ...repo, files: null }] },
+      footnotes: footnotes(["repos[.].files"]),
+    });
+    expect(cells(noFiles)[5]).toBe("not measured");
     expect(v3.text()).not.toContain("did not measure");
     const older = {
       ...repo,
@@ -1837,12 +1845,14 @@ describe("basou view: the board page", () => {
       // What it could not measure is said, by the name it had then.
       footnotes: footnotes(["repos[.].behind_main", "repos[.].base", "repos[.].ahead"]),
     });
+    // Its files, which every version measured.
     expect(cells(v2)).toEqual([
       "app",
       "main",
       "0123456",
       "-",
       "2",
+      "7",
       "0",
       "-",
       "not measured",
@@ -2002,6 +2012,12 @@ describe("basou view: the board page", () => {
       .find((n) => n.className === "tile")
       .map((t) => t.children.map((c) => c.text()));
     expect(tiles[0]).toEqual(["Elapsed", "not measured", "from 2026-04-28"]);
+    // Nothing is said under a time not measured: no union, no divisor.
+    expect(tiles.slice(2, 5)).toEqual([
+      ["Claude", "not measured"],
+      ["Codex", "not measured"],
+      ["Per day", "not measured"],
+    ]);
     expect(effort.text()).toContain(boardPageStrings("en").effort.noDays);
     expect(effort.find((n) => n.tag === "svg")).toHaveLength(0);
     const foot = call("footnotes", {
@@ -2140,7 +2156,16 @@ describe("basou view: the board page", () => {
       "Per day",
       "Output tokens",
     ]);
-    expect(tiles[4]).toEqual(["Per day", "1h 30m", "3h 00m a day worked"]);
+    const DOT = ` ${String.fromCodePoint(0xb7)} `;
+    // Over the four daily rows, today's included: one more than the days elapsed.
+    expect(tiles[4]).toEqual([
+      "Per day",
+      "1h 30m",
+      `over 4 days, today included${DOT}3h 00m a day worked`,
+    ]);
+    // Each tool's time is a union, said under it.
+    expect(tiles[2]).toEqual(["Claude", "4h 00m", "overlaps counted once, not a sum of sessions"]);
+    expect(tiles[3]).toEqual(["Codex", "3h 00m", "overlaps counted once, not a sum of sessions"]);
     const charts = effort.find((n) => n.tag === "svg");
     expect(charts).toHaveLength(3);
     const [timeline, daily, total] = charts as [Node, Node, Node];
@@ -2199,7 +2224,18 @@ describe("basou view: the board page", () => {
     const soloTiles = solo
       .find((n) => n.className === "tile")
       .map((t) => t.children.map((c) => c.text()));
-    expect(soloTiles[4]).toEqual(["Per day", "2h 00m", "2h 00m a day worked"]);
+    expect(soloTiles[4]).toEqual([
+      "Per day",
+      "2h 00m",
+      `over 1 days, today included${DOT}2h 00m a day worked`,
+    ]);
+    // No Codex session is said as before, with nothing under it.
+    expect(soloTiles[3]).toEqual(["Codex", "no Codex session"]);
+    expect(soloTiles[2]).toEqual([
+      "Claude",
+      "2h 00m",
+      "overlaps counted once, not a sum of sessions",
+    ]);
   });
 
   it("labels the months under a chart without crowding, and the milestones inside it without overlap", () => {
@@ -2326,6 +2362,7 @@ describe("basou view: the board page", () => {
         branch: null,
         last_commit: null,
         commits: 2,
+        files: 5,
         uncommitted: 1,
         base: null,
         behind: null,
@@ -2375,13 +2412,14 @@ describe("basou view: the board page", () => {
     const repos = call("liveRepos", LIVE);
     const cells = repos.find((n) => n.tag === "td").map((c) => c.textContent);
     // Nulls that mean so: a detached HEAD, no base, a last commit unread.
-    expect(cells).toEqual(["app", "-", "0123456", "-", "2", "1", "-", "-", "-", "-"]);
+    expect(cells).toEqual(["app", "-", "0123456", "-", "2", "5", "1", "-", "-", "-", "-"]);
     expect(repos.find((n) => n.tag === "th").map((c) => [c.textContent, c.className])).toEqual([
       [S.live.repo, ""],
       [S.live.branch, ""],
       [S.live.head, ""],
       [S.live.lastCommit, ""],
       [S.live.commits, "n"],
+      [S.live.files, "n"],
       [S.live.uncommitted, "n"],
       [S.live.base, ""],
       [S.live.behind, "n"],
@@ -2403,13 +2441,14 @@ describe("basou view: the board page", () => {
     };
     const comparedTds = call("liveRepos", compared).find((n) => n.tag === "td");
     const comparedCells = comparedTds.map((c) => c.textContent);
-    expect(comparedCells.slice(6, 9)).toEqual(["origin/master", "3", "1"]);
-    expect(comparedCells[9]).toBe(new Date("2026-10-04T12:00:00.000Z").toLocaleString("en-US"));
+    expect(comparedCells.slice(7, 10)).toEqual(["origin/master", "3", "1"]);
+    expect(comparedCells[10]).toBe(new Date("2026-10-04T12:00:00.000Z").toLocaleString("en-US"));
     expect(comparedTds.map((c) => c.className)).toEqual([
       "",
       "",
       "",
       "",
+      "n",
       "n",
       "n",
       "",
@@ -2428,6 +2467,7 @@ describe("basou view: the board page", () => {
           name: null,
           head: null,
           commits: null,
+          files: null,
           uncommitted: null,
         },
       ],
@@ -2445,9 +2485,10 @@ describe("basou view: the board page", () => {
       .slice(1)
       .map((row) => row.find((n) => n.tag === "td").map((c) => c.textContent));
     expect(rows).toEqual([
-      ["app", "not measured", "0123456", "-", "2", "1", "-", "-", "-", "-"],
+      ["app", "not measured", "0123456", "-", "2", "5", "1", "-", "-", "-", "-"],
       [
         "../gone",
+        "not measured",
         "not measured",
         "not measured",
         "not measured",
@@ -2472,7 +2513,7 @@ describe("basou view: the board page", () => {
       call("liveRepos", unmeasuredBase)
         .find((n) => n.tag === "td")
         .map((c) => c.textContent)
-        .slice(6),
+        .slice(7),
     ).toEqual(fields.map(() => S.tiles.notMeasured));
 
     const trail = call("liveTrail", LIVE);

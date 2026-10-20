@@ -3,6 +3,80 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Added
+
+- **The board page draws each repo's files in its repos table**, after the
+  commits, on the board measured on the spot and on a record's page: the
+  files a measure sees in the working tree, as `repos[].files` counts them.
+  The measurement and every version of the record held them, and no table
+  drew them. One not measured is drawn as not measured.
+- **The board page says under Claude's and Codex's time that each is a
+  union**: the time two sessions of the tool overlap counts once, so either
+  is less than the sum of its sessions' times when they overlap, as the
+  active time beside them is. `no Codex session` is drawn as before.
+
+### Changed
+
+- **`basou board measure` leaves out of `repos[].files` a symlink that
+  leaves the repository.** One such symlink in a repo's working tree,
+  tracked or untracked and not ignored, as an agent's instruction file
+  linked in from another repo is (`AGENTS.md -> ../<repo>/AGENTS.md`, with
+  `CLAUDE.md -> AGENTS.md` beside it), made `files` null at every
+  measurement, with `'AGENTS.md' is a symlink to outside the repository`,
+  and a built-in value takes no `exclude`. `files` now counts the other
+  files, and is a number on a repo that holds such symlinks. A path that
+  cannot be read, or a directory git could not list in full, still makes it
+  null with its reason, and a measure the board declares (a `file_count` of
+  `**`) is still not measured for such a symlink, which its `exclude` can
+  leave out. The `repos` method is now 3, so the next record marks the
+  repos section `method_changed`.
+- **`basou board record` refuses an `http` value's `final_url` that has a
+  user, a query or a fragment, and the script `basou board guide` writes
+  leaves them out.** Behind a sign-in (a redirect to a login page) the URL
+  curl ended at carries a token signed anew each time: the observation
+  showed as moved at every record, and the record, kept in git, held a token
+  a secret scanner may flag. The script prints `final_url` as that URL's
+  scheme, host (with a port that is not the scheme's own) and path, and a
+  null with the error `the URL curl ended at is not an absolute http or
+  https URL` when it is not one. Record refuses a `final_url` that holds a
+  `?` or a `#`, or a user name or a password:
+  `observed.shop.value.final_url: must be an absolute http or https URL with no user, query or fragment, received "https://example.com/login?token=..."`.
+  On a board whose `final_url` had a query, the observation shows as moved
+  once, at the next record. Records already written are not checked again.
+- **`basou board guide` asks for every `manual` observation of a record in
+  one message**: for each key, what the operator can do as it is written
+  (the line to run and where, or the page to open) and what to send back,
+  with a line that answers several keys given once, naming the keys it
+  answers. A board of ten `manual` observations that one query answers had
+  the agent ask ten times. The operator's turns in the guide list them as
+  one item, with each key under it.
+- **`basou board guide` says a milestone is a day on which something
+  happened** (a release, a launch, the start of the work), never a plan or
+  a target date. It said only what was reached, and also that a board moved
+  from another keeps its milestones, which a start among them did not fit.
+  A moved board keeps the milestones it had that happened, and leaves out
+  those that were only planned.
+
+### Fixed
+
+- **The board page says what its per-day time is divided by.** It is the
+  active time over the days from the start to today, both included (the
+  rows of the daily chart), one more than the elapsed days in the tile
+  beside it, so a page showing `Elapsed 105 days` and `Per day 3h 22m` for
+  358h 17m could not be checked by hand. The tile now says `over 106 days,
+  today included`, beside the time a day worked. `docs/spec/board.md`
+  defines it.
+- **`basou board guide` quotes an observation's `Source:` as its command
+  does.** A `github_check` source wrote the check name as it is
+  (`-f check_name=Workers Builds: my-app`), which a shell reads as other
+  words than the command's `-f check_name='Workers Builds: my-app'`. Each
+  argument of a source is now quoted when a shell would read it otherwise,
+  as the command quotes it, and a plain name (`owner/repo`, `quality.yml`,
+  `main`) is written as before, so the sources of existing boards change
+  only where a name needed quoting.
+
 ## 0.72.0 — 2026-10-20
 
 ### Added

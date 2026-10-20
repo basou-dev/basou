@@ -576,7 +576,7 @@ describe("parseRecordInput: the value of each kind of observation", () => {
     expect(errorsOf({ bare: { status: "200", redirects: 11, final_url: "/item" } })).toEqual([
       'observed.bare.value.status: must be a whole number from 100 to 599, the status of a response, received "200"',
       "observed.bare.value.redirects: must be a whole number from 0 to 10, received 11",
-      'observed.bare.value.final_url: must be an absolute http or https URL, received "/item"',
+      'observed.bare.value.final_url: must be an absolute http or https URL with no user, query or fragment, received "/item"',
     ]);
     for (const status of [0, 99, 600, 200.5]) {
       expect(errorsOf({ bare: { status, redirects: 0, final_url: url } })).toEqual([
@@ -684,6 +684,33 @@ describe("parseRecordInput: the value of each kind of observation", () => {
       ]);
     }
     expect(errorsOf({ "site.shop": { ...shopRead, status: 200, ...notRead } })).toHaveLength(2);
+  });
+
+  it("refuses a final_url with a user, a password, a query or a fragment, and takes a port and an escaped '?' in the path", () => {
+    const finalUrlOf = (finalUrl: string) =>
+      errorsOf({ bare: { status: 200, redirects: 0, final_url: finalUrl } });
+    for (const finalUrl of [
+      "https://example.com/login?token=abc",
+      "https://example.com/login?",
+      "https://example.com/page#top",
+      "https://example.com/#",
+      "https://user@example.com/",
+      "https://user:secret@example.com/",
+      "https://:secret@example.com/",
+    ]) {
+      expect(finalUrlOf(finalUrl), finalUrl).toEqual([
+        `observed.bare.value.final_url: must be an absolute http or https URL with no user, query or fragment, received ${JSON.stringify(finalUrl)}`,
+      ]);
+    }
+    for (const finalUrl of [
+      "https://example.com:8443/a/b",
+      "http://127.0.0.1:4400/login",
+      "https://example.com/a%3Fb%23c",
+    ]) {
+      expect(finalUrlOf(finalUrl), finalUrl).toEqual([]);
+    }
+    // A null with its error is taken as before, and so is any answer of a manual one.
+    expect(errorsOf({ bare: null, users: "https://user@example.com/?q#f" })).toEqual([]);
   });
 
   it("refuses negative redirects, and a URL with no // or a control in it, but takes a scheme in capitals", () => {

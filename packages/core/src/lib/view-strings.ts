@@ -978,8 +978,12 @@ export type BoardPageStrings = {
     daysWorked: string;
     claude: string;
     codex: string;
+    /** Under Claude's and Codex's time: each is a union of intervals, not a sum of sessions. */
+    toolUnion: string;
     noCodex: string;
     perDay: string;
+    /** What the time per day is divided by: the days from the start to today, both included. */
+    perDayOver: string;
     perDayWorked: string;
     outputTokens: string;
     withoutTokens: string;
@@ -1072,6 +1076,7 @@ export type BoardPageStrings = {
     head: string;
     lastCommit: string;
     commits: string;
+    files: string;
     uncommitted: string;
     base: string;
     behind: string;
@@ -1183,8 +1188,10 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     daysWorked: "{n} days worked",
     claude: "Claude",
     codex: "Codex",
+    toolUnion: "overlaps counted once, not a sum of sessions",
     noCodex: "no Codex session",
     perDay: "Per day",
+    perDayOver: "over {days} days, today included",
     perDayWorked: "{time} a day worked",
     outputTokens: "Output tokens",
     withoutTokens: "imports that recorded no tokens: {n}",
@@ -1280,6 +1287,7 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     head: "HEAD",
     lastCommit: "Last commit",
     commits: "Commits",
+    files: "Files",
     uncommitted: "Uncommitted",
     base: "Base branch",
     behind: "Behind",
@@ -1391,8 +1399,10 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     daysWorked: "{n} 日に分布",
     claude: "Claude",
     codex: "Codex",
+    toolUnion: "重なりを除いた時間（session ごとの合計ではない）",
     noCodex: "Codex の session なし",
     perDay: "1 日あたり",
+    perDayOver: "今日を含む {days} 日で割った値",
     perDayWorked: "動いた日だけなら {time}",
     outputTokens: "出力トークン",
     withoutTokens: "トークンを記録しなかった取り込み {n}",
@@ -1485,6 +1495,7 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     head: "HEAD",
     lastCommit: "最終 commit",
     commits: "commit 数",
+    files: "ファイル数",
     uncommitted: "未 commit",
     base: "比べる branch",
     behind: "遅れ",

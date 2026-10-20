@@ -20,7 +20,7 @@ import {
  * the section would change for the same repository, so a difference between
  * two measurements can be told apart from a change in the repository.
  */
-export const BOARD_REPOS_METHOD = 2;
+export const BOARD_REPOS_METHOD = 3;
 
 /**
  * One repository the manifest declares, measured where it is checked out.
@@ -49,7 +49,9 @@ export type BoardRepo = {
   commits: number | null;
   /**
    * The files a measure counts in the working tree: tracked, and untracked
-   * but not ignored, that are on disk (a measure's `file_count` of `**`).
+   * but not ignored, that are on disk (a measure's `file_count` of `**`),
+   * less each symlink that leaves the repository, which cannot be told to be
+   * a file without looking outside it.
    */
   files: number | null;
   /**
@@ -360,13 +362,17 @@ export async function measureRepos(
     const worktree = await worktreeOf(path);
     if (!worktree.ok) fail("files", `the working tree ${worktree.reason}`);
     else {
-      // As a file_count of "**" does: a file that cannot be followed first,
-      // then a directory git could not list in full.
+      // As a file_count of "**" does, less each symlink that leaves the
+      // repository (one an agent's instruction file may be, and which no
+      // exclude can leave out of a built-in count): a path that cannot be
+      // read first, then a directory git could not list in full.
+      const inside = [...worktree.scope.entries]
+        .filter(([, entry]) => entry.kind !== "outside")
+        .map(([p]) => p);
       const blocked =
-        blockedAmong(worktree.scope, [...worktree.scope.entries.keys()]) ??
-        unreadReaching(worktree.scope, () => true);
+        blockedAmong(worktree.scope, inside) ?? unreadReaching(worktree.scope, () => true);
       if (blocked !== undefined) fail("files", blocked);
-      else repo.files = worktree.scope.entries.size;
+      else repo.files = inside.length;
     }
 
     const submodule = mayFetch && !partial ? await hasSubmodule(cwd) : false;

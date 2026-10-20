@@ -704,7 +704,8 @@ describe("boardPage", () => {
     await place(A, v3);
     const page = await boardPage(records);
     if (page.status !== "ok") throw new Error(page.why);
-    const { files: _files, ...drawn } = repo;
+    // Its files too, which a record of every version holds.
+    const drawn = repo;
     expect(page.board.repos).toEqual({
       record_version: 3,
       base_measured: true,
@@ -719,12 +720,15 @@ describe("boardPage", () => {
       ],
     });
     // A record of version 1 or 2 counted the commits behind as behind_main,
-    // and measured no base, ahead or fetch time.
+    // and measured no base, ahead or fetch time. Files not measured are null.
     for (const version of [1, 2]) {
       const older = record({ record_version: version });
       older.measure = {
         ...older.measure,
-        repos: [{ ...repo, behind_main: 4 }],
+        repos: [
+          { ...repo, behind_main: 4 },
+          { ...repo, path: "../lib", files: null, behind_main: null },
+        ],
       } as typeof older.measure;
       await place(A, older);
       const read = await boardPage(records);
@@ -732,7 +736,18 @@ describe("boardPage", () => {
       expect(read.board.repos).toEqual({
         record_version: version,
         base_measured: false,
-        list: [{ ...drawn, base: null, behind: 4, ahead: null, fetched_at: null }],
+        list: [
+          { ...drawn, base: null, behind: 4, ahead: null, fetched_at: null },
+          {
+            ...drawn,
+            path: "../lib",
+            files: null,
+            base: null,
+            behind: null,
+            ahead: null,
+            fetched_at: null,
+          },
+        ],
       });
     }
     // None, or not in the shape of its version: drawn as none, the rest of the record drawn.
@@ -741,6 +756,7 @@ describe("boardPage", () => {
       [3, undefined],
       [3, "x"],
       [3, [{ ...repo, behind_main: 4 }]],
+      [3, [{ ...v3Repo, files: "30" }]],
       [2, [v3Repo]],
       [
         1,

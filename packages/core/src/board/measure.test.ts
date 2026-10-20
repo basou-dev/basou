@@ -1557,17 +1557,56 @@ describe("measureBoard: the repos section", () => {
   });
 
   it.skipIf(!POSIX)(
-    "refuses a symlink that leaves the repository as a file_count of '**' does",
+    "leaves out of files a symlink that leaves the repository, which a file_count of '**' is not measured for",
     async () => {
+      // Instruction files kept in another repo and linked in, tracked and not.
+      await mkdir(join(root, "anchor", "agents", "app"), { recursive: true });
+      await writeFile(join(root, "anchor", "agents", "app", "AGENTS.md"), "x\n");
       const dir = await repo("app", { "a.txt": "1\n" });
-      await symlink("/", join(dir, "out.md"));
+      await mkdir(join(dir, ".github"));
+      await mkdir(join(dir, "docs"));
+      await symlink("../anchor/agents/app/AGENTS.md", join(dir, "AGENTS.md"));
+      await symlink("AGENTS.md", join(dir, "CLAUDE.md"));
+      await symlink("../AGENTS.md", join(dir, ".github", "copilot-instructions.md"));
+      // One that ends at a file inside is that file, and counted.
+      await symlink("../a.txt", join(dir, "docs", "a.md"));
+      await commit(dir, {}, "links");
+      await symlink("AGENTS.md", join(dir, "GEMINI.md"));
       const all = { id: "all", kind: "file_count", repo: "app", include: ["**"], unit: "files" };
-      const m = await measure(declare([all]), NOW, ["app"]);
-      expect(m.repos[0]?.files).toBeNull();
+      const linked = [".github/copilot-instructions.md", "AGENTS.md", "CLAUDE.md", "GEMINI.md"];
+      const rest = { ...all, id: "rest", exclude: linked };
+      const m = await measure(declare([all, rest]), NOW, ["app"]);
+      // a.txt and docs/a.md.
+      expect(m.repos[0]?.files).toBe(2);
+      expect(m.measures.rest?.value).toBe(2);
+      // A measure the board declares is still not measured for one, and can exclude it.
+      expect(m.measures.all?.value).toBeNull();
       expect(m.not_found).toEqual([
-        { at: "repos[app].files", reason: "'out.md' is a symlink to outside the repository" },
-        { at: "measures.all", reason: "'out.md' is a symlink to outside the repository" },
+        {
+          at: "measures.all",
+          reason: expect.stringMatching(/^'[^']+' is a symlink to outside the repository$/),
+        },
       ]);
+    },
+  );
+
+  it.skipIf(!POSIX || ROOT_USER)(
+    "still does not count the files when a path in them cannot be read, a symlink to outside or not",
+    async () => {
+      const dir = await repo("app", { "a.txt": "1\n", "locked/b.ts": "1\n" });
+      await symlink("/", join(dir, "AGENTS.md"));
+      await chmod(join(dir, "locked"), 0o000);
+      try {
+        const m = await measureRepos("app");
+        expect(m.repos[0]?.files).toBeNull();
+        expect(m.not_found).toContainEqual({
+          at: "repos[app].files",
+          reason: "'locked/b.ts' could not be read (EACCES)",
+        });
+        expect(m.not_found.map((n) => n.reason).join("\n")).not.toContain("AGENTS.md");
+      } finally {
+        await chmod(join(dir, "locked"), 0o755);
+      }
     },
   );
 
@@ -1965,7 +2004,7 @@ describe("measureBoard: the repos section", () => {
     const declaration = declare([], {}, ["app"]);
     const first = await measure(declaration, NOW, ["app"]);
     expect(first.methods).toEqual({
-      repos: 2,
+      repos: 3,
       trail: 2,
       integrity: 2,
       review_gaps: 2,
@@ -3463,7 +3502,7 @@ describe("measureBoard: the integrity section", () => {
     const declaration = declare([]);
     const first = await measure(declaration);
     expect(first.methods).toEqual({
-      repos: 2,
+      repos: 3,
       trail: 2,
       integrity: 2,
       review_gaps: 2,
@@ -3723,7 +3762,7 @@ describe("measureBoard: the review_gaps section", () => {
     );
     const none = await measure(declaration);
     expect(none.methods).toEqual({
-      repos: 2,
+      repos: 3,
       trail: 2,
       integrity: 2,
       review_gaps: 2,
@@ -3843,7 +3882,7 @@ describe("measureBoard: the portfolio section", () => {
     await register(`workspaces:\n  - { path: ${master} }\n`);
     const bare = await measure(declaration);
     expect(bare.methods).toEqual({
-      repos: 2,
+      repos: 3,
       trail: 2,
       integrity: 2,
       review_gaps: 2,

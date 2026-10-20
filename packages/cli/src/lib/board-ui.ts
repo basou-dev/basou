@@ -641,16 +641,24 @@ export const BOARD_HTML = `<!doctype html>
       ]);
     };
     var union = e.active_ms.union;
+    // Over the daily rows, today's included (one more than the days elapsed),
+    // so that the first day is a day; the sub-text names the divisor.
     var perDay = union === null || !e.period_days ? null : union / e.period_days;
     var perWorked = union === null || !e.active_days ? null : union / e.active_days;
+    var perDaySub = [
+      perDay === null ? null : fill(S.effort.perDayOver, { days: num(e.period_days) }),
+      perWorked === null ? null : fill(S.effort.perDayWorked, { time: hm(perWorked) })
+    ].filter(function (part) { return part !== null; }).join(DOT);
     var tokens = e.sessions_without_tokens ? fill(S.effort.withoutTokens, { n: e.sessions_without_tokens }) : null;
+    // Each tool's time is the union of its sessions' intervals, as Active is.
+    var unionOf = function (ms) { return ms === null ? null : S.effort.toolUnion; };
     var tiles = el('div', { class: 'tiles' }, [
       tile(S.effort.elapsed, e.elapsed_days === null ? S.effort.notMeasured : fill(S.effort.days, { days: e.elapsed_days }),
         e.time_zone === null ? fill(S.effort.from, { date: e.start }) : fill(S.effort.fromZone, { date: e.start, zone: e.time_zone })),
       tile(S.effort.active, hm(union), e.active_days === null ? null : fill(S.effort.daysWorked, { n: e.active_days })),
-      tile(S.effort.claude, hm(e.active_ms.claude), null),
-      tile(S.effort.codex, e.active_ms.codex === null && union !== null ? S.effort.noCodex : hm(e.active_ms.codex), null),
-      tile(S.effort.perDay, hm(perDay), perWorked === null ? null : fill(S.effort.perDayWorked, { time: hm(perWorked) })),
+      tile(S.effort.claude, hm(e.active_ms.claude), unionOf(e.active_ms.claude)),
+      tile(S.effort.codex, e.active_ms.codex === null && union !== null ? S.effort.noCodex : hm(e.active_ms.codex), unionOf(e.active_ms.codex)),
+      tile(S.effort.perDay, hm(perDay), perDaySub),
       tile(S.effort.outputTokens, num(e.output_tokens), tokens)
     ]);
     var commits = e.commits === null ? S.effort.notMeasured : e.commits.map(function (c) {
@@ -887,8 +895,8 @@ export const BOARD_HTML = `<!doctype html>
   // measured no base, ahead or fetch time (drawn as '-') and held the
   // commits behind as behind_main.
   function reposTable(list, missing, older) {
-    var labels = [S.live.repo, S.live.branch, S.live.head, S.live.lastCommit, S.live.commits, S.live.uncommitted, S.live.base, S.live.behind, S.live.ahead, S.live.fetchedAt];
-    var numeric = [4, 5, 7, 8];
+    var labels = [S.live.repo, S.live.branch, S.live.head, S.live.lastCommit, S.live.commits, S.live.files, S.live.uncommitted, S.live.base, S.live.behind, S.live.ahead, S.live.fetchedAt];
+    var numeric = [4, 5, 6, 8, 9];
     var head = el('tr', null, labels.map(function (label, i) { return el('th', { class: numeric.indexOf(i) !== -1 ? 'n' : '', text: label }); }));
     var rows = list.map(function (r) {
       var at = 'repos[' + r.path + ']';
@@ -906,6 +914,7 @@ export const BOARD_HTML = `<!doctype html>
         el('td', { text: value('head', r.head, function (h) { return h.slice(0, 7); }) }),
         el('td', { text: value('last_commit', r.last_commit, when) }),
         el('td', { class: 'n', text: num(r.commits) }),
+        el('td', { class: 'n', text: num(r.files) }),
         el('td', { class: 'n', text: num(r.uncommitted) }),
         el('td', { text: unmeasured('base', r.base, String) }),
         el('td', { class: 'n', text: value(older ? 'behind_main' : 'behind', r.behind, num) }),

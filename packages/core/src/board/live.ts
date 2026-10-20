@@ -155,6 +155,7 @@ export type BoardLivePage = {
     branch: string | null;
     last_commit: string | null;
     commits: number | null;
+    files: number | null;
     uncommitted: number | null;
     base: string | null;
     behind: number | null;
@@ -194,6 +195,7 @@ export function boardLivePage(title: string, m: BoardLiveMeasurement): BoardLive
       branch: r.branch,
       last_commit: r.last_commit,
       commits: r.commits,
+      files: r.files,
       uncommitted: r.uncommitted,
       base: r.base,
       behind: r.behind,

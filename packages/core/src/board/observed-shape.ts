@@ -66,11 +66,15 @@ function isPlainText(value: unknown): value is string {
   );
 }
 
-function isAbsoluteHttpUrl(value: unknown): boolean {
+// An absolute http or https URL with no user, query or fragment: what a URL
+// behind a sign-in carries there (a token signed anew each time) would move
+// the value at every record, and put the token in a file kept in git.
+function isPlainHttpUrl(value: unknown): boolean {
   if (typeof value !== "string" || hasControl(value) || /\s/u.test(value)) return false;
-  if (!/^https?:\/\//i.test(value)) return false;
+  if (!/^https?:\/\//i.test(value) || /[?#]/.test(value)) return false;
   try {
-    return new URL(value).hostname !== "";
+    const url = new URL(value);
+    return url.hostname !== "" && url.username === "" && url.password === "";
   } catch {
     return false;
   }
@@ -177,10 +181,10 @@ function httpValueProblems(
       message: `must be a whole number from 0 to ${BOARD_HTTP_MAX_REDIRECTS}, ${received(redirects)}`,
     });
   }
-  if (Object.hasOwn(value, "final_url") && !isAbsoluteHttpUrl(finalUrl)) {
+  if (Object.hasOwn(value, "final_url") && !isPlainHttpUrl(finalUrl)) {
     problems.push({
       path: ["final_url"],
-      message: `must be an absolute http or https URL, ${received(finalUrl)}`,
+      message: `must be an absolute http or https URL with no user, query or fragment, ${received(finalUrl)}`,
     });
   }
   // The body is read only when the status is 2xx. With a status that is not

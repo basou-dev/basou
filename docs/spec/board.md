@@ -11,7 +11,7 @@
 >
 > This page describes the shapes of basou 0.71.0: `board_version` 3 and
 > `record_version` 3, with what `basou board record` refuses of an
-> observation's value as of basou 0.72.0. When a later release changes a
+> observation's value as of basou 0.73.0. When a later release changes a
 > shape, it raises the version and this page with it.
 
 This page says what each key of these shapes holds, which keys are required,
@@ -251,7 +251,8 @@ previous record and usable by a ratio or a total.
 - A symlink is followed when it ends at a file inside the repository. One
   that ends nowhere or at a directory is not a file and is left out, as a
   submodule is; one that leaves the repository makes any measure that matches
-  it not measured.
+  it not measured (a repo's built-in `files` leaves it out instead, see
+  [`repos`](#52-repos)).
 - basou measures with git and reads files, with no shell. It does not fetch,
   write a lock or start a file system monitor.
 
@@ -525,10 +526,11 @@ never part of a command.
   U+200B to U+200F, U+2028 to U+202E, U+2060 to U+2069, U+FEFF); a number of
   a kind above that is not
   a whole number from 0 to 9007199254740991; and an `http` value out of its
-  shape ([below](#http)). What a string says is not held to a grammar (a
-  version's, or the words GitHub uses), so a new word is never refused. A
-  `manual` value, and a null, are not checked. Only a board that declares
-  observations has them checked ([3.2](#32-observed)).
+  shape ([below](#http)), which from basou 0.73.0 includes a `final_url`
+  with a user, a query or a fragment. What a string says is not held to a
+  grammar (a version's, or the words GitHub uses), so a new word is never
+  refused. A `manual` value, and a null, are not checked. Only a board that
+  declares observations has them checked ([3.2](#32-observed)).
 
 The keys:
 
@@ -587,14 +589,19 @@ The value recorded:
 |---|---|---|
 | `status` | always | a whole number from 100 to 599: the status of the last response |
 | `redirects` | always | a whole number from 0 to 10: how many redirects led to it |
-| `final_url` | always | an absolute `http://` or `https://` URL: the URL it ended at |
+| `final_url` | always | an absolute `http://` or `https://` URL with no user, query or fragment: the URL it ended at, as its scheme, its host (with a port that is not the scheme's own) and its path |
 | `words` | with `words` | a list of `true` or `false`, one for each word, in the order declared: whether the body holds it |
 | `count` | with `count_pattern` | a whole number from 0 to 9007199254740991: how many times it matches the body (0 when it does not) |
 | `capture` | with `capture_pattern` | a string: what the first group holds in the first match, as it is, spaces and all; null when nothing matches or the group takes no part |
 
 From basou 0.72.0, record refuses an `http` value with a key the
 observation does not declare a read of, or one it declares left out, and a
-read that is not null when the status is not 2xx.
+read that is not null when the status is not 2xx. From basou 0.73.0, it
+refuses a `final_url` that holds a `?` or a `#`, or a user name or a
+password, and the guide's command leaves them out of the URL curl ended at:
+behind a sign-in (a redirect to a login page) they can carry a token made
+anew each time, which would show the observation as moved at every record
+and put the token in a record kept in git.
 
 - **A 4xx or a 5xx is a value**, not an observation not made: the status is
   what was observed.
@@ -608,13 +615,13 @@ read that is not null when the status is not 2xx.
   fails (the name does not resolve, TLS fails, 20 seconds pass, or it takes
   more than 10 redirects), when its status is not one of an HTTP response
   (100 to 599, such as a server answering 600, which curl prints as it is),
-  or when what curl left cannot be read. From basou 0.72.0 the guide's
-  command prints the whole entry for the record's input on one line, with
-  what a terminal would act on or hide escaped: the value, or the null and
-  the error. It gives the null,
-  rather than count, at an empty match the declaration could not refuse: a
-  `count_pattern` that matches the empty string only next to some text, as
-  `\b` or a lookaround can.
+  when the URL it ended at is not an `http://` or `https://` URL (from
+  basou 0.73.0), or when what curl left cannot be read. From basou 0.72.0
+  the guide's command prints the whole entry for the record's input on one
+  line, with what a terminal would act on or hide escaped: the value, or the
+  null and the error. It gives the null, rather than count, at an empty
+  match the declaration could not refuse: a `count_pattern` that matches the
+  empty string only next to some text, as `\b` or a lookaround can.
 
 The keys of the value are basou's words, so the check of the record's input
 for the names of other workspaces ([3.1](#31-how-it-is-checked)) looks at
@@ -782,9 +789,11 @@ A mapping from an observation's key to what was found:
   It is refused where it is not a JSON value: it nests more than 100 deep,
   holds a number too large to be held, or has a key named `__proto__`. From
   basou 0.72.0, when the board declares observations, it is refused too where
-  it is not in the shape of its kind ([2.7](#27-observe)); a `manual` value
-  and a null are not checked. With none declared, the keys of `observed` are
-  free and their values are not checked. A refusal says where in the value
+  it is not in the shape of its kind ([2.7](#27-observe)), and from basou
+  0.73.0 where an `http` value's `final_url` has a user, a query or a
+  fragment ([`http`](#http)); a `manual` value and a null are not checked.
+  With none declared, the keys of `observed` are free and their values are
+  not checked. A refusal says where in the value
   (`observed["site.top"].value.status`); one of what a key holds shows what
   it received, as up to 60 characters of its JSON (an escape counted as one)
   with what a terminal would act on or hide escaped. A value that is not a
@@ -975,7 +984,9 @@ is raised only when the same input would give a value of it another way,
 never for an added field or a new key of the declaration. A method that
 differs from the previous record's fires the axis review's trigger (e), and
 the values of that section in `diff` are marked `method_changed`. In 0.71.0
-they are `portfolio` 1 and every other section 2.
+they are `portfolio` 1 and every other section 2. From basou 0.73.0 `repos`
+is 3: its `files` leaves out a symlink that leaves the repository
+([5.2](#52-repos)).
 
 ### 5.2 `repos`
 
@@ -989,13 +1000,22 @@ A list, in the manifest's order:
 | `branch` | the branch HEAD is on |
 | `last_commit` | HEAD's committer time as git recorded it: ISO 8601 with its offset |
 | `commits` | the commits reachable from HEAD, merges and all |
-| `files` | the files a measure sees in the working tree (tracked, and untracked but not ignored, on disk): a `file_count` of `**` |
+| `files` | the files a measure sees in the working tree (tracked, and untracked but not ignored, on disk), as a `file_count` of `**` counts them, less each symlink that leaves the repository (below) |
 | `uncommitted` | the paths `git status` names: each untracked file on its own, not its directory, and a rename as the two paths it touches |
 | `base` | the branch of origin HEAD is compared with, as `origin/<branch>`: the one `refs/remotes/origin/HEAD` names, or `origin/main` when it names none |
 | `behind` | the commits on `base` that HEAD does not have, as of the last fetch |
 | `ahead` | the commits HEAD has that `base` does not, as of the last fetch |
 | `fetched_at` | when this worktree's `FETCH_HEAD` was last written, in UTC (below) |
 
+- **`files` leaves out a symlink that leaves the repository**, such as an
+  agent's instruction file linked in from another repo (tracked, or
+  untracked and not ignored): what it ends at cannot be told to be a file without looking
+  outside the repository, and a built-in value takes no `exclude`. A
+  `file_count` of `**` is not measured for one. A path that cannot be read,
+  or a directory git could not list in full, still makes `files` null, with
+  the reason at `repos[<path>].files`. Up to `repos` method 2 (before basou
+  0.73.0), such a symlink made `files` null too, with the reason `'<path>' is
+  a symlink to outside the repository`.
 - **An untracked directory counts every file in it**, in `files` and in
   `uncommitted` alike, and so does any measure whose globs reach it: what a
   repo holds but does not own (a build's output, a tool's cache) is counted
@@ -1109,7 +1129,7 @@ counts.
 |---|---|
 | `start` | the declared `start` |
 | `time_zone` | the declared time zone or this host's, as `Intl` names it (a declared `utc` is held as `UTC`; the record's `declaration` keeps it as written) |
-| `elapsed_days` | the days from the start to today. **Not in the digest** |
+| `elapsed_days` | the days from the start to today: today less the start, 0 on the first day. **Not in the digest** |
 | `active_ms` | `{ union, claude, codex }`: active time in milliseconds, every session's intervals merged, Claude Code's among themselves, and Codex's among themselves |
 | `output_tokens` | the output tokens of the sessions that recorded them (reasoning not included) |
 | `sessions_without_tokens` | the Claude Code and Codex imports that recorded no tokens, so that `output_tokens` is a floor while this is above 0 |
@@ -1123,6 +1143,10 @@ counts.
   sessions cannot be read whole.
 - `active_ms.codex` is null **with no entry** when there is no Codex session
   at all, where 0 is a Codex that did nothing.
+- **Per day**, on the board page, is `active_ms.union` divided by the rows of
+  `daily`: the days from the start to today, both included, which is one more
+  than `elapsed_days` (on the first day, the time so far is the day's). The
+  page says what it divided by.
 - A repo's `commits` is null, with an entry at `effort.commits[<path>]`, when
   its history is not known.
 

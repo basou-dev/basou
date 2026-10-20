@@ -285,7 +285,10 @@ describe("boardGuide: a board declared", () => {
     expect(guide).toContain(
       "Only the operator can make this one: count the users in production, read only",
     );
-    expect(guide).toContain("- Observing `users`: count the users in production, read only");
+    expect(guide).toContain(
+      "- Making the manual observations, asked for together in one message:\n  - `users`: count the users in production, read only\n",
+    );
+    // A plain name is given as it is, as before.
     expect(guide).toContain(
       "Source: `gh run list --repo owner/name --workflow quality.yml --branch main`.",
     );
@@ -294,10 +297,39 @@ describe("boardGuide: a board declared", () => {
   it("says how to ask for a manual observation, and what the source says when the operator hands it over", () => {
     const guide = boardGuide(guideInput());
     expect(guide).toContain(
-      "Ask for one thing they can do as it is written: the line to run and where to run it, or the page to open, and what to send back.",
+      "Ask once, in one message, for all the manual observations of this record: for each key, what they can do as it is written (the line to run and where to run it, or the page to open) and what to send back; when one line answers several keys, give it once and say which keys it answers.",
     );
+    expect(guide).not.toContain("Ask for one thing");
     expect(guide).toContain(
       "When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.",
+    );
+  });
+
+  it("asks for every manual observation in one message, and lists them as one turn of the operator's", () => {
+    const withManual = (observe: Record<string, unknown>[]) =>
+      boardGuide(guideInput({ board: declared(httpDeclaration(observe)) }));
+    const two = withManual([
+      { key: "users", kind: "manual", how: "count the users in production" },
+      { key: "site", kind: "http", url: "https://example.com/" },
+      { key: "orders", kind: "manual", how: "count the orders today" },
+    ]);
+    const turns = two.slice(two.indexOf("## The operator's turns in this work"));
+    expect(turns).toContain(
+      [
+        "- Approving a milestone before it is added to board.yaml.",
+        "- Making the manual observations, asked for together in one message:",
+        "  - `users`: count the users in production",
+        "  - `orders`: count the orders today",
+        "- A gate of step 9 that does not pass.",
+      ].join("\n"),
+    );
+    expect(two.split("- Making the manual observations")).toHaveLength(2);
+    expect(two).not.toContain("- Observing `");
+    expect(two).toContain("Ask once, in one message, for all the manual observations");
+    const none = withManual([{ key: "site", kind: "http", url: "https://example.com/" }]);
+    expect(none).not.toContain("manual observations");
+    expect(none).toContain(
+      "- Approving a milestone before it is added to board.yaml.\n- A gate of step 9 that does not pass.",
     );
   });
 
@@ -621,7 +653,7 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
         }),
       );
     const holds =
-      "under effort.milestones, each `{ date, label, ref }`: only what was reached (a release, a launch), with `ref` saying where it can be checked (a tag and its commit, or a decision id in full). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
+      "under effort.milestones, each `{ date, label, ref }`: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, each with `ref` saying where it can be checked (a tag and its commit, or a decision id in full). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
     expect(boardGuide(guideInput())).toContain(`- Milestones: none declared ${holds}`);
     expect(boardGuide(guideInput())).toContain(
       "- Approving a milestone before it is added to board.yaml.",
@@ -629,9 +661,13 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
     expect(withMilestones(0)).toContain(`- Milestones: none declared ${holds}`);
     expect(withMilestones(1)).toContain(`- Milestones: 1 milestone declared ${holds}`);
     expect(withMilestones(2)).toContain(`- Milestones: 2 milestones declared ${holds}`);
-    expect(boardGuide(guideInput({ board: { status: "undeclared" } }))).toContain(
-      "Declare under `effort.milestones` the days to mark on the period and effort chart: only what was reached, each with a `ref` saying where it can be checked; a board moved from another keeps its milestones there.",
+    const undeclared = boardGuide(guideInput({ board: { status: "undeclared" } }));
+    expect(undeclared).toContain(
+      "Declare under `effort.milestones` the days to mark on the period and effort chart: only days on which something happened (a release, a launch, the start of the work), each with a `ref` saying where it can be checked, never a plan or a target date; a board moved from another keeps there the milestones it had that happened, and leaves out any that were only planned.",
     );
+    // Neither says only what was reached: the start of the work is a milestone too.
+    expect(boardGuide(guideInput())).not.toContain("only what was reached");
+    expect(undeclared).not.toContain("only what was reached");
   });
 
   it("keeps other projects out of what the agent writes, and says the portfolio section is basou's own", () => {
@@ -948,10 +984,13 @@ describe("boardGuide: an http observation", () => {
     expect(guide).toContain("- `http`: a GET, following up to 10 redirects, with no `-f`");
     expect(guide).toContain("not line by line as a measure's `pattern` is");
     expect(guide).toContain(
+      "The value holds `status`, `redirects` and `final_url` (the URL it ended at, with no user, query or fragment: they can carry a token that changes each time, and record refuses a `final_url` that has one)",
+    );
+    expect(guide).toContain(
       "When the status is not 2xx the body is not read, and each read is a null, not a list of nulls",
     );
     expect(guide).toContain(
-      "more than 10 redirects: exit 47), its status is not one of an HTTP response (100 to 599, such as a server answering 600), or the body cannot be read",
+      "more than 10 redirects: exit 47), its status is not one of an HTTP response (100 to 599, such as a server answering 600), the URL it ended at is not an http or https one, or the body cannot be read",
     );
     expect(guide).toContain(
       "record refuses another, such as a number given as a string, a string with a space or a line break at either end, or an `http` status that is not a response's (100 to 599)",
@@ -1011,6 +1050,9 @@ describe("boardGuide: an http observation, run", () => {
     server = createServer((req, res) => {
       const url = req.url ?? "";
       if (url === "/moved") res.writeHead(301, { location: "/body/item" }).end();
+      else if (url === "/signin") {
+        res.writeHead(302, { location: "/login?next=%2Fshop&token=a1b2c3" }).end();
+      } else if (url.startsWith("/login?")) res.writeHead(200).end("sign in");
       else if (url.startsWith("/loop")) {
         res.writeHead(302, { location: `/loop${(url.length % 50) + 1}` }).end();
       } else if (url === "/empty") res.writeHead(204).end();
@@ -1259,6 +1301,70 @@ describe("boardGuide: an http observation, run", () => {
     });
   });
 
+  it("keeps of the URL it ended at only the scheme, the host and the path: a sign-in's token is left out", async () => {
+    const get = await observe([{ key: "shop", kind: "http", url: SHOP, words: ["sign in"] }]);
+    const entry = await get("shop", "/signin");
+    expect(entry.value).toEqual({
+      status: 200,
+      redirects: 1,
+      final_url: `${origin}/login`,
+      words: [true],
+    });
+    expect(JSON.stringify(entry)).not.toContain("a1b2c3");
+  });
+
+  it("leaves a user, a query and a fragment out of the URL curl printed, and gives no value for one that is no http or https URL", async () => {
+    const guide = boardGuide(
+      guideInput({
+        anchor: dir,
+        board: declared(httpDeclaration([{ key: "shop", kind: "http", url: SHOP }])),
+      }),
+    );
+    const write = blocksIn(guide).find((b) => b.includes("printf '%s\\n' '")) as string;
+    expect((await run(write)).out).toBe("exit=0\n");
+    const file = /"\$W\/(http-read-[0-9a-f]{12}\.cjs)"/.exec(write)?.[1] as string;
+    const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
+    // The script on what curl would leave: exit 0 and this status line.
+    const read = async (meta: string) => {
+      await writeFile(join(work, "http-x.exit"), "0\n");
+      await writeFile(join(work, "http-x.meta"), `${meta}\n`);
+      const out = execFileSync(
+        "node",
+        [join(work, file), "--", join(work, "http-x"), SHOP, "", ""],
+        {
+          encoding: "utf8",
+        },
+      );
+      return JSON.parse(out) as { value: { final_url?: string } | null; error?: string };
+    };
+    for (const [meta, finalUrl] of [
+      [
+        "200 0 https://user:secret@example.com:8443/a/b%3Fc?token=x#frag",
+        "https://example.com:8443/a/b%3Fc",
+      ],
+      ["200 1 https://example.com:443/login?state=1", "https://example.com/login"],
+      ["301 10 http://example.com#top", "http://example.com/"],
+    ] as const) {
+      const entry = await read(meta);
+      expect(entry.value?.final_url, meta).toBe(finalUrl);
+      const o = httpDeclaration([{ key: "shop", kind: "http", url: SHOP }])
+        .observe[0] as BoardObserve;
+      expect(observedValueProblems(o, entry.value)).toEqual([]);
+    }
+    for (const meta of [
+      "200 0 not a url",
+      "200 0 /login",
+      "200 0 ftp://example.com/x?token=secret",
+    ]) {
+      const entry = await read(meta);
+      expect(entry, meta).toMatchObject({
+        value: null,
+        error: "the URL curl ended at is not an absolute http or https URL",
+      });
+      expect(JSON.stringify(entry)).not.toContain("secret");
+    }
+  });
+
   it("gives no value when the count_pattern matches an empty string the declaration could not see", async () => {
     const get = await observe([{ key: "edge", kind: "http", url: SHOP, count_pattern: "\\b" }]);
     bodies.set("ab", "a b");
@@ -1326,7 +1432,7 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
       "An empty line: the head commit of `main` has no check run named `Workers Builds: app`.",
     );
     expect(deploy).toContain(
-      "Source: `gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app`.",
+      "Source: `gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name='Workers Builds: app'`.",
     );
     // A name with a backquote is still Markdown code as it is, in the prose as in the source.
     const odd = guide.slice(guide.indexOf("#### `odd` (github_check)"), guide.indexOf("### 4."));
@@ -1337,14 +1443,14 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
       `the head commit of \`release/1.x\` has no check run named \`\`${ODD_CHECK}\`\`.`,
     );
     expect(odd).toContain(
-      `Source: \`\`gh api -X GET repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name=${ODD_CHECK}\`\`.`,
+      `Source: \`\`gh api -X GET repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name='${ODD_CHECK}'\`\`.`,
     );
     const observed = templateIn(guide).observed as Record<string, { source: string }>;
     expect(observed.deploy?.source).toBe(
-      "gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name=Workers Builds: app",
+      "gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name='Workers Builds: app'",
     );
     expect(observed.odd?.source).toBe(
-      `gh api -X GET repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name=${ODD_CHECK}`,
+      `gh api -X GET repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name='${ODD_CHECK}'`,
     );
   });
 
@@ -1393,6 +1499,74 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
           "",
         ].join("\n"),
       );
+      await expect(readdir(dir)).resolves.toEqual(["bin"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives as the source the words the command gives gh, quoted only where a shell would read a name otherwise", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "basou-board-source-"));
+    try {
+      const bin = join(dir, "bin");
+      await mkdir(bin);
+      // A gh that prints each argument it is given on a line of its own.
+      await writeFile(
+        join(bin, "gh"),
+        '#!/bin/sh\nfor a in "$@"; do printf \'[%s]\\n\' "$a"; done\n',
+        {
+          mode: 0o755,
+        },
+      );
+      const observe = [
+        { key: "deploy", kind: "github_check", repo: "o/n", check: "Workers Builds: my-app" },
+        { key: "odd", kind: "github_check", repo: "o/n.js", check: ODD_CHECK, branch: "a/b" },
+        { key: "plain", kind: "github_check", repo: "o/n", check: "build" },
+        { key: "ci", kind: "github_ci", repo: "o/n", workflow: "quality.yml", branch: "rel/1.x" },
+        { key: "rel", kind: "github_release", repo: "o/n" },
+        { key: "iss", kind: "github_open_issues", repo: "o/n" },
+        { key: "prs", kind: "github_open_prs", repo: "o/n" },
+      ];
+      const guide = boardGuide(
+        guideInput({ anchor: dir, board: declared(httpDeclaration(observe)) }),
+      );
+      const sources = templateIn(guide).observed as Record<string, { source: string }>;
+      // A plain name reads as it did before.
+      expect(sources.plain?.source).toBe(
+        "gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name=build",
+      );
+      expect(sources.ci?.source).toBe(
+        "gh run list --repo o/n --workflow quality.yml --branch rel/1.x",
+      );
+      expect(sources.deploy?.source).toBe(
+        "gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='Workers Builds: my-app'",
+      );
+      const words = (line: string) =>
+        execFileSync("sh", ["-c", line], {
+          cwd: dir,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+          encoding: "utf8",
+        })
+          .split("\n")
+          .filter((w) => w.startsWith("["));
+      // Run as a shell would, each source asks gh what the command asks it,
+      // the command going on with what it reads off the answer.
+      const blocks = blocksIn(guide).filter((b) => b.startsWith("gh "));
+      expect(blocks).toHaveLength(observe.length);
+      observe.forEach((o, i) => {
+        const source = sources[o.key]?.source as string;
+        const asked = words(blocks[i] as string);
+        expect(words(source), o.key).toEqual(asked.slice(0, words(source).length));
+        expect(words(source).length, o.key).toBeGreaterThan(3);
+      });
+      expect(words(sources.deploy?.source as string)).toEqual([
+        "[api]",
+        "[-X]",
+        "[GET]",
+        "[repos/o/n/commits/heads/main/check-runs]",
+        "[-f]",
+        "[check_name=Workers Builds: my-app]",
+      ]);
       await expect(readdir(dir)).resolves.toEqual(["bin"]);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -1482,13 +1656,13 @@ describe("boardGuide: what a board declares, as code and escaped as the template
     );
     expect(guide).toContain(`How the latest check run named \`${shownCheck}\` on the head commit`);
     expect(guide).toContain(
-      `Source: \`gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name=${shownCheck}\`.`,
+      `Source: \`gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='${shownCheck}'\`.`,
     );
     expect(guide).toContain("Only the operator can make this one: count\\u200fthem");
     // The template says the same, and holds the name itself once read.
-    const source = `gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name=${check}`;
+    const source = `gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='${check}'`;
     expect(guide).toContain(
-      `"source":"gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name=${shownCheck}"`,
+      `"source":"gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='${shownCheck}'"`,
     );
     expect((templateIn(guide).observed as Record<string, { source: string }>).deploy?.source).toBe(
       source,
@@ -1568,10 +1742,10 @@ describe("boardGuide: every text a board or its records give, escaped as the tem
       "- `core` C\\u200d: a\\u2062",
       "  - mind: ln\\u061c",
       "How the latest check run named `c\\u2062` on the head commit",
-      "check_name=c\\u2062`.",
+      "check_name='c\\u2062'`.",
       "- mind: on\\ufeff",
       "Only the operator can make this one: count\\u061c",
-      "- Observing `users`: count\\u061c",
+      "  - `users`: count\\u061c",
     ]) {
       expect(guide, line).toContain(line);
     }
