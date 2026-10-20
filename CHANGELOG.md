@@ -44,8 +44,8 @@ All notable changes to **basou** are recorded here. The project follows
 - **`basou board guide` says what each kind of observation gives once**, before
   the observations, and each observation gives only what it looks at, its
   command and its source. A board of 39 `http` observations, each with two
-  words and a `count_pattern`, had a guide of 143,708 bytes; it is now
-  70,241.
+  words and a `count_pattern`, had a guide of 143,708 bytes in one workspace;
+  it is now 70,849 (the bytes vary with the length of the workspace's path).
 
 ## 0.71.2 — 2026-10-19
 
