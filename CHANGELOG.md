@@ -14,7 +14,8 @@ All notable changes to **basou** are recorded here. The project follows
   value. Now, on a board that declares observations, a string of
   `npm_version`, `github_release`, `github_ci`, `github_check` or
   `page_version` must be non-empty, with no white space at either end and no
-  control character; a count of `github_open_issues` or `github_open_prs` a
+  control character or one a terminal hides (a zero-width or direction mark,
+  a line separator, a byte order mark); a count of `github_open_issues` or `github_open_prs` a
   whole number from 0 to 9007199254740991; and an `http` value an object of
   `status` (a whole number from 100 to 599: a response's, never curl's
   `000`), `redirects` (0 to 10), `final_url` (an absolute `http://` or
@@ -24,8 +25,8 @@ All notable changes to **basou** are recorded here. The project follows
   held to a grammar, and a `capture` is kept as the group holds it. A null
   value with its error, a `manual` value, and the values of a board that
   declares no observation are not checked, and records already written are
-  not checked again. Each refusal names where in the value and shows up to 60
-  characters of what it received:
+  not checked again. A refusal names where in the value, and one of what a
+  key holds shows up to 60 characters of the JSON it received:
   `observed["site.top"].value.status: must be a whole number from 100 to 599, the status of a response, received "200"`.
 - **`basou board guide` makes an `http` observation in one block that prints
   its whole entry for the record's input**, `{"value": ..., "observed_at":
@@ -33,8 +34,10 @@ All notable changes to **basou** are recorded here. The project follows
   into a value by hand. The block keeps curl's status line and exit code in
   the working directory beside the body, and a script the guide has written
   there once reads them: when curl exits other than 0 (no connection, more
-  than 10 redirects) or what it left cannot be read, the entry is a null with
-  the error, such as `curl exit 47: more than 10 redirects`. An empty match
+  than 10 redirects), the status is not from 100 to 599 (a server answering
+  600), or what it left cannot be read, the entry is a null with the error,
+  such as `curl exit 47: more than 10 redirects`. The line escapes what a
+  terminal would act on or hide, as JSON escapes a line break. An empty match
   of a `count_pattern` gives a null with its error too, where the command
   exited 1. Every `http` observation is made this way, also one that reads
   nothing off its body.

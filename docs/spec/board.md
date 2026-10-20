@@ -519,8 +519,10 @@ never part of a command.
 | `manual` | 2 | `how` | what the operator answers, as any JSON value |
 
 - **What record refuses**, from basou 0.72.0: a string of a kind above that
-  is empty, has white space at either end or holds a control character
-  (U+0000 to U+001F, U+007F to U+009F); a number of a kind above that is not
+  is empty, has white space at either end, or holds a control character
+  (U+0000 to U+001F, U+007F to U+009F) or one a terminal hides (U+061C,
+  U+200B to U+200F, U+2028 to U+202E, U+2060 to U+2069, U+FEFF); a number of
+  a kind above that is not
   a whole number from 0 to 9007199254740991; and an `http` value out of its
   shape ([below](#http)). What a string says is not held to a grammar (a
   version's, or the words GitHub uses), so a new word is never refused. A
@@ -603,9 +605,12 @@ read that is not null when the status is not 2xx.
   and HTML entities are not decoded.
 - The observation is not made (a null value with an error) when the request
   fails (the name does not resolve, TLS fails, 20 seconds pass, or it takes
-  more than 10 redirects), or when what curl left cannot be read. From basou
-  0.72.0 the guide's command prints the whole entry for the record's input
-  on one line: the value, or the null and the error. It gives the null,
+  more than 10 redirects), when its status is not one of an HTTP response
+  (100 to 599, such as a server answering 600, which curl prints as it is),
+  or when what curl left cannot be read. From basou 0.72.0 the guide's
+  command prints the whole entry for the record's input on one line, with
+  what a terminal would act on or hide escaped: the value, or the null and
+  the error. It gives the null,
   rather than count, at an empty match the declaration could not refuse: a
   `count_pattern` that matches the empty string only next to some text, as
   `\b` or a lookaround can.
@@ -779,8 +784,10 @@ A mapping from an observation's key to what was found:
   it is not in the shape of its kind ([2.7](#27-observe)); a `manual` value
   and a null are not checked. With none declared, the keys of `observed` are
   free and their values are not checked. A refusal says where in the value
-  (`observed["site.top"].value.status`) and shows up to 60 characters of what
-  it received.
+  (`observed["site.top"].value.status`); one of what a key holds shows what
+  it received, as up to 60 characters of its JSON (an escape counted as one)
+  with what a terminal would act on or hide escaped. A value that is not a
+  JSON value, or nests too deep, is refused for that alone.
 
 ### 3.3 `cells`
 
