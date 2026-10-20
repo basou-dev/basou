@@ -3,6 +3,47 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`basou board record` (and `--dry-run`) refuses an observation's value
+  that is not in the shape its kind gives it.** A value was kept as any JSON
+  value, so a number given as a string (`"200"`) or a version copied with its
+  line break was recorded, and read as a change from the previous record's
+  value. Now, on a board that declares observations, a string of
+  `npm_version`, `github_release`, `github_ci`, `github_check` or
+  `page_version` must be non-empty, with no white space at either end and no
+  control character; a count of `github_open_issues` or `github_open_prs` a
+  whole number from 0 to 9007199254740991; and an `http` value an object of
+  `status` (a whole number from 100 to 599: a response's, never curl's
+  `000`), `redirects` (0 to 10), `final_url` (an absolute `http://` or
+  `https://` URL) and exactly the reads the observation declares (`words` as
+  many true or false as its words, `count` a whole number, `capture` a string
+  or null), each null when the status is not 2xx. What a string says is not
+  held to a grammar, and a `capture` is kept as the group holds it. A null
+  value with its error, a `manual` value, and the values of a board that
+  declares no observation are not checked, and records already written are
+  not checked again. Each refusal names where in the value and shows up to 60
+  characters of what it received:
+  `observed["site.top"].value.status: must be a whole number from 100 to 599, the status of a response, received "200"`.
+- **`basou board guide` makes an `http` observation in one block that prints
+  its whole entry for the record's input**, `{"value": ..., "observed_at":
+  ..., "source": ...}` on one line, in place of curl's status line to copy
+  into a value by hand. The block keeps curl's status line and exit code in
+  the working directory beside the body, and a script the guide has written
+  there once reads them: when curl exits other than 0 (no connection, more
+  than 10 redirects) or what it left cannot be read, the entry is a null with
+  the error, such as `curl exit 47: more than 10 redirects`. An empty match
+  of a `count_pattern` gives a null with its error too, where the command
+  exited 1. Every `http` observation is made this way, also one that reads
+  nothing off its body.
+- **`basou board guide` says what each kind of observation gives once**, before
+  the observations, and each observation gives only what it looks at, its
+  command and its source. A board of 39 `http` observations, each with two
+  words and a `count_pattern`, had a guide of 143,708 bytes; it is now
+  70,241.
+
 ## 0.71.2 — 2026-10-19
 
 ### Fixed
