@@ -1711,6 +1711,13 @@ describe("basou view: the board page", () => {
         ...made,
       },
       { name: "flaky", value: 3, error: "partly", moved: { status: "value", value: 3 }, ...made },
+      // A value the previous record held with an error, which is drawn with it.
+      {
+        name: "mended",
+        value: 3,
+        moved: { status: "value", value: 2, error: "partly" },
+        ...made,
+      },
       { name: "fresh", value: true, moved: { status: "none" }, ...made },
       {
         name: "shop",
@@ -1739,6 +1746,7 @@ describe("basou view: the board page", () => {
       ["changed", '"12"', "previous: 12"],
       ["changed", "ok", "previous: not observed  (timeout)"],
       ["changed", "3  (partly)", "previous: 3"],
+      ["changed", "3", "previous: 2  (partly)"],
       ["changed", "true", "not in the previous record"],
       [
         "changed",
@@ -1748,7 +1756,7 @@ describe("basou view: the board page", () => {
       ["3"],
       ["not observed (previous: 1)  (timeout)"],
     ]);
-    expect(drawn.find((n) => n.className === "chip changed")).toHaveLength(7);
+    expect(drawn.find((n) => n.className === "chip changed")).toHaveLength(8);
     const unreadable = boardPageStrings("en").observed.previousUnreadable;
     expect(drawn.text()).not.toContain(unreadable);
     expect(summary("unreadable", [{ name: "npm", value: "1", ...made }]).text()).toContain(
