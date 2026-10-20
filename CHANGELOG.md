@@ -30,21 +30,33 @@ All notable changes to **basou** are recorded here. The project follows
   cannot be read, or a directory git could not list in full, still makes it
   null with its reason, and a measure the board declares (a `file_count` of
   `**`) is still not measured for such a symlink, which its `exclude` can
-  leave out. The `repos` method is now 3, so the next record marks the
+  leave out. A symlink whose end cannot be reached (a directory on the way
+  that may not be entered) is left out too when its text, or that of a link
+  in the repository it leads to, leaves the repository. The `repos` method
+  is now 3, so on every board the next measure fires the axis review's
+  trigger (e) once, as a raised method does, and the next record marks the
   repos section `method_changed`.
 - **`basou board record` refuses an `http` value's `final_url` that has a
-  user, a query or a fragment, and the script `basou board guide` writes
-  leaves them out.** Behind a sign-in (a redirect to a login page) the URL
+  user, a query, a fragment or a hidden character, and the script
+  `basou board guide` writes leaves them out.** Behind a sign-in (a redirect to a login page) the URL
   curl ended at carries a token signed anew each time: the observation
   showed as moved at every record, and the record, kept in git, held a token
   a secret scanner may flag. The script prints `final_url` as that URL's
   scheme, host (with a port that is not the scheme's own) and path, and a
   null with the error `the URL curl ended at is not an absolute http or
   https URL` when it is not one. Record refuses a `final_url` that holds a
-  `?` or a `#`, or a user name or a password:
-  `observed.shop.value.final_url: must be an absolute http or https URL with no user, query or fragment, received "https://example.com/login?token=..."`.
-  On a board whose `final_url` had a query, the observation shows as moved
-  once, at the next record. Records already written are not checked again.
+  `?` or a `#`, a user name or a password, or a character a terminal hides
+  (as it refuses one in a string of the other kinds):
+  `observed.shop.value.final_url: must be an absolute http or https URL with no user, query, fragment or hidden character, received "https://example.com/login?token=..."`.
+  The script prints the URL as `new URL` reads it, so on the next record an
+  observation shows as moved once wherever the `final_url` it held differs
+  from that: a query, a fragment (curl keeps one of the declared URL) or a
+  user dropped, a port that is the scheme's own (`:443`) dropped, a scheme
+  or host in capitals made lower case, a host outside ASCII in its ASCII
+  form (`xn--`), a character such as `{` escaped. A token in the path
+  itself (`/login;jsessionid=...`) is kept. Records already written are not
+  checked again, and the board page draws an `http` value they hold as its
+  parts as before.
 - **`basou board guide` asks for every `manual` observation of a record in
   one message**: for each key, what the operator can do as it is written
   (the line to run and where, or the page to open) and what to send back,

@@ -576,7 +576,7 @@ describe("parseRecordInput: the value of each kind of observation", () => {
     expect(errorsOf({ bare: { status: "200", redirects: 11, final_url: "/item" } })).toEqual([
       'observed.bare.value.status: must be a whole number from 100 to 599, the status of a response, received "200"',
       "observed.bare.value.redirects: must be a whole number from 0 to 10, received 11",
-      'observed.bare.value.final_url: must be an absolute http or https URL with no user, query or fragment, received "/item"',
+      'observed.bare.value.final_url: must be an absolute http or https URL with no user, query, fragment or hidden character, received "/item"',
     ]);
     for (const status of [0, 99, 600, 200.5]) {
       expect(errorsOf({ bare: { status, redirects: 0, final_url: url } })).toEqual([
@@ -699,7 +699,7 @@ describe("parseRecordInput: the value of each kind of observation", () => {
       "https://:secret@example.com/",
     ]) {
       expect(finalUrlOf(finalUrl), finalUrl).toEqual([
-        `observed.bare.value.final_url: must be an absolute http or https URL with no user, query or fragment, received ${JSON.stringify(finalUrl)}`,
+        `observed.bare.value.final_url: must be an absolute http or https URL with no user, query, fragment or hidden character, received ${JSON.stringify(finalUrl)}`,
       ]);
     }
     for (const finalUrl of [
@@ -708,6 +708,15 @@ describe("parseRecordInput: the value of each kind of observation", () => {
       "https://example.com/a%3Fb%23c",
     ]) {
       expect(finalUrlOf(finalUrl), finalUrl).toEqual([]);
+    }
+    // A character a terminal hides, which no URL the guide's command prints holds.
+    for (const code of [0x200b, 0x202e, 0x2028, 0xfeff]) {
+      const finalUrl = `https://example.com/a${String.fromCodePoint(code)}b`;
+      const errors = finalUrlOf(finalUrl);
+      expect(errors, code.toString(16)).toHaveLength(1);
+      expect(errors[0]).toContain(
+        "observed.bare.value.final_url: must be an absolute http or https URL with no user, query, fragment or hidden character, received",
+      );
     }
     // A null with its error is taken as before, and so is any answer of a manual one.
     expect(errorsOf({ bare: null, users: "https://user@example.com/?q#f" })).toEqual([]);

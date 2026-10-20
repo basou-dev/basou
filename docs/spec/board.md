@@ -527,7 +527,8 @@ never part of a command.
   a kind above that is not
   a whole number from 0 to 9007199254740991; and an `http` value out of its
   shape ([below](#http)), which from basou 0.73.0 includes a `final_url`
-  with a user, a query or a fragment. What a string says is not held to a
+  with a user, a query, a fragment or a character a terminal hides. What a
+  string says is not held to a
   grammar (a version's, or the words GitHub uses), so a new word is never
   refused. A `manual` value, and a null, are not checked. Only a board that
   declares observations has them checked ([3.2](#32-observed)).
@@ -589,7 +590,7 @@ The value recorded:
 |---|---|---|
 | `status` | always | a whole number from 100 to 599: the status of the last response |
 | `redirects` | always | a whole number from 0 to 10: how many redirects led to it |
-| `final_url` | always | an absolute `http://` or `https://` URL with no user, query or fragment: the URL it ended at, as its scheme, its host (with a port that is not the scheme's own) and its path |
+| `final_url` | always | an absolute `http://` or `https://` URL with no user, query, fragment or hidden character: the URL it ended at, as its scheme, its host (with a port that is not the scheme's own) and its path, as `new URL` reads them |
 | `words` | with `words` | a list of `true` or `false`, one for each word, in the order declared: whether the body holds it |
 | `count` | with `count_pattern` | a whole number from 0 to 9007199254740991: how many times it matches the body (0 when it does not) |
 | `capture` | with `capture_pattern` | a string: what the first group holds in the first match, as it is, spaces and all; null when nothing matches or the group takes no part |
@@ -597,11 +598,24 @@ The value recorded:
 From basou 0.72.0, record refuses an `http` value with a key the
 observation does not declare a read of, or one it declares left out, and a
 read that is not null when the status is not 2xx. From basou 0.73.0, it
-refuses a `final_url` that holds a `?` or a `#`, or a user name or a
-password, and the guide's command leaves them out of the URL curl ended at:
-behind a sign-in (a redirect to a login page) they can carry a token made
-anew each time, which would show the observation as moved at every record
-and put the token in a record kept in git.
+refuses a `final_url` that holds a `?` or a `#`, a user name or a password,
+or a character a terminal hides (as for a string of the other kinds), and
+the guide's command leaves them out of the URL curl ended at: behind a
+sign-in (a redirect to a login page) they can carry a token made anew each
+time, which would show the observation as moved at every record and put the
+token in a record kept in git. A record written before keeps the value it
+holds, and the board page draws it as its parts.
+
+- **The command reads the URL as `new URL` does**: a scheme and a host in
+  lower case, a host outside ASCII in its ASCII form (`xn--`), a port that is
+  the scheme's own left out, and the path with its dot segments resolved and
+  what a URL may not hold as it is escaped (`%2e%2e` or a backslash in the
+  path curl ended at reads as a step up or a `/`). The value is the same for
+  the same URL.
+- **A token in the path itself is kept**: a session id a server writes into
+  the path for a client that keeps no cookie (`/login;jsessionid=...`) is
+  part of the path, so the observation shows as moved at each record and the
+  token is in the record. Make such an observation `manual` instead.
 
 - **A 4xx or a 5xx is a value**, not an observation not made: the status is
   what was observed.
@@ -1009,8 +1023,11 @@ A list, in the manifest's order:
 
 - **`files` leaves out a symlink that leaves the repository**, such as an
   agent's instruction file linked in from another repo (tracked, or
-  untracked and not ignored): what it ends at cannot be told to be a file without looking
-  outside the repository, and a built-in value takes no `exclude`. A
+  untracked and not ignored): what it ends at cannot be told to be a file
+  without looking outside the repository, and a built-in value takes no
+  `exclude`. When what it ends at cannot be reached (a directory on the way
+  that may not be entered), it is still left out when its text, or that of
+  a link in the repository it leads to, leaves the repository. A
   `file_count` of `**` is not measured for one. A path that cannot be read,
   or a directory git could not list in full, still makes `files` null, with
   the reason at `repos[<path>].files`. Up to `repos` method 2 (before basou

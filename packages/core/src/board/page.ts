@@ -920,12 +920,15 @@ function httpWords(o: DeclaredObservation | undefined): string[] | undefined {
 }
 
 // An http value read as its parts, when it is in the shape the declared
-// observation gives it (the shape record holds a value to): a value of
-// another shape, as a record written before that check may hold, is drawn
-// as it is.
+// observation gives it (the shape record held a value to when it was
+// written, so a final_url with a query, which record took before it refused
+// one, is still drawn as a part): a value of another shape, as a record
+// written before that check may hold, is drawn as it is.
 function httpOf(o: DeclaredObservation | undefined, value: unknown): BoardPageHttp | undefined {
   if (o?.kind !== "http" || value === null || value === undefined) return undefined;
-  if (observedValueProblems(o as unknown as BoardObserve, value).length > 0) return undefined;
+  if (observedValueProblems(o as unknown as BoardObserve, value, { written: true }).length > 0) {
+    return undefined;
+  }
   const v = value as {
     status: number;
     redirects: number;

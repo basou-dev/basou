@@ -1399,7 +1399,7 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     daysWorked: "{n} 日に分布",
     claude: "Claude",
     codex: "Codex",
-    toolUnion: "重なりを除いた時間（session ごとの合計ではない）",
+    toolUnion: "重なりは 1 回だけ数えた時間（session ごとの合計ではない）",
     noCodex: "Codex の session なし",
     perDay: "1 日あたり",
     perDayOver: "今日を含む {days} 日で割った値",

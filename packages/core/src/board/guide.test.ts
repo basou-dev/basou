@@ -984,7 +984,7 @@ describe("boardGuide: an http observation", () => {
     expect(guide).toContain("- `http`: a GET, following up to 10 redirects, with no `-f`");
     expect(guide).toContain("not line by line as a measure's `pattern` is");
     expect(guide).toContain(
-      "The value holds `status`, `redirects` and `final_url` (the URL it ended at, with no user, query or fragment: they can carry a token that changes each time, and record refuses a `final_url` that has one)",
+      "The value holds `status`, `redirects` and `final_url` (the URL it ended at, with no user, query or fragment: they can carry a token that changes each time, and record refuses a `final_url` that has one; a token in the path itself, such as `;jsessionid=`, is kept, so make an observation that ends at such a URL `manual` instead)",
     );
     expect(guide).toContain(
       "When the status is not 2xx the body is not read, and each read is a null, not a list of nulls",
@@ -1522,6 +1522,12 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
         { key: "deploy", kind: "github_check", repo: "o/n", check: "Workers Builds: my-app" },
         { key: "odd", kind: "github_check", repo: "o/n.js", check: ODD_CHECK, branch: "a/b" },
         { key: "plain", kind: "github_check", repo: "o/n", check: "build" },
+        // What a shell would expand, or zsh would with its own options, though nothing matches here.
+        { key: "star", kind: "github_check", repo: "o/n", check: "e2e*" },
+        { key: "mark", kind: "github_check", repo: "o/n", check: "a?b" },
+        { key: "set", kind: "github_check", repo: "o/n", check: "[x]" },
+        { key: "tilde", kind: "github_check", repo: "o/n", check: "~x" },
+        { key: "caret", kind: "github_check", repo: "o/n", check: "^x" },
         { key: "ci", kind: "github_ci", repo: "o/n", workflow: "quality.yml", branch: "rel/1.x" },
         { key: "rel", kind: "github_release", repo: "o/n" },
         { key: "iss", kind: "github_open_issues", repo: "o/n" },
@@ -1541,6 +1547,17 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
       expect(sources.deploy?.source).toBe(
         "gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='Workers Builds: my-app'",
       );
+      for (const [key, check] of [
+        ["star", "e2e*"],
+        ["mark", "a?b"],
+        ["set", "[x]"],
+        ["tilde", "~x"],
+        ["caret", "^x"],
+      ]) {
+        expect(sources[key as string]?.source, key).toBe(
+          `gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='${check}'`,
+        );
+      }
       const words = (line: string) =>
         execFileSync("sh", ["-c", line], {
           cwd: dir,

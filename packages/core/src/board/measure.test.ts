@@ -1610,6 +1610,38 @@ describe("measureBoard: the repos section", () => {
     },
   );
 
+  it.skipIf(!POSIX || ROOT_USER)(
+    "leaves out of files a symlink that leaves the repository when what it ends at cannot be reached",
+    async () => {
+      // The other repo's directory may not be entered: the links' text still leaves.
+      await mkdir(join(root, "anchor", "agents", "app"), { recursive: true });
+      await writeFile(join(root, "anchor", "agents", "app", "AGENTS.md"), "x\n");
+      const dir = await repo("app", { "a.txt": "1\n" });
+      await mkdir(join(dir, ".github"));
+      await mkdir(join(dir, "docs"));
+      await symlink("../anchor/agents/app/AGENTS.md", join(dir, "AGENTS.md"));
+      await symlink("AGENTS.md", join(dir, "CLAUDE.md"));
+      await symlink("../AGENTS.md", join(dir, ".github", "copilot-instructions.md"));
+      await symlink("../a.txt", join(dir, "docs", "a.md"));
+      await commit(dir, {}, "links");
+      await chmod(join(root, "anchor"), 0o000);
+      try {
+        const all = { id: "all", kind: "file_count", repo: "app", include: ["**"], unit: "files" };
+        const m = await measure(declare([all]), NOW, ["app"]);
+        // a.txt and docs/a.md.
+        expect(m.repos[0]?.files).toBe(2);
+        expect(m.not_found).toEqual([
+          {
+            at: "measures.all",
+            reason: expect.stringMatching(/^'[^']+' is a symlink to outside the repository$/),
+          },
+        ]);
+      } finally {
+        await chmod(join(root, "anchor"), 0o755);
+      }
+    },
+  );
+
   it("counts each path git status names, whatever git's settings say", async () => {
     const dir = await repo("app", {
       ".gitignore": "*.log\n",
