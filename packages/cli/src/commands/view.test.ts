@@ -1420,6 +1420,7 @@ describe("basou view: the board page", () => {
     "setStatus",
     "heading",
     "summary",
+    "observations",
     "effort",
     "matrix",
     "lanes",
@@ -1462,12 +1463,15 @@ describe("basou view: the board page", () => {
       const words = boardPageStrings("en").effort;
       call("draw", board);
       expect(document.title).toBe("Board");
-      // Every section of a record, the repos and the components it measured among them.
+      // Every section of a record, the repos and the components it measured
+      // among them: the matrix and the lanes right after the summary, then the
+      // observations in a section of their own, then the effort.
       expect(byId.board?.find((n) => n.tag === "h2").map((n) => n.textContent)).toEqual([
         "Summary",
-        "Period and effort",
         "Reach matrix",
         "Where each lane is",
+        "Observed outside",
+        "Period and effort",
         "Measures",
         "Composition",
         "The operator's turns",
@@ -1539,10 +1543,52 @@ describe("basou view: the board page", () => {
     expect(none.map((o) => [o.attrs.value, o.disabled])).toEqual([["", true]]);
   });
 
-  it("draws an http observation's words beside what it found of each, in the order declared", () => {
-    const { call } = drawing(["summary"]);
+  it("draws the summary's prose and tiles, and the observations apart from them, each marked as reported", () => {
+    const { call } = drawing(["summary", "observations"]);
+    const S = boardPageStrings("en");
     const made = { observed_at: "2026-10-07T00:00:00Z", source: "s" };
-    const drawn = call("summary", {
+    const board = {
+      summary: {
+        text: "All `well`.",
+        tiles: [{ key: "live_lanes", value: 2, detail: 3, reported: true }],
+        previous_record: "unreadable",
+        observed: [
+          { name: "npm", value: "1.2.3", notes: ["mind the `tag`"], ...made },
+          { name: "site", value: null, error: "timeout", ...made },
+        ],
+      },
+    };
+    const summary = call("summary", board);
+    expect(summary.children[0]?.textContent).toBe(S.sections.summary);
+    expect(summary.find((n) => n.className === "tile")).toHaveLength(1);
+    // The prose's mark and the tile's: no observation, no heading of them.
+    expect(summary.find((n) => n.className === "reported")).toHaveLength(2);
+    expect(summary.find((n) => n.tag === "table" || n.tag === "h3")).toEqual([]);
+    expect(summary.text()).not.toContain(S.observed.heading);
+    expect(summary.text()).not.toContain(S.observed.previousUnreadable);
+    const observations = call("observations", board);
+    const [head] = observations.children;
+    expect([head?.tag, head?.textContent]).toEqual(["h2", S.observed.heading]);
+    expect(head?.find((n) => n.className === "reported")).toHaveLength(1);
+    // Its rows and the notes under them, and the line on the previous record.
+    const rows = observations.find((n) => n.tag === "tr").slice(1);
+    expect(rows.map((r) => [r.className, r.children[0]?.text()])).toEqual([
+      ["", "npm"],
+      ["notes", "mind the tag"],
+      ["", "site"],
+    ]);
+    expect(observations.text()).toContain(S.observed.previousUnreadable);
+    expect(observations.find((n) => n.className === "tile")).toEqual([]);
+    expect(observations.text()).not.toContain("All ");
+    const none = call("observations", { summary: { ...board.summary, observed: [] } });
+    expect(none.text()).toContain(S.observed.none);
+    expect(none.text()).not.toContain(S.observed.previousUnreadable);
+  });
+
+  it("draws an http observation's words beside what it found of each, in the order declared", () => {
+    const { call } = drawing(["observations"]);
+    const made = { observed_at: "2026-10-07T00:00:00Z", source: "s" };
+    const drawn = call("observations", {
       summary: {
         text: "",
         tiles: [],
@@ -1596,11 +1642,11 @@ describe("basou view: the board page", () => {
   });
 
   it("draws an http value in its shape as its parts, what each observation is and looks at, and its notes", () => {
-    const { call } = drawing(["summary"]);
+    const { call } = drawing(["observations"]);
     const DOT = ` ${String.fromCodePoint(0xb7)} `;
     const [YES, NO] = [String.fromCodePoint(0x2713), String.fromCodePoint(0x2717)];
     const made = { observed_at: "2026-10-07T00:00:00Z", source: "https://example.com/x" };
-    const drawn = call("summary", {
+    const drawn = call("observations", {
       summary: {
         text: "",
         tiles: [],
@@ -1687,7 +1733,7 @@ describe("basou view: the board page", () => {
   });
 
   it("marks an observation that moved since the previous record, with what that record held", () => {
-    const { call } = drawing(["summary"]);
+    const { call } = drawing(["observations"]);
     const DOT = ` ${String.fromCodePoint(0xb7)} `;
     const [YES, NO] = [String.fromCodePoint(0x2713), String.fromCodePoint(0x2717)];
     const made = { observed_at: "2026-10-07T00:00:00Z", source: "s" };
@@ -1697,9 +1743,9 @@ describe("basou view: the board page", () => {
       final_url: "https://example.com/",
       body: { words: [{ word, found }] },
     });
-    const summary = (previous_record: string, observed: unknown[]) =>
-      call("summary", { summary: { text: "", tiles: [], previous_record, observed } });
-    const drawn = summary("found", [
+    const observations = (previous_record: string, observed: unknown[]) =>
+      call("observations", { summary: { text: "", tiles: [], previous_record, observed } });
+    const drawn = observations("found", [
       { name: "npm", value: "1.1.0", moved: { status: "value", value: "1.0.0" }, ...made },
       // Its type alone moved: both as JSON would tell them apart.
       { name: "count", value: 12, moved: { status: "value", value: "12" }, ...made },
@@ -1759,10 +1805,10 @@ describe("basou view: the board page", () => {
     expect(drawn.find((n) => n.className === "chip changed")).toHaveLength(8);
     const unreadable = boardPageStrings("en").observed.previousUnreadable;
     expect(drawn.text()).not.toContain(unreadable);
-    expect(summary("unreadable", [{ name: "npm", value: "1", ...made }]).text()).toContain(
+    expect(observations("unreadable", [{ name: "npm", value: "1", ...made }]).text()).toContain(
       unreadable,
     );
-    expect(summary("unreadable", []).text()).not.toContain(unreadable);
+    expect(observations("unreadable", []).text()).not.toContain(unreadable);
   });
 
   it("draws every measure in a table, with its lanes and how much a number moved", () => {
@@ -1895,9 +1941,19 @@ describe("basou view: the board page", () => {
         gone: ["app/db"],
       },
     });
-    const flow = drawn.children
-      .slice(1)
-      .map((n) => (n.tag === "ul" ? n.children.map((li) => li.text()) : n.text()));
+    const items = (ul: Node | undefined) => ul?.children.map((li) => li.text());
+    // Those in no lane folded, closed, under how many they are.
+    const flow = drawn.children.slice(1).map((n) =>
+      n.tag === "ul"
+        ? items(n)
+        : n.tag === "details"
+          ? {
+              open: n.attrs.open,
+              summary: [n.children[0]?.tag, n.children[0]?.text()],
+              items: items(n.children[1]),
+            }
+          : n.text(),
+    );
     expect(flow).toEqual([
       "Core",
       [
@@ -1907,13 +1963,31 @@ describe("basou view: the board page", () => {
       ],
       "Docs",
       S.record.noComponentInLane,
-      S.record.uncounted,
-      ["app/scripts  markertooling"],
+      {
+        open: undefined,
+        summary: ["summary", "Counted in no lane (1)"],
+        items: ["app/scripts  markertooling"],
+      },
       S.record.unacknowledged,
       ["app/new  ci"],
       S.record.gone,
       ["app/db"],
     ]);
+    // Only they are folded.
+    expect(drawn.find((n) => n.tag === "details")).toHaveLength(1);
+    const many = call("recordComponents", {
+      components: {
+        measured: true,
+        reasons: [],
+        lanes: [],
+        uncounted: Array.from({ length: 1234 }, (_, i) => ({ key: `c${i}`, kinds: ["marker"] })),
+        unacknowledged: [],
+        gone: [],
+      },
+    });
+    const [folded] = many.find((n) => n.tag === "details");
+    expect(folded?.children[0]?.text()).toBe("Counted in no lane (1,234)");
+    expect(folded?.find((n) => n.tag === "li")).toHaveLength(1234);
     const notMeasured = call("recordComponents", {
       components: {
         measured: false,
@@ -1937,9 +2011,68 @@ describe("basou view: the board page", () => {
       },
     });
     expect(unknown.text()).toContain(S.record.goneUnknown);
+    // None in no lane: said under its heading, with nothing to fold.
+    expect(unknown.find((n) => n.tag === "details")).toEqual([]);
+    expect(unknown.children.slice(1, 3).map((n) => [n.tag, n.text()])).toEqual([
+      ["h3", S.record.uncounted],
+      ["p", S.record.none],
+    ]);
     expect(call("recordComponents", { components: null }).text()).toContain(
       S.record.componentsUnread,
     );
+  });
+
+  it("puts each stage's meaning in its head's title, and draws a stage by its id alone on a narrow screen", () => {
+    const { call } = drawing(["matrix"]);
+    const drawn = call("matrix", {
+      matrix: {
+        anomalies: [],
+        stages: [
+          { id: "01", meaning: "Concept" },
+          { id: "02", meaning: "Spec <b>x</b>" },
+        ],
+        lanes: [{ id: "core", name: "Core", cells: [{ state: "done" }, { state: "none" }] }],
+      },
+    });
+    const stages = drawn.find((n) => n.tag === "th" && n.className === "stage");
+    expect(stages.map((th) => th.attrs.title)).toEqual(["Concept", "Spec <b>x</b>"]);
+    // The id, and the meaning in an element of its own, which a narrow screen hides.
+    expect(stages.map((th) => th.children.map((c) => [c.tag, c.className, c.text()]))).toEqual([
+      [
+        ["b", "", "01"],
+        ["span", "meaning", "Concept"],
+      ],
+      [
+        ["b", "", "02"],
+        ["span", "meaning", "Spec <b>x</b>"],
+      ],
+    ]);
+    // The page's style, without its comments, and the rules of a part of it.
+    const style = BOARD_HTML.slice(
+      BOARD_HTML.indexOf("<style>") + "<style>".length,
+      BOARD_HTML.indexOf("</style>"),
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = (css: string) =>
+      Object.fromEntries(
+        [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1]?.trim(), m[2]?.trim()]),
+      );
+    const opener = "@media (max-width: 600px) {";
+    const start = style.indexOf(opener);
+    expect(start).toBeGreaterThan(-1);
+    const end = style.indexOf("\n  }", start) + "\n  }".length;
+    const narrow = rules(style.slice(start + opener.length, end - 1));
+    expect(narrow["table.matrix th.stage .meaning"]).toBe("display: none;");
+    expect(narrow["table.matrix th.stage"]).toContain("min-width: 0;");
+    expect(narrow["table.matrix td.cell"]).toContain("padding: 4px 2px;");
+    // A long lane name wraps, in a column of a width it cannot pass.
+    expect(narrow["table.matrix th:first-child"]).toMatch(/max-width: \d+em;/);
+    expect(narrow["table.matrix th:first-child"]).toContain("overflow-wrap: anywhere;");
+    // Wider screens draw the matrix as before, its meanings shown.
+    const wide = rules(style.slice(0, start) + style.slice(end));
+    expect(wide["table.matrix th.stage"]).toContain("min-width: 64px;");
+    expect(wide["table.matrix td.cell"]).toContain("font-size: 18px;");
+    expect(Object.keys(wide).filter((selector) => selector.includes("meaning"))).toEqual([]);
+    expect(wide[".scroll"]).toContain("overflow-x: auto;");
   });
 
   it("draws the paths of a file_paths measure as a count, with the paths folded under it", () => {

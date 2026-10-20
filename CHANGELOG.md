@@ -71,6 +71,20 @@ All notable changes to **basou** are recorded here. The project follows
   keeps its milestones, which a start among them did not fit. A moved board
   keeps the milestones it had that happened, and leaves out those that were
   only planned.
+- **A record's board page draws the reach matrix right after the summary's
+  tiles**, then where each lane is, then the observations outside in a
+  section of their own, then the period and effort and the rest as before.
+  The summary held the observations, and the matrix came after them and
+  after the charts of the effort, about 4,500px down a page 800px wide. The
+  summary keeps its prose and its tiles, and the observations their rows,
+  their notes and their `reported` mark, now on their section's heading. The
+  board measured on the spot, which draws no matrix, keeps its order.
+- **A record's board page folds the components counted in no lane** under
+  one line that says how many they are (`Counted in no lane (123)`), closed
+  until it is opened. A board that registers most of its components with
+  `lane: "-"` had them fill about a third of the page. When there is none,
+  the page says so as before; the components of each lane, those found and
+  not registered, and those gone are drawn open as before.
 
 ### Fixed
 
@@ -89,6 +103,13 @@ All notable changes to **basou** are recorded here. The project follows
   as the command quotes it, and a plain name (`owner/repo`, `quality.yml`,
   `main`) is written as before, so the sources of existing boards change
   only where a name needed quoting.
+- **The board page's reach matrix fits a narrow screen.** On a screen 600px
+  wide or less, each stage's head shows its id alone, the cells take less
+  room, and a long lane name wraps, so that the six stages and a lane name of
+  16 characters fit a phone 375px wide. The matrix was 479px wide in the
+  343px left for it there, with stages 05 and 06 out of sight to the right.
+  Each stage's head now carries its meaning as its title at every width, to
+  be read where it is hidden. A wider screen draws the matrix as before.
 
 ## 0.72.0 — 2026-10-20
 
