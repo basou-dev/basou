@@ -31,7 +31,9 @@ function received(value: unknown): string {
     return "received a value too deep to show";
   }
   const parts = text.match(/\\u[0-9a-fA-F]{4}|\\.|[\s\S]/gu) ?? [];
-  const shown = parts.slice(0, RECEIVED_MAX).map((part) => (part.length === 1 ? shownText(part) : part));
+  const shown = parts
+    .slice(0, RECEIVED_MAX)
+    .map((part) => (part.length === 1 ? shownText(part) : part));
   return `received ${shown.join("")}${parts.length > RECEIVED_MAX ? "..." : ""}`;
 }
 
