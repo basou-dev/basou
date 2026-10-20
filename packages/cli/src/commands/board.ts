@@ -528,14 +528,14 @@ export async function doRunBoardRecord(
   }
   const { result, declared } = checked;
   if (options.json === true) console.log(JSON.stringify(result, null, 2));
-  else printRecordText(result, declared);
+  else printRecordText(result, declared ?? null);
   return result;
 }
 
 async function checkAndRecord(
   options: BoardRecordOptions,
   ctx: BoardContext,
-): Promise<{ result: BoardRecordResult; declared: BoardDeclarationChange[] | null }> {
+): Promise<{ result: BoardRecordResult; declared?: BoardDeclarationChange[] | null }> {
   const cwd = ctx.cwd ?? process.cwd();
   const loaded = await loadBoard(options, ctx, "board record");
   const beside = (...parts: string[]) =>
@@ -582,6 +582,9 @@ async function checkAndRecord(
     recordedAt,
     recordedWith: { basou: BASOU_CLI_VERSION, build: BASOU_BUILD?.commit ?? null },
   });
+  // For the text only, and before the record is written: nothing after it
+  // may fail a record that is there.
+  const declared = options.json === true ? undefined : declarationChanges(loaded, previous);
   let written: string | null = null;
   if (options.dryRun !== true) {
     let name: string;
@@ -616,13 +619,14 @@ async function checkAndRecord(
       order_anomalies: record.order_anomalies,
       diff,
     },
-    declared: declarationChanges(loaded, previous),
+    ...(declared === undefined ? {} : { declared }),
   };
 }
 
 // Where the declaration changed since the previous record, for the text a
 // command prints (its JSON holds none of it): null when there is no previous
-// record to compare with, or it holds no declaration as an object.
+// record to compare with, or it holds no declaration that can be compared (not
+// an object, or nested too deep). It never throws.
 function declarationChanges(
   loaded: LoadedBoard,
   previous: BoardPreviousRecords,
@@ -1122,7 +1126,7 @@ function diffLines(diff: Omit<BoardDiff, "against">, more: boolean): string[] {
 function declarationLines(changes: BoardDeclarationChange[] | null): string[] {
   if (changes === null) {
     return [
-      "  declaration: not compared (the previous record holds no declaration that can be read)",
+      "  declaration: not compared (the previous record holds no declaration basou can compare with)",
     ];
   }
   return changes.map(

@@ -1220,10 +1220,10 @@ differs from the one the previous record holds, one line each:
   `lanes["web"].notes`, `observe["site.top"]` (an observation added or
   removed), `measures["readme.latest"].include`, `components["app/db"].lane`.
 - Both declarations are compared as a record holds them
-  ([4.2](#42-declaration)): with their defaults filled in, a record of
-  version 1 with `observe` as `[]`, and a measure's lane held as one id the
-  list of that one, so the first record after a board moves to version 3
-  lists nothing for that alone.
+  ([4.2](#42-declaration)): with their defaults filled in, and a record of
+  version 1 with `observe` as `[]`. A measure's lane is not listed (see
+  below), so the first record after a board moves to version 3 lists nothing
+  for its lanes held as one id.
 - The lanes, the measures and the ratios are compared by id, and the
   observations by key, each key of an entry on its own; the lanes' order is
   one line of its own. Any other list (`notes`, `look`, `words`, `include`,
@@ -1233,8 +1233,10 @@ differs from the one the previous record holds, one line each:
   `denominator`, `effort.start`, `effort.time_zone` when both declare one,
   and a measure or a ratio added or removed (its values are added or
   removed).
-- When the previous record holds no declaration that is an object, the line
-  says it is not compared.
+- When the previous record holds no declaration that is an object, or one
+  nested too deep to compare (only a record written by hand can), one line
+  says it is not compared: `declaration: not compared (...)`. The record is
+  still written.
 
 ### 5.13 The digest
 

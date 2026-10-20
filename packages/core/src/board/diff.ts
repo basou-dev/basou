@@ -267,21 +267,21 @@ function byName(list: unknown, field: string): Map<string, unknown> | undefined 
  * Where the declaration a board is measured by now differs from the one the
  * previous record holds, in the order the declaration holds its keys, then
  * those only the previous one had. Both are compared as a record holds them:
- * their defaults filled in, a record of version 1 with `observe` as `[]`, and
- * a measure's lane held as one id the list of that one. A list whose entries
- * name themselves is compared entry by entry (lanes, measures and ratios by
- * id, observations by key, and the lanes' order on its own), and any other
- * list whole. Left out is what the measurement's diff shows already: the
- * title, a measure's unit and lanes, a ratio's numerator and denominator, the
- * effort's start, a time zone declared in both, and a measure or a ratio
- * added or removed. Null when the previous record holds no declaration as an
- * object.
+ * their defaults filled in, and a record of version 1 with `observe` as `[]`.
+ * A list whose entries name themselves is compared entry by entry (lanes,
+ * measures and ratios by id, observations by key, and the lanes' order on its
+ * own), and any other list whole. Left out is what the measurement's diff
+ * shows already: the title, a measure's unit and lanes (there a lane of one
+ * id, as a record of version 1 or 2 holds it, is the list of that one, so
+ * moving a board to version 3 shows nothing for that alone), a ratio's
+ * numerator and denominator, the effort's start, a time zone declared in
+ * both, and a measure or a ratio added or removed. Null when the previous
+ * record holds no declaration as an object, or one too deep to compare: it
+ * never throws, so a caller that has written a record goes on.
  */
 export function diffDeclarations(before: unknown, after: unknown): BoardDeclarationChange[] | null {
   if (!isRecord(before) || !isRecord(after)) return null;
   const was = Object.hasOwn(before, "observe") ? before : { ...before, observe: [] };
-  // As a record would hold it: a key whose value is undefined is not there.
-  const is: unknown = JSON.parse(JSON.stringify(after));
   const out: BoardDeclarationChange[] = [];
   const walk = (then: unknown, now: unknown, rule: string, shown: string): void => {
     if (DECLARED_IN_VALUES.has(rule)) return;
@@ -296,17 +296,10 @@ export function diffDeclarations(before: unknown, after: unknown): BoardDeclarat
     const [old, current] =
       field === undefined ? [undefined, undefined] : [byName(then, field), byName(now, field)];
     if (old !== undefined && current !== undefined) {
-      const entry = (list: Map<string, unknown>, name: string) =>
-        rule === "measures" ? withLaneList(list.get(name)) : list.get(name);
       const names = [...current.keys(), ...[...old.keys()].filter((n) => !current.has(n))];
       for (const name of names) {
         if (ENTRIES_IN_VALUES.has(rule) && (!old.has(name) || !current.has(name))) continue;
-        walk(
-          entry(old, name),
-          entry(current, name),
-          `${rule}[]`,
-          `${shown}[${JSON.stringify(name)}]`,
-        );
+        walk(old.get(name), current.get(name), `${rule}[]`, `${shown}[${JSON.stringify(name)}]`);
       }
       if (rule === "lanes") {
         const kept = (from: Map<string, unknown>, other: Map<string, unknown>) =>
@@ -334,7 +327,14 @@ export function diffDeclarations(before: unknown, after: unknown): BoardDeclarat
     }
     if (!same(then, now)) out.push({ at: shown, change: "changed" });
   };
-  walk(was, is, "", "");
+  try {
+    // As a record would hold it: a key whose value is undefined is not there.
+    walk(was, JSON.parse(JSON.stringify(after)), "", "");
+  } catch {
+    // A declaration nested deeper than the stack goes, which only a record
+    // written by hand holds.
+    return null;
+  }
   return out;
 }
 

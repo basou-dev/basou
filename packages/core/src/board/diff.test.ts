@@ -528,6 +528,66 @@ describe("diffDeclarations", () => {
     ]);
   });
 
+  it("says the lanes' order changed only when the lanes both hold are in another order", () => {
+    const lane = (id: string) => ({ id, name: id.toUpperCase() });
+    const lanes = (...ids: string[]) => declaration({ lanes: ids.map(lane) });
+    // A lane added or removed leaves the others in their order.
+    expect(diffDeclarations(lanes("web", "cli"), lanes("web", "cli", "api"))).toEqual([
+      { at: 'lanes["api"]', change: "added" },
+    ]);
+    expect(diffDeclarations(lanes("web", "api", "cli"), lanes("web", "cli"))).toEqual([
+      { at: 'lanes["api"]', change: "removed" },
+    ]);
+    expect(diffDeclarations(lanes("web", "cli"), lanes("api", "web", "cli"))).toEqual([
+      { at: 'lanes["api"]', change: "added" },
+    ]);
+    expect(diffDeclarations(lanes("web", "cli", "api"), lanes("cli", "web"))).toEqual([
+      { at: 'lanes["api"]', change: "removed" },
+      { at: "lanes", change: "reordered" },
+    ]);
+    // The order of the measures, the ratios and the observations is no change.
+    const before = declaration({
+      measures: [
+        { id: "a", kind: "file_count", unit: "files", repo: ".", at: "worktree", include: ["*"] },
+        { id: "b", kind: "file_count", unit: "files", repo: ".", at: "worktree", include: ["*"] },
+      ],
+      ratios: [
+        { id: "r", label: "R", numerator: "a", denominator: "b" },
+        { id: "s", label: "S", numerator: "b", denominator: "a" },
+      ],
+      observe: [
+        { key: "one", kind: "npm_version", package: "one" },
+        { key: "two", kind: "npm_version", package: "two" },
+      ],
+    });
+    const reversed = Object.fromEntries(
+      Object.entries(before).map(([key, value]) => [
+        key,
+        key === "lanes" || !Array.isArray(value) ? value : [...value].reverse(),
+      ]),
+    );
+    expect(diffDeclarations(before, reversed)).toEqual([]);
+  });
+
+  it("says nothing it cannot compare rather than throw, for a declaration nested too deep", () => {
+    const depth = 100_000;
+    const deep = JSON.parse(`${"[".repeat(depth)}"x"${"]".repeat(depth)}`);
+    expect(() => JSON.stringify(deep)).toThrow(RangeError);
+    const notes = (n: unknown) => declaration({ lanes: [{ id: "web", name: "Web", notes: n }] });
+    // Compared whole, with what the board declares now.
+    expect(diffDeclarations(notes(deep), notes(["x"]))).toBeNull();
+    // Only in the previous record: not walked into, so it is said.
+    expect(diffDeclarations(declaration({ deeper: deep }), declaration())).toEqual([
+      { at: "deeper", change: "removed" },
+    ]);
+    // Deep as an object on both sides, walked key by key.
+    let nested: Record<string, unknown> = {};
+    for (let i = 0; i < depth; i++) nested = { a: nested };
+    expect(
+      diffDeclarations(declaration({ axis: nested }), declaration({ axis: nested })),
+    ).toBeNull();
+  });
+
   it("compares a list it cannot tell the entries of whole, and has nothing to compare with no declaration", () => {
     const twice = declaration({
       lanes: [
