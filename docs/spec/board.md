@@ -804,8 +804,9 @@ A mapping from an observation's key to what was found:
   holds a number too large to be held, or has a key named `__proto__`. From
   basou 0.72.0, when the board declares observations, it is refused too where
   it is not in the shape of its kind ([2.7](#27-observe)), and from basou
-  0.73.0 where an `http` value's `final_url` has a user, a query or a
-  fragment ([`http`](#http)); a `manual` value and a null are not checked.
+  0.73.0 where an `http` value's `final_url` has a user, a query, a
+  fragment or a character a terminal hides ([`http`](#http)); a `manual`
+  value and a null are not checked.
   With none declared, the keys of `observed` are free and their values are
   not checked. A refusal says where in the value
   (`observed["site.top"].value.status`); one of what a key holds shows what
