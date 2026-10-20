@@ -258,10 +258,13 @@ export function parseRecordInput(
     }
     // A value of the wrong shape, a number given as a string or a line break
     // copied with a version, would read as a change from the previous
-    // record's value: each is refused here, as the guide asks for it.
+    // record's value: each is refused here, as the guide asks for it. Only a
+    // JSON value is held against its kind: one that is not is refused above,
+    // and one nested too deep is never walked again.
     for (const o of declaration.observe) {
       const entry = Object.hasOwn(observed, o.key) ? observed[o.key] : undefined;
       if (!isRecord(entry) || entry.value === null || entry.value === undefined) continue;
+      if (!observedValue.safeParse(entry.value).success) continue;
       for (const problem of observedValueProblems(o, entry.value)) {
         errors.push(
           `${formatPath(["observed", o.key, "value", ...problem.path])}: ${problem.message}`,

@@ -1,5 +1,5 @@
-import { displayPath } from "../lib/display-path.js";
 import { BOARD_HTTP_MAX_REDIRECTS, type BoardObserve } from "./declaration.js";
+import { HIDDEN_CHAR, shownText } from "./shown-text.js";
 
 /** The lowest status an `http` observation's value may hold: a response's, never curl's `000`. */
 export const BOARD_HTTP_STATUS_MIN = 100;
@@ -7,7 +7,8 @@ export const BOARD_HTTP_STATUS_MIN = 100;
 /** The highest status an `http` observation's value may hold. */
 export const BOARD_HTTP_STATUS_MAX = 599;
 
-// How many characters of a value a problem shows of what it received.
+// How many characters of a value's JSON a problem shows of what it received,
+// an escape counted as one.
 const RECEIVED_MAX = 60;
 
 /** A problem of an observation's value: where in the value, and what is wrong. */
@@ -17,14 +18,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// What was received, as JSON on one line, cut short, with nothing in it that
-// acts on a terminal. The check of the input for other workspaces' names runs
-// before this one, so what is shown names none.
+// What was received, as JSON on one line, cut short where an escape of it
+// ends, with nothing in it that a terminal acts on or hides. The value is a
+// JSON value that nests no deeper than a record takes: record checks that
+// before it holds one against its kind. The check of the input for other
+// workspaces' names runs before this one, so what is shown names none.
 function received(value: unknown): string {
-  const text = value === undefined ? "nothing" : (JSON.stringify(value) ?? String(value));
-  const chars = [...text];
-  const cut = chars.length > RECEIVED_MAX ? `${chars.slice(0, RECEIVED_MAX).join("")}...` : text;
-  return `received ${displayPath(cut)}`;
+  let text: string;
+  try {
+    text = value === undefined ? "nothing" : (JSON.stringify(value) ?? String(value));
+  } catch {
+    return "received a value too deep to show";
+  }
+  const parts = text.match(/\\u[0-9a-fA-F]{4}|\\.|[\s\S]/gu) ?? [];
+  const shown = parts.slice(0, RECEIVED_MAX).map((part) => (part.length === 1 ? shownText(part) : part));
+  return `received ${shown.join("")}${parts.length > RECEIVED_MAX ? "..." : ""}`;
 }
 
 function isWholeNumber(value: unknown, min: number, max: number): value is number {
@@ -32,8 +40,10 @@ function isWholeNumber(value: unknown, min: number, max: number): value is numbe
 }
 
 // Characters a value copied from a command's output may carry by mistake:
-// a control character (a line break, a tab, an escape), and white space at
-// either end. Each would read as a change from the previous record's value.
+// a control character (a line break, a tab, an escape), one a terminal hides
+// (a zero-width or direction mark, a line separator, a byte order mark), and
+// white space at either end. Each would read as a change from the previous
+// record's value, and none is in what the guide's commands print.
 function hasControl(text: string): boolean {
   for (const c of text) {
     const code = c.codePointAt(0) ?? 0;
@@ -46,7 +56,11 @@ const SPACE_AT_AN_END = /^\s|\s$/u;
 
 function isPlainText(value: unknown): value is string {
   return (
-    typeof value === "string" && value !== "" && !hasControl(value) && !SPACE_AT_AN_END.test(value)
+    typeof value === "string" &&
+    value !== "" &&
+    !hasControl(value) &&
+    !HIDDEN_CHAR.test(value) &&
+    !SPACE_AT_AN_END.test(value)
   );
 }
 
@@ -62,9 +76,11 @@ function isAbsoluteHttpUrl(value: unknown): boolean {
 
 /**
  * What is wrong with the value of an observation, held against the shape its
- * kind gives it: every problem, in the order of the value's keys. A null value
- * (the observation was not made) is never held here, nor is a `manual` one,
- * which is what the operator answers.
+ * kind gives it: every problem, for an `http` value its keys it does not take
+ * first, then those left out, then status, redirects, final_url, words, count
+ * and capture. A null value (the observation was not made) is never held
+ * here, nor is a `manual` one, which is what the operator answers. The value
+ * is a JSON value no deeper than a record takes.
  */
 export function observedValueProblems(o: BoardObserve, value: unknown): ObservedValueProblem[] {
   const kind = `(kind '${o.kind}')`;
@@ -81,7 +97,7 @@ export function observedValueProblems(o: BoardObserve, value: unknown): Observed
         : [
             {
               path: [],
-              message: `must be a non-empty string with no space or line break at either end and no control character ${kind}, ${received(value)}`,
+              message: `must be a non-empty string with no space or line break at either end and no control or hidden character ${kind}, ${received(value)}`,
             },
           ];
     case "github_open_issues":

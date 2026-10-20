@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { displayPath } from "../lib/display-path.js";
 import {
   BOARD_HTTP_CAPTURE_FLAGS,
   BOARD_HTTP_COUNT_FLAGS,
@@ -13,6 +12,7 @@ import {
 import { daysBetween, todayIn } from "./effort.js";
 import { BOARD_INIT_SAVE } from "./init.js";
 import type { BoardPreviousRecords } from "./previous.js";
+import { escapeHidden, HIDDEN, shownText as shown } from "./shown-text.js";
 
 /**
  * The steps an agent follows to judge a board and record it, filled in with
@@ -74,28 +74,10 @@ export function shellWord(text: string): string {
   return `'${text.replaceAll("'", `'\\''`)}'`;
 }
 
-// What a terminal would act on, or hides: the C1 controls, the Arabic letter
-// mark, the zero-width and direction marks, the line and paragraph
-// separators, the bidirectional controls, the word joiner and the invisible
-// operators, and the byte order mark.
-const HIDDEN = /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g;
-
-const escapeHidden = (c: string) => `\\u${(c.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`;
-
 // JSON with what a terminal would act on, or hides, escaped as well:
 // JSON.stringify leaves those as they are.
 function jsonText(value: unknown, indent?: number): string {
   return JSON.stringify(value, null, indent).replace(HIDDEN, escapeHidden);
-}
-
-// A surrogate not in a pair, which JSON.stringify writes as an escape.
-const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
-
-// A text as the guide shows it: as displayPath shows it, with what jsonText
-// escapes escaped too (a surrogate not in a pair among it), so that the
-// prose, a source and the template show a value alike.
-function shown(text: string): string {
-  return displayPath(text).replace(HIDDEN, escapeHidden).replace(LONE_SURROGATE, escapeHidden);
 }
 
 const LANGUAGE_NAMES = { en: "English (en)", ja: "Japanese (ja)" } as const;
@@ -588,7 +570,7 @@ function kindText(kind: BoardObserve["kind"]): string {
     case "page_version":
       return "the first `v<major>.<minor>.<patch>` (with what follows a `-`) a page shows, not right after a letter, digit, underscore or dot, once its generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's). Value: the version it prints, as a string (such as \"v1.2.3\"). A failed fetch, or no version on the page (exit 1), is a null with that as the error.";
     case "http":
-      return `a GET, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects, with no \`-f\`: a 4xx or 5xx is a value, not an observation not made (the status is what was observed). The block keeps curl's status line and its exit code in W beside the body, and the script reads them: it prints the whole entry on one line, to put under the key as it is. The value holds \`status\`, \`redirects\` and \`final_url\`, and what the observation reads off the body: \`words\`, whether the body holds each word, true or false in the order declared, found as written, character for character, with HTML entities not decoded; \`count\`, how many times the count_pattern matches (0 when it does not); \`capture\`, what the first group of the first match of the capture_pattern holds (null when nothing matches, or when the group takes no part). The patterns are matched against the whole body at once, not line by line as a measure's \`pattern\` is, so \`^\` and \`$\` are the body's start and end. When the status is not 2xx the body is not read, and each read is a null, not a list of nulls: an error page's text is not the page's. When curl exits other than 0 (the name does not resolve, TLS fails, 20 seconds pass, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47), or the body cannot be read, the value is null and the error says why.`;
+      return `a GET, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects, with no \`-f\`: a 4xx or 5xx is a value, not an observation not made (the status is what was observed). The block keeps curl's status line and its exit code in W beside the body, and the script reads them: it prints the whole entry on one line, to put under the key as it is. The value holds \`status\`, \`redirects\` and \`final_url\`, and what the observation reads off the body: \`words\`, whether the body holds each word, true or false in the order declared, found as written, character for character, with HTML entities not decoded; \`count\`, how many times the count_pattern matches (0 when it does not); \`capture\`, what the first group of the first match of the capture_pattern holds (null when nothing matches, or when the group takes no part). The patterns are matched against the whole body at once, not line by line as a measure's \`pattern\` is, so \`^\` and \`$\` are the body's start and end. When the status is not 2xx the body is not read, and each read is a null, not a list of nulls: an error page's text is not the page's. When curl exits other than 0 (the name does not resolve, TLS fails, 20 seconds pass, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47), its status is not one of an HTTP response (100 to 599, such as a server answering 600), or the body cannot be read, the value is null and the error says why. The line escapes what a terminal would act on or hide (a line separator, a direction mark), as JSON does a line break: the value read is the same.`;
     case "manual":
       return "only the operator can make it. Ask the operator, and do not make it yourself. Ask for one thing they can do as it is written: the line to run and where to run it, or the page to open, and what to send back. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`. When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.";
   }
@@ -675,19 +657,24 @@ function sourceOf(o: BoardObserve): string {
 // is not a value of the declaration's. The body is read only when the status
 // is 2xx, decoded once all of it is read, so a character is never cut where a
 // chunk ends, and with a leading BOM taken off; nothing else of it is decoded.
-// An empty match would count positions, not matches: it is no observation.
-// Written with no ' and no backslash, so that it is one single-quoted word.
+// An empty match would count positions, not matches: it is no observation,
+// and so is a status no response has (curl prints what a server answers, 600
+// too). The line escapes what a terminal would act on or hide, as jsonText
+// does. Written with no ' and no backslash, so that it is one single-quoted
+// word.
 const HTTP_SCRIPT = [
   'const fs = require("fs");',
   'const [at, url, count, capture, ...words] = process.argv.slice(process.argv.indexOf("--") + 1);',
-  "const print = (value, error) => console.log(JSON.stringify({ value, observed_at: new Date().toISOString(), source: url, ...(error === undefined ? {} : { error }) }));",
+  "const hidden = (n) => (n >= 0x7f && n <= 0x9f) || n === 0x61c || (n >= 0x200b && n <= 0x200f) || (n >= 0x2028 && n <= 0x202e) || (n >= 0x2060 && n <= 0x2069) || n === 0xfeff;",
+  'const shown = (s) => [...s].map((c) => (hidden(c.codePointAt(0)) ? String.fromCharCode(92) + "u" + c.codePointAt(0).toString(16).padStart(4, "0") : c)).join("");',
+  "const print = (value, error) => console.log(shown(JSON.stringify({ value, observed_at: new Date().toISOString(), source: url, ...(error === undefined ? {} : { error }) })));",
   "const read = () => {",
   'const exit = fs.readFileSync(at + ".exit", "utf8").trim();',
   `if (exit !== "0") return print(null, "curl exit " + exit + (exit === "47" ? ": more than ${BOARD_HTTP_MAX_REDIRECTS} redirects" : exit === "28" ? ": no answer in 20 seconds" : exit === "6" ? ": the name does not resolve" : exit === "7" ? ": no connection" : ""));`,
   'const m = /^([0-9]{3}) ([0-9]+) (.*)$/.exec(fs.readFileSync(at + ".meta", "utf8").trimEnd());',
   'if (m === null) return print(null, "curl printed no status line");',
   "const status = Number(m[1]);",
-  'if (status < 100 || status > 599) return print(null, "no HTTP response (status " + m[1] + ")");',
+  'if (status < 100 || status > 599) return print(null, "the status " + m[1] + " is not one of an HTTP response (100 to 599)");',
   "const v = { status, redirects: Number(m[2]), final_url: m[3] };",
   "const ok = status >= 200 && status <= 299;",
   'let t = "";',

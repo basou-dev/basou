@@ -555,11 +555,11 @@ describe("parseRecordInput: the value of each kind of observation", () => {
       errorsOf({ npm: "1.2.3\n", release: "", ci: " success", check: 1, page: "v1\u0007" }),
     ).toEqual(
       [
-        `observed.release.value: must be a non-empty string with no space or line break at either end and no control character (kind 'github_release'), received ""`,
-        `observed.ci.value: must be a non-empty string with no space or line break at either end and no control character (kind 'github_ci'), received " success"`,
-        "observed.check.value: must be a non-empty string with no space or line break at either end and no control character (kind 'github_check'), received 1",
-        `observed.page.value: must be a non-empty string with no space or line break at either end and no control character (kind 'page_version'), received "v1\\u0007"`,
-        `observed.npm.value: must be a non-empty string with no space or line break at either end and no control character (kind 'npm_version'), received "1.2.3\\n"`,
+        `observed.release.value: must be a non-empty string with no space or line break at either end and no control or hidden character (kind 'github_release'), received ""`,
+        `observed.ci.value: must be a non-empty string with no space or line break at either end and no control or hidden character (kind 'github_ci'), received " success"`,
+        "observed.check.value: must be a non-empty string with no space or line break at either end and no control or hidden character (kind 'github_check'), received 1",
+        `observed.page.value: must be a non-empty string with no space or line break at either end and no control or hidden character (kind 'page_version'), received "v1\\u0007"`,
+        `observed.npm.value: must be a non-empty string with no space or line break at either end and no control or hidden character (kind 'npm_version'), received "1.2.3\\n"`,
       ].sort((a, b) => order(a) - order(b)),
     );
   });
@@ -634,11 +634,107 @@ describe("parseRecordInput: the value of each kind of observation", () => {
     ]);
   });
 
+  it("refuses a string of a kind with a control or a hidden character anywhere, or a space at its end, and keeps a capture as it is", () => {
+    const refusedWith = (value: string) =>
+      errorsOf({ release: value }).map((e) => e.slice(0, e.indexOf(" (kind")));
+    const refusal =
+      "observed.release.value: must be a non-empty string with no space or line break at either end and no control or hidden character";
+    for (const value of [
+      "v1\u001fx",
+      "v1\u007f",
+      "v1\u0085x",
+      "v1\u009f",
+      "1.2.3 ",
+      "v1\u200bx",
+      "v1\u202ex",
+      "v1\u2028x",
+      "\ufeffv1",
+      "v1\u2060x",
+      "v1\u061cx",
+    ]) {
+      expect(refusedWith(value), JSON.stringify(value)).toEqual([refusal]);
+    }
+    expect(errorsOf({ release: "v1 x" })).toEqual([]);
+    expect(errorsOf({ "site.shop": { ...shopRead, capture: "\u200b2.3\u2028" } })).toEqual([]);
+  });
+
+  it("refuses a read of a 2xx body that is null or of another shape, and any read of a body not 2xx, at the edges of 2xx", () => {
+    expect(errorsOf({ "site.shop": { ...shopRead, words: [true, "false"], count: null } })).toEqual(
+      [
+        'observed["site.shop"].value.words: must be a list of 2 true or false, one for each word declared, in its order, received [true,"false"]',
+        `observed["site.shop"].value.count: must be a whole number from 0 to ${Number.MAX_SAFE_INTEGER} (0 when nothing matches), received null`,
+      ],
+    );
+    expect(errorsOf({ "site.shop": { ...shopRead, words: null } })).toEqual([
+      'observed["site.shop"].value.words: must be a list of 2 true or false, one for each word declared, in its order, received null',
+    ]);
+    for (const count of [-1, Number.MAX_SAFE_INTEGER + 1, 0.5]) {
+      expect(errorsOf({ "site.shop": { ...shopRead, count } })).toHaveLength(1);
+    }
+    expect(errorsOf({ "site.shop": { ...shopRead, count: Number.MAX_SAFE_INTEGER } })).toEqual([]);
+    // 299 is 2xx; 300 and 101 are not.
+    expect(errorsOf({ "site.shop": { ...shopRead, status: 299 } })).toEqual([]);
+    const notRead = { words: null, count: null, capture: null };
+    for (const status of [300, 101, 599, 100]) {
+      expect(errorsOf({ "site.shop": { ...shopRead, ...notRead, status } })).toEqual([]);
+      expect(
+        errorsOf({ "site.shop": { ...shopRead, ...notRead, status, capture: "2.3" } }),
+      ).toEqual([
+        `observed["site.shop"].value.capture: must be null: the status ${status} is not 2xx, so the body is not read, received "2.3"`,
+      ]);
+    }
+    expect(errorsOf({ "site.shop": { ...shopRead, status: 200, ...notRead } })).toHaveLength(2);
+  });
+
+  it("refuses negative redirects, and a URL with no // or a control in it, but takes a scheme in capitals", () => {
+    expect(errorsOf({ bare: { status: 200, redirects: -1, final_url: url } })).toEqual([
+      "observed.bare.value.redirects: must be a whole number from 0 to 10, received -1",
+    ]);
+    expect(errorsOf({ bare: { status: 200, redirects: 10, final_url: url } })).toEqual([]);
+    for (const finalUrl of [
+      "https:example.com/x",
+      "https://example.com/\u0001",
+      "https://e\u0085.com/",
+    ]) {
+      expect(
+        errorsOf({ bare: { status: 200, redirects: 0, final_url: finalUrl } }),
+        JSON.stringify(finalUrl),
+      ).toHaveLength(1);
+    }
+    expect(
+      errorsOf({ bare: { status: 200, redirects: 0, final_url: "HTTPS://example.com/" } }),
+    ).toEqual([]);
+  });
+
+  it("refuses a value nested too deep as before, and does not hold it against its kind", () => {
+    let deep: unknown = 1;
+    for (let i = 0; i < 20000; i++) deep = [deep];
+    const errors = errorsOf({
+      release: deep,
+      bare: { status: deep, redirects: 0, final_url: url },
+    });
+    expect(errors).toEqual([
+      expect.stringMatching(/^observed\.release\.value(\[0\])+: nests more than 100 deep$/),
+      expect.stringMatching(/^observed\.bare\.value\.status(\[0\])+: nests more than 100 deep$/),
+    ]);
+  });
+
+  it("shows what it received with what a terminal hides escaped, cut where an escape ends", () => {
+    expect(errorsOf({ release: "\ufeffv1" })).toEqual([
+      `observed.release.value: must be a non-empty string with no space or line break at either end and no control or hidden character (kind 'github_release'), received "\\ufeffv1"`,
+    ]);
+    // Each \n of the JSON is one of its 60: the cut never splits one.
+    const [error] = errorsOf({ release: `${"x".repeat(58)}\n\n` });
+    expect(error?.endsWith(`received "${"x".repeat(58)}\\n...`)).toBe(true);
+    const [astral] = errorsOf({ release: ` ${"\u{1F600}".repeat(80)}` });
+    expect(astral?.endsWith(`received " ${"\u{1F600}".repeat(58)}...`)).toBe(true);
+  });
+
   it("shows what it received cut short, with nothing that acts on a terminal", () => {
     // Refused for the space it starts with; shown with the override escaped.
     const [error] = errorsOf({ npm: ` \u202e${"x".repeat(100)}` });
     expect(error).toBe(
-      `observed.npm.value: must be a non-empty string with no space or line break at either end and no control character (kind 'npm_version'), received " \\u202e${"x".repeat(57)}...`,
+      `observed.npm.value: must be a non-empty string with no space or line break at either end and no control or hidden character (kind 'npm_version'), received " \\u202e${"x".repeat(57)}...`,
     );
   });
 });

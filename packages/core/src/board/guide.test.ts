@@ -944,7 +944,9 @@ describe("boardGuide: an http observation", () => {
     expect(guide).toContain(
       "When the status is not 2xx the body is not read, and each read is a null, not a list of nulls",
     );
-    expect(guide).toContain("more than 10 redirects: exit 47), or the body cannot be read");
+    expect(guide).toContain(
+      "more than 10 redirects: exit 47), its status is not one of an HTTP response (100 to 599, such as a server answering 600), or the body cannot be read",
+    );
     expect(guide).toContain(
       "record refuses another, such as a number given as a string, a string with a space or a line break at either end, or an `http` status that is not a response's (100 to 599)",
     );
@@ -1008,7 +1010,9 @@ describe("boardGuide: an http observation, run", () => {
       } else if (url === "/empty") res.writeHead(204).end();
       else if (url.startsWith("/body/") && bodies.has(url.slice(6))) {
         res.writeHead(200, { "content-type": "text/html" }).end(bodies.get(url.slice(6)));
-      } else res.writeHead(404).end("not here");
+      } else if (url.startsWith("/status/")) res.writeHead(Number(url.slice(8))).end("x");
+      // A body that a read of it, which a status not 2xx must not make, would find x in.
+      else res.writeHead(404).end("not here, x");
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -1163,6 +1167,89 @@ describe("boardGuide: an http observation, run", () => {
     expect(JSON.parse(out.split("\n")[0] as string)).toMatchObject({
       value: null,
       error: "curl exit 7: no connection",
+    });
+  });
+
+  it("reads a body at 299 and not at 300, and gives no value for a status no response has", async () => {
+    const get = await observe([
+      {
+        key: "shop",
+        kind: "http",
+        url: SHOP,
+        words: ["x"],
+        count_pattern: "x",
+        capture_pattern: "(x)",
+      },
+    ]);
+    expect((await get("shop", "/status/299")).value).toEqual({
+      status: 299,
+      redirects: 0,
+      final_url: `${origin}/status/299`,
+      words: [true],
+      count: 1,
+      capture: "x",
+    });
+    expect((await get("shop", "/status/300")).value).toEqual({
+      status: 300,
+      redirects: 0,
+      final_url: `${origin}/status/300`,
+      words: null,
+      count: null,
+      capture: null,
+    });
+    // curl prints what the server answers, and exits 0.
+    expect(await get("shop", "/status/600")).toMatchObject({
+      value: null,
+      error: "the status 600 is not one of an HTTP response (100 to 599)",
+    });
+  });
+
+  it("escapes in its line what a terminal would act on or hide, and keeps the value", async () => {
+    const get = await observe([
+      { key: "shop", kind: "http", url: SHOP, capture_pattern: "Version ([^<]+)" },
+    ]);
+    const odd = `1${String.fromCodePoint(0x2028)} 2${String.fromCodePoint(0x202e)}evil${String.fromCodePoint(0x85)}`;
+    bodies.set("odd", `Version ${odd}<`);
+    const guide = boardGuide(
+      guideInput({
+        anchor: dir,
+        board: declared(
+          httpDeclaration([
+            { key: "shop", kind: "http", url: SHOP, capture_pattern: "Version ([^<]+)" },
+          ]),
+        ),
+      }),
+    );
+    const block = blocksIn(guide).find((b) => b.includes('"$W/http-shop.body"')) as string;
+    const { out } = await run(block.replaceAll(`'${SHOP}'`, `'${origin}/body/odd'`));
+    expect(out.split("\n")).toHaveLength(3);
+    for (const code of [0x2028, 0x202e, 0x85]) {
+      expect(out.includes(String.fromCodePoint(code)), code.toString(16)).toBe(false);
+    }
+    expect(out).toContain("\\u2028");
+    expect((await get("shop", "/body/odd")).value).toMatchObject({ capture: odd });
+  });
+
+  it("gives no value when what curl left in W cannot be read", async () => {
+    const guide = boardGuide(
+      guideInput({
+        anchor: dir,
+        board: declared(httpDeclaration([{ key: "shop", kind: "http", url: SHOP }])),
+      }),
+    );
+    const write = blocksIn(guide).find((b) => b.includes("printf '%s\\n' '")) as string;
+    expect((await run(write)).out).toBe("exit=0\n");
+    const file = /"\$W\/(http-read-[0-9a-f]{12}\.cjs)"/.exec(write)?.[1] as string;
+    const work = boardGuideWorkDir(dir).replace(TMPDIR_WORD, dir);
+    const out = execFileSync(
+      "node",
+      [join(work, file), "--", join(work, "http-none"), SHOP, "", ""],
+      { encoding: "utf8" },
+    );
+    expect(JSON.parse(out)).toMatchObject({
+      value: null,
+      source: SHOP,
+      error: "what curl left in W could not be read",
     });
   });
 
