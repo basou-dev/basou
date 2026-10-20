@@ -69,13 +69,16 @@ export const BOARD_HTML = `<!doctype html>
   table.matrix th.stage { font-weight: 400; font-size: 12px; text-align: center; min-width: 64px; }
   table.matrix th.stage b { display: block; font-size: 13px; }
   table.matrix td.cell { text-align: center; font-size: 18px; line-height: 1; }
+  .stage-meanings { display: none; list-style: none; padding: 0; margin: 6px 0 0; font-size: 12px; color: var(--fg-2); }
   /* Six stages do not fit beside their meanings below about 600px: each is
-     drawn by its id (the meaning is its head's title), and a lane name wraps. */
+     drawn by its id, the meanings are listed under the matrix, and a lane
+     name wraps. After the rules above, which it overrides. */
   @media (max-width: 600px) {
     table.matrix th.stage { min-width: 0; padding: 4px 2px; }
     table.matrix th.stage .meaning { display: none; }
     table.matrix td.cell { font-size: 16px; padding: 4px 2px; }
     table.matrix th:first-child { max-width: 10em; overflow-wrap: anywhere; }
+    .stage-meanings { display: block; }
   }
   .st::before { display: inline-block; width: 1.2em; }
   .st.done::before { content: "\\25CF"; color: var(--done); }
@@ -705,10 +708,12 @@ export const BOARD_HTML = `<!doctype html>
         })
       )));
     }
-    // The meaning also as the title, read where a narrow screen hides it.
+    // The meaning is the head's title too, as a screen reader reads it and a
+    // pointer that hovers shows it, and the text beside the id is left out of
+    // what a screen reader reads, so that it is read once.
     var head = el('tr', null, [el('th', { text: S.matrix.lane })].concat(x.stages.map(function (s) {
       return el('th', { class: 'stage', title: s.meaning }, [
-        el('b', { text: s.id }), el('span', { class: 'meaning', text: s.meaning })
+        el('b', { text: s.id }), el('span', { class: 'meaning', 'aria-hidden': 'true', text: s.meaning })
       ]);
     })));
     var rows = x.lanes.map(function (lane) {
@@ -721,6 +726,11 @@ export const BOARD_HTML = `<!doctype html>
       })));
     });
     children.push(el('div', { class: 'scroll' }, [el('table', { class: 'matrix' }, [head].concat(rows))]));
+    // What each stage means, drawn where a narrow screen gives a stage its id
+    // alone (and hidden where the heads say it).
+    children.push(el('ul', { class: 'stage-meanings' }, x.stages.map(function (s) {
+      return el('li', null, [el('b', { text: s.id }), ' ' + s.meaning]);
+    })));
     var legend = el('div', { class: 'legend' });
     ['done', 'part', 'blocked', 'shelved', 'none', 'unverified'].forEach(function (s) {
       legend.appendChild(el('span', null, [el('span', { class: 'st ' + s }), stateName(s)]));

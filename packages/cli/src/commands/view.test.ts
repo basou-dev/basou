@@ -2022,7 +2022,7 @@ describe("basou view: the board page", () => {
     );
   });
 
-  it("puts each stage's meaning in its head's title, and draws a stage by its id alone on a narrow screen", () => {
+  it("puts each stage's meaning in its head's title, and draws a stage by its id alone on a narrow screen, with the meanings listed under the matrix", () => {
     const { call } = drawing(["matrix"]);
     const drawn = call("matrix", {
       matrix: {
@@ -2047,6 +2047,11 @@ describe("basou view: the board page", () => {
         ["span", "meaning", "Spec <b>x</b>"],
       ],
     ]);
+    // A screen reader reads the meaning once, as the title, not again as the text.
+    expect(stages.map((th) => th.children[1]?.attrs["aria-hidden"])).toEqual(["true", "true"]);
+    // The meanings listed under the matrix, as text.
+    const [listed] = drawn.find((n) => n.tag === "ul" && n.className === "stage-meanings");
+    expect(listed?.children.map((li) => li.text())).toEqual(["01 Concept", "02 Spec <b>x</b>"]);
     // The page's style, without its comments, and the rules of a part of it.
     const style = BOARD_HTML.slice(
       BOARD_HTML.indexOf("<style>") + "<style>".length,
@@ -2061,17 +2066,37 @@ describe("basou view: the board page", () => {
     expect(start).toBeGreaterThan(-1);
     const end = style.indexOf("\n  }", start) + "\n  }".length;
     const narrow = rules(style.slice(start + opener.length, end - 1));
-    expect(narrow["table.matrix th.stage .meaning"]).toBe("display: none;");
-    expect(narrow["table.matrix th.stage"]).toContain("min-width: 0;");
-    expect(narrow["table.matrix td.cell"]).toContain("padding: 4px 2px;");
-    // A long lane name wraps, in a column of a width it cannot pass.
-    expect(narrow["table.matrix th:first-child"]).toMatch(/max-width: \d+em;/);
-    expect(narrow["table.matrix th:first-child"]).toContain("overflow-wrap: anywhere;");
-    // Wider screens draw the matrix as before, its meanings shown.
+    expect(narrow).toEqual({
+      "table.matrix th.stage": "min-width: 0; padding: 4px 2px;",
+      "table.matrix th.stage .meaning": "display: none;",
+      "table.matrix td.cell": "font-size: 16px; padding: 4px 2px;",
+      // A long lane name wraps, in a column of a width it cannot pass.
+      "table.matrix th:first-child": "max-width: 10em; overflow-wrap: anywhere;",
+      ".stage-meanings": "display: block;",
+    });
+    // Its rules take the place of those of the same weight only by coming after them.
+    for (const selector of [
+      "table.matrix th.stage {",
+      "table.matrix td.cell {",
+      ".stage-meanings {",
+    ]) {
+      const at = style.indexOf(selector);
+      expect(at, selector).toBeGreaterThan(-1);
+      expect(at, selector).toBeLessThan(start);
+    }
+    expect(style.indexOf("table.matrix", end)).toBe(-1);
+    expect(style.indexOf(".stage-meanings", end)).toBe(-1);
+    // Wider screens draw the matrix as before: its meanings in the heads, no list.
     const wide = rules(style.slice(0, start) + style.slice(end));
     expect(wide["table.matrix th.stage"]).toContain("min-width: 64px;");
     expect(wide["table.matrix td.cell"]).toContain("font-size: 18px;");
-    expect(Object.keys(wide).filter((selector) => selector.includes("meaning"))).toEqual([]);
+    expect(Object.keys(wide).filter((selector) => selector.includes("meaning"))).toEqual([
+      ".stage-meanings",
+    ]);
+    expect(wide[".stage-meanings"]).toContain("display: none;");
+    for (const [selector, body] of Object.entries(wide)) {
+      if (selector.includes("th.stage")) expect(body, selector).not.toContain("display: none");
+    }
     expect(wide[".scroll"]).toContain("overflow-x: auto;");
   });
 

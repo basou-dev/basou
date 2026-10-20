@@ -78,7 +78,9 @@ All notable changes to **basou** are recorded here. The project follows
   after the charts of the effort, about 4,500px down a page 800px wide. The
   summary keeps its prose and its tiles, and the observations their rows,
   their notes and their `reported` mark, now on their section's heading. The
-  board measured on the spot, which draws no matrix, keeps its order.
+  board measured on the spot, which draws no matrix, keeps its order. The
+  list in `basou board guide` of what the page draws, and what the agent
+  writes for it, follows the new order.
 - **A record's board page folds the components counted in no lane** under
   one line that says how many they are (`Counted in no lane (123)`), closed
   until it is opened. A board that registers most of its components with
@@ -104,12 +106,13 @@ All notable changes to **basou** are recorded here. The project follows
   `main`) is written as before, so the sources of existing boards change
   only where a name needed quoting.
 - **The board page's reach matrix fits a narrow screen.** On a screen 600px
-  wide or less, each stage's head shows its id alone, the cells take less
-  room, and a long lane name wraps, so that the six stages and a lane name of
-  16 characters fit a phone 375px wide. The matrix was 479px wide in the
-  343px left for it there, with stages 05 and 06 out of sight to the right.
-  Each stage's head now carries its meaning as its title at every width, to
-  be read where it is hidden. A wider screen draws the matrix as before.
+  wide or less, each stage's head shows its id alone, the stages' meanings
+  are listed under the matrix, the cells take less room, and a long lane name
+  wraps, so that the six stages and a lane name of 16 characters fit a phone
+  375px wide. The matrix was 479px wide in the 343px left for it there, with
+  stages 05 and 06 out of sight to the right. Each stage's head also carries
+  its meaning as its title at every width, which a screen reader reads once
+  and a pointer that hovers shows. A wider screen draws the matrix as before.
 
 ## 0.72.0 — 2026-10-20
 
