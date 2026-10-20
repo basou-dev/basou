@@ -69,6 +69,17 @@ export const BOARD_HTML = `<!doctype html>
   table.matrix th.stage { font-weight: 400; font-size: 12px; text-align: center; min-width: 64px; }
   table.matrix th.stage b { display: block; font-size: 13px; }
   table.matrix td.cell { text-align: center; font-size: 18px; line-height: 1; }
+  .stage-meanings { display: none; list-style: none; padding: 0; margin: 6px 0 0; font-size: 12px; color: var(--fg-2); }
+  /* Six stages do not fit beside their meanings below about 600px: each is
+     drawn by its id, the meanings are listed under the matrix, and a lane
+     name wraps. After the rules above, which it overrides. */
+  @media (max-width: 600px) {
+    table.matrix th.stage { min-width: 0; padding: 4px 2px; }
+    table.matrix th.stage .meaning { display: none; }
+    table.matrix td.cell { font-size: 16px; padding: 4px 2px; }
+    table.matrix th:first-child { max-width: 10em; overflow-wrap: anywhere; }
+    .stage-meanings { display: block; }
+  }
   .st::before { display: inline-block; width: 1.2em; }
   .st.done::before { content: "\\25CF"; color: var(--done); }
   .st.part::before { content: "\\25D0"; color: var(--done); }
@@ -357,6 +368,13 @@ export const BOARD_HTML = `<!doctype html>
         k, el('div', { class: 'v', text: num(t.value) }), sub === null ? null : el('div', { class: 's', text: sub })
       ]));
     });
+    return section(S.sections.summary, false, [el('div', null, [prose(s.text), reported()]), tiles]);
+  }
+
+  // The observations outside, which the record holds in its summary, in a
+  // section of their own after the lanes.
+  function observations(b) {
+    var s = b.summary;
     var observed;
     if (s.observed.length === 0) {
       observed = el('p', { class: 'muted', text: S.observed.none });
@@ -399,17 +417,11 @@ export const BOARD_HTML = `<!doctype html>
         ])
       ].concat(rows))]);
     }
-    var observedHeading = el('h3', { text: S.observed.heading }, [reported()]);
-    var children = [
-      el('div', null, [prose(s.text), reported()]),
-      tiles,
-      observedHeading,
-      observed
-    ];
+    var children = [observed];
     if (s.previous_record === 'unreadable' && s.observed.length > 0) {
       children.push(el('p', { class: 'muted', text: S.observed.previousUnreadable }));
     }
-    return section(S.sections.summary, false, children);
+    return section(S.observed.heading, true, children);
   }
 
   var SVGNS = 'http://www.w3.org/2000/svg';
@@ -696,8 +708,13 @@ export const BOARD_HTML = `<!doctype html>
         })
       )));
     }
+    // The meaning is the head's title too, as a screen reader reads it and a
+    // pointer that hovers shows it, and the text beside the id is left out of
+    // what a screen reader reads, so that it is read once.
     var head = el('tr', null, [el('th', { text: S.matrix.lane })].concat(x.stages.map(function (s) {
-      return el('th', { class: 'stage' }, [el('b', { text: s.id }), s.meaning]);
+      return el('th', { class: 'stage', title: s.meaning }, [
+        el('b', { text: s.id }), el('span', { class: 'meaning', 'aria-hidden': 'true', text: s.meaning })
+      ]);
     })));
     var rows = x.lanes.map(function (lane) {
       return el('tr', null, [el('th', { text: lane.name })].concat(lane.cells.map(function (c) {
@@ -709,6 +726,11 @@ export const BOARD_HTML = `<!doctype html>
       })));
     });
     children.push(el('div', { class: 'scroll' }, [el('table', { class: 'matrix' }, [head].concat(rows))]));
+    // What each stage means, drawn where a narrow screen gives a stage its id
+    // alone (and hidden where the heads say it).
+    children.push(el('ul', { class: 'stage-meanings' }, x.stages.map(function (s) {
+      return el('li', null, [el('b', { text: s.id }), ' ' + s.meaning]);
+    })));
     var legend = el('div', { class: 'legend' });
     ['done', 'part', 'blocked', 'shelved', 'none', 'unverified'].forEach(function (s) {
       legend.appendChild(el('span', null, [el('span', { class: 'st ' + s }), stateName(s)]));
@@ -864,8 +886,10 @@ export const BOARD_HTML = `<!doctype html>
     var b = page.board;
     // The board's own title, so that boards open in other tabs can be told apart.
     document.title = b.heading.title;
-    [heading(b), summary(b), effort(b, false), matrix(b), lanes(b), measures(b), composition(b), turns(b),
-      recordRepos(b), recordComponents(b), footnotes(b)]
+    // Where each lane stops, right under the summary's tiles, and the lanes,
+    // before the observations and the charts of the effort.
+    [heading(b), summary(b), matrix(b), lanes(b), observations(b), effort(b, false), measures(b), composition(b),
+      turns(b), recordRepos(b), recordComponents(b), footnotes(b)]
       .forEach(function (node) { root.appendChild(node); });
   }
 
@@ -936,7 +960,7 @@ export const BOARD_HTML = `<!doctype html>
     return section(S.live.repos, false, children);
   }
   // The components the record found, by the lanes its registry counts them
-  // in, then those in no lane, those not registered, and those gone.
+  // in, then those in no lane (folded), those not registered, and those gone.
   function recordComponents(b) {
     var c = b.components;
     if (!c) return section(S.live.components, false, [el('p', { class: 'muted', text: S.record.componentsUnread })]);
@@ -962,7 +986,15 @@ export const BOARD_HTML = `<!doctype html>
     c.lanes.forEach(function (lane) {
       children = children.concat(group(lane.name, lane.components, S.record.noComponentInLane));
     });
-    children = children.concat(group(S.record.uncounted, c.uncounted, S.record.none));
+    // Those in no lane can be most of them: folded under how many they are.
+    if (c.uncounted.length > 0) {
+      children.push(el('details', null, [
+        el('summary', { text: fill(S.record.uncountedFolded, { n: num(c.uncounted.length) }) }),
+        el('ul', null, c.uncounted.map(item))
+      ]));
+    } else {
+      children = children.concat(group(S.record.uncounted, c.uncounted, S.record.none));
+    }
     children = children.concat(group(S.record.unacknowledged, c.unacknowledged, S.record.none));
     children.push(el('h3', { text: S.record.gone }));
     children.push(c.gone === null ? el('p', { class: 'muted', text: S.record.goneUnknown })

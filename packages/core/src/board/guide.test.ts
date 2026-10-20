@@ -1590,6 +1590,36 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
     }
   });
 
+  it("lists what the board page draws in the order a record's page draws it", () => {
+    const guide = boardGuide(
+      guideInput({
+        board: declared(httpDeclaration([{ key: "shop", kind: "http", url: SHOP }])),
+      }),
+    );
+    const list = guide.slice(
+      guide.indexOf("## What the board page draws, and what you write"),
+      guide.indexOf("## Do not"),
+    );
+    const items = list
+      .split("\n")
+      .filter((line) => /^\d+\. /.test(line))
+      .map((line) => line.slice(0, line.indexOf(":")));
+    expect(items).toEqual([
+      "1. Heading",
+      "2. Summary",
+      "3. Reach matrix",
+      "4. Each lane",
+      "5. Observed outside",
+      "6. Period and effort",
+      "7. Ratios",
+      "8. Operator's turns",
+      "9. Footnotes",
+    ]);
+    // The summary draws its tiles; the observations are a section of their own.
+    expect(list).toContain("basou draws the tiles.\n");
+    expect(list).not.toContain("table of observations");
+  });
+
   it("prints each observation's notes under how it is made, and nothing for one without", () => {
     const guide = boardGuide(
       guideInput({

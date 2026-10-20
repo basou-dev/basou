@@ -962,6 +962,8 @@ export type BoardPageStrings = {
     componentsNotMeasured: string;
     noComponentInLane: string;
     uncounted: string;
+    /** The line the components in no lane are folded under, with `{n}` of them. */
+    uncountedFolded: string;
     unacknowledged: string;
     gone: string;
     goneUnknown: string;
@@ -1172,6 +1174,7 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     componentsNotMeasured: "The components were not measured:",
     noComponentInLane: "No component is registered in this lane.",
     uncounted: "Counted in no lane",
+    uncountedFolded: "Counted in no lane ({n})",
     unacknowledged: "Found, not registered",
     gone: "Registered or found before, not found now",
     goneUnknown: "not known (the previous record could not be read)",
@@ -1383,6 +1386,7 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     componentsNotMeasured: "構成要素は測れなかった:",
     noComponentInLane: "このレーンに登録した構成要素はない。",
     uncounted: "どのレーンにも数えない",
+    uncountedFolded: "どのレーンにも数えない（{n}）",
     unacknowledged: "見つかったが登録していない",
     gone: "登録していた・前回見つかったが、今回見つからない",
     goneUnknown: "分からない（前回の記録が読めない）",
