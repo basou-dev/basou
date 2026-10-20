@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffCells, diffMeasurements, diffObserved } from "./diff.js";
+import { diffCells, diffDeclarations, diffMeasurements, diffObserved } from "./diff.js";
 
 // A measurement cut down to the parts a diff looks at, and some it does not.
 function measurement(over: Record<string, unknown> = {}) {
@@ -344,5 +344,270 @@ describe("diffObserved", () => {
     const reordered = { v: { value: { y: [{ b: 2, a: 1 }], x: 1 } } };
     expect(diffObserved(keyed, reordered)).toEqual([]);
     expect(diffObserved(keyed, { v: { value: { x: 1, y: [{ a: 1, b: 3 }] } } })).toHaveLength(1);
+  });
+});
+
+describe("diffDeclarations", () => {
+  const STAGES = Object.fromEntries(
+    ["01", "02", "03", "04", "05", "06"].map((id) => [id, { meaning: `stage ${id}` }]),
+  );
+  // A declaration as a record of version 3 holds it, its defaults filled in.
+  function declaration(over: Record<string, unknown> = {}) {
+    return {
+      title: "Board",
+      stages: STAGES,
+      lanes: [
+        { id: "web", name: "Web" },
+        { id: "cli", name: "CLI", notes: ["mind the flags"] },
+      ],
+      measures: [
+        {
+          id: "readme.latest",
+          kind: "file_count",
+          unit: "files",
+          lane: ["web"],
+          repo: ".",
+          at: "worktree",
+          include: ["*.md"],
+        },
+        {
+          id: "src",
+          kind: "line_count",
+          unit: "lines",
+          repo: ".",
+          at: "worktree",
+          include: ["src/**"],
+        },
+      ],
+      ratios: [
+        { id: "r", label: "Docs to source", numerator: "readme.latest", denominator: "src" },
+      ],
+      components: { "app/db": { lane: ["cli"] }, app: { lane: "-", note: "the root" } },
+      axis: { version: 1, review_due_days: 60 },
+      effort: { start: "2026-04-28", time_zone: "Asia/Tokyo" },
+      observe: [{ key: "site.top", kind: "http", url: "https://example.com/" }],
+      ...over,
+    };
+  }
+
+  it("finds nothing changed in the same declaration, one of version 1 or 2 included", () => {
+    expect(diffDeclarations(declaration(), declaration())).toEqual([]);
+    // A record of version 1 holds a measure's lane as one id and no observe:
+    // the same board read as version 3 has not changed.
+    const v1 = declaration({ observe: undefined }) as Record<string, unknown>;
+    delete v1.observe;
+    v1.measures = (v1.measures as Record<string, unknown>[]).map((m) =>
+      m.lane === undefined ? m : { ...m, lane: "web" },
+    );
+    expect(diffDeclarations(v1, declaration({ observe: [] }))).toEqual([]);
+    // A key whose value is undefined is not there, as in a record.
+    expect(diffDeclarations(declaration(), { ...declaration(), extra: undefined })).toEqual([]);
+  });
+
+  it("names each place that changed as a diff names a value, in the order the declaration holds them", () => {
+    const after = declaration({
+      stages: { ...STAGES, "03": { meaning: "stage 03", look: ["the tests"] } },
+      lanes: [
+        { id: "cli", name: "CLI", notes: ["mind the flags", "and the exit codes"] },
+        { id: "web", name: "Web", about: "the site" },
+        { id: "api", name: "API" },
+      ],
+      measures: [
+        {
+          id: "readme.latest",
+          kind: "file_count",
+          unit: "files",
+          lane: ["web"],
+          repo: ".",
+          at: "HEAD",
+          include: ["*.md", "docs/*.md"],
+        },
+        {
+          id: "src",
+          kind: "line_count",
+          unit: "lines",
+          repo: ".",
+          at: "worktree",
+          include: ["src/**"],
+        },
+      ],
+      ratios: [
+        { id: "r", label: "Docs per source", numerator: "readme.latest", denominator: "src" },
+      ],
+      components: { "app/db": { lane: ["web"] }, "app/web": { lane: ["web"] } },
+      axis: { version: 2, review_due_days: 60, seed_review: { date: "2026-10-01", model: "M" } },
+      effort: {
+        start: "2026-04-28",
+        time_zone: "Asia/Tokyo",
+        milestones: [{ date: "2026-05-01", label: "Open", ref: "v0.1.0" }],
+      },
+      observe: [
+        { key: "site.top", kind: "http", url: "https://example.com/", words: ["in stock"] },
+        { key: "npm", kind: "npm_version", package: "basou", notes: ["the latest tag"] },
+      ],
+    });
+    expect(diffDeclarations(declaration(), after)).toEqual([
+      { at: "stages.03.look", change: "added" },
+      { at: 'lanes["cli"].notes', change: "changed" },
+      { at: 'lanes["web"].about', change: "added" },
+      { at: 'lanes["api"]', change: "added" },
+      { at: "lanes", change: "reordered" },
+      { at: 'measures["readme.latest"].at', change: "changed" },
+      { at: 'measures["readme.latest"].include', change: "changed" },
+      { at: 'ratios["r"].label', change: "changed" },
+      { at: 'components["app/db"].lane', change: "changed" },
+      { at: 'components["app/web"]', change: "added" },
+      { at: "components.app", change: "removed" },
+      { at: "axis.version", change: "changed" },
+      { at: "axis.seed_review", change: "added" },
+      { at: "effort.milestones", change: "added" },
+      { at: 'observe["site.top"].words', change: "added" },
+      { at: 'observe["npm"]', change: "added" },
+    ]);
+    expect(
+      diffDeclarations(
+        declaration({ observe: [{ key: "site.top", kind: "http", url: "https://a.example/" }] }),
+        declaration({
+          observe: [{ key: "site.top", kind: "page_version", url: "https://a.example/" }],
+        }),
+      ),
+    ).toEqual([{ at: 'observe["site.top"].kind', change: "changed" }]);
+    expect(diffDeclarations(declaration(), declaration({ observe: [] }))).toEqual([
+      { at: 'observe["site.top"]', change: "removed" },
+    ]);
+  });
+
+  it("leaves out what the measurement's diff shows already", () => {
+    const after = declaration({
+      title: "Another board",
+      measures: [
+        // The unit and the lanes are values of the measurement.
+        {
+          id: "readme.latest",
+          kind: "file_count",
+          unit: "docs",
+          repo: ".",
+          at: "worktree",
+          include: ["*.md"],
+        },
+        {
+          id: "src",
+          kind: "line_count",
+          unit: "lines",
+          lane: ["cli"],
+          repo: ".",
+          at: "worktree",
+          include: ["src/**"],
+        },
+        // A measure added is a value added.
+        {
+          id: "more",
+          kind: "file_count",
+          unit: "files",
+          repo: ".",
+          at: "worktree",
+          include: ["*"],
+        },
+      ],
+      ratios: [
+        { id: "r", label: "Docs to source", numerator: "src", denominator: "readme.latest" },
+        { id: "s", label: "New", numerator: "src", denominator: "more" },
+      ],
+      effort: { start: "2026-05-01", time_zone: "UTC" },
+    });
+    expect(diffDeclarations(declaration(), after)).toEqual([]);
+    // A measure and a ratio removed are values removed.
+    expect(diffDeclarations(after, declaration())).toEqual([]);
+    // A time zone declared only once may be this host's either way: it is listed.
+    const without = declaration({ effort: { start: "2026-04-28" } });
+    expect(diffDeclarations(declaration(), without)).toEqual([
+      { at: "effort.time_zone", change: "removed" },
+    ]);
+    expect(diffDeclarations(without, declaration())).toEqual([
+      { at: "effort.time_zone", change: "added" },
+    ]);
+  });
+
+  it("says the lanes' order changed only when the lanes both hold are in another order", () => {
+    const lane = (id: string) => ({ id, name: id.toUpperCase() });
+    const lanes = (...ids: string[]) => declaration({ lanes: ids.map(lane) });
+    // A lane added or removed leaves the others in their order.
+    expect(diffDeclarations(lanes("web", "cli"), lanes("web", "cli", "api"))).toEqual([
+      { at: 'lanes["api"]', change: "added" },
+    ]);
+    expect(diffDeclarations(lanes("web", "api", "cli"), lanes("web", "cli"))).toEqual([
+      { at: 'lanes["api"]', change: "removed" },
+    ]);
+    expect(diffDeclarations(lanes("web", "cli"), lanes("api", "web", "cli"))).toEqual([
+      { at: 'lanes["api"]', change: "added" },
+    ]);
+    expect(diffDeclarations(lanes("web", "cli", "api"), lanes("cli", "web"))).toEqual([
+      { at: 'lanes["api"]', change: "removed" },
+      { at: "lanes", change: "reordered" },
+    ]);
+    // The order of the measures, the ratios and the observations is no change.
+    const before = declaration({
+      measures: [
+        { id: "a", kind: "file_count", unit: "files", repo: ".", at: "worktree", include: ["*"] },
+        { id: "b", kind: "file_count", unit: "files", repo: ".", at: "worktree", include: ["*"] },
+      ],
+      ratios: [
+        { id: "r", label: "R", numerator: "a", denominator: "b" },
+        { id: "s", label: "S", numerator: "b", denominator: "a" },
+      ],
+      observe: [
+        { key: "one", kind: "npm_version", package: "one" },
+        { key: "two", kind: "npm_version", package: "two" },
+      ],
+    });
+    const reversed = Object.fromEntries(
+      Object.entries(before).map(([key, value]) => [
+        key,
+        key === "lanes" || !Array.isArray(value) ? value : [...value].reverse(),
+      ]),
+    );
+    expect(diffDeclarations(before, reversed)).toEqual([]);
+  });
+
+  it("says nothing it cannot compare rather than throw, for a declaration nested too deep", () => {
+    const depth = 100_000;
+    const deep = JSON.parse(`${"[".repeat(depth)}"x"${"]".repeat(depth)}`);
+    expect(() => JSON.stringify(deep)).toThrow(RangeError);
+    const notes = (n: unknown) => declaration({ lanes: [{ id: "web", name: "Web", notes: n }] });
+    // Compared whole, with what the board declares now.
+    expect(diffDeclarations(notes(deep), notes(["x"]))).toBeNull();
+    // Only in the previous record: not walked into, so it is said.
+    expect(diffDeclarations(declaration({ deeper: deep }), declaration())).toEqual([
+      { at: "deeper", change: "removed" },
+    ]);
+    // Deep as an object on both sides, walked key by key.
+    let nested: Record<string, unknown> = {};
+    for (let i = 0; i < depth; i++) nested = { a: nested };
+    expect(
+      diffDeclarations(declaration({ axis: nested }), declaration({ axis: nested })),
+    ).toBeNull();
+  });
+
+  it("compares a list it cannot tell the entries of whole, and has nothing to compare with no declaration", () => {
+    const twice = declaration({
+      lanes: [
+        { id: "web", name: "Web" },
+        { id: "web", name: "Web again" },
+      ],
+    });
+    expect(diffDeclarations(twice, declaration())).toEqual([{ at: "lanes", change: "changed" }]);
+    expect(diffDeclarations(declaration({ observe: "none" }), declaration())).toEqual([
+      { at: "observe", change: "changed" },
+    ]);
+    // A key that is not a plain word is quoted, as a diff quotes it.
+    expect(
+      diffDeclarations(
+        declaration({ stages: { ...STAGES, "a b": { meaning: "x" } } }),
+        declaration(),
+      ),
+    ).toEqual([{ at: 'stages["a b"]', change: "removed" }]);
+    for (const none of [null, "x", [], undefined]) {
+      expect(diffDeclarations(none, declaration())).toBeNull();
+    }
   });
 });

@@ -5,6 +5,48 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Added
+
+- **`basou board measure` and `basou board record` say where the declaration
+  changed since the previous record**, in the text they print without
+  `--json`: under `Since the previous record <ULID>:`, one line for each
+  place where board.yaml differs from the declaration that record holds,
+  named as a diff names a value (`declaration stages.03.look: changed`,
+  `declaration observe["site.top"]: added`, `declaration lanes: the order
+  changed`). A changed `look` or `notes` moved the digest, and nothing said
+  where. Both declarations are compared as a record holds them, so the first
+  record after a board moves to version 3 lists nothing for that alone, and
+  what the diff of the measurement shows already (the title, a measure's
+  unit and lanes, a ratio's numerator and denominator, the effort's start, a
+  time zone declared in both, a measure or a ratio added or removed) is not
+  listed again. The JSON of both commands is unchanged. The guide asks for
+  an axis review's summary from these lines.
+- **The board page of `basou view` reads each observation outside as its
+  kind does, and marks what moved.** An `http` value in the shape its
+  declaration gives it is drawn as its parts: the status, the redirects,
+  where it landed, each word found or not, the count and the capture, or
+  that the body was not read when the status is not 2xx. A value of another
+  shape, as a record written before 0.72.0 may hold, is drawn as before.
+  Under each name are its kind and what it looks at, and under each row its
+  notes, from the declaration the record holds. An observation made whose
+  value or error moved since the previous record (as `basou board record`
+  compares them) is marked, with the previous record's value drawn by that
+  record's declaration; one whose type alone moved (`"12"` and `12`) is drawn
+  as JSON. One not made is drawn as before, as not observed with the previous
+  record's value, unmarked. Nothing is marked when there is no previous
+  record, or it cannot be read (a line under the table says so) or compared.
+- **The board page draws every measure in a table of its own**, with its
+  unit (none for a string, and the paths of a `file_paths` by how many), the
+  lanes it is drawn in, and, for a number, how much it moved since the
+  previous record. A measure with no lane was drawn nowhere on the page.
+- **A record's board page draws the repos and the components it measured**,
+  as the page measured on the spot draws them: the repos by the record's
+  version (one of version 1 or 2 measured no base, commits ahead or fetch
+  time, and its `behind_main` is drawn as behind), and the components by
+  the lanes the registry counts them in, then those counted in no lane with
+  their notes, those found and not registered, and those gone, with a
+  change of kinds marked.
+
 ### Changed
 
 - **`basou board record` (and `--dry-run`) refuses an observation's value

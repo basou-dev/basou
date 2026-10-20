@@ -219,8 +219,9 @@ Every measure has:
 
 A `lane` is read as a list whatever the version, so a record holds a list
 (`lane: cli` is `["cli"]`). A measure with no lane is drawn in no lane's
-section, and is still kept in the records, compared with the previous record
-and usable by a ratio or a total.
+section. Every measure, with a lane or without, is drawn in the board page's
+table of measures (from basou 0.72.0), kept in the records, compared with the
+previous record and usable by a ratio or a total.
 
 | Kind | Since | Reads | Value |
 |---|---|---|---|
@@ -499,7 +500,7 @@ Every observation has:
 |---|---|---|---|
 | `key` | yes | 2 | an id, or from version 3 a dotted id |
 | `kind` | yes | 2 | one of the kinds below |
-| `notes` | no | 3 | a list of non-empty strings: what to mind when making it; the guide prints them under its commands |
+| `notes` | no | 3 | a list of non-empty strings: what to mind when making it; the guide prints them under its commands, and the board page under the observation |
 
 The values of an observation are put into commands, each as one
 single-quoted word, so each is held to a shape that cannot end its quotation
@@ -857,6 +858,11 @@ no such cell); and `observed` lists each observation whose value or error
 moved, as `{ name, before, after }`, each `{ value, error }` (no `error` when
 there is none), or null where there was no such observation.
 
+Without `--json`, the text says where the record is, then what moved since the
+previous record: the cells, the observations, the measurement's `diff`, and,
+from basou 0.72.0, where the declaration changed ([5.12](#512-diff)), which
+the JSON does not hold.
+
 ## 4. A record
 
 `records/<ULID>.json`, written whole (to a file of another name, then linked
@@ -1190,7 +1196,9 @@ no previous record, and null with an entry at `diff` when it cannot be read.
 - **Compared** are the values the digest covers, except `measured_with`,
   `methods` (compared on their own), `effort.daily` (its rows only grow) and
   `components.kind_changed` (already a change since the previous record).
-  The declaration, which the digest also covers, is not compared.
+  The declaration, which the digest also covers, is not compared in `diff`:
+  the JSON holds no change of it. The text `basou board measure` and `basou
+  board record` print without `--json` lists it (see below).
 - Values are equal when their JSON is, keys sorted. A list whose entries name
   themselves is compared entry by entry: `repos` by `path`,
   `trail.tracks_open` by `id`, `not_found` by `at`. `components.unacknowledged`
@@ -1199,6 +1207,36 @@ no previous record, and null with an entry at `diff` when it cannot be read.
   `added`, one that went out is `removed`); any other list is compared whole.
 - A measure's lane held as one id, as a record of version 1 or 2 holds it, is
   equal to the list of that one.
+
+**Where the declaration changed, in the text only.** From basou 0.72.0, the
+text `basou board measure` and `basou board record` print without `--json`
+lists, under `Since the previous record <ULID>:` and after what moved in the
+measurement, each place where the declaration the board is measured by now
+differs from the one the previous record holds, one line each:
+`declaration <where>: added`, `removed` or `changed`, and
+`declaration lanes: the order changed`. No key of the JSON holds these.
+
+- `<where>` names the place as `at` does: `stages.03.look`,
+  `lanes["web"].notes`, `observe["site.top"]` (an observation added or
+  removed), `measures["readme.latest"].include`, `components["app/db"].lane`.
+- Both declarations are compared as a record holds them
+  ([4.2](#42-declaration)): with their defaults filled in, and a record of
+  version 1 with `observe` as `[]`. A measure's lane is not listed (see
+  below), so the first record after a board moves to version 3 lists nothing
+  for its lanes held as one id.
+- The lanes, the measures and the ratios are compared by id, and the
+  observations by key, each key of an entry on its own; the lanes' order is
+  one line of its own. Any other list (`notes`, `look`, `words`, `include`,
+  `effort.milestones`) is compared whole.
+- Not listed again is what `values`, `added` and `removed` show already: the
+  title, a measure's `unit` and `lane`, a ratio's `numerator` and
+  `denominator`, `effort.start`, `effort.time_zone` when both declare one,
+  and a measure or a ratio added or removed (its values are added or
+  removed).
+- When the previous record holds no declaration that is an object, or one
+  nested too deep to compare (only a record written by hand can), one line
+  says it is not compared: `declaration: not compared (...)`. The record is
+  still written.
 
 ### 5.13 The digest
 

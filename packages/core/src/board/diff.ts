@@ -213,6 +213,131 @@ export function diffMeasurements(before: unknown, after: unknown, against: strin
   return { against, values, methods, added, removed };
 }
 
+/**
+ * A place where the declaration a board was measured by is not the previous
+ * record's: an entry or a key there only now (`added`), only then
+ * (`removed`), or there in both with another value (`changed`); or, for the
+ * lanes, the same lanes in another order (`reordered`).
+ */
+export type BoardDeclarationChange = {
+  /** Where, as a diff names a value: `stages.03.look`, `lanes["web"].notes`. */
+  at: string;
+  change: "added" | "removed" | "changed" | "reordered";
+};
+
+// The lists of a declaration whose entries name themselves, by the field
+// that names them.
+const DECLARED_KEYED: Readonly<Record<string, string>> = {
+  lanes: "id",
+  measures: "id",
+  ratios: "id",
+  observe: "key",
+};
+// What the diff of the measurement shows already, as a value of the
+// measurement that moved: the title, a measure's unit and lanes, a ratio's
+// numerator and denominator, and the effort's start.
+const DECLARED_IN_VALUES = new Set([
+  "title",
+  "measures[].unit",
+  "measures[].lane",
+  "ratios[].numerator",
+  "ratios[].denominator",
+  "effort.start",
+]);
+// The lists whose entries, added or removed, the diff of the measurement
+// shows as values added or removed.
+const ENTRIES_IN_VALUES = new Set(["measures", "ratios"]);
+
+// The entries of a list by the field that names them, or undefined when an
+// entry is not an object named by a string, or a name is given twice: such a
+// list is compared whole.
+function byName(list: unknown, field: string): Map<string, unknown> | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const out = new Map<string, unknown>();
+  for (const entry of list) {
+    if (!isRecord(entry)) return undefined;
+    const name = entry[field];
+    if (typeof name !== "string" || out.has(name)) return undefined;
+    out.set(name, entry);
+  }
+  return out;
+}
+
+/**
+ * Where the declaration a board is measured by now differs from the one the
+ * previous record holds, in the order the declaration holds its keys, then
+ * those only the previous one had. Both are compared as a record holds them:
+ * their defaults filled in, and a record of version 1 with `observe` as `[]`.
+ * A list whose entries name themselves is compared entry by entry (lanes,
+ * measures and ratios by id, observations by key, and the lanes' order on its
+ * own), and any other list whole. Left out is what the measurement's diff
+ * shows already: the title, a measure's unit and lanes (there a lane of one
+ * id, as a record of version 1 or 2 holds it, is the list of that one, so
+ * moving a board to version 3 shows nothing for that alone), a ratio's
+ * numerator and denominator, the effort's start, a time zone declared in
+ * both, and a measure or a ratio added or removed. Null when the previous
+ * record holds no declaration as an object, or one too deep to compare: it
+ * never throws, so a caller that has written a record goes on.
+ */
+export function diffDeclarations(before: unknown, after: unknown): BoardDeclarationChange[] | null {
+  if (!isRecord(before) || !isRecord(after)) return null;
+  const was = Object.hasOwn(before, "observe") ? before : { ...before, observe: [] };
+  const out: BoardDeclarationChange[] = [];
+  const walk = (then: unknown, now: unknown, rule: string, shown: string): void => {
+    if (DECLARED_IN_VALUES.has(rule)) return;
+    if (then === undefined && now === undefined) return;
+    if (then === undefined || now === undefined) {
+      out.push({ at: shown, change: then === undefined ? "added" : "removed" });
+      return;
+    }
+    // The measurement's time zone is the one declared, when one is.
+    if (rule === "effort.time_zone" && typeof then === "string" && typeof now === "string") return;
+    const field = DECLARED_KEYED[rule];
+    const [old, current] =
+      field === undefined ? [undefined, undefined] : [byName(then, field), byName(now, field)];
+    if (old !== undefined && current !== undefined) {
+      const names = [...current.keys(), ...[...old.keys()].filter((n) => !current.has(n))];
+      for (const name of names) {
+        if (ENTRIES_IN_VALUES.has(rule) && (!old.has(name) || !current.has(name))) continue;
+        walk(old.get(name), current.get(name), `${rule}[]`, `${shown}[${JSON.stringify(name)}]`);
+      }
+      if (rule === "lanes") {
+        const kept = (from: Map<string, unknown>, other: Map<string, unknown>) =>
+          [...from.keys()].filter((n) => other.has(n));
+        if (!same(kept(old, current), kept(current, old))) {
+          out.push({ at: shown, change: "reordered" });
+        }
+      }
+      return;
+    }
+    if (field === undefined && isRecord(then) && isRecord(now)) {
+      const keys = [
+        ...Object.keys(now),
+        ...Object.keys(then).filter((k) => !Object.hasOwn(now, k)),
+      ];
+      for (const key of keys) {
+        walk(
+          Object.hasOwn(then, key) ? then[key] : undefined,
+          Object.hasOwn(now, key) ? now[key] : undefined,
+          rule === "" ? key : `${rule}.${key}`,
+          shownKey(shown, key),
+        );
+      }
+      return;
+    }
+    if (!same(then, now)) out.push({ at: shown, change: "changed" });
+  };
+  try {
+    // As a record would hold it: a key whose value is undefined is not there.
+    walk(was, JSON.parse(JSON.stringify(after)), "", "");
+  } catch {
+    // A declaration nested deeper than the stack goes, which only a record
+    // written by hand holds.
+    return null;
+  }
+  return out;
+}
+
 /** A cell whose state is not the previous record's (null where there was no such cell). */
 export type BoardCellChange = {
   lane: string;

@@ -235,6 +235,12 @@ describe("boardPage", () => {
         value: { status: 404, redirects: 0, final_url: "https://example.com/x", words: null },
         observed_at: "2026-10-07T00:00:00Z",
         source: "https://example.com/x",
+        // Read as its parts: the body of a 404 is not read.
+        http: { status: 404, redirects: 0, final_url: "https://example.com/x", body: null },
+        kind: "http",
+        looks_at: ["https://example.com/x"],
+        // The record before it observed no such thing.
+        moved: { status: "none" },
       },
     ]);
     expect((await boardPage(records, A)).status).toBe("ok");
@@ -324,6 +330,535 @@ describe("boardPage", () => {
     const [shop] = page.board.summary.observed;
     expect(shop?.previous).toEqual({ status: "value", value: { status: 200, words: [true] } });
     expect(Object.hasOwn(shop as object, "words")).toBe(false);
+  });
+
+  it("reads an http value in its shape as its parts, and draws one of another shape as it is", async () => {
+    await mkdir(records);
+    const made = (v: unknown) => ({ value: v, observed_at: "2026-10-07T00:00:00Z", source: "s" });
+    const r = record({
+      record_version: 3,
+      observed: {
+        shop: made({
+          status: 200,
+          redirects: 1,
+          final_url: "https://example.com/x/",
+          words: [true, false],
+          count: 42,
+          capture: "2.3",
+        }),
+        closed: made({
+          status: 503,
+          redirects: 0,
+          final_url: "http://example.com/",
+          words: null,
+          count: null,
+          capture: null,
+        }),
+        plain: made({ status: 301, redirects: 10, final_url: "https://example.com/y" }),
+        nomatch: made({
+          status: 200,
+          redirects: 0,
+          final_url: "https://a.example/",
+          capture: null,
+        }),
+        // The last status of 2xx: its body was read.
+        last: made({ status: 299, redirects: 0, final_url: "https://a.example/", words: [false] }),
+        // As a record written before 0.72.0 may hold it.
+        older: made({ status: 200, words: [true] }),
+        asked: made({ status: 200, redirects: 0, final_url: "https://a.example/" }),
+      },
+    });
+    const http = (key: string, more: Record<string, unknown> = {}) => ({
+      key,
+      kind: "http",
+      url: `https://example.com/${key}`,
+      ...more,
+    });
+    r.declaration = {
+      ...r.declaration,
+      observe: [
+        http("shop", {
+          words: ["in stock", "sold out"],
+          count_pattern: "item",
+          capture_pattern: "v(\\d)",
+        }),
+        http("closed", { words: ["a"], count_pattern: "b", capture_pattern: "(c)" }),
+        http("plain"),
+        http("nomatch", { capture_pattern: "(c)" }),
+        http("last", { words: ["a"] }),
+        http("older", { words: ["a"] }),
+        { key: "asked", kind: "manual", how: "ask" },
+      ],
+    } as typeof r.declaration;
+    await place(A, r);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    const byName = new Map(page.board.summary.observed.map((o) => [o.name, o]));
+    expect(byName.get("shop")?.http).toEqual({
+      status: 200,
+      redirects: 1,
+      final_url: "https://example.com/x/",
+      body: {
+        words: [
+          { word: "in stock", found: true },
+          { word: "sold out", found: false },
+        ],
+        count: 42,
+        capture: "2.3",
+      },
+    });
+    // Not 2xx: the body was not read.
+    expect(byName.get("closed")?.http).toEqual({
+      status: 503,
+      redirects: 0,
+      final_url: "http://example.com/",
+      body: null,
+    });
+    // Nothing read off the body: no body at all.
+    expect(byName.get("plain")?.http).toEqual({
+      status: 301,
+      redirects: 10,
+      final_url: "https://example.com/y",
+    });
+    expect(byName.get("nomatch")?.http?.body).toEqual({ capture: null });
+    expect(byName.get("last")?.http?.body).toEqual({ words: [{ word: "a", found: false }] });
+    // Out of the shape its declaration gives it, or of a kind with no shape: as it is.
+    expect(byName.get("older")?.http).toBeUndefined();
+    expect(byName.get("older")?.words).toEqual([{ word: "a", found: true }]);
+    expect(byName.get("asked")?.http).toBeUndefined();
+    expect(byName.get("asked")?.kind).toBe("manual");
+  });
+
+  it("gives each observation its kind, what it looks at and its notes, as the record declares them", async () => {
+    await mkdir(records);
+    const made = { value: "x", observed_at: "2026-10-07", source: "s" };
+    const r = record({
+      record_version: 3,
+      observed: { ci: made, check: made, npm: made, page: made, odd: made, undeclared: made },
+    });
+    r.declaration = {
+      ...r.declaration,
+      observe: [
+        {
+          key: "ci",
+          kind: "github_ci",
+          repo: "owner/app",
+          workflow: "quality.yml",
+          branch: "main",
+          notes: ["the main branch", "`gh` must be signed in"],
+        },
+        {
+          key: "check",
+          kind: "github_check",
+          repo: "owner/app",
+          check: "Builds: app",
+          branch: "main",
+        },
+        { key: "npm", kind: "npm_version", package: "@scope/cli" },
+        { key: "page", kind: "page_version", url: "https://example.com/" },
+        // A key not in its shape is left out, the rest of the entry kept.
+        { key: "odd", kind: "github_release", repo: 1, notes: "not a list" },
+      ],
+    } as typeof r.declaration;
+    await place(A, r);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    const drawn = page.board.summary.observed.map(({ name, kind, looks_at, notes }) => ({
+      name,
+      kind,
+      looks_at,
+      notes,
+    }));
+    expect(drawn).toEqual([
+      {
+        name: "ci",
+        kind: "github_ci",
+        looks_at: ["owner/app", "quality.yml"],
+        notes: ["the main branch", "`gh` must be signed in"],
+      },
+      {
+        name: "check",
+        kind: "github_check",
+        looks_at: ["owner/app", "Builds: app"],
+        notes: undefined,
+      },
+      { name: "npm", kind: "npm_version", looks_at: ["@scope/cli"], notes: undefined },
+      { name: "page", kind: "page_version", looks_at: ["https://example.com/"], notes: undefined },
+      { name: "odd", kind: "github_release", looks_at: undefined, notes: undefined },
+      { name: "undeclared", kind: undefined, looks_at: undefined, notes: undefined },
+    ]);
+    for (const o of page.board.summary.observed.slice(1)) {
+      expect(Object.hasOwn(o, "notes"), o.name).toBe(false);
+    }
+  });
+
+  it("marks an observation that moved since the previous record, with what that record held by its own declaration", async () => {
+    await mkdir(records);
+    const made = (v: unknown, error?: string) => ({
+      value: v,
+      observed_at: "2026-10-07",
+      source: "s",
+      ...(error === undefined ? {} : { error }),
+    });
+    const shop = (words: string[]) => ({
+      key: "shop",
+      kind: "http",
+      url: "https://example.com/",
+      words,
+    });
+    const at = (observed: Record<string, unknown>, words: string[]) => {
+      const r = record({ record_version: 3, observed });
+      r.declaration = { ...r.declaration, observe: [shop(words)] } as typeof r.declaration;
+      return r;
+    };
+    const ok = (found: boolean) => ({
+      status: 200,
+      redirects: 0,
+      final_url: "https://example.com/",
+      words: [found],
+    });
+    await place(
+      A,
+      at(
+        {
+          npm: made("1.0.0"),
+          same: made(3),
+          flaky: made(3),
+          count: made("12"),
+          back: made(null, "timeout"),
+          shop: made(ok(true)),
+          gone: made(1),
+          down: made("1.0.0"),
+        },
+        ["was"],
+      ),
+    );
+    await place(
+      B,
+      at(
+        {
+          npm: made("1.1.0"),
+          same: made(3),
+          flaky: made(3, "partly"),
+          count: made(12),
+          back: made("ok"),
+          shop: made(ok(false)),
+          fresh: made(true),
+          down: made(null, "timeout"),
+        },
+        ["is"],
+      ),
+    );
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.board.summary.previous_record).toBe("found");
+    const moved = Object.fromEntries(page.board.summary.observed.map((o) => [o.name, o.moved]));
+    expect(moved).toEqual({
+      npm: { status: "value", value: "1.0.0" },
+      same: undefined,
+      // Its error moved, as record's diff says.
+      flaky: { status: "value", value: 3 },
+      count: { status: "value", value: "12" },
+      back: { status: "value", value: null, error: "timeout" },
+      // Drawn by the words the previous record declared, not this one's.
+      shop: {
+        status: "value",
+        value: ok(true),
+        words: [{ word: "was", found: true }],
+        http: {
+          status: 200,
+          redirects: 0,
+          final_url: "https://example.com/",
+          body: { words: [{ word: "was", found: true }] },
+        },
+      },
+      fresh: { status: "none" },
+      // Not made now: drawn with its previous value, as before, unmarked.
+      down: undefined,
+    });
+    const down = page.board.summary.observed.find((o) => o.name === "down");
+    expect(down?.previous).toEqual({ status: "value", value: "1.0.0" });
+    // The first record has no previous one, and marks nothing.
+    const first = await boardPage(records, A);
+    if (first.status !== "ok") throw new Error(first.why);
+    expect(first.board.summary.previous_record).toBe("none");
+    expect(first.board.summary.observed.some((o) => o.moved !== undefined)).toBe(false);
+    // One that cannot be read marks nothing either, and says so.
+    await place(A, "{ not json");
+    const unread = await boardPage(records);
+    if (unread.status !== "ok") throw new Error(unread.why);
+    expect(unread.board.summary.previous_record).toBe("unreadable");
+    expect(unread.board.summary.observed.some((o) => o.moved !== undefined)).toBe(false);
+  });
+
+  it("draws a record without marks when the previous record's observations are too deep to compare", async () => {
+    await mkdir(records);
+    const depth = 100_000;
+    const deep = `${"[".repeat(depth)}"x"${"]".repeat(depth)}`;
+    const made = (v: unknown) => ({ value: v, observed_at: "2026-10-07", source: "s" });
+    const text = JSON.stringify(record({ observed: { npm: made("DEEP") } })).replace(
+      '"DEEP"',
+      deep,
+    );
+    await place(A, text);
+    await place(
+      B,
+      record({
+        observed: { npm: made("1.0.0") },
+        cells: cells({
+          core: ["done", "done", "done", "blocked", "none", "none"],
+          docs: ["done", "done", "done", "done", "done", "done"],
+        }),
+      }),
+    );
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.board.summary.previous_record).toBe("found");
+    expect(page.board.summary.observed).toEqual([
+      { name: "npm", value: "1.0.0", observed_at: "2026-10-07", source: "s" },
+    ]);
+    // The rest of what the previous record gives is still drawn.
+    expect(page.board.matrix.lanes[0]?.cells[2]?.moved_from).toBe("part");
+  });
+
+  it("lists every measure, with the lanes it is drawn in and how much a number moved", async () => {
+    await mkdir(records);
+    const at = (values: Record<string, unknown>) => {
+      const r = record({ record_version: 3 });
+      r.declaration = {
+        ...r.declaration,
+        measures: [
+          { id: "src", kind: "line_count", unit: "lines", lane: ["core", "docs"] },
+          { id: "test", kind: "line_count", unit: "lines" },
+          { id: "latest", kind: "file_name", unit: "name", lane: ["docs"] },
+          { id: "mig", kind: "file_paths", unit: "files" },
+          { id: "new", kind: "file_count", unit: "files" },
+        ],
+        ratios: [],
+      } as typeof r.declaration;
+      r.measure = {
+        ...r.measure,
+        measures: Object.fromEntries(
+          Object.entries(values).map(([id, value]) => [id, { value, unit: "u" }]),
+        ),
+        ratios: {},
+      } as unknown as typeof r.measure;
+      return r;
+    };
+    await place(A, at({ src: 100, test: 40, latest: "a", mig: ["x"] }));
+    await place(B, at({ src: 90, test: null, latest: "b", mig: ["x", "y"], new: 3 }));
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.board.measures).toEqual([
+      { id: "src", value: 90, unit: "lines", lanes: ["Core", "Docs"], delta: -10 },
+      { id: "test", value: null, unit: "lines", lanes: [], delta: null },
+      { id: "latest", value: "b", unit: "name", lanes: ["Docs"], delta: null },
+      { id: "mig", value: ["x", "y"], unit: "files", lanes: [], delta: null },
+      // Not in the previous record.
+      { id: "new", value: 3, unit: "files", lanes: [], delta: null },
+    ]);
+    // No previous record, or one that cannot be read: no change to give.
+    const first = await boardPage(records, A);
+    if (first.status !== "ok") throw new Error(first.why);
+    expect(first.board.measures.map((m) => m.delta)).toEqual([null, null, null, null, null]);
+    await place(A, "{ not json");
+    const unread = await boardPage(records);
+    if (unread.status !== "ok") throw new Error(unread.why);
+    expect(unread.board.measures[0]?.delta).toBeNull();
+    // A record of version 1 holds one lane id.
+    await rm(join(records, `${B}.json`));
+    await place(A, record());
+    const v1 = await boardPage(records);
+    if (v1.status !== "ok") throw new Error(v1.why);
+    expect(v1.board.measures).toEqual([
+      { id: "src", value: 100, unit: "lines", lanes: ["Core"], delta: null },
+      { id: "test", value: null, unit: "lines", lanes: [], delta: null },
+    ]);
+  });
+
+  it("draws the repos a record measured by its version", async () => {
+    await mkdir(records);
+    const repo = {
+      path: ".",
+      name: "app",
+      head: "0123456789abcdef0123456789abcdef01234567",
+      branch: "main",
+      last_commit: "2026-10-06T12:00:00+09:00",
+      commits: 12,
+      files: 30,
+      uncommitted: 1,
+    };
+    const v3 = record({ record_version: 3 });
+    v3.measure = {
+      ...v3.measure,
+      repos: [
+        {
+          ...repo,
+          base: "origin/main",
+          behind: 2,
+          ahead: 1,
+          fetched_at: "2026-10-06T00:00:00.000Z",
+        },
+      ],
+    } as typeof v3.measure;
+    await place(A, v3);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    const { files: _files, ...drawn } = repo;
+    expect(page.board.repos).toEqual({
+      record_version: 3,
+      base_measured: true,
+      list: [
+        {
+          ...drawn,
+          base: "origin/main",
+          behind: 2,
+          ahead: 1,
+          fetched_at: "2026-10-06T00:00:00.000Z",
+        },
+      ],
+    });
+    // A record of version 1 or 2 counted the commits behind as behind_main,
+    // and measured no base, ahead or fetch time.
+    for (const version of [1, 2]) {
+      const older = record({ record_version: version });
+      older.measure = {
+        ...older.measure,
+        repos: [{ ...repo, behind_main: 4 }],
+      } as typeof older.measure;
+      await place(A, older);
+      const read = await boardPage(records);
+      if (read.status !== "ok") throw new Error(read.why);
+      expect(read.board.repos).toEqual({
+        record_version: version,
+        base_measured: false,
+        list: [{ ...drawn, base: null, behind: 4, ahead: null, fetched_at: null }],
+      });
+    }
+    // None, or not in the shape of its version: drawn as none, the rest of the record drawn.
+    const v3Repo = { ...repo, base: null, behind: 1, ahead: 0, fetched_at: null };
+    for (const [version, repos] of [
+      [3, undefined],
+      [3, "x"],
+      [3, [{ ...repo, behind_main: 4 }]],
+      [2, [v3Repo]],
+      [
+        1,
+        [
+          { ...repo, behind_main: 4 },
+          { ...repo, path: "../app" },
+        ],
+      ],
+    ] as const) {
+      const odd = record({ record_version: version });
+      odd.measure = { ...odd.measure, repos } as typeof odd.measure;
+      await place(A, odd);
+      const read = await boardPage(records);
+      if (read.status !== "ok") throw new Error(`${JSON.stringify(repos)}: ${read.why}`);
+      expect(read.board.repos, `${version} ${JSON.stringify(repos)}`).toBeNull();
+    }
+  });
+
+  it("draws the components a record found by the lanes its registry counts them in", async () => {
+    await mkdir(records);
+    const r = record({ record_version: 3 });
+    r.declaration = {
+      ...r.declaration,
+      components: {
+        "app/web": { lane: ["docs", "core"] },
+        app: { lane: ["core"] },
+        "app/db": { lane: ["core"] },
+        "app/scripts": { lane: "-", note: "tooling, not a surface" },
+      },
+    } as typeof r.declaration;
+    const found = JSON.parse(
+      '{"app":{"kinds":["manifest"],"status":"known"},"app/web":{"kinds":["edge","manifest"],"status":"known"},"app/scripts":{"kinds":["marker"],"status":"known"},"app/new":{"kinds":["ci"],"status":"unacknowledged"},"__proto__":{"kinds":["build"],"status":"unacknowledged"}}',
+    );
+    r.measure = {
+      ...r.measure,
+      components: {
+        found,
+        unacknowledged: ["app/new", "__proto__"],
+        gone: ["app/db", "app/old"],
+        kind_changed: [{ key: "app/web", before: ["manifest"], after: ["edge", "manifest"] }],
+      },
+    } as unknown as typeof r.measure;
+    await place(A, r);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    expect(page.board.components).toEqual({
+      measured: true,
+      reasons: [],
+      lanes: [
+        {
+          id: "core",
+          name: "Core",
+          components: [
+            { key: "app", kinds: ["manifest"] },
+            { key: "app/db", kinds: null },
+            {
+              key: "app/web",
+              kinds: ["edge", "manifest"],
+              kind_changed: { before: ["manifest"], after: ["edge", "manifest"] },
+            },
+          ],
+        },
+        {
+          id: "docs",
+          name: "Docs",
+          components: [
+            {
+              key: "app/web",
+              kinds: ["edge", "manifest"],
+              kind_changed: { before: ["manifest"], after: ["edge", "manifest"] },
+            },
+          ],
+        },
+      ],
+      uncounted: [{ key: "app/scripts", kinds: ["marker"], note: "tooling, not a surface" }],
+      unacknowledged: [
+        { key: "__proto__", kinds: ["build"] },
+        { key: "app/new", kinds: ["ci"] },
+      ],
+      gone: ["app/db", "app/old"],
+    });
+    // Not measured: why, from not_found.
+    const unmeasured = record({ record_version: 3 });
+    unmeasured.measure = {
+      ...unmeasured.measure,
+      not_found: [{ at: "components", reason: "two repos are in directories of the same name" }],
+      components: { found: null, unacknowledged: null, gone: null, kind_changed: null },
+    } as unknown as typeof unmeasured.measure;
+    await place(A, unmeasured);
+    const none = await boardPage(records);
+    if (none.status !== "ok") throw new Error(none.why);
+    expect(none.board.components).toEqual({
+      measured: false,
+      reasons: ["two repos are in directories of the same name"],
+      lanes: [],
+      uncounted: [],
+      unacknowledged: [],
+      gone: null,
+    });
+    // What was gone is not known when the record before could not be read.
+    const unknown = record({ record_version: 3 });
+    unknown.measure = {
+      ...unknown.measure,
+      components: { found: {}, unacknowledged: [], gone: null, kind_changed: null },
+    } as unknown as typeof unknown.measure;
+    await place(A, unknown);
+    const notKnown = await boardPage(records);
+    if (notKnown.status !== "ok") throw new Error(notKnown.why);
+    expect(notKnown.board.components?.gone).toBeNull();
+    // Not in its shape: drawn as none, the rest of the record drawn.
+    for (const components of [undefined, "x", { found: { app: { kinds: "manifest" } } }]) {
+      const odd = record({ record_version: 3 });
+      odd.measure = { ...odd.measure, components } as unknown as typeof odd.measure;
+      await place(A, odd);
+      const read = await boardPage(records);
+      if (read.status !== "ok") throw new Error(`${JSON.stringify(components)}: ${read.why}`);
+      expect(read.board.components).toBeNull();
+    }
   });
 
   it("draws a record whose declared observations are not in their shape, without their words", async () => {

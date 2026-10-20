@@ -48,7 +48,7 @@ describe("boardInitText", () => {
       expect(text).toContain(`# ${words.comments.measures}\nmeasures: []\n`);
     }
     expect(en.comments.measures).toContain(
-      "One with a lane, or a list of lanes, is drawn in each one's section",
+      "Each is drawn in the board page's table of measures, and one with a lane, or a list of lanes, in each one's section of the page too.",
     );
     // The comment on observe names every kind a board can declare, http among them.
     for (const kind of BOARD_OBSERVE_KINDS) {
@@ -72,7 +72,7 @@ describe("boardInitText", () => {
       expect(ja.comments.measures).toContain(kind);
     }
     expect(ja.comments.measures).toContain(
-      "lane\uff081 \u3064\u306e\u30ec\u30fc\u30f3\u304b\u3001\u30ec\u30fc\u30f3\u306e\u4e26\u3073\uff09\u3092\u4ed8\u3051\u305f\u3082\u306e\u306f\u76e4\u306e\u30da\u30fc\u30b8\u306e\u305d\u308c\u305e\u308c\u306e\u30ec\u30fc\u30f3\u306e\u7bc0\u306b\u63cf\u304b\u308c",
+      "\u3069\u308c\u3082\u76e4\u306e\u30da\u30fc\u30b8\u306e measure \u306e\u4e00\u89a7\u306b\u63cf\u304b\u308c\u3001lane\uff081 \u3064\u306e\u30ec\u30fc\u30f3\u304b\u3001\u30ec\u30fc\u30f3\u306e\u4e26\u3073\uff09\u3092\u4ed8\u3051\u305f\u3082\u306e\u306f\u305d\u308c\u305e\u308c\u306e\u30ec\u30fc\u30f3\u306e\u7bc0\u306b\u3082\u63cf\u304b\u308c\u308b",
     );
   });
 

@@ -3,8 +3,10 @@ import { join } from "node:path";
 import { decodeTime } from "ulid";
 import { z } from "zod";
 import { findErrorCode } from "../lib/error-codes.js";
-import { isCalendarDate } from "./declaration.js";
-import { diffCells } from "./diff.js";
+import { byCodePoint } from "./components.js";
+import { type BoardObserve, isCalendarDate } from "./declaration.js";
+import { type BoardObservedChange, diffCells, diffObserved } from "./diff.js";
+import { observedValueProblems } from "./observed-shape.js";
 import { readBoardRecordFile, recordIds } from "./previous.js";
 import { BOARD_RECORD_VERSIONS } from "./record.js";
 
@@ -17,12 +19,46 @@ const count = z.number().nullable();
 
 // What the page draws from a record, kept loose: a key it does not draw is
 // let through.
-// An observation of a record's declaration, as the page reads its words.
+// An observation of a record's declaration, as the page reads it: a key of it
+// not in its shape is read as not there.
+const maybe = <T extends z.ZodType>(schema: T) => schema.optional().catch(undefined);
 const declaredObservationSchema = z.looseObject({
   key: text,
   kind: text,
-  words: z.array(text).optional(),
+  words: maybe(z.array(text)),
+  count_pattern: maybe(text),
+  capture_pattern: maybe(text),
+  notes: maybe(z.array(text)),
+  url: maybe(text),
+  repo: maybe(text),
+  package: maybe(text),
+  workflow: maybe(text),
+  check: maybe(text),
 });
+type DeclaredObservation = z.output<typeof declaredObservationSchema>;
+
+// What an observation looks at, as the page names it under the observation.
+const LOOKS_AT = ["url", "repo", "package", "workflow", "check"] as const;
+
+// A repo of a record of version 3, and of one of version 1 or 2, which held
+// the commits behind as behind_main and measured no base, ahead or fetch.
+const repoFields = {
+  path: text,
+  name: text.nullable(),
+  head: text.nullable(),
+  branch: text.nullable(),
+  last_commit: text.nullable(),
+  commits: count,
+  uncommitted: count,
+};
+const repoSchema = z.looseObject({
+  ...repoFields,
+  base: text.nullable(),
+  behind: count,
+  ahead: count,
+  fetched_at: text.nullable(),
+});
+const olderRepoSchema = z.looseObject({ ...repoFields, behind_main: count });
 
 const pageRecordSchema = z.looseObject({
   record_version: z.number(),
@@ -55,6 +91,12 @@ const pageRecordSchema = z.looseObject({
   measure: z.looseObject({
     measured_with: z.looseObject({ basou: text, build: text.nullable() }),
     complete: z.boolean(),
+    // Read by the record's version (see repoSchema), and drawn as not in its
+    // shape, rather than the record not drawn, when it is not.
+    repos: z.unknown().optional(),
+    // Read by hand (see componentsOf): a key of its own, such as __proto__,
+    // stays one.
+    components: z.unknown().optional(),
     not_found: z.array(z.looseObject({ at: text, reason: text })),
     measures: z.record(
       text,
@@ -155,13 +197,99 @@ export type BoardPageObservation = {
    * for each word.
    */
   words?: { word: string; found: unknown }[];
+  /** An http value read as its parts, present when it is in the shape its declaration gives it. */
+  http?: BoardPageHttp;
+  /** Its kind, as the record's declaration says, when that declares it. */
+  kind?: string;
+  /** What it looks at, as the record's declaration says: its url, or its repo, package, workflow and check. */
+  looks_at?: string[];
+  /** What to mind when making it, as the record's declaration says. */
+  notes?: string[];
+  /**
+   * Present when the value is not null and it moved since the previous
+   * record, as the record's diff compares observations (its value or its
+   * error): what the previous record held.
+   */
+  moved?: BoardPageMovedFrom;
 };
+
+/**
+ * An http value read as its parts. `body` is there when the observation reads
+ * the body (words, a count or a capture), and null when the status is not
+ * 2xx, so the body was not read.
+ */
+export type BoardPageHttp = {
+  status: number;
+  redirects: number;
+  final_url: string;
+  body?: {
+    words?: { word: string; found: boolean }[];
+    count?: number;
+    capture?: string | null;
+  } | null;
+};
+
+/**
+ * What the previous record held of an observation that moved: its value,
+ * drawn by that record's declaration (its words and the shape of its kind),
+ * or none, when it had no observation of that name.
+ */
+export type BoardPageMovedFrom =
+  | {
+      status: "value";
+      value: unknown;
+      error?: string;
+      words?: { word: string; found: unknown }[];
+      http?: BoardPageHttp;
+    }
+  | { status: "none" };
 
 /** The previous record's value of an observation: there, none, or not known. */
 export type BoardPagePrevious =
   | { status: "value"; value: unknown }
   | { status: "none" }
   | { status: "unreadable" };
+
+/** A measure of the record, in the table of every measure. */
+export type BoardPageMeasure = {
+  id: string;
+  /** A number, a string, or the paths of a `file_paths`. */
+  value: number | string | string[] | null;
+  unit: string;
+  /** The names of the lanes it is drawn in. */
+  lanes: string[];
+  /**
+   * This value less the previous record's, when both are numbers; null when
+   * one is not, or there is no previous record that can be read.
+   */
+  delta: number | null;
+};
+
+/** A repository as the board page draws it, measured on the spot or recorded. */
+export type BoardPageRepo = {
+  path: string;
+  name: string | null;
+  head: string | null;
+  branch: string | null;
+  last_commit: string | null;
+  commits: number | null;
+  uncommitted: number | null;
+  base: string | null;
+  behind: number | null;
+  ahead: number | null;
+  fetched_at: string | null;
+};
+
+/** A component as a record's page draws it. */
+export type BoardPageComponent = {
+  key: string;
+  /** The kinds of marker found for it, null when it was not found. */
+  kinds: string[] | null;
+  /** Why it counts in no lane, for one registered with the lane '-'. */
+  note?: string;
+  /** Its kinds in the previous record, when they were others. */
+  kind_changed?: { before: string[]; after: string[] };
+};
 
 export type BoardPageCell = {
   stage: string;
@@ -214,7 +342,7 @@ export type BoardPageWeek = {
   commits: number | null;
 };
 
-/** What the board page draws from one record: the eight sections, in order. */
+/** What the board page draws from one record, by section. */
 export type BoardPageBody = {
   heading: {
     title: string;
@@ -223,7 +351,13 @@ export type BoardPageBody = {
     complete: boolean;
     not_found: number;
   };
-  summary: { text: string; tiles: BoardPageTile[]; observed: BoardPageObservation[] };
+  summary: {
+    text: string;
+    tiles: BoardPageTile[];
+    observed: BoardPageObservation[];
+    /** Whether there is a previous record, and whether it could be read. */
+    previous_record: "found" | "none" | "unreadable";
+  };
   effort: {
     start: string;
     time_zone: string | null;
@@ -255,6 +389,8 @@ export type BoardPageBody = {
     anomalies: { lane: string; stage: string; state: string; before: string }[];
   };
   lanes: BoardPageLane[];
+  /** Every measure the record's declaration holds, in its order. */
+  measures: BoardPageMeasure[];
   composition: {
     id: string;
     label: string;
@@ -262,6 +398,32 @@ export type BoardPageBody = {
     numerator: { id: string; value: number | string | string[] | null; unit: string | null };
     denominator: { id: string; value: number | string | string[] | null; unit: string | null };
   }[];
+  /**
+   * The repositories as the record measured them. A record of version 1 or 2
+   * measured no base, commits ahead or fetch time (`base_measured` false), and
+   * its commits behind are drawn as `behind`. Null when the record holds none
+   * in a shape the page reads.
+   */
+  repos: { record_version: number; base_measured: boolean; list: BoardPageRepo[] } | null;
+  /**
+   * The components as the record measured them, against the registry its
+   * declaration holds. Null when the record holds none in a shape the page
+   * reads.
+   */
+  components: {
+    /** False when they were not measured: `reasons` says why. */
+    measured: boolean;
+    /** What not_found says at `components` or under it. */
+    reasons: string[];
+    /** Each lane, with the components registered in it, by code point. */
+    lanes: { id: string; name: string; components: BoardPageComponent[] }[];
+    /** The components registered with the lane '-', each with its note. */
+    uncounted: BoardPageComponent[];
+    /** The components found that the registry does not hold. */
+    unacknowledged: BoardPageComponent[];
+    /** Those registered or found before that were not found; null when not known. */
+    gone: string[] | null;
+  } | null;
   turns: { text: string; source: string }[];
   footnotes: {
     notes: string[];
@@ -382,7 +544,15 @@ export async function boardPage(recordsDir: string, id?: string): Promise<BoardP
       previous === null
         ? { status: "none" }
         : previous.ok
-          ? { status: "found", cells: previous.record.cells, observed: previous.record.observed }
+          ? {
+              status: "found",
+              cells: previous.record.cells,
+              observed: previous.record.observed,
+              observe: declaredObservations(
+                isRecord(previous.record.declaration) ? previous.record.declaration.observe : [],
+              ),
+              measures: measureValues(previous.record.measure.measures),
+            }
           : { status: "unreadable" },
     ),
   };
@@ -461,8 +631,52 @@ type Previous =
   | {
       status: "found";
       cells: readonly { lane: string; stage: string; state: string }[];
-      observed: Readonly<Record<string, { value: unknown }>>;
+      observed: Readonly<Record<string, { value: unknown; error?: string | undefined }>>;
+      /** The observations its declaration holds, by key. */
+      observe: ReadonlyMap<string, DeclaredObservation>;
+      /** The value of each of its measures, by id. */
+      measures: ReadonlyMap<string, unknown>;
     };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// The observations a declaration holds, by key: an entry not in its shape is
+// left out, and drawn with none of what the declaration says of it.
+function declaredObservations(observe: unknown): Map<string, DeclaredObservation> {
+  const out = new Map<string, DeclaredObservation>();
+  if (!Array.isArray(observe)) return out;
+  for (const raw of observe) {
+    const o = declaredObservationSchema.safeParse(raw).data;
+    if (o !== undefined && !out.has(o.key)) out.set(o.key, o);
+  }
+  return out;
+}
+
+// The observations that moved, compared as the record's diff compares them,
+// by name. None when a value is nested deeper than the comparison goes, which
+// only a record written by hand holds: the page is drawn without the marks.
+function movedObservations(
+  before: Readonly<Record<string, { value: unknown; error?: string | undefined }>>,
+  after: PageRecord["observed"],
+): [string, BoardObservedChange][] {
+  try {
+    return diffObserved(before, after).map((c) => [c.name, c]);
+  } catch {
+    return [];
+  }
+}
+
+// The value of each measure of a measurement as a record holds it, by id.
+function measureValues(measures: unknown): Map<string, unknown> {
+  const out = new Map<string, unknown>();
+  if (!isRecord(measures)) return out;
+  for (const [id, entry] of Object.entries(measures)) {
+    if (isRecord(entry)) out.set(id, entry.value);
+  }
+  return out;
+}
 
 // The states a cell has when it is done or begun, and when it needs attention.
 const REACHED = new Set(["done", "part"]);
@@ -471,12 +685,11 @@ const ATTENTION = new Set(["blocked", "shelved", "unverified"]);
 function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
   const d = r.declaration;
   const m = r.measure;
-  const declaredWords = new Map(
-    (d.observe ?? []).flatMap((raw) => {
-      const o = declaredObservationSchema.safeParse(raw).data;
-      return o?.kind === "http" && o.words !== undefined ? [[o.key, o.words] as const] : [];
-    }),
+  const declared = declaredObservations(d.observe ?? []);
+  const movedNow = new Map<string, BoardObservedChange>(
+    previous.status === "found" ? movedObservations(previous.observed, r.observed) : [],
   );
+  const laneNames = new Map(d.lanes.map((lane) => [lane.id, lane.name]));
   const stages = Object.entries(d.stages)
     .map(([id, stage]) => ({ id, meaning: stage.meaning }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -530,7 +743,14 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
         { key: "turns", value: r.prose.operator_turns.length, reported: true },
       ],
       observed: Object.entries(r.observed).map(([name, o]) => {
-        const words = wordsOf(declaredWords.get(name), o.value);
+        const declaredNow = declared.get(name);
+        const words = wordsOf(httpWords(declaredNow), o.value);
+        const http = httpOf(declaredNow, o.value);
+        const looksAt = LOOKS_AT.flatMap((key) => {
+          const value = declaredNow?.[key];
+          return value === undefined ? [] : [value];
+        });
+        const change = movedNow.get(name);
         return {
           name,
           value: o.value,
@@ -539,8 +759,16 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
           ...(o.error === undefined ? {} : { error: o.error }),
           ...(o.value === null ? { previous: previousValue(previous, name) } : {}),
           ...(words === undefined ? {} : { words }),
+          ...(http === undefined ? {} : { http }),
+          ...(declaredNow === undefined ? {} : { kind: declaredNow.kind }),
+          ...(looksAt.length === 0 ? {} : { looks_at: looksAt }),
+          ...(declaredNow?.notes === undefined ? {} : { notes: [...declaredNow.notes] }),
+          ...(o.value === null || change === undefined || previous.status !== "found"
+            ? {}
+            : { moved: movedFrom(change.before, previous.observe.get(name)) }),
         };
       }),
+      previous_record: previous.status,
     },
     effort: effortOf(m.effort, d.effort.milestones ?? []),
     matrix: {
@@ -611,6 +839,23 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
         },
       };
     }),
+    measures: d.measures.map((measure) => {
+      const value = m.measures[measure.id]?.value ?? null;
+      const before = previous.status === "found" ? previous.measures.get(measure.id) : undefined;
+      const lanes =
+        measure.lane === undefined
+          ? []
+          : typeof measure.lane === "string"
+            ? [measure.lane]
+            : measure.lane;
+      return {
+        id: measure.id,
+        value,
+        unit: measure.unit,
+        lanes: lanes.map((id) => laneNames.get(id) ?? id),
+        delta: typeof value === "number" && typeof before === "number" ? value - before : null,
+      };
+    }),
     composition: d.ratios.map((ratio) => ({
       id: ratio.id,
       label: ratio.label,
@@ -618,6 +863,8 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
       numerator: measureOf(ratio.numerator),
       denominator: measureOf(ratio.denominator),
     })),
+    repos: reposOf(r.record_version, m.repos),
+    components: componentsOf(m.components, d.components, d.lanes, m.not_found),
     turns: r.prose.operator_turns.map(({ text: t, source }) => ({ text: t, source })),
     footnotes: {
       notes: [...r.prose.footnotes],
@@ -659,6 +906,179 @@ function wordsOf(
   const found = (value as { words?: unknown }).words;
   if (!Array.isArray(found) || found.length !== words.length) return undefined;
   return words.map((word, i) => ({ word, found: found[i] }));
+}
+
+// The words of an http observation a declaration holds.
+function httpWords(o: DeclaredObservation | undefined): string[] | undefined {
+  return o?.kind === "http" ? o.words : undefined;
+}
+
+// An http value read as its parts, when it is in the shape the declared
+// observation gives it (the shape record holds a value to): a value of
+// another shape, as a record written before that check may hold, is drawn
+// as it is.
+function httpOf(o: DeclaredObservation | undefined, value: unknown): BoardPageHttp | undefined {
+  if (o?.kind !== "http" || value === null || value === undefined) return undefined;
+  if (observedValueProblems(o as unknown as BoardObserve, value).length > 0) return undefined;
+  const v = value as {
+    status: number;
+    redirects: number;
+    final_url: string;
+    words?: boolean[];
+    count?: number;
+    capture?: string | null;
+  };
+  const reads =
+    o.words !== undefined || o.count_pattern !== undefined || o.capture_pattern !== undefined;
+  const read = v.status >= 200 && v.status <= 299;
+  const body = read
+    ? {
+        ...(o.words === undefined
+          ? {}
+          : { words: o.words.map((word, i) => ({ word, found: v.words?.[i] === true })) }),
+        ...(o.count_pattern === undefined ? {} : { count: v.count as number }),
+        ...(o.capture_pattern === undefined ? {} : { capture: v.capture ?? null }),
+      }
+    : null;
+  return {
+    status: v.status,
+    redirects: v.redirects,
+    final_url: v.final_url,
+    ...(reads ? { body } : {}),
+  };
+}
+
+// What the previous record held of an observation that moved, drawn by that
+// record's declaration.
+function movedFrom(
+  before: { value: unknown; error?: string } | null,
+  declaredThen: DeclaredObservation | undefined,
+): BoardPageMovedFrom {
+  if (before === null) return { status: "none" };
+  const words = wordsOf(httpWords(declaredThen), before.value);
+  const http = httpOf(declaredThen, before.value);
+  return {
+    status: "value",
+    value: before.value,
+    ...(before.error === undefined ? {} : { error: before.error }),
+    ...(words === undefined ? {} : { words }),
+    ...(http === undefined ? {} : { http }),
+  };
+}
+
+// The repos of a record, read by its version: one of version 1 or 2 held the
+// commits behind as behind_main, and measured no base, ahead or fetch time.
+function reposOf(version: number, repos: unknown): BoardPageBody["repos"] {
+  if (!Array.isArray(repos)) return null;
+  const list: BoardPageRepo[] = [];
+  for (const raw of repos) {
+    if (version >= 3) {
+      const r = repoSchema.safeParse(raw).data;
+      if (r === undefined) return null;
+      list.push({
+        path: r.path,
+        name: r.name,
+        head: r.head,
+        branch: r.branch,
+        last_commit: r.last_commit,
+        commits: r.commits,
+        uncommitted: r.uncommitted,
+        base: r.base,
+        behind: r.behind,
+        ahead: r.ahead,
+        fetched_at: r.fetched_at,
+      });
+    } else {
+      const r = olderRepoSchema.safeParse(raw).data;
+      if (r === undefined) return null;
+      list.push({
+        path: r.path,
+        name: r.name,
+        head: r.head,
+        branch: r.branch,
+        last_commit: r.last_commit,
+        commits: r.commits,
+        uncommitted: r.uncommitted,
+        base: null,
+        behind: r.behind_main,
+        ahead: null,
+        fetched_at: null,
+      });
+    }
+  }
+  return { record_version: version, base_measured: version >= 3, list };
+}
+
+const isTexts = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((v) => typeof v === "string");
+
+// The components of a record, held against the registry its declaration
+// holds, read by hand so that a key of its own (such as __proto__) stays one.
+function componentsOf(
+  measured: unknown,
+  registry: unknown,
+  lanes: readonly { id: string; name: string }[],
+  notFound: readonly { at: string; reason: string }[],
+): BoardPageBody["components"] {
+  if (!isRecord(measured)) return null;
+  const { found, unacknowledged, gone, kind_changed: kindChanged } = measured;
+  const reasons = notFound
+    .filter(
+      (n) =>
+        n.at === "components" || n.at.startsWith("components.") || n.at.startsWith("components["),
+    )
+    .map((n) => n.reason);
+  if (found === null) {
+    return { measured: false, reasons, lanes: [], uncounted: [], unacknowledged: [], gone: null };
+  }
+  const kindsOf = new Map<string, string[]>();
+  if (!isRecord(found)) return null;
+  for (const [key, c] of Object.entries(found)) {
+    if (!isRecord(c) || !isTexts(c.kinds)) return null;
+    kindsOf.set(key, c.kinds);
+  }
+  const changed = new Map<string, { before: string[]; after: string[] }>();
+  if (Array.isArray(kindChanged)) {
+    for (const c of kindChanged) {
+      if (isRecord(c) && typeof c.key === "string" && isTexts(c.before) && isTexts(c.after)) {
+        changed.set(c.key, { before: c.before, after: c.after });
+      }
+    }
+  }
+  const row = (key: string, note?: string): BoardPageComponent => {
+    const moved = changed.get(key);
+    return {
+      key,
+      kinds: kindsOf.get(key) ?? null,
+      ...(note === undefined ? {} : { note }),
+      ...(moved === undefined ? {} : { kind_changed: moved }),
+    };
+  };
+  const registered = isRecord(registry) ? registry : {};
+  const keys = Object.keys(registered).sort(byCodePoint);
+  const inLane = (id: string) =>
+    keys.filter((key) => {
+      const lane = (registered[key] as { lane?: unknown } | undefined)?.lane;
+      return Array.isArray(lane) && lane.includes(id);
+    });
+  const uncounted = keys.flatMap((key) => {
+    const c = registered[key];
+    if (!isRecord(c) || c.lane !== "-") return [];
+    return [row(key, typeof c.note === "string" ? c.note : undefined)];
+  });
+  const listed = (value: unknown) => (isTexts(value) ? [...value].sort(byCodePoint) : null);
+  return {
+    measured: true,
+    reasons,
+    lanes: lanes.map((lane) => ({
+      id: lane.id,
+      name: lane.name,
+      components: inLane(lane.id).map((key) => row(key)),
+    })),
+    uncounted,
+    unacknowledged: (listed(unacknowledged) ?? []).map((key) => row(key)),
+    gone: listed(gone),
+  };
 }
 
 // The previous record's value of an observation this record could not make.

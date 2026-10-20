@@ -38,6 +38,7 @@ export {
 } from "./declaration.js";
 export type {
   BoardCellChange,
+  BoardDeclarationChange,
   BoardDiff,
   BoardMethodChange,
   BoardObservation,
@@ -45,7 +46,7 @@ export type {
   BoardValueChange,
   BoardValueOnly,
 } from "./diff.js";
-export { diffCells, diffMeasurements, diffObserved } from "./diff.js";
+export { diffCells, diffDeclarations, diffMeasurements, diffObserved } from "./diff.js";
 export type { BoardActiveMs, BoardEffort, BoardEffortDay } from "./effort.js";
 export { BOARD_EFFORT_METHOD, effortStartOf } from "./effort.js";
 export type { BoardFreshness, BoardImportProbe } from "./freshness.js";

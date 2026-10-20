@@ -904,6 +904,7 @@ export type BoardPageStrings = {
     effort: string;
     matrix: string;
     lanes: string;
+    measures: string;
     composition: string;
     turns: string;
     footnotes: string;
@@ -929,6 +930,44 @@ export type BoardPageStrings = {
     missing: string;
     missingNoPrevious: string;
     missingPreviousUnreadable: string;
+    /** The parts of an http value: `{n}` redirects, the count, the capture as JSON. */
+    redirects: string;
+    count: string;
+    capture: string;
+    captureNone: string;
+    /** In place of what an http value reads off its body, when the status is not 2xx. */
+    bodyNotRead: string;
+    /** Marks an observation whose value or error moved since the previous record. */
+    changed: string;
+    /** What the previous record held of an observation that moved. */
+    before: string;
+    beforeNotObserved: string;
+    beforeNone: string;
+    /** Under the table, when the previous record could not be read. */
+    previousUnreadable: string;
+  };
+  /** The table of every measure the record holds. */
+  measures: {
+    id: string;
+    value: string;
+    lanes: string;
+    delta: string;
+    none: string;
+  };
+  /** What a record's page draws of the repositories and the components it measured. */
+  record: {
+    reposUnread: string;
+    notMeasuredByVersion: string;
+    componentsUnread: string;
+    componentsNotMeasured: string;
+    noComponentInLane: string;
+    uncounted: string;
+    unacknowledged: string;
+    gone: string;
+    goneUnknown: string;
+    none: string;
+    notFound: string;
+    kindChanged: string;
   };
   effort: {
     elapsed: string;
@@ -1075,6 +1114,7 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     effort: "Period and effort",
     matrix: "Reach matrix",
     lanes: "Where each lane is",
+    measures: "Measures",
     composition: "Composition",
     turns: "The operator's turns",
     footnotes: "Footnotes",
@@ -1100,6 +1140,39 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     missing: "not observed (previous: {value})",
     missingNoPrevious: "not observed (no previous value)",
     missingPreviousUnreadable: "not observed (the previous record could not be read)",
+    redirects: "redirects {n}",
+    count: "count {n}",
+    capture: "capture {value}",
+    captureNone: "no capture",
+    bodyNotRead: "body not read",
+    changed: "changed",
+    before: "previous: {value}",
+    beforeNotObserved: "previous: not observed",
+    beforeNone: "not in the previous record",
+    previousUnreadable:
+      "The previous record could not be read, so no observation is marked as changed.",
+  },
+  measures: {
+    id: "Measure",
+    value: "Value",
+    lanes: "Drawn in",
+    delta: "Since the previous record",
+    none: "No measures are declared.",
+  },
+  record: {
+    reposUnread: "The record holds no repositories in a shape the page reads.",
+    notMeasuredByVersion:
+      "A record of version {version} did not measure the base branch, the commits ahead or the last fetch: they are drawn as -, and Behind is its behind_main.",
+    componentsUnread: "The record holds no components in a shape the page reads.",
+    componentsNotMeasured: "The components were not measured:",
+    noComponentInLane: "No component is registered in this lane.",
+    uncounted: "Counted in no lane",
+    unacknowledged: "Found, not registered",
+    gone: "Registered or found before, not found now",
+    goneUnknown: "not known (the previous record could not be read)",
+    none: "none",
+    notFound: "not found",
+    kindChanged: "was {before} in the previous record",
   },
   effort: {
     elapsed: "Elapsed",
@@ -1250,6 +1323,7 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     effort: "期間と労力",
     matrix: "到達マトリクス",
     lanes: "レーンごとの現在地",
+    measures: "測った値の一覧",
     composition: "構成比",
     turns: "operator の手番",
     footnotes: "脚注",
@@ -1275,6 +1349,38 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     missing: "未確認（前回値: {value}）",
     missingNoPrevious: "未確認（前回値なし）",
     missingPreviousUnreadable: "未確認（前回の記録が読めない）",
+    redirects: "リダイレクト {n}",
+    count: "件数 {n}",
+    capture: "capture {value}",
+    captureNone: "capture なし",
+    bodyNotRead: "本文は読まない",
+    changed: "変化",
+    before: "前回: {value}",
+    beforeNotObserved: "前回: 未確認",
+    beforeNone: "前回の記録には無い",
+    previousUnreadable: "前の記録を読めないので、変化した観測に印を付けていない。",
+  },
+  measures: {
+    id: "measure",
+    value: "値",
+    lanes: "描くレーン",
+    delta: "前回からの増減",
+    none: "measure の宣言はない。",
+  },
+  record: {
+    reposUnread: "この記録の repo は、ページが読める形をしていない。",
+    notMeasuredByVersion:
+      "版 {version} の記録は、比べる branch・進み・最後の fetch を測っていない（- で描く）。遅れはこの記録の behind_main。",
+    componentsUnread: "この記録の構成要素は、ページが読める形をしていない。",
+    componentsNotMeasured: "構成要素は測れなかった:",
+    noComponentInLane: "このレーンに登録した構成要素はない。",
+    uncounted: "どのレーンにも数えない",
+    unacknowledged: "見つかったが登録していない",
+    gone: "登録していた・前回見つかったが、今回見つからない",
+    goneUnknown: "分からない（前回の記録が読めない）",
+    none: "なし",
+    notFound: "見つからない",
+    kindChanged: "前回は {before}",
   },
   effort: {
     elapsed: "経過",
@@ -1457,7 +1563,7 @@ const BOARD_INIT_EN: BoardInitStrings = {
       "The six stages are fixed; only what each means is the board's. Keep 04 (merged) apart from 05 (in users' hands). `look` and `notes` say what to look at and mind when judging a stage.",
     lanes: "At least one lane. Its id is lowercase ASCII and stays: records join on it.",
     measures:
-      "What to measure in the repos (file_count, dir_count, line_count, match_count, regex_capture, json_length, file_name, file_paths, trail_count), and their sums and differences (total). One with a lane, or a list of lanes, is drawn in each one's section of the board page; one without is kept only in the records and their differences (and in a ratio or a total that uses it).",
+      "What to measure in the repos (file_count, dir_count, line_count, match_count, regex_capture, json_length, file_name, file_paths, trail_count), and their sums and differences (total). Each is drawn in the board page's table of measures, and one with a lane, or a list of lanes, in each one's section of the page too.",
     observe:
       "What to observe outside basou (npm_version, github_release, github_open_issues, github_open_prs, github_ci, github_check, page_version, http, manual), each with notes on what to mind when making it if need be. basou never makes these; the guide says how.",
     components:
@@ -1494,7 +1600,7 @@ const BOARD_INIT_JA: BoardInitStrings = {
       "6 段の id は固定で、盤が決めるのは意味だけ。04 本番（main に入った）と 05 開通（利用者が手に取れる）を分ける。look と notes は、その段を判定するときに見るものと注意。",
     lanes: "レーンは 1 本以上。id は小文字の ASCII で、記録の照合に使うので変えない。",
     measures:
-      "repo の中で測るもの（file_count・dir_count・line_count・match_count・regex_capture・json_length・file_name・file_paths・trail_count）と、それらの和と差（total）。lane（1 つのレーンか、レーンの並び）を付けたものは盤のページのそれぞれのレーンの節に描かれ、付けないものは記録と差分（と、それを使う ratio や total）にだけ残る。",
+      "repo の中で測るもの（file_count・dir_count・line_count・match_count・regex_capture・json_length・file_name・file_paths・trail_count）と、それらの和と差（total）。どれも盤のページの measure の一覧に描かれ、lane（1 つのレーンか、レーンの並び）を付けたものはそれぞれのレーンの節にも描かれる。",
     observe:
       "basou の外で観測するもの（npm_version・github_release・github_open_issues・github_open_prs・github_ci・github_check・page_version・http・manual）。取るときの注意があれば notes に書く。basou は取りに行かない。取り方は guide が出す。",
     components:

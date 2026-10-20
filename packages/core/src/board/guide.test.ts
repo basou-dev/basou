@@ -317,6 +317,12 @@ describe("boardGuide: a board declared", () => {
     );
   });
 
+  it("says the text of measure lists where board.yaml changed, which the JSON does not hold", () => {
+    expect(boardGuide(guideInput())).toContain(
+      "The top of measure.txt also lists each place where board.yaml changed since that record (`declaration <where>: added`, `removed` or `changed`, and `declaration lanes: the order changed`), or says `declaration: not compared` when that record holds no declaration basou can compare with, which the JSON does not hold: write an `axis_review`'s summary from these lines, not from memory.",
+    );
+  });
+
   it("says what a total's value is, that it may be below 0, and when it is null", () => {
     expect(boardGuide(guideInput())).toContain(
       "- A `total` measure's value is what its `plus` adds up to less what its `minus` adds up to, and may be below 0. It is null when a measure it takes was not measured, and when it is out of the range a number holds exactly (-9007199254740991 to 9007199254740991).",
@@ -539,7 +545,7 @@ describe("boardGuide: the gate on readers, the Stop hook and where a measure is 
   it("says, before a board is declared, which measures the page draws and who may read the repo", () => {
     const guide = boardGuide(guideInput({ board: { status: "undeclared" } }));
     expect(guide).toContain(
-      "A measure with `lane:` (a lane id, or a list of them) is drawn in each of those lanes' sections of the board page; one without is kept only in the records and their differences (and in a ratio or a total that uses it).",
+      "Every measure is drawn in the board page's table of measures, and one with `lane:` (a lane id, or a list of them) in each of those lanes' sections too.",
     );
     expect(guide).toContain(
       "no collaborator but the owner and you (the account gh is signed in as), and no invitation",
