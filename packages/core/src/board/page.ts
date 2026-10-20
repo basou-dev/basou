@@ -654,6 +654,20 @@ function declaredObservations(observe: unknown): Map<string, DeclaredObservation
   return out;
 }
 
+// The observations that moved, compared as the record's diff compares them,
+// by name. None when a value is nested deeper than the comparison goes, which
+// only a record written by hand holds: the page is drawn without the marks.
+function movedObservations(
+  before: Readonly<Record<string, { value: unknown; error?: string | undefined }>>,
+  after: PageRecord["observed"],
+): [string, BoardObservedChange][] {
+  try {
+    return diffObserved(before, after).map((c) => [c.name, c]);
+  } catch {
+    return [];
+  }
+}
+
 // The value of each measure of a measurement as a record holds it, by id.
 function measureValues(measures: unknown): Map<string, unknown> {
   const out = new Map<string, unknown>();
@@ -672,11 +686,8 @@ function bodyOf(r: PageRecord, previous: Previous): BoardPageBody {
   const d = r.declaration;
   const m = r.measure;
   const declared = declaredObservations(d.observe ?? []);
-  // The observations that moved, compared as the record's diff compares them.
   const movedNow = new Map<string, BoardObservedChange>(
-    previous.status === "found"
-      ? diffObserved(previous.observed, r.observed).map((c) => [c.name, c])
-      : [],
+    previous.status === "found" ? movedObservations(previous.observed, r.observed) : [],
   );
   const laneNames = new Map(d.lanes.map((lane) => [lane.id, lane.name]));
   const stages = Object.entries(d.stages)
