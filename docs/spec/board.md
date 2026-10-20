@@ -10,8 +10,9 @@
 > guaranteed.
 >
 > This page describes the shapes of basou 0.71.0: `board_version` 3 and
-> `record_version` 3. When a later release changes a shape, it raises the
-> version and this page with it.
+> `record_version` 3, with what `basou board record` refuses of an
+> observation's value as of basou 0.72.0. When a later release changes a
+> shape, it raises the version and this page with it.
 
 This page says what each key of these shapes holds, which keys are required,
 what a `null` means, and what the digest of a measurement covers. It does not
@@ -484,10 +485,13 @@ declared, `basou board guide` prints the command that makes it (or, for
 makes it and gives it under its key in the record's input
 ([3.2](#32-observed)).
 
-`basou board record` does not check a value against its kind: it keeps any
-JSON value. The value of each kind below is what the guide asks for and the
-board page draws, and what the previous record's value is compared with.
-Keep the keys: a key joins a value to the previous record's.
+From basou 0.72.0, `basou board record` holds each value that is not null
+against the shape its kind gives it below, and refuses one in another shape
+(before, it kept any JSON value). The value of each kind is what the guide
+asks for and the board page draws, and what the previous record's value is
+compared with: a number given as a string, or a version copied with its line
+break, would read as a change. Keep the keys: a key joins a value to the
+previous record's.
 
 Every observation has:
 
@@ -513,6 +517,17 @@ never part of a command.
 | `page_version` | 2 | `url` | a string: the first `v<major>.<minor>.<patch>` the page shows (`"v1.2.3"`, with what follows a `-`) that is not right after a letter, a digit, `_` or `.`, once its generator meta tags are taken out; null with an error when there is none |
 | `http` | 3 | `url`, `words`, `count_pattern`, `capture_pattern` | an object ([below](#http)) |
 | `manual` | 2 | `how` | what the operator answers, as any JSON value |
+
+- **What record refuses**, from basou 0.72.0: a string of a kind above that
+  is empty, has white space at either end, or holds a control character
+  (U+0000 to U+001F, U+007F to U+009F) or one a terminal hides (U+061C,
+  U+200B to U+200F, U+2028 to U+202E, U+2060 to U+2069, U+FEFF); a number of
+  a kind above that is not
+  a whole number from 0 to 9007199254740991; and an `http` value out of its
+  shape ([below](#http)). What a string says is not held to a grammar (a
+  version's, or the words GitHub uses), so a new word is never refused. A
+  `manual` value, and a null, are not checked. Only a board that declares
+  observations has them checked ([3.2](#32-observed)).
 
 The keys:
 
@@ -569,12 +584,16 @@ The value recorded:
 
 | Key | Present | Holds |
 |---|---|---|
-| `status` | always | a number: the status of the last response |
-| `redirects` | always | a number: how many redirects led to it |
-| `final_url` | always | a string: the URL it ended at |
+| `status` | always | a whole number from 100 to 599: the status of the last response |
+| `redirects` | always | a whole number from 0 to 10: how many redirects led to it |
+| `final_url` | always | an absolute `http://` or `https://` URL: the URL it ended at |
 | `words` | with `words` | a list of `true` or `false`, one for each word, in the order declared: whether the body holds it |
-| `count` | with `count_pattern` | a number: how many times it matches the body (0 when it does not) |
-| `capture` | with `capture_pattern` | a string: what the first group holds in the first match; null when nothing matches or the group takes no part |
+| `count` | with `count_pattern` | a whole number from 0 to 9007199254740991: how many times it matches the body (0 when it does not) |
+| `capture` | with `capture_pattern` | a string: what the first group holds in the first match, as it is, spaces and all; null when nothing matches or the group takes no part |
+
+From basou 0.72.0, record refuses an `http` value with a key the
+observation does not declare a read of, or one it declares left out, and a
+read that is not null when the status is not 2xx.
 
 - **A 4xx or a 5xx is a value**, not an observation not made: the status is
   what was observed.
@@ -586,10 +605,15 @@ The value recorded:
   and HTML entities are not decoded.
 - The observation is not made (a null value with an error) when the request
   fails (the name does not resolve, TLS fails, 20 seconds pass, or it takes
-  more than 10 redirects), or when the guide's command that reads the body
-  fails. That command stops, rather than count, at an empty match the
-  declaration could not refuse: a `count_pattern` that matches the empty
-  string only next to some text, as `\b` or a lookaround can.
+  more than 10 redirects), when its status is not one of an HTTP response
+  (100 to 599, such as a server answering 600, which curl prints as it is),
+  or when what curl left cannot be read. From basou 0.72.0 the guide's
+  command prints the whole entry for the record's input on one line, with
+  what a terminal would act on or hide escaped: the value, or the null and
+  the error. It gives the null,
+  rather than count, at an empty match the declaration could not refuse: a
+  `count_pattern` that matches the empty string only next to some text, as
+  `\b` or a lookaround can.
 
 The keys of the value are basou's words, so the check of the record's input
 for the names of other workspaces ([3.1](#31-how-it-is-checked)) looks at
@@ -724,8 +748,9 @@ In this order, and nothing is written when any step refuses:
    to check against; one that cannot be read is said to be so on stderr, and
    the input goes on unchecked.)
 4. **Its shape, and the declaration.** An unknown key is refused at every
-   level but the keys of `observed` and of `prose.lanes`, and every problem
-   found is listed at once.
+   level but the keys of `observed` and of `prose.lanes`, each observation's
+   value is held against its kind's shape ([2.7](#27-observe), from basou
+   0.72.0), and every problem found is listed at once.
 5. **The digest.** The board is measured again, as the model of
    `judged_by.model`, and the record is refused unless the digest is
    `measure_digest`: something measured, or `board.yaml`, changed since the
@@ -742,7 +767,7 @@ A mapping from an observation's key to what was found:
 
 | Key | Required | Holds |
 |---|---|---|
-| `value` | yes | any JSON value, or `null` when the observation was not made |
+| `value` | yes | a JSON value in the shape of its kind ([2.7](#27-observe)), or `null` when the observation was not made |
 | `observed_at` | yes | when it was made, or tried: a date, or a date and a time of day with its offset (`2026-10-19T09:00Z`, `2026-10-19T18:00:00.5+09:00`); a time with no offset is refused |
 | `source` | yes | a non-empty string: what was asked (the command, the URL, `the operator`) |
 | `error` | with a `null` value | a non-empty string: why it was not made |
@@ -753,9 +778,16 @@ A mapping from an observation's key to what was found:
   so a closed exit is never dropped from the board unsaid. With none
   declared, `observed` may be empty.
 - The value is kept as `JSON.parse` read it, and basou does not interpret it.
-  It is refused only where it is not a JSON value: it nests more than 100
-  deep, holds a number too large to be held, or has a key named
-  `__proto__`. Its shape by kind is in [`observe`](#27-observe).
+  It is refused where it is not a JSON value: it nests more than 100 deep,
+  holds a number too large to be held, or has a key named `__proto__`. From
+  basou 0.72.0, when the board declares observations, it is refused too where
+  it is not in the shape of its kind ([2.7](#27-observe)); a `manual` value
+  and a null are not checked. With none declared, the keys of `observed` are
+  free and their values are not checked. A refusal says where in the value
+  (`observed["site.top"].value.status`); one of what a key holds shows what
+  it received, as up to 60 characters of its JSON (an escape counted as one)
+  with what a terminal would act on or hide escaped. A value that is not a
+  JSON value, or nests too deep, is refused for that alone.
 
 ### 3.3 `cells`
 

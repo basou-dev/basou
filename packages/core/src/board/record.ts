@@ -14,6 +14,7 @@ import {
   isCalendarDate,
 } from "./declaration.js";
 import type { BoardMeasurement } from "./measure.js";
+import { observedValueProblems } from "./observed-shape.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -200,9 +201,10 @@ export type BoardRecordInputResult =
  * part's shape is wrong. An unknown key is refused at every level but the
  * keys of `observed` and of `prose.lanes`: the latter are limited to the
  * declaration's lane ids, and the former, when the declaration names what to
- * observe, are exactly those names. Every lane has a cell at every stage,
- * once. The value is what JSON.parse read, so a key given twice has kept
- * its last.
+ * observe, are exactly those names, and each value that is not null is held
+ * against the shape its kind gives it (a `manual` one is the operator's
+ * answer, and is not). Every lane has a cell at every stage, once. The value
+ * is what JSON.parse read, so a key given twice has kept its last.
  */
 export function parseRecordInput(
   value: unknown,
@@ -252,6 +254,21 @@ export function parseRecordInput(
     for (const key of Object.keys(observed)) {
       if (!declared.has(key) && key.trim() !== "" && key !== "__proto__") {
         errors.push(`${formatPath(["observed", key])}: is not an observation the board declares`);
+      }
+    }
+    // A value of the wrong shape, a number given as a string or a line break
+    // copied with a version, would read as a change from the previous
+    // record's value: each is refused here, as the guide asks for it. Only a
+    // JSON value is held against its kind: one that is not is refused above,
+    // and one nested too deep is never walked again.
+    for (const o of declaration.observe) {
+      const entry = Object.hasOwn(observed, o.key) ? observed[o.key] : undefined;
+      if (!isRecord(entry) || entry.value === null || entry.value === undefined) continue;
+      if (!observedValue.safeParse(entry.value).success) continue;
+      for (const problem of observedValueProblems(o, entry.value)) {
+        errors.push(
+          `${formatPath(["observed", o.key, "value", ...problem.path])}: ${problem.message}`,
+        );
       }
     }
   }

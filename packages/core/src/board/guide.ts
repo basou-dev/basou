@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { displayPath } from "../lib/display-path.js";
 import {
   BOARD_HTTP_CAPTURE_FLAGS,
   BOARD_HTTP_COUNT_FLAGS,
   BOARD_HTTP_MAX_REDIRECTS,
+  BOARD_OBSERVE_KINDS,
   BOARD_STAGE_IDS,
   type BoardDeclaration,
   type BoardObserve,
@@ -12,6 +12,7 @@ import {
 import { daysBetween, todayIn } from "./effort.js";
 import { BOARD_INIT_SAVE } from "./init.js";
 import type { BoardPreviousRecords } from "./previous.js";
+import { escapeHidden, HIDDEN, shownText as shown } from "./shown-text.js";
 
 /**
  * The steps an agent follows to judge a board and record it, filled in with
@@ -73,28 +74,10 @@ export function shellWord(text: string): string {
   return `'${text.replaceAll("'", `'\\''`)}'`;
 }
 
-// What a terminal would act on, or hides: the C1 controls, the Arabic letter
-// mark, the zero-width and direction marks, the line and paragraph
-// separators, the bidirectional controls, the word joiner and the invisible
-// operators, and the byte order mark.
-const HIDDEN = /[\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g;
-
-const escapeHidden = (c: string) => `\\u${(c.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`;
-
 // JSON with what a terminal would act on, or hides, escaped as well:
 // JSON.stringify leaves those as they are.
 function jsonText(value: unknown, indent?: number): string {
   return JSON.stringify(value, null, indent).replace(HIDDEN, escapeHidden);
-}
-
-// A surrogate not in a pair, which JSON.stringify writes as an escape.
-const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
-
-// A text as the guide shows it: as displayPath shows it, with what jsonText
-// escapes escaped too (a surrogate not in a pair among it), so that the
-// prose, a source and the template show a value alike.
-function shown(text: string): string {
-  return displayPath(text).replace(HIDDEN, escapeHidden).replace(LONE_SURROGATE, escapeHidden);
 }
 
 const LANGUAGE_NAMES = { en: "English (en)", ja: "Japanese (ja)" } as const;
@@ -485,29 +468,36 @@ function observeSteps(
     return;
   }
   line(
-    'Read only: these commands write nothing and change nothing. Make each one, and write it under its key in `observed` as `{ "value": <value>, "observed_at": <when>, "source": <what you asked> }`. `observed_at` is when you made it, or tried to, with its offset, such as `date -u +%Y-%m-%dT%H:%M:%SZ` prints. When it cannot be made (a command failed, nothing to read, no answer), write `"value": null` and an `"error"` saying why, and still the `observed_at` of when you tried: record refuses one left empty. The board then shows it as not confirmed, with the previous record\'s value. Never carry an old value forward as today\'s. Keep the keys: they join each value to the previous record\'s.',
+    'Read only: these commands write nothing and change nothing. Make each one, and write it under its key in `observed` as `{ "value": <value>, "observed_at": <when>, "source": <what you asked> }`; the command of an `http` observation prints this whole entry. `observed_at` is when you made it, or tried to, with its offset, such as `date -u +%Y-%m-%dT%H:%M:%SZ` prints. When it cannot be made (a command failed, nothing to read, no answer), write `"value": null` and an `"error"` saying why, and still the `observed_at` of when you tried: record refuses one left empty. The board then shows it as not confirmed, with the previous record\'s value. Never carry an old value forward as today\'s. Keep the keys: they join each value to the previous record\'s.',
+    "",
+    "Write a value as the command printed it, in the shape its kind gives it below: record refuses another, such as a number given as a string, a string with a space or a line break at either end, or an `http` status that is not a response's (100 to 599). A `manual` value is the operator's answer, as any JSON value.",
+    "",
+    "What each kind gives:",
     "",
   );
+  const kinds = BOARD_OBSERVE_KINDS.filter((kind) => observe.some((o) => o.kind === kind));
+  for (const kind of kinds) line(`- \`${kind}\`: ${kindText(kind)}`);
+  line("");
+  if (kinds.includes("http")) {
+    line(
+      "Before the first `http` observation, write the script that reads what its GET got. It is basou's own, the same for every `http` observation, and its name changes with what it holds:",
+    );
+    block(`${go} && printf '%s\\n' '${HTTP_SCRIPT}' > "$W/${HTTP_SCRIPT_FILE}"; echo "exit=$?"`);
+  }
   for (const o of observe) {
     line(`#### \`${o.key}\` (${o.kind})`, "");
     switch (o.kind) {
       case "npm_version":
         line(`The version of ${codeSpan(o.package)} published on npm (its \`latest\` tag):`);
         block(`npm view ${shellWord(o.package)} version; echo "exit=$?"`);
-        line(
-          `Value: the last line of the output, as a string (such as "1.2.3"). Source: ${codeSpan(sourceOf(o))}.`,
-          "",
-        );
+        line(`Source: ${codeSpan(sourceOf(o))}.`, "");
         break;
       case "github_release":
         line(`The latest release of ${codeSpan(o.repo)} on GitHub:`);
         block(
           `gh release view --repo ${shellWord(o.repo)} --json tagName -q .tagName; echo "exit=$?"`,
         );
-        line(
-          `Value: the tag, as a string. No release yet is a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
-          "",
-        );
+        line(`Source: ${codeSpan(sourceOf(o))}.`, "");
         break;
       case "github_open_issues":
       case "github_open_prs": {
@@ -518,10 +508,7 @@ function observeSteps(
         block(
           `gh ${what} list --repo ${shellWord(o.repo)} --state open --limit 1000 --json number -q length; echo "exit=$?"`,
         );
-        line(
-          `Value: the number, as a number. At 1000 there may be more: say so in a footnote. Source: ${codeSpan(sourceOf(o))}.`,
-          "",
-        );
+        line(`Source: ${codeSpan(sourceOf(o))}.`, "");
         break;
       }
       case "github_ci":
@@ -531,41 +518,61 @@ function observeSteps(
         block(
           `gh run list --repo ${shellWord(o.repo)} --workflow ${shellWord(o.workflow)} --branch ${shellWord(o.branch)} --limit 1 --json status,conclusion -q '.[0] | if .status == "completed" then .conclusion else .status end'; echo "exit=$?"`,
         );
+        line(`Source: ${codeSpan(sourceOf(o))}.`, "");
+        break;
+      case "github_check":
         line(
-          `Value: what it prints, as a string (\`success\`, \`failure\`, or the status of a run not finished, such as \`in_progress\`). Nothing printed (no run) is a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
+          `How the latest check run named ${codeSpan(o.check)} on the head commit of ${codeSpan(o.branch)} of ${codeSpan(o.repo)} ended:`,
+        );
+        block(
+          `gh api -X GET ${shellWord(githubCheckPath(o))} -f check_name=${shellWord(o.check)} -f per_page=${CHECK_RUNS_PER_PAGE} -q ${shellWord(CHECK_RUN_STATE)}; echo "exit=$?"`,
+        );
+        line(
+          `An empty line: the head commit of ${codeSpan(o.branch)} has no check run named ${codeSpan(o.check)}. Source: ${codeSpan(sourceOf(o))}.`,
           "",
         );
         break;
-      case "github_check":
-        githubCheckSteps(o, line, block);
-        break;
       case "page_version":
-        line(
-          `The version ${codeSpan(o.url)} shows: the first \`v<major>.<minor>.<patch>\` (with what follows a \`-\`) not right after a letter, digit, underscore or dot, once the page's generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's).`,
-        );
+        line(`The version ${codeSpan(o.url)} shows:`);
         block(
           `${go} && curl -fsS --max-time 20 ${shellWord(o.url)} > "$W/page-${o.key}.html"; echo "curl exit=$?"`,
           `${go} && node -e 'let t="";process.stdin.on("data",(d)=>{t+=d}).on("end",()=>{const m=t.replace(/<meta\\b[^>]*\\bname\\s*=\\s*["\\x27]?generator\\b[^>]*>/gi,"").match(/(?<![\\w.])v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?/);if(m===null){process.exitCode=1}else{console.log(m[0])}})' < "$W/page-${o.key}.html"; echo "exit=$?"`,
         );
-        line(
-          `Value: the version it prints, as a string (such as "v1.2.3"). A failed fetch, or no version on the page (exit 1), is a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
-          "",
-        );
+        line(`Source: ${codeSpan(sourceOf(o))}.`, "");
         break;
       case "http":
         httpSteps(o, go, line, block);
         break;
       case "manual":
-        line(
-          `Only the operator can make this one: ${shown(o.how)}`,
-          "",
-          "Ask the operator, and do not make it yourself. Ask for one thing they can do as it is written: the line to run and where to run it, or the page to open, and what to send back. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`. When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.",
-          "",
-        );
+        line(`Only the operator can make this one: ${shown(o.how)}`, "");
         break;
     }
     for (const note of o.notes ?? []) line(`- mind: ${shown(note)}`);
     line("");
+  }
+}
+
+// What a kind of observation gives, and how its value is written: said once
+// for all the observations of the kind.
+function kindText(kind: BoardObserve["kind"]): string {
+  switch (kind) {
+    case "npm_version":
+      return 'the version a package\'s `latest` tag names on npm. Value: the last line of the output, as a string (such as "1.2.3"), with nothing around it.';
+    case "github_release":
+      return "the tag of a repository's latest release on GitHub. Value: the tag, as a string. No release yet is a null with that as the error.";
+    case "github_open_issues":
+    case "github_open_prs":
+      return "how many are open. Value: the number, as a number. At 1000 there may be more: say so in a footnote.";
+    case "github_ci":
+      return "how the latest run of a workflow on a branch ended. Value: what it prints, as a string (`success`, `failure`, or the status of a run not finished, such as `in_progress`). Nothing printed (no run) is a null with that as the error.";
+    case "github_check":
+      return `how the newest check run of a name on the head commit of a branch ended: a check run of a GitHub App, such as a deploy, as well as a job of a workflow. Value: the first line it prints, as a string (\`success\`, \`failure\`, \`cancelled\`, \`skipped\`, or the status of a run not finished, such as \`queued\` or \`in_progress\`). A second line, \`more than ${CHECK_RUNS_PER_PAGE} runs: <n>\`, says the newest run may be on a page not read: keep the first line as the value, and say so in a footnote. An empty line is no check run of that name on the head commit: a null, with the error saying so. A head commit that never started the check (a path filter, \`[skip ci]\` in its commit message, or the app's own rules) gives this too, even when what the check looks after is fine; a job a workflow skipped with \`if:\` is a check run, concluded \`skipped\`. A branch that does not exist exits 1 (HTTP 422): a null with that as the error.`;
+    case "page_version":
+      return "the first `v<major>.<minor>.<patch>` (with what follows a `-`) a page shows, not right after a letter, digit, underscore or dot, once its generator meta tags are taken out, however they are quoted or cased (they name the site builder's version, not the product's). Value: the version it prints, as a string (such as \"v1.2.3\"). A failed fetch, or no version on the page (exit 1), is a null with that as the error.";
+    case "http":
+      return `a GET, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects, with no \`-f\`: a 4xx or 5xx is a value, not an observation not made (the status is what was observed). The block keeps curl's status line and its exit code in W beside the body, and the script reads them: it prints the whole entry on one line, to put under the key as it is. The value holds \`status\`, \`redirects\` and \`final_url\`, and what the observation reads off the body: \`words\`, whether the body holds each word, true or false in the order declared, found as written, character for character, with HTML entities not decoded; \`count\`, how many times the count_pattern matches (0 when it does not); \`capture\`, what the first group of the first match of the capture_pattern holds (null when nothing matches, or when the group takes no part). The patterns are matched against the whole body at once, not line by line as a measure's \`pattern\` is, so \`^\` and \`$\` are the body's start and end. When the status is not 2xx the body is not read, and each read is a null, not a list of nulls: an error page's text is not the page's. When curl exits other than 0 (the name does not resolve, TLS fails, 20 seconds pass, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47), its status is not one of an HTTP response (100 to 599, such as a server answering 600), or the body cannot be read, the value is null and the error says why. The line escapes what a terminal would act on or hide (a line separator, a direction mark), as JSON does a line break: the value read is the same.`;
+    case "manual":
+      return "only the operator can make it. Ask the operator, and do not make it yourself. Ask for one thing they can do as it is written: the line to run and where to run it, or the page to open, and what to send back. With no answer this time, write a null, say so as the error, and give the time you asked as `observed_at`. Source: `the operator`. When the operator tells you to make it yourself, make it as they said and write that in the source instead, such as `ran <the command> as the operator asked`.";
   }
 }
 
@@ -640,23 +647,49 @@ function sourceOf(o: BoardObserve): string {
   }
 }
 
-// What reads the values of an http observation off its body, on stdin. The
-// patterns and the words come after `--`, so none is read as an option of
-// node's: the count_pattern, the capture_pattern (each '' when not declared)
-// and the words. The body is decoded only once all of it is read, so a
-// character is never cut where a chunk ends, and a leading BOM is taken
-// off; nothing else of it is decoded. An empty match would count positions,
-// not matches: it stops instead. It prints the values as JSON.
-const HTTP_BODY_SCRIPT = [
-  "const [count, capture, ...words] = process.argv.slice(1);",
-  'let t = require("fs").readFileSync(0, "utf8");',
-  "if (t.charCodeAt(0) === 0xfeff) t = t.slice(1);",
-  "const v = {};",
-  "if (words.length > 0) v.words = words.map((w) => t.includes(w));",
-  `if (count !== "") { let n = 0; for (const m of t.matchAll(new RegExp(count, "${BOARD_HTTP_COUNT_FLAGS}"))) { if (m[0] === "") { console.error("count_pattern matched an empty string at " + m.index); process.exit(1); } n++; } v.count = n; }`,
-  `if (capture !== "") { const m = new RegExp(capture, "${BOARD_HTTP_CAPTURE_FLAGS}").exec(t); v.capture = m === null || m[1] === undefined ? null : m[1]; }`,
-  "console.log(JSON.stringify(v));",
+// What reads what an http observation's GET got, from the files its block
+// leaves in W (curl's exit code, its status line and the body), and prints
+// the observation's entry for the record's input on one line: the value, or a
+// null and why. The arguments come after `--`, so none is read as an option of
+// node's: where the files are, the URL (the source), the count_pattern and the
+// capture_pattern (each '' when not declared), and the words. Curl's status
+// line is read from a file, never passed as an argument: the URL it ended at
+// is not a value of the declaration's. The body is read only when the status
+// is 2xx, decoded once all of it is read, so a character is never cut where a
+// chunk ends, and with a leading BOM taken off; nothing else of it is decoded.
+// An empty match would count positions, not matches: it is no observation,
+// and so is a status no response has (curl prints what a server answers, 600
+// too). The line escapes what a terminal would act on or hide, as jsonText
+// does. Written with no ' and no backslash, so that it is one single-quoted
+// word.
+const HTTP_SCRIPT = [
+  'const fs = require("fs");',
+  'const [at, url, count, capture, ...words] = process.argv.slice(process.argv.indexOf("--") + 1);',
+  "const hidden = (n) => (n >= 0x7f && n <= 0x9f) || n === 0x61c || (n >= 0x200b && n <= 0x200f) || (n >= 0x2028 && n <= 0x202e) || (n >= 0x2060 && n <= 0x2069) || n === 0xfeff;",
+  'const shown = (s) => [...s].map((c) => (hidden(c.codePointAt(0)) ? String.fromCharCode(92) + "u" + c.codePointAt(0).toString(16).padStart(4, "0") : c)).join("");',
+  "const print = (value, error) => console.log(shown(JSON.stringify({ value, observed_at: new Date().toISOString(), source: url, ...(error === undefined ? {} : { error }) })));",
+  "const read = () => {",
+  'const exit = fs.readFileSync(at + ".exit", "utf8").trim();',
+  `if (exit !== "0") return print(null, "curl exit " + exit + (exit === "47" ? ": more than ${BOARD_HTTP_MAX_REDIRECTS} redirects" : exit === "28" ? ": no answer in 20 seconds" : exit === "6" ? ": the name does not resolve" : exit === "7" ? ": no connection" : ""));`,
+  'const m = /^([0-9]{3}) ([0-9]+) (.*)$/.exec(fs.readFileSync(at + ".meta", "utf8").trimEnd());',
+  'if (m === null) return print(null, "curl printed no status line");',
+  "const status = Number(m[1]);",
+  'if (status < 100 || status > 599) return print(null, "the status " + m[1] + " is not one of an HTTP response (100 to 599)");',
+  "const v = { status, redirects: Number(m[2]), final_url: m[3] };",
+  "const ok = status >= 200 && status <= 299;",
+  'let t = "";',
+  'if (ok && (words.length > 0 || count !== "" || capture !== "")) { try { t = fs.readFileSync(at + ".body", "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; } if (t.charCodeAt(0) === 0xfeff) t = t.slice(1); }',
+  "if (words.length > 0) v.words = ok ? words.map((w) => t.includes(w)) : null;",
+  `if (count !== "") { if (!ok) v.count = null; else { let n = 0; for (const x of t.matchAll(new RegExp(count, "${BOARD_HTTP_COUNT_FLAGS}"))) { if (x[0] === "") return print(null, "the count_pattern matched an empty string at " + x.index); n++; } v.count = n; } }`,
+  `if (capture !== "") { const x = ok ? new RegExp(capture, "${BOARD_HTTP_CAPTURE_FLAGS}").exec(t) : null; v.capture = x === null || x[1] === undefined ? null : x[1]; }`,
+  "return print(v);",
+  "};",
+  'try { read(); } catch { print(null, "what curl left in W could not be read"); }',
 ].join(" ");
+
+// The file the script is written to in W: named by what it holds, so that one
+// a basou of another version wrote there is never run instead.
+const HTTP_SCRIPT_FILE = `http-read-${createHash("sha256").update(HTTP_SCRIPT).digest("hex").slice(0, 12)}.cjs`;
 
 // A text as Markdown code, as it is: fenced by more backquotes than it
 // holds in a row, and padded with a space when it starts or ends with a
@@ -686,77 +719,29 @@ const CHECK_RUNS_PER_PAGE = 100;
 // page holds, a second line says so: the newest may be on a page not read.
 const CHECK_RUN_STATE = `(.check_runs | max_by(.id) | if .status == "completed" then .conclusion else .status end), (if .total_count > ${CHECK_RUNS_PER_PAGE} then "more than ${CHECK_RUNS_PER_PAGE} runs: \\(.total_count)" else empty end)`;
 
-// How a github_check observation is made.
-function githubCheckSteps(
-  o: Extract<BoardObserve, { kind: "github_check" }>,
-  line: (...lines: string[]) => void,
-  block: (...lines: string[]) => void,
-): void {
-  line(
-    `How the latest check run named ${codeSpan(o.check)} on the head commit of ${codeSpan(o.branch)} of ${codeSpan(o.repo)} ended (a check run of a GitHub App, such as a deploy, as well as a job of a workflow):`,
-  );
-  block(
-    `gh api -X GET ${shellWord(githubCheckPath(o))} -f check_name=${shellWord(o.check)} -f per_page=${CHECK_RUNS_PER_PAGE} -q ${shellWord(CHECK_RUN_STATE)}; echo "exit=$?"`,
-  );
-  line(
-    `Value: the first line it prints, as a string (\`success\`, \`failure\`, \`cancelled\`, \`skipped\`, or the status of a run not finished, such as \`queued\` or \`in_progress\`). A second line, \`more than ${CHECK_RUNS_PER_PAGE} runs: <n>\`, says the newest run may be on a page not read: keep the first line as the value, and say so in a footnote. An empty line is no check run of that name on the head commit: a null, with the error saying that the head commit of ${codeSpan(o.branch)} has no check run named ${codeSpan(o.check)}. A head commit that never started the check (a path filter, \`[skip ci]\` in its commit message, or the app's own rules) gives this too, even when what the check looks after is fine; a job a workflow skipped with \`if:\` is a check run, concluded \`skipped\`. A branch that does not exist exits 1 (HTTP 422): a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
-    "",
-  );
-}
-
-// How an http observation is made: a GET, then its body read when the
-// observation declares what to read off it.
+// How an http observation is made: a GET, its status line and exit code kept
+// in W beside the body, and the script, written once, reading them.
 function httpSteps(
   o: Extract<BoardObserve, { kind: "http" }>,
   go: string,
   line: (...lines: string[]) => void,
   block: (...lines: string[]) => void,
 ): void {
-  const body = `"$W/http-${o.key}.body"`;
   const reads = [
-    ...(o.words === undefined
-      ? []
-      : [
-          `\`words\`: whether the body holds each word, as true or false in the order the command gives them (${o.words.map(codeSpan).join(", ")})`,
-        ]),
-    ...(o.count_pattern === undefined
-      ? []
-      : [
-          `\`count\`: how many times ${codeSpan(o.count_pattern)} matches the body (0 when it does not)`,
-        ]),
-    ...(o.capture_pattern === undefined
-      ? []
-      : [
-          `\`capture\`: what the first group of the first match of ${codeSpan(o.capture_pattern)} holds, as a string (null when nothing matches, or when the first group takes no part in the match)`,
-        ]),
+    ...(o.words === undefined ? [] : [`\`words\` ${o.words.map(codeSpan).join(", ")}`]),
+    ...(o.count_pattern === undefined ? [] : [`\`count\` of ${codeSpan(o.count_pattern)}`]),
+    ...(o.capture_pattern === undefined ? [] : [`\`capture\` of ${codeSpan(o.capture_pattern)}`]),
   ];
   line(
-    `A GET of ${codeSpan(o.url)}, following up to ${BOARD_HTTP_MAX_REDIRECTS} redirects. It prints the status of the last response, how many redirects led to it and the URL it ended at (no \`-f\`: a 4xx or 5xx is printed and exits 0):`,
+    `A GET of ${codeSpan(o.url)}${reads.length > 0 ? `, reading off a 2xx body ${reads.join(", ")}` : ""}:`,
   );
+  const at = `"$W/http-${o.key}`;
+  const args = [o.url, o.count_pattern ?? "", o.capture_pattern ?? "", ...(o.words ?? [])];
   block(
-    `${go} && curl -sS -L --max-redirs ${BOARD_HTTP_MAX_REDIRECTS} --max-time 20 -o ${body} -w '%{http_code} %{num_redirects} %{url_effective}\\n' ${shellWord(o.url)}; echo "curl exit=$?"`,
+    `${go} && { rm -f ${at}.body"; curl -sS -L --max-redirs ${BOARD_HTTP_MAX_REDIRECTS} --max-time 20 -o ${at}.body" -w '%{http_code} %{num_redirects} %{url_effective}\\n' ${shellWord(o.url)} > ${at}.meta"; echo "$?" > ${at}.exit"; node "$W/${HTTP_SCRIPT_FILE}" -- ${at}" ${args.map(shellWord).join(" ")}; }; echo "exit=$?"`,
   );
-  if (reads.length > 0) {
-    line(
-      "When the status is 2xx, read the body. The words are found as written, character for character, and HTML entities are not decoded; the patterns are matched against the whole body at once, not line by line as a measure's `pattern` is, so `^` and `$` are the body's start and end:",
-    );
-    const args = [o.count_pattern ?? "", o.capture_pattern ?? "", ...(o.words ?? [])];
-    block(
-      `${go} && node -e ${shellWord(HTTP_BODY_SCRIPT)} -- ${args.map(shellWord).join(" ")} < ${body}; echo "exit=$?"`,
-    );
-    line("It prints, as JSON:", "", ...reads.map((r) => `- ${r}`), "");
-  }
-  // What the body would give, as the value holds it when the status is not 2xx.
-  const nulls = (["words", "count", "capture"] as const)
-    .filter((k) => (k === "words" ? o.words : k === "count" ? o.count_pattern : o.capture_pattern))
-    .map((k) => `"${k}": null`)
-    .join(", ");
-  const notRead =
-    nulls === ""
-      ? ""
-      : ` When the status is not 2xx, do not read the body: give \`${nulls}\`, each a null and not a list of nulls (an error page's text is not the page's).`;
   line(
-    `Value: \`{ "status": <the first number>, "redirects": <the second>, "final_url": <the URL, as a string>${reads.length > 0 ? ", <what the body gave>" : ""} }\`, the numbers as numbers. A 4xx or 5xx is a value, not an observation not made: the status is what was observed.${notRead} When curl exits other than 0 (the name does not resolve, TLS fails, the time runs out, more than ${BOARD_HTTP_MAX_REDIRECTS} redirects: exit 47)${reads.length > 0 ? ", or reading the body exits 1," : ""} the observation is not made: a null with that as the error. Source: ${codeSpan(sourceOf(o))}.`,
+    `Put the line it prints under ${codeSpan(o.key)} as it is. Source: ${codeSpan(sourceOf(o))}.`,
     "",
   );
 }
