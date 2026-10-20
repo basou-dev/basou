@@ -52,12 +52,13 @@ All notable changes to **basou** are recorded here. The project follows
   answers. A board of ten `manual` observations that one query answers had
   the agent ask ten times. The operator's turns in the guide list them as
   one item, with each key under it.
-- **`basou board guide` says a milestone is a day on which something
-  happened** (a release, a launch, the start of the work), never a plan or
-  a target date. It said only what was reached, and also that a board moved
-  from another keeps its milestones, which a start among them did not fit.
-  A moved board keeps the milestones it had that happened, and leaves out
-  those that were only planned.
+- **`basou board guide`, and the comment `basou board init` prints above
+  `milestones`, say a milestone is a day on which something happened** (a
+  release, a launch, the start of the work), never a plan or a target date.
+  They said only what was reached, and also that a board moved from another
+  keeps its milestones, which a start among them did not fit. A moved board
+  keeps the milestones it had that happened, and leaves out those that were
+  only planned.
 
 ### Fixed
 
