@@ -545,7 +545,7 @@ describe("boardGuide: the gate on readers, the Stop hook and where a measure is 
   it("says, before a board is declared, which measures the page draws and who may read the repo", () => {
     const guide = boardGuide(guideInput({ board: { status: "undeclared" } }));
     expect(guide).toContain(
-      "A measure with `lane:` (a lane id, or a list of them) is drawn in each of those lanes' sections of the board page; one without is kept only in the records and their differences (and in a ratio or a total that uses it).",
+      "Every measure is drawn in the board page's table of measures, and one with `lane:` (a lane id, or a list of them) in each of those lanes' sections too.",
     );
     expect(guide).toContain(
       "no collaborator but the owner and you (the account gh is signed in as), and no invitation",

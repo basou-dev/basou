@@ -1366,6 +1366,11 @@ describe("basou view: the board page", () => {
       "when",
       "shown",
       "withWords",
+      "httpText",
+      "observedText",
+      "movedText",
+      "measureText",
+      "signed",
       "stateName",
       "section",
       "svg",
@@ -1387,6 +1392,9 @@ describe("basou view: the board page", () => {
     const source = [
       liftVar("SVGNS"),
       liftVar("CHART"),
+      liftVar("DOT"),
+      liftVar("FOUND"),
+      liftVar("NOT_FOUND"),
       ...(names.includes("drawLive") ? [liftVar("liveDrawn")] : []),
       ...[...helpers, ...names.filter((n) => !helpers.includes(n))].map(lift),
     ].join("\n");
@@ -1415,8 +1423,12 @@ describe("basou view: the board page", () => {
     "effort",
     "matrix",
     "lanes",
+    "measures",
     "composition",
     "turns",
+    "recordRepos",
+    "recordComponents",
+    "reposTable",
     "footnotes",
     "liveHeading",
     "liveRepos",
@@ -1450,6 +1462,24 @@ describe("basou view: the board page", () => {
       const words = boardPageStrings("en").effort;
       call("draw", board);
       expect(document.title).toBe("Board");
+      // Every section of a record, the repos and the components it measured among them.
+      expect(byId.board?.find((n) => n.tag === "h2").map((n) => n.textContent)).toEqual([
+        "Summary",
+        "Period and effort",
+        "Reach matrix",
+        "Where each lane is",
+        "Measures",
+        "Composition",
+        "The operator's turns",
+        "Repositories",
+        "Components",
+        "Footnotes",
+      ]);
+      // The record was written by this basou: its repo is drawn with its base.
+      const repoCells = (byId.board as Node)
+        .find((n) => n.tag === "section" && n.children[0]?.textContent === "Repositories")[0]
+        ?.find((n) => n.tag === "td");
+      expect(repoCells?.[0]?.textContent).toBe(basename(repo));
       // The record's board declares no milestones, and says so.
       expect(byId.board?.text()).toContain(words.noMilestones);
       expect(byId.board?.text()).not.toContain(words.milestonesNotRead);
@@ -1563,6 +1593,335 @@ describe("basou view: the board page", () => {
     expect(values).toContain('{"words":{"solo":false}}');
     // The previous value, under another declaration, is drawn as it was.
     expect(values).toContain('not observed (previous: {"words":[true]})');
+  });
+
+  it("draws an http value in its shape as its parts, what each observation is and looks at, and its notes", () => {
+    const { call } = drawing(["summary"]);
+    const DOT = ` ${String.fromCodePoint(0xb7)} `;
+    const [YES, NO] = [String.fromCodePoint(0x2713), String.fromCodePoint(0x2717)];
+    const made = { observed_at: "2026-10-07T00:00:00Z", source: "https://example.com/x" };
+    const drawn = call("summary", {
+      summary: {
+        text: "",
+        tiles: [],
+        previous_record: "none",
+        observed: [
+          {
+            name: "shop",
+            value: { status: 200 },
+            http: {
+              status: 200,
+              redirects: 1,
+              final_url: "https://example.com/x/",
+              body: {
+                words: [
+                  { word: "in stock", found: true },
+                  { word: "sold out", found: false },
+                ],
+                count: 42,
+                capture: "2.3",
+              },
+            },
+            kind: "http",
+            looks_at: ["https://example.com/x"],
+            notes: ["mind the `cache`", "<b>not markup</b>"],
+            ...made,
+          },
+          {
+            name: "closed",
+            value: {},
+            http: { status: 503, redirects: 0, final_url: "http://example.com/", body: null },
+            ...made,
+          },
+          {
+            name: "plain",
+            value: {},
+            http: { status: 301, redirects: 10, final_url: "https://example.com/y" },
+            ...made,
+          },
+          {
+            name: "nomatch",
+            value: {},
+            http: {
+              status: 200,
+              redirects: 0,
+              final_url: "https://a.example/",
+              body: { capture: null },
+            },
+            ...made,
+          },
+          { name: "ci", value: "success", kind: "github_ci", looks_at: ["o/r", "q.yml"], ...made },
+          { name: "issues", value: 12, ...made },
+        ],
+      },
+    });
+    const rows = drawn.find((n) => n.tag === "tr").slice(1);
+    const cells = rows.map((r) => r.children.map((c) => c.text()));
+    expect(cells.map((c) => c[1])).toEqual([
+      `200${DOT}redirects 1${DOT}https://example.com/x/${DOT}in stock ${YES}  sold out ${NO}${DOT}count 42${DOT}capture "2.3"`,
+      undefined,
+      `503${DOT}redirects 0${DOT}http://example.com/${DOT}body not read`,
+      `301${DOT}redirects 10${DOT}https://example.com/y`,
+      `200${DOT}redirects 0${DOT}https://a.example/${DOT}no capture`,
+      "success",
+      "12",
+    ]);
+    // Its kind and what it looks at, small under its name.
+    const [name] = rows[0]?.children ?? [];
+    expect(name?.children.map((c) => [c.className, c.text()])).toEqual([
+      ["", "shop"],
+      ["sub", `http${DOT}https://example.com/x`],
+    ]);
+    expect(rows[5]?.children[0]?.text()).toBe(`ci${"github_ci"}${DOT}o/r${DOT}q.yml`);
+    expect(rows[6]?.children[0]?.children).toHaveLength(1);
+    // Its notes in a row under it, across the table, as prose.
+    const notes = rows[1] as Node;
+    expect(notes.className).toBe("notes");
+    expect(notes.children[0]?.attrs.colspan).toBe("4");
+    expect(notes.find((n) => n.tag === "li").map((n) => n.text())).toEqual([
+      "mind the cache",
+      "<b>not markup</b>",
+    ]);
+    expect(notes.find((n) => n.tag === "code").map((n) => n.text())).toEqual(["cache"]);
+    expect(notes.find((n) => n.tag === "b")).toEqual([]);
+  });
+
+  it("marks an observation that moved since the previous record, with what that record held", () => {
+    const { call } = drawing(["summary"]);
+    const DOT = ` ${String.fromCodePoint(0xb7)} `;
+    const [YES, NO] = [String.fromCodePoint(0x2713), String.fromCodePoint(0x2717)];
+    const made = { observed_at: "2026-10-07T00:00:00Z", source: "s" };
+    const ok = (word: string, found: boolean) => ({
+      status: 200,
+      redirects: 0,
+      final_url: "https://example.com/",
+      body: { words: [{ word, found }] },
+    });
+    const summary = (previous_record: string, observed: unknown[]) =>
+      call("summary", { summary: { text: "", tiles: [], previous_record, observed } });
+    const drawn = summary("found", [
+      { name: "npm", value: "1.1.0", moved: { status: "value", value: "1.0.0" }, ...made },
+      // Its type alone moved: both as JSON would tell them apart.
+      { name: "count", value: 12, moved: { status: "value", value: "12" }, ...made },
+      { name: "rev", value: "12", moved: { status: "value", value: 12 }, ...made },
+      {
+        name: "back",
+        value: "ok",
+        moved: { status: "value", value: null, error: "timeout" },
+        ...made,
+      },
+      { name: "flaky", value: 3, error: "partly", moved: { status: "value", value: 3 }, ...made },
+      { name: "fresh", value: true, moved: { status: "none" }, ...made },
+      {
+        name: "shop",
+        value: {},
+        http: ok("is", false),
+        moved: { status: "value", value: {}, http: ok("was", true) },
+        ...made,
+      },
+      { name: "same", value: 3, ...made },
+      // Not made now: its previous value as before, unmarked.
+      {
+        name: "down",
+        value: null,
+        error: "timeout",
+        previous: { status: "value", value: "1" },
+        ...made,
+      },
+    ]);
+    const cells = drawn
+      .find((n) => n.tag === "tr")
+      .slice(1)
+      .map((r) => r.children[1] as Node);
+    expect(cells.map((c) => c.children.map((x) => x.text()))).toEqual([
+      ["changed", "1.1.0", "previous: 1.0.0"],
+      ["changed", "12", 'previous: "12"'],
+      ["changed", '"12"', "previous: 12"],
+      ["changed", "ok", "previous: not observed  (timeout)"],
+      ["changed", "3  (partly)", "previous: 3"],
+      ["changed", "true", "not in the previous record"],
+      [
+        "changed",
+        `200${DOT}redirects 0${DOT}https://example.com/${DOT}is ${NO}`,
+        `previous: 200${DOT}redirects 0${DOT}https://example.com/${DOT}was ${YES}`,
+      ],
+      ["3"],
+      ["not observed (previous: 1)  (timeout)"],
+    ]);
+    expect(drawn.find((n) => n.className === "chip changed")).toHaveLength(7);
+    const unreadable = boardPageStrings("en").observed.previousUnreadable;
+    expect(drawn.text()).not.toContain(unreadable);
+    expect(summary("unreadable", [{ name: "npm", value: "1", ...made }]).text()).toContain(
+      unreadable,
+    );
+    expect(summary("unreadable", []).text()).not.toContain(unreadable);
+  });
+
+  it("draws every measure in a table, with its lanes and how much a number moved", () => {
+    const { call } = drawing(["measures"]);
+    const drawn = call("measures", {
+      measures: [
+        { id: "src", value: 90, unit: "lines", lanes: ["Core", "Docs"], delta: -10 },
+        { id: "test", value: null, unit: "lines", lanes: [], delta: null },
+        { id: "latest", value: "20260401", unit: "name", lanes: ["Docs"], delta: null },
+        { id: "mig", value: ["db/a.sql", "db/b.sql"], unit: "files", lanes: [], delta: null },
+        { id: "pages", value: 1234.5, unit: "pages", lanes: [], delta: 0.5 },
+        { id: "same", value: 3, unit: "files", lanes: [], delta: 0 },
+      ],
+    });
+    const rows = drawn.find((n) => n.tag === "tr").map((r) => r.children.map((c) => c.text()));
+    expect(rows).toEqual([
+      ["Measure", "Value", "Drawn in", "Since the previous record"],
+      ["src", "90 lines", "Core, Docs", "-10"],
+      ["test", "not measured", "-", ""],
+      // A string is no amount: no unit. The paths of a file_paths by how many.
+      ["latest", "20260401", "Docs", ""],
+      ["mig", "2 files", "-", ""],
+      ["pages", "1,234.5 pages", "-", "+0.5"],
+      ["same", "3 files", "-", "0"],
+    ]);
+    expect(call("measures", { measures: [] }).text()).toContain("No measures are declared.");
+  });
+
+  it("draws the repos a record measured, saying what a record of version 1 or 2 did not measure", () => {
+    const { call } = drawing(["missingIn", "reposTable", "recordRepos"]);
+    const repo = {
+      path: ".",
+      name: "app",
+      head: "0123456789abcdef0123456789abcdef01234567",
+      branch: "main",
+      last_commit: null,
+      commits: 2,
+      uncommitted: 0,
+      base: "origin/main",
+      behind: 3,
+      ahead: 1,
+      fetched_at: null,
+    };
+    const S = boardPageStrings("en");
+    const footnotes = (at: string[]) => ({ not_found: at.map((a) => ({ at: a, reason: "x" })) });
+    const cells = (node: Node) => node.find((n) => n.tag === "td").map((c) => c.textContent);
+    const v3 = call("recordRepos", {
+      repos: { record_version: 3, base_measured: true, list: [repo] },
+      footnotes: footnotes([]),
+    });
+    expect(cells(v3)).toEqual([
+      "app",
+      "main",
+      "0123456",
+      "-",
+      "2",
+      "0",
+      "origin/main",
+      "3",
+      "1",
+      "-",
+    ]);
+    expect(v3.text()).not.toContain("did not measure");
+    const older = {
+      ...repo,
+      base: null,
+      behind: null,
+      ahead: null,
+    };
+    const v2 = call("recordRepos", {
+      repos: { record_version: 2, base_measured: false, list: [older] },
+      // What it could not measure is said, by the name it had then.
+      footnotes: footnotes(["repos[.].behind_main", "repos[.].base", "repos[.].ahead"]),
+    });
+    expect(cells(v2)).toEqual([
+      "app",
+      "main",
+      "0123456",
+      "-",
+      "2",
+      "0",
+      "-",
+      "not measured",
+      "-",
+      "-",
+    ]);
+    expect(v2.text()).toContain(
+      "A record of version 2 did not measure the base branch, the commits ahead or the last fetch: they are drawn as -, and Behind is its behind_main.",
+    );
+    expect(v2.text()).not.toContain("undefined");
+    const none = call("recordRepos", { repos: null, footnotes: footnotes([]) });
+    expect(none.text()).toContain(S.record.reposUnread);
+  });
+
+  it("draws the components a record found by lane, then those in no lane, not registered and gone", () => {
+    const { call } = drawing(["recordComponents"]);
+    const S = boardPageStrings("en");
+    const drawn = call("recordComponents", {
+      components: {
+        measured: true,
+        reasons: [],
+        lanes: [
+          {
+            id: "core",
+            name: "Core",
+            components: [
+              { key: "app", kinds: ["manifest"] },
+              { key: "app/db", kinds: null },
+              {
+                key: "app/web",
+                kinds: ["edge", "manifest"],
+                kind_changed: { before: ["manifest"], after: ["edge", "manifest"] },
+              },
+            ],
+          },
+          { id: "docs", name: "Docs", components: [] },
+        ],
+        uncounted: [{ key: "app/scripts", kinds: ["marker"], note: "tooling" }],
+        unacknowledged: [{ key: "app/new", kinds: ["ci"] }],
+        gone: ["app/db"],
+      },
+    });
+    const flow = drawn.children
+      .slice(1)
+      .map((n) => (n.tag === "ul" ? n.children.map((li) => li.text()) : n.text()));
+    expect(flow).toEqual([
+      "Core",
+      [
+        "app  manifest",
+        "app/db  not found",
+        "app/web  edge, manifestwas manifest in the previous record",
+      ],
+      "Docs",
+      S.record.noComponentInLane,
+      S.record.uncounted,
+      ["app/scripts  markertooling"],
+      S.record.unacknowledged,
+      ["app/new  ci"],
+      S.record.gone,
+      ["app/db"],
+    ]);
+    const notMeasured = call("recordComponents", {
+      components: {
+        measured: false,
+        reasons: ["two repos are in directories of the same name"],
+        lanes: [],
+        uncounted: [],
+        unacknowledged: [],
+        gone: null,
+      },
+    });
+    expect(notMeasured.text()).toContain(S.record.componentsNotMeasured);
+    expect(notMeasured.text()).toContain("two repos are in directories of the same name");
+    const unknown = call("recordComponents", {
+      components: {
+        measured: true,
+        reasons: [],
+        lanes: [],
+        uncounted: [],
+        unacknowledged: [],
+        gone: null,
+      },
+    });
+    expect(unknown.text()).toContain(S.record.goneUnknown);
+    expect(call("recordComponents", { components: null }).text()).toContain(
+      S.record.componentsUnread,
+    );
   });
 
   it("draws the paths of a file_paths measure as a count, with the paths folded under it", () => {
@@ -1988,6 +2347,7 @@ describe("basou view: the board page", () => {
       "missingIn",
       "liveTile",
       "liveHeading",
+      "reposTable",
       "liveRepos",
       "liveTrail",
       "liveComponents",

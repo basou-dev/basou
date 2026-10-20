@@ -1,8 +1,9 @@
 /**
  * The board page of `basou view`, served verbatim at `GET /board` in single
  * mode. It draws one record of the board (`GET /api/board`, or
- * `/api/board/<ULID>` with `?record=<ULID>`) in eight sections, from the record
- * alone, with the fixed strings the server sends in the workspace's language.
+ * `/api/board/<ULID>` with `?record=<ULID>`) in sections, from the record and
+ * the one before it alone, with the fixed strings the server sends in the
+ * workspace's language.
  * With no record to draw, or with `?live=1`, it draws what basou measures of
  * the workspace now (`GET /api/board/live`): the period and effort, the
  * repositories, the trail and the components, with nothing judged.
@@ -88,6 +89,11 @@ export const BOARD_HTML = `<!doctype html>
   .chip.blocked { background: var(--chip-blocked); }
   .chip.unverified { background: var(--chip-unverified); }
   .muted { color: var(--fg-2); }
+  .sub { font-size: 12px; color: var(--fg-2); overflow-wrap: anywhere; }
+  ul.sub { margin: 0; padding-left: 18px; }
+  td.wrap { overflow-wrap: anywhere; min-width: 10em; }
+  tr.notes td { padding-top: 0; }
+  .chip.changed { margin-left: 0; margin-right: 6px; background: var(--chip-unverified); }
   .bar { height: 10px; background: var(--fill); border-radius: 5px; min-width: 120px; position: relative; overflow: hidden; }
   .bar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--s1); }
   figure { margin: 16px 0; }
@@ -217,6 +223,60 @@ export const BOARD_HTML = `<!doctype html>
       return JSON.stringify(k) + ':' + v;
     }).join(',') + '}';
   }
+  // The parts of a value drawn on one line, and what an http value says of each word.
+  var DOT = ' ' + String.fromCharCode(183) + ' ';
+  var FOUND = String.fromCharCode(10003);
+  var NOT_FOUND = String.fromCharCode(10007);
+  // An http value read as its parts: the status, the redirects, where it
+  // landed, and what it read off the body (when the status is 2xx) or that it
+  // did not. Numbers and strings are drawn as they are.
+  function httpText(h) {
+    var parts = [String(h.status), fill(S.observed.redirects, { n: h.redirects }), h.final_url];
+    if (h.body === null) parts.push(S.observed.bodyNotRead);
+    else if (h.body) {
+      if (h.body.words) {
+        parts.push(h.body.words.map(function (w) { return w.word + ' ' + (w.found ? FOUND : NOT_FOUND); }).join('  '));
+      }
+      if (h.body.count !== undefined) parts.push(fill(S.observed.count, { n: h.body.count }));
+      if (h.body.capture !== undefined) {
+        parts.push(h.body.capture === null ? S.observed.captureNone : fill(S.observed.capture, { value: JSON.stringify(h.body.capture) }));
+      }
+    }
+    return parts.join(DOT);
+  }
+  // A value of an observation as the page draws it: an http value in its
+  // shape read as its parts, one with words beside what it says of each, and
+  // any other as it is (a string) or as JSON. A test lifts this function.
+  function observedText(value, words, http) {
+    if (http) return httpText(http);
+    if (words) return withWords(value, words);
+    return shown(value);
+  }
+  // The value of an observation that moved, and what the previous record
+  // held: a value whose type alone moved ("12" and 12) is drawn as JSON, so
+  // that the two do not read the same. A test lifts this function.
+  function movedText(o) {
+    var m = o.moved;
+    var now = observedText(o.value, o.words, o.http);
+    if (m.status === 'none') return { now: now, then: S.observed.beforeNone };
+    if (m.value === null) {
+      return { now: now, then: S.observed.beforeNotObserved + (m.error ? '  (' + m.error + ')' : '') };
+    }
+    var then = observedText(m.value, m.words, m.http);
+    if ((typeof m.value === 'string') !== (typeof o.value === 'string')) {
+      then = JSON.stringify(m.value);
+      if (then === now) now = JSON.stringify(o.value);
+    }
+    return { now: now, then: fill(S.observed.before, { value: then }) + (m.error ? '  (' + m.error + ')' : '') };
+  }
+  // A measure's value: the paths of a file_paths by how many, a number with
+  // its unit, and a string (a file's name, a capture), which is no amount,
+  // without it.
+  function measureText(m) {
+    if (Array.isArray(m.value)) return num(m.value.length) + ' ' + m.unit;
+    return num(m.value) + (typeof m.value === 'number' ? ' ' + m.unit : '');
+  }
+  function signed(n) { return (n > 0 ? '+' : '') + num(n); }
   function stateName(state) { return S.states[state] || state; }
   function setStatus(message, isErr) {
     var s = $('status');
@@ -301,17 +361,36 @@ export const BOARD_HTML = `<!doctype html>
     if (s.observed.length === 0) {
       observed = el('p', { class: 'muted', text: S.observed.none });
     } else {
-      var rows = s.observed.map(function (o) {
+      var rows = [];
+      s.observed.forEach(function (o) {
+        var cell = el('td', { class: 'wrap' });
         var value;
-        if (o.value !== null) value = o.words ? withWords(o.value, o.words) : shown(o.value);
-        else if (o.previous && o.previous.status === 'value') value = fill(S.observed.missing, { value: shown(o.previous.value) });
-        else if (o.previous && o.previous.status === 'unreadable') value = S.observed.missingPreviousUnreadable;
-        else value = S.observed.missingNoPrevious;
-        if (o.error) value += '  (' + o.error + ')';
-        return el('tr', null, [
-          el('td', { text: o.name }), el('td', { text: value }),
-          el('td', { text: o.observed_at }), el('td', { text: o.source })
-        ]);
+        if (o.value !== null && o.moved) {
+          var pair = movedText(o);
+          cell.appendChild(el('span', { class: 'chip changed', text: S.observed.changed }));
+          value = pair.now;
+          cell.appendChild(el('span', { text: value + (o.error ? '  (' + o.error + ')' : '') }));
+          cell.appendChild(el('div', { class: 'sub', text: pair.then }));
+        } else {
+          if (o.value !== null) value = observedText(o.value, o.words, o.http);
+          else if (o.previous && o.previous.status === 'value') value = fill(S.observed.missing, { value: shown(o.previous.value) });
+          else if (o.previous && o.previous.status === 'unreadable') value = S.observed.missingPreviousUnreadable;
+          else value = S.observed.missingNoPrevious;
+          if (o.error) value += '  (' + o.error + ')';
+          cell.appendChild(el('span', { text: value }));
+        }
+        // What the record's declaration says it is and looks at, under its name.
+        var what = o.kind ? [o.kind].concat(o.looks_at || []).join(DOT) : null;
+        rows.push(el('tr', null, [
+          el('td', null, [el('div', { text: o.name }), what === null ? null : el('div', { class: 'sub', text: what })]),
+          cell,
+          el('td', { text: o.observed_at }), el('td', { class: 'wrap', text: o.source })
+        ]));
+        if (o.notes && o.notes.length > 0) {
+          rows.push(el('tr', { class: 'notes' }, [el('td', { colspan: '4' }, [
+            el('ul', { class: 'sub' }, o.notes.map(function (n) { return el('li', null, [prose(n, 'span')]); }))
+          ])]));
+        }
       });
       observed = el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [
         el('tr', null, [
@@ -321,12 +400,16 @@ export const BOARD_HTML = `<!doctype html>
       ].concat(rows))]);
     }
     var observedHeading = el('h3', { text: S.observed.heading }, [reported()]);
-    return section(S.sections.summary, false, [
+    var children = [
       el('div', null, [prose(s.text), reported()]),
       tiles,
       observedHeading,
       observed
-    ]);
+    ];
+    if (s.previous_record === 'unreadable' && s.observed.length > 0) {
+      children.push(el('p', { class: 'muted', text: S.observed.previousUnreadable }));
+    }
+    return section(S.sections.summary, false, children);
   }
 
   var SVGNS = 'http://www.w3.org/2000/svg';
@@ -665,6 +748,27 @@ export const BOARD_HTML = `<!doctype html>
     }));
   }
 
+  // Every measure of the record, with the lanes it is drawn in and how much a
+  // number moved since the previous record.
+  function measures(b) {
+    if (b.measures.length === 0) {
+      return section(S.sections.measures, false, [el('p', { class: 'muted', text: S.measures.none })]);
+    }
+    var head = el('tr', null, [
+      el('th', { text: S.measures.id }), el('th', { text: S.measures.value }),
+      el('th', { text: S.measures.lanes }), el('th', { class: 'n', text: S.measures.delta })
+    ]);
+    var rows = b.measures.map(function (m) {
+      return el('tr', { 'data-measure': m.id }, [
+        el('td', null, [el('code', { text: m.id })]),
+        el('td', { class: 'wrap', text: measureText(m) }),
+        el('td', { text: m.lanes.length === 0 ? '-' : m.lanes.join(', ') }),
+        el('td', { class: 'n', text: m.delta === null || m.delta === undefined ? '' : signed(m.delta) })
+      ]);
+    });
+    return section(S.sections.measures, false, [el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [head].concat(rows))])]);
+  }
+
   function composition(b) {
     if (b.composition.length === 0) {
       return section(S.sections.composition, false, [el('p', { class: 'muted', text: S.composition.none })]);
@@ -752,7 +856,8 @@ export const BOARD_HTML = `<!doctype html>
     var b = page.board;
     // The board's own title, so that boards open in other tabs can be told apart.
     document.title = b.heading.title;
-    [heading(b), summary(b), effort(b, false), matrix(b), lanes(b), composition(b), turns(b), footnotes(b)]
+    [heading(b), summary(b), effort(b, false), matrix(b), lanes(b), measures(b), composition(b), turns(b),
+      recordRepos(b), recordComponents(b), footnotes(b)]
       .forEach(function (node) { root.appendChild(node); });
   }
 
@@ -778,12 +883,14 @@ export const BOARD_HTML = `<!doctype html>
   function missingIn(l) {
     return function (at) { return l.footnotes.not_found.some(function (n) { return n.at === at; }); };
   }
-  function liveRepos(l) {
-    var missing = missingIn(l);
+  // The repositories as a table. older: a record of version 1 or 2, which
+  // measured no base, ahead or fetch time (drawn as '-') and held the
+  // commits behind as behind_main.
+  function reposTable(list, missing, older) {
     var labels = [S.live.repo, S.live.branch, S.live.head, S.live.lastCommit, S.live.commits, S.live.uncommitted, S.live.base, S.live.behind, S.live.ahead, S.live.fetchedAt];
     var numeric = [4, 5, 7, 8];
     var head = el('tr', null, labels.map(function (label, i) { return el('th', { class: numeric.indexOf(i) !== -1 ? 'n' : '', text: label }); }));
-    var rows = l.repos.map(function (r) {
+    var rows = list.map(function (r) {
       var at = 'repos[' + r.path + ']';
       // A null the measurement says it could not measure, or one that means
       // so (a detached HEAD, no commit yet, no base, no fetch of it on
@@ -792,6 +899,7 @@ export const BOARD_HTML = `<!doctype html>
         if (v !== null) return show(v);
         return missing(at) || missing(at + '.' + field) ? S.tiles.notMeasured : '-';
       };
+      var unmeasured = function (field, v, show) { return older ? '-' : value(field, v, show); };
       return el('tr', null, [
         el('td', { text: r.name === null ? r.path : r.name }),
         el('td', { text: value('branch', r.branch, String) }),
@@ -799,13 +907,59 @@ export const BOARD_HTML = `<!doctype html>
         el('td', { text: value('last_commit', r.last_commit, when) }),
         el('td', { class: 'n', text: num(r.commits) }),
         el('td', { class: 'n', text: num(r.uncommitted) }),
-        el('td', { text: value('base', r.base, String) }),
-        el('td', { class: 'n', text: value('behind', r.behind, num) }),
-        el('td', { class: 'n', text: value('ahead', r.ahead, num) }),
-        el('td', { text: value('fetched_at', r.fetched_at, when) })
+        el('td', { text: unmeasured('base', r.base, String) }),
+        el('td', { class: 'n', text: value(older ? 'behind_main' : 'behind', r.behind, num) }),
+        el('td', { class: 'n', text: unmeasured('ahead', r.ahead, num) }),
+        el('td', { text: unmeasured('fetched_at', r.fetched_at, when) })
       ]);
     });
-    return section(S.live.repos, false, [el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [head].concat(rows))])]);
+    return el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [head].concat(rows))]);
+  }
+  function liveRepos(l) {
+    return section(S.live.repos, false, [reposTable(l.repos, missingIn(l), false)]);
+  }
+  // The repositories as the record measured them, by its version.
+  function recordRepos(b) {
+    var r = b.repos;
+    if (!r) return section(S.live.repos, false, [el('p', { class: 'muted', text: S.record.reposUnread })]);
+    var children = [reposTable(r.list, missingIn(b), !r.base_measured)];
+    if (!r.base_measured) children.push(el('p', { class: 'muted', text: fill(S.record.notMeasuredByVersion, { version: r.record_version }) }));
+    return section(S.live.repos, false, children);
+  }
+  // The components the record found, by the lanes its registry counts them
+  // in, then those in no lane, those not registered, and those gone.
+  function recordComponents(b) {
+    var c = b.components;
+    if (!c) return section(S.live.components, false, [el('p', { class: 'muted', text: S.record.componentsUnread })]);
+    if (!c.measured) {
+      return section(S.live.components, false, [
+        el('p', { class: 'muted', text: S.record.componentsNotMeasured }),
+        el('ul', null, c.reasons.map(function (reason) { return el('li', { text: reason }); }))
+      ]);
+    }
+    var item = function (x) {
+      var kinds = x.kinds === null ? S.record.notFound : x.kinds.join(', ');
+      var parts = [el('code', { text: x.key }), el('span', { class: 'muted', text: '  ' + kinds })];
+      if (x.kind_changed) {
+        parts.push(el('span', { class: 'chip changed', text: fill(S.record.kindChanged, { before: x.kind_changed.before.join(', ') }) }));
+      }
+      if (x.note) parts.push(el('div', { class: 'sub', text: x.note }));
+      return el('li', { 'data-component': x.key }, parts);
+    };
+    var group = function (title, list, empty) {
+      return [el('h3', { text: title }), list.length === 0 ? el('p', { class: 'muted', text: empty }) : el('ul', null, list.map(item))];
+    };
+    var children = [];
+    c.lanes.forEach(function (lane) {
+      children = children.concat(group(lane.name, lane.components, S.record.noComponentInLane));
+    });
+    children = children.concat(group(S.record.uncounted, c.uncounted, S.record.none));
+    children = children.concat(group(S.record.unacknowledged, c.unacknowledged, S.record.none));
+    children.push(el('h3', { text: S.record.gone }));
+    children.push(c.gone === null ? el('p', { class: 'muted', text: S.record.goneUnknown })
+      : c.gone.length === 0 ? el('p', { class: 'muted', text: S.record.none })
+      : el('ul', null, c.gone.map(function (key) { return el('li', null, [el('code', { text: key })]); })));
+    return section(S.live.components, false, children);
   }
   function liveTrail(l) {
     var t = l.trail;

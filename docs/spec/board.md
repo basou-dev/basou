@@ -219,8 +219,9 @@ Every measure has:
 
 A `lane` is read as a list whatever the version, so a record holds a list
 (`lane: cli` is `["cli"]`). A measure with no lane is drawn in no lane's
-section, and is still kept in the records, compared with the previous record
-and usable by a ratio or a total.
+section. Every measure, with a lane or without, is drawn in the board page's
+table of measures (from basou 0.72.0), kept in the records, compared with the
+previous record and usable by a ratio or a total.
 
 | Kind | Since | Reads | Value |
 |---|---|---|---|
@@ -499,7 +500,7 @@ Every observation has:
 |---|---|---|---|
 | `key` | yes | 2 | an id, or from version 3 a dotted id |
 | `kind` | yes | 2 | one of the kinds below |
-| `notes` | no | 3 | a list of non-empty strings: what to mind when making it; the guide prints them under its commands |
+| `notes` | no | 3 | a list of non-empty strings: what to mind when making it; the guide prints them under its commands, and the board page under the observation |
 
 The values of an observation are put into commands, each as one
 single-quoted word, so each is held to a shape that cannot end its quotation
