@@ -26,12 +26,12 @@ import {
   shellWord,
 } from "./guide.js";
 import { BOARD_INIT_SAVE } from "./init.js";
+import { observedValueProblems } from "./observed-shape.js";
 import {
   type BoardPreviousRecords,
   NO_PREVIOUS_RECORDS,
   type ReadBoardRecord,
 } from "./previous.js";
-import { observedValueProblems } from "./observed-shape.js";
 import { parseRecordInput } from "./record.js";
 
 const STAGES = ["01", "02", "03", "04", "05", "06"];
