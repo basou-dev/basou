@@ -1590,7 +1590,7 @@ const BOARD_INIT_EN: BoardInitStrings = {
     timeZone:
       "This host's time zone has no name a board can declare: write effort.time_zone (such as Asia/Tokyo), or the days are counted in an unnamed zone or not at all.",
     milestones:
-      "Days marked on the period and effort chart, each { date: YYYY-MM-DD, label, ref }: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, with ref saying where it can be checked (a tag and its commit, or a decision id in full). A board moved from another keeps here the milestones it had that happened, and leaves out those that were only planned.",
+      "Days marked on the period and effort chart, each { date: YYYY-MM-DD, label, ref }: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, with ref saying where it can be checked (a tag and its commit, or a decision id in full). date is the day in the board's time zone (.basou/decisions.md dates a decision by its day in UTC, which can be a day apart). A board moved from another keeps here the milestones it had that happened, and leaves out those that were only planned.",
   },
 };
 
@@ -1600,7 +1600,7 @@ const BOARD_INIT_JA: BoardInitStrings = {
     "01": "構想 — そのレーンが何をするものかを書いた文書がある",
     "02": "仕様 — 何をどう作るかが決まっている",
     "03": "実装 — 動くコードが repo にあり、テストが通る",
-    "04": "本番 — main に入っている",
+    "04": "統合 — main に入っている",
     "05": "開通 — 利用者が手に取れる",
     "06": "稼働 — 実際に使われている",
   },
@@ -1612,7 +1612,7 @@ const BOARD_INIT_JA: BoardInitStrings = {
   comments: {
     head: "進捗盤の宣言（basou board init が出した雛形）。この workspace に合わせて直し、basou board measure で確かめる。判定と記録の手順は basou board guide が出す。",
     stages:
-      "6 段の id は固定で、盤が決めるのは意味だけ。04 本番（main に入った）と 05 開通（利用者が手に取れる）を分ける。look と notes は、その段を判定するときに見るものと注意。",
+      "6 段の id は固定で、盤が決めるのは意味だけ。04 統合（main に入った）と 05 開通（利用者が手に取れる）を分ける。look と notes は、その段を判定するときに見るものと注意。",
     lanes: "レーンは 1 本以上。id は小文字の ASCII で、記録の照合に使うので変えない。",
     measures:
       "repo の中で測るもの（file_count・dir_count・line_count・match_count・regex_capture・json_length・file_name・file_paths・trail_count）と、それらの和と差（total）。どれも盤のページの measure の一覧に描かれ、lane（1 つのレーンか、レーンの並び）を付けたものはそれぞれのレーンの節にも描かれる。",
@@ -1627,7 +1627,7 @@ const BOARD_INIT_JA: BoardInitStrings = {
     timeZone:
       "このホストの time zone に、盤に書ける名前が無い。effort.time_zone（例 Asia/Tokyo）を書かないと、期間と労力は名前の無い zone で数えられるか、測られない。",
     milestones:
-      "期間と労力の図に印を付ける日。各 { date: YYYY-MM-DD, label, ref }。何かが起きた日（出荷・公開・作業の開始）だけを書き、予定や目標の日は書かない。ref に確かめられる出所（tag とその commit、または完全な decision の ID）を書く。他の盤から移すときは、起きた節目をここに移し、予定だけだったものは移さない。",
+      "期間と労力の図に印を付ける日。各 { date: YYYY-MM-DD, label, ref }。何かが起きた日（出荷・公開・作業の開始）だけを書き、予定や目標の日は書かない。ref に確かめられる出所（tag とその commit、または完全な decision の ID）を書く。date は盤の time zone の日（.basou/decisions.md の決定日は UTC の日なので、1 日ずれることがある）。他の盤から移すときは、起きた節目をここに移し、予定だけだったものは移さない。",
   },
 };
 

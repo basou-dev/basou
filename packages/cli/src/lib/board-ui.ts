@@ -79,6 +79,9 @@ export const BOARD_HTML = `<!doctype html>
     table.matrix td.cell { font-size: 16px; padding: 4px 2px; }
     table.matrix th:first-child { max-width: 10em; overflow-wrap: anywhere; }
     .stage-meanings { display: block; }
+    /* A table wider than the page scrolls; its notes wrap at the width in
+       view and stay at its left edge, so none is cut off on the right. */
+    tr.notes ul.sub { position: sticky; left: 0; max-width: calc(100vw - 32px); }
   }
   .st::before { display: inline-block; width: 1.2em; }
   .st.done::before { content: "\\25CF"; color: var(--done); }
@@ -673,8 +676,17 @@ export const BOARD_HTML = `<!doctype html>
       tile(S.effort.perDay, hm(perDay), perDaySub),
       tile(S.effort.outputTokens, num(e.output_tokens), tokens)
     ]);
+    // A repo by its name, as the repos table draws it: a workspace that is
+    // one repo is at the path '.'. The board measured on the spot holds its
+    // repos as a list, a record as { list } or null.
+    var names = {};
+    var repos = !b.repos ? [] : Array.isArray(b.repos) ? b.repos : b.repos.list;
+    repos.forEach(function (r) {
+      if (r.name !== null) names[r.path] = r.name;
+    });
     var commits = e.commits === null ? S.effort.notMeasured : e.commits.map(function (c) {
-      return c.repo + ' ' + num(c.count);
+      var name = Object.prototype.hasOwnProperty.call(names, c.repo) ? names[c.repo] : c.repo;
+      return name + ' ' + num(c.count);
     }).join('  /  ');
     var children = [tiles, el('p', { class: 'muted', text: fill(S.effort.commits, { list: commits }) })];
     var days = e.daily || [];

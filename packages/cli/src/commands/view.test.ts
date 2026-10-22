@@ -2073,6 +2073,8 @@ describe("basou view: the board page", () => {
       // A long lane name wraps, in a column of a width it cannot pass.
       "table.matrix th:first-child": "max-width: 10em; overflow-wrap: anywhere;",
       ".stage-meanings": "display: block;",
+      // A table's notes wrap at the width in view, at its left edge as it scrolls.
+      "tr.notes ul.sub": "position: sticky; left: 0; max-width: calc(100vw - 32px);",
     });
     // Its rules take the place of those of the same weight only by coming after them.
     for (const selector of [
@@ -2086,6 +2088,9 @@ describe("basou view: the board page", () => {
     }
     expect(style.indexOf("table.matrix", end)).toBe(-1);
     expect(style.indexOf(".stage-meanings", end)).toBe(-1);
+    // Wider, a table that fits draws its notes as before.
+    expect(style.indexOf("tr.notes ul.sub")).toBeGreaterThan(start);
+    expect(style.indexOf("tr.notes ul.sub", end)).toBe(-1);
     // Wider screens draw the matrix as before: its meanings in the heads, no list.
     const wide = rules(style.slice(0, start) + style.slice(end));
     expect(wide["table.matrix th.stage"]).toContain("min-width: 64px;");
@@ -2544,6 +2549,35 @@ describe("basou view: the board page", () => {
       measured_with: { basou: "0.0.0-test", build: null },
     },
   };
+
+  it("names each repo in the commits since the start as the repos table does", () => {
+    const { call } = drawing(["effort"]);
+    const S = boardPageStrings("en");
+    const said = (b: object) => {
+      const text = call("effort", b).text();
+      const at = text.indexOf(S.effort.commits.replace("{list}", ""));
+      expect(at).toBeGreaterThan(-1);
+      return text.slice(at);
+    };
+    const line = (list: string) => S.effort.commits.replace("{list}", list);
+    // A workspace that is one repo is at the path '.', which the line names.
+    expect(said(LIVE)).toContain(line("app 2"));
+    expect(said(LIVE)).not.toContain(line(". 2"));
+    const record = (list: object[] | null) => ({
+      effort: LIVE.effort,
+      repos: list === null ? null : { record_version: 3, base_measured: true, list },
+    });
+    expect(said(record(LIVE.repos))).toContain(line("app 2"));
+    // With no name to give, or no repos read, the path is drawn as before.
+    expect(said(record([{ ...LIVE.repos[0], name: null }]))).toContain(line(". 2"));
+    expect(said(record(null))).toContain(line(". 2"));
+    expect(said({ effort: LIVE.effort })).toContain(line(". 2"));
+    const two = { ...LIVE.effort, commits: [{ repo: "site", count: 1 }, { repo: ".", count: 2 }] };
+    expect(said({ ...LIVE, effort: two })).toContain(line("site 1  /  app 2"));
+    // A path that is also a name an object has of its own is not one of the repos.
+    const odd = { ...LIVE.effort, commits: [{ repo: "constructor", count: 1 }] };
+    expect(said({ ...LIVE, effort: odd })).toContain(line("constructor 1"));
+  });
 
   it("draws a board measured on the spot: what basou measured, nothing judged", () => {
     const names = [

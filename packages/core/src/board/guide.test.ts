@@ -206,7 +206,7 @@ describe("boardGuide: a board declared", () => {
       "- Records: board/records/, none yet; this will be the first",
     );
     expect(boardGuide(guideInput())).toContain(
-      "- Axis: version 3, due a review every 60 days; no review on record (the first record is the first review",
+      '- Axis: version 3, due a review every 60 days; no review on record (the first record is the first review: give it an axis_review, step 2b; its triggers are the letters axis.reasons gives, and "a" too when the components were registered for it: registering clears (a), but (a) led to the review)',
     );
     const unreadable: BoardPreviousRecords = {
       last: { status: "unreadable", reason: "the record X could not be read as JSON" },
@@ -341,6 +341,16 @@ describe("boardGuide: a board declared", () => {
     expect(guide).toContain(
       "with `ref` saying where it can be checked (a tag and its commit, or a decision id in full).",
     );
+  });
+
+  it("names 04 merged, not production: where a merge deploys at once, production is 05", () => {
+    const guide = boardGuide(guideInput());
+    expect(guide).toContain(
+      "04 (merged) and 05 (open, in users' hands) are apart on purpose: what is merged but not published is used by no one.",
+    );
+    expect(guide).not.toContain("merged, in production");
+    const undeclared = boardGuide(guideInput({ board: { status: "undeclared" } }));
+    expect(undeclared).toContain("keeping 04 (merged) apart from 05 (in users' hands)");
   });
 
   it("says where to read the paths of a file_paths measure, and how the diff gives them", () => {
@@ -653,7 +663,7 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
         }),
       );
     const holds =
-      "under effort.milestones, each `{ date, label, ref }`: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, each with `ref` saying where it can be checked (a tag and its commit, or a decision id in full). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
+      "under effort.milestones, each `{ date, label, ref }`: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, each with `ref` saying where it can be checked (a tag and its commit, or a decision id in full). `date` is the day in the board's time zone (effort.time_zone); .basou/decisions.md dates a decision by its day in UTC, which can be a day apart. The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
     expect(boardGuide(guideInput())).toContain(`- Milestones: none declared ${holds}`);
     expect(boardGuide(guideInput())).toContain(
       "- Approving a milestone before it is added to board.yaml.",
@@ -663,7 +673,7 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
     expect(withMilestones(2)).toContain(`- Milestones: 2 milestones declared ${holds}`);
     const undeclared = boardGuide(guideInput({ board: { status: "undeclared" } }));
     expect(undeclared).toContain(
-      "Declare under `effort.milestones` the days to mark on the period and effort chart: only days on which something happened (a release, a launch, the start of the work), each with a `ref` saying where it can be checked, never a plan or a target date; a board moved from another keeps there the milestones it had that happened, and leaves out any that were only planned.",
+      "Declare under `effort.milestones` the days to mark on the period and effort chart: only days on which something happened (a release, a launch, the start of the work), each with a `ref` saying where it can be checked, never a plan or a target date, its `date` the day in the board's time zone (.basou/decisions.md dates a decision by its day in UTC); a board moved from another keeps there the milestones it had that happened, and leaves out any that were only planned.",
     );
     // Neither says only what was reached: the start of the work is a milestone too.
     expect(boardGuide(guideInput())).not.toContain("only what was reached");
@@ -684,6 +694,12 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
 });
 
 describe("boardGuide: no board declared", () => {
+  it("asks to keep board/ out of a public site or package built from this repo", () => {
+    expect(boardGuide(guideInput({ board: { status: "undeclared" } }))).toContain(
+      "Never keep a board in a repo shared with a client. When this repo is also what a public site or package is built from, check too that board/ stays out of what is built and published (a generator that copies the repo's root into the site publishes the records); when it cannot be checked, ask the operator before going on.",
+    );
+  });
+
   it("says how to declare one instead of the steps", () => {
     const guide = boardGuide(guideInput({ board: { status: "undeclared" } }));
     expect(guide).toContain("## No board is declared yet");

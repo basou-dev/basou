@@ -122,7 +122,7 @@ export function boardGuide(input: BoardGuideInput): string {
   line(`- Records: board/records/, ${recordsLine(input, recordCount)}`);
   line(`- Axis: ${axisLine(input)}`);
   line(
-    `- Milestones: ${milestonesLine(d)} under effort.milestones, each \`{ date, label, ref }\`: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, each with \`ref\` saying where it can be checked (a tag and its commit, or a decision id in full). The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.`,
+    `- Milestones: ${milestonesLine(d)} under effort.milestones, each \`{ date, label, ref }\`: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, each with \`ref\` saying where it can be checked (a tag and its commit, or a decision id in full). \`date\` is the day in the board's time zone (effort.time_zone); .basou/decisions.md dates a decision by its day in UTC, which can be a day apart. The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.`,
   );
   line(
     `- Language: write every prose string and reason in ${LANGUAGE_NAMES[input.language]}, the language this board's page is drawn in (Japanese when the manifest declares ja for this repo, English otherwise)`,
@@ -452,7 +452,7 @@ function axisLine(input: BoardGuideInput): string {
     return `${head}; last reviewed ${seed.date} by ${shown(seed.model)} (seed_review in board.yaml)`;
   }
   return input.board.recordCount === 0 && previous.last.status === "none"
-    ? `${head}; no review on record (the first record is the first review: give it an axis_review, step 2b)`
+    ? `${head}; no review on record (the first record is the first review: give it an axis_review, step 2b; its triggers are the letters axis.reasons gives, and "a" too when the components were registered for it: registering clears (a), but (a) led to the review)`
     : `${head}; no review on record (measure's axis section says whether one is due)`;
 }
 
@@ -593,7 +593,7 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
   }
   line(
     "",
-    "04 (merged, in production) and 05 (open, in users' hands) are apart on purpose: what is merged but not published is used by no one. There is more than one way out, and one closed is enough to make 05 `part` or `blocked`.",
+    "04 (merged) and 05 (open, in users' hands) are apart on purpose: what is merged but not published is used by no one. There is more than one way out, and one closed is enough to make 05 `part` or `blocked`.",
     "",
     "The states of a cell:",
     "",
@@ -824,12 +824,12 @@ function undeclared(
     "",
     `This workspace (${shown(input.anchor)}) declares no board at board/board.yaml. \`basou view\`'s /board page already draws what can be measured without one (the period and effort, the repos, the trail, the components). A judged board (the reach matrix, the lanes, the operator's turns) needs a declaration first.`,
     "",
-    "1. Check that no one outside can read this repo: records hold what the trail holds (open tracks, time worked, model names). Step 9 (f) of this guide, once a board is declared, says how; on GitHub it is visibility PRIVATE, no collaborator but the owner and you (the account gh is signed in as), and no invitation. Never keep a board in a repo shared with a client.",
+    "1. Check that no one outside can read this repo: records hold what the trail holds (open tracks, time worked, model names). Step 9 (f) of this guide, once a board is declared, says how; on GitHub it is visibility PRIVATE, no collaborator but the owner and you (the account gh is signed in as), and no invitation. Never keep a board in a repo shared with a client. When this repo is also what a public site or package is built from, check too that board/ stays out of what is built and published (a generator that copies the repo's root into the site publishes the records); when it cannot be checked, ask the operator before going on.",
     "2. Print a board to start from, and save it only where no board is. Never print it straight into board/board.yaml: the shell empties that file before init runs.",
   );
   block(`${go} && ${BOARD_INIT_SAVE}; echo "exit=$?"`);
   line(
-    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only days on which something happened (a release, a launch, the start of the work), each with a `ref` saying where it can be checked, never a plan or a target date; a board moved from another keeps there the milestones it had that happened, and leaves out any that were only planned. Measures, ratios and components may stay empty at first. Every measure is drawn in the board page's table of measures, and one with `lane:` (a lane id, or a list of them) in each of those lanes' sections too.",
+    "3. Cut the axis, with the operator. The board asks what can be used now and what is stuck, not what was built. Replace the sample lane with lanes cut by who uses what, not by repo. Fix what each of the six stages means for this product, keeping 04 (merged) apart from 05 (in users' hands): merged but closed to users is used by no one. Declare under `observe` what is reached outside the repos (a registry, a release, a site). Declare under `effort.milestones` the days to mark on the period and effort chart: only days on which something happened (a release, a launch, the start of the work), each with a `ref` saying where it can be checked, never a plan or a target date, its `date` the day in the board's time zone (.basou/decisions.md dates a decision by its day in UTC); a board moved from another keeps there the milestones it had that happened, and leaves out any that were only planned. Measures, ratios and components may stay empty at first. Every measure is drawn in the board page's table of measures, and one with `lane:` (a lane id, or a list of them) in each of those lanes' sections too.",
     `   ${referenceLine(input)}`,
     "4. Check it until it reads (every problem with it is listed at once):",
   );
