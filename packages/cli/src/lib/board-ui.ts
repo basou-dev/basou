@@ -80,7 +80,9 @@ export const BOARD_HTML = `<!doctype html>
     table.matrix th:first-child { max-width: 10em; overflow-wrap: anywhere; }
     .stage-meanings { display: block; }
     /* A table wider than the page scrolls; its notes wrap at the width in
-       view and stay at its left edge, so none is cut off on the right. */
+       view and stay at its left edge, so none is cut off on the right. The
+       cell keeps no right padding, which a sticky note could not cross. */
+    tr.notes td { padding-right: 0; }
     tr.notes ul.sub { position: sticky; left: 0; max-width: calc(100vw - 32px); }
   }
   .st::before { display: inline-block; width: 1.2em; }

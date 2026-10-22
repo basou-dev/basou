@@ -2074,6 +2074,7 @@ describe("basou view: the board page", () => {
       "table.matrix th:first-child": "max-width: 10em; overflow-wrap: anywhere;",
       ".stage-meanings": "display: block;",
       // A table's notes wrap at the width in view, at its left edge as it scrolls.
+      "tr.notes td": "padding-right: 0;",
       "tr.notes ul.sub": "position: sticky; left: 0; max-width: calc(100vw - 32px);",
     });
     // Its rules take the place of those of the same weight only by coming after them.
@@ -2093,6 +2094,7 @@ describe("basou view: the board page", () => {
     expect(style.indexOf("tr.notes ul.sub", end)).toBe(-1);
     // Wider screens draw the matrix as before: its meanings in the heads, no list.
     const wide = rules(style.slice(0, start) + style.slice(end));
+    expect(wide["tr.notes td"]).toBe("padding-top: 0;");
     expect(wide["table.matrix th.stage"]).toContain("min-width: 64px;");
     expect(wide["table.matrix td.cell"]).toContain("font-size: 18px;");
     expect(Object.keys(wide).filter((selector) => selector.includes("meaning"))).toEqual([
@@ -2572,7 +2574,13 @@ describe("basou view: the board page", () => {
     expect(said(record([{ ...LIVE.repos[0], name: null }]))).toContain(line(". 2"));
     expect(said(record(null))).toContain(line(". 2"));
     expect(said({ effort: LIVE.effort })).toContain(line(". 2"));
-    const two = { ...LIVE.effort, commits: [{ repo: "site", count: 1 }, { repo: ".", count: 2 }] };
+    const two = {
+      ...LIVE.effort,
+      commits: [
+        { repo: "site", count: 1 },
+        { repo: ".", count: 2 },
+      ],
+    };
     expect(said({ ...LIVE, effort: two })).toContain(line("site 1  /  app 2"));
     // A path that is also a name an object has of its own is not one of the repos.
     const odd = { ...LIVE.effort, commits: [{ repo: "constructor", count: 1 }] };

@@ -116,9 +116,7 @@ describe("boardInitText", () => {
 
   it("names 04 merged in both languages, never production, which 05 is where a merge deploys", () => {
     expect(en.stages["04"]).toBe("Merged \u2014 it is on main");
-    expect(ja.stages["04"]).toBe(
-      "\u7d71\u5408 \u2014 main \u306b\u5165\u3063\u3066\u3044\u308b",
-    );
+    expect(ja.stages["04"]).toBe("\u7d71\u5408 \u2014 main \u306b\u5165\u3063\u3066\u3044\u308b");
     expect(ja.comments.stages).toContain(
       "04 \u7d71\u5408\uff08main \u306b\u5165\u3063\u305f\uff09",
     );
@@ -129,9 +127,7 @@ describe("boardInitText", () => {
     expect(en.comments.milestones).toContain(
       "date is the day in the board's time zone (.basou/decisions.md dates a decision by its day in UTC, which can be a day apart).",
     );
-    expect(ja.comments.milestones).toContain(
-      "date \u306f\u76e4\u306e time zone \u306e\u65e5",
-    );
+    expect(ja.comments.milestones).toContain("date \u306f\u76e4\u306e time zone \u306e\u65e5");
     expect(ja.comments.milestones).toContain("UTC");
   });
 
