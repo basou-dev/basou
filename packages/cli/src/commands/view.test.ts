@@ -1986,6 +1986,44 @@ describe("basou view: the board page", () => {
             looks_at: ["::"],
             ...made,
           },
+          // Another origin on the same path (http sent on to https) is elsewhere.
+          {
+            name: "scheme",
+            value: {},
+            http: http("https://example.com/a", 1),
+            kind: "http",
+            looks_at: ["http://example.com/a"],
+            ...made,
+          },
+          // A record written before basou 0.73.0 may keep a query or a user in
+          // its final_url: that is drawn, as it can be what moved.
+          {
+            name: "query",
+            value: {},
+            http: http("https://example.com/a?sid=2"),
+            moved: { status: "value", value: {}, http: http("https://example.com/a?sid=1") },
+            kind: "http",
+            looks_at: ["https://example.com/a"],
+            ...made,
+          },
+          {
+            name: "user",
+            value: {},
+            http: http("https://u@example.com/a#top"),
+            kind: "http",
+            looks_at: ["https://example.com/a"],
+            ...made,
+          },
+          // Declared since the previous record: new, and drawn as any other.
+          {
+            name: "fresh",
+            value: {},
+            http: http("https://example.com/a"),
+            moved: { status: "none" },
+            kind: "http",
+            looks_at: ["https://example.com/a"],
+            ...made,
+          },
         ],
       },
     });
@@ -2004,6 +2042,14 @@ describe("basou view: the board page", () => {
       ],
       [`200${DOT}redirects 0${DOT}https://example.com/a`],
       [`200${DOT}redirects 0${DOT}not a url`],
+      [`200${DOT}redirects 1${DOT}https://example.com/a`],
+      [
+        "changed",
+        `200${DOT}redirects 0${DOT}https://example.com/a?sid=2`,
+        `previous: 200${DOT}redirects 0${DOT}https://example.com/a?sid=1`,
+      ],
+      [`200${DOT}redirects 0${DOT}https://u@example.com/a#top`],
+      ["new", `200${DOT}redirects 0`],
     ]);
   });
 
@@ -3164,18 +3210,41 @@ describe("basou view: the board page", () => {
     const board = alone.byId.board as Node;
     expect(board.text()).toContain(judged);
     // Said once, in the one section of footnotes, still the last.
-    expect(
-      board
-        .find((n) => n.tag === "h2")
-        .map((n) => n.textContent)
-        .at(-1),
-    ).toBe("Footnotes");
+    const heads = board.find((n) => n.tag === "h2").map((n) => n.textContent);
+    expect(heads.at(-1)).toBe("Footnotes");
+    expect(heads.filter((h) => h === "Footnotes")).toHaveLength(1);
     expect(board.text().split(judged)).toHaveLength(2);
     const noRecord = await runPage("", {
       "/api/board": NO_RECORDS,
       "/api/board/live": LIVE_BODY,
     });
     expect((noRecord.byId.board as Node).text()).toContain(judged);
+  });
+
+  it("leaves a board measured now that was drawn again before its records were read as the last draw made it", async () => {
+    const judged = boardPageStrings("en").live.judged;
+    let answer: (body: unknown) => void = () => undefined;
+    const records = new Promise((resolve) => {
+      answer = resolve;
+    });
+    const page = await runPage("?live=1", { "/api/board/live": LIVE_BODY, "/api/board": records });
+    const board = page.byId.board as Node;
+    // Measured again while the first draw still waits for the records.
+    const [again] = board.find((n) => n.tag === "button");
+    again?.listeners.click?.[0]?.({});
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    answer(NO_RECORDS);
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(page.fetched).toEqual([
+      "/api/board/live",
+      "/api/board",
+      "/api/board/live",
+      "/api/board",
+    ]);
+    // Only the last draw answers: one section of footnotes, which says it once.
+    const heads = board.find((n) => n.tag === "h2").map((n) => n.textContent);
+    expect(heads.filter((h) => h === "Footnotes")).toHaveLength(1);
+    expect(board.text().split(judged)).toHaveLength(2);
   });
 
   it("reads a portfolio workspace's board from its scoped routes, and keeps the workspace in its links", async () => {

@@ -288,12 +288,15 @@ export const BOARD_HTML = `<!doctype html>
   var FOUND = String.fromCharCode(10003);
   var NOT_FOUND = String.fromCharCode(10007);
   // Whether a final_url is where the declared url points: the same origin and
-  // path (a final_url keeps no query). A test lifts this function.
+  // path, and nothing more. A final_url written from basou 0.73.0 holds no
+  // query, fragment, user or password; one in a record written before may, and
+  // is then drawn, as what it holds can be what moved. A test lifts this function.
   function landsAsDeclared(url, finalUrl) {
     try {
       var a = new URL(url);
       var b = new URL(finalUrl);
-      return a.origin === b.origin && a.pathname === b.pathname;
+      return a.origin === b.origin && a.pathname === b.pathname &&
+        b.search === '' && b.hash === '' && b.username === '' && b.password === '';
     } catch (e) {
       return false;
     }
@@ -334,7 +337,7 @@ export const BOARD_HTML = `<!doctype html>
   // manual observation may give one) is drawn as it is, not as its midnight.
   // A test lifts this function.
   function observedAtText(at) {
-    return /^\\d{4}-\\d{2}-\\d{2}$/.test(String(at)) ? String(at) : when(at);
+    return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(at)) ? String(at) : when(at);
   }
   // The value of an observation that moved, and what the previous record
   // held: a value whose type alone moved ("12" and 12) is drawn as JSON, so
