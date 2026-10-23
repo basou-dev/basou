@@ -16,6 +16,7 @@ import {
   doRunImportCodex,
   type ImportContext,
   type ImportOptions,
+  type ReimportChange,
 } from "../commands/import.js";
 import { glanceDefaultBoard } from "./board-glance.js";
 
@@ -46,6 +47,11 @@ export type ImportOutcome =
        * from an older one, and no longer do.
        */
       droppedCopiesCount: number;
+      /**
+       * Of `reimportedCount`, how those sessions' decisions and output tokens
+       * moved in total: after the re-import minus before.
+       */
+      reimportChange: ReimportChange;
       /** Discovered but derived nothing importable (e.g. a source shape the adapter cannot read). */
       skippedNoAction: number;
       skippedAlreadyImported: number;
@@ -178,9 +184,17 @@ function isMissingSourceDir(error: unknown): boolean {
 }
 
 /** Run one adapter import as a best-effort action, classifying a missing source dir as skipped. */
-async function runImport(adapter: ImportAdapter, fn: () => Promise<void>): Promise<ImportOutcome> {
+async function runImport(
+  adapter: ImportAdapter,
+  fn: (onReimportChange: (change: ReimportChange) => void) => Promise<void>,
+): Promise<ImportOutcome> {
   try {
-    const json = await captureImportJson(fn);
+    let reimportChange: ReimportChange = { decisions: 0, outputTokens: 0 };
+    const json = await captureImportJson(() =>
+      fn((change) => {
+        reimportChange = change;
+      }),
+    );
     return {
       adapter,
       status: "ran",
@@ -188,6 +202,7 @@ async function runImport(adapter: ImportAdapter, fn: () => Promise<void>): Promi
       replacedCount: readCount(json.replaced_count),
       reimportedCount: readCount(json.reimported_count),
       droppedCopiesCount: readCount(json.dropped_copies_count),
+      reimportChange,
       skippedNoAction: readCount(json.skipped_no_action),
       skippedAlreadyImported: readCount(json.skipped_already_imported),
       skippedLegacyUntracked: readCount(json.skipped_legacy_untracked),
@@ -220,7 +235,9 @@ export function importClaudeCode(
   options: RefreshActionOptions,
   ctx: ImportContext,
 ): Promise<ImportOutcome> {
-  return runImport("claude-code", () => doRunImportClaudeCode(importOptions(options), ctx));
+  return runImport("claude-code", (onReimportChange) =>
+    doRunImportClaudeCode(importOptions(options), { ...ctx, onReimportChange }),
+  );
 }
 
 /** Import Codex rollouts for the project (best-effort). */
@@ -228,7 +245,9 @@ export function importCodex(
   options: RefreshActionOptions,
   ctx: ImportContext,
 ): Promise<ImportOutcome> {
-  return runImport("codex", () => doRunImportCodex(importOptions(options), ctx));
+  return runImport("codex", (onReimportChange) =>
+    doRunImportCodex(importOptions(options), { ...ctx, onReimportChange }),
+  );
 }
 
 type RenderCallbacks = Parameters<typeof renderHandoff>[0];

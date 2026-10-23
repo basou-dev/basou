@@ -12,7 +12,7 @@ import { warnIfPositionNamesOtherWorkspaces } from "../lib/foreign-workspace-war
 import { warnIfObservationsRefused } from "../lib/observation-warn.js";
 import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
-import type { ImportContext } from "./import.js";
+import { type ImportContext, reimportFallText } from "./import.js";
 import {
   DEFAULT_WATCH_INTERVAL_SEC,
   MAX_WATCH_INTERVAL_SEC,
@@ -358,11 +358,17 @@ function describeImport(outcome: ImportOutcome): string {
   const verb = outcome.dryRun ? "would import" : "imported";
   const parts = [`${outcome.importedCount} session(s)`, `${outcome.eventTotal} events`];
   if (outcome.reimportedCount > 0) {
-    const copies =
+    // What the re-import took out sits beside it, so a count that fell after
+    // this refresh can be told why without the views it overwrote.
+    const notes = [
       outcome.droppedCopiesCount > 0
-        ? ` (${outcome.droppedCopiesCount} without records copied from an older transcript)`
-        : "";
-    parts.push(`${outcome.reimportedCount} re-imported${copies}`);
+        ? `${outcome.droppedCopiesCount} without records copied from an older transcript`
+        : null,
+      reimportFallText(outcome.reimportChange),
+    ].filter((n) => n !== null);
+    parts.push(
+      `${outcome.reimportedCount} re-imported${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`,
+    );
   }
   if (outcome.replacedCount > 0) parts.push(`${outcome.replacedCount} replaced`);
   if (outcome.skippedAlreadyImported > 0)

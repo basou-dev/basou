@@ -447,6 +447,50 @@ describe("decisions-renderer", () => {
     expect(result.body).toContain(`- linked_files: ${realRelPath}, src/missing.ts (missing)`);
   });
 
+  it("case rich-5b: a linked file is found from any declared source root, and ~ stands for the home directory", async () => {
+    // A capture keeps a path as the agent passed it, relative to where it ran:
+    // the view, another source root, or under home. Only a file found from
+    // none of them is (missing).
+    const root = getWorkDir();
+    const master = join(root, "planning");
+    await mkdir(master, { recursive: true });
+    const paths = await ensureBasouDirectory(master);
+    const manifest = createManifest({ workspaceName: "fixture" });
+    manifest.import = { source_roots: [".", "../app", "../view"] };
+    await writeManifest(paths, manifest);
+    const home = join(root, "home");
+    for (const [dir, file] of [
+      ["app/packages", "app/packages/x.ts"],
+      ["view/notes", "view/notes/n.md"],
+      ["home/.claude", "home/.claude/plan.md"],
+      ["other", "other/y.ts"],
+    ] as const) {
+      await mkdir(join(root, dir), { recursive: true });
+      await writeFile(join(root, file), "x", "utf8");
+    }
+
+    const sid = SES("R5B");
+    await placeSession(
+      paths,
+      sid,
+      "2026-05-08T11:00:00+09:00",
+      decisionLine(sid, "E5B", DEC("R5B"), "roots", "2026-05-08T11:30:00+09:00", {
+        linked_files: [
+          "packages/x.ts",
+          "notes/n.md",
+          "~/.claude/plan.md",
+          "~/.claude/absent.md",
+          "y.ts",
+          join(root, "other", "y.ts"),
+        ],
+      }),
+    );
+    const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO, homeDir: home });
+    expect(result.body).toContain(
+      `- linked_files: packages/x.ts, notes/n.md, ~/.claude/plan.md, ~/.claude/absent.md (missing), y.ts (missing), ${join(root, "other", "y.ts")}`,
+    );
+  });
+
   it("case rich-6: a v0.1-shape payload (no rich fields) renders the legacy 4-line section unchanged", async () => {
     // Backward-compat check: events without any of the new fields produce
     // exactly the same lines as the original 4-line section.

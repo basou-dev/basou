@@ -1440,7 +1440,7 @@ async function commandsOf(repo: string, sid: string): Promise<string[]> {
 async function importJson(
   repo: string,
   options: Parameters<typeof doRunImportClaudeCode>[0],
-  ctx = forkCtx(repo),
+  ctx: Parameters<typeof doRunImportClaudeCode>[1] = forkCtx(repo),
 ): Promise<Record<string, unknown> | undefined> {
   const lines: string[] = [];
   const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
@@ -1593,10 +1593,19 @@ describe("basou import claude-code: forked transcripts", () => {
     const forkSize = (await readFile(await transcriptPath(repo, FORK_ID))).length;
 
     await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
-    const result = await importJson(repo, { all: true });
+    const changes: Array<{ decisions: number; outputTokens: number }> = [];
+    const result = await importJson(
+      repo,
+      { all: true },
+      { ...forkCtx(repo), onReimportChange: (change) => changes.push(change) },
+    );
     expect(result?.imported_count).toBe(1);
     expect(result?.reimported_count).toBe(1);
     expect(result?.dropped_copies_count).toBe(1);
+    // The copied decision and the copied replies' tokens are what it took out;
+    // the --json result does not carry them.
+    expect(changes).toEqual([{ decisions: -1, outputTokens: -150 }]);
+    expect(result).not.toHaveProperty("reimport_change");
 
     expect(await sessionIdOf(repo, FORK_ID)).toBe(fork);
     const after = await readEvents(repo, fork);
@@ -1709,7 +1718,7 @@ describe("basou import claude-code: forked transcripts", () => {
       spy.mockRestore();
     }
     expect(lines.join("\n")).toContain(
-      "re-imported 1 changed session(s) (1 without the records its transcript copied from an older one)",
+      "re-imported 1 changed session(s) (1 without the records its transcript copied from an older one; 1 fewer decision, 150 fewer output tokens)",
     );
   });
 

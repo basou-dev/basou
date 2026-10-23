@@ -642,6 +642,7 @@ describe("printRefreshSummary", () => {
           replacedCount: 0,
           reimportedCount: 0,
           droppedCopiesCount: 0,
+          reimportChange: { decisions: 0, outputTokens: 0 },
           skippedNoAction: 2,
           skippedAlreadyImported: 4,
           skippedLegacyUntracked: 0,
@@ -670,6 +671,7 @@ describe("printRefreshSummary", () => {
           replacedCount: 0,
           reimportedCount: 3,
           droppedCopiesCount: 2,
+          reimportChange: { decisions: 0, outputTokens: 0 },
           skippedNoAction: 0,
           skippedAlreadyImported: 0,
           skippedLegacyUntracked: 0,
@@ -682,6 +684,47 @@ describe("printRefreshSummary", () => {
       }),
     );
     expect(out).toContain("3 re-imported (2 without records copied from an older transcript)");
+  });
+
+  it("says what a re-import took out of the decisions and output tokens, so a count that fell can be told why", () => {
+    const ran = (
+      reimportChange: { decisions: number; outputTokens: number },
+      droppedCopiesCount = 7,
+    ) =>
+      capture(
+        baseResult({
+          claudeCode: {
+            adapter: "claude-code",
+            status: "ran",
+            importedCount: 0,
+            replacedCount: 0,
+            reimportedCount: 9,
+            droppedCopiesCount,
+            reimportChange,
+            skippedNoAction: 0,
+            skippedAlreadyImported: 0,
+            skippedLegacyUntracked: 0,
+            skippedDecreased: 0,
+            skippedDuplicate: 0,
+            skippedUnverifiable: 0,
+            eventTotal: 0,
+            dryRun: false,
+          },
+        }),
+      );
+    expect(ran({ decisions: -48, outputTokens: -1050123 })).toContain(
+      "9 re-imported (7 without records copied from an older transcript; 48 fewer decisions, 1,050,123 fewer output tokens)",
+    );
+    expect(ran({ decisions: -1, outputTokens: 0 }, 0)).toContain(
+      "9 re-imported (1 fewer decision)",
+    );
+    // A rise is what a source that grew brings: nothing to explain.
+    const rose = ran({ decisions: 3, outputTokens: 1200 }, 0);
+    expect(rose).toContain("9 re-imported");
+    expect(rose).not.toContain("9 re-imported (");
+    expect(ran({ decisions: 2, outputTokens: -1 })).toContain(
+      "9 re-imported (7 without records copied from an older transcript; 1 fewer output token)",
+    );
   });
 
   it("0 decisions WITH captured sessions: states the count and nudges the runnable command (not 'regenerated (0)')", () => {

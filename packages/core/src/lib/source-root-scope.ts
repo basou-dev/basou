@@ -73,7 +73,7 @@ async function realpathBestEffort(absPath: string): Promise<string> {
 }
 
 /** Expand a leading `~` / `~/` to the home directory; leave other forms as-is. */
-function expandTilde(p: string, homedir: string): string {
+export function expandTilde(p: string, homedir: string): string {
   if (p === "~") return homedir;
   if (p.startsWith("~/")) return join(homedir, p.slice(2));
   return p;

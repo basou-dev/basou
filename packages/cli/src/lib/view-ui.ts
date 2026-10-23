@@ -307,8 +307,12 @@ export const VIEW_HTML = `<!doctype html>
     if (!st.checked) return el('span', { class: 'badge', text: 'freshness unknown' });
     if (st.unverifiableSessions > 0)
       return el('span', { class: 'badge danger', text: '⚠ ' + st.unverifiableSessions + ' unverifiable — run verify' });
-    if (st.newSessions > 0)
-      return el('span', { class: 'badge danger', text: '⚠ ' + st.newSessions + ' uncaptured — run refresh' });
+    // The updated ones are said beside the uncaptured ones, so the badge counts
+    // what measure's freshness does ("1 new, 1 updated").
+    if (st.newSessions > 0) {
+      var updated = st.updatedSessions > 0 ? ', ' + st.updatedSessions + ' updated' : '';
+      return el('span', { class: 'badge danger', text: '⚠ ' + st.newSessions + ' uncaptured' + updated + ' — run refresh' });
+    }
     if (st.updatedSessions > 0)
       return el('span', { class: 'badge warn', text: st.updatedSessions + ' updated — run refresh' });
     return el('span', { class: 'badge ok', text: 'up to date' });
