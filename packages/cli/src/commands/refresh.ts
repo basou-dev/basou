@@ -10,7 +10,12 @@ import { type Command, InvalidArgumentError } from "commander";
 import { isVerbose, renderCliError } from "../lib/error-render.js";
 import { warnIfPositionNamesOtherWorkspaces } from "../lib/foreign-workspace-warn.js";
 import { warnIfObservationsRefused } from "../lib/observation-warn.js";
-import { type ImportOutcome, type RefreshResult, refreshAll } from "../lib/provenance-actions.js";
+import {
+  type ImportOutcome,
+  type RefreshResult,
+  refreshAll,
+  reimportChangeOf,
+} from "../lib/provenance-actions.js";
 import { resolveBasouRootForCommand } from "../lib/repo-root.js";
 import { type ImportContext, reimportFallText } from "./import.js";
 import {
@@ -364,7 +369,7 @@ function describeImport(outcome: ImportOutcome): string {
       outcome.droppedCopiesCount > 0
         ? `${outcome.droppedCopiesCount} without records copied from an older transcript`
         : null,
-      reimportFallText(outcome.reimportChange),
+      reimportFallText(reimportChangeOf(outcome) ?? { decisions: 0, outputTokens: 0 }),
     ].filter((n) => n !== null);
     parts.push(
       `${outcome.reimportedCount} re-imported${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`,

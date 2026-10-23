@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -468,6 +468,9 @@ describe("decisions-renderer", () => {
       await mkdir(join(root, dir), { recursive: true });
       await writeFile(join(root, file), "x", "utf8");
     }
+    // A symlink is followed: one to a file is there, a dangling one is not.
+    await symlink(join(root, "app", "packages", "x.ts"), join(root, "app", "link.ts"));
+    await symlink(join(root, "app", "nowhere.ts"), join(root, "app", "dangling.ts"));
 
     const sid = SES("R5B");
     await placeSession(
@@ -482,12 +485,14 @@ describe("decisions-renderer", () => {
           "~/.claude/absent.md",
           "y.ts",
           join(root, "other", "y.ts"),
+          "link.ts",
+          "dangling.ts",
         ],
       }),
     );
     const result = await renderDecisions({ paths, nowIso: FIXED_NOW_ISO, homeDir: home });
     expect(result.body).toContain(
-      `- linked_files: packages/x.ts, notes/n.md, ~/.claude/plan.md, ~/.claude/absent.md (missing), y.ts (missing), ${join(root, "other", "y.ts")}`,
+      `- linked_files: packages/x.ts, notes/n.md, ~/.claude/plan.md, ~/.claude/absent.md (missing), y.ts (missing), ${join(root, "other", "y.ts")}, link.ts, dangling.ts (missing)`,
     );
   });
 

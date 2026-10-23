@@ -1,4 +1,4 @@
-import { lstat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
@@ -151,9 +151,9 @@ export async function renderDecisions(
   // directory as `~/…`. So it exists when it is found from the repository
   // root or from any declared source root, `~` standing for the home
   // directory; only a file found from none of them is `(missing)`. Existence
-  // is checked with `lstat` so symlinks are treated honestly — a dangling
-  // symlink is reported as `(missing)`. The check runs once per unique path
-  // so repeated references share their lookup.
+  // is checked with `stat`, which follows a symlink, so a dangling symlink is
+  // reported as `(missing)`. The check runs once per unique path so repeated
+  // references share their lookup.
   const repoRoot = dirname(input.paths.root);
   const home = input.homeDir ?? homedir();
   const bases = await linkedFileBases(input.paths, repoRoot);
@@ -166,7 +166,7 @@ export async function renderDecisions(
     let exists = false;
     for (const abs of candidates) {
       try {
-        await lstat(abs);
+        await stat(abs);
         exists = true;
         break;
       } catch {

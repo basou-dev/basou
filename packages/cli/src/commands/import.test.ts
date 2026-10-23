@@ -27,6 +27,7 @@ import {
 } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doRunImportClaudeCode, doRunImportCodex } from "./import.js";
+import { doRunRefresh } from "./refresh.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1719,6 +1720,98 @@ describe("basou import claude-code: forked transcripts", () => {
     }
     expect(lines.join("\n")).toContain(
       "re-imported 1 changed session(s) (1 without the records its transcript copied from an older one; 1 fewer decision, 150 fewer output tokens)",
+    );
+  });
+
+  it("sums what it took out over every session it re-imports", async () => {
+    const repo = await setupInitedRepo();
+    const SOLO = "bbbbbbbb-solo";
+    const solo = (commands: string[]) =>
+      commands.map((command, i) =>
+        commandRecord(repo, 60 + i, `2026-05-11T00:0${i}:00.000Z`, SOLO, command),
+      );
+    await writeTranscript(repo, SOLO, solo(["ls"]));
+    await importForkWithCopies(repo);
+    // The fork leaves its copies out, and an unrelated session grows by a
+    // command of 10 tokens: one run re-imports both.
+    await writeTranscript(repo, SOLO, solo(["ls", "pwd"]));
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    const changes: Array<{ decisions: number; outputTokens: number }> = [];
+    const result = await importJson(
+      repo,
+      { all: true },
+      { ...forkCtx(repo), onReimportChange: (change) => changes.push(change) },
+    );
+    expect(result?.reimported_count).toBe(2);
+    expect(changes).toEqual([{ decisions: -1, outputTokens: -140 }]);
+  });
+
+  it("says in a dry run what the re-import would take out", async () => {
+    const repo = await setupInitedRepo();
+    await importForkWithCopies(repo);
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((a) => String(a)).join(" "));
+    });
+    try {
+      await doRunImportClaudeCode({ all: true, dryRun: true }, forkCtx(repo));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.join("\n")).toContain(
+      "re-import 1 changed session(s) (1 without the records its transcript copied from an older one; 1 fewer decision, 150 fewer output tokens)",
+    );
+  });
+
+  // Refresh a workspace whose fork is re-imported without its copies.
+  async function refreshAfterFork(json: boolean): Promise<string> {
+    const repo = await setupInitedRepo();
+    await importForkWithCopies(repo);
+    await writeTranscript(repo, ORIGINAL_ID, originalTranscript(repo));
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((a) => String(a)).join(" "));
+    });
+    try {
+      await doRunRefresh(json ? { json: true } : {}, {
+        ...forkCtx(repo),
+        codexSessionsDir: join(repo, "no-codex-sessions"),
+        portfolioConfigPath: join(repo, "no-portfolio.yaml"),
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    return lines.join("\n");
+  }
+
+  it("refresh says what its re-import took out", async () => {
+    expect(await refreshAfterFork(false)).toContain(
+      "claude-code: imported 1 session(s), 5 events, 1 re-imported (1 without records copied from an older transcript; 1 fewer decision, 150 fewer output tokens)",
+    );
+  });
+
+  it("refresh --json holds no more than before: what a re-import took out is not on its result", async () => {
+    const out = await refreshAfterFork(true);
+    const json = JSON.parse(out.slice(out.indexOf("{"))) as Record<string, Record<string, unknown>>;
+    expect(json.claudeCode?.reimportedCount).toBe(1);
+    expect(Object.keys(json.claudeCode ?? {}).sort()).toEqual(
+      [
+        "adapter",
+        "status",
+        "importedCount",
+        "replacedCount",
+        "reimportedCount",
+        "droppedCopiesCount",
+        "skippedNoAction",
+        "skippedAlreadyImported",
+        "skippedLegacyUntracked",
+        "skippedDecreased",
+        "skippedDuplicate",
+        "skippedUnverifiable",
+        "eventTotal",
+        "dryRun",
+      ].sort(),
     );
   });
 

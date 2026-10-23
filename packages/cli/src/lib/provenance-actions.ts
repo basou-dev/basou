@@ -47,11 +47,6 @@ export type ImportOutcome =
        * from an older one, and no longer do.
        */
       droppedCopiesCount: number;
-      /**
-       * Of `reimportedCount`, how those sessions' decisions and output tokens
-       * moved in total: after the re-import minus before.
-       */
-      reimportChange: ReimportChange;
       /** Discovered but derived nothing importable (e.g. a source shape the adapter cannot read). */
       skippedNoAction: number;
       skippedAlreadyImported: number;
@@ -183,6 +178,22 @@ function isMissingSourceDir(error: unknown): boolean {
   );
 }
 
+// How the sessions an import re-imported moved in their decisions and output
+// tokens, kept beside its outcome and not on it: an outcome is serialized as it
+// is (refresh --json, the view server), and its shape stays as documented.
+const reimportChanges = new WeakMap<ImportOutcome, ReimportChange>();
+
+/** How the sessions an import re-imported moved (after minus before), when it ran and said. */
+export function reimportChangeOf(outcome: ImportOutcome): ReimportChange | undefined {
+  return reimportChanges.get(outcome);
+}
+
+/** Keep `change` beside `outcome` (see {@link reimportChangeOf}); returns the outcome. */
+export function noteReimportChange(outcome: ImportOutcome, change: ReimportChange): ImportOutcome {
+  reimportChanges.set(outcome, change);
+  return outcome;
+}
+
 /** Run one adapter import as a best-effort action, classifying a missing source dir as skipped. */
 async function runImport(
   adapter: ImportAdapter,
@@ -195,14 +206,13 @@ async function runImport(
         reimportChange = change;
       }),
     );
-    return {
+    const outcome: ImportOutcome = {
       adapter,
       status: "ran",
       importedCount: readCount(json.imported_count),
       replacedCount: readCount(json.replaced_count),
       reimportedCount: readCount(json.reimported_count),
       droppedCopiesCount: readCount(json.dropped_copies_count),
-      reimportChange,
       skippedNoAction: readCount(json.skipped_no_action),
       skippedAlreadyImported: readCount(json.skipped_already_imported),
       skippedLegacyUntracked: readCount(json.skipped_legacy_untracked),
@@ -212,6 +222,7 @@ async function runImport(
       eventTotal: readCount(json.event_total),
       dryRun: json.dry_run === true,
     };
+    return noteReimportChange(outcome, reimportChange);
   } catch (error: unknown) {
     if (isMissingSourceDir(error)) {
       return { adapter, status: "skipped", reason: "no source logs for this project" };

@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, createManifest, ensureBasouDirectory, writeManifest } from "@basou/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RefreshResult } from "../lib/provenance-actions.js";
+import { noteReimportChange, type RefreshResult } from "../lib/provenance-actions.js";
 import {
   doRunRefresh,
   doRunRefreshPortfolio,
@@ -642,7 +642,6 @@ describe("printRefreshSummary", () => {
           replacedCount: 0,
           reimportedCount: 0,
           droppedCopiesCount: 0,
-          reimportChange: { decisions: 0, outputTokens: 0 },
           skippedNoAction: 2,
           skippedAlreadyImported: 4,
           skippedLegacyUntracked: 0,
@@ -671,7 +670,6 @@ describe("printRefreshSummary", () => {
           replacedCount: 0,
           reimportedCount: 3,
           droppedCopiesCount: 2,
-          reimportChange: { decisions: 0, outputTokens: 0 },
           skippedNoAction: 0,
           skippedAlreadyImported: 0,
           skippedLegacyUntracked: 0,
@@ -693,23 +691,25 @@ describe("printRefreshSummary", () => {
     ) =>
       capture(
         baseResult({
-          claudeCode: {
-            adapter: "claude-code",
-            status: "ran",
-            importedCount: 0,
-            replacedCount: 0,
-            reimportedCount: 9,
-            droppedCopiesCount,
+          claudeCode: noteReimportChange(
+            {
+              adapter: "claude-code",
+              status: "ran",
+              importedCount: 0,
+              replacedCount: 0,
+              reimportedCount: 9,
+              droppedCopiesCount,
+              skippedNoAction: 0,
+              skippedAlreadyImported: 0,
+              skippedLegacyUntracked: 0,
+              skippedDecreased: 0,
+              skippedDuplicate: 0,
+              skippedUnverifiable: 0,
+              eventTotal: 0,
+              dryRun: false,
+            },
             reimportChange,
-            skippedNoAction: 0,
-            skippedAlreadyImported: 0,
-            skippedLegacyUntracked: 0,
-            skippedDecreased: 0,
-            skippedDuplicate: 0,
-            skippedUnverifiable: 0,
-            eventTotal: 0,
-            dryRun: false,
-          },
+          ),
         }),
       );
     expect(ran({ decisions: -48, outputTokens: -1050123 })).toContain(
