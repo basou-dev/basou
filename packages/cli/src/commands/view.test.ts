@@ -1459,8 +1459,11 @@ describe("basou view: the board page", () => {
       "when",
       "shown",
       "withWords",
+      "landsAsDeclared",
       "httpText",
       "observedText",
+      "declaredUrl",
+      "observedAtText",
       "movedText",
       "measureText",
       "signed",
@@ -1566,9 +1569,9 @@ describe("basou view: the board page", () => {
         "Where each lane is",
         "Observed outside",
         "Period and effort",
+        "The operator's turns",
         "Measures",
         "Composition",
-        "The operator's turns",
         "Repositories",
         "Components",
         "Footnotes",
@@ -1668,8 +1671,10 @@ describe("basou view: the board page", () => {
     const rows = observations.find((n) => n.tag === "tr").slice(1);
     expect(rows.map((r) => [r.className, r.children[0]?.text()])).toEqual([
       ["", "npm"],
+      ["source", "Source: s"],
       ["notes", "mind the tag"],
       ["", "site"],
+      ["source", "Source: s"],
     ]);
     expect(observations.text()).toContain(S.observed.previousUnreadable);
     expect(observations.find((n) => n.className === "tile")).toEqual([]);
@@ -1795,7 +1800,25 @@ describe("basou view: the board page", () => {
         ],
       },
     });
-    const rows = drawn.find((n) => n.tag === "tr").slice(1);
+    const all = drawn.find((n) => n.tag === "tr").slice(1);
+    // Each observation's row, then its source in a row drawn on a narrow
+    // screen only, then its notes.
+    expect(all.map((r) => r.className)).toEqual([
+      "",
+      "source",
+      "notes",
+      "",
+      "source",
+      "",
+      "source",
+      "",
+      "source",
+      "",
+      "source",
+      "",
+      "source",
+    ]);
+    const rows = all.filter((r) => r.className !== "source");
     const cells = rows.map((r) => r.children.map((c) => c.text()));
     expect(cells.map((c) => c[1])).toEqual([
       `200${DOT}redirects 1${DOT}https://example.com/x/${DOT}in stock ${YES}  sold out ${NO}${DOT}count 42${DOT}capture "2.3"`,
@@ -1879,6 +1902,7 @@ describe("basou view: the board page", () => {
     const cells = drawn
       .find((n) => n.tag === "tr")
       .slice(1)
+      .filter((r) => r.className === "")
       .map((r) => r.children[1] as Node);
     expect(cells.map((c) => c.children.map((x) => x.text()))).toEqual([
       ["changed", "1.1.0", "previous: 1.0.0"],
@@ -1887,7 +1911,8 @@ describe("basou view: the board page", () => {
       ["changed", "ok", "previous: not observed  (timeout)"],
       ["changed", "3  (partly)", "previous: 3"],
       ["changed", "3", "previous: 2  (partly)"],
-      ["changed", "true", "not in the previous record"],
+      // Declared since the previous record: new, not changed.
+      ["new", "true"],
       [
         "changed",
         `200${DOT}redirects 0${DOT}https://example.com/${DOT}is ${NO}`,
@@ -1896,13 +1921,123 @@ describe("basou view: the board page", () => {
       ["3"],
       ["not observed (previous: 1)  (timeout)"],
     ]);
-    expect(drawn.find((n) => n.className === "chip changed")).toHaveLength(8);
+    expect(drawn.find((n) => n.className === "chip changed")).toHaveLength(7);
+    expect(drawn.find((n) => n.className === "chip added")).toHaveLength(1);
     const unreadable = boardPageStrings("en").observed.previousUnreadable;
     expect(drawn.text()).not.toContain(unreadable);
     expect(observations("unreadable", [{ name: "npm", value: "1", ...made }]).text()).toContain(
       unreadable,
     );
     expect(observations("unreadable", []).text()).not.toContain(unreadable);
+  });
+
+  it("leaves out where an http observation landed when it is where its declaration points", () => {
+    const { call } = drawing(["observations"]);
+    const DOT = ` ${String.fromCodePoint(0xb7)} `;
+    const made = { observed_at: "2026-10-07T00:00:00Z", source: "curl" };
+    const http = (final_url: string, redirects = 0) => ({ status: 200, redirects, final_url });
+    const drawn = call("observations", {
+      summary: {
+        text: "",
+        tiles: [],
+        previous_record: "found",
+        observed: [
+          // The url declared, as a final_url keeps it: no query, the default
+          // port dropped, the host in lower case.
+          {
+            name: "same",
+            value: {},
+            http: http("https://example.com/a"),
+            kind: "http",
+            looks_at: ["HTTPS://Example.com:443/a?x=1"],
+            ...made,
+          },
+          {
+            name: "moved",
+            value: {},
+            http: http("https://example.com/b", 1),
+            kind: "http",
+            looks_at: ["https://example.com/a"],
+            ...made,
+          },
+          {
+            name: "was",
+            value: {},
+            http: http("https://example.com/a"),
+            moved: { status: "value", value: {}, http: http("https://example.com/old", 1) },
+            kind: "http",
+            looks_at: ["https://example.com/a"],
+            ...made,
+          },
+          // Not an http declaration: what it looks at is no url to compare with.
+          {
+            name: "other",
+            value: {},
+            http: http("https://example.com/a"),
+            kind: "github_check",
+            looks_at: ["https://example.com/a"],
+            ...made,
+          },
+          {
+            name: "bad",
+            value: {},
+            http: http("not a url"),
+            kind: "http",
+            looks_at: ["::"],
+            ...made,
+          },
+        ],
+      },
+    });
+    const cells = drawn
+      .find((n) => n.tag === "tr")
+      .slice(1)
+      .filter((r) => r.className === "")
+      .map((r) => (r.children[1] as Node).children.map((x) => x.text()));
+    expect(cells).toEqual([
+      [`200${DOT}redirects 0`],
+      [`200${DOT}redirects 1${DOT}https://example.com/b`],
+      [
+        "changed",
+        `200${DOT}redirects 0`,
+        `previous: 200${DOT}redirects 1${DOT}https://example.com/old`,
+      ],
+      [`200${DOT}redirects 0${DOT}https://example.com/a`],
+      [`200${DOT}redirects 0${DOT}not a url`],
+    ]);
+  });
+
+  it("draws when an observation was made as a time, a day alone as it is, with what it holds in the title", () => {
+    const { call } = drawing(["observations"]);
+    const drawn = call("observations", {
+      summary: {
+        text: "",
+        tiles: [],
+        observed: [
+          { name: "a", value: 1, observed_at: "2026-10-23T06:05:58.369Z", source: "s" },
+          { name: "b", value: 2, observed_at: "2026-10-23T15:05:00+09:00", source: "s" },
+          { name: "c", value: 3, observed_at: "2026-10-23", source: "s" },
+          { name: "d", value: 4, observed_at: "yesterday", source: "s" },
+        ],
+      },
+    });
+    const at = drawn
+      .find((n) => n.tag === "tr")
+      .slice(1)
+      .filter((r) => r.className === "")
+      .map((r) => r.children[2] as Node);
+    expect(at.map((td) => td.textContent)).toEqual([
+      new Date("2026-10-23T06:05:58.369Z").toLocaleString("en-US"),
+      new Date("2026-10-23T15:05:00+09:00").toLocaleString("en-US"),
+      "2026-10-23",
+      "yesterday",
+    ]);
+    expect(at.map((td) => td.attrs.title)).toEqual([
+      "2026-10-23T06:05:58.369Z",
+      "2026-10-23T15:05:00+09:00",
+      "2026-10-23",
+      "yesterday",
+    ]);
   });
 
   it("draws every measure in a table, with its lanes and how much a number moved", () => {
@@ -1919,15 +2054,19 @@ describe("basou view: the board page", () => {
     });
     const rows = drawn.find((n) => n.tag === "tr").map((r) => r.children.map((c) => c.text()));
     expect(rows).toEqual([
-      ["Measure", "Value", "Drawn in", "Since the previous record"],
-      ["src", "90 lines", "Core, Docs", "-10"],
-      ["test", "not measured", "-", ""],
+      ["Measure", "Value", "Since the previous record", "Drawn in"],
+      ["src", "90 lines", "-10", "Core, Docs"],
+      ["test", "not measured", "", "-"],
       // A string is no amount: no unit. The paths of a file_paths by how many.
-      ["latest", "20260401", "Docs", ""],
-      ["mig", "2 files", "-", ""],
-      ["pages", "1,234.5 pages", "-", "+0.5"],
-      ["same", "3 files", "-", "0"],
+      ["latest", "20260401", "", "Docs"],
+      ["mig", "2 files", "", "-"],
+      ["pages", "1,234.5 pages", "+0.5", "-"],
+      ["same", "3 files", "0", "-"],
     ]);
+    // How much a number moved, beside it and never broken; the lanes, words,
+    // break between them only.
+    const first = drawn.find((n) => n.tag === "tr")[1];
+    expect(first?.children.map((c) => c.className)).toEqual(["", "wrap", "n", "lanes"]);
     expect(call("measures", { measures: [] }).text()).toContain("No measures are declared.");
   });
 
@@ -1967,6 +2106,8 @@ describe("basou view: the board page", () => {
       "1",
       "-",
     ]);
+    // Its heads break between words only (keep-all on table.repos th).
+    expect(v3.find((n) => n.tag === "table").map((t) => t.className)).toEqual(["grid repos"]);
     // Files the record could not measure are said to be.
     const noFiles = call("recordRepos", {
       repos: { record_version: 3, base_measured: true, list: [{ ...repo, files: null }] },
@@ -2116,6 +2257,39 @@ describe("basou view: the board page", () => {
     );
   });
 
+  it("lists the cells that moved under the matrix with the state each had, and gives their mark a place in the legend", () => {
+    const { call } = drawing(["matrix"]);
+    const S = boardPageStrings("en");
+    const matrix = (cells: unknown[]) =>
+      call("matrix", {
+        matrix: {
+          anomalies: [],
+          stages: [
+            { id: "03", meaning: "Built" },
+            { id: "04", meaning: "Merged" },
+          ],
+          lanes: [{ id: "out", name: "Outbound", cells }],
+        },
+      });
+    const drawn = matrix([
+      { state: "done", moved_from: "blocked" },
+      { state: "part", moved_from: "none" },
+    ]);
+    const [legend] = drawn.find((n) => n.className === "legend");
+    expect(legend?.find((n) => n.className === "moved-key")).toHaveLength(1);
+    expect(legend?.text()).toContain(S.matrix.movedKey);
+    const [moved] = drawn.find((n) => n.tag === "ul" && n.className === "moved");
+    expect(moved?.children.map((li) => li.text())).toEqual([
+      `Outbound 03: ${S.states.blocked} \u2192 ${S.states.done}`,
+      `Outbound 04: ${S.states.none} \u2192 ${S.states.part}`,
+    ]);
+    // Nothing moved: no mark in the legend, no list.
+    const still = matrix([{ state: "done" }, { state: "none" }]);
+    expect(still.find((n) => n.className === "moved-key")).toEqual([]);
+    expect(still.find((n) => n.className === "moved")).toEqual([]);
+    expect(still.text()).not.toContain(S.matrix.movedKey);
+  });
+
   it("puts each stage's meaning in its head's title, and draws a stage by its id alone on a narrow screen, with the meanings listed under the matrix", () => {
     const { call } = drawing(["matrix"]);
     const drawn = call("matrix", {
@@ -2170,9 +2344,12 @@ describe("basou view: the board page", () => {
       // A table's notes wrap at the width of their scroll, at its left edge as
       // it scrolls; 100vw stays for a browser that knows no container units.
       ".scroll": "container-type: inline-size;",
-      "tr.notes td": "padding-right: 0;",
-      "tr.notes ul.sub":
+      "tr.notes td, tr.source td": "padding-right: 0;",
+      "tr.notes ul.sub, tr.source div.sub":
         "position: sticky; left: 0; max-width: calc(100vw - 32px); max-width: 100cqw;",
+      // An observation's source leaves its column for a row of its own.
+      "th.source, td.source": "display: none;",
+      "tr.source": "display: table-row;",
     });
     // Its rules take the place of those of the same weight only by coming after them.
     for (const selector of [
@@ -2192,6 +2369,12 @@ describe("basou view: the board page", () => {
     // Wider screens draw the matrix as before: its meanings in the heads, no list.
     const wide = rules(style.slice(0, start) + style.slice(end));
     expect(wide["tr.notes td"]).toBe("padding-top: 0;");
+    // Wider, the source stays in its column and its row is not drawn; the
+    // rule comes before the narrow one, which takes its place by coming after.
+    expect(wide["tr.source"]).toBe("display: none;");
+    expect(style.indexOf("tr.source { display: none; }")).toBeLessThan(start);
+    expect(wide["td.n"]).toBe("white-space: nowrap;");
+    expect(wide["td.lanes, table.repos th"]).toBe("word-break: keep-all;");
     expect(wide["table.matrix th.stage"]).toContain("min-width: 64px;");
     expect(wide["table.matrix td.cell"]).toContain("font-size: 18px;");
     expect(Object.keys(wide).filter((selector) => selector.includes("meaning"))).toEqual([
@@ -2841,14 +3024,17 @@ describe("basou view: the board page", () => {
     expect(components.find((n) => n.tag === "code").map((c) => c.textContent)).toEqual(["app"]);
     expect(components.text()).toContain("ci, manifest");
 
-    const noBoard = call("liveFootnotes", LIVE, "no_board");
+    const noBoard = call("liveFootnotes", LIVE, "no_board", true);
     for (const s of [S.live.note, S.live.judged, S.unavailable.noBoard, S.footnotes.notMeasured]) {
       expect(noBoard.text()).toContain(s);
     }
     expect(noBoard.text()).toContain(
       "freshness.newest_session_at: a session.yaml could not be read",
     );
-    expect(call("liveFootnotes", LIVE, null).text()).not.toContain(S.unavailable.noBoard);
+    const asked = call("liveFootnotes", LIVE, null, false).text();
+    expect(asked).not.toContain(S.unavailable.noBoard);
+    // Asked for where records are: how a record comes to be is not said.
+    expect(asked).not.toContain(S.live.judged);
 
     // The period and effort are drawn as a record's are.
     expect(call("effort", LIVE).find((n) => n.tag === "figure").length).toBeGreaterThan(0);
@@ -2955,6 +3141,41 @@ describe("basou view: the board page", () => {
     const failed = await runPage("?live=1", {});
     expect(failed.fetched).toEqual(["/api/board/live"]);
     expect((failed.byId.status as Node).textContent).toBe("Not found");
+  });
+
+  it("says how a record comes to be drawn on the board measured now only where there is no record", async () => {
+    const judged = boardPageStrings("en").live.judged;
+    const withRecords = await runPage("?live=1", {
+      "/api/board/live": LIVE_BODY,
+      "/api/board": {
+        ...STRINGS,
+        page: {
+          status: "unavailable",
+          why: "not_json",
+          records: [{ id: A_REC, at: "2026-10-01T00:00:00.000Z" }],
+        },
+      },
+    });
+    expect((withRecords.byId.board as Node).text()).not.toContain(judged);
+    const alone = await runPage("?live=1", {
+      "/api/board/live": LIVE_BODY,
+      "/api/board": NO_RECORDS,
+    });
+    const board = alone.byId.board as Node;
+    expect(board.text()).toContain(judged);
+    // Said once, in the one section of footnotes, still the last.
+    expect(
+      board
+        .find((n) => n.tag === "h2")
+        .map((n) => n.textContent)
+        .at(-1),
+    ).toBe("Footnotes");
+    expect(board.text().split(judged)).toHaveLength(2);
+    const noRecord = await runPage("", {
+      "/api/board": NO_RECORDS,
+      "/api/board/live": LIVE_BODY,
+    });
+    expect((noRecord.byId.board as Node).text()).toContain(judged);
   });
 
   it("reads a portfolio workspace's board from its scoped routes, and keeps the workspace in its links", async () => {

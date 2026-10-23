@@ -939,6 +939,8 @@ export type BoardPageStrings = {
     bodyNotRead: string;
     /** Marks an observation whose value or error moved since the previous record. */
     changed: string;
+    /** Marks an observation the previous record did not have (declared since). */
+    added: string;
     /** What the previous record held of an observation that moved. */
     before: string;
     beforeNotObserved: string;
@@ -1018,6 +1020,10 @@ export type BoardPageStrings = {
   matrix: {
     lane: string;
     moved: string;
+    /** The legend's entry for the mark on a cell that moved since the previous record. */
+    movedKey: string;
+    /** A cell that moved, listed under the matrix: `{lane}`, `{stage}`, `{before}`, `{after}`. */
+    movedCell: string;
     anomalies: string;
     anomaly: string;
   };
@@ -1153,6 +1159,7 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     captureNone: "no capture",
     bodyNotRead: "body not read",
     changed: "changed",
+    added: "new",
     before: "previous: {value}",
     beforeNotObserved: "previous: not observed",
     beforeNone: "not in the previous record",
@@ -1227,6 +1234,8 @@ const BOARD_PAGE_EN: BoardPageStrings = {
   matrix: {
     lane: "Lane",
     moved: "was {state} in the previous record",
+    movedKey: "Moved since the previous record",
+    movedCell: "{lane} {stage}: {before} \u2192 {after}",
     anomalies: "Out of order",
     anomaly: "{lane} {stage} is {state} before {before}, which is done or begun",
   },
@@ -1366,6 +1375,7 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     captureNone: "capture なし",
     bodyNotRead: "本文は読まない",
     changed: "変化",
+    added: "新規",
     before: "前回: {value}",
     beforeNotObserved: "前回: 未確認",
     beforeNone: "前回の記録には無い",
@@ -1438,6 +1448,8 @@ const BOARD_PAGE_JA: BoardPageStrings = {
   matrix: {
     lane: "レーン",
     moved: "前回は {state}",
+    movedKey: "前回の記録から動いた",
+    movedCell: "{lane} の {stage}: {before} \u2192 {after}",
     anomalies: "順序の破れ",
     anomaly: "{lane} の {stage} は {state} なのに、後の {before} は到達か部分到達",
   },

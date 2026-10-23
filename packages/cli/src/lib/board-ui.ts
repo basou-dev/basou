@@ -66,12 +66,31 @@ export const BOARD_HTML = `<!doctype html>
   table { border-collapse: collapse; }
   th, td { text-align: left; vertical-align: top; padding: 4px 10px 4px 0; }
   td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  /* A number is never broken across lines, so a part of it cannot pass for another number. */
+  td.n { white-space: nowrap; }
   table.grid td, table.grid th { border-bottom: 1px solid var(--grid); }
-  .scroll { overflow-x: auto; max-width: 100%; }
+  /* Where a table is wider than its box, a shade at an edge says there is
+     more that way, also where scrollbars are drawn over the content and
+     hidden: each shade stays at its edge, and a cover of the page's color,
+     moving with the content, hides it while that end is in view. */
+  .scroll {
+    overflow-x: auto; max-width: 100%;
+    background:
+      linear-gradient(to right, var(--bg) 40%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--bg) 40%, transparent) right center / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--fg-2) 40%, transparent), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--fg-2) 40%, transparent), transparent) right center / 12px 100% no-repeat scroll;
+  }
+  /* Lane names, and the heads of the repos' table, break between words, not
+     inside one (a name in Japanese is one word). */
+  td.lanes, table.repos th { word-break: keep-all; }
   table.matrix th.stage { font-weight: 400; font-size: 12px; text-align: center; min-width: 64px; }
   table.matrix th.stage b { display: block; font-size: 13px; }
   table.matrix td.cell { text-align: center; font-size: 18px; line-height: 1; }
   .stage-meanings { display: none; list-style: none; padding: 0; margin: 6px 0 0; font-size: 12px; color: var(--fg-2); }
+  /* Drawn only below about 600px, by the rule below. */
+  tr.source { display: none; }
+  tr.source td { padding-top: 0; }
   /* Six stages do not fit beside their meanings below about 600px: each is
      drawn by its id, the meanings are listed under the matrix, and a lane
      name wraps. After the rules above, which it overrides. */
@@ -87,8 +106,13 @@ export const BOARD_HTML = `<!doctype html>
        is cut off. The cell keeps no right padding, which a sticky note could
        not cross. */
     .scroll { container-type: inline-size; }
-    tr.notes td { padding-right: 0; }
-    tr.notes ul.sub { position: sticky; left: 0; max-width: calc(100vw - 32px); max-width: 100cqw; }
+    tr.notes td, tr.source td { padding-right: 0; }
+    tr.notes ul.sub, tr.source div.sub { position: sticky; left: 0; max-width: calc(100vw - 32px); max-width: 100cqw; }
+    /* An observation's source is drawn in a row of its own under it, where
+       it wraps at the width in view, not in a column off the screen that
+       makes its row tall. */
+    th.source, td.source { display: none; }
+    tr.source { display: table-row; }
   }
   .st::before { display: inline-block; width: 1.2em; }
   .st.done::before { content: "\\25CF"; color: var(--done); }
@@ -97,7 +121,9 @@ export const BOARD_HTML = `<!doctype html>
   .st.shelved::before { content: "\\2298"; color: var(--fg-2); }
   .st.none::before { content: "\\25CB"; color: var(--fg-2); }
   .st.unverified::before { content: "?"; color: var(--info); font-weight: 700; }
-  td.moved { outline: 2px solid var(--info); outline-offset: -3px; border-radius: 6px; }
+  td.moved, .moved-key { outline: 2px solid var(--info); outline-offset: -3px; border-radius: 6px; }
+  .moved-key { display: inline-block; width: 1.2em; height: 1.2em; margin-right: 4px; vertical-align: -0.3em; }
+  ul.moved { margin: 6px 0 0; padding-left: 18px; font-size: 12px; }
   .legend { font-size: 12px; color: var(--fg-2); display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
   .swatch.s1 { background: var(--s1); }
@@ -115,6 +141,7 @@ export const BOARD_HTML = `<!doctype html>
   td.wrap { overflow-wrap: anywhere; min-width: 10em; }
   tr.notes td { padding-top: 0; }
   .chip.changed { margin-left: 0; margin-right: 6px; background: var(--chip-unverified); }
+  .chip.added { margin-left: 0; margin-right: 6px; background: var(--chip-live); }
   .bar { height: 10px; background: var(--fill); border-radius: 5px; min-width: 120px; position: relative; overflow: hidden; }
   .bar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--s1); }
   figure { margin: 16px 0; }
@@ -260,11 +287,24 @@ export const BOARD_HTML = `<!doctype html>
   var DOT = ' ' + String.fromCharCode(183) + ' ';
   var FOUND = String.fromCharCode(10003);
   var NOT_FOUND = String.fromCharCode(10007);
+  // Whether a final_url is where the declared url points: the same origin and
+  // path (a final_url keeps no query). A test lifts this function.
+  function landsAsDeclared(url, finalUrl) {
+    try {
+      var a = new URL(url);
+      var b = new URL(finalUrl);
+      return a.origin === b.origin && a.pathname === b.pathname;
+    } catch (e) {
+      return false;
+    }
+  }
   // An http value read as its parts: the status, the redirects, where it
-  // landed, and what it read off the body (when the status is 2xx) or that it
+  // landed (left out where it is the url declared, which is drawn under the
+  // name), and what it read off the body (when the status is 2xx) or that it
   // did not. Numbers and strings are drawn as they are.
-  function httpText(h) {
-    var parts = [String(h.status), fill(S.observed.redirects, { n: h.redirects }), h.final_url];
+  function httpText(h, url) {
+    var parts = [String(h.status), fill(S.observed.redirects, { n: h.redirects })];
+    if (!url || !landsAsDeclared(url, h.final_url)) parts.push(h.final_url);
     if (h.body === null) parts.push(S.observed.bodyNotRead);
     else if (h.body) {
       if (h.body.words) {
@@ -279,23 +319,35 @@ export const BOARD_HTML = `<!doctype html>
   }
   // A value of an observation as the page draws it: an http value in its
   // shape read as its parts, one with words beside what it says of each, and
-  // any other as it is (a string) or as JSON. A test lifts this function.
-  function observedText(value, words, http) {
-    if (http) return httpText(http);
+  // any other as it is (a string) or as JSON. url: the url its declaration
+  // gives, or null. A test lifts this function.
+  function observedText(value, words, http, url) {
+    if (http) return httpText(http, url);
     if (words) return withWords(value, words);
     return shown(value);
+  }
+  // The url an http observation's declaration gives, or null.
+  function declaredUrl(o) {
+    return o.kind === 'http' && o.looks_at && o.looks_at.length > 0 ? o.looks_at[0] : null;
+  }
+  // When an observation was made, as the page draws a time; a day alone (a
+  // manual observation may give one) is drawn as it is, not as its midnight.
+  // A test lifts this function.
+  function observedAtText(at) {
+    return /^\\d{4}-\\d{2}-\\d{2}$/.test(String(at)) ? String(at) : when(at);
   }
   // The value of an observation that moved, and what the previous record
   // held: a value whose type alone moved ("12" and 12) is drawn as JSON, so
   // that the two do not read the same. A test lifts this function.
   function movedText(o) {
     var m = o.moved;
-    var now = observedText(o.value, o.words, o.http);
+    var url = declaredUrl(o);
+    var now = observedText(o.value, o.words, o.http, url);
     if (m.status === 'none') return { now: now, then: S.observed.beforeNone };
     if (m.value === null) {
       return { now: now, then: S.observed.beforeNotObserved + (m.error ? '  (' + m.error + ')' : '') };
     }
-    var then = observedText(m.value, m.words, m.http);
+    var then = observedText(m.value, m.words, m.http, url);
     if ((typeof m.value === 'string') !== (typeof o.value === 'string')) {
       then = JSON.stringify(m.value);
       if (then === now) now = JSON.stringify(o.value);
@@ -405,14 +457,19 @@ export const BOARD_HTML = `<!doctype html>
       s.observed.forEach(function (o) {
         var cell = el('td', { class: 'wrap' });
         var value;
-        if (o.value !== null && o.moved) {
+        if (o.value !== null && o.moved && o.moved.status === 'none') {
+          // Declared since the previous record: new, which is not a change.
+          cell.appendChild(el('span', { class: 'chip added', text: S.observed.added }));
+          value = observedText(o.value, o.words, o.http, declaredUrl(o));
+          cell.appendChild(el('span', { text: value + (o.error ? '  (' + o.error + ')' : '') }));
+        } else if (o.value !== null && o.moved) {
           var pair = movedText(o);
           cell.appendChild(el('span', { class: 'chip changed', text: S.observed.changed }));
           value = pair.now;
           cell.appendChild(el('span', { text: value + (o.error ? '  (' + o.error + ')' : '') }));
           cell.appendChild(el('div', { class: 'sub', text: pair.then }));
         } else {
-          if (o.value !== null) value = observedText(o.value, o.words, o.http);
+          if (o.value !== null) value = observedText(o.value, o.words, o.http, declaredUrl(o));
           else if (o.previous && o.previous.status === 'value') value = fill(S.observed.missing, { value: shown(o.previous.value) });
           else if (o.previous && o.previous.status === 'unreadable') value = S.observed.missingPreviousUnreadable;
           else value = S.observed.missingNoPrevious;
@@ -424,8 +481,13 @@ export const BOARD_HTML = `<!doctype html>
         rows.push(el('tr', null, [
           el('td', null, [el('div', { text: o.name }), what === null ? null : el('div', { class: 'sub', text: what })]),
           cell,
-          el('td', { text: o.observed_at }), el('td', { class: 'wrap', text: o.source })
+          el('td', { text: observedAtText(o.observed_at), title: o.observed_at }),
+          el('td', { class: 'wrap source', text: o.source })
         ]));
+        // Its source again, drawn only on a narrow screen, where its column is not.
+        rows.push(el('tr', { class: 'source' }, [el('td', { colspan: '4' }, [
+          el('div', { class: 'sub', text: S.observed.source + ': ' + o.source })
+        ])]));
         if (o.notes && o.notes.length > 0) {
           rows.push(el('tr', { class: 'notes' }, [el('td', { colspan: '4' }, [
             el('ul', { class: 'sub' }, o.notes.map(function (n) { return el('li', null, [prose(n, 'span')]); }))
@@ -435,7 +497,7 @@ export const BOARD_HTML = `<!doctype html>
       observed = el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [
         el('tr', null, [
           el('th', { text: S.observed.name }), el('th', { text: S.observed.value }),
-          el('th', { text: S.observed.observedAt }), el('th', { text: S.observed.source })
+          el('th', { text: S.observed.observedAt }), el('th', { class: 'source', text: S.observed.source })
         ])
       ].concat(rows))]);
     }
@@ -766,7 +828,22 @@ export const BOARD_HTML = `<!doctype html>
     ['done', 'part', 'blocked', 'shelved', 'none', 'unverified'].forEach(function (s) {
       legend.appendChild(el('span', null, [el('span', { class: 'st ' + s }), stateName(s)]));
     });
+    // The cells that moved since the previous record: their mark in the
+    // legend, and each with the state it had, which a cell's title alone says
+    // only to a pointer that hovers.
+    var moved = [];
+    x.lanes.forEach(function (lane) {
+      lane.cells.forEach(function (c, i) {
+        if (c.moved_from) moved.push({ lane: lane.name, stage: x.stages[i] ? x.stages[i].id : '', before: c.moved_from, after: c.state });
+      });
+    });
+    if (moved.length > 0) legend.appendChild(el('span', null, [el('span', { class: 'moved-key' }), S.matrix.movedKey]));
     children.push(legend);
+    if (moved.length > 0) {
+      children.push(el('ul', { class: 'moved' }, moved.map(function (m) {
+        return el('li', { text: fill(S.matrix.movedCell, { lane: m.lane, stage: m.stage, before: stateName(m.before), after: stateName(m.after) }) });
+      })));
+    }
     return section(S.sections.matrix, true, children);
   }
 
@@ -815,16 +892,18 @@ export const BOARD_HTML = `<!doctype html>
     if (b.measures.length === 0) {
       return section(S.sections.measures, false, [el('p', { class: 'muted', text: S.measures.none })]);
     }
+    // How much a number moved, right beside it: where the table is wider than
+    // the screen, the lanes, which are words, are the column cut off.
     var head = el('tr', null, [
       el('th', { text: S.measures.id }), el('th', { text: S.measures.value }),
-      el('th', { text: S.measures.lanes }), el('th', { class: 'n', text: S.measures.delta })
+      el('th', { class: 'n', text: S.measures.delta }), el('th', { text: S.measures.lanes })
     ]);
     var rows = b.measures.map(function (m) {
       return el('tr', { 'data-measure': m.id }, [
         el('td', null, [el('code', { text: m.id })]),
         el('td', { class: 'wrap', text: measureText(m) }),
-        el('td', { text: m.lanes.length === 0 ? '-' : m.lanes.join(', ') }),
-        el('td', { class: 'n', text: m.delta === null || m.delta === undefined ? '' : signed(m.delta) })
+        el('td', { class: 'n', text: m.delta === null || m.delta === undefined ? '' : signed(m.delta) }),
+        el('td', { class: 'lanes', text: m.lanes.length === 0 ? '-' : m.lanes.join(', ') })
       ]);
     });
     return section(S.sections.measures, false, [el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [head].concat(rows))])]);
@@ -918,9 +997,10 @@ export const BOARD_HTML = `<!doctype html>
     // The board's own title, so that boards open in other tabs can be told apart.
     document.title = b.heading.title;
     // Where each lane stops, right under the summary's tiles, and the lanes,
-    // before the observations and the charts of the effort.
-    [heading(b), summary(b), matrix(b), lanes(b), observations(b), effort(b, false), measures(b), composition(b),
-      turns(b), recordRepos(b), recordComponents(b), footnotes(b)]
+    // before the observations and the charts of the effort; then the
+    // operator's turns, which are read most, before the tables of every value.
+    [heading(b), summary(b), matrix(b), lanes(b), observations(b), effort(b, false), turns(b), measures(b),
+      composition(b), recordRepos(b), recordComponents(b), footnotes(b)]
       .forEach(function (node) { root.appendChild(node); });
   }
 
@@ -977,7 +1057,7 @@ export const BOARD_HTML = `<!doctype html>
         el('td', { text: unmeasured('fetched_at', r.fetched_at, when) })
       ]);
     });
-    return el('div', { class: 'scroll' }, [el('table', { class: 'grid' }, [head].concat(rows))]);
+    return el('div', { class: 'scroll' }, [el('table', { class: 'grid repos' }, [head].concat(rows))]);
   }
   function liveRepos(l) {
     return section(S.live.repos, false, [reposTable(l.repos, missingIn(l), false)]);
@@ -1074,9 +1154,12 @@ export const BOARD_HTML = `<!doctype html>
         }));
     return section(S.live.components, false, [body]);
   }
-  function liveFootnotes(l, why) {
+  // noRecord: whether to say how a record comes to be drawn, which is said
+  // only where the workspace has no record.
+  function liveFootnotes(l, why, noRecord) {
     var f = l.footnotes;
-    var items = [el('li', { text: S.live.note }), el('li', { text: S.live.judged })];
+    var items = [el('li', { text: S.live.note })];
+    if (noRecord) items.push(el('li', { text: S.live.judged }));
     if (why === 'no_board') items.push(el('li', { text: S.unavailable.noBoard }));
     if (f.not_found.length > 0) {
       items.push(el('li', null, [el('b', { text: S.footnotes.notMeasured }), el('ul', null, f.not_found.map(function (n) {
@@ -1097,19 +1180,27 @@ export const BOARD_HTML = `<!doctype html>
     var drawn = ++liveDrawn;
     var nav = $('records');
     clear(nav);
-    // Asked for with ?live=1: lead back to the records, when there are any.
-    if (why === null) {
-      getJson(apiPath('board')).then(function (b) {
-        var list = b && b.page && b.page.records ? b.page.records : [];
-        if (drawn === liveDrawn && list.length > 0) nav.appendChild(el('a', { href: boardHref(''), text: S.live.toRecords }));
-      }).catch(function () {});
-    }
     var root = $('board');
     clear(root);
     setStatus('', false);
     var l = d.live;
-    [liveHeading(l, why), effort(l, true), liveRepos(l), liveTrail(l), liveComponents(l), liveFootnotes(l, why)]
+    var foot = liveFootnotes(l, why, why !== null);
+    [liveHeading(l, why), effort(l, true), liveRepos(l), liveTrail(l), liveComponents(l), foot]
       .forEach(function (node) { root.appendChild(node); });
+    // Asked for with ?live=1: lead back to the records when there are any,
+    // and say how one comes to be drawn when there are none.
+    if (why === null) {
+      getJson(apiPath('board')).then(function (b) {
+        var list = b && b.page && b.page.records ? b.page.records : [];
+        if (drawn !== liveDrawn) return;
+        if (list.length > 0) {
+          nav.appendChild(el('a', { href: boardHref(''), text: S.live.toRecords }));
+        } else {
+          root.removeChild(foot);
+          root.appendChild(liveFootnotes(l, why, true));
+        }
+      }).catch(function () {});
+    }
   }
 
   function getJson(url) {

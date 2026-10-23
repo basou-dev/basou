@@ -1627,8 +1627,8 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
       "4. Each lane",
       "5. Observed outside",
       "6. Period and effort",
-      "7. Ratios",
-      "8. Operator's turns",
+      "7. Operator's turns",
+      "8. Ratios",
       "9. Footnotes",
     ]);
     // The summary draws its tiles; the observations are a section of their own.
