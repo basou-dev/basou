@@ -1649,8 +1649,11 @@ describe("basou board record", () => {
 });
 
 describe("basou board measure and record against the previous record", () => {
-  async function recorded(): Promise<{ repo: string; first: string }> {
+  async function recorded(
+    prepare: (repo: string) => Promise<void> = async () => undefined,
+  ): Promise<{ repo: string; first: string }> {
     const repo = await workspace([{ path: ".", visibility: "private" }]);
+    await prepare(repo);
     await placeBoard(repo, boardYaml([MD]));
     capture();
     const measured = await doRunBoardMeasure({ json: true }, ctx(repo));
@@ -1707,6 +1710,34 @@ describe("basou board measure and record against the previous record", () => {
     const lines = out.join("\n").split("\n");
     expect(lines.slice(2, 5)).toEqual(["", `Since the previous record ${first}:`, lines[4]]);
     expect(out.join("\n")).toContain("  measures.md.value: 2 -> 3 (+1)\n");
+  });
+
+  it("says a name came into or went out of a set as a line of its list, not as the name's value", async () => {
+    const { repo } = await recorded(async (at) => {
+      await mkdir(join(at, "svc"));
+      await writeFile(join(at, "svc", "Dockerfile"), "FROM x\n");
+    });
+    const name = basename(repo);
+    await rm(join(repo, "svc"), { recursive: true });
+    await mkdir(join(repo, "web"));
+    await writeFile(join(repo, "web", "Dockerfile"), "FROM x\n");
+    const { out } = capture();
+    const m = await doRunBoardMeasure({ json: true }, ctx(repo));
+    // The JSON keeps each name as a place of its own holding true.
+    expect(m.diff?.added).toContainEqual({
+      at: `components.unacknowledged["${name}/web"]`,
+      value: true,
+    });
+    expect(m.diff?.removed).toContainEqual({
+      at: `components.unacknowledged["${name}/svc"]`,
+      value: true,
+    });
+    out.length = 0;
+    await doRunBoardMeasure({}, ctx(repo));
+    const text = out.join("\n");
+    expect(text).toContain(`\n  + components.unacknowledged: now lists "${name}/web"\n`);
+    expect(text).toContain(`\n  - components.unacknowledged: no longer lists "${name}/svc"\n`);
+    expect(text).not.toContain(`unacknowledged["${name}/svc"]: true`);
   });
 
   it("reads no records for a declaration not named board.yaml", async () => {

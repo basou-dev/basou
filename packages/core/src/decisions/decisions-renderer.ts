@@ -1,8 +1,10 @@
-import { lstat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { displayPath } from "../lib/display-path.js";
 import { oneLine } from "../lib/one-line.js";
+import { expandTilde } from "../lib/source-root-scope.js";
 import {
   resolveViewLanguageFromPaths,
   type ViewLanguage,
@@ -10,6 +12,7 @@ import {
   viewStrings,
 } from "../lib/view-strings.js";
 import type { BasouPaths } from "../storage/basou-dir.js";
+import { readManifest } from "../storage/manifest.js";
 import { loadSessionEntries, type SessionSkipReason } from "../storage/sessions.js";
 
 export type DecisionsRendererInput = {
@@ -23,6 +26,8 @@ export type DecisionsRendererInput = {
    * override exists for tests and programmatic callers that already resolved it.
    */
   language?: ViewLanguage;
+  /** The directory `~` stands for in a linked file. Defaults to the user's home; injectable for tests. */
+  homeDir?: string;
 };
 
 export type DecisionsRendererResult = {
@@ -140,22 +145,33 @@ export async function renderDecisions(
     return c !== 0 ? c : a.decisionId.localeCompare(b.decisionId);
   });
 
-  // Resolve linked_files relative to the repository root (= parent of
-  // `.basou/`). Existence is checked with `lstat` so symlinks are treated
-  // honestly — a dangling symlink is reported as `(missing)`. The check
-  // runs once per unique path so repeated references share their lookup.
+  // A linked file is kept as the agent passed it, relative to wherever the
+  // capture ran: any of the workspace's source roots (the view among them,
+  // and the repository root = parent of `.basou/`), or under the home
+  // directory as `~/…`. So it exists when it is found from the repository
+  // root or from any declared source root, `~` standing for the home
+  // directory; only a file found from none of them is `(missing)`. Existence
+  // is checked with `stat`, which follows a symlink, so a dangling symlink is
+  // reported as `(missing)`. The check runs once per unique path so repeated
+  // references share their lookup.
   const repoRoot = dirname(input.paths.root);
+  const home = input.homeDir ?? homedir();
+  const bases = await linkedFileBases(input.paths, repoRoot);
   const fileExistenceCache = new Map<string, boolean>();
   async function fileExists(relPath: string): Promise<boolean> {
     const cached = fileExistenceCache.get(relPath);
     if (cached !== undefined) return cached;
-    const abs = resolve(repoRoot, relPath);
-    let exists: boolean;
-    try {
-      await lstat(abs);
-      exists = true;
-    } catch {
-      exists = false;
+    const expanded = expandTilde(relPath, home);
+    const candidates = isAbsolute(expanded) ? [expanded] : bases.map((b) => resolve(b, expanded));
+    let exists = false;
+    for (const abs of candidates) {
+      try {
+        await stat(abs);
+        exists = true;
+        break;
+      } catch {
+        // Not from this base; try the next.
+      }
     }
     fileExistenceCache.set(relPath, exists);
     return exists;
@@ -259,4 +275,25 @@ function shortDecisionSessionId(sessionId: string): string {
   const SES = "ses_";
   if (sessionId.startsWith(SES)) return sessionId.slice(SES.length, SES.length + 10);
   return sessionId.slice(0, 10);
+}
+
+/**
+ * Where a relative linked file is looked for: the repository root, then each
+ * declared source root, resolved against the repository root as capture
+ * resolves them (the manifest admits only relative ones). A manifest that
+ * cannot be read leaves the repository root alone.
+ */
+async function linkedFileBases(paths: BasouPaths, repoRoot: string): Promise<string[]> {
+  const bases = [repoRoot];
+  let roots: readonly string[] = [];
+  try {
+    roots = (await readManifest(paths)).import?.source_roots ?? [];
+  } catch {
+    return bases;
+  }
+  for (const root of roots) {
+    const base = resolve(repoRoot, root);
+    if (!bases.includes(base)) bases.push(base);
+  }
+  return bases;
 }

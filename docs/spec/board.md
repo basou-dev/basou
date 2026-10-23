@@ -1243,7 +1243,11 @@ no previous record, and null with an entry at `diff` when it cannot be read.
   or `trail.tracks_open["decision_<id>"].title`, and a path that came in or
   went out of a `file_paths` measure as `measures.migrations.value["db/a.sql"]`
   (with the value `true`). `method_changed: true` is there only when its
-  section's method moved.
+  section's method moved. The text `basou board measure` and `basou board
+  record` print without `--json` writes a name that came into or went out of
+  a list compared as a set (below) as a line of its list: `+
+  components.gone: now lists "app/scripts"`, or `- components.gone: no
+  longer lists "app/scripts"` when it went out.
 - **Compared** are the values the digest covers, except `measured_with`,
   `methods` (compared on their own), `effort.daily` (its rows only grow) and
   `components.kind_changed` (already a change since the previous record).

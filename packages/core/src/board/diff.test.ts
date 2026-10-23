@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffCells, diffDeclarations, diffMeasurements, diffObserved } from "./diff.js";
+import { diffCells, diffDeclarations, diffMeasurements, diffObserved, setEntryOf } from "./diff.js";
 
 // A measurement cut down to the parts a diff looks at, and some it does not.
 function measurement(over: Record<string, unknown> = {}) {
@@ -31,6 +31,46 @@ function measurement(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+describe("setEntryOf: a name that came into or went out of a set", () => {
+  it("reads the list and the name of each place a set's name is compared at", () => {
+    const sets = diffMeasurements(
+      measurement({
+        measures: { "m.paths": { value: ['db/"q".sql'], unit: "files" } },
+        components: { found: {}, unacknowledged: ["ws/x"], gone: ["ws/old"], kind_changed: null },
+      }),
+      measurement({
+        measures: { "m.paths": { value: [], unit: "files" } },
+        components: { found: {}, unacknowledged: [], gone: [], kind_changed: null },
+      }),
+      "01M4",
+    );
+    expect(sets.removed.map((r) => setEntryOf(r.at))).toEqual([
+      { list: 'measures["m.paths"].value', name: 'db/"q".sql' },
+      { list: "components.unacknowledged", name: "ws/x" },
+      { list: "components.gone", name: "ws/old" },
+    ]);
+    expect(setEntryOf('measures.mig.value["db/a.sql"]')).toEqual({
+      list: "measures.mig.value",
+      name: "db/a.sql",
+    });
+  });
+
+  it("is null for every other place, a keyed list's entry among them", () => {
+    for (const at of [
+      'repos["../app"].commits',
+      'repos["../app"]',
+      "measures.mig.value",
+      'trail.tracks_open["decision_A"]',
+      'trail.tracks_open["decision_A"].title',
+      'not_found["measures.md"]',
+      'components.found["ws"].kinds',
+      'components.gone["unclosed]',
+    ]) {
+      expect(setEntryOf(at)).toBeNull();
+    }
+  });
+});
 
 describe("diffMeasurements: the paths of a file_paths measure", () => {
   const withPaths = (value: unknown, unit = "files") =>

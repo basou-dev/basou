@@ -369,6 +369,13 @@ export type ReimportResult =
       reusedIdCount: number;
       /** Prior derived events dropped under {@link ReimportOptions.dropDerivedBefore}. */
       droppedCount: number;
+      /**
+       * What the rewrite holds minus what the prior session held: its
+       * `decision_recorded` events and its `metrics.output_tokens`. Negative
+       * when the re-derivation left records out (those an older transcript was
+       * copied with), so a count that falls after a re-import can be told why.
+       */
+      change: { decisions: number; outputTokens: number };
     }
   | {
       status: "skipped";
@@ -670,6 +677,8 @@ export async function reimportPreservingId(
       }
     }
 
+    const decisions = (events: ReadonlyArray<Event>): number =>
+      events.filter((e) => e.type === "decision_recorded").length;
     return {
       status: "reimported",
       sessionId,
@@ -677,6 +686,12 @@ export async function reimportPreservingId(
       preservedCount: preserved.length,
       reusedIdCount,
       droppedCount,
+      change: {
+        decisions: decisions(mergedEvents) - decisions(priorEvents),
+        outputTokens:
+          (updatedRecord.session.metrics?.output_tokens ?? 0) -
+          (prior.session.metrics?.output_tokens ?? 0),
+      },
     };
   } finally {
     await lock?.release();

@@ -611,7 +611,7 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
     "3. Give a stuck cell its reason in one sentence. A reason you cannot write means the judgement is early.",
     "4. Do not paint a shelved cell red. Shelving is a decision; blaming it makes stopping harder and bends judgement.",
     "5. Do not mix estimates and measurements. Plans and estimates are not results: name them in a footnote.",
-    "6. When a number falls, find out why. Counts of files or commands rarely fall: the measuring may have broken, or a repo is in another state.",
+    "6. When a number falls, find out why. Counts of files or commands rarely fall: the measuring may have broken, or a repo is in another state. Decisions and output tokens fall when `basou refresh` re-imports sessions and leaves out what their transcripts copied from an older one: its line says how many fewer. When you know why a number fell, say so in `prose.footnotes`: the next one to judge cannot see the views the refresh overwrote.",
     "7. Do not bend a stage to get a record through. A stage left behind before a later one done is recorded as an order anomaly and shown, not refused: if that is the fact, write it.",
     "",
     "Where judging goes wrong most: 04 taken for 05; uncommitted work counted as 04; `blocked` and `shelved` mixed up (stuck, or stopped on purpose); what cannot be confirmed pushed into `part` or `blocked` instead of `unverified`; a stage given generously.",

@@ -16,6 +16,7 @@ import {
   doRunImportCodex,
   type ImportContext,
   type ImportOptions,
+  type ReimportChange,
 } from "../commands/import.js";
 import { glanceDefaultBoard } from "./board-glance.js";
 
@@ -177,11 +178,35 @@ function isMissingSourceDir(error: unknown): boolean {
   );
 }
 
+// How the sessions an import re-imported moved in their decisions and output
+// tokens, kept beside its outcome and not on it: an outcome is serialized as it
+// is (refresh --json, the view server), and its shape stays as documented.
+const reimportChanges = new WeakMap<ImportOutcome, ReimportChange>();
+
+/** How the sessions an import re-imported moved (after minus before), when it ran and said. */
+export function reimportChangeOf(outcome: ImportOutcome): ReimportChange | undefined {
+  return reimportChanges.get(outcome);
+}
+
+/** Keep `change` beside `outcome` (see {@link reimportChangeOf}); returns the outcome. */
+export function noteReimportChange(outcome: ImportOutcome, change: ReimportChange): ImportOutcome {
+  reimportChanges.set(outcome, change);
+  return outcome;
+}
+
 /** Run one adapter import as a best-effort action, classifying a missing source dir as skipped. */
-async function runImport(adapter: ImportAdapter, fn: () => Promise<void>): Promise<ImportOutcome> {
+async function runImport(
+  adapter: ImportAdapter,
+  fn: (onReimportChange: (change: ReimportChange) => void) => Promise<void>,
+): Promise<ImportOutcome> {
   try {
-    const json = await captureImportJson(fn);
-    return {
+    let reimportChange: ReimportChange = { decisions: 0, outputTokens: 0 };
+    const json = await captureImportJson(() =>
+      fn((change) => {
+        reimportChange = change;
+      }),
+    );
+    const outcome: ImportOutcome = {
       adapter,
       status: "ran",
       importedCount: readCount(json.imported_count),
@@ -197,6 +222,7 @@ async function runImport(adapter: ImportAdapter, fn: () => Promise<void>): Promi
       eventTotal: readCount(json.event_total),
       dryRun: json.dry_run === true,
     };
+    return noteReimportChange(outcome, reimportChange);
   } catch (error: unknown) {
     if (isMissingSourceDir(error)) {
       return { adapter, status: "skipped", reason: "no source logs for this project" };
@@ -220,7 +246,9 @@ export function importClaudeCode(
   options: RefreshActionOptions,
   ctx: ImportContext,
 ): Promise<ImportOutcome> {
-  return runImport("claude-code", () => doRunImportClaudeCode(importOptions(options), ctx));
+  return runImport("claude-code", (onReimportChange) =>
+    doRunImportClaudeCode(importOptions(options), { ...ctx, onReimportChange }),
+  );
 }
 
 /** Import Codex rollouts for the project (best-effort). */
@@ -228,7 +256,9 @@ export function importCodex(
   options: RefreshActionOptions,
   ctx: ImportContext,
 ): Promise<ImportOutcome> {
-  return runImport("codex", () => doRunImportCodex(importOptions(options), ctx));
+  return runImport("codex", (onReimportChange) =>
+    doRunImportCodex(importOptions(options), { ...ctx, onReimportChange }),
+  );
 }
 
 type RenderCallbacks = Parameters<typeof renderHandoff>[0];
