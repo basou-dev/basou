@@ -199,6 +199,7 @@ export {
   parseRecordInput,
   readPreviousRecords,
   recordIds,
+  setEntryOf,
   shellWord,
   writeRecord,
 } from "./board/index.js";

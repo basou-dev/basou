@@ -70,6 +70,28 @@ const KEYED: Readonly<Record<string, string>> = {
 // Lists of names, compared as sets.
 const SETS = new Set(["components.unacknowledged", "components.gone"]);
 
+/**
+ * The list and the name of an `added` or `removed` place that is a name coming
+ * into or going out of a list compared as a set (`components.gone`, a
+ * `file_paths` measure's `measures.<id>.value`), or `null` for any other place.
+ * Such a place holds `true`, which says only that the name is listed: a line
+ * drawn from it reads by the list and the name instead.
+ */
+export function setEntryOf(at: string): { list: string; name: string } | null {
+  const match = /^(.+)\[("(?:[^"\\]|\\.)*")\]$/.exec(at);
+  if (match === null) return null;
+  const [, list = "", quoted = ""] = match;
+  if (!SETS.has(list) && !/^measures(\.[A-Za-z0-9_-]+|\["(?:[^"\\]|\\.)*"\])\.value$/.test(list)) {
+    return null;
+  }
+  try {
+    const name: unknown = JSON.parse(quoted);
+    return typeof name === "string" ? { list, name } : null;
+  } catch {
+    return null;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

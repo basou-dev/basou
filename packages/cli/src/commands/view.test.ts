@@ -644,6 +644,38 @@ describe("basou view portfolio mode", () => {
     expect(label({ inFlightCount: 0 })).toBe("in-flight 0");
   });
 
+  it("the card's freshness badge says the updated sessions beside the uncaptured ones", () => {
+    // measure's freshness reads "1 new, 1 updated"; the badge used to drop the
+    // updated count whenever a session was uncaptured.
+    const marker = "function stalenessBadge(st) {";
+    const start = VIEW_HTML.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    let end = -1;
+    for (let i = start + marker.length - 1; i < VIEW_HTML.length; i++) {
+      const ch = VIEW_HTML[i];
+      if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+    expect(end).toBeGreaterThan(start);
+    const badge = new Function(
+      `function el(tag, attrs) { return attrs; } ${VIEW_HTML.slice(start, end)}; return stalenessBadge;`,
+    )() as (st: Record<string, unknown>) => { text: string };
+    const st = (newSessions: number, updatedSessions: number) => ({
+      checked: true,
+      unverifiableSessions: 0,
+      newSessions,
+      updatedSessions,
+    });
+    expect(badge(st(1, 1)).text).toBe("\u26a0 1 uncaptured, 1 updated \u2014 run refresh");
+    expect(badge(st(2, 0)).text).toBe("\u26a0 2 uncaptured \u2014 run refresh");
+    expect(badge(st(0, 3)).text).toBe("3 updated \u2014 run refresh");
+    expect(badge(st(0, 0)).text).toBe("up to date");
+  });
+
   it("tells a workspace that never recorded a task from one whose tasks are all done", async () => {
     // Two different zeros. `inFlightCount` reads 0 for both, which is the same
     // defect orient and handoff already fixed -- the card carries the third

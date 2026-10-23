@@ -39,6 +39,7 @@ import {
   readPreviousRecords,
   recordIds,
   resolveViewLanguage,
+  setEntryOf,
   shellWord,
   writeRecord,
 } from "@basou/core";
@@ -1112,11 +1113,17 @@ function diffLines(diff: Omit<BoardDiff, "against">, more: boolean): string[] {
       `  ${displayPath(c.at)}: ${shownJson(c.before)} -> ${shownJson(c.after)}${delta}${flag(c)}`,
     );
   }
-  for (const c of diff.added)
-    lines.push(`  + ${displayPath(c.at)}: ${shownJson(c.value)}${flag(c)}`);
-  for (const c of diff.removed) {
-    lines.push(`  - ${displayPath(c.at)}: ${shownJson(c.value)}${flag(c)}`);
-  }
+  // A name that came into or went out of a set holds `true`, which would read
+  // as the value of the name ("gone: true" for a component no longer gone):
+  // the line says what happened to the list instead.
+  const only = (sign: "+" | "-", c: BoardDiff["added"][number]): string => {
+    const entry = setEntryOf(c.at);
+    if (entry === null) return `  ${sign} ${displayPath(c.at)}: ${shownJson(c.value)}${flag(c)}`;
+    const how = sign === "+" ? "now lists" : "no longer lists";
+    return `  ${sign} ${displayPath(entry.list)}: ${how} ${shownJson(entry.name)}${flag(c)}`;
+  };
+  for (const c of diff.added) lines.push(only("+", c));
+  for (const c of diff.removed) lines.push(only("-", c));
   if (lines.length === 0 && !more) lines.push("  nothing moved");
   return lines;
 }

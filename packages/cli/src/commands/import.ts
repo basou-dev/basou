@@ -90,7 +90,34 @@ export type ImportContext = {
    * file system offers no way to set a birth time.
    */
   transcriptCreatedAtMs?: (file: string) => Promise<number>;
+  /**
+   * Told, once per run, how the sessions re-imported in place moved in total:
+   * their decisions and output tokens after the re-import minus before. Refresh
+   * reads it to say why a count fell; the `--json` result does not carry it.
+   */
+  onReimportChange?: (change: ReimportChange) => void;
 };
+
+/** How re-imported sessions' decisions and output tokens moved: after minus before. */
+export type ReimportChange = { decisions: number; outputTokens: number };
+
+/**
+ * What a re-import took out, for a result line: the decisions and output
+ * tokens the re-imported sessions hold fewer of than before, or `null` when
+ * neither fell. A rise is left unsaid; it is what a source that grew brings.
+ */
+export function reimportFallText(change: ReimportChange): string | null {
+  const parts: string[] = [];
+  if (change.decisions < 0) {
+    const n = -change.decisions;
+    parts.push(`${n.toLocaleString("en-US")} fewer decision${n === 1 ? "" : "s"}`);
+  }
+  if (change.outputTokens < 0) {
+    const n = -change.outputTokens;
+    parts.push(`${n.toLocaleString("en-US")} fewer output token${n === 1 ? "" : "s"}`);
+  }
+  return parts.length === 0 ? null : parts.join(", ");
+}
 
 /**
  * A single source session ready to be derived and imported. The dedup key
@@ -345,6 +372,7 @@ export async function doRunImportClaudeCode(
     candidates,
     projectPaths,
     hasDeclaredBoundary(options, manifest),
+    ctx.onReimportChange,
   );
 }
 
@@ -388,6 +416,7 @@ export async function doRunImportCodex(
     candidates,
     projectPaths,
     hasDeclaredBoundary(options, manifest),
+    ctx.onReimportChange,
   );
 }
 
@@ -438,6 +467,7 @@ async function importDerivedSessions(
   candidates: ReadonlyArray<ImportCandidate>,
   projectPaths: ReadonlyArray<string>,
   boundaryDeclared: boolean,
+  onReimportChange?: ImportContext["onReimportChange"],
 ): Promise<void> {
   const { byExternalId: existingByExternalId, notDirectories, yamlNotFiles } = store;
   // An entry named as a session that is not a directory is not followed, nor
@@ -488,6 +518,7 @@ async function importDerivedSessions(
     skippedDuplicate: 0,
     skippedUnverifiable: 0,
     droppedCopies: 0,
+    change: { decisions: 0, outputTokens: 0 },
   };
   let sanitizedPaths = 0;
 
@@ -582,6 +613,8 @@ async function importDerivedSessions(
         continue;
       }
       counts.reimported++;
+      counts.change.decisions += outcome.change.decisions;
+      counts.change.outputTokens += outcome.change.outputTokens;
       // The prior session held the copies, and this re-derivation left them out:
       // whether or not they had derived any event, they are gone from it now.
       if (holdsCopies?.(prior) === true) counts.droppedCopies++;
@@ -661,6 +694,7 @@ async function importDerivedSessions(
     }
   }
 
+  onReimportChange?.({ ...counts.change });
   printImportResult(options, results, counts);
 }
 
@@ -694,6 +728,8 @@ type ImportCounts = {
    * from an older one, and no longer do.
    */
   droppedCopies: number;
+  /** Summed over {@link reimported}: how their decisions and output tokens moved. */
+  change: ReimportChange;
 };
 
 /**
@@ -1403,10 +1439,12 @@ function printImportResult(
   const skipSuffix = skipParts.length > 0 ? `; skipped ${skipParts.join(", ")}` : "";
   const eventsPart =
     replaced > 0 ? `${eventTotal} events, ${replaced} replaced` : `${eventTotal} events`;
-  const copiesPart =
+  const copies =
     droppedCopies > 0
-      ? ` (${droppedCopies} without the records ${droppedCopies === 1 ? "its transcript" : "their transcripts"} copied from an older one)`
-      : "";
+      ? `${droppedCopies} without the records ${droppedCopies === 1 ? "its transcript" : "their transcripts"} copied from an older one`
+      : null;
+  const notes = [copies, reimportFallText(counts.change)].filter((n) => n !== null);
+  const copiesPart = notes.length > 0 ? ` (${notes.join("; ")})` : "";
 
   if (isDry) {
     const parts: string[] = [];
