@@ -236,7 +236,7 @@ export const VIEW_HTML = `<!doctype html>
     state.canAct = true;
     document.body.classList.remove('landing');
     $('btn-back').style.display = 'none';
-    // The board page is served in single mode only.
+    $('board-link').href = '/board';
     $('board-link').style.display = '';
     updateActionBar();
     buildTabs();
@@ -250,6 +250,8 @@ export const VIEW_HTML = `<!doctype html>
     state.canAct = false;
     document.body.classList.add('landing');
     $('btn-back').style.display = 'none';
+    // No workspace is open: there is no board to lead to.
+    $('board-link').style.display = 'none';
     setStatus('', false);
     clear($('tabs'));
     updateActionBar();
@@ -364,6 +366,10 @@ export const VIEW_HTML = `<!doctype html>
     state.canAct = true;
     document.body.classList.remove('landing');
     $('btn-back').style.display = '';
+    // The board of the workspace open, read from its scoped routes. The cards
+    // of the landing carry none of a board's figures.
+    $('board-link').href = '/board?ws=' + encodeURIComponent(key);
+    $('board-link').style.display = '';
     updateActionBar();
     setStatus('workspace: ' + label, false);
     buildTabs();

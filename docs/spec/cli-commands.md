@@ -273,7 +273,10 @@ Routes. Portfolio mode adds `GET /api/portfolio` (the aggregate of per-workspace
 "current position" cards) and `/api/ws/<key>/*` (the existing single-workspace
 routes, scoped to one workspace by its stable key). The flat `/api/*` routes are
 unchanged and target the first workspace, so single mode behaves exactly as
-before. The routes and pages are a local UI, not an API (see
+before. The board page opens one workspace's board: a workspace opened from a
+card links to `/board?ws=<key>`, which reads that workspace's scoped board
+routes, and in portfolio mode the flat board routes serve no board. The cards
+carry none of a board's figures. The routes and pages are a local UI, not an API (see
 [compatibility](compatibility.md#what-is-not-guaranteed)).
 
 Boundaries (intentional, kept neutral). Aggregation is **read-only**: a

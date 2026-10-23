@@ -1,6 +1,8 @@
 /**
- * The board page of `basou view`, served verbatim at `GET /board` in single
- * mode. It draws one record of the board (`GET /api/board`, or
+ * The board page of `basou view`, served verbatim at `GET /board`. In
+ * portfolio mode it is opened for one workspace with `?ws=<key>`, reads that
+ * workspace's routes (`/api/ws/<key>/board...`) and keeps `ws` in its links.
+ * It draws one record of the board (`GET /api/board`, or
  * `/api/board/<ULID>` with `?record=<ULID>`) in sections, from the record and
  * the one before it alone, with the fixed strings the server sends in the
  * workspace's language.
@@ -145,6 +147,18 @@ export const BOARD_HTML = `<!doctype html>
 (function () {
   var S = null;
   var lang = 'en';
+  // The workspace of a portfolio the page is opened for (?ws=<key>), set
+  // before anything is fetched: its board is read from its scoped routes, and
+  // the page's links keep it. Null in single mode.
+  var WS = null;
+  function apiPath(sub) {
+    return (WS === null ? '/api/' : '/api/ws/' + encodeURIComponent(WS) + '/') + sub;
+  }
+  function boardHref(query) {
+    var parts = WS === null ? [] : ['ws=' + encodeURIComponent(WS)];
+    if (query) parts.push(query);
+    return '/board' + (parts.length > 0 ? '?' + parts.join('&') : '');
+  }
   function $(id) { return document.getElementById(id); }
   function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
   function el(tag, attrs, children) {
@@ -314,19 +328,19 @@ export const BOARD_HTML = `<!doctype html>
     var page = d.page;
     var list = page.records || [];
     if (list.length > 0) recordLinks(nav, page, list);
-    nav.appendChild(el('a', { href: '/board?live=1', text: S.live.measureNow }));
+    nav.appendChild(el('a', { href: boardHref('live=1'), text: S.live.measureNow }));
   }
 
   function recordLinks(nav, page, list) {
     var link = function (id, label) {
-      return el('a', { href: '/board?record=' + encodeURIComponent(id), text: label });
+      return el('a', { href: boardHref('record=' + encodeURIComponent(id)), text: label });
     };
     // Around the record asked for, whether or not it could be drawn.
     if (page.older) nav.appendChild(link(page.older, S.older));
     if (page.newer) nav.appendChild(link(page.newer, S.newer));
-    nav.appendChild(el('a', { href: '/board', text: S.latest }));
+    nav.appendChild(el('a', { href: boardHref(''), text: S.latest }));
     var select = el('select', {
-      onchange: function () { location.href = '/board?record=' + encodeURIComponent(select.value); }
+      onchange: function () { location.href = boardHref('record=' + encodeURIComponent(select.value)); }
     });
     var listed = list.some(function (r) { return r.id === page.id; });
     if (!listed) {
@@ -1085,9 +1099,9 @@ export const BOARD_HTML = `<!doctype html>
     clear(nav);
     // Asked for with ?live=1: lead back to the records, when there are any.
     if (why === null) {
-      getJson('/api/board').then(function (b) {
+      getJson(apiPath('board')).then(function (b) {
         var list = b && b.page && b.page.records ? b.page.records : [];
-        if (drawn === liveDrawn && list.length > 0) nav.appendChild(el('a', { href: '/board', text: S.live.toRecords }));
+        if (drawn === liveDrawn && list.length > 0) nav.appendChild(el('a', { href: boardHref(''), text: S.live.toRecords }));
       }).catch(function () {});
     }
     var root = $('board');
@@ -1110,16 +1124,17 @@ export const BOARD_HTML = `<!doctype html>
   // Measuring takes seconds, so the page says so until it is done.
   function loadLive(why) {
     setStatus(S ? S.live.measuring : '...', false);
-    getJson('/api/board/live').then(function (d) { drawLive(d, why); }).catch(failed);
+    getJson(apiPath('board/live')).then(function (d) { drawLive(d, why); }).catch(failed);
   }
 
   var params = new URLSearchParams(location.search);
+  WS = params.get('ws');
   var record = params.get('record');
   if (params.get('live') !== null) {
     loadLive(null);
   } else {
     setStatus('...', false);
-    getJson('/api/board' + (record ? '/' + encodeURIComponent(record) : '')).then(draw).catch(failed);
+    getJson(apiPath('board' + (record ? '/' + encodeURIComponent(record) : ''))).then(draw).catch(failed);
   }
 })();
 </script>
