@@ -3,6 +3,25 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.74.0 — 2026-10-23
+
+### Added
+
+- **`basou view` in portfolio mode leads to each workspace's board.** A
+  workspace opened from a card shows the Board link, to `/board?ws=<key>`:
+  the board page then reads that workspace's own routes
+  (`/api/ws/<key>/board`, `/api/ws/<key>/board/<id>`,
+  `/api/ws/<key>/board/live`) and keeps the workspace in every link it
+  draws. Its records are drawn when the workspace's manifest declares its
+  own repo private, and it is measured on the spot otherwise, as in single
+  mode; the measurement runs only when its board page asks for it. Until
+  now the board page was served in single mode only, though a portfolio's
+  workspace screens served every other single-mode route. The cards stay as
+  they were: they carry none of a board's figures, and no page draws the
+  boards of several workspaces together. In portfolio mode the flat board
+  routes (`/api/board...`) serve no board, so a board page opened without a
+  workspace draws none rather than the first workspace's.
+
 ## 0.73.1 — 2026-10-23
 
 ### Fixed
