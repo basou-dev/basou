@@ -3,6 +3,60 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.74.1 — 2026-10-23
+
+### Fixed
+
+- **`basou refresh` and `basou import` say what a re-import took out.** When
+  sessions are re-imported in place and their transcripts no longer bring the
+  records an older transcript was copied with, a board's decisions and output
+  tokens fell with nothing to say why. The result line now names it, beside
+  the sessions left without those records: `9 re-imported (7 without records
+  copied from an older transcript; 48 fewer decisions, 1,050,123 fewer output
+  tokens)`. Only a fall is named; a source that grew brings a rise. No
+  `--json` result changes. `basou board guide`'s principle on a falling
+  number says this is one reason and asks for it in `prose.footnotes`, as the
+  views the refresh overwrote are gone.
+- **decisions.md finds a linked file where it was written from.** A linked
+  file is kept as the agent passed it, relative to where the capture ran.
+  decisions.md looked for it from the repository root alone and never read
+  `~`, so most files captured from the workspace view, from another source
+  root or under home were marked `(missing)` though they exist. A file is now
+  `(missing)` only when found from neither the repository root nor any
+  declared `import.source_roots` entry, `~` standing for the home directory.
+  It is checked through a symlink, so a dangling one is `(missing)`.
+- **`basou board measure` and `basou board record` say a set's change as what
+  happened to the list.** A name that came into or went out of
+  `components.gone`, `components.unacknowledged` or a `file_paths` measure
+  was printed as `- components.gone["app/scripts"]: true`, which reads as the
+  component being gone. It is now `- components.gone: no longer lists
+  "app/scripts"`, or `+ ...: now lists ...`. The JSON diff is unchanged.
+- **`basou view`'s portfolio card counts what measure's freshness does.** Its
+  badge dropped the updated sessions whenever one was not captured; it now
+  says both (`1 uncaptured, 1 updated`).
+- **The board page reads as it is on a narrow screen and without hovering.**
+  - In the table of measures, how much a number moved sits beside it and
+    never breaks, so a cut-off column cannot turn +135 into +13. Lane names,
+    and the heads of the repos' table, break between words only.
+  - A table wider than its box shows a shade at the edge it scrolls toward,
+    also where scrollbars are overlaid and hidden.
+  - The cells that moved since the previous record have their mark in the
+    legend, and they are listed under the reach matrix with the state each
+    had, which was only in a cell's title.
+  - Below about 600px an observation's source is drawn in a row of its own,
+    not in a column off the screen that made its row tall.
+  - An observation the previous record did not have is marked new, not
+    changed.
+  - When an observation was made is drawn as a time, as the heading is; a day
+    alone as it is.
+  - An http value leaves out where it landed when that is the url its
+    declaration gives, which is drawn under its name. A record written before
+    0.73.0 with a query or credentials in it still shows them.
+  - The operator's turns come right after the period and effort, before the
+    tables of every value, and the guide lists them in that order.
+  - The board measured now says how a record comes to be drawn only where the
+    workspace has no record.
+
 ## 0.74.0 — 2026-10-23
 
 ### Added
