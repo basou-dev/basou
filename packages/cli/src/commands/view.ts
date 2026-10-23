@@ -229,7 +229,14 @@ async function buildSingleDeps(ctx: ViewContext, cwd: string): Promise<ViewServe
   const repositoryRoot = await resolveBasouRootForCommand(cwd, "view");
   const paths = basouPaths(repositoryRoot);
   await assertWorkspaceInitialized(paths.root);
-  const entry = await buildWorkspaceEntry(repositoryRoot, ctx);
+  const built = await buildWorkspaceEntry(repositoryRoot, ctx);
+  // Its one workspace has a board page even when the manifest cannot be read:
+  // no records (they need the manifest to declare the repo private), and the
+  // measurement on the spot, which says what it could not measure.
+  const entry: WorkspaceEntry =
+    built.board !== undefined
+      ? built
+      : { ...built, board: { why: "no_board" }, boardLive: liveBoardOf(repositoryRoot, ctx) };
   return {
     workspaces: [entry],
     mode: "single",

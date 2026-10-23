@@ -1154,6 +1154,22 @@ describe("basou view: the board page", () => {
     });
   });
 
+  it("draws no record in single mode when the manifest cannot be read, and measures on the spot", async () => {
+    const repo = await workspaceWith([{ path: ".", visibility: "private" }]);
+    const manifest = basouPaths(repo).files.manifest;
+    // Unreadable, then gone: neither declares the repo private.
+    for (const broken of ["workspace: [unclosed\n", null]) {
+      if (broken === null) await rm(manifest);
+      else await writeFile(manifest, broken);
+      await withView(repo, {}, async (h) => {
+        expect((await getJson(h, "/api/board")).data).toMatchObject({
+          page: { status: "unavailable", why: "no_board" },
+        });
+        expect((await getJson(h, "/api/board/live")).status).toBe(200);
+      });
+    }
+  });
+
   it("has no record to draw before the first one is written", async () => {
     const repo = await workspaceWith([{ path: ".", visibility: "private" }]);
     await withView(repo, {}, async (h) => {
@@ -1184,7 +1200,17 @@ describe("basou view: the board page", () => {
         expect((await getJson(h, `/api/ws/${WS_ID_B}/board`)).data).toMatchObject({
           page: { status: "unavailable", why: "no_board" },
         });
-        expect((await getJson(h, `/api/ws/${WS_ID_B}/board/live`)).status).toBe(200);
+        // Each workspace is measured on the spot as itself, not as the first one.
+        const measured = async (key: string) => {
+          const live = await getJson(h, `/api/ws/${key}/board/live`);
+          expect(live.status).toBe(200);
+          return (live.data as { live: { repos: { name: string | null }[] } }).live.repos.map(
+            (r) => r.name,
+          );
+        };
+        const first = await measured(FIXED_WS_ID);
+        expect(first).toEqual([basename(repo)]);
+        expect(await measured(WS_ID_B)).not.toEqual(first);
         // The flat routes serve no board here: a page opened without a
         // workspace draws none, rather than the first workspace's.
         expect((await getJson(h, "/api/board")).status).toBe(404);
@@ -1377,7 +1403,9 @@ describe("basou view: the board page", () => {
     textContent = "";
     selected = false;
     disabled = false;
+    value = "";
     style: Record<string, string> = {};
+    listeners: Record<string, ((event: unknown) => void)[]> = {};
     constructor(readonly tag: string) {}
     appendChild(child: Node): Node {
       this.children.push(child);
@@ -1392,7 +1420,10 @@ describe("basou view: the board page", () => {
     setAttribute(key: string, value: unknown): void {
       this.attrs[key] = String(value);
     }
-    addEventListener(): void {}
+    addEventListener(type: string, listener: (event: unknown) => void): void {
+      this.listeners[type] ??= [];
+      this.listeners[type].push(listener);
+    }
     text(): string {
       return this.textContent + this.children.map((c) => c.text()).join("");
     }
@@ -2852,11 +2883,12 @@ describe("basou view: the board page", () => {
         json: async () => body ?? { error: "Not found" },
       };
     };
-    new Function("document", "location", "fetch", script)(document, { search }, fetch);
+    const location = { search, href: "" };
+    new Function("document", "location", "fetch", script)(document, location, fetch);
     for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
     // A page that never drew has no navigation at all.
     const links = (byId.records?.find((n) => n.tag === "a") ?? []).map((a) => a.attrs.href);
-    return { fetched, byId, links, document };
+    return { fetched, byId, links, document, location };
   }
 
   const STRINGS = { language: "en", strings: boardPageStrings("en") };
@@ -2949,6 +2981,33 @@ describe("basou view: the board page", () => {
     expect(live.links).toEqual([own]);
     const asked = await runPage(`?ws=${WS_ID_A}&record=${A_REC}`, {});
     expect(asked.fetched).toEqual([`${api}/board/${A_REC}`]);
+    // A record with one before and one after it: those links and the list of
+    // records keep the workspace too.
+    const around = await runPage(`?ws=${WS_ID_A}&record=${B_REC}`, {
+      [`${api}/board/${B_REC}`]: {
+        ...STRINGS,
+        page: {
+          status: "unavailable",
+          why: "not_json",
+          id: B_REC,
+          older: A_REC,
+          newer: C_REC,
+          records: [A_REC, B_REC, C_REC].map((id, i) => ({
+            id,
+            at: `2026-10-0${i + 1}T00:00:00.000Z`,
+          })),
+        },
+      },
+    });
+    expect(around.links).toEqual(
+      expect.arrayContaining([`${own}&record=${A_REC}`, `${own}&record=${C_REC}`]),
+    );
+    for (const link of around.links) expect(link?.startsWith(own)).toBe(true);
+    const [select] = (around.byId.records as Node).find((n) => n.tag === "select");
+    if (select === undefined) throw new Error("no list of records");
+    select.value = C_REC;
+    for (const listener of select.listeners.change ?? []) listener({});
+    expect(around.location.href).toBe(`${own}&record=${C_REC}`);
   });
 
   it("builds prose of text nodes, with only a span between backticks as a code element", () => {
