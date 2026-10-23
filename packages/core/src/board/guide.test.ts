@@ -663,7 +663,7 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
         }),
       );
     const holds =
-      "under effort.milestones, each `{ date, label, ref }`: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, each with `ref` saying where it can be checked (a tag and its commit, or a decision id in full). `date` is the day in the board's time zone (effort.time_zone); .basou/decisions.md dates a decision by its day in UTC, which can be a day apart. The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
+      "under effort.milestones, each `{ date, label, ref }`: only days on which something happened (a release, a launch, the start of the work), never a plan or a target date, each with `ref` saying where it can be checked (a tag and its commit, or a decision id in full). `date` is the day in the board's time zone (effort.time_zone, or this host's when it declares none); .basou/decisions.md dates a decision by its day in UTC, which can be a day apart. The page marks them on the period and effort chart from the next record on: a record draws the declaration it kept. Add one with the operator's approval, before the measure of step 2 or after the record of step 7, never between: the digest covers board.yaml.";
     expect(boardGuide(guideInput())).toContain(`- Milestones: none declared ${holds}`);
     expect(boardGuide(guideInput())).toContain(
       "- Approving a milestone before it is added to board.yaml.",

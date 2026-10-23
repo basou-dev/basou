@@ -2073,9 +2073,12 @@ describe("basou view: the board page", () => {
       // A long lane name wraps, in a column of a width it cannot pass.
       "table.matrix th:first-child": "max-width: 10em; overflow-wrap: anywhere;",
       ".stage-meanings": "display: block;",
-      // A table's notes wrap at the width in view, at its left edge as it scrolls.
+      // A table's notes wrap at the width of their scroll, at its left edge as
+      // it scrolls; 100vw stays for a browser that knows no container units.
+      ".scroll": "container-type: inline-size;",
       "tr.notes td": "padding-right: 0;",
-      "tr.notes ul.sub": "position: sticky; left: 0; max-width: calc(100vw - 32px);",
+      "tr.notes ul.sub":
+        "position: sticky; left: 0; max-width: calc(100vw - 32px); max-width: 100cqw;",
     });
     // Its rules take the place of those of the same weight only by coming after them.
     for (const selector of [
@@ -2585,6 +2588,10 @@ describe("basou view: the board page", () => {
     // A path that is also a name an object has of its own is not one of the repos.
     const odd = { ...LIVE.effort, commits: [{ repo: "constructor", count: 1 }] };
     expect(said({ ...LIVE, effort: odd })).toContain(line("constructor 1"));
+    // A repo at such a path is one of its own, named as the repos table names it.
+    const proto = { ...LIVE.effort, commits: [{ repo: "__proto__", count: 1 }] };
+    const at = record([{ ...LIVE.repos[0], path: "__proto__", name: "site" }]);
+    expect(said({ ...at, effort: proto })).toContain(line("site 1"));
   });
 
   it("draws a board measured on the spot: what basou measured, nothing judged", () => {

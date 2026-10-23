@@ -291,8 +291,10 @@ whole body, see [`http`](#http).)
 
 In board.yaml, write a pattern in single quotes (`'^\d+$'`), where a `\` is
 itself. In double quotes YAML reads a `\` as the start of an escape: `"\d"`
-stops the reading, and `"\b"` or `"\t"` becomes another character without a
-word. Double every `\` there (`"^\\d+$"`) if double quotes are needed.
+stops the reading, and `"\b"` or `"\t"` becomes a control character, which a
+measure's `pattern` and a `section`'s `start` and `end` take without a word
+and an `http` observation's patterns refuse. Double every `\` there
+(`"^\\d+$"`) if double quotes are needed.
 
 #### When a measure is not measured
 
