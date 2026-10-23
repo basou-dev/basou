@@ -3,6 +3,55 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## 0.73.1 — 2026-10-23
+
+### Fixed
+
+- **`basou board guide` names stage 04 merged, not production.** Its rule
+  for the stages said "04 (merged, in production)": where a merge deploys
+  at once, production is what users can reach, which is 05. It now says
+  "04 (merged)", as its steps for a board not declared yet, `basou board
+  init`'s English meaning of 04 and the reference do. `basou board init`'s
+  Japanese meaning of 04, and its comment above the stages, now use the
+  word for merged instead of the one for production. A board declared
+  before keeps the meanings it wrote.
+- **With no board declared, `basou board guide` asks to keep board/ out of
+  a public build.** Its first step checked only who can read the repository
+  on GitHub. When the repository is also what a public site or package is
+  built from, it now asks too that board/ stays out of what is built and
+  published, since a generator that copies the repository's root into the
+  site publishes the records, and to ask the operator before going on when
+  that cannot be checked.
+- **A milestone's date is said to be a day in the board's time zone.**
+  `basou board guide`, the comment `basou board init` prints above
+  milestones, and the reference say that a milestone's `date` is a day in
+  `effort.time_zone`, or in this host's zone when the board declares none,
+  and that `.basou/decisions.md` dates a decision by its day in UTC, which
+  can be a day apart from a milestone that refs it.
+- **`basou board guide` says what a first record's axis review triggers.**
+  Its axis line for a board with no record yet says the triggers are the
+  letters `axis.reasons` gives, and `a` too when the components were
+  registered for the record: registering clears (a), but (a) led to the
+  review.
+- **The board page names a repo by its name in "Commits since the start"**,
+  as its repos table does. A workspace that is one repository drew it by
+  its path, as `. 205`. A repo with no name, or a record whose repos cannot
+  be read, is drawn by its path as before.
+- **Below 600px, an observation's notes on the board page stay in view.**
+  The notes row spans the observations table, which scrolls inside the page
+  on a narrow screen, so the right part of each note was cut off (173px at
+  375px on a board measured for this). A scroll is now a size container
+  there, and a note is as wide as the scroll it is in and stays at its left
+  edge while the table scrolls, with an overlay scrollbar or a classic one.
+  A browser that knows no container units sizes it by the page's width.
+- **The reference (`docs/spec/board.md`) says that `**/` matches no
+  directory too** (`src/**/*.ts` matches `src/a.ts`), **and how to write a
+  regular expression in board.yaml**: in single quotes, where a `\` is
+  itself. In double quotes YAML refuses `"\d"`, and turns `"\b"` or `"\t"`
+  into a control character, which a measure's `pattern` and a section's
+  `start` and `end` take without a word and an `http` observation's patterns
+  refuse.
+
 ## 0.73.0 — 2026-10-20
 
 ### Added
