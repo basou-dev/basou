@@ -7,6 +7,7 @@ import {
   basouPaths,
   findErrorCode,
   loadPortfolioConfig,
+  type Manifest,
   type PortfolioWorkspace,
   readManifest,
 } from "@basou/core";
@@ -234,8 +235,6 @@ async function buildSingleDeps(ctx: ViewContext, cwd: string): Promise<ViewServe
     mode: "single",
     nowProvider: nowProviderOf(ctx),
     ...(ctx.remoteUrlOf !== undefined ? { remoteUrlOf: ctx.remoteUrlOf } : {}),
-    board: await viewBoardOf(repositoryRoot, paths),
-    boardLive: liveBoardOf(repositoryRoot, ctx),
   };
 }
 
@@ -272,13 +271,8 @@ export function sharedWhileRunning<T>(run: () => Promise<T>): () => Promise<T> {
 // own repo private. There is no flag to point elsewhere: this command is
 // guaranteed and the board is experimental. The page is drawn from the
 // records; the board.yaml as it is now is not read.
-async function viewBoardOf(root: string, paths: ReturnType<typeof basouPaths>): Promise<ViewBoard> {
-  let own: { visibility?: string | undefined } | undefined;
-  try {
-    own = (await readManifest(paths)).repos?.find((repo) => repo.path === ".");
-  } catch {
-    own = undefined;
-  }
+function viewBoardOf(root: string, manifest: Manifest): ViewBoard {
+  const own = manifest.repos?.find((repo) => repo.path === ".");
   if (own?.visibility !== "private") return { why: "no_board" };
   return { recordsDir: join(root, dirname(DEFAULT_BOARD_PATH), "records") };
 }
@@ -339,6 +333,8 @@ async function buildWorkspaceEntry(
   };
   try {
     const manifest = await readManifest(paths);
+    // Its board, in single mode and in a portfolio alike: a portfolio's board
+    // page is opened for one workspace, and its cards carry no board figures.
     return {
       key: manifest.workspace.id,
       label: labelOverride ?? manifest.workspace.name,
@@ -346,6 +342,8 @@ async function buildWorkspaceEntry(
       repoRoot,
       importCtx,
       initialized: true,
+      board: viewBoardOf(repoRoot, manifest),
+      boardLive: liveBoardOf(repoRoot, ctx),
     };
   } catch (error: unknown) {
     // "YAML file not found" (ENOENT) = never initialized; anything else (parse /

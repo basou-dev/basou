@@ -66,6 +66,14 @@ export type WorkspaceEntry = {
    * "unreadable" from "never initialized". Pathless.
    */
   manifestError?: string;
+  /**
+   * The board its board page shows (the records beside its default
+   * board.yaml, or why there are none). Unset when its manifest cannot be
+   * read: it then has no board routes.
+   */
+  board?: ViewBoard;
+  /** Measure it as it is now for its board page, with no record; it writes nothing. */
+  boardLive?: () => Promise<BoardLiveMeasurement>;
 };
 
 /**
@@ -90,13 +98,6 @@ export type ViewServerDeps = {
    * {@link tryRemoteUrl}; injectable so tests need no real git remotes.
    */
   remoteUrlOf?: RemoteUrlResolver;
-  /** The board the board page shows: single mode only (the page is not served otherwise). */
-  board?: ViewBoard;
-  /**
-   * Measure the workspace as it is now for the board page, with no record:
-   * single mode only, like the board. It writes nothing.
-   */
-  boardLive?: () => Promise<BoardLiveMeasurement>;
 };
 
 /** A running view server, with the means to stop it. */
@@ -220,9 +221,10 @@ async function handleGet(
     sendHtml(res, VIEW_HTML);
     return;
   }
-  // Single mode only: a board carries the effort figures the portfolio
-  // cards never show.
-  if (pathname === "/board" && deps.mode === "single") {
+  // In portfolio mode the page is opened for one workspace (?ws=<key>) and
+  // reads its scoped routes; the portfolio's cards carry none of a board's
+  // figures.
+  if (pathname === "/board") {
     sendHtml(res, BOARD_HTML);
     return;
   }
@@ -244,8 +246,8 @@ async function handleGet(
         ws,
         deps.nowProvider,
         remoteUrlOf(deps),
-        boardOf(deps),
-        boardLiveOf(deps),
+        ws.board,
+        ws.boardLive,
       ))
     ) {
       sendError(res, 404, "Not found");
@@ -261,8 +263,8 @@ async function handleGet(
         primaryWorkspace(deps),
         deps.nowProvider,
         remoteUrlOf(deps),
-        boardOf(deps),
-        boardLiveOf(deps),
+        flatBoardOf(deps),
+        flatBoardLiveOf(deps),
       ))
     ) {
       sendError(res, 404, "Not found");
@@ -272,14 +274,18 @@ async function handleGet(
   sendError(res, 404, "Not found");
 }
 
-/** The board the board routes serve: none outside single mode. */
-function boardOf(deps: ViewServerDeps): ViewBoard | undefined {
-  return deps.mode === "single" ? deps.board : undefined;
+/**
+ * The board the flat board routes serve: the one workspace's, in single mode
+ * only. A portfolio's boards are read by their scoped routes, so a board page
+ * opened there without a workspace draws none, rather than the first one's.
+ */
+function flatBoardOf(deps: ViewServerDeps): ViewBoard | undefined {
+  return deps.mode === "single" ? primaryWorkspace(deps).board : undefined;
 }
 
-/** The measurement the live board route serves: none outside single mode. */
-function boardLiveOf(deps: ViewServerDeps): (() => Promise<BoardLiveMeasurement>) | undefined {
-  return deps.mode === "single" ? deps.boardLive : undefined;
+/** The measurement the flat live board route serves: in single mode only, like the board. */
+function flatBoardLiveOf(deps: ViewServerDeps): (() => Promise<BoardLiveMeasurement>) | undefined {
+  return deps.mode === "single" ? primaryWorkspace(deps).boardLive : undefined;
 }
 
 /** The configured live remote-URL resolver, or core's default. */

@@ -1163,16 +1163,62 @@ describe("basou view: the board page", () => {
     });
   });
 
-  it("is not served in portfolio mode", async () => {
-    const repo = await initWorkspaceAt(tmpRepo as string, WS_ID_A, "a");
-    await withPortfolioServer([repo], {}, async (h) => {
-      expect((await fetch(`${h.url}/board`)).status).toBe(404);
-      expect((await getJson(h, `/api/ws/${WS_ID_A}/board`)).status).toBe(404);
-      expect((await getJson(h, `/api/ws/${WS_ID_A}/board/live`)).status).toBe(404);
-    });
+  it("serves each workspace's own board in portfolio mode, from its scoped routes, and none on the cards", async () => {
+    const repo = await workspaceWith([{ path: ".", visibility: "private" }]);
+    const id = await recorded(repo);
+    const raw = await mkdtemp(join(tmpdir(), "basou-pf-board-"));
+    try {
+      const other = await initWorkspaceAt(raw, WS_ID_B, "b");
+      await withPortfolioServer([repo, other], hermeticLogRoots(), async (h) => {
+        const page = await fetch(`${h.url}/board`);
+        expect(page.status).toBe(200);
+        expect(await page.text()).toBe(BOARD_HTML);
+        expect((await getJson(h, `/api/ws/${FIXED_WS_ID}/board`)).data).toMatchObject({
+          page: { status: "ok", id },
+        });
+        expect((await getJson(h, `/api/ws/${FIXED_WS_ID}/board/${id}`)).data).toMatchObject({
+          page: { status: "ok", id },
+        });
+        // A workspace whose manifest does not declare its own repo private has
+        // no records to draw, as in single mode, and is measured on the spot.
+        expect((await getJson(h, `/api/ws/${WS_ID_B}/board`)).data).toMatchObject({
+          page: { status: "unavailable", why: "no_board" },
+        });
+        expect((await getJson(h, `/api/ws/${WS_ID_B}/board/live`)).status).toBe(200);
+        // The flat routes serve no board here: a page opened without a
+        // workspace draws none, rather than the first workspace's.
+        expect((await getJson(h, "/api/board")).status).toBe(404);
+        expect((await getJson(h, "/api/board/live")).status).toBe(404);
+        // The cards carry none of a board's figures.
+        const cards = (await getJson(h, "/api/portfolio")).data as {
+          workspaces: Record<string, unknown>[];
+        };
+        expect(cards.workspaces).toHaveLength(2);
+        for (const card of cards.workspaces) {
+          expect(Object.keys(card).sort()).toEqual([
+            "anyTaskEverRecorded",
+            "freshness",
+            "inFlightCount",
+            "initialized",
+            "key",
+            "label",
+            "latestDecision",
+            "latestSession",
+            "pendingApprovals",
+            "repoRoot",
+            "sessionCount",
+            "staleness",
+            "suspectCount",
+            "unreadableTaskCount",
+          ]);
+        }
+      });
+    } finally {
+      await rm(raw, { recursive: true, force: true });
+    }
   });
 
-  it("serves the measurement on the spot in single mode only, whatever it is given", async () => {
+  it("serves a workspace's measurement on the spot on its scoped route in both modes, and on the flat one in single mode only", async () => {
     const root = await initWorkspaceAt(tmpRepo as string, WS_ID_A, "a");
     let measured = 0;
     const entry = {
@@ -1182,27 +1228,33 @@ describe("basou view: the board page", () => {
       repoRoot: root,
       importCtx: { cwd: root },
       initialized: true,
+      boardLive: () => {
+        measured++;
+        return measureLiveBoard(root, {
+          claudeProjectsDir: getClaudeRoot(),
+          codexSessionsDir: getCodexRoot(),
+        });
+      },
     };
-    const boardLive = () => {
-      measured++;
-      return measureLiveBoard(root, {
-        claudeProjectsDir: getClaudeRoot(),
-        codexSessionsDir: getCodexRoot(),
-      });
-    };
+    const statuses: [string, number, number][] = [];
     for (const mode of ["portfolio", "single"] as const) {
       const h = await startViewServer({
         port: 0,
-        deps: { workspaces: [entry], mode, nowProvider: () => FIXED_DATE, boardLive },
+        deps: { workspaces: [entry], mode, nowProvider: () => FIXED_DATE },
       });
       try {
-        const status = (await getJson(h, `/api/ws/${WS_ID_A}/board/live`)).status;
-        expect([mode, status]).toEqual([mode, mode === "single" ? 200 : 404]);
+        const scoped = (await getJson(h, `/api/ws/${WS_ID_A}/board/live`)).status;
+        const flat = (await getJson(h, "/api/board/live")).status;
+        statuses.push([mode, scoped, flat]);
       } finally {
         await h.close();
       }
     }
-    expect(measured).toBe(1);
+    expect(statuses).toEqual([
+      ["portfolio", 200, 404],
+      ["single", 200, 200],
+    ]);
+    expect(measured).toBe(3);
   });
 
   it("shares one measurement among the requests made while it runs", async () => {
@@ -1280,12 +1332,20 @@ describe("basou view: the board page", () => {
     expect(view?.options.map((o) => o.long)).not.toContain("--board");
   });
 
-  it("links to the page from the single-mode header, and only there", () => {
+  it("links to the page from a workspace's header, its own board in a portfolio, and not from the cards", () => {
     expect(VIEW_HTML).toContain('<a id="board-link" href="/board" style="display:none">Board</a>');
     const shows = "$('board-link').style.display = '';";
-    expect(liftFrom(VIEW_HTML, "enterSingle")).toContain(shows);
-    expect(liftFrom(VIEW_HTML, "openWorkspace")).not.toContain("board-link");
-    expect(VIEW_HTML.split(shows)).toHaveLength(2);
+    const single = liftFrom(VIEW_HTML, "enterSingle");
+    expect(single).toContain("$('board-link').href = '/board';");
+    expect(single).toContain(shows);
+    const opened = liftFrom(VIEW_HTML, "openWorkspace");
+    expect(opened).toContain("$('board-link').href = '/board?ws=' + encodeURIComponent(key);");
+    expect(opened).toContain(shows);
+    // Back on the cards, no workspace is open.
+    expect(liftFrom(VIEW_HTML, "enterLandingChrome")).toContain(
+      "$('board-link').style.display = 'none';",
+    );
+    expect(VIEW_HTML.split(shows)).toHaveLength(3);
   });
 
   /** Lift a named function out of a page. */
@@ -1354,6 +1414,8 @@ describe("basou view: the board page", () => {
       },
     };
     const helpers = [
+      "apiPath",
+      "boardHref",
       "$",
       "clear",
       "el",
@@ -1390,6 +1452,7 @@ describe("basou view: the board page", () => {
       "weeksTable",
     ];
     const source = [
+      liftVar("WS"),
       liftVar("SVGNS"),
       liftVar("CHART"),
       liftVar("DOT"),
@@ -2860,6 +2923,32 @@ describe("basou view: the board page", () => {
     const failed = await runPage("?live=1", {});
     expect(failed.fetched).toEqual(["/api/board/live"]);
     expect((failed.byId.status as Node).textContent).toBe("Not found");
+  });
+
+  it("reads a portfolio workspace's board from its scoped routes, and keeps the workspace in its links", async () => {
+    const own = `/board?ws=${WS_ID_A}`;
+    const api = `/api/ws/${WS_ID_A}`;
+    const oneRecord = {
+      ...STRINGS,
+      page: {
+        status: "unavailable",
+        why: "not_json",
+        records: [{ id: A_REC, at: "2026-10-01T00:00:00.000Z" }],
+      },
+    };
+    const latest = await runPage(`?ws=${WS_ID_A}`, { [`${api}/board`]: oneRecord });
+    expect(latest.fetched).toEqual([`${api}/board`]);
+    expect(latest.links).toContain(own);
+    expect(latest.links).toContain(`${own}&live=1`);
+    for (const link of latest.links) expect(link?.startsWith(own)).toBe(true);
+    const live = await runPage(`?ws=${WS_ID_A}&live=1`, {
+      [`${api}/board/live`]: LIVE_BODY,
+      [`${api}/board`]: oneRecord,
+    });
+    expect(live.fetched).toEqual([`${api}/board/live`, `${api}/board`]);
+    expect(live.links).toEqual([own]);
+    const asked = await runPage(`?ws=${WS_ID_A}&record=${A_REC}`, {});
+    expect(asked.fetched).toEqual([`${api}/board/${A_REC}`]);
   });
 
   it("builds prose of text nodes, with only a span between backticks as a code element", () => {
