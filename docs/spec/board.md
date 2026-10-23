@@ -273,7 +273,9 @@ it means to git as a `:(glob)` pathspec:
   under: `docs` and `docs/` match `docs/a.md`.
 - Then, when it has a wildcard (`*`, `?`, `[` or `\`), the whole path must
   match it: `*` and `?` never match `/`; `**` matches across directories where
-  it stands for whole segments (`src/**/*.ts`); `[...]` is a class of bytes
+  it stands for whole segments (`src/**/*.ts`), and `**/` matches no
+  directory too (`src/**/*.ts` matches `src/a.ts`, and `**/*.md` matches
+  `a.md`); `[...]` is a class of bytes
   (`!` or `^` negates it); `\` escapes the next character.
 - Matching is by byte: paths and globs are compared as their UTF-8 bytes.
 
@@ -286,6 +288,13 @@ is read as UTF-8 with a leading byte order mark dropped, split at `\n`, with a
 (A `file_name`'s `pattern` is matched against each file's name instead, see
 [`file_name`](#file_name), and an `http` observation's patterns against the
 whole body, see [`http`](#http).)
+
+In board.yaml, write a pattern in single quotes (`'^\d+$'`), where a `\` is
+itself. In double quotes YAML reads a `\` as the start of an escape: `"\d"`
+stops the reading, and `"\b"` or `"\t"` becomes a control character, which a
+measure's `pattern` and a `section`'s `start` and `end` take without a word
+and an `http` observation's patterns refuse. Double every `\` there
+(`"^\\d+$"`) if double quotes are needed.
 
 #### When a measure is not measured
 
@@ -707,7 +716,7 @@ These are the rules of the `components` method 2 (see
 |---|---|---|
 | `start` | yes | a date: the first day the effort is counted from |
 | `time_zone` | no | a name from the time zone database (`Asia/Tokyo`, `UTC`), not an offset such as `+09:00`. Without it, the days are in this host's time zone when it has a name |
-| `milestones` | no | a list of `{ date, label, ref }`, a date and two non-empty strings: days to mark on the period and effort chart, each with a `ref` saying where it can be checked |
+| `milestones` | no | a list of `{ date, label, ref }`, a date and two non-empty strings: days to mark on the period and effort chart, each with a `ref` saying where it can be checked. A `date` is a day in the board's time zone (`time_zone`, or this host's), as the chart's days are (`.basou/decisions.md` dates a decision by its day in UTC) |
 
 ## 3. The record's input
 
