@@ -3,6 +3,18 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`@basou/core` now depends on zod 4.6.7 or later, for an advisory against
+  the versions before 4.6.6.** GHSA-mrhx-c7xc-m3w5: zod before 4.6.6 can
+  exhaust memory while validating oversized constrained collections. The
+  declared range already admitted the fixed versions, so a fresh install of
+  `0.74.1` resolves to them; this release makes the declared floor say so.
+  No source changed, and the committed JSON Schema artifacts are
+  byte-identical when regenerated with zod 4.6.7.
+
 ## 0.74.1 — 2026-10-23
 
 ### Fixed
