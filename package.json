@@ -29,7 +29,7 @@
     "clean": "pnpm -r --parallel clean && rm -rf node_modules"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.15",
+    "@biomejs/biome": "^2.6.2",
     "@types/node": "^26.6.4",
     "@vitest/coverage-v8": "^4.1.11",
     "tsup": "^8.3.0",
