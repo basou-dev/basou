@@ -1599,6 +1599,14 @@ describe("basou view: the board page", () => {
       const words = boardPageStrings("en").effort;
       call("draw", board);
       expect(document.title).toBe("Board");
+      // A record drawn: the page says it records nothing, with the request.
+      const ask = boardPageStrings("en").ask;
+      expect(byId.ask?.find((n) => n.tag === "code").map((n) => n.textContent)).toEqual([
+        ask.request,
+      ]);
+      expect(byId.ask?.find((n) => n.tag === "button").map((n) => n.textContent)).toEqual([
+        ask.copy,
+      ]);
       // Every section of a record, the repos and the components it measured
       // among them: the matrix and the lanes right after the summary, then the
       // observations in a section of their own, then the effort.
@@ -3333,12 +3341,30 @@ describe("basou view: the board page", () => {
       const page = await runPage(search, { "/api/board": board, "/api/board/live": LIVE_BODY });
       expect(askOf(page).children).toEqual([]);
     }
+    // Nor beside why the records cannot be read, where there is none to read.
+    for (const why of ["records_unreadable", "records_not_directory"]) {
+      const page = await runPage("", {
+        "/api/board": { ...STRINGS, page: { status: "unavailable", why, records: [] } },
+      });
+      expect(askOf(page).children).toEqual([]);
+    }
+    // Nor while a board with no record is still being measured.
+    const measuring = await runPage("", {
+      "/api/board": NO_RECORDS,
+      "/api/board/live": new Promise(() => undefined),
+    });
+    expect(measuring.fetched).toEqual(["/api/board", "/api/board/live"]);
+    expect(askOf(measuring).children).toEqual([]);
     // In the language the server sends the strings in.
     const ja = boardPageStrings("ja");
     const inJa = askOf(
       await runPage("", { "/api/board": { ...ONE_RECORD, language: "ja", strings: ja } }),
     );
-    expect(inJa.text()).toContain(ja.ask.lead.replace("{measureNow}", ja.live.measureNow));
+    expect(inJa.text()).toBe(
+      "このページは何も記録しない（「いま測る」も）。盤を記録し直すには、この workspace の AI の session で次のように頼む: " +
+        ja.ask.request +
+        ja.ask.copy,
+    );
     expect(inJa.find((n) => n.tag === "code").map((n) => n.textContent)).toEqual([ja.ask.request]);
   });
 
@@ -3350,13 +3376,17 @@ describe("basou view: the board page", () => {
     // The text on the clipboard, and what was selected each time execCommand ran.
     let clipboard: string | null = null;
     let selections: { command: string; text: string | null; inBody: boolean }[] = [];
-    const copyWith = async (navigator: unknown, execCommand?: (command: string) => unknown) => {
+    const copyWith = async (
+      navigator: unknown,
+      execCommand?: (command: string) => unknown,
+      board: unknown = ONE_RECORD,
+    ) => {
       clipboard = null;
       selections = [];
       let body: Node | undefined;
       const page = await runPage(
         "",
-        { "/api/board": ONE_RECORD },
+        { "/api/board": board },
         {
           navigator,
           ...(execCommand === undefined
@@ -3396,9 +3426,19 @@ describe("basou view: the board page", () => {
     const copies = () => true;
 
     // The clipboard takes it: nothing is selected.
-    expect(await copyWith(writes, copies)).toEqual([S.ask.copied]);
+    expect(await copyWith(writes, copies)).toEqual(["Copied."]);
     expect(clipboard).toBe(S.ask.request);
     expect(selections).toEqual([]);
+    expect(await copyWith(refused, () => false)).toEqual([
+      "Could not copy: select the request and copy it.",
+    ]);
+    // In the language the server sends the strings in.
+    const ja = { ...ONE_RECORD, language: "ja", strings: boardPageStrings("ja") };
+    expect(await copyWith(writes, copies, ja)).toEqual(["コピーした。"]);
+    expect(clipboard).toBe(boardPageStrings("ja").ask.request);
+    expect(await copyWith(refused, () => false, ja)).toEqual([
+      "コピーできなかった。依頼の文を選んでコピーする。",
+    ]);
     // Refused, refused at once, no clipboard, no navigator: copied as a selection is.
     for (const navigator of [refused, thrown, {}, undefined]) {
       expect(await copyWith(navigator, copies)).toEqual([S.ask.copied]);
