@@ -9,6 +9,9 @@
  * With no record to draw, or with `?live=1`, it draws what basou measures of
  * the workspace now (`GET /api/board/live`): the period and effort, the
  * repositories, the trail and the components, with nothing judged.
+ * The page records nothing: where the workspace has records, it says that an
+ * agent records the board again and gives the request, in the workspace's
+ * language, to copy into a session of the workspace.
  * Everything is put in with createElement / textContent (never innerHTML): a
  * record's prose is the judge's text, and a script running on this origin
  * could call the view's POST routes. Only a span between backticks in prose
@@ -162,11 +165,16 @@ export const BOARD_HTML = `<!doctype html>
   ol.turns li { margin-bottom: 8px; }
   .foot { font-size: 13px; }
   #status.err { color: var(--err); }
+  /* The request to copy breaks anywhere, so that a narrow screen keeps all of it in view. */
+  .ask { font-size: 13px; color: var(--fg-2); margin-bottom: 8px; }
+  .ask code { color: var(--fg); overflow-wrap: anywhere; padding: 0 3px; border-radius: 4px; background: var(--fill); }
+  .ask button { font: inherit; margin: 0 6px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <nav class="records" id="records"></nav>
+  <div class="ask" id="ask"></div>
   <div id="status"></div>
   <div id="board"></div>
 </div>
@@ -384,6 +392,59 @@ export const BOARD_HTML = `<!doctype html>
     var list = page.records || [];
     if (list.length > 0) recordLinks(nav, page, list);
     nav.appendChild(el('a', { href: boardHref('live=1'), text: S.live.measureNow }));
+    askToRecord(list.length > 0);
+  }
+
+  // The page records nothing, measuring now included: an agent judges the
+  // board and records it. show: whether the workspace has records, where the
+  // page says so with the request to copy into a session of the workspace.
+  function askToRecord(show) {
+    var box = $('ask');
+    clear(box);
+    if (!show) return;
+    var result = el('span', { role: 'status' });
+    var copy = el('button', { type: 'button', text: S.ask.copy, onclick: function () { copyRequest(result); } });
+    var lead = fill(S.ask.lead, { measureNow: S.live.measureNow }) + ' ';
+    [document.createTextNode(lead), el('code', { text: S.ask.request }), copy, result]
+      .forEach(function (node) { box.appendChild(node); });
+  }
+  // A browser gives the clipboard to a page of 127.0.0.1, which it counts as
+  // secure, but it can refuse the permission to write to it, as a browser
+  // built into an app does. Then the request is copied as a selection is,
+  // which the click still allows. Where neither copies, say so: the request
+  // stays on the page to select.
+  function copyRequest(result) {
+    var say = function (text) { result.textContent = text; };
+    var bySelection = function () { say(copySelected(S.ask.request) ? S.ask.copied : S.ask.copyFailed); };
+    var clip = typeof navigator !== 'undefined' && navigator.clipboard ? navigator.clipboard : null;
+    if (clip === null) {
+      bySelection();
+      return;
+    }
+    try {
+      clip.writeText(S.ask.request).then(function () { say(S.ask.copied); }, bySelection);
+    } catch (err) {
+      bySelection();
+    }
+  }
+  // Copy text as a selection is copied, from a field put in for it and taken
+  // out again. False where the browser does not say it copied.
+  function copySelected(text) {
+    if (typeof document.execCommand !== 'function' || !document.body) return false;
+    var field = el('textarea', { readonly: '', 'aria-hidden': 'true' });
+    field.value = text;
+    field.style.position = 'fixed';
+    field.style.opacity = '0';
+    document.body.appendChild(field);
+    var copied = false;
+    try {
+      field.select();
+      copied = document.execCommand('copy') === true;
+    } catch (err) {
+      copied = false;
+    }
+    document.body.removeChild(field);
+    return copied;
   }
 
   function recordLinks(nav, page, list) {
@@ -1183,6 +1244,7 @@ export const BOARD_HTML = `<!doctype html>
     var drawn = ++liveDrawn;
     var nav = $('records');
     clear(nav);
+    askToRecord(false);
     var root = $('board');
     clear(root);
     setStatus('', false);
@@ -1191,13 +1253,15 @@ export const BOARD_HTML = `<!doctype html>
     [liveHeading(l, why), effort(l, true), liveRepos(l), liveTrail(l), liveComponents(l), foot]
       .forEach(function (node) { root.appendChild(node); });
     // Asked for with ?live=1: lead back to the records when there are any,
-    // and say how one comes to be drawn when there are none.
+    // saying how to record the board again, and say how one comes to be
+    // drawn when there are none.
     if (why === null) {
       getJson(apiPath('board')).then(function (b) {
         var list = b && b.page && b.page.records ? b.page.records : [];
         if (drawn !== liveDrawn) return;
         if (list.length > 0) {
           nav.appendChild(el('a', { href: boardHref(''), text: S.live.toRecords }));
+          askToRecord(true);
         } else {
           root.removeChild(foot);
           root.appendChild(liveFootnotes(l, why, true));

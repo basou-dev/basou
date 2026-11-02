@@ -1107,6 +1107,18 @@ export type BoardPageStrings = {
     note: string;
     judged: string;
   };
+  /**
+   * How the board is recorded again, which the page cannot do: the request
+   * an agent in a session of the workspace is given, to copy.
+   */
+  ask: {
+    /** Before the request; {measureNow} is `live.measureNow`. */
+    lead: string;
+    request: string;
+    copy: string;
+    copied: string;
+    copyFailed: string;
+  };
 };
 
 const BOARD_PAGE_EN: BoardPageStrings = {
@@ -1323,6 +1335,13 @@ const BOARD_PAGE_EN: BoardPageStrings = {
     judged:
       "The reach matrix, the lanes and the operator's turns are drawn from a record: declare the board in board/board.yaml, have an agent judge it, and record it with basou board record.",
   },
+  ask: {
+    lead: "This page records nothing, {measureNow} included. To record the board again, ask an agent in a session of this workspace:",
+    request: "Record the progress board again, following the steps basou board guide prints.",
+    copy: "Copy",
+    copied: "Copied.",
+    copyFailed: "Could not copy: select the request and copy it.",
+  },
 };
 
 const BOARD_PAGE_JA: BoardPageStrings = {
@@ -1534,6 +1553,13 @@ const BOARD_PAGE_JA: BoardPageStrings = {
     note: "ページを開いたときに、basou がこの workspace の repo と証跡を測った値。記録には残らず、判定も含まない。",
     judged:
       "到達マトリクス・レーン・operator の手番は、判定の記録から描かれる。board/board.yaml に盤を宣言し、AI に判定させて basou board record で記録すると、ここに出る。",
+  },
+  ask: {
+    lead: "このページは何も記録しない（「{measureNow}」も）。盤を記録し直すには、この workspace の AI の session で次のように頼む:",
+    request: "進捗盤を記録し直して。手順は basou board guide が出すとおりに。",
+    copy: "コピー",
+    copied: "コピーした。",
+    copyFailed: "コピーできなかった。依頼の文を選んでコピーする。",
   },
 };
 
