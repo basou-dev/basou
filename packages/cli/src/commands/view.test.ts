@@ -1449,6 +1449,10 @@ describe("basou view: the board page", () => {
     removeChild(child: Node): void {
       this.children = this.children.filter((c) => c !== child);
     }
+    /** A field's text selected, as a browser selects it. */
+    select(): void {
+      this.selected = true;
+    }
     setAttribute(key: string, value: unknown): void {
       this.attrs[key] = String(value);
     }
@@ -1567,6 +1571,9 @@ describe("basou view: the board page", () => {
     "liveFootnotes",
     "liveTile",
     "missingIn",
+    "askToRecord",
+    "copyRequest",
+    "copySelected",
   ];
   const EMPTY_EFFORT = {
     start: "2026-04-28",
@@ -1634,7 +1641,7 @@ describe("basou view: the board page", () => {
   });
 
   it("draws a page it cannot draw around the record asked for", () => {
-    const { call, byId } = drawing(["records", "recordLinks"]);
+    const { call, byId } = drawing(["records", "recordLinks", "askToRecord"]);
     const records = [A_REC, B_REC, C_REC].map((id, i) => ({
       id,
       at: `2026-10-0${i + 1}T00:00:00.000Z`,
@@ -3119,8 +3126,13 @@ describe("basou view: the board page", () => {
   });
 
   // Run the page's script as a browser would, with a fake DOM and a fake fetch
-  // that answers each URL from `responses`.
-  async function runPage(search: string, responses: Record<string, unknown>) {
+  // that answers each URL from `responses`. A browser's navigator and
+  // document.execCommand are there only when given.
+  async function runPage(
+    search: string,
+    responses: Record<string, unknown>,
+    browser: { navigator?: unknown; execCommand?: (command: string) => unknown } = {},
+  ) {
     const script = BOARD_HTML.slice(
       BOARD_HTML.indexOf("<script>") + "<script>".length,
       BOARD_HTML.indexOf("</script>"),
@@ -3137,6 +3149,8 @@ describe("basou view: the board page", () => {
       },
       documentElement: { lang: "" },
       title: "",
+      body: new Node("body"),
+      ...(browser.execCommand === undefined ? {} : { execCommand: browser.execCommand }),
     };
     const fetch = async (url: string) => {
       fetched.push(url);
@@ -3148,7 +3162,12 @@ describe("basou view: the board page", () => {
       };
     };
     const location = { search, href: "" };
-    new Function("document", "location", "fetch", script)(document, location, fetch);
+    new Function("document", "location", "fetch", "navigator", script)(
+      document,
+      location,
+      fetch,
+      browser.navigator,
+    );
     for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
     // A page that never drew has no navigation at all.
     const links = (byId.records?.find((n) => n.tag === "a") ?? []).map((a) => a.attrs.href);
@@ -3161,6 +3180,15 @@ describe("basou view: the board page", () => {
     page: { status: "unavailable", why: "no_records", records: [] },
   };
   const LIVE_BODY = { ...STRINGS, live: LIVE };
+  // A board with one record, which cannot be drawn: the page around it is.
+  const ONE_RECORD = {
+    ...STRINGS,
+    page: {
+      status: "unavailable",
+      why: "not_json",
+      records: [{ id: A_REC, at: "2026-10-01T00:00:00.000Z" }],
+    },
+  };
 
   it("measures on the spot when there is no board or no record to draw", async () => {
     for (const why of ["no_board", "no_records"]) {
@@ -3277,6 +3305,114 @@ describe("basou view: the board page", () => {
     const heads = board.find((n) => n.tag === "h2").map((n) => n.textContent);
     expect(heads.filter((h) => h === "Footnotes")).toHaveLength(1);
     expect(board.text().split(judged)).toHaveLength(2);
+  });
+
+  it("says where there are records that the page records nothing, with the request to copy into a session", async () => {
+    const S = boardPageStrings("en");
+    const askOf = (page: { byId: Record<string, Node> }) => page.byId.ask as Node;
+    const latest = askOf(await runPage("", { "/api/board": ONE_RECORD }));
+    expect(latest.text()).toBe(
+      "This page records nothing, Measure now included. To record the board again, ask an agent in a session of this workspace: " +
+        S.ask.request +
+        S.ask.copy,
+    );
+    expect(latest.find((n) => n.tag === "code").map((n) => n.textContent)).toEqual([S.ask.request]);
+    expect(latest.find((n) => n.tag === "button").map((n) => n.textContent)).toEqual([S.ask.copy]);
+    // Measured now where there are records: said there too, once.
+    const live = askOf(
+      await runPage("?live=1", { "/api/board/live": LIVE_BODY, "/api/board": ONE_RECORD }),
+    );
+    expect(live.text().split(S.ask.request)).toHaveLength(2);
+    // With no record, nothing is said: the footnotes say how one comes to be.
+    const noBoard = { ...STRINGS, page: { status: "unavailable", why: "no_board", records: [] } };
+    for (const [search, board] of [
+      ["", NO_RECORDS],
+      ["", noBoard],
+      ["?live=1", NO_RECORDS],
+    ] as const) {
+      const page = await runPage(search, { "/api/board": board, "/api/board/live": LIVE_BODY });
+      expect(askOf(page).children).toEqual([]);
+    }
+    // In the language the server sends the strings in.
+    const ja = boardPageStrings("ja");
+    const inJa = askOf(
+      await runPage("", { "/api/board": { ...ONE_RECORD, language: "ja", strings: ja } }),
+    );
+    expect(inJa.text()).toContain(ja.ask.lead.replace("{measureNow}", ja.live.measureNow));
+    expect(inJa.find((n) => n.tag === "code").map((n) => n.textContent)).toEqual([ja.ask.request]);
+  });
+
+  it("copies the request, as a selection is where the clipboard is refused, and says whether it could", async () => {
+    const S = boardPageStrings("en");
+    const withClipboard = (writeText: (text: string) => Promise<void>) => ({
+      clipboard: { writeText },
+    });
+    // The text on the clipboard, and what was selected each time execCommand ran.
+    let clipboard: string | null = null;
+    let selections: { command: string; text: string | null; inBody: boolean }[] = [];
+    const copyWith = async (navigator: unknown, execCommand?: (command: string) => unknown) => {
+      clipboard = null;
+      selections = [];
+      let body: Node | undefined;
+      const page = await runPage(
+        "",
+        { "/api/board": ONE_RECORD },
+        {
+          navigator,
+          ...(execCommand === undefined
+            ? {}
+            : {
+                execCommand: (command: string) => {
+                  const field = body?.children.find((n) => n.tag === "textarea");
+                  selections.push({
+                    command,
+                    text: field?.selected ? field.value : null,
+                    inBody: field !== undefined,
+                  });
+                  return execCommand(command);
+                },
+              }),
+        },
+      );
+      body = page.document.body;
+      const ask = page.byId.ask as Node;
+      const [button] = ask.find((n) => n.tag === "button");
+      button?.listeners.click?.[0]?.({});
+      for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      // The field put in to copy from is taken out again.
+      expect(body.children).toEqual([]);
+      return ask.find((n) => n.attrs.role === "status").map((n) => n.textContent);
+    };
+    const writes = withClipboard(async (text) => {
+      clipboard = text;
+    });
+    const refused = withClipboard(async () => {
+      throw new Error("denied");
+    });
+    // Refused before it promises anything.
+    const thrown = withClipboard(() => {
+      throw new Error("not focused");
+    });
+    const copies = () => true;
+
+    // The clipboard takes it: nothing is selected.
+    expect(await copyWith(writes, copies)).toEqual([S.ask.copied]);
+    expect(clipboard).toBe(S.ask.request);
+    expect(selections).toEqual([]);
+    // Refused, refused at once, no clipboard, no navigator: copied as a selection is.
+    for (const navigator of [refused, thrown, {}, undefined]) {
+      expect(await copyWith(navigator, copies)).toEqual([S.ask.copied]);
+      expect(selections).toEqual([{ command: "copy", text: S.ask.request, inBody: true }]);
+    }
+    // Neither copies: said so.
+    expect(await copyWith(refused, () => false)).toEqual([S.ask.copyFailed]);
+    expect(
+      await copyWith(refused, () => {
+        throw new Error("not supported");
+      }),
+    ).toEqual([S.ask.copyFailed]);
+    expect(await copyWith(refused)).toEqual([S.ask.copyFailed]);
+    expect(await copyWith(undefined)).toEqual([S.ask.copyFailed]);
   });
 
   it("reads a portfolio workspace's board from its scoped routes, and keeps the workspace in its links", async () => {

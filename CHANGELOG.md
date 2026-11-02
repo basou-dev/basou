@@ -5,6 +5,21 @@ All notable changes to **basou** are recorded here. The project follows
 
 ## Unreleased
 
+### Added
+
+- **The board page of `basou view` says that it records nothing, and gives
+  the request that has the board recorded again.** Its "Measure now" link
+  measures on the spot and records nothing, but read as a way to bring the
+  board up to date. Where the workspace has records, the page now says, under
+  its links, that it records nothing and that an agent in a session of the
+  workspace records the board again, with the request to give it
+  ("Record the progress board again, following the steps basou board guide
+  prints.", in the workspace's language) and a button that copies it. Where
+  the browser refuses to let the page write to the clipboard, as one built
+  into an app can, the request is copied as a selection is; where neither
+  copies, the page says so next to the button, and the request stays on the
+  page to select. Recording still takes an agent: basou judges nothing.
+
 ### Changed
 
 - **`@basou/core` now depends on zod 4.6.7 or later, for an advisory against
