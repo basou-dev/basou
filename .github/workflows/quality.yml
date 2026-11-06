@@ -72,3 +72,35 @@ jobs:
         # dots (`..notes`) as a step out of its base; the mistake once sat in
         # five places and took two releases to remove.
         run: pnpm lint:paths
+
+  node-lines:
+    name: Tests on Node.js ${{ matrix.node }}
+    # The quality job runs the tests on the latest Node.js 22. This job runs
+    # them on the floor `engines.node` names and on the latest release of each
+    # other line a release covers (docs/spec/compatibility.md): a line in its
+    # Current phase or later, before its end-of-life. Change the list when a
+    # line enters its Current phase, reaches its end-of-life, or the floor
+    # moves. The bundles are built on the Node.js in `.nvmrc`, as release.yml
+    # builds them, and only the tests run on the release under test, so a
+    # build tool may need a later Node.js than the floor.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.12.0", "24", "26"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ".nvmrc"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm -r build
+      - name: Switch to the Node.js under test
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Test
+        run: node --version && pnpm -r test
