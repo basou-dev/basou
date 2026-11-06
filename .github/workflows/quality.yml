@@ -21,7 +21,10 @@ jobs:
         # are specified.
       - uses: actions/setup-node@v7
         with:
+          # The latest Node.js 22, not the runner image's cached one; the
+          # node-lines job below covers the other lines.
           node-version: "22"
+          check-latest: true
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build
@@ -78,9 +81,9 @@ jobs:
     # The quality job runs the tests on the latest Node.js 22. This job runs
     # them on the floor `engines.node` names and on the latest release of each
     # other line a release covers (docs/spec/compatibility.md): a line in its
-    # Current phase or later, before its end-of-life. Change the list when a
-    # line enters its Current phase, reaches its end-of-life, or the floor
-    # moves. The bundles are built on the Node.js in `.nvmrc`, as release.yml
+    # Current phase or later, before its end-of-life. When a line enters its
+    # Current phase, reaches its end-of-life, or the floor moves, change this
+    # list and the quality job's `node-version` together. The bundles are built on the Node.js in `.nvmrc`, as release.yml
     # builds them, and only the tests run on the release under test, so a
     # build tool may need a later Node.js than the floor.
     runs-on: ubuntu-latest
@@ -102,5 +105,6 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
+          check-latest: true
       - name: Test
         run: node --version && pnpm -r test

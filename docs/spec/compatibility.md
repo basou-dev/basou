@@ -435,9 +435,10 @@ it does not know and for a subclass of one it does.
 
 ### Node.js: a minor drops a release line only past its end-of-life
 
-Every published package names the Node.js releases it runs on in
+Every published package names the Node.js releases it admits in
 `engines.node`: `basou`, `@basou/cli` and `@basou/sdk`, and `@basou/core`,
-which they depend on and which names the same range. A **release line** is a
+which the others depend on, directly or through `@basou/cli`, and which names
+the same range. A **release line** is a
 major version of Node.js, and the phases named here are those of the [Node.js
 release schedule](https://github.com/nodejs/release#release-schedule). A `1.x`
 release **covers** a line when, on the day it is published, the line has
