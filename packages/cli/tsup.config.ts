@@ -70,7 +70,7 @@ function buildStamp(): string {
 const shared = {
   define: { __BASOU_BUILD_STAMP__: JSON.stringify(buildStamp()) },
   format: ["esm"],
-  target: "node20",
+  target: "node22",
   outDir: "dist",
   clean: false,
   dts: true,

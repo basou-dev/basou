@@ -431,6 +431,25 @@ A consumer handles the classes it knows and keeps a branch for the rest.
 later; a switch on `name` does not, so it needs a default branch, for a class
 it does not know and for a subclass of one it does.
 
+### Node.js: the floor rises at a minor only past a line's end-of-life
+
+Each package names the oldest Node.js it runs on in `engines.node`. A `1.x`
+release runs on the latest release of every Node.js release line the previous
+`1.x` release ran on, for as long as upstream maintains that line. Two changes
+to the floor are allowed at a minor, and only these:
+
+1. **Dropping a line upstream no longer maintains.** Once a release line has
+   passed its end-of-life in the [Node.js release
+   schedule](https://github.com/nodejs/release#release-schedule), a minor may
+   raise the floor past it.
+2. **Requiring a later release of a line that stays supported.** A user who
+   stays on a maintained line keeps running basou by taking that line's
+   updates.
+
+Dropping a line upstream still maintains waits for `2.0`. A patch release
+never raises the floor. A release that raises it says so in the changelog,
+naming the release it now requires.
+
 ## What is *not* guaranteed
 
 - **`@basou/core` is published on npm but is not a semver-guaranteed API.**

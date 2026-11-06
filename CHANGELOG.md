@@ -3,6 +3,21 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **basou requires Node.js 22.12.0 or later.** Node.js 20 reached its
+  end-of-life on 2026-04-30. The `engines.node` of every package moves from
+  `>=20.10.0` to `>=22.12.0`, the bundles are built for Node.js 22, and CI
+  builds and tests on Node.js 22. 22.12.0 is the oldest release that
+  commander 15, the next major of the argument parser basou uses, supports.
+  Installing on Node.js 20 prints npm's engine warning, or fails where
+  `engine-strict` is set, and Node.js 20 is no longer tested.
+  [compatibility.md](docs/spec/compatibility.md) now says when the floor may
+  rise from `1.0` on: at a minor, only past a release line upstream no longer
+  maintains, or to a later release of a line that stays supported.
+
 ## 0.75.0 — 2026-11-02
 
 ### Added

@@ -39,7 +39,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=20.10.0"
+    "node": ">=22.12.0"
   },
   "dependencies": {
     "@basou/core": "workspace:*"

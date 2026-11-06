@@ -38,7 +38,7 @@ pnpm test       # all green at HEAD; baseline noted in CHANGELOG.md
 
 Prerequisites:
 
-- Node.js **>= 20.10.0** (`engines.node` in the root `package.json`)
+- Node.js **>= 22.12.0** (`engines.node` in the root `package.json`)
 - pnpm **>= 8.15.0**
 - Git
 

@@ -10,7 +10,7 @@ in plain files next to your code.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/@basou/cli.svg)](https://www.npmjs.com/package/@basou/cli)
-[![Node](https://img.shields.io/badge/node-%3E%3D20.10-339933.svg)](#installation)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.12-339933.svg)](#installation)
 
 Basou is local-first and zero-network: it reads the agent logs already on
 your machine and writes its trail only into a `.basou/` directory beside your
@@ -219,7 +219,7 @@ Issues and contributions are welcome.
 
 ### From npm (recommended)
 
-Requires Node.js >= 20.10.0.
+Requires Node.js >= 22.12.0.
 
 ```bash
 npm install -g @basou/cli
@@ -237,7 +237,7 @@ Build from `main` to track changes ahead of the published releases.
 
 Requirements:
 
-- Node.js >= 20.10.0
+- Node.js >= 22.12.0
 - pnpm >= 8.15.0
 - Git
 
