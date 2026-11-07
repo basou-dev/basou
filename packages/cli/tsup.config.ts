@@ -73,11 +73,20 @@ const shared = {
   target: "node22",
   outDir: "dist",
   clean: false,
-  dts: true,
+  // Declarations come from `tsc -p tsconfig.build.json` (see there), not tsup.
   sourcemap: true,
 } as const;
 
-export default defineConfig([
-  { ...shared, entry: ["src/index.ts"], banner: { js: "#!/usr/bin/env node" } },
+export default defineConfig((options) => [
+  {
+    ...shared,
+    entry: ["src/index.ts"],
+    banner: { js: "#!/usr/bin/env node" },
+    // Under `pnpm dev`, re-emit the declarations after a rebuild. Only one of
+    // the two builds does it, or both would write the same files at once. It
+    // is this one because `src/index.ts` imports `src/program.ts`, and tsup
+    // rebuilds an entry only when a module it reaches changes.
+    onSuccess: options.watch ? "tsc -p tsconfig.build.json" : undefined,
+  },
   { ...shared, entry: ["src/program.ts"] },
 ]);

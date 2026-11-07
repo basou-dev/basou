@@ -237,7 +237,9 @@ Build from `main` to track changes ahead of the published releases.
 
 Requirements:
 
-- Node.js >= 22.12.0
+- Node.js 22.18 or later on the 22 line, 24.11 or later on 24, or 26 or
+  later (what the build tool needs; the built packages run on 22.12.0 or
+  later)
 - pnpm >= 8.15.0
 - Git
 

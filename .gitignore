@@ -9,6 +9,8 @@ dist/
 *.tsbuildinfo
 .turbo/
 .tsup/
+# API Extractor working files; the API report it writes, packages/sdk/etc/, is committed
+packages/sdk/temp/
 
 # Test / coverage
 coverage/
