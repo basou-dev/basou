@@ -1,7 +1,8 @@
 /**
  * Synthetic `.basou` store generator for the perf bench. NOT shipped — it is
  * reachable only from `perf-budget.test.ts`, never from `src/index.ts`, so
- * tsup (entry = `src/index.ts`) leaves it out of `dist`.
+ * the build, whose only entry is `src/index.ts`, leaves it out of `dist`:
+ * tsup's bundle and the declarations `tsconfig.build.json` emits alike.
  *
  * Builds a realistic store at a caller-chosen scale: each session carries the
  * full lifecycle event spine plus a configurable number of `decision_recorded`

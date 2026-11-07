@@ -1,0 +1,17 @@
+{
+  // Emits the declaration files; tsup emits the JavaScript. Declarations are
+  // not left to tsup because its declaration build needs the TypeScript
+  // compiler API, which TypeScript 7 no longer provides. `files` names the
+  // entries alone, so the modules declared are the ones reachable from them --
+  // the modules the bundle holds -- and a module only the tests reach is left
+  // out. One declaration file is written per module.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declarationMap": false,
+    "incremental": false
+  },
+  "include": [],
+  "files": ["src/index.ts"]
+}

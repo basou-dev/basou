@@ -47,8 +47,8 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsup && tsc -p tsconfig.build.json",
+    "dev": "tsup --watch --onSuccess \"tsc -p tsconfig.build.json\"",
     "gen:schemas": "pnpm build && node scripts/gen-schemas.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

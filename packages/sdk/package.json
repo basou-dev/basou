@@ -45,8 +45,8 @@
     "@basou/core": "workspace:*"
   },
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsup && tsc -p tsconfig.build.json",
+    "dev": "tsup --watch --onSuccess \"tsc -p tsconfig.build.json\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

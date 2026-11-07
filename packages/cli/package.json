@@ -51,8 +51,8 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "pnpm run clean && tsup",
-    "dev": "tsup --watch",
+    "build": "pnpm run clean && tsup && tsc -p tsconfig.build.json",
+    "dev": "tsup --watch --onSuccess \"tsc -p tsconfig.build.json\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

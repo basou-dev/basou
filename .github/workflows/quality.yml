@@ -28,8 +28,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build
-        # tsup per package; produces dist/ artifacts (including .d.ts
-        # files) that downstream packages import from. Must run before
+        # tsup, then tsc for the declarations, per package; produces dist/
+        # artifacts (including .d.ts files) that downstream packages import
+        # from. Must run before
         # typecheck so the @basou/core type references in @basou/cli
         # resolve under fresh CI checkouts; locally, the same step runs
         # first in CONTRIBUTING.md's release-flow step 4. Also catches

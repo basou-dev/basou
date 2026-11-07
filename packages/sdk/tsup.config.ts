@@ -71,6 +71,6 @@ export default defineConfig({
   target: "node22",
   outDir: "dist",
   clean: true,
-  dts: true,
+  // Declarations come from `tsc -p tsconfig.build.json` (see there), not tsup.
   sourcemap: true,
 });

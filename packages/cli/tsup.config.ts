@@ -73,7 +73,7 @@ const shared = {
   target: "node22",
   outDir: "dist",
   clean: false,
-  dts: true,
+  // Declarations come from `tsc -p tsconfig.build.json` (see there), not tsup.
   sourcemap: true,
 } as const;
 
