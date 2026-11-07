@@ -72,6 +72,12 @@ end-to-end.
   below the floor fails. When your tests raise coverage,
   raise the floor in the same PR — floors only ever move up. The shared
   measurement policy lives in `vitest.coverage.ts`.
+- **The SDK's public API is recorded in
+  `packages/sdk/etc/sdk.api.md`.** `pnpm -r build` rewrites it from the
+  declarations `@basou/sdk` ships (API Extractor), and CI fails when the
+  rewritten file differs from the committed one. A change to what the SDK
+  exports commits the rewritten report with it, so the change shows in
+  review.
 - **Error messages stay pathless on the CLI surface.** basou
   maintains a "no absolute paths in stderr" contract, and a
   workspace-write-time path sanitizer follows the same principle. See

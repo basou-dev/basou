@@ -52,7 +52,7 @@
   },
   "scripts": {
     "build": "pnpm run clean && tsup && tsc -p tsconfig.build.json",
-    "dev": "tsup --watch --onSuccess \"tsc -p tsconfig.build.json\"",
+    "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

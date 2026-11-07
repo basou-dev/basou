@@ -28,14 +28,20 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build
-        # tsup, then tsc for the declarations, per package; produces dist/
-        # artifacts (including .d.ts files) that downstream packages import
-        # from. Must run before
+        # tsup, then tsc for the declarations, per package (and API Extractor
+        # for @basou/sdk); produces dist/ artifacts (including .d.ts files)
+        # that downstream packages import from. Must run before
         # typecheck so the @basou/core type references in @basou/cli
         # resolve under fresh CI checkouts; locally, the same step runs
         # first in CONTRIBUTING.md's release-flow step 4. Also catches
         # publish-time export-shape regressions before they reach npm.
         run: pnpm -r build
+      - name: SDK API report
+        # The sdk build rewrites packages/sdk/etc/sdk.api.md from the
+        # declarations @basou/sdk ships. A difference from the committed file
+        # means the SDK's exported API changed without the report: commit the
+        # rewritten report with the change, so the change shows in review.
+        run: git diff --exit-code -- packages/sdk/etc/sdk.api.md
       - name: Typecheck
         # tsc --noEmit per package; depends on the prior Build step
         # having generated downstream .d.ts files. Verifies that all

@@ -20,16 +20,17 @@ All notable changes to **basou** are recorded here. The project follows
   admitting one: only once the line has reached its end-of-life. A minor may
   also require a later release of a line it keeps, once that release is six
   months old, and a patch never narrows the range.
-- **The type declarations are written one file per module.** `@basou/sdk`,
-  `@basou/core` and `@basou/cli` used to ship each entry's declarations
-  bundled into one file; the TypeScript compiler now writes them, one beside
-  each module, and `dist/index.d.ts` (with `dist/program.d.ts` for
-  `@basou/cli/program`) is still the file `exports` names. The exported types
-  are unchanged: every export of the four entries was checked to be identical
-  to the previous build's. The packages carry more files as a result, about
-  130 declaration files for `@basou/core` and 50 for `@basou/cli`, and each
-  tarball grows by 4 to 8 percent. The bundler's own declaration build needs the TypeScript
-  compiler API, which TypeScript 7 no longer provides.
+- **The type declarations of `@basou/core` and `@basou/cli` are written one
+  file per module.** Each entry's declarations used to be bundled into one
+  file; the TypeScript compiler now writes them, one beside each module, and
+  `dist/index.d.ts` (with `dist/program.d.ts` for `@basou/cli/program`) is
+  still the file `exports` names. The two packages carry more files as a
+  result, about 130 and 50 declaration files, and their tarballs grow by
+  about 4 and 7 percent. `@basou/sdk` still ships its declarations as one
+  `dist/index.d.ts`, now rolled up by API Extractor. The exported types of
+  all four entries are unchanged: every export was checked to be identical to
+  the previous build's. The bundler's own declaration build needs the
+  TypeScript compiler API, which TypeScript 7 no longer provides.
 - **Building from source needs Node.js 22.18 or later on the 22 line, 24.11
   or later on 24, or 26 or later.** That is the floor of tsup 9, which builds
   the bundles. The packages it builds still run on 22.12.0 or later.

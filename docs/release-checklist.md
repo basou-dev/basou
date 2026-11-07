@@ -38,12 +38,15 @@ than a fixed count. As of `0.6.0`:
   `schemas/*.json` JSON Schema artifacts shipped under `./schemas/*`
   (added in `0.6.0`).
 
-After `0.75.0` the declarations stopped being bundled into one file per
-entry: `tsc -p tsconfig.build.json` writes one `.d.ts` per module under
-`dist/`, so each package's file count rose by the number of modules its
-entries reach (about 130 for `@basou/core`, 50 for `@basou/cli`, 3 for
-`@basou/sdk`) while the tarball sizes rose by 4 to 8 percent. A
-`.d.ts.map` or a `*.test.d.ts` in the list is a regression.
+After `0.75.0` the declarations of `@basou/core` and `@basou/cli` stopped
+being bundled into one file per entry: `tsc -p tsconfig.build.json` writes
+one `.d.ts` per module under `dist/`, so their file counts rose by one for
+each module their entries reach beyond the entries themselves (about 130
+more for `@basou/core`, 50 more for `@basou/cli`), and their tarballs grew
+by about 4 and 7 percent. `@basou/sdk` still ships five files: API
+Extractor rolls its declarations into the one `dist/index.d.ts`. A
+`.d.ts.map` or a `*.test.d.ts` in the list, or a second `.d.ts` in
+`@basou/sdk`, is a regression.
 
 Since publishing is now done by the OIDC trusted-publisher workflow on
 a `vX.Y.Z` tag push (`.github/workflows/release.yml`), this dry-run is

@@ -45,13 +45,13 @@
     "@basou/core": "workspace:*"
   },
   "scripts": {
-    "build": "tsup && tsc -p tsconfig.build.json",
-    "dev": "tsup --watch --onSuccess \"tsc -p tsconfig.build.json\"",
+    "build": "tsup && tsc -p tsconfig.build.json && api-extractor run --local",
+    "dev": "tsup --watch --onSuccess \"tsc -p tsconfig.build.json && api-extractor run --local\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "clean": "rm -rf dist .tsup *.tsbuildinfo",
+    "clean": "rm -rf dist temp .tsup *.tsbuildinfo",
     "prepublishOnly": "pnpm -w run build"
   }
 }
