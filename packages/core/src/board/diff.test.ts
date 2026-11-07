@@ -612,7 +612,11 @@ describe("diffDeclarations", () => {
   it("says nothing it cannot compare rather than throw, for a declaration nested too deep", () => {
     const depth = 100_000;
     const deep = JSON.parse(`${"[".repeat(depth)}"x"${"]".repeat(depth)}`);
-    expect(() => JSON.stringify(deep)).toThrow(RangeError);
+    // Deep enough that walking it recursively overflows the stack. Not checked
+    // with JSON.stringify: from Node.js 25, V8's fast path for it is on by
+    // default and does not recurse, so it no longer throws on this value.
+    const walk = (value: unknown): number => (Array.isArray(value) ? 1 + walk(value[0]) : 0);
+    expect(() => walk(deep)).toThrow(RangeError);
     const notes = (n: unknown) => declaration({ lanes: [{ id: "web", name: "Web", notes: n }] });
     // Compared whole, with what the board declares now.
     expect(diffDeclarations(notes(deep), notes(["x"]))).toBeNull();

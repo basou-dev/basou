@@ -43,7 +43,9 @@ surface is a breaking change and requires a major bump (`2.0`). The sections
 below, and the extension rules of [schemas
 §7.3](schemas.md#73-extension-rules-additive-by-default-breaking-changes-are-gated)
 for the on-disk format, state the exceptions to that rule and what bounds each
-of them.
+of them. Which Node.js releases the packages run on is not a surface of its
+own, but it is bounded too: [a minor drops a release line only past its
+end-of-life](#nodejs-a-minor-drops-a-release-line-only-past-its-end-of-life).
 
 ### A value a flag refuses
 
@@ -430,6 +432,33 @@ A consumer handles the classes it knows and keeps a branch for the rest.
 `StoreUnsafeError` handles every store's refusal, including a store added
 later; a switch on `name` does not, so it needs a default branch, for a class
 it does not know and for a subclass of one it does.
+
+### Node.js: a minor drops a release line only past its end-of-life
+
+Every published package names the Node.js releases it admits in
+`engines.node`: `basou`, `@basou/cli` and `@basou/sdk`, and `@basou/core`,
+which the others depend on, directly or through `@basou/cli`, and which names
+the same range. A **release line** is a
+major version of Node.js, and the phases named here are those of the [Node.js
+release schedule](https://github.com/nodejs/release#release-schedule). A `1.x`
+release **covers** a line when, on the day it is published, the line has
+entered its Current phase and not reached its end-of-life, and `engines.node`
+admits the line's latest release. A line in its Alpha phase is not covered,
+even where `engines.node` admits its prereleases.
+
+1. **A release runs on the latest release of each line it covers**, as of the
+   day it is published. A published release is never changed: when a later
+   Node.js release of a line it covers breaks it, the fix ships in a later
+   `1.x` release, which may be a patch.
+2. **A minor covers every line the release before it covered, until that line
+   reaches its end-of-life.** Once a line has, a minor may stop admitting it.
+   Dropping a line before its end-of-life waits for `2.0`.
+3. **A minor may require a later release of a line it keeps covering, once
+   that release is six months old.** The release it requires was published at
+   least six months before the minor is. Each line may have a lowest release
+   of its own, as in `^22.20.0 || >=24.8.0`.
+4. **A patch never narrows what `engines.node` admits.** A release that
+   narrows it says so in the changelog, naming the range it now requires.
 
 ## What is *not* guaranteed
 

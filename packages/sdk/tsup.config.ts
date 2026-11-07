@@ -68,7 +68,7 @@ export default defineConfig({
   define: { __BASOU_BUILD_STAMP__: JSON.stringify(buildStamp()) },
   entry: ["src/index.ts"],
   format: ["esm"],
-  target: "node20",
+  target: "node22",
   outDir: "dist",
   clean: true,
   dts: true,
