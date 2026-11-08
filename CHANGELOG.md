@@ -34,6 +34,23 @@ All notable changes to **basou** are recorded here. The project follows
 - **Building from source needs Node.js 22.18 or later on the 22 line, 24.11
   or later on 24, or 26 or later.** That is the floor of tsup 9, which builds
   the bundles. The packages it builds still run on 22.12.0 or later.
+- **`docs/spec/compatibility.md` now says that when the Stop hook's review
+  reminder is given may change within `1.x`.** `basou hook stop
+  --require-review` reminds the agent that a session shipped code without
+  recording a review, and deciding that a session owes one is an ongoing
+  judgement: which commands count as shipping work, which file edits count
+  toward the `--min-edits` threshold, which part of the session is read,
+  whether a ship already reminded about is reminded about again, and what
+  counts as a review having been recorded. Today, within the part of the
+  session the hook reads, the reminder keeps coming at the end of later turns
+  after a push until a review is recorded, including after a push that
+  changed no code, while a review recorded for one push also silences a later
+  one. Without the carve-out, changing either after `1.0` would need `2.0`.
+  It is bounded: the gate stays opt-in, the reminder is only about the
+  session's own shipping, it holds the agent only under `--block` and never
+  twice in a row, it never changes the hook's exit code, the changelog lists
+  each change to when it is given, and the command, its flags and its exit
+  code stay under the additive rule.
 
 ## 0.75.0 — 2026-11-02
 
