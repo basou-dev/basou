@@ -64,13 +64,17 @@ function buildStamp(): string {
   return JSON.stringify({ version: pkg.version, commit, committedAt });
 }
 
-export default defineConfig({
+export default defineConfig((options) => ({
   define: { __BASOU_BUILD_STAMP__: JSON.stringify(buildStamp()) },
   entry: ["src/index.ts"],
   format: ["esm"],
   target: "node22",
   outDir: "dist",
-  clean: true,
-  dts: true,
+  // Declarations come from `tsc -p tsconfig.build.json` (see there), not tsup,
+  // and cleaning `dist` deletes them too. A watch build keeps them: under
+  // `pnpm dev` the sdk and the CLI build against them while this package
+  // rebuilds. A one-off build cleans everything, so no declaration outlives
+  // the module it describes.
+  clean: options.watch ? ["!**/*.d.{ts,cts,mts}"] : true,
   sourcemap: true,
-});
+}));

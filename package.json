@@ -14,7 +14,7 @@
   },
   "homepage": "https://basou.dev",
   "scripts": {
-    "build": "pnpm -r --parallel build",
+    "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
     "typecheck": "pnpm -r --parallel typecheck",
     "lint": "biome check .",
@@ -30,9 +30,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
+    "@microsoft/api-extractor": "^7.60.1",
     "@types/node": "^26.6.6",
     "@vitest/coverage-v8": "^4.1.12",
-    "tsup": "^8.3.0",
+    "tsup": "^9.0.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.12"
   },
