@@ -321,6 +321,43 @@ stay under the additive rule — with one carve-out for the `--json` payload:
 A consumer that needs a frozen shape should read the store through
 **`@basou/sdk`** and apply its own rule.
 
+### The Stop hook's review reminder: the flag is guaranteed, when it is given may improve
+
+`basou hook stop --require-review`, the form `basou hook install
+--require-review` registers, adds a reminder to what the Stop hook tells the
+agent at the end of a turn: that the session shipped code without recording a
+review. Deciding that a session owes one is an ongoing judgement, as what reads
+as a gap is to an [advisory
+surfacer](#advisory-surfacers-the-command-is-guaranteed-the-payload-evolves) —
+which commands count as shipping work, which file edits count toward the
+threshold `--min-edits` sets, which part of the session is read, whether a ship
+already reminded about is reminded about again, and what counts as a review
+having been recorded — and freezing today's answer to `2.0` would mean either
+never improving it or bumping the major to do so. **When the reminder is given
+may change within a `1.x` line,** in either direction: a change may give it
+where today's rule does not, or stop giving it where today's rule does.
+
+1. **The gate stays opt-in.** Without `--require-review` the hook gives no
+   review reminder.
+2. **It is only about the session's own shipping.** It is given only when the
+   session itself shipped work.
+3. **It holds the agent only under `--block`, and never twice in a row.** It is
+   given in the one message the hook returns for a turn, so it holds the agent
+   in its turn only when the hook runs with `--block`. It is never given while
+   the agent is continuing because a Stop hook held it (`stop_hook_active` in
+   the hook's input), so it never holds the agent twice in a row. It never
+   changes the hook's exit code.
+4. **The changelog lists each change to when it is given.** The reminder does
+   not say which rule decided it, so the changelog is the only place that says
+   it may come, or not, because the rule changed rather than the work.
+5. **It applies to when the review reminder is given only** — not to the
+   command, its flags or its exit code, which stay under the rules above, and
+   not to anything else the hook does. `--min-edits` stays the threshold the
+   reminder applies; what is counted against it for the reminder is part of
+   when the reminder is given. What the reminder says is prose, which [is not
+   guaranteed](#what-is-not-guaranteed); this section is about whether it is
+   given.
+
 ### Observed files: six properties are guaranteed, the attribution may improve
 
 For an imported session, part of `session.yaml`'s `related_files` is observed
