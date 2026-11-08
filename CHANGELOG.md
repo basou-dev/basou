@@ -52,6 +52,25 @@ All notable changes to **basou** are recorded here. The project follows
   each change to when it is given, and the command, its flags and its exit
   code stay under the additive rule.
 
+### Fixed
+
+- **`basou hook stop` exits 0 when whatever reads its output has stopped
+  reading.** If the reader of the hook's stdout went away before the hook
+  wrote its reminder, the failed write ended the hook with exit 1 and a stack
+  trace on stderr, though the hook handlers exit 0 once their command line
+  parses. A registration made by `basou hook install` hid it, as it ends in
+  `2>/dev/null || true`. The write is now dropped and the hook exits 0 with
+  nothing on stderr. `basou hook session-start` wrote its output the same
+  way, and on Node.js 22 it exited 1 the same way; it now drops a failed
+  write too.
+- **`basou hook stop --help` says what `--block` and `--require-review` do.**
+  Its summary said the hook never blocks, though `--block` holds the agent in
+  its turn. Its help said the review reminder comes when the session shipped
+  "substantive code", a term it defines as file edits or an answered
+  question, while the reminder counts file edits only. It now says the
+  reminder comes when the session shipped work and made at least as many file
+  edits as `--min-edits` sets, in either order.
+
 ## 0.75.0 — 2026-11-02
 
 ### Added

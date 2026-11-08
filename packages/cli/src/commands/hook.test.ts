@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
 import {
   access,
   mkdir,
@@ -13,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
@@ -45,6 +47,7 @@ import {
   registerHookCommand,
   runHookInstall,
   runHookSessionStart,
+  writeHookOutput,
 } from "./hook.js";
 import { doRunProtocolSync } from "./protocol.js";
 
@@ -1992,5 +1995,188 @@ describe("doRunHookStop — the protocol-update gate", () => {
     await rm(ptarget, { force: true });
     const body = await transcript(new Date().toISOString(), [editLine(2)]);
     expect(nudgeContext(await runGate(body))).toContain("basou decision capture");
+  });
+});
+
+describe("the hook handlers' output when its reader is gone", () => {
+  /**
+   * A stream whose reader is gone: every write fails with EPIPE, reported
+   * after write() has returned, as a pipe reports it.
+   */
+  function readerGone(): Writable {
+    const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    return new Writable({
+      write(_chunk, _encoding, callback) {
+        setImmediate(() => callback(epipe));
+      },
+    });
+  }
+
+  /**
+   * Resolves once `stream` closes. A failed write makes the stream emit
+   * 'error' and then 'close'; with no listener the 'error' is thrown instead,
+   * 'close' never follows, and awaiting this times out. It also times out
+   * when nothing was written to the stream at all.
+   */
+  function closeOf(stream: Writable): Promise<void> {
+    return new Promise((resolve) => stream.on("close", () => resolve()));
+  }
+
+  it("writeHookOutput absorbs a write the reader can no longer take", async () => {
+    const stream = readerGone();
+    const closed = closeOf(stream);
+    writeHookOutput("{}\n", stream);
+    await closed;
+    expect(stream.destroyed).toBe(true);
+  });
+
+  it("writeHookOutput adds its listener once, however many times it writes", () => {
+    const stream = new Writable({ write: (_chunk, _encoding, callback) => callback() });
+    writeHookOutput("a\n", stream);
+    writeHookOutput("b\n", stream);
+    expect(stream.listenerCount("error")).toBe(1);
+  });
+
+  it("hook stop writes through it when no sink is injected", async () => {
+    const stream = readerGone();
+    const closed = closeOf(stream);
+    await doRunHookStop(
+      {},
+      {
+        readStdin: async () =>
+          JSON.stringify({ transcript_path: join(hookSuiteDir, "absent-transcript.jsonl") }),
+        readTranscript: async () => editLine(2),
+        protocolTargetPath: absentProtocolTarget,
+        observe: async () => {},
+        stdout: stream,
+      },
+    );
+    await closed;
+    expect(stream.destroyed).toBe(true);
+  });
+
+  it("hook session-start writes through it when no sink is injected", async () => {
+    const stream = readerGone();
+    const closed = closeOf(stream);
+    await doRunHookSessionStart({
+      readStdin: async () => JSON.stringify({ session_id: "s", cwd: hookSuiteDir }),
+      render: async () => ({ body: "# Orientation\n" }),
+      observe: async () => {},
+      stdout: stream,
+    });
+    await closed;
+    expect(stream.destroyed).toBe(true);
+  });
+});
+
+describe("the hook handlers exit 0 when their reader is gone (built CLI)", () => {
+  // Runs the built CLI the way a hook runner does: CI builds before it tests;
+  // locally run `pnpm -r build` first. HOME is a fresh directory, so the
+  // handlers read no real portfolio, protocol block or store.
+  const distEntry = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "dist",
+    "index.js",
+  );
+  const execFileAsync = promisify(execFile);
+  const ENV = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull };
+  let home: string;
+
+  beforeEach(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), "basou-hook-reader-")));
+  });
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  /**
+   * Run `basou hook <handler>` with `payload` on stdin. With `readerGone`, the
+   * read end of the hook's stdout is closed before the hook can write, so its
+   * write fails with EPIPE, as when the tool has stopped reading.
+   */
+  async function runHook(
+    handler: "stop" | "session-start",
+    payload: Record<string, unknown>,
+    readerGone: boolean,
+  ): Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }> {
+    const child = spawn(process.execPath, [distEntry, "hook", handler], {
+      env: { ...ENV, HOME: home },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    if (readerGone) {
+      child.stdout.destroy();
+    } else {
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+    }
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.stdin.end(JSON.stringify(payload));
+    const [code, signal] = (await once(child, "close")) as [number | null, string | null];
+    return { code, signal, stdout, stderr };
+  }
+
+  it("hook stop", async () => {
+    // Before writeHookOutput this exited 1, with Node's unhandled 'error' trace
+    // on stderr.
+    const transcriptPath = join(home, "transcript.jsonl");
+    await writeFile(transcriptPath, `${editLine(2)}\n`);
+    const payload = { session_id: "s", transcript_path: transcriptPath, cwd: home };
+
+    // With a reader the same payload produces output, so the run without one
+    // is a failed write and not an empty one.
+    const read = await runHook("stop", payload, false);
+    expect(read.code).toBe(0);
+    expect(read.stdout).toContain("hookSpecificOutput");
+
+    const gone = await runHook("stop", payload, true);
+    expect({ code: gone.code, signal: gone.signal, stderr: gone.stderr }).toEqual({
+      code: 0,
+      signal: null,
+      stderr: "",
+    });
+  });
+
+  it("hook session-start", async () => {
+    // Before writeHookOutput this exited 1 on Node.js 22, as hook stop did. On
+    // 24 and 25 (measured on macOS) the same unhandled 'error' was thrown, yet
+    // the run still exited 0: where this handler's write runs, the throw did
+    // not end the process. So there this test alone does not pin the listener
+    // for session-start; "hook session-start writes through it when no sink is
+    // injected" does.
+    const repo = join(home, "ws");
+    await execFileAsync("git", ["-c", "init.defaultBranch=main", "init", "-q", repo], { env: ENV });
+    const paths = await ensureBasouDirectory(repo);
+    await writeManifest(
+      paths,
+      createManifest({
+        workspaceName: "ws",
+        now: new Date("2026-11-08T03:00:00.000Z"),
+        workspaceId: "ws_01HXABCDEF1234567890ABCDEF",
+      }),
+    );
+    await mkdir(join(home, ".basou"), { recursive: true });
+    await writeFile(
+      join(home, ".basou", "portfolio.yaml"),
+      `workspaces:\n  - path: ${JSON.stringify(repo)}\n`,
+    );
+    const payload = { session_id: "s", cwd: repo, source: "startup" };
+
+    const read = await runHook("session-start", payload, false);
+    expect(read.code).toBe(0);
+    expect(read.stdout).toContain("# Orientation");
+
+    const gone = await runHook("session-start", payload, true);
+    expect({ code: gone.code, signal: gone.signal, stderr: gone.stderr }).toEqual({
+      code: 0,
+      signal: null,
+      stderr: "",
+    });
   });
 });
