@@ -79,9 +79,10 @@ export type HookStopOptions = {
    */
   block?: boolean;
   /**
-   * Opt-in review gate: when true, a session that shipped substantive code
-   * without recording a review also warrants a nudge (composed into the same
-   * envelope as the capture nudge). Default (false) ignores the review verdict
+   * Opt-in review gate: when true, a session that shipped work and made at
+   * least `minEdits` file edits, in either order, without recording a review
+   * also warrants a nudge (composed into the same envelope as the capture
+   * nudge). Default (false) ignores the review verdict
    * entirely, keeping the capture-only output byte-identical.
    */
   requireReview?: boolean;
@@ -114,8 +115,17 @@ export type HookStopContext = {
   readStdin?: () => Promise<string>;
   /** Read a transcript file. Defaults to `readFile(path, "utf8")`. Injectable for tests. */
   readTranscript?: (path: string) => Promise<string>;
-  /** Sink for the hook's stdout JSON. Defaults to `process.stdout.write`. Injectable for tests. */
+  /**
+   * Sink for the hook's stdout JSON. Defaults to {@link writeHookOutput} on
+   * {@link HookStopContext.stdout}, which absorbs a write the reader can no
+   * longer take. Injectable for tests.
+   */
   write?: (text: string) => void;
+  /**
+   * The stream the default sink writes to. Defaults to `process.stdout`;
+   * ignored when `write` is given. Injectable for tests.
+   */
+  stdout?: NodeJS.WritableStream;
   /** Path to the file the protocol block is rendered into. Injectable for tests. */
   protocolTargetPath?: string;
   /** The operator's workspace registry (`~/.basou/portfolio.yaml`). Injectable for tests. */
@@ -173,11 +183,11 @@ export function registerHookCommand(program: Command): void {
     .command("stop")
     .description(
       "Stop-hook: when a substantive session recorded no decisions or next " +
-        "step, emit a non-blocking nudge to capture them. Also hands a running " +
+        "step, emit a nudge to capture them. Also hands a running " +
         "session the standing protocols when they changed after it started — the " +
         "copy it read at start is stale, and only this hook reaches a session " +
-        "still running. Reads the Stop hook JSON payload on stdin; never blocks " +
-        "and never fails the session.",
+        "still running. Reads the Stop hook JSON payload on stdin; holds the " +
+        "agent in its turn only with --block, and never fails the session.",
     )
     .option(
       "--min-edits <n>",
@@ -189,7 +199,7 @@ export function registerHookCommand(program: Command): void {
     )
     .option(
       "--require-review",
-      "Opt-in review gate: also remind when a session shipped substantive code (push / PR / merge) without recording a review",
+      "Opt-in review gate: also remind when a session shipped work (push / PR / merge) and made enough file edits (--min-edits) without recording a review",
     )
     .addHelpText("after", HOOK_STOP_HELP)
     .action(async (options: RawHookStopOptions) => {
@@ -375,10 +385,12 @@ answer (an uncaptured conversational decision). Read-only Bash (ls / grep /
 git status) does NOT count.
 
 With --require-review (opt-in, 'basou hook install --require-review') it also
-reminds when the session SHIPPED substantive code (git push / git merge /
-gh pr create|merge) without recording a review ('basou review record'). This
-gate is off by default; when on, its reminder is composed into the same
-envelope as the capture reminder.
+reminds when the session SHIPPED work (git push / git merge /
+gh pr create|merge) and made at least as many file edits as the threshold
+above (--min-edits), in either order, without recording a review ('basou
+review record'). Only file edits count toward it: an AskUserQuestion answer is
+not code to review. This gate is off by default; when on, its reminder is
+composed into the same envelope as the capture reminder.
 
 It also hands a RUNNING session the standing protocols when they changed after
 that session started. The protocol block in ~/.claude/CLAUDE.md is read at
@@ -398,13 +410,17 @@ flag and Claude Code's own loop prevention bound it to a single turn. Note that
 this covers the protocol delivery too, which carries no action to take -- with
 --block the turn is held so the new text lands before more work is done on the
 old. Either way the hook fails open: a bad payload or unreadable transcript
-exits cleanly with no output.
+exits cleanly with no output, and so does a reader that stops reading before
+the hook writes.
 `;
 
 /**
  * Programmatic entry for `basou hook stop`. Owns process state. Fail-open by
  * design: a Stop hook that throws or exits non-zero would disrupt every turn,
  * so ALL errors are swallowed and the process exits cleanly with no output.
+ * The try/catch covers what throws; a write the reader can no longer take is
+ * reported after it returns, as a stream event, which {@link writeHookOutput}
+ * absorbs.
  */
 export async function runHookStop(
   options: HookStopOptions,
@@ -420,7 +436,7 @@ export async function runHookStop(
 export async function doRunHookStop(options: HookStopOptions, ctx: HookStopContext): Promise<void> {
   const readStdin = ctx.readStdin ?? defaultReadStdin;
   const readTranscript = ctx.readTranscript ?? readTranscriptBounded;
-  const write = ctx.write ?? ((text) => void process.stdout.write(text));
+  const write = ctx.write ?? ((text) => writeHookOutput(text, ctx.stdout));
 
   const raw = await readStdin();
   if (raw.trim().length === 0) return;
@@ -626,8 +642,17 @@ async function transcriptCarries(path: string, token: string): Promise<boolean> 
 export type HookSessionStartContext = {
   /** Read the SessionStart payload on stdin to EOF. Injectable for tests. */
   readStdin?: () => Promise<string>;
-  /** Sink for the hook's stdout. Defaults to `process.stdout.write`. Injectable for tests. */
+  /**
+   * Sink for the hook's stdout. Defaults to {@link writeHookOutput} on
+   * {@link HookSessionStartContext.stdout}, which absorbs a write the reader
+   * can no longer take. Injectable for tests.
+   */
   write?: (text: string) => void;
+  /**
+   * The stream the default sink writes to. Defaults to `process.stdout`;
+   * ignored when `write` is given. Injectable for tests.
+   */
+  stdout?: NodeJS.WritableStream;
   /**
    * Render the position for a cwd. Defaults to {@link renderRegisteredWorkspacePosition}:
    * resolve the workspace, refuse one the operator has not registered, render
@@ -718,7 +743,9 @@ async function isRegisteredWorkspace(root: string, portfolioConfigPath: string):
  * Programmatic entry for `basou hook session-start`. Fail-open by design: a
  * SessionStart hook that throws, exits non-zero, or prints an error would put
  * that error into every Codex session's context (or block the start), so ALL
- * errors are swallowed and the process exits cleanly with no output.
+ * errors are swallowed and the process exits cleanly with no output. As in
+ * {@link runHookStop}, a write the reader can no longer take is absorbed by
+ * {@link writeHookOutput}, not by the try/catch.
  */
 export async function runHookSessionStart(ctx: HookSessionStartContext = {}): Promise<void> {
   try {
@@ -740,7 +767,7 @@ export async function runHookSessionStart(ctx: HookSessionStartContext = {}): Pr
  */
 export async function doRunHookSessionStart(ctx: HookSessionStartContext): Promise<void> {
   const readStdin = ctx.readStdin ?? defaultReadStdin;
-  const write = ctx.write ?? ((text) => void process.stdout.write(text));
+  const write = ctx.write ?? ((text) => writeHookOutput(text, ctx.stdout));
   const render =
     ctx.render ??
     ((cwd: string) => renderRegisteredWorkspacePosition(cwd, ctx.portfolioConfigPath));
@@ -869,6 +896,34 @@ async function defaultReadStdin(): Promise<string> {
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * Write a hook handler's output, by default to stdout, so that a reader which
+ * is already gone cannot fail the hook.
+ *
+ * The reader can stop reading before the hook writes: the tool stopped waiting
+ * for it, or a hand-written registration pipes it into a command that does not
+ * read. The write then fails with EPIPE, and Node reports that as an `'error'`
+ * event on the stream rather than by throwing, so it arrives after the
+ * handler's try/catch has returned. An `'error'` event with no listener is an
+ * uncaught exception, which ends the process with exit 1 and a stack trace on
+ * stderr. A hook handler exits 0 once its command line parses, so the listener
+ * makes a write nobody can receive what every other failure in a hook already
+ * is: no output and a clean exit.
+ */
+export function writeHookOutput(
+  text: string,
+  stream: NodeJS.WritableStream = process.stdout,
+): void {
+  if (!stream.listeners("error").includes(ignoreHookOutputError)) {
+    stream.on("error", ignoreHookOutputError);
+  }
+  stream.write(text);
+}
+
+function ignoreHookOutputError(): void {
+  // The reader is gone, so there is nobody left to tell.
 }
 
 /**
