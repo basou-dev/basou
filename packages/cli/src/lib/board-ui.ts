@@ -51,7 +51,8 @@ export const BOARD_HTML = `<!doctype html>
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.6 system-ui, -apple-system, Segoe UI, sans-serif; }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  /* The page's frame only: a cell of class wrap keeps the padding of a cell. */
+  div.wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
   nav.records { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 13px; margin-bottom: 8px; }
   nav.records a { color: inherit; }
   nav.records select { font: inherit; max-width: 100%; }

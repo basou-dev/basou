@@ -474,6 +474,31 @@ describe("parseBoardDeclaration: patterns, revisions and pointers", () => {
     );
   });
 
+  // What the reference says: a pattern takes no flag but u, and an inline
+  // modifier is read only by the Node.js releases that know it.
+  it("reads an inline modifier from Node.js 24 on, and refuses it on 22", () => {
+    const result = parse(
+      withMeasure({
+        id: "a",
+        kind: "match_count",
+        repo: ".",
+        include: ["a"],
+        pattern: "(?i:select)",
+        unit: "x",
+      }),
+    );
+    const major = Number(process.versions.node.split(".")[0]);
+    if (major >= 24) {
+      expect(result.ok).toBe(true);
+    } else {
+      const errors = errorsOf(result);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(
+        /^measures\[0\]\.pattern: is not a valid regular expression with the 'u' flag \(/,
+      );
+    }
+  });
+
   it("refuses an empty or broken pattern, start or end", () => {
     const errors = errorsOf(
       parse(

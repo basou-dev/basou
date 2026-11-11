@@ -70,6 +70,51 @@ All notable changes to **basou** are recorded here. The project follows
   question, while the reminder counts file edits only. It now says the
   reminder comes when the session shipped work and made at least as many file
   edits as `--min-edits` sets, in either order.
+- **The commands `basou board guide` prints ask for a URL with brackets or
+  braces in it as it is written.** A declaration takes `[ ]` and `{ }` in the
+  URL of an `http` or a `page_version` observation, but curl read them as its
+  own patterns: some stopped it with exit 3 (`[slug]`, `{}`), and others were
+  asked for as other URLs, with no error (`{b}` as `b`, a range such as
+  `[1-2]` or a set such as `{b,c}` as one request for each).
+  The commands now give curl `-g`. The script that reads an `http`
+  observation also says why for exit 3 (the URL is malformed) and for exit 56
+  (receiving failed, as through a proxy that refuses the host, so whether the
+  name resolves is not known).
+- **The board page draws the value of a measure or an observation level with
+  the cells beside it.** The padding of the page's frame also applied to the
+  cells that hold those values, which share its class name, and drew their
+  text 12px lower than the name and the change beside them. This was so from
+  0.72.0.
+- **`basou orient` no longer lists the files in the working directory of
+  `basou board guide`, or flags them as outside the declared source roots.**
+  The directory the guide names for its working files (`basou-board-` and
+  twelve hex digits, under the temp directory) holds the measurement and the
+  record's input, which the guide tells the agent to write there. Its files
+  are now left out of the position as other scratch files are, and counted
+  with them, where it is under a temp root `basou orient` knows: `/tmp`,
+  `/var/tmp`, or the temp directory of the process that draws the position.
+  One under another temp directory, as when the session that wrote it had a
+  `TMPDIR` the drawing process does not, is still listed.
+- **`basou board guide` says what else keeps a judgement from being
+  recorded, and whose turn the trail stays.** Step 7 and the refusal of
+  `basou board record` add that the day turning in the board's time zone
+  since the measurement also moves the digest: the day that was today is then
+  counted. Step 2b says that the model is part of what is measured, and how to
+  record a review made before the model that judges changed. Step 3 says that
+  `observed_at` given as a date alone is taken but keeps no time, and can read
+  a day apart from when the board was recorded. Step 1 says that `basou
+  orient`, or what a session is shown as it starts, may say to run `basou
+  refresh`, and that in this work it is still the operator's to run. Its list
+  of what the board page draws now has the measures, the repositories and the
+  components, which the page draws and the list left out.
+- **The board reference says three more things the measures do.** A
+  `file_name` measure's byte order is not the order of versions, so `pick:
+  last` over names that carry a version picks `1.9.0` over `1.10.0`. A
+  `line_count` or `match_count` measure reads a binary file matched as lines
+  too, which `exclude` leaves out. basou gives a pattern no flag but `u`:
+  Node.js 24 and later also read an inline modifier such as `(?i:select)`,
+  which Node.js 22 refuses with the declaration, so a letter that may be
+  either is written as a class to match either case wherever basou runs.
 
 ## 0.75.0 — 2026-11-02
 

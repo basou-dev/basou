@@ -36,6 +36,12 @@ import { normalize, sep } from "node:path";
  * life as an absolute path, so it starts with the separator turned into a dash
  * and carries a dash for every one after it. A directory named that way is
  * machinery, never something a person created.
+ *
+ * The other name it knows is the directory `basou board guide` tells an agent
+ * to put its working files in: `basou-board-` and twelve hex digits, under the
+ * temp directory. What is written there (the measurement, the record's input)
+ * is scratch in the same way, and the guide itself names it, so it is not a
+ * file of another project.
  */
 
 /** Temp roots to treat as transient, before per-platform aliasing. */
@@ -48,6 +54,9 @@ const TEMP_ROOTS = ["/tmp", "/var/tmp"];
  * starts with a dash from being mistaken for an encoded one.
  */
 const MIN_ENCODED_DASHES = 3;
+
+/** The working directory `basou board guide` names: `basou-board-` and 12 hex digits. */
+const BOARD_GUIDE_WORK_DIR = /^basou-board-[0-9a-f]{12}$/;
 
 /**
  * Whether `segment` is a working directory an agent tool encoded into a single
@@ -74,7 +83,8 @@ function withPrivateAlias(root: string): string[] {
 /**
  * Whether `filePath` is an agent's per-session scratch path: under a temp root
  * (`/tmp`, `/var/tmp`, or the platform temp directory) AND carrying an encoded
- * working directory in one of the segments below that root.
+ * working directory, or the board guide's working directory, in one of the
+ * segments below that root.
  *
  * Only ABSOLUTE paths qualify. A recorded path that is repo-relative or
  * `~`-prefixed has already been placed by the path sanitizer, which means it is
@@ -88,5 +98,8 @@ export function isTransientToolPath(filePath: string, temp: string = tmpdir()): 
     .flatMap(withPrivateAlias)
     .find((r) => candidate === r || candidate.startsWith(r + sep));
   if (root === undefined) return false;
-  return candidate.slice(root.length).split(sep).some(isEncodedWorkingDirectory);
+  return candidate
+    .slice(root.length)
+    .split(sep)
+    .some((segment) => isEncodedWorkingDirectory(segment) || BOARD_GUIDE_WORK_DIR.test(segment));
 }

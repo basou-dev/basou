@@ -573,7 +573,7 @@ async function checkAndRecord(
   const recordedAt = ctx.nowProvider?.() ?? new Date();
   if (measurement.digest !== parsed.input.measure_digest) {
     throw new RecordRefusal(
-      `measure_digest is ${parsed.input.measure_digest}, but the board measures ${measurement.digest} now: something it measures or board.yaml changed since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.`,
+      `measure_digest is ${parsed.input.measure_digest}, but the board measures ${measurement.digest} now: something it measures or board.yaml changed since the judgement, basou was rebuilt or upgraded since that measurement, or the day turned in the board's time zone. Measure again and judge that; nothing was written.`,
     );
   }
   const record = buildRecord({

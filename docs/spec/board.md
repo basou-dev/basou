@@ -296,6 +296,12 @@ measure's `pattern` and a `section`'s `start` and `end` take without a word
 and an `http` observation's patterns refuse. Double every `\` there
 (`"^\\d+$"`) if double quotes are needed.
 
+basou gives a pattern no flag but `u`, and a declaration has no key for
+one. Node.js 24 and later also read an inline modifier such as
+`(?i:select)`, but Node.js 22 refuses it, and with it the declaration. To
+match either case wherever basou runs, write each letter that may be either
+as a class, such as `'[sS][eE][lL][eE][cC][tT]'`.
+
 #### When a measure is not measured
 
 A measure's value is `null` when it cannot be measured, and then the
@@ -347,6 +353,7 @@ counted, and a file right in `path` counts no directory. With nothing under
 
 The value is the number of lines of the files matched, counted as
 [above](#regular-expressions).
+A binary file matched is counted too, as `match_count` says.
 
 #### `match_count`
 
@@ -359,6 +366,11 @@ The value is the number of lines of the files matched, counted as
 
 The value is the number of lines of the files matched that `pattern`
 matches, each line counted once.
+
+Every file matched is read as the regular expressions section says, a
+binary one too (a compiled `.mo` catalog, an image): its bytes split at `\n`
+are lines like any other, and a pattern can match one. Leave such files out
+with `exclude`.
 
 With a `section`, only the lines of a section of each file are looked at:
 those after the first line `start` matches, up to the next line `end`
@@ -429,6 +441,12 @@ that file's name, or, with a `pattern`, what `group` holds in the match of
 it. The candidates are narrowed before one is picked, so a name the pattern
 does not match at the end of the order (`schema.sql` after
 `20261001_init.sql`) does not hide the one before it.
+
+Byte order is not the order of versions: `1.10.0.sql` comes before
+`1.9.0.sql`, so `pick: last` over names that carry a version gives
+`1.9.0.sql` once a part of the version reaches two digits. It suits names
+that sort as they are written, such as a date or numbers padded to one
+width (`0009_`, `0010_`).
 
 It is null when no file is left to pick (a string has no zero) or the group
 took no part in the match. A `group` without a `pattern` is refused. The
@@ -785,8 +803,8 @@ In this order, and nothing is written when any step refuses:
 5. **The digest.** The board is measured again, as the model of
    `judged_by.model`, and the record is refused unless the digest is
    `measure_digest`: something measured, or `board.yaml`, changed since the
-   judgement, or another basou measured it (see [The
-   digest](#513-the-digest)).
+   judgement, another basou measured it, or the day turned in the board's
+   time zone (see [The digest](#513-the-digest)).
 
 `--dry-run` runs every step and writes nothing. The exit code is `0` when
 the record was written (with `--dry-run`, when everything checked out) and
@@ -1314,7 +1332,10 @@ change to what `board.yaml` declares (not its comments or layout, though
 editing the file can move a repo's counts as editing any file can), and with
 a basou of another version or build. Two measurements of the same values by
 the same declaration and the same basou have the same digest whenever they
-were taken.
+were taken on the same day in the board's time zone. When the day turns, the
+row of the day before, which was today's and left out, comes into it
+wherever `effort.daily` has rows, so a judgement measured before the day
+turned cannot then be recorded.
 
 ## 6. Records of version 1 and 2
 
