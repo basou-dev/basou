@@ -2467,6 +2467,11 @@ describe("basou view: the board page", () => {
     expect(wide["tr.source"]).toBe("display: none;");
     expect(style.indexOf("tr.source { display: none; }")).toBeLessThan(start);
     expect(wide["td.n"]).toBe("white-space: nowrap;");
+    // The frame of the page is not a cell's: a value's cell, of class wrap,
+    // keeps the padding of the cells beside it.
+    expect(wide["div.wrap"]).toBe("max-width: 1100px; margin: 0 auto; padding: 16px;");
+    expect(Object.keys(wide).filter((selector) => /(^|[\s,])\.wrap\b/.test(selector))).toEqual([]);
+    expect(wide["td.wrap"]).toBe("overflow-wrap: anywhere; min-width: 10em;");
     expect(wide["td.lanes, table.repos th"]).toBe("word-break: keep-all;");
     expect(wide["table.matrix th.stage"]).toContain("min-width: 64px;");
     expect(wide["table.matrix td.cell"]).toContain("font-size: 18px;");

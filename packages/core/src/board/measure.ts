@@ -107,7 +107,9 @@ export type BoardMeasurement = {
    * `fetched_at`, with the declaration it was measured by (see
    * {@link boardDigest}), serialized with its keys sorted. Two measurements
    * with the same values by the same declaration have the same digest
-   * whenever they were taken. The freshness moves as work goes on, the
+   * whenever they were taken on the same day in the board's time zone: when
+   * the day turns, the row of the day before comes into it wherever
+   * `effort.daily` has rows. The freshness moves as work goes on, the
    * measuring session's own included, the axis rests on the day, the model
    * and the records, the diff is derived from the previous record, a fetch
    * that brings nothing still moves `fetched_at`, and the others move with

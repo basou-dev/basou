@@ -1565,7 +1565,7 @@ describe("basou board record", () => {
       `measure_digest is ${input.measure_digest}, but the board measures sha256:`,
     );
     expect(err.join("\n")).toContain(
-      "something it measures or board.yaml changed since the judgement, or basou was rebuilt or upgraded since that measurement. Measure again and judge that; nothing was written.",
+      "something it measures or board.yaml changed since the judgement, basou was rebuilt or upgraded since that measurement, or the day turned in the board's time zone. Measure again and judge that; nothing was written.",
     );
     expect(process.exitCode).toBe(1);
     await expect(readdir(join(repo, "board"))).resolves.toEqual(["board.yaml"]);

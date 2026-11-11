@@ -174,7 +174,7 @@ export function boardGuide(input: BoardGuideInput): string {
   );
   block(`cd ${anchor} && basou refresh`);
   line(
-    "Never suggest `--force` without a reason you can state. This session counts among the new or updated ones, so 0 is not to be expected. If the operator does not run it, say so in a footnote.",
+    "`basou orient`, and what a session is shown as it starts, may say to run `basou refresh`: in this work it is still the operator's to run. Never suggest `--force` without a reason you can state. This session counts among the new or updated ones, so 0 is not to be expected. If the operator does not run it, say so in a footnote.",
     "",
   );
 
@@ -215,7 +215,7 @@ export function boardGuide(input: BoardGuideInput): string {
     "",
     referenceLine(input),
     "",
-    'Apply nothing until the operator approves. Then edit board.yaml, measure again from step 2 (the digest moves with the declaration), and give the record an `axis_review`: `{ "triggers": [every letter that led to it], "summary": "what was reviewed and decided" }`. Raise `axis.version` when a lane is added or removed or a stage\'s condition changes, and name the commit `axis review v<version>`. Give `axis_review` even when nothing changed: the next (b) counts from it. Registering a component only to silence (a) is not a review.',
+    'Apply nothing until the operator approves. Then edit board.yaml, measure again from step 2 (the digest moves with the declaration), and give the record an `axis_review`: `{ "triggers": [every letter that led to it], "summary": "what was reviewed and decided" }`. Raise `axis.version` when a lane is added or removed or a stage\'s condition changes, and name the commit `axis review v<version>`. Give `axis_review` even when nothing changed: the next (b) counts from it. Registering a component only to silence (a) is not a review. The model is part of what is measured: when the model that judges changes after step 2, measure again with its `--model`. When that measurement no longer asks for a review (the new model is the one that reviewed last), a review already made still goes in `axis_review` with the letters that led to it, and its summary says the model changed: the page shows it beside an axis that needs no review.',
     "",
   );
 
@@ -261,7 +261,7 @@ export function boardGuide(input: BoardGuideInput): string {
   );
   block(`${go} && basou board record --file "$W/input.json" --dry-run; echo "exit=$?"`);
   line(
-    "A refusal lists every reason on stderr. A digest that differs means something measured or board.yaml changed since step 2, or basou was rebuilt or upgraded: measure again from step 2 (the judgement can be kept where nothing it rests on moved). When it checks out, write it:",
+    "A refusal lists every reason on stderr. A digest that differs means something measured or board.yaml changed since step 2, basou was rebuilt or upgraded, or the day turned in the board's time zone (the day that was today is then counted): measure again from step 2 (the judgement can be kept where nothing it rests on moved). When it checks out, write it:",
   );
   block(`${go} && basou board record --file "$W/input.json"; echo "exit=$?"`);
   line(
@@ -341,8 +341,11 @@ export function boardGuide(input: BoardGuideInput): string {
     "5. Observed outside: your `observed`. basou draws each value as its kind reads, with what it looks at, its notes and whether it moved since the last record.",
     "6. Period and effort: basou draws it. Write nothing that gives the numbers a meaning.",
     "7. Operator's turns: `prose.operator_turns`, the items waiting for a ruling (not for implementation), the ones that move most first, each with its source (a decision or task id, a pull request) in `source`. This is what is read most: what the operator can do to move the board.",
-    "8. Ratios: basou draws them.",
-    "9. Footnotes: `prose.footnotes`, what was not confirmed, what is estimated, whether the trail was refreshed, a build that is not the repo's main. basou adds the axis, the model, what was not measured and which basou measured.",
+    "8. Measures: basou draws every measure, its value and how it moved since the last record.",
+    "9. Ratios: basou draws them.",
+    "10. Repositories: basou draws each repo as it was measured.",
+    "11. Components: basou draws the components as they were found, against the registry.",
+    "12. Footnotes: `prose.footnotes`, what was not confirmed, what is estimated, whether the trail was refreshed, a build that is not the repo's main. basou adds the axis, the model, what was not measured and which basou measured.",
     "",
     "## Do not",
     "",
@@ -471,7 +474,7 @@ function observeSteps(
     return;
   }
   line(
-    'Read only: these commands write nothing and change nothing. Make each one, and write it under its key in `observed` as `{ "value": <value>, "observed_at": <when>, "source": <what you asked> }`; the command of an `http` observation prints this whole entry. `observed_at` is when you made it, or tried to, with its offset, such as `date -u +%Y-%m-%dT%H:%M:%SZ` prints. When it cannot be made (a command failed, nothing to read, no answer), write `"value": null` and an `"error"` saying why, and still the `observed_at` of when you tried: record refuses one left empty. The board then shows it as not confirmed, with the previous record\'s value. Never carry an old value forward as today\'s. Keep the keys: they join each value to the previous record\'s.',
+    'Read only: these commands write nothing and change nothing. Make each one, and write it under its key in `observed` as `{ "value": <value>, "observed_at": <when>, "source": <what you asked> }`; the command of an `http` observation prints this whole entry. `observed_at` is when you made it, or tried to, with its offset, such as `date -u +%Y-%m-%dT%H:%M:%SZ` prints. Record takes a date alone too, but a date keeps no time, and the board page shows it as written, which can read a day apart from when the board was recorded: write the time, for an observation not made as well. When it cannot be made (a command failed, nothing to read, no answer), write `"value": null` and an `"error"` saying why, and still the `observed_at` of when you tried: record refuses one left empty. The board then shows it as not confirmed, with the previous record\'s value. Never carry an old value forward as today\'s. Keep the keys: they join each value to the previous record\'s.',
     "",
     "Write a value as the command printed it, in the shape its kind gives it below: record refuses another, such as a number given as a string, a string with a space or a line break at either end, or an `http` status that is not a response's (100 to 599). A `manual` value is the operator's answer, as any JSON value.",
     "",
@@ -538,7 +541,7 @@ function observeSteps(
       case "page_version":
         line(`The version ${codeSpan(o.url)} shows:`);
         block(
-          `${go} && curl -fsS --max-time 20 ${shellWord(o.url)} > "$W/page-${o.key}.html"; echo "curl exit=$?"`,
+          `${go} && curl -g -fsS --max-time 20 ${shellWord(o.url)} > "$W/page-${o.key}.html"; echo "curl exit=$?"`,
           `${go} && node -e 'let t="";process.stdin.on("data",(d)=>{t+=d}).on("end",()=>{const m=t.replace(/<meta\\b[^>]*\\bname\\s*=\\s*["\\x27]?generator\\b[^>]*>/gi,"").match(/(?<![\\w.])v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?/);if(m===null){process.exitCode=1}else{console.log(m[0])}})' < "$W/page-${o.key}.html"; echo "exit=$?"`,
         );
         line(`Source: ${codeSpan(sourceOf(o))}.`, "");
@@ -686,7 +689,7 @@ const HTTP_SCRIPT = [
   "const print = (value, error) => console.log(shown(JSON.stringify({ value, observed_at: new Date().toISOString(), source: url, ...(error === undefined ? {} : { error }) })));",
   "const read = () => {",
   'const exit = fs.readFileSync(at + ".exit", "utf8").trim();',
-  `if (exit !== "0") return print(null, "curl exit " + exit + (exit === "47" ? ": more than ${BOARD_HTTP_MAX_REDIRECTS} redirects" : exit === "28" ? ": no answer in 20 seconds" : exit === "6" ? ": the name does not resolve" : exit === "7" ? ": no connection" : ""));`,
+  `if (exit !== "0") return print(null, "curl exit " + exit + (exit === "47" ? ": more than ${BOARD_HTTP_MAX_REDIRECTS} redirects" : exit === "28" ? ": no answer in 20 seconds" : exit === "6" ? ": the name does not resolve" : exit === "7" ? ": no connection" : exit === "3" ? ": the URL is malformed" : exit === "56" ? ": receiving failed, as through a proxy that refuses the host: whether the name resolves is not known" : ""));`,
   'const m = /^([0-9]{3}) ([0-9]+) (.*)$/.exec(fs.readFileSync(at + ".meta", "utf8").trimEnd());',
   'if (m === null) return print(null, "curl printed no status line");',
   "const status = Number(m[1]);",
@@ -756,7 +759,7 @@ function httpSteps(
   const at = `"$W/http-${o.key}`;
   const args = [o.url, o.count_pattern ?? "", o.capture_pattern ?? "", ...(o.words ?? [])];
   block(
-    `${go} && { rm -f ${at}.body"; curl -sS -L --max-redirs ${BOARD_HTTP_MAX_REDIRECTS} --max-time 20 -o ${at}.body" -w '%{http_code} %{num_redirects} %{url_effective}\\n' ${shellWord(o.url)} > ${at}.meta"; echo "$?" > ${at}.exit"; node "$W/${HTTP_SCRIPT_FILE}" -- ${at}" ${args.map(shellWord).join(" ")}; }; echo "exit=$?"`,
+    `${go} && { rm -f ${at}.body"; curl -g -sS -L --max-redirs ${BOARD_HTTP_MAX_REDIRECTS} --max-time 20 -o ${at}.body" -w '%{http_code} %{num_redirects} %{url_effective}\\n' ${shellWord(o.url)} > ${at}.meta"; echo "$?" > ${at}.exit"; node "$W/${HTTP_SCRIPT_FILE}" -- ${at}" ${args.map(shellWord).join(" ")}; }; echo "exit=$?"`,
   );
   line(
     `Put the line it prints under ${codeSpan(o.key)} as it is. Source: ${codeSpan(sourceOf(o))}.`,

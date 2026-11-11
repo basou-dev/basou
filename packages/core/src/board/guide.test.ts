@@ -280,7 +280,7 @@ describe("boardGuide: a board declared", () => {
       "gh run list --repo 'owner/name' --workflow 'quality.yml' --branch 'main' --limit 1",
     );
     expect(blocks).toContain(
-      `curl -fsS --max-time 20 'https://example.com/ja/?a=1&b=2' > "$W/page-site.html"`,
+      `curl -g -fsS --max-time 20 'https://example.com/ja/?a=1&b=2' > "$W/page-site.html"`,
     );
     expect(guide).toContain(
       "Only the operator can make this one: count the users in production, read only",
@@ -977,11 +977,11 @@ describe("boardGuide: an http observation", () => {
     expect(script).not.toMatch(/['\\]/);
     const file = /> "\$W\/(http-read-[0-9a-f]{12}\.cjs)"; echo "exit=\$\?"$/.exec(write)?.[1];
     expect(file).toBeDefined();
-    expect(blocks.indexOf(write)).toBeLessThan(blocks.findIndex((b) => b.includes("curl -sS")));
+    expect(blocks.indexOf(write)).toBeLessThan(blocks.findIndex((b) => b.includes("curl -g -sS")));
     const get = blocks.find((b) => b.includes('"$W/http-shop.body"')) as string;
     expect(get).toMatch(/^cd .* && \{ rm -f "\$W\/http-shop\.body"; curl /);
     expect(get).toContain(
-      `curl -sS -L --max-redirs 10 --max-time 20 -o "$W/http-shop.body" -w '%{http_code} %{num_redirects} %{url_effective}\\n' '${SHOP}' > "$W/http-shop.meta"; echo "$?" > "$W/http-shop.exit"; node "$W/${file}" -- "$W/http-shop" '${SHOP}' '<loc>' 'Version ([0-9.]+)' 'in stock' '${IN_STOCK}' 'AT&T'; }; echo "exit=$?"`,
+      `curl -g -sS -L --max-redirs 10 --max-time 20 -o "$W/http-shop.body" -w '%{http_code} %{num_redirects} %{url_effective}\\n' '${SHOP}' > "$W/http-shop.meta"; echo "$?" > "$W/http-shop.exit"; node "$W/${file}" -- "$W/http-shop" '${SHOP}' '<loc>' 'Version ([0-9.]+)' 'in stock' '${IN_STOCK}' 'AT&T'; }; echo "exit=$?"`,
     );
     // No -f: a 4xx or 5xx is a status, not a failure.
     expect(get.slice(get.indexOf("curl "), get.indexOf(' > "$W/http-shop.meta"'))).not.toMatch(
@@ -1072,6 +1072,7 @@ describe("boardGuide: an http observation, run", () => {
       else if (url.startsWith("/loop")) {
         res.writeHead(302, { location: `/loop${(url.length % 50) + 1}` }).end();
       } else if (url === "/empty") res.writeHead(204).end();
+      else if (url.startsWith("/echo?")) res.writeHead(200).end(url);
       else if (url.startsWith("/body/") && bodies.has(url.slice(6))) {
         res.writeHead(200, { "content-type": "text/html" }).end(bodies.get(url.slice(6)));
       } else if (url.startsWith("/status/")) res.writeHead(Number(url.slice(8))).end("x");
@@ -1232,6 +1233,53 @@ describe("boardGuide: an http observation, run", () => {
       value: null,
       error: "curl exit 7: no connection",
     });
+  });
+
+  it("asks for a URL with brackets and braces as it is written", async () => {
+    // Without -g, curl reads [ ] as a range and stops (exit 3), and { } as a
+    // set it rewrites the URL by.
+    const path = "/echo?request[slug]=x&a={b}";
+    const get = await observe([{ key: "shop", kind: "http", url: SHOP, words: [path] }]);
+    expect(await get("shop", path)).toMatchObject({
+      value: { status: 200, words: [true] },
+    });
+  });
+
+  it("says why when curl exits 3 or 56", async () => {
+    const guide = boardGuide(
+      guideInput({
+        anchor: dir,
+        board: declared(httpDeclaration([{ key: "shop", kind: "http", url: SHOP }])),
+      }),
+    );
+    const blocks = blocksIn(guide);
+    const write = blocks.find((b) => b.includes("printf '%s\\n' '")) as string;
+    expect(await run(write)).toEqual({ out: "exit=0\n", err: "" });
+    const block = blocks.find((b) => b.includes('"$W/http-shop.body"')) as string;
+    for (const [code, why] of [
+      ["3", "curl exit 3: the URL is malformed"],
+      [
+        "56",
+        "curl exit 56: receiving failed, as through a proxy that refuses the host: whether the name resolves is not known",
+      ],
+    ]) {
+      // A curl that exits as a real one would, with nothing written.
+      const bin = join(dir, `bin-${code}`);
+      await mkdir(bin);
+      await writeFile(join(bin, "curl"), `#!/bin/sh\nexit ${code}\n`, { mode: 0o755 });
+      const out = await new Promise<string>((resolve) => {
+        execFile(
+          "sh",
+          ["-c", block],
+          {
+            env: { ...process.env, TMPDIR: dir, PATH: `${bin}:${process.env.PATH ?? ""}` },
+            encoding: "utf8",
+          },
+          (_error, stdout) => resolve(stdout),
+        );
+      });
+      expect(JSON.parse(out.split("\n")[0] as string)).toMatchObject({ value: null, error: why });
+    }
   });
 
   it("reads a body at 299 and not at 300, and gives no value for a status no response has", async () => {
@@ -1628,12 +1676,39 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
       "5. Observed outside",
       "6. Period and effort",
       "7. Operator's turns",
-      "8. Ratios",
-      "9. Footnotes",
+      "8. Measures",
+      "9. Ratios",
+      "10. Repositories",
+      "11. Components",
+      "12. Footnotes",
     ]);
     // The summary draws its tiles; the observations are a section of their own.
     expect(list).toContain("basou draws the tiles.\n");
     expect(list).not.toContain("table of observations");
+  });
+
+  it("says what keeps a judgement from being recorded, and whose turn the trail is", () => {
+    const guide = boardGuide(
+      guideInput({
+        board: declared(httpDeclaration([{ key: "shop", kind: "http", url: SHOP }])),
+      }),
+    );
+    // A date alone is taken, and loses the time asked.
+    expect(guide).toContain(
+      "Record takes a date alone too, but a date keeps no time, and the board page shows it as written, which can read a day apart from when the board was recorded: write the time, for an observation not made as well.",
+    );
+    // A new day in the board's time zone moves the digest.
+    expect(guide).toContain(
+      "basou was rebuilt or upgraded, or the day turned in the board's time zone (the day that was today is then counted): measure again from step 2",
+    );
+    // The model is measured: a change of it after step 2 is measured again.
+    expect(guide).toContain(
+      "when the model that judges changes after step 2, measure again with its `--model`.",
+    );
+    // What orient says does not make the refresh this work's.
+    expect(guide).toContain(
+      "`basou orient`, and what a session is shown as it starts, may say to run `basou refresh`: in this work it is still the operator's to run.",
+    );
   });
 
   it("prints each observation's notes under how it is made, and nothing for one without", () => {
