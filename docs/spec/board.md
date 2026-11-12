@@ -296,11 +296,12 @@ measure's `pattern` and a `section`'s `start` and `end` take without a word
 and an `http` observation's patterns refuse. Double every `\` there
 (`"^\\d+$"`) if double quotes are needed.
 
-basou gives a pattern no flag but `u`, and a declaration has no key for
-one. Node.js 24 and later also read an inline modifier such as
-`(?i:select)`, but Node.js 22 refuses it, and with it the declaration. To
-match either case wherever basou runs, write each letter that may be either
-as a class, such as `'[sS][eE][lL][eE][cC][tT]'`.
+basou gives a pattern no flag but `u` (an `http` observation's
+`count_pattern` also gets `g`, so that each match is counted), and a
+declaration has no key for one. Node.js 24 and later also read an inline
+modifier such as `(?i:select)`, but Node.js 22 refuses it, and with it the
+declaration. To match either case wherever basou runs, write each letter
+that may be either as a class, such as `'[sS][eE][lL][eE][cC][tT]'`.
 
 #### When a measure is not measured
 

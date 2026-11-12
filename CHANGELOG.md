@@ -111,7 +111,8 @@ All notable changes to **basou** are recorded here. The project follows
   `file_name` measure's byte order is not the order of versions, so `pick:
   last` over names that carry a version picks `1.9.0` over `1.10.0`. A
   `line_count` or `match_count` measure reads a binary file matched as lines
-  too, which `exclude` leaves out. basou gives a pattern no flag but `u`:
+  too, which `exclude` leaves out. basou gives a pattern no flag but `u`
+  (and `g` to an `http` observation's `count_pattern`, to count each match):
   Node.js 24 and later also read an inline modifier such as `(?i:select)`,
   which Node.js 22 refuses with the declaration, so a letter that may be
   either is written as a class to match either case wherever basou runs.
