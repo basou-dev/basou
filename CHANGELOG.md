@@ -3,6 +3,32 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Removed
+
+- **`basou init --repo-url` is removed.** The flag has been a deprecated
+  no-op since `0.31.0`, when `project.repository_url` left the manifest: it
+  was accepted, ignored, and warned about, and each of its messages said it
+  would be removed at `1.0`. Passing it is now an unknown-option error
+  (`error: unknown option '--repo-url'`, exit 1), raised before `basou init`
+  writes anything. Drop the flag from any script that still passes it;
+  nothing else about `basou init` changes. It was the only deprecated no-op
+  flag.
+
+### Changed
+
+- **[compatibility.md](docs/spec/compatibility.md) states its guarantees as
+  committed from `1.0.0`**, where it used to describe the policy `1.0` would
+  freeze. The guaranteed surfaces and their rules are unchanged. The
+  deprecation policy now says what holds within a `1.x` line: a command or
+  flag that becomes obsolete stays, still accepted and still doing what it
+  did, and may be marked deprecated in its `--help` and by a warning on
+  stderr; removing it waits for the next major. The `0.x` rule (an obsolete
+  flag became a no-op and was removed at `1.0`) is kept there as history.
+  The README's status section and the introduction of CONTRIBUTING.md no
+  longer call basou pre-1.0.
+
 ## 0.76.0 — 2026-11-12
 
 ### Changed

@@ -4,15 +4,14 @@ This document defines what basou commits to under [semantic
 versioning](https://semver.org/), so that adopters know which surfaces they can
 build on and which are still internal.
 
-basou is **pre-1.0 today**. The `0.x` line is being driven toward a `1.0`
-release aimed at broad adoption — the point at which the guarantees below are
-formally committed. This document describes the policy that `1.0` freezes; it is
-written before the freeze because parts of it (notably the on-disk format gate)
-cannot be retrofitted onto an already-frozen contract.
+basou commits to the guarantees below from `1.0.0` on. The `0.x` releases led
+up to that commitment, and this policy was written and adjusted across them.
+Where this document names a `0.x` release, it is giving the history of a rule,
+not a second set of rules.
 
 ## Guaranteed surfaces
 
-At `1.0`, semantic versioning applies to exactly three surfaces:
+Semantic versioning applies to exactly three surfaces:
 
 1. **The `basou` CLI** — the set of commands and subcommands, their flags,
    exit codes, the documented `--json` output shapes of the commands that offer
@@ -519,7 +518,7 @@ even where `engines.node` admits its prereleases.
   table is guaranteed from its first release. An experimental command may
   change its flags, its output and input shapes, and the files it reads or
   writes, or disappear, at any release. This overrides the [deprecation
-  policy](#deprecation-policy), including the `0.x` freeze. What still holds:
+  policy](#deprecation-policy). What still holds:
     - Its exit codes follow the rule stated for experimental commands under
       [exit codes](#exit-codes-zero-is-success-and-a-failures-value-may-be-refined),
       which replaces the allocation for them.
@@ -599,10 +598,10 @@ a `basou_version`). This tracks the **on-disk format major**, which is
   validator enforces the same major. (Cache schemas keep an exact `const` — see
   below.)
 
-This gate behavior is itself part of the frozen format contract. It is defined
-before the `1.0` freeze because a forward-compatible acceptor cannot be added
-after the version is pinned to an exact literal — an old reader would already
-reject anything it had not seen.
+This gate behavior is itself part of the frozen format contract. It was put in
+place before `1.0`, in `0.31.0`, because a forward-compatible acceptor cannot
+be added after the version is pinned to an exact literal — an old reader would
+already reject anything it had not seen.
 
 **Migration machinery is deliberately deferred.** Only the *gate* is frozen now;
 the transform that would carry an old format major forward to a new one is
@@ -614,22 +613,32 @@ contract.
 
 ## Deprecation policy
 
-For the `0.x` line the CLI surface is already treated as frozen — commands and
-flags are stable. When a flag becomes obsolete before `1.0`, it is **kept as a
-deprecated no-op** (still accepted, prints a warning that it is now ignored)
-rather than removed, so an existing script that passes the flag keeps working
-instead of erroring on an unknown option. Deprecated no-op flags are removed at
-`1.0`. None of this paragraph applies to the experimental commands listed
-under [What is *not* guaranteed](#what-is-not-guaranteed).
+Within a `1.x` line a command or flag that becomes obsolete **stays**: it is
+still accepted and still does what it did, because removing it, or changing
+what it means, waits for the next major. A release may mark it deprecated — in
+its `--help`, and with a warning on stderr when it is used — and the changelog
+says so when it does. The next major may then remove it. None of this
+paragraph applies to the experimental commands listed under [What is *not*
+guaranteed](#what-is-not-guaranteed).
 
-> Example: `basou init --repo-url` became a no-op when `project.repository_url`
-> was removed from the manifest (a value nothing read and that drifted silently).
-> The flag is accepted-and-ignored through `0.x` and dropped at `1.0`.
+Before `1.0` the rule was looser. From `0.31.0` the CLI surface of the `0.x`
+line was treated as frozen, and a flag that became obsolete was **kept as a
+deprecated no-op** (still accepted, printing a warning that it was now
+ignored) rather than removed, so that an existing script that passed the flag
+kept working instead of erroring on an unknown option. Deprecated no-op flags
+were removed at `1.0`.
+
+> Example: `basou init --repo-url` became a no-op in `0.31.0`, when
+> `project.repository_url` was removed from the manifest (a value nothing read
+> and that drifted silently). The flag was accepted and ignored through `0.x`,
+> and `1.0.0` removed it: passing it is now an unknown-option error. It is the
+> only flag that took this path.
 
 The same policy covers a field that becomes **required** on a documented JSON
 input shape. Within a `1.x` line that is a breaking change and waits for
-`2.0`; the path below is how it is introduced, at a major or before `1.0`. It
-is warned about for at least one release first — the item is
+`2.0`; the path below is how it is introduced at a major, and how it was
+introduced before `1.0`. It is warned about for at least one release first —
+the item is
 still accepted and still written, and the full text of the eventual error goes
 to stderr — before omitting it becomes an error. The warning release is a
 chance to be told, not a guarantee of being told: a producer that upgrades
@@ -673,14 +682,14 @@ treats as frozen.
 
 Since this policy was adopted (`0.31.0`), a flag has also kept what it
 accepts, with one exception: `-` as the file of an input-file flag, refused
-before `1.0` so that `1.0` does not freeze it as a file name in the way of
+before `1.0` so that `1.0` would not freeze it as a file name in the way of
 the [reservation](#a-value-a-flag-refuses). Four flags read it as a file named
 `-` until the release after `0.68.4`: `--file` on `basou decision capture`,
 `basou review record` and `basou note`, and `--from` on `basou session
 import`. It was refused outright, with no warning release. A warning release
 exists so that a caller does not lose input it cannot easily make again; here
 the input is a file, which stays on disk and is read as `./-`, as the refusal
-says. No other value is refused this way before `1.0`.
+says. No other value was refused this way before `1.0`.
 
 After `1.0`, removing or changing the meaning of any guaranteed-surface element
 requires a major bump; additions within a line remain backward-compatible.

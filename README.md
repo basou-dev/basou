@@ -176,32 +176,32 @@ data model, see [docs/spec/](docs/spec/).
 
 ## Status & stability
 
-Basou is **open source, local-first, and pre-1.0**, maintained by a single
-author who runs it daily across their own projects. The `0.x` line is being
-driven toward a **1.0 release aimed at broad adoption** — a version external
-maintainers and teams can rely on — without giving up the local-first,
-zero-network design.
+Basou is **open source and local-first**, maintained by a single author who
+runs it daily across their own projects. `1.0` is the release aimed at **broad
+adoption** — a version external maintainers and teams can rely on — without
+giving up the local-first, zero-network design.
 
-What that means for you today:
+What that means for you:
 
-- **The `basou` CLI surface is frozen for the `0.x` line** — commands and
-  flags are stable, except that `-` as the file of an input-file flag is
-  refused, [reserved for standard
-  input](docs/spec/compatibility.md#a-value-a-flag-refuses), and except the
-  experimental commands that
-  [docs/spec/compatibility.md](docs/spec/compatibility.md#what-is-not-guaranteed)
-  lists, which may also write files beside one of yours that they read, never
+- **The `basou` CLI, the `@basou/sdk` read API and the on-disk `.basou/`
+  formats follow semantic versioning from `1.0.0`.** Within `1.x` they change
+  only additively, with the exceptions that
+  [docs/spec/compatibility.md](docs/spec/compatibility.md) states and bounds.
+  The experimental commands it
+  [lists](docs/spec/compatibility.md#what-is-not-guaranteed) are outside the
+  guarantee, and may also write files beside one of yours that they read, never
   under `.basou/` (`basou board record` writes records beside its
   `board.yaml`: they are not part of the trail, though they may hold what the
   trail holds). Internal `@basou/core` APIs may still change between minor
   releases.
-- **The on-disk `.basou/` formats are versioned** and ship JSON Schemas;
-  `1.0` is where the formats and semver guarantees are committed.
+- **The on-disk `.basou/` formats are versioned** and ship JSON Schemas. The
+  format version is separate from the product version: a `1.x` install reads
+  and writes `schema_version: 0.x` files, and that is expected.
 - **Adopting is low-risk and reversible**: the trail lives in a `.basou/`
   directory next to your code, nothing is sent off-machine, and the
   generators are dry-run-by-default and non-destructive.
 
-For the precise semver contract — which surfaces `1.0` guarantees, how the
+For the precise semver contract — which surfaces are guaranteed, how the
 on-disk format is versioned, and the deprecation policy — see
 [docs/spec/compatibility.md](docs/spec/compatibility.md).
 
