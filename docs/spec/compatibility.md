@@ -615,9 +615,15 @@ contract.
 
 Within a `1.x` line a command or flag that becomes obsolete **stays**: it is
 still accepted and still does what it did, because removing it, or changing
-what it means, waits for the next major. A release may mark it deprecated — in
-its `--help`, and with a warning on stderr when it is used — and the changelog
-says so when it does. The next major may then remove it. None of this
+what it means, waits for the next major. It is not turned into a no-op
+either: ignoring a flag changes what it means. Being deprecated changes no
+other rule in this document: what a command or flag is guaranteed to do, and
+what the sections above let a release change about it, are the same as before
+it was marked. A release may mark it deprecated — in its `--help`, and with a
+warning on stderr when it is used — and the changelog says so when it does.
+The warning is prose on stderr: the exit code and what the command writes to
+stdout are unchanged, so a consumer should judge a command by those and not
+by whether stderr is empty. The next major may then remove it. None of this
 paragraph applies to the experimental commands listed under [What is *not*
 guaranteed](#what-is-not-guaranteed).
 

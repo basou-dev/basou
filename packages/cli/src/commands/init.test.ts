@@ -141,6 +141,7 @@ describe("doRunInit (pure runner)", () => {
       for (const sub of cmd.commands) applyOverrides(sub);
     };
     applyOverrides(program);
+    const before = (await readdir(repo)).sort();
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repo);
     let captured: unknown;
     try {
@@ -158,7 +159,10 @@ describe("doRunInit (pure runner)", () => {
     }
     expect(captured).toMatchObject({ code: "commander.unknownOption", exitCode: 1 });
     expect(stderrBuf).toContain("unknown option '--repo-url'");
-    await expect(stat(join(repo, ".basou"))).rejects.toMatchObject({ code: "ENOENT" });
+    // Nothing is created beside `.git`: no `.basou/`, and no `.gitignore`
+    // either, which `basou init` would otherwise write.
+    expect(before).toEqual([".git"]);
+    expect((await readdir(repo)).sort()).toEqual(before);
   });
 
   it("does not list --repo-url among the options of init", () => {

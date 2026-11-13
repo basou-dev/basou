@@ -23,8 +23,9 @@ All notable changes to **basou** are recorded here. The project follows
   freeze. The guaranteed surfaces and their rules are unchanged. The
   deprecation policy now says what holds within a `1.x` line: a command or
   flag that becomes obsolete stays, still accepted and still doing what it
-  did, and may be marked deprecated in its `--help` and by a warning on
-  stderr; removing it waits for the next major. The `0.x` rule (an obsolete
+  did (it is not turned into a no-op), and may be marked deprecated in its
+  `--help` and by a warning on stderr, which changes neither the exit code
+  nor stdout; removing it waits for the next major. The `0.x` rule (an obsolete
   flag became a no-op and was removed at `1.0`) is kept there as history.
   The README's status section and the introduction of CONTRIBUTING.md no
   longer call basou pre-1.0.
