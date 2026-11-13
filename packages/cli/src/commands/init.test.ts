@@ -15,8 +15,9 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { basouPaths, readManifest } from "@basou/core";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { doRunInit, runInit } from "./init.js";
+import { doRunInit, registerInitCommand, runInit } from "./init.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -118,17 +119,58 @@ describe("doRunInit (pure runner)", () => {
     expect("repository_url" in manifest.project).toBe(false);
   });
 
-  it("accepts --repo-url as a deprecated no-op: writes nothing, warns", async () => {
-    // Kept for 0.x CLI stability (removed at 1.0); it must not error, must not
-    // write repository_url, and must warn that it is ignored.
+  it("refuses --repo-url as an unknown option and initializes nothing", async () => {
+    // The flag was a deprecated no-op through 0.x and was removed at 1.0. It
+    // must be refused while the arguments are parsed, before the action runs,
+    // so a script that still passes it does not get a workspace it did not
+    // ask for in that form.
     const repo = getTmpRepo();
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
-    await doRunInit({ repoUrl: "https://example.com/ignored.git" }, { cwd: repo });
-    const manifest = await readManifest(basouPaths(repo));
-    expect("repository_url" in manifest.project).toBe(false);
-    const stderr = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
-    expect(stderr).toMatch(/--repo-url is deprecated and ignored/i);
+    const program = new Command();
+    registerInitCommand(program);
+    let stderrBuf = "";
+    // commander 14 does not propagate these overrides to subcommands, and the
+    // unknown-option error is raised on `init`, so apply them across the tree.
+    const applyOverrides = (cmd: Command): void => {
+      cmd.exitOverride();
+      cmd.configureOutput({
+        writeErr: (msg) => {
+          stderrBuf += msg;
+        },
+        writeOut: () => undefined,
+      });
+      for (const sub of cmd.commands) applyOverrides(sub);
+    };
+    applyOverrides(program);
+    const before = (await readdir(repo)).sort();
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repo);
+    let captured: unknown;
+    try {
+      await program.parseAsync([
+        "node",
+        "basou",
+        "init",
+        "--repo-url",
+        "https://example.com/ignored.git",
+      ]);
+    } catch (error: unknown) {
+      captured = error;
+    } finally {
+      cwdSpy.mockRestore();
+    }
+    expect(captured).toMatchObject({ code: "commander.unknownOption", exitCode: 1 });
+    expect(stderrBuf).toContain("unknown option '--repo-url'");
+    // Nothing is created beside `.git`: no `.basou/`, and no `.gitignore`
+    // either, which `basou init` would otherwise write.
+    expect(before).toEqual([".git"]);
+    expect((await readdir(repo)).sort()).toEqual(before);
+  });
+
+  it("does not list --repo-url among the options of init", () => {
+    const program = new Command();
+    registerInitCommand(program);
+    const init = program.commands.find((cmd) => cmd.name() === "init");
+    expect(init).toBeDefined();
+    expect(init?.options.map((option) => option.long)).not.toContain("--repo-url");
   });
 
   it("refuses to re-initialize without --force", async () => {

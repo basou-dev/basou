@@ -1,11 +1,12 @@
 # Contributing to Basou
 
-Thanks for your interest in Basou! Basou is in a pre-1.0 stage — the
-scoped `@basou/*` packages are published to npm and dogfood-ready, the
-public APIs are still stabilizing, and we're collecting feedback from a
-small set of trial users before opening contributions broadly. This
-document describes how to set up the project, the change conventions we
-follow, and the easiest way to report problems while we're in this state.
+Thanks for your interest in Basou! The scoped `@basou/*` packages are
+published to npm, and from `1.0` the CLI, the `@basou/sdk` read API and the
+on-disk formats follow semantic versioning (see
+[docs/spec/compatibility.md](docs/spec/compatibility.md)). Basou is
+maintained by a single author. This document describes how to set up the
+project, the change conventions we follow, and the easiest way to report
+problems.
 
 ## Reporting issues / friction
 
