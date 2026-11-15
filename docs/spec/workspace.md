@@ -16,7 +16,7 @@ out on disk.
 - A session is **bound to a single workspace**. Cross-repository work is
   split across separate sessions, which a multi-root import attributes to
   the aggregating workspace.
-- `manifest.yaml` carries `workspace_id`, leaving room for multi-workspace
+- `manifest.yaml` carries `workspace.id`, leaving room for multi-workspace
   configurations in a future release.
 
 ## §1.2 `.basou/` directory layout
