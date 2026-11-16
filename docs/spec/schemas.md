@@ -391,6 +391,7 @@ Events written by the import paths additionally carry an optional top-level
 | Git | `git_snapshot` | git state at session start / end |
 | File | `file_changed` | file change |
 | Decision | `decision_recorded` | explicit decision record |
+| Decision | `decision_voided` | voids an earlier `decision_recorded`, or supersedes it when `superseded_by` names the replacement. Append-only: the original is kept, struck in `decisions.md` and skipped as orientation's latest direction. Emitted by `basou decision void`. |
 | Task | `task_created` | task created |
 | Task | `task_status_changed` | task status transition |
 | Task | `task_reconciled` | broken-reference repair record. Added in v0.2; emitted by `basou task reconcile --write`. |
