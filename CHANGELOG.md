@@ -3,6 +3,23 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Fixed
+
+- **Orientation and handoff no longer say that a decision captured from
+  inside the last session comes from a different session.** `basou decision
+  capture` and `basou decision record` without `--session` write the decision
+  into an ad-hoc session of their own, and that session is never the one
+  shown as the last session. The note "this decision comes from a different
+  session" was therefore attached to every such decision, including one
+  recorded while the last session was running. A decision held by an ad-hoc
+  session now gets the note only when it was recorded before the last session
+  started. A decision imported from an agent's transcript, or attached with
+  `--session`, is compared by session as before. A decision captured from a
+  second session running alongside the last one, after the last one started,
+  cannot be told apart and gets no note.
+
 ## 1.0.0 — 2026-11-13
 
 ### Removed

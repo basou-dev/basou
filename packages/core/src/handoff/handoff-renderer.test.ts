@@ -1044,6 +1044,137 @@ describe("renderHandoff (resume coherence)", () => {
     const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
     expect(body).toContain("this decision comes from a different session");
   });
+
+  // A decision written from the CLI without --session lives in an ad-hoc
+  // session of its own (source kind "human", no commands, no files). That
+  // session is never Last session, so its id never matches.
+  const placeWorkAndAdHocDecision = async (
+    paths: BasouPaths,
+    opts: {
+      work: string;
+      adHoc: string;
+      evt: string;
+      decisionId: string;
+      title: string;
+      at: string;
+    },
+  ): Promise<void> => {
+    await placeSession(paths, {
+      id: opts.work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T13:00:00Z",
+      endedAt: "2026-05-08T15:00:00Z",
+      relatedFiles: ["src/a.ts"],
+      label: "real work",
+    });
+    await placeSession(
+      paths,
+      {
+        id: opts.adHoc,
+        status: "completed",
+        source: "human",
+        startedAt: opts.at,
+        endedAt: opts.at,
+        relatedFiles: [],
+        label: "ad-hoc capture",
+      },
+      decisionRecordedLine(opts.adHoc, opts.evt, opts.decisionId, opts.title, opts.at),
+    );
+  };
+
+  it("F-C: does NOT flag a decision captured from the CLI while Last session was running", async () => {
+    const paths = await setupPaths();
+    await placeWorkAndAdHocDecision(paths, {
+      work: SES("HC4"),
+      adHoc: SES("HA4"),
+      evt: "HE4",
+      decisionId: DEC("HD4"),
+      title: "captured inside the latest session",
+      at: "2026-05-08T14:00:00Z",
+    });
+    const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body.slice(body.indexOf("## Current state"))).toContain("Last session: real work");
+    expect(sliceSection(body, "## Latest decision", "## ")).toContain(
+      "captured inside the latest session",
+    );
+    expect(body).not.toContain("different session");
+  });
+
+  it("F-C: does NOT flag a CLI decision recorded after Last session's captured end", async () => {
+    const paths = await setupPaths();
+    await placeWorkAndAdHocDecision(paths, {
+      work: SES("HC5"),
+      adHoc: SES("HA5"),
+      evt: "HE5",
+      decisionId: DEC("HD5"),
+      title: "captured after the last import",
+      at: "2026-05-08T15:20:00Z",
+    });
+    const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body.slice(body.indexOf("## Current state"))).toContain("Last session: real work");
+    expect(body).not.toContain("different session");
+  });
+
+  it("F-C: still flags a CLI decision recorded before Last session started", async () => {
+    const paths = await setupPaths();
+    await placeWorkAndAdHocDecision(paths, {
+      work: SES("HC6"),
+      adHoc: SES("HA6"),
+      evt: "HE6",
+      decisionId: DEC("HD6"),
+      title: "captured by an earlier thread",
+      at: "2026-05-08T12:40:00Z",
+    });
+    const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body.slice(body.indexOf("## Current state"))).toContain("Last session: real work");
+    expect(sliceSection(body, "## Latest decision", "## ")).toContain(
+      "this decision comes from a different session",
+    );
+  });
+
+  it("F-C: still flags an imported decision from a session running alongside Last session", async () => {
+    // An imported session has an identity of its own, so it is compared by id
+    // even though its decision is newer than Last session's start.
+    const paths = await setupPaths();
+    const work = SES("HC7"); // newest start -> Last session
+    const alongside = SES("HP7");
+    await placeSession(paths, {
+      id: work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T13:00:00Z",
+      endedAt: "2026-05-08T15:00:00Z",
+      relatedFiles: ["src/a.ts"],
+      label: "real work",
+    });
+    await placeSession(
+      paths,
+      {
+        id: alongside,
+        status: "completed",
+        source: "claude-code-import",
+        // Overlaps Last session without containing it: a session that ran
+        // entirely inside another is not a Last session candidate at all.
+        startedAt: "2026-05-08T12:00:00Z",
+        endedAt: "2026-05-08T14:30:00Z",
+        relatedFiles: ["src/b.ts"],
+        label: "alongside",
+      },
+      decisionRecordedLine(
+        alongside,
+        "HE7",
+        DEC("HD7"),
+        "decided alongside",
+        "2026-05-08T14:00:00Z",
+      ),
+    );
+    const { body } = await renderHandoff({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body.slice(body.indexOf("## Current state"))).toContain("Last session: real work");
+    expect(sliceSection(body, "## Latest decision", "## ")).toContain(
+      "this decision comes from a different session",
+    );
+  });
 });
 
 function decisionVoidedLine(

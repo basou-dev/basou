@@ -1713,6 +1713,175 @@ describe("renderOrientation (resume coherence)", () => {
     const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(body).not.toContain("different session");
   });
+
+  // A decision written from the CLI without --session lives in an ad-hoc
+  // session of its own (source kind "human", no commands, no files). That
+  // session is never Last session, so its id never matches.
+  const placeAdHocDecision = async (
+    paths: BasouPaths,
+    opts: { id: string; evt: string; decisionId: string; title: string; at: string },
+  ): Promise<void> => {
+    await placeSession(
+      paths,
+      {
+        id: opts.id,
+        status: "completed",
+        source: "human",
+        startedAt: opts.at,
+        endedAt: opts.at,
+        relatedFiles: [],
+      },
+      decisionLine(opts.id, opts.evt, opts.decisionId, opts.title, opts.at, {
+        source: LOCAL_CLI_EVENT_SOURCE,
+      }),
+    );
+  };
+
+  it("F-C: does NOT flag a decision captured from the CLI while Last session was running", async () => {
+    const paths = await setupPaths();
+    const work = SES("WK4");
+    const adHoc = SES("AD4");
+    await placeSession(paths, {
+      id: work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T13:00:00Z",
+      endedAt: "2026-05-08T15:00:00Z",
+      relatedFiles: ["src/a.ts"],
+    });
+    await placeAdHocDecision(paths, {
+      id: adHoc,
+      evt: "AE4",
+      decisionId: DEC("DC4"),
+      title: "captured inside the latest session",
+      at: "2026-05-08T14:00:00Z",
+    });
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    // The pointers still name two sessions; what changes is how that is read.
+    expect(summary.latestSession?.sessionId).toBe(work);
+    expect(summary.latestDecision?.sessionId).toBe(adHoc);
+    expect(summary.latestDecisionFromOtherSession).toBe(false);
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("Latest decision: captured inside the latest session");
+    expect(body).not.toContain("different session");
+  });
+
+  it("F-C: does NOT flag a CLI decision recorded after Last session's captured end", async () => {
+    // An imported session's ended_at is the end of what had been captured when
+    // it was last imported, so a capture made later in the same session falls
+    // after it.
+    const paths = await setupPaths();
+    const work = SES("WK5");
+    const adHoc = SES("AD5");
+    await placeSession(paths, {
+      id: work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T13:00:00Z",
+      endedAt: "2026-05-08T15:00:00Z",
+      relatedFiles: ["src/a.ts"],
+    });
+    await placeAdHocDecision(paths, {
+      id: adHoc,
+      evt: "AE5",
+      decisionId: DEC("DC5"),
+      title: "captured after the last import",
+      at: "2026-05-08T15:20:00Z",
+    });
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.latestSession?.sessionId).toBe(work);
+    expect(summary.latestDecisionFromOtherSession).toBe(false);
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).not.toContain("different session");
+  });
+
+  it("F-C: still flags a CLI decision recorded before Last session started", async () => {
+    const paths = await setupPaths();
+    const work = SES("WK6");
+    const adHoc = SES("AD6");
+    await placeSession(paths, {
+      id: work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T13:00:00Z",
+      endedAt: "2026-05-08T15:00:00Z",
+      relatedFiles: ["src/a.ts"],
+    });
+    await placeAdHocDecision(paths, {
+      id: adHoc,
+      evt: "AE6",
+      decisionId: DEC("DC6"),
+      title: "captured by an earlier thread",
+      at: "2026-05-08T12:40:00Z",
+    });
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.latestSession?.sessionId).toBe(work);
+    expect(summary.latestDecisionFromOtherSession).toBe(true);
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("this decision comes from a different session");
+  });
+
+  it("F-C: still flags an imported decision from a session running alongside Last session", async () => {
+    // An imported session has an identity of its own, so it is compared by id
+    // even though its decision is newer than Last session's start.
+    const paths = await setupPaths();
+    const work = SES("WK7"); // newest start -> Last session
+    const alongside = SES("PR7");
+    await placeSession(paths, {
+      id: work,
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T13:00:00Z",
+      endedAt: "2026-05-08T15:00:00Z",
+      relatedFiles: ["src/a.ts"],
+    });
+    await placeSession(
+      paths,
+      {
+        id: alongside,
+        status: "completed",
+        source: "claude-code-import",
+        // Overlaps Last session without containing it: a session that ran
+        // entirely inside another is not a Last session candidate at all.
+        startedAt: "2026-05-08T12:00:00Z",
+        endedAt: "2026-05-08T14:30:00Z",
+        relatedFiles: ["src/b.ts"],
+      },
+      decisionLine(alongside, "PE7", DEC("DC7"), "decided alongside", "2026-05-08T14:00:00Z", {
+        source: "claude-code-import",
+      }),
+    );
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.latestSession?.sessionId).toBe(work);
+    expect(summary.latestDecision?.sessionId).toBe(alongside);
+    expect(summary.latestDecisionFromOtherSession).toBe(true);
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).toContain("this decision comes from a different session");
+  });
+
+  it("F-C: reports no disagreement when either pointer is missing", async () => {
+    const paths = await setupPaths();
+    // A decision with no live session to compare against.
+    await placeAdHocDecision(paths, {
+      id: SES("AD8"),
+      evt: "AE8",
+      decisionId: DEC("DC8"),
+      title: "only a decision",
+      at: "2026-05-08T14:00:00Z",
+    });
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.latestDecision).not.toBeNull();
+    // The ad-hoc session is the only session, so it is Last session and the
+    // decision is its own.
+    expect(summary.latestSession?.sessionId).toBe(SES("AD8"));
+    expect(summary.latestDecisionFromOtherSession).toBe(false);
+
+    const empty = await setupSeparatePaths();
+    const none = await summarizeOrientation({ paths: empty, nowIso: FIXED_NOW_ISO });
+    expect(none.latestDecision).toBeNull();
+    expect(none.latestSession).toBeNull();
+    expect(none.latestDecisionFromOtherSession).toBe(false);
+  });
 });
 
 describe("renderOrientation (federation / multi-host)", () => {
@@ -1779,6 +1948,50 @@ describe("renderOrientation (federation / multi-host)", () => {
     expect(body).toContain("@laptop");
     expect(body).toContain("> hosts: local, laptop");
     expect(body).toContain("Missed work on other hosts cannot be assessed here");
+  });
+
+  it("judges a federated host's CLI decision by time, like a local one", async () => {
+    // Last session is local; the decision was captured on another host while
+    // it was running. The decision's ad-hoc session lives in the host's store,
+    // so its source kind has to be found there.
+    const local = await setupPaths();
+    await placeSession(local, {
+      id: SES("A01"),
+      status: "completed",
+      source: "claude-code-import",
+      startedAt: "2026-05-08T13:00:00Z",
+      endedAt: "2026-05-08T15:00:00Z",
+      relatedFiles: ["src/a.ts"],
+    });
+    const laptop = await setupHostStore();
+    await placeSession(
+      laptop,
+      {
+        id: SES("R01"),
+        status: "completed",
+        source: "human",
+        startedAt: "2026-05-08T14:00:00Z",
+        endedAt: "2026-05-08T14:00:00Z",
+      },
+      decisionLine(SES("R01"), "E01", DEC("D01"), "captured on the laptop", "2026-05-08T14:00:00Z"),
+    );
+    const federatedRoots = [{ paths: laptop, host: "laptop" }];
+    const summary = await summarizeOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      federatedRoots,
+    });
+    expect(summary.latestSession?.sessionId).toBe(SES("A01"));
+    expect(summary.latestDecision?.sessionId).toBe(SES("R01"));
+    expect(summary.latestDecision?.host).toBe("laptop");
+    expect(summary.latestDecisionFromOtherSession).toBe(false);
+    const { body } = await renderOrientation({
+      paths: local,
+      nowIso: FIXED_NOW_ISO,
+      federatedRoots,
+    });
+    expect(body).toContain("Latest decision: captured on the laptop");
+    expect(body).not.toContain("different session");
   });
 
   it("scopes the green freshness verdict to THIS host when federated (no global current claim)", async () => {

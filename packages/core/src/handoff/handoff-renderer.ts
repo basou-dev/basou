@@ -2,7 +2,11 @@ import { enumerateApprovals } from "../approval/approval-store.js";
 import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { displayPath } from "../lib/display-path.js";
 import { oneLine } from "../lib/one-line.js";
-import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
+import {
+  isDecisionFromAnotherSession,
+  isTrailingStale,
+  pickLatestSubstantiveEntry,
+} from "../lib/recency.js";
 import { isTransientToolPath } from "../lib/transient-paths.js";
 import {
   resolveViewLanguageFromPaths,
@@ -481,7 +485,24 @@ function formatHandoffBody(args: {
     }
     // When the latest decision is from a DIFFERENT session than the last session, the
     // two "latest" pointers disagree; surface it so the timeline is unambiguous.
-    if (args.latestSession !== undefined && last.sessionId !== args.latestSession.sessionId) {
+    // Session ids alone call every decision captured from the CLI foreign, so
+    // the decision's own session is looked up for its source kind: see
+    // `isDecisionFromAnotherSession` (mirrors the orientation renderer).
+    if (
+      args.latestSession !== undefined &&
+      isDecisionFromAnotherSession(
+        {
+          sessionId: last.sessionId,
+          occurredAt: last.occurredAt,
+          sessionSourceKind: args.entries.find((e) => e.sessionId === last.sessionId)?.session
+            .session.source.kind,
+        },
+        {
+          sessionId: args.latestSession.sessionId,
+          startedAt: args.latestSession.session.session.started_at,
+        },
+      )
+    ) {
       lines.push(`  - ${t.common.decisionOtherSessionNote(shortIdWithPrefix(last.sessionId))}`);
     }
     lines.push("");
