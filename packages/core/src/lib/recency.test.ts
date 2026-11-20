@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DECISION_TRAILING_ACTIVITY_GAP_MS,
+  isDecisionFromAnotherSession,
   isTrailingStale,
   pickLatestSubstantiveEntry,
 } from "./recency.js";
@@ -277,5 +278,90 @@ describe("pickLatestSubstantiveEntry", () => {
     pickLatestSubstantiveEntry(input, noCommands, noUnmeasured);
     expect(input[0]?.sessionId).toBe("a");
     expect(input[1]?.sessionId).toBe("b");
+  });
+});
+
+describe("isDecisionFromAnotherSession", () => {
+  const LATEST = "ses_01HXABCDEF1234567890ABCDEF";
+  const OTHER = "ses_01HXABCDEF1234567890ABCDEG";
+  const latest = { sessionId: LATEST, startedAt: "2026-05-08T13:00:00.000Z" };
+  const decision = (sessionId: string, occurredAt: string, kind: string | undefined) => ({
+    sessionId,
+    occurredAt,
+    sessionSourceKind: kind,
+  });
+
+  it("is false when the decision is held by the latest session itself", () => {
+    // Whatever the kind and however old the timestamp: same id is same session.
+    expect(
+      isDecisionFromAnotherSession(
+        decision(LATEST, "2026-05-08T09:00:00.000Z", "claude-code-import"),
+        latest,
+      ),
+    ).toBe(false);
+    expect(
+      isDecisionFromAnotherSession(decision(LATEST, "2026-05-08T09:00:00.000Z", "human"), latest),
+    ).toBe(false);
+  });
+
+  it("compares a non-ad-hoc session by id, whenever the decision was recorded", () => {
+    for (const kind of ["claude-code-import", "codex-import", "terminal", "import"]) {
+      // Before the latest session started.
+      expect(
+        isDecisionFromAnotherSession(decision(OTHER, "2026-05-08T09:00:00.000Z", kind), latest),
+      ).toBe(true);
+      // After it started: a session running alongside still has its own identity.
+      expect(
+        isDecisionFromAnotherSession(decision(OTHER, "2026-05-08T14:00:00.000Z", kind), latest),
+      ).toBe(true);
+    }
+  });
+
+  it("is false for an ad-hoc session's decision recorded after the latest session started", () => {
+    expect(
+      isDecisionFromAnotherSession(decision(OTHER, "2026-05-08T14:00:00.000Z", "human"), latest),
+    ).toBe(false);
+  });
+
+  it("treats the exact start instant as not earlier", () => {
+    expect(isDecisionFromAnotherSession(decision(OTHER, latest.startedAt, "human"), latest)).toBe(
+      false,
+    );
+    expect(
+      isDecisionFromAnotherSession(decision(OTHER, "2026-05-08T12:59:59.999Z", "human"), latest),
+    ).toBe(true);
+  });
+
+  it("is true for an ad-hoc session's decision recorded before the latest session started", () => {
+    expect(
+      isDecisionFromAnotherSession(decision(OTHER, "2026-05-08T09:00:00.000Z", "human"), latest),
+    ).toBe(true);
+  });
+
+  it("compares instants, not strings, across UTC offsets", () => {
+    // 22:30+09:00 is 13:30Z, after the 13:00Z start, though it sorts after as text too;
+    // 21:30+09:00 is 12:30Z, before the start, though "21:30" sorts after "13:00".
+    expect(
+      isDecisionFromAnotherSession(decision(OTHER, "2026-05-08T22:30:00+09:00", "human"), latest),
+    ).toBe(false);
+    expect(
+      isDecisionFromAnotherSession(decision(OTHER, "2026-05-08T21:30:00+09:00", "human"), latest),
+    ).toBe(true);
+  });
+
+  it("falls back to the id comparison when the session kind is unknown", () => {
+    expect(
+      isDecisionFromAnotherSession(decision(OTHER, "2026-05-08T14:00:00.000Z", undefined), latest),
+    ).toBe(true);
+  });
+
+  it("falls back to the id comparison when a timestamp does not parse", () => {
+    expect(isDecisionFromAnotherSession(decision(OTHER, "not-a-date", "human"), latest)).toBe(true);
+    expect(
+      isDecisionFromAnotherSession(decision(OTHER, "2026-05-08T14:00:00.000Z", "human"), {
+        sessionId: LATEST,
+        startedAt: "not-a-date",
+      }),
+    ).toBe(true);
   });
 });

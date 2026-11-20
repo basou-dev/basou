@@ -18,6 +18,21 @@ All notable changes to **basou** are recorded here. The project follows
   observation's `Source:` and the template's `source` change with it, for
   every `github_check` observation; sources already recorded stay as they are.
 
+### Fixed
+
+- **Orientation and handoff no longer say that a decision captured from
+  inside the last session comes from a different session.** `basou decision
+  capture` and `basou decision record` without `--session` write the decision
+  into an ad-hoc session of their own, and while any session that did work
+  exists, that session is not the one shown as the last session. The note
+  "this decision comes from a different session" was therefore attached to
+  every such decision, including one recorded while the last session was
+  running. A decision held by an ad-hoc session now gets the note only when it was recorded before the last session
+  started. A decision imported from an agent's transcript, or attached with
+  `--session`, is compared by session as before. A decision captured from a
+  second session running alongside the last one, after the last one started,
+  cannot be told apart and gets no note.
+
 ## 1.0.0 — 2026-11-13
 
 ### Removed

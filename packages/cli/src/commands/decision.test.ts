@@ -18,6 +18,9 @@ import {
   createManifest,
   ensureBasouDirectory,
   readYamlFile,
+  renderHandoff,
+  renderOrientation,
+  summarizeOrientation,
   writeManifest,
   writeYamlFile,
 } from "@basou/core";
@@ -817,6 +820,89 @@ describe("doRunDecisionCapture (batch ad-hoc capture)", () => {
     // exactly one ad-hoc session directory exists
     const dirs = (await readdir(basouPaths(repo).sessions)).filter((d) => d.startsWith("ses_"));
     expect(dirs).toHaveLength(1);
+  });
+
+  // The agent session a capture is run from, as an import leaves it: it touched
+  // a file, so it (not the capture's own ad-hoc session) is the latest session.
+  async function placeImportedWorkSession(
+    repo: string,
+    id: string,
+    window: { startedAt: string; endedAt: string },
+  ): Promise<void> {
+    const sessionDir = join(basouPaths(repo).sessions, id);
+    await mkdir(sessionDir, { recursive: true });
+    await writeYamlFile(join(sessionDir, "session.yaml"), {
+      schema_version: "0.1.0" as const,
+      session: {
+        id,
+        label: "imported work",
+        task_id: null,
+        workspace_id: FIXED_WS_ID,
+        source: { kind: "claude-code-import" as const, version: "0.1.0" as const },
+        started_at: window.startedAt,
+        ended_at: window.endedAt,
+        status: "imported" as const,
+        working_directory: repo,
+        invocation: { command: "claude", args: [], exit_code: null },
+        related_files: ["src/a.ts"],
+        events_log: "events.jsonl",
+      },
+    });
+    await writeFile(join(sessionDir, "events.jsonl"), "");
+  }
+
+  it("cap-orient-1: a capture made while the latest session was running is not reported as another session's decision", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const work = SES("WRK");
+    // FIXED_NOW (the capture) falls inside this window.
+    await placeImportedWorkSession(repo, work, {
+      startedAt: "2026-05-11T10:00:00.000Z",
+      endedAt: "2026-05-11T13:00:00.000Z",
+    });
+    await doRunDecisionCapture(
+      {},
+      captureCtx(repo, JSON.stringify([{ title: "ship it", kind: "decision" }])),
+    );
+
+    const paths = basouPaths(repo);
+    const nowIso = "2026-05-11T14:00:00.000Z";
+    const summary = await summarizeOrientation({ paths, nowIso });
+    // The decision still lives in the capture's own session, which is not the
+    // latest session: an id comparison alone would call it foreign.
+    expect(summary.latestSession?.sessionId).toBe(work);
+    expect(summary.latestDecision?.title).toBe("ship it");
+    expect(summary.latestDecision?.sessionId).not.toBe(work);
+    expect(summary.latestDecisionFromOtherSession).toBe(false);
+    expect((await renderOrientation({ paths, nowIso })).body).not.toContain("different session");
+    expect((await renderHandoff({ paths, nowIso })).body).not.toContain("different session");
+  });
+
+  it("cap-orient-2: a capture made before the latest session started is still reported as another session's decision", async () => {
+    const repo = await setupInitedRepo();
+    captureStdout();
+    const work = SES("WRK");
+    // FIXED_NOW (the capture) precedes this window.
+    await placeImportedWorkSession(repo, work, {
+      startedAt: "2026-05-11T12:30:00.000Z",
+      endedAt: "2026-05-11T13:00:00.000Z",
+    });
+    await doRunDecisionCapture(
+      {},
+      captureCtx(repo, JSON.stringify([{ title: "ship it", kind: "decision" }])),
+    );
+
+    const paths = basouPaths(repo);
+    const nowIso = "2026-05-11T14:00:00.000Z";
+    const summary = await summarizeOrientation({ paths, nowIso });
+    expect(summary.latestSession?.sessionId).toBe(work);
+    expect(summary.latestDecisionFromOtherSession).toBe(true);
+    expect((await renderOrientation({ paths, nowIso })).body).toContain(
+      "this decision comes from a different session",
+    );
+    expect((await renderHandoff({ paths, nowIso })).body).toContain(
+      "this decision comes from a different session",
+    );
   });
 
   it("cap-2: text output lists each decision id + title and the ad-hoc session", async () => {

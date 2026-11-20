@@ -6,7 +6,11 @@ import { type ReplayWarning, replayEvents } from "../events/event-replay.js";
 import { displayPath } from "../lib/display-path.js";
 import { formatDurationMs } from "../lib/format-duration.js";
 import { oneLine } from "../lib/one-line.js";
-import { isTrailingStale, pickLatestSubstantiveEntry } from "../lib/recency.js";
+import {
+  isDecisionFromAnotherSession,
+  isTrailingStale,
+  pickLatestSubstantiveEntry,
+} from "../lib/recency.js";
 import { AGENT_INFRA_DIRS, classifyFilesBySourceRoot } from "../lib/source-root-scope.js";
 import { isTransientToolPath } from "../lib/transient-paths.js";
 import {
@@ -193,6 +197,14 @@ export type OrientationSummary = {
   latestSession: LatestSession | null;
   /** Most recent `decision_recorded` across all sessions; null when none. */
   latestDecision: DecisionRecord | null;
+  /**
+   * Whether {@link latestDecision} belongs to a different session than
+   * {@link latestSession}, so the two "latest" pointers disagree. A decision a
+   * CLI command wrote into its own ad-hoc session is judged by when it was
+   * recorded rather than by session id; see `isDecisionFromAnotherSession`.
+   * False when either pointer is null.
+   */
+  latestDecisionFromOtherSession: boolean;
   decisionCount: number;
   /**
    * Open (non-voided) `kind: "track"` decisions — strategic, unfinished
@@ -631,6 +643,25 @@ export async function summarizeOrientation(
           host: latestEntry.host,
         }
       : null;
+  // Whether the two "latest" pointers disagree. The decision's own session is
+  // looked up for its source kind (among every root's entries, so a federated
+  // host's decision is judged the same way): an ad-hoc CLI session is judged by
+  // time, any other by id.
+  const latestDecisionFromOtherSession =
+    latestDecision !== undefined && latestEntry !== undefined
+      ? isDecisionFromAnotherSession(
+          {
+            sessionId: latestDecision.sessionId,
+            occurredAt: latestDecision.occurredAt,
+            sessionSourceKind: entries.find((e) => e.sessionId === latestDecision.sessionId)
+              ?.session.session.source.kind,
+          },
+          {
+            sessionId: latestEntry.sessionId,
+            startedAt: latestEntry.session.session.started_at,
+          },
+        )
+      : false;
 
   // Freshness: newest started_at over all non-archived sessions (= most recent
   // captured activity). This is an honest staleness signal, NOT a completeness
@@ -722,6 +753,7 @@ export async function summarizeOrientation(
     sessionCount: entries.length,
     latestSession,
     latestDecision: latestDecision ?? null,
+    latestDecisionFromOtherSession,
     decisionCount: decisions.length,
     openTracks,
     openDecisionGaps,
@@ -868,8 +900,10 @@ function formatOrientationBody(
     // When the latest recorded decision comes from a DIFFERENT session than the
     // representative latest session, the two "latest" pointers disagree. Say so,
     // so a resume reader does not treat an older thread's decision as this
-    // session's direction (a linear-timeline cue, not a stale claim).
-    if (summary.latestSession !== null && dec.sessionId !== summary.latestSession.sessionId) {
+    // session's direction (a linear-timeline cue, not a stale claim). The
+    // summary decides it, because session ids alone call every decision captured
+    // from the CLI foreign: see `isDecisionFromAnotherSession`.
+    if (summary.latestDecisionFromOtherSession) {
       lines.push(`  - ${t.common.decisionOtherSessionNote(shortId(dec.sessionId))}`);
     }
     if (summary.decisionCount > 1) {
