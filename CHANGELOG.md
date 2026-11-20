@@ -3,7 +3,7 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
-## Unreleased
+## 1.0.1 — 2026-11-20
 
 ### Changed
 
@@ -17,6 +17,20 @@ All notable changes to **basou** are recorded here. The project follows
   by its flags asked for approval each time the board was recorded. The
   observation's `Source:` and the template's `source` change with it, for
   every `github_check` observation; sources already recorded stay as they are.
+- **`@basou/cli` now depends on commander 15, the library that parses basou's
+  command line, in place of commander 14.** Compared with 1.0.0 command by
+  command, `--help` is the same byte for byte for every command, and so are
+  the flags each command declares and the exit codes of the command lines the
+  parser rejects (an unknown command or option, a missing or an extra
+  argument, an option without its value). A `--no-*` flag that is not given still reaches the command
+  as `true`, and as `false` when it is (`--no-snapshot`, `--no-open`,
+  `--no-session-start`). One error message reads differently: too many
+  arguments now names the ones that were not expected (`error: too many
+  arguments for 'status'. Expected 0 arguments but got 2: a, b.`), still on
+  stderr and still with exit code 1. `buildProgram()` from
+  `@basou/cli/program` now returns a commander 15 `Command`, on which a lone
+  `--no-*` flag's default of `true` is set when the command line is parsed,
+  so its `opts()` read before parsing no longer shows it.
 
 ### Fixed
 
