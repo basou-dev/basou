@@ -172,7 +172,9 @@ function isNestedInAnother<E extends RankableSessionEntry>(
 /**
  * The `source.kind` of a session a CLI command minted for a single write (see
  * `createAdHocSessionWithEvent`): `basou decision capture`, `decision record`,
- * `note`, `task ...`, `review record` without `--session`.
+ * `note`, `task ...`, `review record` without `--session`. The kind is not
+ * theirs alone: `basou session import` keeps whatever kind its payload names,
+ * so a manually authored session imported as `human` carries it as well.
  */
 const AD_HOC_SESSION_SOURCE_KIND = "human";
 
@@ -184,11 +186,11 @@ const AD_HOC_SESSION_SOURCE_KIND = "human";
  * Session ids alone cannot answer this for a decision a CLI command wrote
  * without `--session`. Such a command mints its own ad-hoc session for the
  * write, so the decision's session id never equals the agent session the
- * command was run from; and an ad-hoc session is never the representative
- * either, since it ran no command and touched no file (see
- * {@link pickLatestSubstantiveEntry}). Compared by id, every captured decision
- * is therefore "from a different session" -- including the ones captured from
- * inside the latest session, where the note is false.
+ * command was run from; and while any session that did work exists, an ad-hoc
+ * session is not the representative either, since it ran no command and
+ * touched no file (see {@link pickLatestSubstantiveEntry}). Compared by id,
+ * every captured decision is therefore "from a different session" -- including
+ * the ones captured from inside the latest session, where the note is false.
  *
  * An ad-hoc session id names the write, not a thread of work, and nothing on
  * disk ties it to the session it was run from. So for a decision held by an
@@ -201,7 +203,10 @@ const AD_HOC_SESSION_SOURCE_KIND = "human";
  *
  * What this cannot see: a decision captured from a second session running
  * alongside the latest one, after the latest one started. Nothing recorded
- * distinguishes it, and it is treated as the latest session's.
+ * distinguishes it, and it is treated as the latest session's. Nor can it tell
+ * an ad-hoc session from a manually authored one of the same kind brought in
+ * by `basou session import`; a decision in such a session is judged by time
+ * as well.
  *
  * A decision held by any other kind of session (one imported from a transcript,
  * or attached with `--session`) carries a real session identity and is compared

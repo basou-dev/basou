@@ -1715,8 +1715,9 @@ describe("renderOrientation (resume coherence)", () => {
   });
 
   // A decision written from the CLI without --session lives in an ad-hoc
-  // session of its own (source kind "human", no commands, no files). That
-  // session is never Last session, so its id never matches.
+  // session of its own (source kind "human", no commands, no files). While a
+  // session that did work exists, that session is not Last session, so its id
+  // does not match.
   const placeAdHocDecision = async (
     paths: BasouPaths,
     opts: { id: string; evt: string; decisionId: string; title: string; at: string },
@@ -1859,9 +1860,8 @@ describe("renderOrientation (resume coherence)", () => {
     expect(body).toContain("this decision comes from a different session");
   });
 
-  it("F-C: reports no disagreement when either pointer is missing", async () => {
+  it("F-C: does NOT flag a CLI decision whose ad-hoc session is the only session", async () => {
     const paths = await setupPaths();
-    // A decision with no live session to compare against.
     await placeAdHocDecision(paths, {
       id: SES("AD8"),
       evt: "AE8",
@@ -1871,11 +1871,36 @@ describe("renderOrientation (resume coherence)", () => {
     });
     const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
     expect(summary.latestDecision).not.toBeNull();
-    // The ad-hoc session is the only session, so it is Last session and the
-    // decision is its own.
+    // With no session that did work, the ad-hoc session is Last session and
+    // the decision is its own.
     expect(summary.latestSession?.sessionId).toBe(SES("AD8"));
     expect(summary.latestDecisionFromOtherSession).toBe(false);
+  });
 
+  it("F-C: reports no disagreement when either pointer is missing", async () => {
+    // A decision with no live session to compare against: its only session is
+    // a round-trip import, which Last session leaves out.
+    const paths = await setupPaths();
+    const imported = SES("RT9");
+    await placeSession(
+      paths,
+      {
+        id: imported,
+        status: "imported",
+        source: "import",
+        startedAt: "2026-05-08T13:00:00Z",
+        relatedFiles: ["src/a.ts"],
+      },
+      decisionLine(imported, "RE9", DEC("DC9"), "an imported decision", "2026-05-08T13:10:00Z"),
+    );
+    const summary = await summarizeOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(summary.latestDecision?.sessionId).toBe(imported);
+    expect(summary.latestSession).toBeNull();
+    expect(summary.latestDecisionFromOtherSession).toBe(false);
+    const { body } = await renderOrientation({ paths, nowIso: FIXED_NOW_ISO });
+    expect(body).not.toContain("different session");
+
+    // Neither pointer.
     const empty = await setupSeparatePaths();
     const none = await summarizeOrientation({ paths: empty, nowIso: FIXED_NOW_ISO });
     expect(none.latestDecision).toBeNull();

@@ -1046,8 +1046,9 @@ describe("renderHandoff (resume coherence)", () => {
   });
 
   // A decision written from the CLI without --session lives in an ad-hoc
-  // session of its own (source kind "human", no commands, no files). That
-  // session is never Last session, so its id never matches.
+  // session of its own (source kind "human", no commands, no files). While a
+  // session that did work exists, that session is not Last session, so its id
+  // does not match.
   const placeWorkAndAdHocDecision = async (
     paths: BasouPaths,
     opts: {
