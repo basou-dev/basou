@@ -3,6 +3,21 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Changed
+
+- **`basou board guide` asks for a `github_check` observation with neither
+  `-X GET` nor `-f`.** The check name and the page size are now in the query
+  of the endpoint the command gives `gh api`
+  (`gh api 'repos/<owner>/<name>/commits/heads/<branch>/check-runs?check_name=<name>&per_page=100' -q ...`),
+  the name percent-encoded as UTF-8, which the API reads back as the name.
+  The request is the same GET, but `-X` and `-f` are flags a request that
+  writes takes as well, so a permission rule or a hook that approves `gh api`
+  by its flags asked for approval each time the board was recorded. The
+  observation's `Source:` and the template's `source` change with it, for
+  every `github_check` observation; sources already recorded stay as they are.
+
 ## 1.0.0 — 2026-11-13
 
 ### Removed
