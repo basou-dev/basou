@@ -531,7 +531,7 @@ function observeSteps(
           `How the latest check run named ${codeSpan(o.check)} on the head commit of ${codeSpan(o.branch)} of ${codeSpan(o.repo)} ended:`,
         );
         block(
-          `gh api -X GET ${shellWord(githubCheckPath(o))} -f check_name=${shellWord(o.check)} -f per_page=${CHECK_RUNS_PER_PAGE} -q ${shellWord(CHECK_RUN_STATE)}; echo "exit=$?"`,
+          `gh api ${shellWord(githubCheckEndpoint(o))} -q ${shellWord(CHECK_RUN_STATE)}; echo "exit=$?"`,
         );
         line(
           `An empty line: the head commit of ${codeSpan(o.branch)} has no check run named ${codeSpan(o.check)}. Source: ${codeSpan(sourceOf(o))}.`,
@@ -632,7 +632,7 @@ function judging(d: BoardDeclaration, line: (...lines: string[]) => void): void 
 
 // A word of a source as a shell reads it: as it is when it holds only what a
 // shell takes literally, so that a plain name reads as before, and quoted as
-// the command quotes it otherwise (a check named `Workers Builds: app`).
+// the command quotes it otherwise (a github_check endpoint, with '?' and '&').
 function sourceWord(text: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(text) ? text : shellWord(text);
 }
@@ -653,7 +653,7 @@ function sourceOf(o: BoardObserve): string {
     case "github_ci":
       return `gh run list --repo ${sourceWord(o.repo)} --workflow ${sourceWord(o.workflow)} --branch ${sourceWord(o.branch)}`;
     case "github_check":
-      return `gh api -X GET ${sourceWord(githubCheckPath(o))} -f check_name=${sourceWord(o.check)}`;
+      return `gh api ${sourceWord(githubCheckEndpoint(o))}`;
     case "page_version":
     case "http":
       return o.url;
@@ -723,11 +723,29 @@ function codeSpan(text: string): string {
   return `${fence}${pad}${visible}${pad}${fence}`;
 }
 
-// The API path of the check runs on the head commit of a github_check
-// observation's branch. `heads/` names the branch, as the API documents it,
-// so a tag or a commit of the same name is never read instead.
-function githubCheckPath(o: Extract<BoardObserve, { kind: "github_check" }>): string {
-  return `repos/${o.repo}/commits/heads/${o.branch}/check-runs`;
+// The API endpoint of the check runs of a github_check observation's name on
+// the head commit of its branch. `heads/` names the branch, as the API
+// documents it, so a tag or a commit of the same name is never read instead.
+// The name and the page size are in the endpoint's query rather than given
+// as `-f` fields: gh then takes neither `-f` nor `-X GET`, flags that a
+// request writing to the API takes as well, so the command reads as a read
+// to whatever approves commands by their flags.
+function githubCheckEndpoint(o: Extract<BoardObserve, { kind: "github_check" }>): string {
+  return `repos/${o.repo}/commits/heads/${o.branch}/check-runs?check_name=${queryValue(o.check)}&per_page=${CHECK_RUNS_PER_PAGE}`;
+}
+
+// A text as a value in the query of a URL: each byte of its UTF-8
+// percent-encoded but the letters, digits, '-', '.', '_' and '~' (what
+// RFC 3986 leaves unreserved), so that nothing in a check name (a space, '&',
+// '#', '%', '+') reads as part of the URL. The API decodes it to the name
+// itself. A lone surrogate becomes U+FFFD, as it would be printed as it is.
+function queryValue(text: string): string {
+  let value = "";
+  for (const byte of Buffer.from(text, "utf8")) {
+    const c = String.fromCharCode(byte);
+    value += /[A-Za-z0-9._~-]/.test(c) ? c : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  return value;
 }
 
 // How many check runs a github_check observation reads, as one page.

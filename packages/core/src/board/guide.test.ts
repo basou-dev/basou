@@ -1440,6 +1440,9 @@ describe("boardGuide: an http observation, run", () => {
 });
 
 const ODD_CHECK = 'Workers Builds: a`b $(touch x) "c"; \u30c7\u30d7\u30ed\u30a4';
+// ODD_CHECK as a value in the query of a URL: its UTF-8, percent-encoded.
+const ODD_CHECK_QUERY =
+  "Workers%20Builds%3A%20a%60b%20%24%28touch%20x%29%20%22c%22%3B%20%E3%83%87%E3%83%97%E3%83%AD%E3%82%A4";
 const CHECK_STATE =
   '(.check_runs | max_by(.id) | if .status == "completed" then .conclusion else .status end), (if .total_count > 100 then "more than 100 runs: \\(.total_count)" else empty end)';
 
@@ -1468,10 +1471,10 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
     );
     const blocks = blocksIn(guide);
     expect(blocks).toContain(
-      `gh api -X GET 'repos/owner/name/commits/heads/main/check-runs' -f check_name='Workers Builds: app' -f per_page=100 -q '${CHECK_STATE}'; echo "exit=$?"`,
+      `gh api 'repos/owner/name/commits/heads/main/check-runs?check_name=Workers%20Builds%3A%20app&per_page=100' -q '${CHECK_STATE}'; echo "exit=$?"`,
     );
     expect(blocks).toContain(
-      `gh api -X GET 'repos/owner/name.js/commits/heads/release/1.x/check-runs' -f check_name='${ODD_CHECK}' -f per_page=100 -q '${CHECK_STATE}'; echo "exit=$?"`,
+      `gh api 'repos/owner/name.js/commits/heads/release/1.x/check-runs?check_name=${ODD_CHECK_QUERY}&per_page=100' -q '${CHECK_STATE}'; echo "exit=$?"`,
     );
     const deploy = guide.slice(
       guide.indexOf("#### `deploy` (github_check)"),
@@ -1496,9 +1499,9 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
       "An empty line: the head commit of `main` has no check run named `Workers Builds: app`.",
     );
     expect(deploy).toContain(
-      "Source: `gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name='Workers Builds: app'`.",
+      "Source: `gh api 'repos/owner/name/commits/heads/main/check-runs?check_name=Workers%20Builds%3A%20app&per_page=100'`.",
     );
-    // A name with a backquote is still Markdown code as it is, in the prose as in the source.
+    // A name with a backquote is still Markdown code as it is in the prose; the source holds it percent-encoded.
     const odd = guide.slice(guide.indexOf("#### `odd` (github_check)"), guide.indexOf("### 4."));
     expect(odd).toContain(
       `How the latest check run named \`\`${ODD_CHECK}\`\` on the head commit of \`release/1.x\` of \`owner/name.js\` ended`,
@@ -1507,18 +1510,18 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
       `the head commit of \`release/1.x\` has no check run named \`\`${ODD_CHECK}\`\`.`,
     );
     expect(odd).toContain(
-      `Source: \`\`gh api -X GET repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name='${ODD_CHECK}'\`\`.`,
+      `Source: \`gh api 'repos/owner/name.js/commits/heads/release/1.x/check-runs?check_name=${ODD_CHECK_QUERY}&per_page=100'\`.`,
     );
     const observed = templateIn(guide).observed as Record<string, { source: string }>;
     expect(observed.deploy?.source).toBe(
-      "gh api -X GET repos/owner/name/commits/heads/main/check-runs -f check_name='Workers Builds: app'",
+      "gh api 'repos/owner/name/commits/heads/main/check-runs?check_name=Workers%20Builds%3A%20app&per_page=100'",
     );
     expect(observed.odd?.source).toBe(
-      `gh api -X GET repos/owner/name.js/commits/heads/release/1.x/check-runs -f check_name='${ODD_CHECK}'`,
+      `gh api 'repos/owner/name.js/commits/heads/release/1.x/check-runs?check_name=${ODD_CHECK_QUERY}&per_page=100'`,
     );
   });
 
-  it("gives the check name to gh as one argument, whatever it holds", async () => {
+  it("gives gh the check name in the endpoint's query, which reads back as the name, whatever it holds", async () => {
     const dir = await mkdtemp(join(tmpdir(), "basou-board-check-"));
     try {
       const bin = join(dir, "bin");
@@ -1531,38 +1534,65 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
           mode: 0o755,
         },
       );
+      // What a URL's query reads otherwise: a space, '&', '=', '#', '%' and '+'.
+      const query = "a b&c=d#e%25f+g?h/i";
       const guide = boardGuide(
         guideInput({
           anchor: dir,
           board: declared(
             httpDeclaration([
               { key: "odd", kind: "github_check", repo: "o/n", check: ODD_CHECK, branch: "a/b" },
+              { key: "query", kind: "github_check", repo: "o/n", check: query },
             ]),
           ),
         }),
       );
-      const ask = blocksIn(guide).find((b) => b.startsWith("gh api ")) as string;
-      const out = execFileSync("sh", ["-c", ask], {
-        cwd: dir,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
-        encoding: "utf8",
-      });
-      expect(out).toBe(
+      const asks = blocksIn(guide).filter((b) => b.startsWith("gh api "));
+      expect(asks).toHaveLength(2);
+      const run = (ask: string) =>
+        execFileSync("sh", ["-c", ask], {
+          cwd: dir,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+          encoding: "utf8",
+        });
+      expect(run(asks[0] as string)).toBe(
         [
           "[api]",
-          "[-X]",
-          "[GET]",
-          "[repos/o/n/commits/heads/a/b/check-runs]",
-          "[-f]",
-          `[check_name=${ODD_CHECK}]`,
-          "[-f]",
-          "[per_page=100]",
+          `[repos/o/n/commits/heads/a/b/check-runs?check_name=${ODD_CHECK_QUERY}&per_page=100]`,
           "[-q]",
           `[${CHECK_STATE}]`,
           "exit=0",
           "",
         ].join("\n"),
       );
+      expect(run(asks[1] as string)).toBe(
+        [
+          "[api]",
+          "[repos/o/n/commits/heads/main/check-runs?check_name=a%20b%26c%3Dd%23e%2525f%2Bg%3Fh%2Fi&per_page=100]",
+          "[-q]",
+          `[${CHECK_STATE}]`,
+          "exit=0",
+          "",
+        ].join("\n"),
+      );
+      // The endpoint's query reads back as the name and the page size, and nothing else.
+      for (const [ask, check, path] of [
+        [asks[0], ODD_CHECK, "/repos/o/n/commits/heads/a/b/check-runs"],
+        [asks[1], query, "/repos/o/n/commits/heads/main/check-runs"],
+      ]) {
+        const endpoint = (run(ask as string).split("\n")[1] as string).slice(1, -1);
+        const url = new URL(endpoint, "https://api.github.com/");
+        expect(url.pathname).toBe(path);
+        expect([...url.searchParams]).toEqual([
+          ["check_name", check],
+          ["per_page", "100"],
+        ]);
+        expect(url.hash).toBe("");
+      }
+      // Neither flag a request that writes takes is given.
+      for (const ask of asks) {
+        expect(ask).not.toMatch(/ -[Xf] /);
+      }
       await expect(readdir(dir)).resolves.toEqual(["bin"]);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -1601,25 +1631,26 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
         guideInput({ anchor: dir, board: declared(httpDeclaration(observe)) }),
       );
       const sources = templateIn(guide).observed as Record<string, { source: string }>;
-      // A plain name reads as it did before.
+      // A check's endpoint holds its query, so is quoted, with a plain name as well.
       expect(sources.plain?.source).toBe(
-        "gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name=build",
+        "gh api 'repos/o/n/commits/heads/main/check-runs?check_name=build&per_page=100'",
       );
+      // A plain name reads as it did before.
       expect(sources.ci?.source).toBe(
         "gh run list --repo o/n --workflow quality.yml --branch rel/1.x",
       );
       expect(sources.deploy?.source).toBe(
-        "gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='Workers Builds: my-app'",
+        "gh api 'repos/o/n/commits/heads/main/check-runs?check_name=Workers%20Builds%3A%20my-app&per_page=100'",
       );
       for (const [key, check] of [
-        ["star", "e2e*"],
-        ["mark", "a?b"],
-        ["set", "[x]"],
+        ["star", "e2e%2A"],
+        ["mark", "a%3Fb"],
+        ["set", "%5Bx%5D"],
         ["tilde", "~x"],
-        ["caret", "^x"],
+        ["caret", "%5Ex"],
       ]) {
         expect(sources[key as string]?.source, key).toBe(
-          `gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='${check}'`,
+          `gh api 'repos/o/n/commits/heads/main/check-runs?check_name=${check}&per_page=100'`,
         );
       }
       const words = (line: string) =>
@@ -1638,15 +1669,12 @@ describe("boardGuide: a github_check observation and an observation's notes", ()
         const source = sources[o.key]?.source as string;
         const asked = words(blocks[i] as string);
         expect(words(source), o.key).toEqual(asked.slice(0, words(source).length));
-        expect(words(source).length, o.key).toBeGreaterThan(3);
+        // A check's source is api and its endpoint, which holds the name in its query.
+        expect(words(source).length, o.key).toBeGreaterThan(o.kind === "github_check" ? 1 : 3);
       });
       expect(words(sources.deploy?.source as string)).toEqual([
         "[api]",
-        "[-X]",
-        "[GET]",
-        "[repos/o/n/commits/heads/main/check-runs]",
-        "[-f]",
-        "[check_name=Workers Builds: my-app]",
+        "[repos/o/n/commits/heads/main/check-runs?check_name=Workers%20Builds%3A%20my-app&per_page=100]",
       ]);
       await expect(readdir(dir)).resolves.toEqual(["bin"]);
     } finally {
@@ -1779,9 +1807,12 @@ describe("boardGuide: what a board declares, as code and escaped as the template
     }
   });
 
-  it("escapes in its prose and sources what its template escapes, and gives the command the name as it is", () => {
+  it("escapes in its prose what its template escapes, and gives the command and the source the name percent-encoded", () => {
     const check = `a${String.fromCharCode(0x200f)}b${String.fromCharCode(0xfeff)}c${String.fromCharCode(0x200b)}d${String.fromCharCode(0x061c)}e${String.fromCharCode(0x2060)}f${String.fromCharCode(0x200e)}g`;
     const shownCheck = "a\\u200fb\\ufeffc\\u200bd\\u061ce\\u2060f\\u200eg";
+    // The name's UTF-8, percent-encoded: nothing of it is hidden.
+    const endpoint =
+      "repos/o/n/commits/heads/main/check-runs?check_name=a%E2%80%8Fb%EF%BB%BFc%E2%80%8Bd%D8%9Ce%E2%81%A0f%E2%80%8Eg&per_page=100";
     const guide = boardGuide(
       guideInput({
         board: declared(
@@ -1793,23 +1824,28 @@ describe("boardGuide: what a board declares, as code and escaped as the template
       }),
     );
     expect(guide).toContain(`How the latest check run named \`${shownCheck}\` on the head commit`);
-    expect(guide).toContain(
-      `Source: \`gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='${shownCheck}'\`.`,
-    );
+    expect(guide).toContain(`Source: \`gh api '${endpoint}'\`.`);
     expect(guide).toContain("Only the operator can make this one: count\\u200fthem");
-    // The template says the same, and holds the name itself once read.
-    const source = `gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='${check}'`;
-    expect(guide).toContain(
-      `"source":"gh api -X GET repos/o/n/commits/heads/main/check-runs -f check_name='${shownCheck}'"`,
-    );
+    // The template's source is the same, and the command asks gh for the same endpoint.
     expect((templateIn(guide).observed as Record<string, { source: string }>).deploy?.source).toBe(
-      source,
+      `gh api '${endpoint}'`,
     );
-    // Only the command takes the name as it is.
-    const raw = guide.split("\n").filter((l) => l.includes(check));
-    expect(raw).toHaveLength(1);
-    expect(raw[0]).toContain(
-      "gh api -X GET 'repos/o/n/commits/heads/main/check-runs' -f check_name=",
+    expect(blocksIn(guide)).toContain(`gh api '${endpoint}' -q '${CHECK_STATE}'; echo "exit=$?"`);
+    // The endpoint reads back as the name itself; nothing in the guide holds it as it is.
+    expect(new URL(endpoint, "https://api.github.com/").searchParams.get("check_name")).toBe(check);
+    expect(guide.includes(check)).toBe(false);
+  });
+
+  it("gives a lone surrogate in a check name as U+FFFD, as printing it would, rather than failing", () => {
+    const check = `a${String.fromCharCode(0xd800)}b`;
+    const board = httpDeclaration([{ key: "lone", kind: "github_check", repo: "o/n", check }]);
+    // The declaration takes the name as it is.
+    expect(board.observe[0]).toMatchObject({ kind: "github_check", check });
+    const guide = boardGuide(guideInput({ board: declared(board) }));
+    const endpoint = "repos/o/n/commits/heads/main/check-runs?check_name=a%EF%BF%BDb&per_page=100";
+    expect(blocksIn(guide)).toContain(`gh api '${endpoint}' -q '${CHECK_STATE}'; echo "exit=$?"`);
+    expect((templateIn(guide).observed as Record<string, { source: string }>).lone?.source).toBe(
+      `gh api '${endpoint}'`,
     );
   });
 });
@@ -1880,7 +1916,7 @@ describe("boardGuide: every text a board or its records give, escaped as the tem
       "- `core` C\\u200d: a\\u2062",
       "  - mind: ln\\u061c",
       "How the latest check run named `c\\u2062` on the head commit",
-      "check_name='c\\u2062'`.",
+      "check_name=c%E2%81%A2&per_page=100'`.",
       "- mind: on\\ufeff",
       "Only the operator can make this one: count\\u061c",
       "  - `users`: count\\u061c",
@@ -1891,8 +1927,10 @@ describe("boardGuide: every text a board or its records give, escaped as the tem
     for (const c of ESCAPED.map(hid)) {
       expect(outsideCommands.includes(c), c.charCodeAt(0).toString(16)).toBe(false);
     }
-    // The command takes the name as it is.
-    expect(guide).toContain(`-f check_name='c${IT}'`);
+    // The command takes the name percent-encoded, which reads back as the name.
+    expect(guide).toContain(
+      "gh api 'repos/o/n/commits/heads/main/check-runs?check_name=c%E2%81%A2&per_page=100' -q ",
+    );
     expect(guide).toContain(`- \`docs\` Docs: x${NEXT}y`);
   });
 });
