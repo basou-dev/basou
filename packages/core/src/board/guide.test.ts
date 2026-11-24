@@ -688,8 +688,19 @@ describe("boardGuide: an observation not made, the milestones, isolation and wha
 
   it("gives what only the operator can see to unverified, and a screen checked every time to a manual observation", () => {
     expect(boardGuide(guideInput())).toContain(
-      "- `unverified` (?): you cannot confirm it from where you judge: a run only another workspace can make, or a screen only the operator can see and did not check this time. Needs a reason saying who or what could confirm it. Not when this board could check it and you did not: measure it, or say in a footnote why not. When the operator did check, judge by what they saw. A screen the operator would check at every record is better declared as a `manual` observation (through step 2b): their answer is then kept in the record",
+      "- `unverified` (?): when you cannot confirm it from where you judge: a run only another workspace can make, or a screen only the operator can see and did not check this time. Give a reason saying who or what could confirm it. Not when this board could check it and you did not: measure it, or say in a footnote why not. When the operator did check, judge by what they saw. A screen the operator would check at every record is better declared as a `manual` observation (through step 2b): their answer is then kept in the record",
     );
+  });
+
+  it("says when to give each state, and where what each means is fixed, and no longer calls the board experimental", () => {
+    const guide = boardGuide(guideInput());
+    expect(guide).toContain(
+      "The states of a cell, and when to give each (what each state means is fixed in basou's board.md, docs/spec/board.md in its repository, section 3.3):",
+    );
+    for (const state of ["done", "part", "blocked", "shelved", "none", "unverified"]) {
+      expect(guide).toMatch(new RegExp(`\\n- \`${state}\` \\([^)]*\\): when `));
+    }
+    expect(guide).not.toMatch(/experimental/i);
   });
 });
 

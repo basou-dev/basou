@@ -2383,6 +2383,65 @@ describe("basou view: the board page", () => {
     expect(still.text()).not.toContain(S.matrix.movedKey);
   });
 
+  it("draws a state it does not know by its name as written, and a name every object has as a state too", () => {
+    const { call } = drawing(["matrix", "lanes"]);
+    const S = boardPageStrings("en");
+    const drawn = call("matrix", {
+      matrix: {
+        anomalies: [{ lane: "Core", stage: "01", state: "toString", before: "02" }],
+        stages: [
+          { id: "01", meaning: "Concept" },
+          { id: "02", meaning: "Spec" },
+          { id: "03", meaning: "Built" },
+        ],
+        lanes: [
+          {
+            id: "core",
+            name: "Core",
+            cells: [
+              { state: "toString" },
+              { state: "part_verified", moved_from: "done" },
+              { state: "done", moved_from: "constructor" },
+            ],
+          },
+        ],
+      },
+    });
+    const cells = drawn.find((n) => n.tag === "td");
+    expect(cells.map((td) => td.attrs["data-state"])).toEqual([
+      "toString",
+      "part_verified",
+      "done",
+    ]);
+    // A state it knows by its mark; one it does not by its name, with no mark.
+    expect(cells.map((td) => td.children.map((c) => [c.className, c.text()]))).toEqual([
+      [["st other", "toString"]],
+      [["st other", "part_verified"]],
+      [["st done", ""]],
+    ]);
+    expect(cells.map((td) => td.attrs.title)).toEqual([
+      "toString",
+      `part_verified  (${S.matrix.moved.replace("{state}", S.states.done)})`,
+      `${S.states.done}  (${S.matrix.moved.replace("{state}", "constructor")})`,
+    ]);
+    const [moved] = drawn.find((n) => n.tag === "ul" && n.className === "moved");
+    expect(moved?.children.map((li) => li.text())).toEqual([
+      `Core 02: ${S.states.done} \u2192 part_verified`,
+      `Core 03: constructor \u2192 ${S.states.done}`,
+    ]);
+    expect(drawn.text()).not.toContain("function");
+    // The legend lists the states it knows, each once.
+    const [legend] = drawn.find((n) => n.className === "legend");
+    expect(legend?.find((n) => n.className.startsWith("st ")).map((n) => n.className)).toEqual([
+      "st done",
+      "st part",
+      "st blocked",
+      "st shelved",
+      "st none",
+      "st unverified",
+    ]);
+  });
+
   it("puts each stage's meaning in its head's title, and draws a stage by its id alone on a narrow screen, with the meanings listed under the matrix", () => {
     const { call } = drawing(["matrix"]);
     const drawn = call("matrix", {

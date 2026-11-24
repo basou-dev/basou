@@ -275,9 +275,10 @@ export function sharedWhileRunning<T>(run: () => Promise<T>): () => Promise<T> {
 
 // Where the board page reads records from: beside the default board.yaml,
 // which `basou board` reads only when the manifest declares the workspace's
-// own repo private. There is no flag to point elsewhere: this command is
-// guaranteed and the board is experimental. The page is drawn from the
-// records; the board.yaml as it is now is not read.
+// own repo private. There is no flag to point elsewhere: the board page is a
+// local UI, not a guaranteed surface, so it reads only where basou board does
+// by default. The page is drawn from the records; the board.yaml as it is now
+// is not read.
 function viewBoardOf(root: string, manifest: Manifest): ViewBoard {
   const own = manifest.repos?.find((repo) => repo.path === ".");
   if (own?.visibility !== "private") return { why: "no_board" };

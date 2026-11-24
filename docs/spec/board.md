@@ -1,18 +1,26 @@
 # Progress board: `board.yaml`, the record's input, and records
 
-> **Experimental.** `basou board` is an [experimental
-> command](compatibility.md#what-is-not-guaranteed). Every shape on this page
-> (the declaration `board.yaml`, the input `basou board record` reads, the
-> records it writes, and the measurement `basou board measure --json` prints)
-> is outside every guarantee, and may change at any release. If the command
-> is promoted, the release that promotes it names the shapes it guarantees
-> from then on; until then, and for any shape it does not name, none is
-> guaranteed.
+> **Guaranteed from basou 1.1.0.** `basou board` was experimental from
+> basou 0.65.0 until 1.1.0 promoted it. What this page describes of
+> `board.yaml` (`board_version` 1, 2 and 3), of the input `basou board
+> record` reads, of the records it writes and has written (`record_version`
+> 1, 2 and 3), and of what `basou board measure --json` and `basou board
+> record --json` print, is guaranteed as [The progress
+> board](compatibility.md#the-progress-board-every-version-is-read-and-what-may-grow)
+> in compatibility.md bounds it. Not guaranteed: what these commands print
+> without `--json`, what `basou board guide` and `basou board init` print,
+> the words of a refusal, the strings a `--json` output holds for a person
+> to read (a `not_found` entry's `reason`, and the `detail` and `why` under
+> `axis`), the commands the guide prints to make an observation and their
+> limits, how the digest is computed from what it covers, the board page of
+> `basou view`, and what `@basou/core` exports for the board.
 >
-> This page describes the shapes of basou 0.71.0: `board_version` 3 and
-> `record_version` 3, with what `basou board record` refuses of an
-> observation's value as of basou 0.73.0. When a later release changes a
-> shape, it raises the version and this page with it.
+> This page describes the shapes of basou 1.1.0: `board_version` 3 and
+> `record_version` 3. A later release adds to them only as compatibility.md
+> allows: a new key, kind or value of `board.yaml` comes with a new
+> `board_version`; a record, and each `--json` output, may gain fields
+> without its version moving; and a few values may grow, each listed in
+> [What may grow](#7-what-may-grow) with the release that gave it.
 
 This page says what each key of these shapes holds, which keys are required,
 what a `null` means, and what the digest of a measurement covers. It does not
@@ -33,6 +41,10 @@ Conventions on this page:
 - **Since** names the first `board_version` that reads a key, a kind or a
   value. Using one in a board of an earlier version is refused (see
   [How it is read](#21-how-it-is-read)).
+- **Since basou x.y** names the first release of basou that gives a value no
+  `board_version` gates: a cell's state, an axis review's trigger or a
+  component's kind ([What may grow](#7-what-may-grow)). A basou before that
+  release does not know the value.
 
 ## 1. Files and versions
 
@@ -56,6 +68,12 @@ Conventions on this page:
   record is the last by name. A record written before basou 0.70.1 has a
   name of another time, a second or so apart; the board page's list of
   records and `basou board guide` give each record's own `recorded_at`.
+- **A record is a regular file.** An entry of `records/` named as a record
+  that is not one (a symlink, a directory) is passed over, by every command
+  and the board page alike, and `basou board measure`, `basou board record`
+  and `basou board guide` name it on stderr. basou never creates one. Before
+  basou 1.1.0, `measure` and `record` read such a symlink as a record, and
+  could not read such a directory.
 
 Both shapes carry a version, and every version ever written is read:
 
@@ -71,11 +89,15 @@ Both shapes carry a version, and every version ever written is read:
   and a component's `marker`.
 - `record_version` 2 holds the observations and the stages' `look` and
   `notes` of a board of version 2.
-- `record_version` 3 may hold a declaration of `board_version` 3 and its
-  values (a list of paths for a `file_paths` measure, the kind `marker` for
-  a component), holds a measure's `lane` as a list, and holds a repo's
-  `base`, `behind`, `ahead` and `fetched_at` (see [Records of version 1 and
-  2](#6-records-of-version-1-and-2)).
+- `record_version` 3 may hold a declaration of `board_version` 3, or of a
+  later version, and its values (a list of paths for a `file_paths` measure,
+  the kind `marker` for a component), holds a measure's `lane` as a list,
+  and holds a repo's `base`, `behind`, `ahead` and `fetched_at` (see
+  [Records of version 1 and 2](#6-records-of-version-1-and-2)).
+- Two records of one `record_version` may hold different fields: a release
+  may add a field to a record without moving its version, so a record an
+  earlier basou wrote does not have it. A reader passes over a field it does
+  not know, as basou's do.
 
 A board of an unknown version is refused, naming it (`board_version: this
 basou reads board_version 1, 2 or 3, not 4`). A record of an unknown version
@@ -515,6 +537,12 @@ declared, `basou board guide` prints the command that makes it (or, for
 makes it and gives it under its key in the record's input
 ([3.2](#32-observed)).
 
+What each kind's value is, this page defines. The commands the guide prints
+to make one, and their limits (how many items a listing reads, how long a
+request may take), are the guide's: they may change at any release, within
+that definition. Where this page names such a limit, it says what today's
+guide does.
+
 From basou 0.72.0, `basou board record` holds each value that is not null
 against the shape its kind gives it below, and refuses one in another shape
 (before, it kept any JSON value). The value of each kind is what the guide
@@ -540,7 +568,7 @@ never part of a command.
 |---|---|---|---|
 | `npm_version` | 2 | `package` | a string: the version npm's `latest` tag names (`"1.2.3"`) |
 | `github_release` | 2 | `repo` | a string: the tag of the latest release; null with an error when there is none |
-| `github_open_issues` | 2 | `repo` | a number: the open issues (the guide reads up to 1000) |
+| `github_open_issues` | 2 | `repo` | a number: the open issues (today's guide reads up to 1000) |
 | `github_open_prs` | 2 | `repo` | a number: the open pull requests (the same) |
 | `github_ci` | 2 | `repo`, `workflow`, `branch` | a string: how the latest run of the workflow on the branch ended (`success`, `failure`), or its status while it runs (`in_progress`); null with an error when there is no run |
 | `github_check` | 3 | `repo`, `check`, `branch` | a string: how the newest check run of that name on the head commit of the branch ended, or its status while it runs; null with an error when the head commit has none |
@@ -654,8 +682,9 @@ holds, and the board page draws it as its parts.
   and nothing else decoded: a word is looked for character for character,
   and HTML entities are not decoded.
 - The observation is not made (a null value with an error) when the request
-  fails (the name does not resolve, TLS fails, 20 seconds pass, or it takes
-  more than 10 redirects), when its status is not one of an HTTP response
+  fails (the name does not resolve, TLS fails, it takes longer than the
+  guide's command allows, 20 seconds in today's guide, or it takes more than
+  10 redirects), when its status is not one of an HTTP response
   (100 to 599, such as a server answering 600, which curl prints as it is),
   when the URL it ended at is not an `http://` or `https://` URL (from
   basou 0.73.0), or when what curl left cannot be read. From basou 0.72.0
@@ -719,7 +748,8 @@ directory named `node_modules`, `vendor`, `dist`, `build`, `.svelte-kit`,
 | `sql` | a name that ends with `.sql`, not under a `migrations` or `migration` directory | the file's directory |
 
 These are the rules of the `components` method 2 (see
-[`methods`](#51-top-level-keys)).
+[`methods`](#51-top-level-keys)). A later release may give a kind of its
+own ([What may grow](#7-what-may-grow)).
 
 ### 2.9 `axis`
 
@@ -808,8 +838,11 @@ In this order, and nothing is written when any step refuses:
    time zone (see [The digest](#513-the-digest)).
 
 `--dry-run` runs every step and writes nothing. The exit code is `0` when
-the record was written (with `--dry-run`, when everything checked out) and
-`1` when it was refused, with the reasons on stderr.
+the record was written (with `--dry-run`, when everything checked out), and
+not `0` (`1` today) when it was refused, with the reasons on stderr: any
+value but `0` is a failure, as compatibility.md's [exit
+codes](compatibility.md#exit-codes-zero-is-success-and-a-failures-value-may-be-refined)
+say.
 
 ### 3.2 `observed`
 
@@ -854,9 +887,28 @@ each lane and stage once.
 | `state` | yes | `done`, `part`, `blocked`, `shelved`, `none` or `unverified` |
 | `reason` | for `blocked`, `shelved` and `unverified` | a non-empty string |
 
-What the states mean, and how to judge them, is in `basou board guide`. The
-guide's template of the input gives each cell the previous record's state as
-`previous`: delete it, since a cell takes no other key.
+What each state means, at a lane's stage:
+
+| State | Means |
+|---|---|
+| `done` | the stage's condition, as the board's `stages` says it, is met |
+| `part` | the condition is met for some of the lane's surfaces or features, not all |
+| `blocked` | stuck at this stage: what the next step needs is missing; the reason says what |
+| `shelved` | stopped on purpose, by a settled decision, which the reason names; not a failure |
+| `none` | not started |
+| `unverified` | it cannot be confirmed from where the board is judged (a run only another workspace can make, a screen only the operator can see and did not check); the reason says who or what could confirm it |
+
+`done` and `part` reach the stage. `none`, `blocked` and `shelved` do not,
+and leave it behind when a later stage of the lane is `done` or `part`.
+`unverified` counts neither way. How to judge a cell is in `basou board
+guide`. The guide's template of the input gives each cell the
+previous record's state as `previous`: delete it, since a cell takes no
+other key.
+
+A later release may give a state of its own ([What may
+grow](#7-what-may-grow)); a record it writes then holds it, and an earlier
+basou reads that record. A state a basou does not know is drawn as it is
+written, and counts neither way, as `unverified` does.
 
 A stage left behind (`none`, `blocked` or `shelved` before a later stage of
 the lane that is `done` or `part`; `unverified` counts neither way) is
@@ -890,7 +942,8 @@ All are plain strings: the board page shows HTML as text, and draws only
 | `summary` | yes | a non-empty string: what was reviewed and decided |
 
 A record with an `axis_review` is the last review that the triggers (b) and
-(c) count from.
+(c) count from. A later release may add a trigger ([What may
+grow](#7-what-may-grow)).
 
 ### 3.6 What `basou board record --json` prints
 
@@ -977,9 +1030,16 @@ which is `before`.
 
 `basou board measure --json` prints it; a record holds it without `diff`.
 It reads and never writes, and sends nothing. Its exit code is `0` when
-everything was measured, and `1` when something was not (the measurement is
-still printed) or the declaration or the manifest cannot be read (nothing is
-printed on stdout).
+everything was measured, and not `0` (`1` today) when something was not
+(the measurement is still printed) or the declaration or the manifest cannot
+be read (nothing is printed on stdout): any value but `0` is a failure, as
+compatibility.md's [exit
+codes](compatibility.md#exit-codes-zero-is-success-and-a-failures-value-may-be-refined)
+say. A field a later release adds, or a method it raises, can move a board
+from measured in full to not, or back, and so its exit code across `0`
+([The progress
+board](compatibility.md#the-progress-board-every-version-is-read-and-what-may-grow),
+item 7).
 
 **What a null means.** A value is `null` when it could not be measured, and
 then `not_found` has an entry saying why and `complete` is false: a missing
@@ -1023,8 +1083,10 @@ could be measured, `measures.commands` or `measures["site.pages"]`,
 
 **`methods`.** `{ repos, trail, integrity, review_gaps, portfolio,
 freshness, effort, components, axis }`, each an integer. A section's method
-is raised only when the same input would give a value of it another way,
-never for an added field or a new key of the declaration. A method that
+is raised whenever the same input would give a value of it another way, a
+fix included, and never for an added field or a new key of the declaration.
+A `trail_count` measure counts as the `trail` section does, so a change to
+how it counts raises the `trail` method. A method that
 differs from the previous record's fires the axis review's trigger (e), and
 the values of that section in `diff` are marked `method_changed`. In 0.71.0
 they are `portfolio` 1 and every other section 2. From basou 0.73.0 `repos`
@@ -1238,7 +1300,17 @@ what was measured.
 | `last_review` | `{ date, model, from: "record", record }` for the last record with an `axis_review` (its date in the effort's time zone), or `{ date, model, from: "seed" }` for the declaration's `seed_review` when no record has one; null when there is none, which fires (b), and (c) when a model is given |
 
 `last_review` is null with an entry at `axis.last_review` when a record that
-may hold it cannot be read; (b) and (c) are then not judged. Two model names
+may hold it cannot be read; (b) and (c) are then not judged.
+
+**`complete` does not move with the day or the model.** The axis's entries
+in `not_found` come and go with them, as the axis does, but one comes only
+while `not_found` holds an entry that does not: a gap another key reports
+(the components, the effort's time zone), or a record that cannot be read
+(at `diff`, or, for a record before the previous one, at
+`axis.last_review`, which is there whatever the day or the model). So two
+measurements of the same board by the same basou on the same day agree on
+`complete`, whatever `--model` each was given. The digest leaves the axis's
+entries out ([5.13](#513-the-digest)) and covers `complete`. Two model names
 are the same model when they match lower-cased, with each run of anything
 but an ASCII letter or digit read as one `-` and none at either end (when
 either has no ASCII letter or digit, the names themselves are compared,
@@ -1352,3 +1424,42 @@ differs from version 3 in what it holds:
 - Its declaration is of `board_version` 1 or 2. The declaration a record of
   version 1 holds has no `observe` (its `observed` may still hold entries,
   under any names) and no stage's `look` or `notes`.
+
+## 7. What may grow
+
+Within `1.x`, the shapes on this page change only as [The progress
+board](compatibility.md#the-progress-board-every-version-is-read-and-what-may-grow)
+in compatibility.md allows:
+
+- **`board.yaml` gains a key, a kind, or a value of `kind`, `pick`, `of` or
+  `on_missing`, only with a new `board_version`**, which the tables above
+  name in their Since column.
+- **A record, and each `--json` output, may gain fields without its version
+  moving.** A built-in section added this way (a new key of `methods`)
+  counts as its method raised from none: the first measurement after the
+  release fires the axis review's trigger (e) on every board.
+- **These values may grow**, each listed with the release that gave it
+  (**Since basou x.y**) where this page lists the values; every value it
+  lists without one is known to basou 1.1.0:
+  - a cell's `state` ([3.3](#33-cells)): in the record's input, in a
+    record's `cells`, and under `cells` in the `diff` of `basou board record
+    --json`;
+  - an axis review's `triggers` ([3.5](#35-judged_by-and-axis_review)), and
+    the `trigger` under `axis.reasons` and `axis.unjudged`
+    ([5.11](#511-axis));
+  - a component's `kinds` ([2.8](#28-components)), under
+    `components.found`;
+  - what a later `board_version` adds: its number, the values of its keys,
+    and the values a new kind gives, which a record's `declaration` and
+    `measure` then hold;
+  - the keys of `integrity.by_status`, as `basou verify` gains statuses
+    ([5.5](#55-integrity)), and the keys of `review_gaps.by_verdict`, which
+    may also lose one as `basou review-gaps` changes its verdicts, with the
+    `review_gaps` method rising when they do ([5.6](#56-review_gaps)).
+- **A value never changes meaning.** This page says what each one means.
+- **A value a basou does not know** is drawn as it is written, on the board
+  page and in the text `basou board measure` and `basou board record`
+  print, and counts as neither reaching a stage nor leaving one behind, as
+  `unverified` does. A consumer keeps a branch for a value it does not know.
+
+Every other enumeration of these shapes is fixed within `1.x`.

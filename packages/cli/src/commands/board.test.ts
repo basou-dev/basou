@@ -2023,6 +2023,99 @@ describe("basou board measure and record against the previous record", () => {
     );
     expect(out.join("\n")).toContain("Components:\n  0 found, 0 unacknowledged, gone not known\n");
   });
+
+  it("passes over, and names on stderr, an entry of records/ named as a record that is not a regular file", async () => {
+    const { repo, first } = await recorded();
+    capture();
+    const before = await doRunBoardMeasure({ json: true }, ctx(repo));
+    const exitBefore = process.exitCode ?? 0;
+    vi.restoreAllMocks();
+    // Named as records after the last one: a directory, and a link to a record.
+    const records = join(repo, "board", "records");
+    const dir = "7ZZZZZZZZZZZZZZZZZZZZZZZZY";
+    const link = "7ZZZZZZZZZZZZZZZZZZZZZZZZZ";
+    await mkdir(join(records, `${dir}.json`));
+    await symlink(join(records, `${first}.json`), join(records, `${link}.json`));
+    const said = (name: string) =>
+      `basou: records/${name}.json beside the board is not a regular file (a symlink or a directory), so it is passed over and not read as a record.`;
+
+    const { err } = capture();
+    const m = await doRunBoardMeasure({ json: true }, ctx(repo));
+    // Neither is the previous record, nor one that cannot be read.
+    expect(m.diff?.against).toBe(first);
+    expect(m.not_found).toEqual(before.not_found);
+    expect(process.exitCode ?? 0).toBe(exitBefore);
+    expect(err).toEqual([said(dir), said(link)]);
+
+    err.length = 0;
+    const result = await doRunBoardRecord(
+      { dryRun: true },
+      {
+        ...ctx(repo),
+        readInput: async () => JSON.stringify(judgement(m.digest, ["done"], {})),
+      },
+    );
+    expect(result.diff?.against).toBe(first);
+    expect(err).toEqual([said(dir), said(link)]);
+
+    vi.restoreAllMocks();
+    const guided = capture();
+    await doRunBoardGuide({}, { ...ctx(repo), basouCommand: "basou-under-test" });
+    expect(guided.out.join("\n")).toContain(
+      `- Records: board/records/, 1 record; the last is ${first},`,
+    );
+    expect(guided.err).toEqual([said(dir), said(link)]);
+  });
+
+  it("reads a previous record holding values this basou does not know, and says them as written", async () => {
+    const { repo, first } = await recorded(async (at) => {
+      await writeFile(join(at, "package.json"), "{}\n");
+    });
+    const key = basename(repo);
+    // What a later basou may write: a state, a trigger and a kind of its own,
+    // a built-in section and a field this basou does not know.
+    const path = join(repo, "board", "records", `${first}.json`);
+    const held = JSON.parse(await readFile(path, "utf8"));
+    expect(held.measure.components.found[key].kinds).toEqual(["manifest"]);
+    held.cells[0].state = "part_verified";
+    held.axis_review = { triggers: ["f"], summary: "a trigger of a later basou" };
+    held.measure.methods.newsection = 1;
+    held.measure.newsection = { value: 1 };
+    held.measure.components.found[key].kinds = ["manifest", "newkind"];
+    held.later_field = { kept: true };
+    await writeFile(path, JSON.stringify(held, null, 2));
+
+    capture();
+    const m = await doRunBoardMeasure({ json: true, model: "Claude Opus 5.5" }, ctx(repo));
+    expect(m.diff?.against).toBe(first);
+    expect(m.not_found.filter((n) => n.at === "diff" || n.at.startsWith("axis"))).toEqual([]);
+    // The review it holds is the last review, whatever its triggers.
+    expect(m.axis.last_review).toMatchObject({ from: "record", record: first });
+    // A section it has and this basou does not is a method that moved (e).
+    expect(m.diff?.methods).toContainEqual({ section: "newsection", before: 1, after: null });
+    expect(m.axis.reasons.map((r) => r.trigger)).toContain("e");
+    // A kind it found that this basou does not give is a change of kinds (a).
+    expect(m.components.kind_changed).toEqual([
+      { key, before: ["manifest", "newkind"], after: ["manifest"] },
+    ]);
+    vi.restoreAllMocks();
+
+    const { out } = capture();
+    const result = await doRunBoardRecord(
+      { dryRun: true },
+      {
+        ...ctx(repo),
+        readInput: async () => JSON.stringify(judgement(m.digest, ["done", "part"], {})),
+      },
+    );
+    expect(result.diff?.cells).toContainEqual({
+      lane: "core",
+      stage: "01",
+      before: "part_verified",
+      after: "done",
+    });
+    expect(out.join("\n")).toContain("\n  core 01: part_verified -> done\n");
+  });
 });
 
 describe("basou board guide", () => {

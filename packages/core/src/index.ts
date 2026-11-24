@@ -198,6 +198,7 @@ export {
   parseBoardDeclaration,
   parseRecordInput,
   readPreviousRecords,
+  recordEntries,
   recordIds,
   setEntryOf,
   shellWord,

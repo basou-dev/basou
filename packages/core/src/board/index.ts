@@ -98,7 +98,12 @@ export type {
   PreviousOutcome,
   ReadBoardRecord,
 } from "./previous.js";
-export { NO_PREVIOUS_RECORDS, readPreviousRecords, recordIds } from "./previous.js";
+export {
+  NO_PREVIOUS_RECORDS,
+  readPreviousRecords,
+  recordEntries,
+  recordIds,
+} from "./previous.js";
 export type {
   BoardOrderAnomaly,
   BoardRecord,

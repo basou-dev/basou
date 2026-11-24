@@ -7,7 +7,7 @@ import { DEFAULT_BOARD_PATH } from "../commands/board.js";
  * board.yaml `basou board` reads by default, which it reads only when the
  * manifest declares the workspace's own repo private. Null when there is
  * none, or the manifest cannot be read: a position never fails on a board,
- * which an experimental command wrote. Every writer of the position calls
+ * whatever its files hold. Every writer of the position calls
  * this, so the line is there whichever wrote it last.
  */
 export async function glanceDefaultBoard(

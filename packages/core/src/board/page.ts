@@ -7,7 +7,7 @@ import { byCodePoint } from "./components.js";
 import { type BoardObserve, isCalendarDate } from "./declaration.js";
 import { type BoardObservedChange, diffCells, diffObserved } from "./diff.js";
 import { observedValueProblems } from "./observed-shape.js";
-import { readBoardRecordFile, recordIds } from "./previous.js";
+import { readBoardRecordFile, recordEntries } from "./previous.js";
 import { BOARD_RECORD_VERSIONS } from "./record.js";
 
 // The record versions the page draws: every version a record has had (a
@@ -506,21 +506,19 @@ export function boardPageUnavailable(
  * the previous value of an observation not made.
  */
 export async function boardPage(recordsDir: string, id?: string): Promise<BoardPage> {
-  let names: string[];
-  // The names that are files: the list opens no other (a FIFO would never answer).
-  let files: Set<string>;
+  // The records are the regular files named as one, as for every reader of
+  // them: a symlink or a directory named as a record is passed over, and the
+  // list opens no other entry (a FIFO would never answer).
+  let ids: string[];
   try {
     const entry = await lstat(recordsDir);
     if (!entry.isDirectory()) return boardPageUnavailable("records_not_directory");
-    const entries = await readdir(recordsDir, { withFileTypes: true });
-    names = entries.map((e) => e.name);
-    files = new Set(entries.filter((e) => e.isFile()).map((e) => e.name));
+    ids = recordEntries(await readdir(recordsDir, { withFileTypes: true })).ids;
   } catch (error: unknown) {
     if (findErrorCode(error, "ENOENT")) return boardPageUnavailable("no_records");
     return boardPageUnavailable("records_unreadable");
   }
-  const ids = recordIds(names);
-  const records = await recordTimes(recordsDir, ids, files);
+  const records = await recordTimes(recordsDir, ids);
   if (ids.length === 0) return boardPageUnavailable("no_records", { records });
   const shown = id ?? (ids[ids.length - 1] as string);
   const index = ids.indexOf(shown);
@@ -572,12 +570,10 @@ export async function boardPage(recordsDir: string, id?: string): Promise<BoardP
 async function recordTimes(
   recordsDir: string,
   ids: readonly string[],
-  files: ReadonlySet<string>,
 ): Promise<{ id: string; at: string }[]> {
   const out: { id: string; at: string }[] = [];
   for (const id of ids) {
-    const name = `${id}.json`;
-    const at = files.has(name) ? await recordedAtOf(join(recordsDir, name)) : undefined;
+    const at = await recordedAtOf(join(recordsDir, `${id}.json`));
     out.push({ id, at: at ?? new Date(decodeTime(id)).toISOString() });
   }
   return out;

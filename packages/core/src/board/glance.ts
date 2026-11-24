@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { decodeTime } from "ulid";
 import { parseDocument } from "yaml";
 import { findErrorCode } from "../lib/error-codes.js";
-import { recordIds } from "./previous.js";
+import { recordEntries } from "./previous.js";
 
 /**
  * What a workspace's position says of its board, read loosely: the board is
@@ -53,11 +53,8 @@ export async function glanceBoard(boardYaml: string): Promise<BoardGlance | null
     const records = join(dirname(boardYaml), "records");
     // A link or a file is not read, as the board page does not read one.
     if (!(await lstat(records)).isDirectory()) throw new Error("not a directory");
-    // A directory that bears a record's name is not a record.
-    const files = (await readdir(records, { withFileTypes: true }))
-      .filter((entry) => entry.isFile())
-      .map((entry) => entry.name);
-    const ids = recordIds(files);
+    // A record is a regular file, as for every reader of the records.
+    const { ids } = recordEntries(await readdir(records, { withFileTypes: true }));
     const last = ids.at(-1);
     lastRecordAt = last === undefined ? null : new Date(decodeTime(last)).toISOString();
   } catch (error: unknown) {

@@ -1009,6 +1009,80 @@ describe("boardPage", () => {
     ]);
   });
 
+  it("draws a state, a trigger and a kind it does not know as written, counting the state neither way", async () => {
+    await mkdir(records);
+    // What a later basou may write: a state, a trigger and a kind of its own,
+    // a built-in section and a field this basou does not know.
+    const r = record({
+      record_version: 3,
+      cells: cells({
+        core: ["done", "part_verified", "done", "none", "none", "none"],
+        docs: ["part_verified", "none", "none", "none", "none", "none"],
+      }),
+      axis_review: { triggers: ["f", "b"], summary: "A trigger of a later basou." },
+      order_anomalies: [],
+      later_field: { kept: true },
+    });
+    r.measure = {
+      ...r.measure,
+      methods: { ...r.measure.methods, newsection: 1 },
+      newsection: { value: 1 },
+      components: {
+        found: { app: { kinds: ["manifest", "newkind"], status: "known" } },
+        unacknowledged: [],
+        gone: [],
+        kind_changed: [{ key: "app", before: ["manifest"], after: ["manifest", "newkind"] }],
+      },
+    } as unknown as typeof r.measure;
+    r.declaration = { ...r.declaration, components: { app: { lane: ["core"] } } };
+    await place(A, r);
+    const page = await boardPage(records);
+    if (page.status !== "ok") throw new Error(page.why);
+    const b = page.board;
+    // Drawn as written.
+    expect(b.matrix.lanes.map((lane) => lane.cells.map((c) => c.state))).toEqual([
+      ["done", "part_verified", "done", "none", "none", "none"],
+      ["part_verified", "none", "none", "none", "none", "none"],
+    ]);
+    expect(b.footnotes.axis.this_review).toEqual({
+      triggers: ["f", "b"],
+      summary: "A trigger of a later basou.",
+    });
+    expect(b.components?.lanes[0]?.components[0]).toEqual({
+      key: "app",
+      kinds: ["manifest", "newkind"],
+      kind_changed: { before: ["manifest"], after: ["manifest", "newkind"] },
+    });
+    // Counted neither as reaching a stage nor as needing attention: where a
+    // lane is comes from done and part alone.
+    expect(b.lanes.map((lane) => [lane.id, lane.now?.stage ?? null, lane.attention])).toEqual([
+      ["core", "03", []],
+      ["docs", null, []],
+    ]);
+    expect(b.summary.tiles.slice(1, 3)).toEqual([
+      { key: "blocked", value: 0, reported: true },
+      { key: "unverified", value: 0, reported: true },
+    ]);
+    // A cell that moved to or from it says so, by its name.
+    await place(
+      B,
+      record({
+        record_version: 3,
+        cells: cells({
+          core: ["done", "done", "done", "none", "none", "none"],
+          docs: ["part_verified", "none", "none", "none", "none", "none"],
+        }),
+      }),
+    );
+    const next = await boardPage(records);
+    if (next.status !== "ok") throw new Error(next.why);
+    expect(next.board.matrix.lanes[0]?.cells[1]).toEqual({
+      stage: "02",
+      state: "done",
+      moved_from: "part_verified",
+    });
+  });
+
   it("draws the heading, the tiles and the observations from the record", async () => {
     await mkdir(records);
     await place(A, record());
@@ -1368,11 +1442,12 @@ describe("boardPage", () => {
       await place(C, JSON.stringify(record({ recorded_at })));
       expect(await last(), recorded_at).toEqual(byName);
     }
-    // Only a file is opened: a name that is a link (or a FIFO, which would
-    // never answer) is listed by its name's time.
+    // A record is a regular file: a name that is a link (or a FIFO, which
+    // would never answer) is no record, so it is neither opened nor listed.
     await rm(join(records, `${C}.json`));
     await symlink(join(records, `${A}.json`), join(records, `${C}.json`));
-    expect(await last()).toEqual(byName);
+    expect((await boardPage(records)).records.map((r) => r.id)).toEqual([A, B]);
+    expect((await boardPage(records, C)).status).toBe("unavailable");
   });
 
   it("does not draw a record it cannot read, of a version it does not know, or not in the shape of one", async () => {

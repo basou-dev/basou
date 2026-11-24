@@ -875,6 +875,18 @@ function schemaOf(version: number) {
   return version === 1 ? boardSchemaV1 : version === 2 ? boardSchemaV2 : boardSchemaV3;
 }
 
+/**
+ * The shape each `board_version` reads, by version: what a test walks to pin
+ * the keys, kinds and values each version takes, so that one cannot be taken
+ * away, or added to a version that is already read, without the test
+ * failing. Not exported from the package.
+ */
+export const BOARD_DECLARATION_SCHEMAS = {
+  1: boardSchemaV1,
+  2: boardSchemaV2,
+  3: boardSchemaV3,
+} as const;
+
 function parseAs(
   version: unknown,
   raw: unknown,

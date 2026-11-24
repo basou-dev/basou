@@ -14,7 +14,7 @@ import {
 
 const TABLE_HEADER = "| Command | Experimental since |";
 const TABLE_DELIMITER = "|---|---|";
-const EMPTY_SENTENCE = "No command is experimental yet.";
+const EMPTY_SENTENCE = "No command is experimental now.";
 
 // The top-level commands that existed when the list was introduced. An
 // existing command is never moved onto the list, so none of these may ever
@@ -46,6 +46,11 @@ const COMMANDS_BEFORE_THE_LIST = [
   "verify",
   "view",
 ];
+
+// The commands that left the list. Promotion is one-way, so none of these may
+// ever join it again; a name that returned would be a new command, which a
+// promoted command's name cannot be while it is registered.
+const PROMOTED_COMMANDS = ["board"];
 
 async function notGuaranteedSection(): Promise<string> {
   const doc = await readFile(
@@ -136,6 +141,15 @@ describe("experimental commands as documented", () => {
     expect(EXPERIMENTAL_COMMANDS.filter((name) => COMMANDS_BEFORE_THE_LIST.includes(name))).toEqual(
       [],
     );
+  });
+
+  it("never lists a command again once it was promoted", async () => {
+    expect(EXPERIMENTAL_COMMANDS.filter((name) => PROMOTED_COMMANDS.includes(name))).toEqual([]);
+    const rows = tableRows(await notGuaranteedSection());
+    expect(rows.filter((row) => PROMOTED_COMMANDS.includes(row.command))).toEqual([]);
+    // Each promoted command is still there, guaranteed.
+    const registered = buildProgram().commands.map((c) => c.name());
+    expect(PROMOTED_COMMANDS.filter((name) => !registered.includes(name))).toEqual([]);
   });
 
   it("marks in --help exactly the listed commands and every command under them", () => {
@@ -236,19 +250,35 @@ describe("installExperimentalNotice", () => {
     ]);
   });
 
-  it("writes to stderr, never to stdout, for the commands buildProgram lists", async () => {
-    const program = buildProgram().exitOverride();
-    const measure = program.commands
-      .find((c) => c.name() === "board")
-      ?.commands.find((c) => c.name() === "measure");
-    if (measure === undefined) throw new Error("basou board measure is not registered");
-    measure.action(() => {});
+  it("writes to stderr, never to stdout, for a command it lists", async () => {
+    const ran: string[] = [];
+    const program = sample(ran);
+    installExperimentalNotice(program, ["alpha"]);
     const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    await program.parseAsync(["node", "basou", "board", "measure"]);
-    expect(err).toHaveBeenCalledWith(`${experimentalNotice("board")}\n`);
+    await program.parseAsync(["node", "basou", "alpha"]);
+    expect(ran).toEqual(["alpha"]);
+    expect(err).toHaveBeenCalledWith(`${experimentalNotice("alpha")}\n`);
     expect(out).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled();
+  });
+
+  it("prints no notice and no mark for a promoted command that buildProgram lists", async () => {
+    const program = buildProgram().exitOverride();
+    const board = program.commands.find((c) => c.name() === "board");
+    const measure = board?.commands.find((c) => c.name() === "measure");
+    if (board === undefined || measure === undefined) {
+      throw new Error("basou board measure is not registered");
+    }
+    expect(board.description()).not.toContain(EXPERIMENTAL_MARK);
+    expect(measure.description()).not.toContain(EXPERIMENTAL_MARK);
+    expect(program.helpInformation()).not.toContain(EXPERIMENTAL_MARK);
+    measure.action(() => {});
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await program.parseAsync(["node", "basou", "board", "measure"]);
+    expect(err).not.toHaveBeenCalled();
+    expect(out).not.toHaveBeenCalled();
   });
 });

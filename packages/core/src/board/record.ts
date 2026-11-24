@@ -163,7 +163,11 @@ const triggersSchema = z
   )
   .min(1, { error: "must name at least one trigger" });
 
-const recordInputSchema = z.strictObject({
+/**
+ * The shape of the record's input, which a test also walks to pin the keys and
+ * values it takes. Not exported from the package.
+ */
+export const recordInputSchema = z.strictObject({
   measure_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/, {
     error: "must be the digest of a measurement (sha256: and 64 hex digits)",
   }),

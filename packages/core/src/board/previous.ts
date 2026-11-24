@@ -53,10 +53,15 @@ export type PreviousOutcome<T> =
 
 /** The records a board compares with, from the `records/` beside its board.yaml. */
 export type BoardPreviousRecords = {
-  /** The previous record: of the files named as a ULID with `.json`, the last by name. */
+  /** The previous record: of the records ({@link recordEntries}), the last by name. */
   last: PreviousOutcome<{ id: string; record: ReadBoardRecord }>;
   /** The last record with an axis review, the previous one or one before it. */
   lastReview: PreviousOutcome<{ id: string; record: ReadBoardRecord }>;
+  /**
+   * The entries named as a record that are not a regular file (a symlink, a
+   * directory), passed over, by name. Absent or empty when there is none.
+   */
+  passedOver?: readonly string[];
 };
 
 /** The names that are records, as their ULIDs, oldest first. */
@@ -67,6 +72,29 @@ export function recordIds(names: readonly string[]): string[] {
     .sort();
 }
 
+/** An entry of a directory, as `readdir` with `withFileTypes` gives it. */
+export type RecordDirEntry = { name: string; isFile(): boolean };
+
+/**
+ * The records among the entries of a `records/` directory, the one rule every
+ * reader of a board's records follows: a record is a regular file named as a
+ * ULID with `.json`. `ids` are their ULIDs, oldest first. An entry named so
+ * that is not a regular file (a symlink, a directory, a FIFO) is no record:
+ * basou never creates one, and it is passed over, listed by name in
+ * `passedOver` so that a command can say so. Any other name is no record
+ * either, and is not listed.
+ */
+export function recordEntries(entries: readonly RecordDirEntry[]): {
+  ids: string[];
+  passedOver: string[];
+} {
+  const ids = recordIds(entries.filter((e) => e.isFile()).map((e) => e.name));
+  const passedOver = recordIds(entries.filter((e) => !e.isFile()).map((e) => e.name)).map(
+    (id) => `${id}.json`,
+  );
+  return { ids, passedOver };
+}
+
 /** No record to compare with. */
 export const NO_PREVIOUS_RECORDS: BoardPreviousRecords = {
   last: { status: "none" },
@@ -74,13 +102,15 @@ export const NO_PREVIOUS_RECORDS: BoardPreviousRecords = {
 };
 
 /**
- * Read the records a board compares with. Only a file whose name is a ULID
- * with `.json` is a record; any other file (a temporary one, a copy) is
- * passed over. A record that cannot be read is never taken as no record:
- * what it alone would tell is then unknown, and so is anything before it.
+ * Read the records a board compares with. Only a regular file whose name is a
+ * ULID with `.json` is a record ({@link recordEntries}); any other file (a
+ * temporary one, a copy) is passed over, and so is an entry named as a record
+ * that is not a regular file, which is listed in `passedOver`. A record that
+ * cannot be read is never taken as no record: what it alone would tell is
+ * then unknown, and so is anything before it.
  */
 export async function readPreviousRecords(recordsDir: string): Promise<BoardPreviousRecords> {
-  let names: string[];
+  let entries: RecordDirEntry[];
   try {
     const entry = await lstat(recordsDir);
     if (!entry.isDirectory()) {
@@ -90,13 +120,14 @@ export async function readPreviousRecords(recordsDir: string): Promise<BoardPrev
         lastReview: { status: "unreadable", reason },
       };
     }
-    names = await readdir(recordsDir);
+    entries = await readdir(recordsDir, { withFileTypes: true });
   } catch (error: unknown) {
     if (findErrorCode(error, "ENOENT")) return NO_PREVIOUS_RECORDS;
     const reason = "the records/ beside the board could not be read";
     return { last: { status: "unreadable", reason }, lastReview: { status: "unreadable", reason } };
   }
-  const ids = recordIds(names);
+  const { ids, passedOver } = recordEntries(entries);
+  const said = passedOver.length === 0 ? {} : { passedOver };
 
   let last: BoardPreviousRecords["last"] = { status: "none" };
   for (let i = ids.length - 1; i >= 0; i--) {
@@ -104,14 +135,14 @@ export async function readPreviousRecords(recordsDir: string): Promise<BoardPrev
     const read = await readBoardRecordFile(recordsDir, id);
     if (!read.ok) {
       const unreadable = { status: "unreadable" as const, reason: read.reason };
-      return { last: last.status === "none" ? unreadable : last, lastReview: unreadable };
+      return { last: last.status === "none" ? unreadable : last, lastReview: unreadable, ...said };
     }
     if (last.status === "none") last = { status: "found", id, record: read.record };
     if (read.record.axis_review !== null) {
-      return { last, lastReview: { status: "found", id, record: read.record } };
+      return { last, lastReview: { status: "found", id, record: read.record }, ...said };
     }
   }
-  return { last, lastReview: { status: "none" } };
+  return { last, lastReview: { status: "none" }, ...said };
 }
 
 /** Read the record named `id` in a records directory, or say why it cannot be read. */
