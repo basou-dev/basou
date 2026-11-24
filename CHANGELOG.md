@@ -86,6 +86,7 @@ All notable changes to **basou** are recorded here. The project follows
   in the cell, where it drew an empty cell; a state named as something every
   JavaScript object has (`toString`, `constructor`) is drawn as that name too.
 
+## 1.0.1 — 2026-11-20
 
 ### Changed
 
