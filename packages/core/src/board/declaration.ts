@@ -1,14 +1,15 @@
 import { isNode, isScalar, LineCounter, parseDocument, visit } from "yaml";
 import { z } from "zod";
-import { TaskStatusSchema } from "../schemas/task.schema.js";
 
 /**
  * The declaration file of a progress board (`board.yaml`): which lanes and
- * stages the board has, and what to measure for it. The board commands are
- * experimental (docs/spec/compatibility.md lists them), so this shape is not
- * a guaranteed surface and has no published JSON Schema. It still carries a
- * version that moves with every change of shape, so a record written under
- * one shape is never read as another.
+ * stages the board has, and what to measure for it. Every `board_version` it
+ * reads is guaranteed (docs/spec/compatibility.md, "The progress board"; the
+ * shape is described in docs/spec/board.md, and no JSON Schema is published):
+ * a new key or kind, or a new value of a key that enumerates its values
+ * (`kind`, `pick`, `of`, `on_missing`, `status`), comes with a new
+ * `board_version`, so that a basou that does not read it refuses the board
+ * by its version rather than by a key it does not know.
  *
  * The file is user-written and is read strictly: an unknown key anywhere is
  * an error, so a typo is refused instead of silently ignored, and every
@@ -342,11 +343,19 @@ export const BOARD_TRAIL_COUNTS = [
   "tasks",
 ] as const;
 
+/**
+ * The task statuses a `trail_count` of tasks may name. They are the statuses
+ * a task has in `.basou/`, held here as the board's own list: a status the
+ * task format gains is read by board.yaml only from a new `board_version`,
+ * as any new value of a key that enumerates its values is.
+ */
+const BOARD_TRAIL_TASK_STATUSES = ["planned", "in_progress", "done", "cancelled"] as const;
+
 const trailCountSchema = z.strictObject({
   kind: z.literal("trail_count"),
   ...measureCommon,
   of: z.enum(BOARD_TRAIL_COUNTS),
-  status: TaskStatusSchema.optional(),
+  status: z.enum(BOARD_TRAIL_TASK_STATUSES).optional(),
 });
 
 const measureSchemaV1 = z.discriminatedUnion("kind", [

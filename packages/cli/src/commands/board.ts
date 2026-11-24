@@ -433,9 +433,7 @@ export async function doRunBoardGuide(
       board: {
         status: "declared",
         declaration: parsed.declaration,
-        recordCount: recordEntries(
-          await readdir(recordsDir, { withFileTypes: true }).catch(() => []),
-        ).ids.length,
+        recordCount: await recordCountOf(recordsDir),
         previous,
       },
     });
@@ -782,8 +780,20 @@ async function previousOf(loaded: LoadedBoard): Promise<BoardPreviousRecords> {
 function sayPassedOver(previous: BoardPreviousRecords): void {
   for (const name of previous.passedOver ?? []) {
     console.error(
-      `basou: records/${name} beside the board is not a regular file (a symlink or a directory), so it is passed over and not read as a record.`,
+      `basou: records/${name} beside the board is not a regular file (a symlink, a directory or another kind of entry), so it is passed over and not read as a record.`,
     );
+  }
+}
+
+// How many records the guide counts: by the rule every reader of the records
+// follows, and none in a records/ that is not a directory (a symlink to one
+// included), which no reader reads.
+async function recordCountOf(recordsDir: string): Promise<number> {
+  try {
+    if (!(await lstat(recordsDir)).isDirectory()) return 0;
+    return recordEntries(await readdir(recordsDir, { withFileTypes: true })).ids.length;
+  } catch {
+    return 0;
   }
 }
 

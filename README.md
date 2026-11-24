@@ -187,9 +187,10 @@ What that means for you:
   progress board's files (its `board.yaml` and the records `basou board
   record` writes beside it).** Within `1.x` they change only additively, with
   the exceptions that [docs/spec/compatibility.md](docs/spec/compatibility.md)
-  states and bounds. A command writes files outside `.basou/` only where that
-  document says it does: the board's records, which are not part of the
-  trail, though they may hold what the trail holds. Any command it
+  states and bounds. A command may also write files beside one of yours that
+  it reads, never under `.basou/` and only where that document says it does:
+  today a board's records, which are not part of the trail, though they may
+  hold what the trail holds. Any command it
   [lists](docs/spec/compatibility.md#what-is-not-guaranteed) as experimental
   (none today) is outside the guarantee. Internal `@basou/core` APIs may still
   change between minor releases.

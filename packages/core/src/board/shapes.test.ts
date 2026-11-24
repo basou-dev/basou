@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { BOARD_DECLARATION_SCHEMAS } from "./declaration.js";
+import { BOARD_DECLARATION_SCHEMAS, BOARD_VERSIONS } from "./declaration.js";
 import { recordInputSchema } from "./record.js";
 
 // The shapes a board's guaranteed files and input take, pinned: a key, a kind
@@ -137,13 +137,20 @@ describe("the shapes a board's files and input take", () => {
   });
 
   it("pins what board.yaml of each board_version reads", () => {
+    // Every version shares the key board_version, whose values are the
+    // versions this basou reads: they are pinned on their own, so that a
+    // version added leaves the lines of the versions before it as they are.
+    const versionLine = `board_version = ${BOARD_VERSIONS.join(" | ")}`;
     const lines = Object.fromEntries(
-      Object.entries(BOARD_DECLARATION_SCHEMAS).map(([version, schema]) => [
-        version,
-        shapeLines(schema),
-      ]),
+      Object.entries(BOARD_DECLARATION_SCHEMAS).map(([version, schema]) => {
+        const all = shapeLines(schema);
+        expect(all, version).toContain(versionLine);
+        return [version, all.filter((line) => line !== versionLine)];
+      }),
     );
     expect(lines).toEqual(BOARD_YAML_SHAPES);
+    // A version is added, never taken away.
+    expect(BOARD_VERSIONS).toEqual([1, 2, 3]);
   });
 
   it("pins what the input of basou board record takes", () => {
@@ -157,7 +164,6 @@ const BOARD_YAML_SHAPES: Record<string, string[]> = {
     "(top): {axis, board_version, components?, effort, lanes, measures?, ratios?, stages, title}",
     "axis.seed_review: {date, model}",
     "axis: {review_due_days, seed_review?, version}",
-    "board_version = 1 | 2 | 3",
     "components.*.lane = -",
     "components.*: {lane, note?}",
     "effort.milestones[]: {date, label, ref}",
@@ -197,7 +203,6 @@ const BOARD_YAML_SHAPES: Record<string, string[]> = {
     "(top): {axis, board_version, components?, effort, lanes, measures?, observe?, ratios?, stages, title}",
     "axis.seed_review: {date, model}",
     "axis: {review_due_days, seed_review?, version}",
-    "board_version = 1 | 2 | 3",
     "components.*.lane = -",
     "components.*: {lane, note?}",
     "effort.milestones[]: {date, label, ref}",
@@ -251,7 +256,6 @@ const BOARD_YAML_SHAPES: Record<string, string[]> = {
     "(top): {axis, board_version, components?, effort, lanes, measures?, observe?, ratios?, stages, title}",
     "axis.seed_review: {date, model}",
     "axis: {review_due_days, seed_review?, version}",
-    "board_version = 1 | 2 | 3",
     "components.*.lane = -",
     "components.*: {lane, marker?, note?}",
     "effort.milestones[]: {date, label, ref}",

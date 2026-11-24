@@ -17,10 +17,12 @@
 >
 > This page describes the shapes of basou 1.1.0: `board_version` 3 and
 > `record_version` 3. A later release adds to them only as compatibility.md
-> allows: a new key, kind or value of `board.yaml` comes with a new
-> `board_version`; a record, and each `--json` output, may gain fields
-> without its version moving; and a few values may grow, each listed in
-> [What may grow](#7-what-may-grow) with the release that gave it.
+> allows: a new key or kind of `board.yaml`, or a new value of `kind`,
+> `pick`, `of`, `on_missing` or `status`, comes with a new `board_version`;
+> a record, and each `--json` output, may gain fields without its version
+> moving; and the few values [What may grow](#7-what-may-grow) names may
+> grow, each listed with the release that gave it where this page lists
+> the values.
 
 This page says what each key of these shapes holds, which keys are required,
 what a `null` means, and what the digest of a measurement covers. It does not
@@ -42,9 +44,12 @@ Conventions on this page:
   value. Using one in a board of an earlier version is refused (see
   [How it is read](#21-how-it-is-read)).
 - **Since basou x.y** names the first release of basou that gives a value no
-  `board_version` gates: a cell's state, an axis review's trigger or a
-  component's kind ([What may grow](#7-what-may-grow)). A basou before that
-  release does not know the value.
+  `board_version` gates: a cell's state, an axis review's trigger, a
+  component's kind, or a key of `integrity.by_status` or
+  `review_gaps.by_verdict` ([What may grow](#7-what-may-grow)). A basou
+  before that release does not know the value. **Until basou x.y** names the
+  first release that no longer gives a key of `review_gaps.by_verdict`,
+  which may go away.
 
 ## 1. Files and versions
 
@@ -69,7 +74,8 @@ Conventions on this page:
   name of another time, a second or so apart; the board page's list of
   records and `basou board guide` give each record's own `recorded_at`.
 - **A record is a regular file.** An entry of `records/` named as a record
-  that is not one (a symlink, a directory) is passed over, by every command
+  that is not one (a symlink, a directory, or any other kind of entry) is
+  passed over, by every command
   and the board page alike, and `basou board measure`, `basou board record`
   and `basou board guide` name it on stderr. basou never creates one. Before
   basou 1.1.0, `measure` and `record` read such a symlink as a record, and
@@ -889,31 +895,30 @@ each lane and stage once.
 
 What each state means, at a lane's stage:
 
-| State | Means |
-|---|---|
-| `done` | the stage's condition, as the board's `stages` says it, is met |
-| `part` | the condition is met for some of the lane's surfaces or features, not all |
-| `blocked` | stuck at this stage: what the next step needs is missing; the reason says what |
-| `shelved` | stopped on purpose, by a settled decision, which the reason names; not a failure |
-| `none` | not started |
-| `unverified` | it cannot be confirmed from where the board is judged (a run only another workspace can make, a screen only the operator can see and did not check); the reason says who or what could confirm it |
+| State | Means | Counts as |
+|---|---|---|
+| `done` | the stage's condition, as the board's `stages` says it, is met | reaching the stage |
+| `part` | the condition is met for some of the lane's surfaces or features, not all | reaching the stage |
+| `blocked` | stuck at this stage: what the next step needs is missing; the reason says what | not reaching it |
+| `shelved` | stopped on purpose, by a settled decision, which the reason names; not a failure | not reaching it |
+| `none` | not started | not reaching it |
+| `unverified` | it cannot be confirmed from where the board is judged (a run only another workspace can make, a screen only the operator can see and did not check); the reason says who or what could confirm it | neither |
 
-`done` and `part` reach the stage. `none`, `blocked` and `shelved` do not,
-and leave it behind when a later stage of the lane is `done` or `part`.
-`unverified` counts neither way. How to judge a cell is in `basou board
-guide`. The guide's template of the input gives each cell the
+A stage whose state does not reach it is left behind when a later stage of
+the lane has a state that reaches its stage. How to judge a cell is in
+`basou board guide`. The guide's template of the input gives each cell the
 previous record's state as `previous`: delete it, since a cell takes no
 other key.
 
 A later release may give a state of its own ([What may
-grow](#7-what-may-grow)); a record it writes then holds it, and an earlier
-basou reads that record. A state a basou does not know is drawn as it is
-written, and counts neither way, as `unverified` does.
+grow](#7-what-may-grow)), and says in this table what it means and how it
+counts; a record it writes then holds it, and an earlier basou reads that
+record. A state a basou does not know is drawn as it is written, and counts
+neither way, as `unverified` does.
 
-A stage left behind (`none`, `blocked` or `shelved` before a later stage of
-the lane that is `done` or `part`; `unverified` counts neither way) is
-recorded as an order anomaly, not refused (see
-[`order_anomalies`](#45-order_anomalies)).
+A stage left behind (today: `none`, `blocked` or `shelved` before a later
+stage of the lane that is `done` or `part`) is recorded as an order
+anomaly, not refused (see [`order_anomalies`](#45-order_anomalies)).
 
 ### 3.4 `prose`
 
@@ -1022,9 +1027,10 @@ filled in.
 ### 4.5 `order_anomalies`
 
 A list of `{ lane, stage, state, before }`, in the order of the lanes and
-their stages: a stage that is `none`, `blocked` or `shelved` (`state`)
-before a later stage of the lane that is `done` or `part`, the first of
-which is `before`.
+their stages: a stage whose state does not reach it (`state`; today `none`,
+`blocked` or `shelved`, [3.3](#33-cells)) before a later stage of the lane
+whose state reaches its stage (today `done` or `part`), the first of which
+is `before`.
 
 ## 5. The measurement
 
@@ -1431,19 +1437,25 @@ Within `1.x`, the shapes on this page change only as [The progress
 board](compatibility.md#the-progress-board-every-version-is-read-and-what-may-grow)
 in compatibility.md allows:
 
-- **`board.yaml` gains a key, a kind, or a value of `kind`, `pick`, `of` or
-  `on_missing`, only with a new `board_version`**, which the tables above
-  name in their Since column.
+- **`board.yaml` gains a key, a kind, or a value of `kind`, `pick`, `of`,
+  `on_missing` or `status`, only with a new `board_version`**, which the
+  tables above name in their Since column.
 - **A record, and each `--json` output, may gain fields without its version
   moving.** A built-in section added this way (a new key of `methods`)
   counts as its method raised from none: the first measurement after the
-  release fires the axis review's trigger (e) on every board.
+  release fires the axis review's trigger (e) on every board. A basou
+  earlier than the one that wrote the previous record sees such a section as
+  gone, and a component's kind it does not give as changed, so where basous
+  of different releases record one board in turn, (e), or (a), fires
+  whenever the board is measured by a basou of another release than the one
+  that wrote its previous record.
 - **These values may grow**, each listed with the release that gave it
   (**Since basou x.y**) where this page lists the values; every value it
   lists without one is known to basou 1.1.0:
   - a cell's `state` ([3.3](#33-cells)): in the record's input, in a
-    record's `cells`, and under `cells` in the `diff` of `basou board record
-    --json`;
+    record's `cells`, under `cells` in the `diff` of `basou board record
+    --json`, and in `order_anomalies` (in a record and in `basou board
+    record --json`) for a state that does not reach its stage;
   - an axis review's `triggers` ([3.5](#35-judged_by-and-axis_review)), and
     the `trigger` under `axis.reasons` and `axis.unjudged`
     ([5.11](#511-axis));
@@ -1462,4 +1474,6 @@ in compatibility.md allows:
   print, and counts as neither reaching a stage nor leaving one behind, as
   `unverified` does. A consumer keeps a branch for a value it does not know.
 
-Every other enumeration of these shapes is fixed within `1.x`.
+Every other enumeration of these shapes is fixed within `1.x`. A
+`not_found` entry's `at`, and an `at` under `diff`, name a place rather than
+a value of an enumeration: a field a release adds gives places of its own.

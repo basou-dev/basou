@@ -50,10 +50,13 @@ All notable changes to **basou** are recorded here. The project follows
 - **What may grow within `1.x`** (compatibility.md's progress board section,
   items 1 to 8, and board.md's new section 7, What may grow): every
   `board_version` and every `record_version` is read, with the meaning it was
-  written with, and a record is never rewritten; a new key, kind or value of
-  `board.yaml` comes with a new `board_version`; a record and each `--json`
+  written with, and a record is never rewritten; a new key or kind of
+  `board.yaml`, or a new value of `kind`, `pick`, `of`, `on_missing` or
+  `status`, comes with a new `board_version`; a record and each `--json`
   output may gain fields without its version moving (a built-in section added
-  so fires the axis review's trigger (e) once on every board); a cell's
+  so fires the axis review's trigger (e) once on every board, and again
+  whenever a basou of another release measures a board after the one that
+  recorded it); a cell's
   `state`, an axis review's `triggers`, a component's `kinds`, the keys of
   `integrity.by_status`, and those of `review_gaps.by_verdict` (which may also
   lose one, with the `review_gaps` method rising) may gain values, with no
@@ -62,7 +65,18 @@ All notable changes to **basou** are recorded here. The project follows
   measure moves with the `trail` method; what `basou board record` refuses as
   naming another workspace may change with the rule it is judged by; and what
   basou never creates in a board's `records/` may come to be refused or
-  passed over. Anything else that would change these shapes waits for `2.0`.
+  passed over. A `not_found` entry's `at`, and an `at` under `diff`, name a
+  place rather than a value of an enumeration. Anything else that would
+  change these shapes waits for `2.0`.
+- **A `trail_count`'s `status` takes the four task statuses it takes today**
+  (`planned`, `in_progress`, `done`, `cancelled`) as the board's own list: a
+  status the task format of `.basou/` gains is read in `board.yaml` only from
+  a new `board_version`, as any new value of a key that enumerates its values
+  is.
+- **`--file -` and `--board -`.** `--file` on `basou board record` reads
+  standard input for `-`, as it does with no `--file`. `--board` is not an
+  input-file flag: it names the declaration, and `--board -` reads a file
+  named `-`. compatibility.md's paragraph on `-` now says both.
 - **What each state of a cell means is now in board.md** (section 3.3), where
   it is guaranteed; `basou board guide` says when to give each and points
   there. board.md also says how a basou reads a value it does not know: it
@@ -80,11 +94,18 @@ All notable changes to **basou** are recorded here. The project follows
   symlink named as a record as the previous record, and took a directory so
   named as a record that could not be read, so a measurement was not
   complete and exited `1`; the board page listed both, and the guide counted
-  both. It is the first change of this kind compatibility.md now allows for a
-  board's `records/` (A layout basou never creates may come to be refused).
+  both. The guide now also counts no record in a `records/` that is a
+  symlink, which no reader reads. This is made in the release that promotes
+  the board, before its guarantee applies, so that every reader of the
+  records follows one rule from the start.
 - **The board page draws a state of a cell it does not know by its name**,
   in the cell, where it drew an empty cell; a state named as something every
   JavaScript object has (`toString`, `constructor`) is drawn as that name too.
+- **compatibility.md counts the rule a `repos` entry of `basou review record`
+  is judged by among the ways an invocation crosses zero within `1.x`**, in
+  "A value a flag refuses" and "A layout basou never creates may come to be
+  refused", where it was left out though item 1 of the guaranteed surfaces
+  already said that rule may change.
 
 ## 1.0.1 — 2026-11-20
 

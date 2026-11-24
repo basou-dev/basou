@@ -65,9 +65,11 @@ moves the invocations it accepts from a non-zero exit to `0`, one of the ways
 an invocation crosses zero within `1.x`; the others are a command [coming to
 refuse a layout basou never
 creates](#a-layout-basou-never-creates-may-come-to-be-refused), in the
-opposite direction, and what [the progress
+opposite direction, what [the progress
 board](#the-progress-board-every-version-is-read-and-what-may-grow) states
-for `basou board`. A [split of the
+for `basou board`, and the rule a `repos` entry of `basou review record` is
+judged by ([Guaranteed surfaces](#guaranteed-surfaces), item 1), either way.
+A [split of the
 non-zero values](#exit-codes-zero-is-success-and-a-failures-value-may-be-refined)
 never crosses zero.
 
@@ -79,7 +81,11 @@ session note`, and `--from` on `basou session import`. Each of them refuses
 `-` today, and an input-file flag added later either refuses it too or reads
 standard input for it from the start. If one comes to accept it, `-` will mean
 standard input, never a file named `-`. A file named `-` is read by naming it
-`./-`.
+`./-`. `--file` on `basou board record`, guaranteed from `1.1.0`, reads
+standard input for `-`, as it does with no `--file`. The `--board` of the
+`basou board` commands is not an input-file flag: it names the declaration a
+command measures, beside which its records are, and `--board -` reads a file
+named `-`.
 
 ### `--version`: the first token is the contract, the rest is build identity
 
@@ -213,8 +219,10 @@ this rule ([item 4
 below](#sdk-errors-the-class-is-the-contract-the-message-is-not)). Besides
 what [the progress
 board](#the-progress-board-every-version-is-read-and-what-may-grow) states for
-`basou board`, this is the one way an invocation moves from `0` to a non-zero
-exit within `1.x`, and it is bounded by three things:
+`basou board`, and the rule a `repos` entry of `basou review record` is judged
+by ([Guaranteed surfaces](#guaranteed-surfaces), item 1), this is the one way
+an invocation moves from `0` to a non-zero exit within `1.x`, and it is
+bounded by three things:
 
 1. **Nothing changes on a layout basou creates.** On a workspace basou laid
    out, a command that succeeded still succeeds, and a row that passed still
@@ -507,11 +515,11 @@ Within `1.x`:
    `record_version`, that a `1.x` release has read is still read. A record
    is never rewritten.
 2. **A new key or kind of `board.yaml`, or a new value of a key that
-   enumerates its values (`kind`, `pick`, `of`, `on_missing`), comes with a
-   new `board_version`**, which an earlier basou does not read. A board
-   keeps its version until it uses what only a later one reads, and a basou
-   that does not read a version refuses the board naming it, rather than
-   reporting a key it does not know as a mistake.
+   enumerates its values (`kind`, `pick`, `of`, `on_missing`, `status`),
+   comes with a new `board_version`**, which an earlier basou does not
+   read. A board keeps its version until it uses what only a later one
+   reads, and a basou that does not read a version refuses the board naming
+   it, rather than reporting a key it does not know as a mistake.
 3. **A record, and each `--json` output, may gain fields without its
    version moving.** A reader passes over a field it does not know, as
    basou's do. A built-in section added this way counts as its method
@@ -533,7 +541,9 @@ Within `1.x`:
    A consumer keeps a branch for a value it does not know. A basou that
    does not know a value draws it as it is written, and counts it as
    neither reaching a stage nor leaving one behind. Every other enumeration
-   of these shapes is fixed.
+   of these shapes is fixed. A `not_found` entry's `at`, and an `at` under
+   `diff`, name a place rather than a value of an enumeration: a field added
+   (3) gives places of its own.
 5. **A built-in section's method rises whenever a value of the section
    would be computed another way for the same input**, a fix included. Its
    number under `methods` moves, `diff` marks the section's values

@@ -7,6 +7,7 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -2037,7 +2038,7 @@ describe("basou board measure and record against the previous record", () => {
     await mkdir(join(records, `${dir}.json`));
     await symlink(join(records, `${first}.json`), join(records, `${link}.json`));
     const said = (name: string) =>
-      `basou: records/${name}.json beside the board is not a regular file (a symlink or a directory), so it is passed over and not read as a record.`;
+      `basou: records/${name}.json beside the board is not a regular file (a symlink, a directory or another kind of entry), so it is passed over and not read as a record.`;
 
     const { err } = capture();
     const m = await doRunBoardMeasure({ json: true }, ctx(repo));
@@ -2065,6 +2066,18 @@ describe("basou board measure and record against the previous record", () => {
       `- Records: board/records/, 1 record; the last is ${first},`,
     );
     expect(guided.err).toEqual([said(dir), said(link)]);
+  });
+
+  it("counts no record in a records/ that is a link, as no reader of the records reads one", async () => {
+    const { repo } = await recorded();
+    const board = join(repo, "board");
+    await rename(join(board, "records"), join(board, "records-real"));
+    await symlink(join(board, "records-real"), join(board, "records"));
+    const { out } = capture();
+    await doRunBoardGuide({}, { ...ctx(repo), basouCommand: "basou-under-test" });
+    expect(out.join("\n")).toContain(
+      "- Records: board/records/, 0 records; the last cannot be read (the records/ beside the board is not a directory (a symlink or a file))",
+    );
   });
 
   it("reads a previous record holding values this basou does not know, and says them as written", async () => {
