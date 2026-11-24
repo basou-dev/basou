@@ -37,7 +37,7 @@ import {
   parseRecordInput,
   readManifest,
   readPreviousRecords,
-  recordIds,
+  recordEntries,
   resolveViewLanguage,
   setEntryOf,
   shellWord,
@@ -118,8 +118,9 @@ export const DEFAULT_BOARD_PATH = "board/board.yaml";
 /**
  * Register `basou board`, the progress board of a workspace: a declaration
  * file (`board.yaml`) saying what to measure, and the commands that measure
- * it and record it with a judgement. Experimental (docs/spec/compatibility.md lists it): its flags, output
- * and files may change at any release.
+ * it and record it with a judgement. Guaranteed from 1.1.0, which promoted it
+ * from experimental: docs/spec/compatibility.md says what of its files and
+ * its JSON is guaranteed, and docs/spec/board.md describes them.
  */
 export function registerBoardCommand(program: Command): void {
   const board = program
@@ -146,10 +147,11 @@ export function registerBoardCommand(program: Command): void {
 For a board.yaml, the last record in the records/ beside it is the previous
 one, and the result says what moved since it.
 
-Exit codes: 0 when everything was measured; 1 when something could not be
-measured (the result is still printed, with null for what is missing and a
-reason under not_found); 1 when the declaration or the manifest cannot be
-read (nothing is printed on stdout).`,
+Exit codes: 0 when everything was measured; not 0 (1 today) when something
+could not be measured (the result is still printed, with null for what is
+missing and a reason under not_found), or when the declaration or the
+manifest cannot be read (nothing is printed on stdout). Any value but 0 is a
+failure (docs/spec/compatibility.md, Exit codes).`,
     )
     .action(async (options: BoardMeasureOptions) => {
       await runBoardMeasure(options);
@@ -180,8 +182,9 @@ declares any), cells (every lane at every stage), prose, judged_by and
 axis_review. The board is measured again, and nothing is written when the
 digest differs (it covers board.yaml as read). Records are never written
 under a .basou/ directory. Exit codes: 0 when the record was written, or with
---dry-run when everything checked out (nothing is written then); 1 when it
-was refused (nothing is written; the reasons are on stderr).`,
+--dry-run when everything checked out (nothing is written then); not 0 (1
+today) when it was refused (nothing is written; the reasons are on stderr).
+Any value but 0 is a failure (docs/spec/compatibility.md, Exit codes).`,
     )
     .action(async (options: BoardRecordOptions) => {
       await runBoardRecord(options);
@@ -201,9 +204,10 @@ it is and its last record, the commands that measure, observe, record and show
 it, what each stage is judged by, and the record's input to fill in, with the
 previous record's state of each cell beside it. With no board declared yet, it
 says how to declare one. The text is for an agent to read; its shape may change
-at any release. Exit codes: 0 when the steps were printed; 1 when the workspace,
-its manifest or its board.yaml cannot be read, or its own repo is not declared
-private (the reason is on stderr).`,
+at any release. Exit codes: 0 when the steps were printed; not 0 (1 today)
+when the workspace, its manifest or its board.yaml cannot be read, or its own
+repo is not declared private (the reason is on stderr). Any value but 0 is a
+failure (docs/spec/compatibility.md, Exit codes).`,
     )
     .action(async (options: BoardGuideOptions) => {
       await runBoardGuide(options);
@@ -229,10 +233,12 @@ of its own:
 Never print it straight into ${DEFAULT_BOARD_PATH}: the shell empties that file
 before init runs, so a board already there would be lost.
 
-Exit codes: 0 when it was printed; 1 when the manifest does not declare the
-workspace's own repo private (a board's records hold what the trail holds),
-when ${DEFAULT_BOARD_PATH} is already there, or when the workspace cannot be
-read (the reason is on stderr, and nothing is printed on stdout).`,
+Exit codes: 0 when it was printed; not 0 (1 today) when the manifest does
+not declare the workspace's own repo private (a board's records hold what the
+trail holds), when ${DEFAULT_BOARD_PATH} is already there, or when the
+workspace cannot be read (the reason is on stderr, and nothing is printed on
+stdout). Any value but 0 is a failure (docs/spec/compatibility.md, Exit
+codes).`,
     )
     .action(async (options: BoardInitOptions) => {
       await runBoardInit(options);
@@ -420,13 +426,15 @@ export async function doRunBoardGuide(
       );
     }
     const recordsDir = join(dirname(board.path), "records");
+    const previous = await readPreviousRecords(recordsDir);
+    sayPassedOver(previous);
     guide = boardGuide({
       ...common,
       board: {
         status: "declared",
         declaration: parsed.declaration,
-        recordCount: recordIds(await readdir(recordsDir).catch(() => [])).length,
-        previous: await readPreviousRecords(recordsDir),
+        recordCount: await recordCountOf(recordsDir),
+        previous,
       },
     });
   }
@@ -760,9 +768,33 @@ function hasRecords(loaded: LoadedBoard): boolean {
 }
 
 async function previousOf(loaded: LoadedBoard): Promise<BoardPreviousRecords> {
-  return hasRecords(loaded)
-    ? readPreviousRecords(join(dirname(loaded.board.path), "records"))
-    : NO_PREVIOUS_RECORDS;
+  if (!hasRecords(loaded)) return NO_PREVIOUS_RECORDS;
+  const previous = await readPreviousRecords(join(dirname(loaded.board.path), "records"));
+  sayPassedOver(previous);
+  return previous;
+}
+
+// An entry of records/ named as a record that is not a regular file is no
+// record, and is passed over; each is named on stderr, as basou never creates
+// one.
+function sayPassedOver(previous: BoardPreviousRecords): void {
+  for (const name of previous.passedOver ?? []) {
+    console.error(
+      `basou: records/${name} beside the board is not a regular file (a symlink, a directory or another kind of entry), so it is passed over and not read as a record.`,
+    );
+  }
+}
+
+// How many records the guide counts: by the rule every reader of the records
+// follows, and none in a records/ that is not a directory (a symlink to one
+// included), which no reader reads.
+async function recordCountOf(recordsDir: string): Promise<number> {
+  try {
+    if (!(await lstat(recordsDir)).isDirectory()) return 0;
+    return recordEntries(await readdir(recordsDir, { withFileTypes: true })).ids.length;
+  } catch {
+    return 0;
+  }
 }
 
 function errorCode(error: unknown): string | undefined {

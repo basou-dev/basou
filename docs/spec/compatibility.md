@@ -11,14 +11,15 @@ not a second set of rules.
 
 ## Guaranteed surfaces
 
-Semantic versioning applies to exactly three surfaces:
+Semantic versioning applies to exactly four surfaces:
 
 1. **The `basou` CLI** — the set of commands and subcommands, their flags,
    exit codes, the documented `--json` output shapes of the commands that offer
    one, and the documented JSON **input** shapes of the commands that read one
    from stdin or an input-file flag (today: `basou decision capture`, `basou
-   review record`, and the envelope of `basou session import`, whose version
-   follows [its own rule](#the-import-envelope-version-may-move-at-a-minor)).
+   review record`, `basou board record`, and the envelope of `basou session
+   import`, whose version follows [its own
+   rule](#the-import-envelope-version-may-move-at-a-minor)).
    An input shape is a contract for the same reason an output shape is —
    something else produces it, and tightening what is accepted breaks that
    producer exactly as surely as dropping a field breaks a consumer. Accepting
@@ -26,14 +27,21 @@ Semantic versioning applies to exactly three surfaces:
    `basou review record`, the documented shape is the `Input format` section of
    the command's `--help`, which is contract rather than presentation: the
    fields, their JSON types, which are required, and the values a field
-   enumerates. Whether a `repos` entry of `basou review record` names a
-   repository root on the machine is judged by the rule `basou review-gaps`
-   binds a record with, and may change with that rule.
+   enumerates; for `basou board record`, it is
+   [board.md](board.md#3-the-records-input). Whether a `repos` entry of `basou
+   review record` names a repository root on the machine is judged by the rule
+   `basou review-gaps` binds a record with, and may change with that rule.
 2. **The `@basou/sdk` package** — its exported read-only API for reading a
    workspace's provenance.
 3. **The `.basou/` on-disk format** — the durable file schemas (manifest,
    session, event, approval, task) and the JSON Schemas published alongside
    them.
+4. **The files a command reads or writes outside `.basou/`, where this
+   document names them** — today a progress board's: its declaration
+   `board.yaml`, and the records `basou board record` writes beside it, as
+   [board.md](board.md) describes them and [The progress
+   board](#the-progress-board-every-version-is-read-and-what-may-grow)
+   bounds.
 
 Within a `1.x` line these surfaces change **only additively** — a new command,
 a new optional flag, a new optional field, a new SDK export, an added field in a
@@ -53,10 +61,15 @@ additive, as accepting more of an input shape is — but only when every
 invocation accepted before is parsed and behaves as before. Making an option's
 value optional does not qualify: `--file --json` reads a file named `--json`
 today, and would parse `--json` as a flag instead. Accepting a refused value
-moves the invocations it accepts from a non-zero exit to `0`, one of the two
-ways an invocation crosses zero within `1.x`; the other, in the opposite
-direction, is a command [coming to refuse a layout basou never
-creates](#a-layout-basou-never-creates-may-come-to-be-refused). A [split of the
+moves the invocations it accepts from a non-zero exit to `0`, one of the ways
+an invocation crosses zero within `1.x`; the others are a command [coming to
+refuse a layout basou never
+creates](#a-layout-basou-never-creates-may-come-to-be-refused), in the
+opposite direction, what [the progress
+board](#the-progress-board-every-version-is-read-and-what-may-grow) states
+for `basou board`, and the rule a `repos` entry of `basou review record` is
+judged by ([Guaranteed surfaces](#guaranteed-surfaces), item 1), either way.
+A [split of the
 non-zero values](#exit-codes-zero-is-success-and-a-failures-value-may-be-refined)
 never crosses zero.
 
@@ -68,7 +81,11 @@ session note`, and `--from` on `basou session import`. Each of them refuses
 `-` today, and an input-file flag added later either refuses it too or reads
 standard input for it from the start. If one comes to accept it, `-` will mean
 standard input, never a file named `-`. A file named `-` is read by naming it
-`./-`.
+`./-`. `--file` on `basou board record`, guaranteed from `1.1.0`, reads
+standard input for `-`, as it does with no `--file`. The `--board` of the
+`basou board` commands is not an input-file flag: it names the declaration a
+command measures, beside which its records are, and `--board -` reads a file
+named `-`.
 
 ### `--version`: the first token is the contract, the rest is build identity
 
@@ -193,13 +210,18 @@ section](#a-layout-basou-never-creates-may-come-to-be-refused) bounds; the
 ### A layout basou never creates may come to be refused
 
 Within `1.x` a command may come to refuse, or to stop following, an entry of
-the `.basou/` store in a form basou never creates — a symlink, or anything
-other than the directory or regular file basou writes there — and so fail, or
-report a failure, where it succeeded before. A `basou verify` row that passed
-then fails as `tampered`: a log read through a symlink as `verified`, say. The
-SDK's reads follow their own form of this rule ([item 4
-below](#sdk-errors-the-class-is-the-contract-the-message-is-not)). This is the
-one way an invocation moves from `0` to a non-zero exit within `1.x`, and it is
+the `.basou/` store or of a progress board's `records/` in a form basou never
+creates — a symlink, or anything other than the directory or regular file
+basou writes there — and so fail, or report a failure, where it succeeded
+before. A `basou verify` row that passed then fails as `tampered`: a log read
+through a symlink as `verified`, say. The SDK's reads follow their own form of
+this rule ([item 4
+below](#sdk-errors-the-class-is-the-contract-the-message-is-not)). Besides
+what [the progress
+board](#the-progress-board-every-version-is-read-and-what-may-grow) states for
+`basou board`, and the rule a `repos` entry of `basou review record` is judged
+by ([Guaranteed surfaces](#guaranteed-surfaces), item 1), this is the one way
+an invocation moves from `0` to a non-zero exit within `1.x`, and it is
 bounded by three things:
 
 1. **Nothing changes on a layout basou creates.** On a workspace basou laid
@@ -469,6 +491,86 @@ A consumer handles the classes it knows and keeps a branch for the rest.
 later; a switch on `name` does not, so it needs a default branch, for a class
 it does not know and for a subclass of one it does.
 
+### The progress board: every version is read, and what may grow
+
+`basou board` was experimental from `0.65.0` until `1.1.0` promoted it.
+What is guaranteed is what [board.md](board.md) describes of `board.yaml`
+of `board_version` 1, 2 and 3; of the input `basou board record` reads; of
+the records it writes and has written (`record_version` 1, 2 and 3); and of
+the output of `basou board measure --json` and `basou board record --json`.
+What an observation's value is, board.md defines and this guarantees; the
+commands `basou board guide` prints to make one, and their limits (how many
+items a listing reads, how long a request may take), are not, and change
+only within that definition. Not covered either: what these commands print
+without `--json`, what `basou board guide` and `basou board init` print, the
+words of a refusal, the strings a `--json` output holds for a person to read
+(a `not_found` entry's `reason`, and the `detail` and `why` under `axis`),
+how the digest is computed from what it covers, and the board page of
+`basou view`.
+
+Within `1.x`:
+
+1. **Every version is read, with the meaning it was written with.** A
+   `board.yaml` of any `board_version`, and a record of any
+   `record_version`, that a `1.x` release has read is still read. A record
+   is never rewritten.
+2. **A new key or kind of `board.yaml`, or a new value of a key that
+   enumerates its values (`kind`, `pick`, `of`, `on_missing`, `status`),
+   comes with a new `board_version`**, which an earlier basou does not
+   read. A board keeps its version until it uses what only a later one
+   reads, and a basou that does not read a version refuses the board naming
+   it, rather than reporting a key it does not know as a mistake.
+3. **A record, and each `--json` output, may gain fields without its
+   version moving.** A reader passes over a field it does not know, as
+   basou's do. A built-in section added this way counts as its method
+   raised from none (5): it fires the axis review's trigger (e) once on
+   every board, and the changelog says so. Whatever a release adds or
+   raises, every value the digest covers, `complete` and `not_found`
+   included, is one that two measurements of the same board by the same
+   basou on the same day agree on, so `basou board record` never comes to
+   refuse a judgement only because of what was added.
+4. **Some values may grow:** a cell's `state`; an axis review's `triggers`,
+   and the `trigger` under `axis.reasons` and `axis.unjudged`; a
+   component's `kinds`; and what a later `board_version` adds (2) — its
+   number, the values of its keys, and the values a new kind gives, which a
+   record's `declaration` and `measure` then hold. A value never changes
+   meaning: board.md says what each one means, and from which release.
+   `integrity.by_status` gains keys as `basou verify` gains statuses, and
+   `review_gaps.by_verdict` gains or loses keys as `basou review-gaps`
+   changes its verdicts, with the `review_gaps` method rising when it does.
+   A consumer keeps a branch for a value it does not know. A basou that
+   does not know a value draws it as it is written, and counts it as
+   neither reaching a stage nor leaving one behind. Every other enumeration
+   of these shapes is fixed. A `not_found` entry's `at`, and an `at` under
+   `diff`, name a place rather than a value of an enumeration: a field added
+   (3) gives places of its own.
+5. **A built-in section's method rises whenever a value of the section
+   would be computed another way for the same input**, a fix included. Its
+   number under `methods` moves, `diff` marks the section's values
+   `method_changed`, and the changelog says what changed. It applies to the
+   sections `methods` names, and to a `trail_count` measure, which counts
+   as the `trail` section does; never to what any other declared measure or
+   an observation gives, and never to a field's name, its type or what its
+   null means.
+6. **What `basou board record` refuses as naming another workspace may
+   change with the rule it is judged by.** It refuses only an input that
+   names another workspace `~/.basou/portfolio.yaml` registers, and says
+   where, never which.
+7. **`basou board measure` exits non-zero when something was not
+   measured**, so a field added (3) or a method raised (5) can move a
+   board's measurement across zero, either way, and what `basou board
+   record` comes to refuse (6) moves an invocation from `0` to non-zero.
+   The changelog says when a release does either.
+8. **What basou never creates in a board's `records/`** — anything there
+   but regular files — may come to be refused or passed over, under the
+   bounds of [A layout basou never creates may come to be
+   refused](#a-layout-basou-never-creates-may-come-to-be-refused).
+
+Anything else that would change these shapes — a field renamed, retyped,
+made nullable or removed, a value given another meaning, a value taken out
+of the digest or one put into it that two measurements on the same day may
+disagree on, an input refused that was accepted — waits for `2.0`.
+
 ### Node.js: a minor drops a release line only past its end-of-life
 
 Every published package names the Node.js releases it admits in
@@ -507,10 +609,10 @@ even where `engines.node` admits its prereleases.
   a future release; until then, treat core as internal.
 - **The CLI's human-facing *prose* is presentation, not contract.** The
   orientation narrative, nudges, and other rendered prose may be refined at any
-  time — do not scrape it. Machine consumers have two covered read paths
-  instead: **`@basou/sdk`**, and the **`--json`** output of the commands that
-  offer it, other than the experimental commands below (part of the
-  guaranteed CLI surface above).
+  time — do not scrape it. Machine consumers have three covered read paths
+  instead: **`@basou/sdk`**, the **`--json`** output of the commands that
+  offer it, other than the experimental commands below, and a progress
+  board's **records** (part of the guaranteed surfaces above).
 - **Experimental commands are outside every guarantee in this document, except
   the ones stated here.** Each row of the table below names a top-level
   command. It and every subcommand under it, including one added later, are
@@ -538,16 +640,11 @@ even where `engines.node` admits its prereleases.
   guarantee. A listed command may instead be removed at any release, and its
   row with it. Removal is not promotion, and a name that returns later is a
   new command. `--help` marks each of these commands `[experimental]`; the
-  table, not the mark, is what decides.
+  table, not the mark, is what decides. No command is experimental now.
+  `basou board` was, from `0.65.0` until `1.1.0` promoted it.
 
   | Command | Experimental since |
   |---|---|
-  | `basou board` | 0.65.0 |
-
-  The shapes `basou board` reads and writes (its `board.yaml`, the input of
-  `basou board record`, its records and the measurement it prints) are
-  described in [board.md](board.md), outside every guarantee as the command
-  is.
 
 - **`basou view`'s HTTP routes and pages are a local UI, not an API.** Read the
   trail through `@basou/sdk` or the `--json` output of a command that is not
@@ -707,11 +804,12 @@ expected to change across major versions:
 
 - **Local-first and zero-network** — the workspace trail lives under `.basou/`
   next to your code; optional integrations may also write user-level files
-  (`~/.claude/`, `~/.codex/`), and an experimental command may write files
-  beside a file of yours that it reads, never under `.basou/` (`basou board
-  record` writes a `records/` directory beside its `board.yaml`); those files
-  are not part of the trail, though they may hold what the trail holds.
-  Everything stays on-machine — nothing is sent off-machine.
+  (`~/.claude/`, `~/.codex/`), and a command may write files beside a file of
+  yours that it reads, never under `.basou/` and only where this document says
+  it does (`basou board record` writes a `records/` directory beside its
+  `board.yaml`); those files are not part of the trail, though they may hold
+  what the trail holds. Everything stays on-machine — nothing is sent
+  off-machine.
 - **Adopt, not rip** — adoption is non-destructive and reversible, and the
   adoption / wiring generators (`sync`, `adopt`, gitignore, symlinks) are
   dry-run-by-default.

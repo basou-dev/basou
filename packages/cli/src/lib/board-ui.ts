@@ -125,6 +125,7 @@ export const BOARD_HTML = `<!doctype html>
   .st.shelved::before { content: "\\2298"; color: var(--fg-2); }
   .st.none::before { content: "\\25CB"; color: var(--fg-2); }
   .st.unverified::before { content: "?"; color: var(--info); font-weight: 700; }
+  .st.other { font-size: 11px; color: var(--fg-2); }
   td.moved, .moved-key { outline: 2px solid var(--info); outline-offset: -3px; border-radius: 6px; }
   .moved-key { display: inline-block; width: 1.2em; height: 1.2em; margin-right: 4px; vertical-align: -0.3em; }
   ul.moved { margin: 6px 0 0; padding-left: 18px; font-size: 12px; }
@@ -374,7 +375,12 @@ export const BOARD_HTML = `<!doctype html>
     return num(m.value) + (typeof m.value === 'number' ? ' ' + m.unit : '');
   }
   function signed(n) { return (n > 0 ? '+' : '') + num(n); }
-  function stateName(state) { return S.states[state] || state; }
+  // A state's name in the page's language, or the state as it is written when
+  // the page does not know it (one a later basou gives): a name such as
+  // toString is a state like any other, not a key of every object.
+  function stateName(state) {
+    return Object.prototype.hasOwnProperty.call(S.states, state) ? S.states[state] : String(state);
+  }
   function setStatus(message, isErr) {
     var s = $('status');
     s.textContent = message || '';
@@ -878,9 +884,12 @@ export const BOARD_HTML = `<!doctype html>
       return el('tr', null, [el('th', { text: lane.name })].concat(lane.cells.map(function (c) {
         var title = stateName(c.state) + (c.reason ? ': ' + c.reason : '');
         if (c.moved_from) title += '  (' + fill(S.matrix.moved, { state: stateName(c.moved_from) }) + ')';
-        return el('td', { class: 'cell' + (c.moved_from ? ' moved' : ''), title: title, 'data-state': c.state }, [
-          el('span', { class: 'st ' + c.state })
-        ]);
+        // A state the page knows is drawn by its mark; one it does not, by
+        // its name as it is written, which a class could not carry.
+        var mark = Object.prototype.hasOwnProperty.call(S.states, c.state)
+          ? el('span', { class: 'st ' + c.state })
+          : el('span', { class: 'st other', text: String(c.state) });
+        return el('td', { class: 'cell' + (c.moved_from ? ' moved' : ''), title: title, 'data-state': c.state }, [mark]);
       })));
     });
     children.push(el('div', { class: 'scroll' }, [el('table', { class: 'matrix' }, [head].concat(rows))]));

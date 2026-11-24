@@ -10,9 +10,10 @@ import type { Command } from "commander";
  * alone, or a mark typed into a description or a summary by hand all fail it.
  *
  * A command joins only in the release that introduces it. An existing command
- * never joins, and leaving the list is a one-way promotion.
+ * never joins, and leaving the list is a one-way promotion: `board` left it
+ * in 1.1.0 and never comes back.
  */
-export const EXPERIMENTAL_COMMANDS: readonly string[] = ["board"];
+export const EXPERIMENTAL_COMMANDS: readonly string[] = [];
 
 export const EXPERIMENTAL_MARK = "[experimental]";
 

@@ -3,6 +3,110 @@
 All notable changes to **basou** are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting with v0.1.0.
 
+## Unreleased
+
+### Promoted
+
+- **`basou board` is no longer experimental.** It was experimental from
+  `0.65.0`. Its `--help` no longer marks it `[experimental]`, it no longer
+  prints `basou board is experimental; its formats may change.` on stderr
+  each time it runs, and `basou board guide` no longer calls it experimental.
+  No shape changes with the promotion: `board_version` 3 and `record_version`
+  3, as `0.71.0` gave them and `0.72.0` and `0.73.0` checked them, are what is
+  now guaranteed.
+- **What is guaranteed from this release**, as
+  [compatibility.md](docs/spec/compatibility.md#the-progress-board-every-version-is-read-and-what-may-grow)
+  states it: what [board.md](docs/spec/board.md) describes of `board.yaml`
+  (`board_version` 1, 2 and 3), of the input `basou board record` reads, of
+  the records it writes and has written (`record_version` 1, 2 and 3), and of
+  what `basou board measure --json` and `basou board record --json` print. The
+  four subcommands and their flags now follow the normal rules: they are not
+  removed and do not change meaning within `1.x`. compatibility.md now names
+  four guaranteed surfaces: a board's `board.yaml` and records are the fourth,
+  files a command reads or writes outside `.basou/` where the document names
+  them, and `basou board record` joins the commands whose JSON input is
+  guaranteed.
+- **What is not guaranteed:** what the commands print without `--json`, what
+  `basou board guide` and `basou board init` print (the `board.yaml` init
+  prints included), the words of a refusal and of anything on stderr, the
+  strings a `--json` output holds for a person to read (a `not_found` entry's
+  `reason`, and `detail` and `why` under `axis`; that each is there, and is a
+  string, is guaranteed), the commands the guide prints to make an
+  observation and their limits (how many items a listing reads, how long a
+  request may take; what an observation's value is, board.md defines and is
+  guaranteed), how the digest is computed from what it covers, the board page
+  of `basou view`, and what `@basou/core` exports for the board.
+- **Exit codes.** The four subcommands now follow the rule every guaranteed
+  command does: `0` is success, and any other value is a failure, whose value
+  may be refined within `1.x` ([exit
+  codes](docs/spec/compatibility.md#exit-codes-zero-is-success-and-a-failures-value-may-be-refined)).
+  They still exit `1` on every failure today. Their `--help` and board.md now
+  say "not 0 (1 today)" where they said `1`. Because `basou board measure`
+  exits non-zero when something was not measured, a field a later release
+  adds, or a method it raises, can move a board's measurement across `0`
+  either way, and a wider refusal by `basou board record` of an input that
+  names another workspace moves an invocation from `0` to non-zero: the
+  changelog says when a release does either.
+- **What may grow within `1.x`** (compatibility.md's progress board section,
+  items 1 to 8, and board.md's new section 7, What may grow): every
+  `board_version` and every `record_version` is read, with the meaning it was
+  written with, and a record is never rewritten; a new key or kind of
+  `board.yaml`, or a new value of `kind`, `pick`, `of`, `on_missing` or
+  `status`, comes with a new `board_version`; a record and each `--json`
+  output may gain fields without its version moving (a built-in section added
+  so fires the axis review's trigger (e) once on every board, and again
+  whenever a basou of another release measures a board after the one that
+  recorded it); a cell's
+  `state`, an axis review's `triggers`, a component's `kinds`, the keys of
+  `integrity.by_status`, and those of `review_gaps.by_verdict` (which may also
+  lose one, with the `review_gaps` method rising) may gain values, with no
+  value changing meaning; a built-in section's method rises whenever a value
+  of it would be computed another way, a fix included, and a `trail_count`
+  measure moves with the `trail` method; what `basou board record` refuses as
+  naming another workspace may change with the rule it is judged by; and what
+  basou never creates in a board's `records/` may come to be refused or
+  passed over. A `not_found` entry's `at`, and an `at` under `diff`, name a
+  place rather than a value of an enumeration. Anything else that would
+  change these shapes waits for `2.0`.
+- **A `trail_count`'s `status` takes the four task statuses it takes today**
+  (`planned`, `in_progress`, `done`, `cancelled`) as the board's own list: a
+  status the task format of `.basou/` gains is read in `board.yaml` only from
+  a new `board_version`, as any new value of a key that enumerates its values
+  is.
+- **`--file -` and `--board -`.** `--file` on `basou board record` reads
+  standard input for `-`, as it does with no `--file`. `--board` is not an
+  input-file flag: it names the declaration, and `--board -` reads a file
+  named `-`. compatibility.md's paragraph on `-` now says both.
+- **What each state of a cell means is now in board.md** (section 3.3), where
+  it is guaranteed; `basou board guide` says when to give each and points
+  there. board.md also says how a basou reads a value it does not know: it
+  draws it as written, and counts it as neither reaching a stage nor leaving
+  one behind, as `unverified` does.
+
+### Changed
+
+- **A record of a board is a regular file, for every reader of the
+  records.** An entry of a board's `records/` named as a record (a ULID with
+  `.json`) that is a symlink or a directory is now passed over by `basou board
+  measure`, `basou board record` and `basou board guide`, and each names it on
+  stderr (`basou: records/<name> beside the board is not a regular file ...`).
+  basou never creates such an entry. Before, `measure` and `record` read a
+  symlink named as a record as the previous record, and took a directory so
+  named as a record that could not be read, so a measurement was not
+  complete and exited `1`; the board page listed both, and the guide counted
+  both. The guide now also counts no record in a `records/` that is a
+  symlink, which no reader reads. This is made in the release that promotes
+  the board, before its guarantee applies, so that every reader of the
+  records follows one rule from the start.
+- **The board page draws a state of a cell it does not know by its name**,
+  in the cell, where it drew an empty cell; a state named as something every
+  JavaScript object has (`toString`, `constructor`) is drawn as that name too.
+- **compatibility.md counts the rule a `repos` entry of `basou review record`
+  is judged by among the ways an invocation crosses zero within `1.x`**, in
+  "A value a flag refuses" and "A layout basou never creates may come to be
+  refused", where it was left out though item 1 of the guaranteed surfaces
+  already said that rule may change.
+
 ## 1.0.1 — 2026-11-20
 
 ### Changed

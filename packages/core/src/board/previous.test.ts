@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readPreviousRecords } from "./previous.js";
+import { readPreviousRecords, recordEntries } from "./previous.js";
 
 // Names in the order a ULID sorts in.
 const [A, B, C] = [
@@ -130,6 +130,38 @@ describe("readPreviousRecords", () => {
     });
   });
 
+  it("passes over, and names, an entry named as a record that is not a regular file", async () => {
+    await mkdir(records);
+    await place(`${A}.json`, record({ axis_review: REVIEW }));
+    // A link to a record, after the last record by name: not the previous one.
+    await symlink(join(records, `${A}.json`), join(records, `${C}.json`));
+    // A directory named as a record, between them: not one that cannot be read.
+    await mkdir(join(records, `${B}.json`));
+    // A link and a directory not named as a record: no record, and not named.
+    await symlink(join(records, `${A}.json`), join(records, "copy.json"));
+    await mkdir(join(records, "old"));
+    const read = await readPreviousRecords(records);
+    expect(read.last).toMatchObject({ status: "found", id: A });
+    expect(read.lastReview).toMatchObject({ status: "found", id: A });
+    expect(read.passedOver).toEqual([`${B}.json`, `${C}.json`]);
+    // With nothing passed over, nothing is said.
+    await rm(join(records, `${B}.json`), { recursive: true });
+    await rm(join(records, `${C}.json`));
+    expect((await readPreviousRecords(records)).passedOver).toBeUndefined();
+  });
+
+  it("names what it passed over even when the last record cannot be read", async () => {
+    await mkdir(records);
+    await place(`${A}.json`, "{ not json");
+    await mkdir(join(records, `${B}.json`));
+    const read = await readPreviousRecords(records);
+    expect(read.last).toEqual({
+      status: "unreadable",
+      reason: `the record ${A} could not be read as JSON`,
+    });
+    expect(read.passedOver).toEqual([`${B}.json`]);
+  });
+
   it("cannot read a records/ that is a link or a file", async () => {
     const elsewhere = join(dir, "elsewhere");
     await mkdir(elsewhere);
@@ -144,5 +176,23 @@ describe("readPreviousRecords", () => {
     await rm(records);
     await writeFile(records, "not a directory\n");
     expect(await readPreviousRecords(records)).toEqual(unreadable);
+  });
+});
+
+describe("recordEntries", () => {
+  const entry = (name: string, file = true) => ({ name, isFile: () => file });
+
+  it("takes only a regular file named as a ULID with .json as a record, oldest first", () => {
+    expect(
+      recordEntries([
+        entry(`${C}.json`),
+        entry(`${A}.json`),
+        entry(`${B}.json`, false),
+        entry("notes.json"),
+        entry("old", false),
+        entry(`${A}.json.orig`),
+      ]),
+    ).toEqual({ ids: [A, C], passedOver: [`${B}.json`] });
+    expect(recordEntries([])).toEqual({ ids: [], passedOver: [] });
   });
 });

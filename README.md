@@ -14,9 +14,8 @@ in plain files next to your code.
 
 Basou is local-first and zero-network: it reads the agent logs already on
 your machine and writes its trail only into a `.basou/` directory beside your
-repo (the experimental `basou board record` also writes records, which are
-not part of the trail, beside the board's `board.yaml`). Nothing leaves your
-machine.
+repo (`basou board record` also writes records, which are not part of the
+trail, beside the board's `board.yaml`). Nothing leaves your machine.
 
 ## Why Basou?
 
@@ -184,16 +183,17 @@ giving up the local-first, zero-network design.
 What that means for you:
 
 - **The `basou` CLI, the `@basou/sdk` read API and the on-disk `.basou/`
-  formats follow semantic versioning from `1.0.0`.** Within `1.x` they change
-  only additively, with the exceptions that
-  [docs/spec/compatibility.md](docs/spec/compatibility.md) states and bounds.
-  The experimental commands it
-  [lists](docs/spec/compatibility.md#what-is-not-guaranteed) are outside the
-  guarantee, and may also write files beside one of yours that they read, never
-  under `.basou/` (`basou board record` writes records beside its
-  `board.yaml`: they are not part of the trail, though they may hold what the
-  trail holds). Internal `@basou/core` APIs may still change between minor
-  releases.
+  formats follow semantic versioning from `1.0.0`, and so, from `1.1.0`, do a
+  progress board's files (its `board.yaml` and the records `basou board
+  record` writes beside it).** Within `1.x` they change only additively, with
+  the exceptions that [docs/spec/compatibility.md](docs/spec/compatibility.md)
+  states and bounds. A command may also write files beside one of yours that
+  it reads, never under `.basou/` and only where that document says it does:
+  today a board's records, which are not part of the trail, though they may
+  hold what the trail holds. Any command it
+  [lists](docs/spec/compatibility.md#what-is-not-guaranteed) as experimental
+  (none today) is outside the guarantee. Internal `@basou/core` APIs may still
+  change between minor releases.
 - **The on-disk `.basou/` formats are versioned** and ship JSON Schemas. The
   format version is separate from the product version: a `1.x` install reads
   and writes `schema_version: 0.x` files, and that is expected.
